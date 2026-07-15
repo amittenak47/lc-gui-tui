@@ -334,7 +334,7 @@ fn cmd_config(cmd: ConfigCmd) -> Result<()> {
 fn cmd_list(cmd: ListCmd) -> Result<()> {
     let conn = index::open_db()?;
     match cmd {
-        ListCmd::Create { name } => lists::create(&conn, &name),
+        ListCmd::Create { name } => lists::create_or_get(&conn, &name),
         ListCmd::Delete { name } => lists::delete(&conn, &name),
         ListCmd::Add { name, ids } => lists::add(&conn, &name, &ids),
         ListCmd::Remove { name, ids } => lists::remove(&conn, &name, &ids),

@@ -31,12 +31,16 @@ fn next_position(conn: &Connection, id: i64) -> Result<i64> {
     )?)
 }
 
-pub fn create(conn: &Connection, name: &str) -> Result<()> {
+pub fn create(conn: &Connection, name: &str) -> Result<bool> {
     let inserted = conn.execute("INSERT OR IGNORE INTO lists (name) VALUES (?1)", params![name])?;
-    if inserted == 0 {
-        println!("list {name:?} already exists");
-    } else {
+    Ok(inserted > 0)
+}
+
+pub fn create_or_get(conn: &Connection, name: &str) -> Result<()> {
+    if create(conn, name)? {
         println!("created list {name:?}");
+    } else {
+        println!("list {name:?} already exists");
     }
     Ok(())
 }
@@ -50,6 +54,13 @@ pub fn delete(conn: &Connection, name: &str) -> Result<()> {
 }
 
 pub fn add(conn: &Connection, name: &str, ids: &[String]) -> Result<()> {
+  let added = add_tasks(conn, name, ids)?;
+  println!("{added} added to {name:?}");
+  Ok(())
+}
+
+/// Add tasks without printing (for TUI).
+pub fn add_tasks(conn: &Connection, name: &str, ids: &[String]) -> Result<u32> {
     let id = list_id(conn, name)?;
     let mut added = 0;
     for raw in ids {
@@ -61,13 +72,9 @@ pub fn add(conn: &Connection, name: &str, ids: &[String]) -> Result<()> {
         )?;
         if inserted > 0 {
             added += 1;
-            println!("+ {}", row.task_id);
-        } else {
-            println!("= {} (already in list)", row.task_id);
         }
     }
-    println!("{added} added to {name:?}");
-    Ok(())
+    Ok(added)
 }
 
 pub fn remove(conn: &Connection, name: &str, ids: &[String]) -> Result<()> {

@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -17,7 +17,7 @@ use std::time::Duration;
 use crate::config::Config;
 use crate::index::{self, ProblemRow, SearchSort};
 use crate::session::{ProblemState, Session};
-use crate::{generator, llm, loader, problem, runner};
+use crate::{generator, lists, llm, loader, problem, runner};
 
 type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -49,6 +49,7 @@ enum Screen {
     Browse,
     ProblemActions,
     InputId,
+    InputListName,
     Settings,
     Help,
     Message,
@@ -59,6 +60,13 @@ struct BrowseFilter {
     tag_index: usize,
     list_name: Option<String>,
     slug_query: Option<String>,
+}
+
+#[derive(Clone)]
+enum ListPickPurpose {
+    LoadSession,
+    AddTask { task_id: String },
+    AddRandom,
 }
 
 struct App {
@@ -82,6 +90,9 @@ struct App {
     message_scroll: usize,
     difficulty_pick_for: Screen,
     back_screen: Screen,
+    browse_search_active: bool,
+    browse_search_buf: String,
+    list_pick_purpose: ListPickPurpose,
 }
 
 impl App {
@@ -114,6 +125,9 @@ impl App {
             message_scroll: 0,
             difficulty_pick_for: Screen::ChooseProblems,
             back_screen: Screen::Main,
+            browse_search_active: false,
+            browse_search_buf: String::new(),
+            list_pick_purpose: ListPickPurpose::LoadSession,
         })
     }
 
@@ -206,10 +220,54 @@ impl App {
         Ok(())
     }
 
+    fn cycle_difficulty(&mut self) -> Result<()> {
+        self.browse.difficulty = match self.browse.difficulty.as_deref() {
+            None => Some("Easy".into()),
+            Some("Easy") => Some("Medium".into()),
+            Some("Medium") => Some("Hard".into()),
+            _ => None,
+        };
+        self.browse_page = 0;
+        self.browse_sel = 0;
+        self.reload_browse_page()?;
+        self.status = format!(
+            "difficulty: {}",
+            self.browse
+                .difficulty
+                .as_deref()
+                .unwrap_or("any")
+        );
+        Ok(())
+    }
+
+    fn difficulty_label(&self) -> &str {
+        self.browse.difficulty.as_deref().unwrap_or("any")
+    }
+
+    fn apply_browse_search(&mut self) -> Result<()> {
+        let q = self.browse_search_buf.trim().to_string();
+        self.browse.slug_query = if q.is_empty() { None } else { Some(q) };
+        self.browse_page = 0;
+        self.browse_sel = 0;
+        self.browse_search_active = false;
+        self.reload_browse_page()?;
+        self.status = match &self.browse.slug_query {
+            Some(q) => format!("search: {q}"),
+            None => "search cleared".into(),
+        };
+        Ok(())
+    }
+
     fn open_browse(&mut self, filter: BrowseFilter, from: Screen) -> Result<()> {
         self.browse = filter;
         self.browse_page = 0;
         self.browse_sel = 0;
+        self.browse_search_active = false;
+        self.browse_search_buf = self
+            .browse
+            .slug_query
+            .clone()
+            .unwrap_or_default();
         self.back_screen = from;
         self.screen = Screen::Browse;
         self.reload_browse_page()?;
@@ -221,6 +279,7 @@ impl App {
             &self.conn,
             self.browse.difficulty.as_deref(),
             self.current_tag_filter(),
+            self.browse.slug_query.as_deref(),
         )?
         .ok_or_else(|| anyhow::anyhow!("no problem matches those filters"))?;
         self.selected_problem = Some(row.clone());
@@ -228,6 +287,66 @@ impl App {
         self.screen = Screen::ProblemActions;
         self.menu_sel = 0;
         self.status = format!("random: {}", row.task_id);
+        Ok(())
+    }
+
+    fn open_list_pick(&mut self, purpose: ListPickPurpose, back: Screen) -> Result<()> {
+        self.list_names = index::list_names(&self.conn)?;
+        self.list_pick_purpose = purpose;
+        self.back_screen = back;
+        self.screen = Screen::ListPick;
+        self.menu_sel = 0;
+        Ok(())
+    }
+
+    fn add_task_to_list(&mut self, list_name: &str, task_id: &str) -> Result<()> {
+        let n = lists::add_tasks(&self.conn, list_name, &[task_id.to_string()])?;
+        self.status = if n > 0 {
+            format!("added {task_id} to list {list_name:?}")
+        } else {
+            format!("{task_id} already in list {list_name:?}")
+        };
+        Ok(())
+    }
+
+    fn random_add_to_list(&mut self, list_name: &str) -> Result<()> {
+        let row = index::random_one(
+            &self.conn,
+            self.browse.difficulty.as_deref(),
+            self.current_tag_filter(),
+            self.browse.slug_query.as_deref(),
+        )?
+        .ok_or_else(|| anyhow::anyhow!("no problem matches current filters"))?;
+        let n = lists::add_tasks(&self.conn, list_name, &[row.task_id.clone()])?;
+        self.status = if n > 0 {
+            format!("random add: {} → list {list_name:?}", row.task_id)
+        } else {
+            format!("random pick {} already in list {list_name:?}", row.task_id)
+        };
+        Ok(())
+    }
+
+    fn resolve_input_list_name(&mut self) -> Result<()> {
+        let name = self.input_buf.trim().to_string();
+        if name.is_empty() {
+            bail!("enter a list name");
+        }
+        let _ = lists::create(&self.conn, &name)?;
+        self.input_buf.clear();
+        match self.list_pick_purpose.clone() {
+            ListPickPurpose::LoadSession => {
+                self.list_names = index::list_names(&self.conn)?;
+                self.screen = Screen::ListPick;
+            }
+            ListPickPurpose::AddTask { task_id } => {
+                self.add_task_to_list(&name, &task_id)?;
+                self.screen = self.back_screen;
+            }
+            ListPickPurpose::AddRandom => {
+                self.random_add_to_list(&name)?;
+                self.screen = self.back_screen;
+            }
+        }
         Ok(())
     }
 
@@ -253,7 +372,7 @@ impl App {
         let dir = generator::generate(&self.cfg, &prob, json_path, false)?;
         self.session.mark_loaded(&row.task_id)?;
         self.session = Session::load_or_new()?;
-        generator::open_in_editor(&dir);
+        generator::open_in_editor_quiet(&dir);
         self.status = format!("workspace: {}", dir.display());
         Ok(())
     }
@@ -363,7 +482,7 @@ fn run_app(terminal: &mut TuiTerminal, cfg: &Config) -> Result<()> {
 
     loop {
         terminal.draw(|f| draw(f, &mut app))?;
-        if event::poll(Duration::from_millis(150))? {
+        if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 if handle_key(&mut app, key)? {
                     break;
@@ -375,6 +494,9 @@ fn run_app(terminal: &mut TuiTerminal, cfg: &Config) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+    if key.kind != KeyEventKind::Press {
+        return Ok(false);
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return Ok(true);
     }
@@ -382,8 +504,14 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
     if app.screen == Screen::InputId {
         return handle_input_id(app, key);
     }
+    if app.screen == Screen::InputListName {
+        return handle_input_list_name(app, key);
+    }
     if app.screen == Screen::Message {
         return handle_message(app, key);
+    }
+    if app.screen == Screen::Browse && app.browse_search_active {
+        return handle_browse_search(app, key);
     }
 
     match key.code {
@@ -398,7 +526,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 Screen::Browse => app.back_screen,
                 Screen::ProblemActions => Screen::Browse,
                 Screen::Settings | Screen::Help => Screen::Main,
-                Screen::InputId => Screen::ChooseProblems,
+                Screen::InputId => app.back_screen,
+                Screen::InputListName => Screen::ListPick,
                 Screen::Message => app.back_screen,
             };
             app.menu_sel = 0;
@@ -426,17 +555,48 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             }
         }
         KeyCode::Char('t') if app.screen == Screen::Browse => app.cycle_tag()?,
+        KeyCode::Char('e') if app.screen == Screen::Browse => app.cycle_difficulty()?,
         KeyCode::Char('o') if app.screen == Screen::Browse => app.cycle_sort()?,
+        KeyCode::Char('/') if app.screen == Screen::Browse => {
+            app.browse_search_active = true;
+            app.browse_search_buf = app
+                .browse
+                .slug_query
+                .clone()
+                .unwrap_or_default();
+            app.status = "search: type filter · Enter apply · Esc cancel".into();
+        }
+        KeyCode::Char('i') if app.screen == Screen::Browse => {
+            app.input_buf.clear();
+            app.screen = Screen::InputId;
+            app.back_screen = Screen::Browse;
+        }
+        KeyCode::Char('l') if app.screen == Screen::Browse => {
+            if let Some(row) = app.browse_rows.get(app.browse_sel).cloned() {
+                app.open_list_pick(
+                    ListPickPurpose::AddTask {
+                        task_id: row.task_id,
+                    },
+                    Screen::Browse,
+                )?;
+            }
+        }
+        KeyCode::Char('r') if app.screen == Screen::Browse => {
+            app.open_list_pick(ListPickPurpose::AddRandom, Screen::Browse)?;
+        }
         _ => {}
     }
     Ok(false)
 }
 
 fn handle_input_id(app: &mut App, key: KeyEvent) -> Result<bool> {
+    if key.kind != KeyEventKind::Press {
+        return Ok(false);
+    }
     match key.code {
         KeyCode::Esc => {
             app.input_buf.clear();
-            app.screen = Screen::ChooseProblems;
+            app.screen = app.back_screen;
         }
         KeyCode::Enter => {
             if let Err(e) = app.resolve_input_id() {
@@ -446,13 +606,69 @@ fn handle_input_id(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Backspace => {
             app.input_buf.pop();
         }
-        KeyCode::Char(c) => app.input_buf.push(c),
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => app.input_buf.push(c),
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_browse_search(app: &mut App, key: KeyEvent) -> Result<bool> {
+    if key.kind != KeyEventKind::Press {
+        return Ok(false);
+    }
+    match key.code {
+        KeyCode::Esc => {
+            app.browse_search_active = false;
+            app.browse_search_buf = app
+                .browse
+                .slug_query
+                .clone()
+                .unwrap_or_default();
+            app.status = "search cancelled".into();
+        }
+        KeyCode::Enter => {
+            if let Err(e) = app.apply_browse_search() {
+                app.status = format!("{e:#}");
+            }
+        }
+        KeyCode::Backspace => {
+            app.browse_search_buf.pop();
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.browse_search_buf.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_input_list_name(app: &mut App, key: KeyEvent) -> Result<bool> {
+    if key.kind != KeyEventKind::Press {
+        return Ok(false);
+    }
+    match key.code {
+        KeyCode::Esc => {
+            app.input_buf.clear();
+            app.screen = Screen::ListPick;
+        }
+        KeyCode::Enter => {
+            if let Err(e) = app.resolve_input_list_name() {
+                app.status = format!("{e:#}");
+            }
+        }
+        KeyCode::Backspace => {
+            app.input_buf.pop();
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => app.input_buf.push(c),
         _ => {}
     }
     Ok(false)
 }
 
 fn handle_message(app: &mut App, key: KeyEvent) -> Result<bool> {
+    if key.kind != KeyEventKind::Press {
+        return Ok(false);
+    }
     match key.code {
         KeyCode::Esc | KeyCode::Enter => {
             app.screen = Screen::ProblemActions;
@@ -498,15 +714,15 @@ fn menu_down(app: &mut App) {
 fn menu_len(app: &App) -> usize {
     match app.screen {
         Screen::Main => 5,
-        Screen::StartSession => 5,
-        Screen::ChooseProblems => 5,
+        Screen::StartSession => 6,
+        Screen::ChooseProblems => 3,
         Screen::DifficultyPick => 4,
-        Screen::ListPick => app.list_names.len() + 1,
+        Screen::ListPick => app.list_names.len() + 2,
         Screen::Browse => app.browse_rows.len(),
-        Screen::ProblemActions => 6,
+        Screen::ProblemActions => 7,
         Screen::Settings => 4,
         Screen::Help => 1,
-        Screen::InputId | Screen::Message => 0,
+        Screen::InputId | Screen::InputListName | Screen::Message => 0,
     }
 }
 
@@ -543,8 +759,15 @@ fn activate(app: &mut App) -> Result<bool> {
         },
         Screen::StartSession => match app.menu_sel {
             0 => {
-                app.screen = Screen::ChooseProblems;
-                app.menu_sel = 0;
+                app.open_browse(
+                    BrowseFilter {
+                        difficulty: None,
+                        tag_index: 0,
+                        list_name: None,
+                        slug_query: None,
+                    },
+                    Screen::StartSession,
+                )?;
             }
             1 => {
                 app.screen = Screen::DifficultyPick;
@@ -552,11 +775,14 @@ fn activate(app: &mut App) -> Result<bool> {
                 app.menu_sel = 0;
             }
             2 => {
-                app.list_names = index::list_names(&app.conn)?;
-                app.screen = Screen::ListPick;
-                app.menu_sel = 0;
+                app.open_list_pick(ListPickPurpose::LoadSession, Screen::StartSession)?;
             }
-            3 => show_session_stats(app)?,
+            3 => {
+                app.input_buf.clear();
+                app.back_screen = Screen::StartSession;
+                app.screen = Screen::InputId;
+            }
+            4 => show_session_stats(app)?,
             _ => {
                 app.screen = Screen::Main;
                 app.menu_sel = 0;
@@ -564,26 +790,6 @@ fn activate(app: &mut App) -> Result<bool> {
         },
         Screen::ChooseProblems => match app.menu_sel {
             0 => {
-                app.input_buf.clear();
-                app.screen = Screen::InputId;
-            }
-            1 => {
-                app.screen = Screen::DifficultyPick;
-                app.difficulty_pick_for = Screen::ChooseProblems;
-                app.menu_sel = 0;
-            }
-            2 => {
-                app.open_browse(
-                    BrowseFilter {
-                        difficulty: None,
-                        tag_index: 1.min(app.all_tags.len()),
-                        list_name: None,
-                        slug_query: None,
-                    },
-                    Screen::ChooseProblems,
-                )?;
-            }
-            3 => {
                 app.open_browse(
                     BrowseFilter {
                         difficulty: None,
@@ -593,6 +799,16 @@ fn activate(app: &mut App) -> Result<bool> {
                     },
                     Screen::ChooseProblems,
                 )?;
+            }
+            1 => {
+                app.input_buf.clear();
+                app.back_screen = Screen::ChooseProblems;
+                app.screen = Screen::InputId;
+            }
+            2 => {
+                app.screen = Screen::DifficultyPick;
+                app.difficulty_pick_for = Screen::ChooseProblems;
+                app.menu_sel = 0;
             }
             _ => {
                 app.screen = Screen::StartSession;
@@ -623,28 +839,52 @@ fn activate(app: &mut App) -> Result<bool> {
             }
         }
         Screen::ListPick => {
-            if app.menu_sel >= app.list_names.len() {
-                app.screen = Screen::StartSession;
+            let create_idx = app.list_names.len();
+            let back_idx = app.list_names.len() + 1;
+            if app.menu_sel == back_idx {
+                app.screen = app.back_screen;
                 app.menu_sel = 0;
                 return Ok(false);
             }
-            let name = app.list_names[app.menu_sel].clone();
-            app.session.set_active_list(Some(name.clone()))?;
-            app.session = Session::load_or_new()?;
-            let rows = index::list_problem_rows(&app.conn, &name, SearchSort::Question)?;
-            for row in &rows {
-                app.session.add_to_queue(&row.task_id)?;
+            if app.menu_sel == create_idx {
+                app.input_buf.clear();
+                app.screen = Screen::InputListName;
+                return Ok(false);
             }
-            app.open_browse(
-                BrowseFilter {
-                    difficulty: None,
-                    tag_index: 0,
-                    list_name: Some(name),
-                    slug_query: None,
-                },
-                Screen::StartSession,
-            )?;
-            app.status = format!("list loaded ({} problems)", app.browse_total);
+            let name = app.list_names[app.menu_sel].clone();
+            match app.list_pick_purpose.clone() {
+                ListPickPurpose::LoadSession => {
+                    app.session.set_active_list(Some(name.clone()))?;
+                    app.session = Session::load_or_new()?;
+                    let rows =
+                        index::list_problem_rows(&app.conn, &name, SearchSort::Question)?;
+                    for row in &rows {
+                        app.session.add_to_queue(&row.task_id)?;
+                    }
+                    app.open_browse(
+                        BrowseFilter {
+                            difficulty: None,
+                            tag_index: 0,
+                            list_name: Some(name),
+                            slug_query: None,
+                        },
+                        Screen::StartSession,
+                    )?;
+                    app.status = format!("list loaded ({} problems)", app.browse_total);
+                }
+                ListPickPurpose::AddTask { task_id } => {
+                    if let Err(e) = app.add_task_to_list(&name, &task_id) {
+                        app.status = format!("{e:#}");
+                    }
+                    app.screen = app.back_screen;
+                }
+                ListPickPurpose::AddRandom => {
+                    if let Err(e) = app.random_add_to_list(&name) {
+                        app.status = format!("{e:#}");
+                    }
+                    app.screen = app.back_screen;
+                }
+            }
         }
         Screen::Browse => {
             if let Some(row) = app.browse_rows.get(app.browse_sel).cloned() {
@@ -680,6 +920,16 @@ fn activate(app: &mut App) -> Result<bool> {
                     app.status = format!("{e:#}");
                 }
             }
+            5 => {
+                if let Some(row) = app.selected_problem.clone() {
+                    app.open_list_pick(
+                        ListPickPurpose::AddTask {
+                            task_id: row.task_id,
+                        },
+                        Screen::ProblemActions,
+                    )?;
+                }
+            }
             _ => {
                 app.screen = Screen::Browse;
                 app.menu_sel = 0;
@@ -701,7 +951,7 @@ fn activate(app: &mut App) -> Result<bool> {
             app.screen = Screen::Main;
             app.menu_sel = 0;
         }
-        Screen::InputId | Screen::Message => {}
+        Screen::InputId | Screen::InputListName | Screen::Message => {}
     }
     Ok(false)
 }
@@ -720,7 +970,10 @@ fn draw(f: &mut Frame, app: &mut App) {
     match app.screen {
         Screen::Browse => draw_browse(f, chunks[1], app),
         Screen::Message => draw_message(f, chunks[1], app),
-        Screen::InputId => draw_input(f, chunks[1], app),
+        Screen::InputId => draw_input(f, chunks[1], app, "add by id", "Enter problem id / slug / question #:"),
+        Screen::InputListName => {
+            draw_input(f, chunks[1], app, "new list", "Enter list name:")
+        }
         _ => draw_menu(f, chunks[1], app),
     }
     draw_footer(f, chunks[2], app);
@@ -787,9 +1040,10 @@ fn menu_items(app: &App) -> (&'static str, Vec<String>) {
         Screen::StartSession => (
             "start session",
             vec![
-                "Choose problems".into(),
+                "Browse / search problems".into(),
                 "Randomize".into(),
                 "Use existing list".into(),
+                "Add problem by id".into(),
                 "Session stats".into(),
                 "Back".into(),
             ],
@@ -797,10 +1051,9 @@ fn menu_items(app: &App) -> (&'static str, Vec<String>) {
         Screen::ChooseProblems => (
             "choose problems",
             vec![
+                "Browse / search (paginated)".into(),
                 "Add by id".into(),
                 "Filter by difficulty".into(),
-                "Filter by tag (cycle with t in browse)".into(),
-                "Browse all (paginated)".into(),
                 "Back".into(),
             ],
         ),
@@ -815,8 +1068,14 @@ fn menu_items(app: &App) -> (&'static str, Vec<String>) {
         ),
         Screen::ListPick => {
             let mut items: Vec<String> = app.list_names.iter().cloned().collect();
+            items.push("Create new list…".into());
             items.push("Back".into());
-            ("pick a list", items)
+            let title = match app.list_pick_purpose {
+                ListPickPurpose::LoadSession => "pick a list",
+                ListPickPurpose::AddTask { .. } => "add to list",
+                ListPickPurpose::AddRandom => "random add to list",
+            };
+            (title, items)
         }
         Screen::ProblemActions => (
             "problem",
@@ -832,6 +1091,7 @@ fn menu_items(app: &App) -> (&'static str, Vec<String>) {
                 "AI overview".into(),
                 "View my solution".into(),
                 "Submit locally (save)".into(),
+                "Add to list".into(),
                 "Back".into(),
             ],
         ),
@@ -858,15 +1118,37 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &App) {
     let max_page = app.browse_total.saturating_sub(1) / PAGE_SIZE + 1;
     let page = app.browse_page + 1;
     let title = format!(
-        "browse · page {page}/{max_page} · {} total · tag: {} · sort: {}",
+        "browse · page {page}/{max_page} · {} total · diff: {} · tag: {} · sort: {}{}",
         app.browse_total,
+        app.difficulty_label(),
         app.tag_label(),
-        app.browse_sort.label()
+        app.browse_sort.label(),
+        app.browse
+            .slug_query
+            .as_ref()
+            .map(|q| format!(" · q: {q}"))
+            .unwrap_or_default(),
     );
 
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    let inner_w = inner.width as usize;
+    let (q_w, task_w, diff_w, cases_w) = browse_col_widths(inner_w);
+
     let mut lines = Vec::new();
+    if app.browse_search_active {
+        lines.push(Line::from(Span::styled(
+            pad_line(
+                &format!("search: {}_", app.browse_search_buf),
+                inner_w,
+            ),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
     lines.push(Line::from(Span::styled(
-        "  q#    task_id                          diff    cases  st",
+        format_browse_header(q_w, task_w, diff_w, cases_w, inner_w),
         Style::default().add_modifier(Modifier::BOLD),
     )));
 
@@ -879,13 +1161,7 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &App) {
                 ProblemState::Failed => "xx",
             },
         };
-        let label = format!(
-            "  {:<5} {:<32} {:<7} {:>5}  {st}",
-            row.question_id.as_deref().unwrap_or(""),
-            trunc(&row.task_id, 32),
-            row.difficulty.as_deref().unwrap_or(""),
-            row.test_count,
-        );
+        let label = format_browse_row(row, st, q_w, task_w, diff_w, cases_w, inner_w);
         let style = if i == app.browse_sel {
             Style::default()
                 .fg(Color::Black)
@@ -898,19 +1174,79 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &App) {
     }
 
     if app.browse_rows.is_empty() {
-        lines.push(Line::from("  (no matches — try t to cycle tag filter)"));
+        lines.push(Line::from(pad_line(
+            "(no matches — try t to cycle tag filter)",
+            inner_w,
+        )));
     }
 
-    let block = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title));
-    f.render_widget(block, area);
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn draw_input(f: &mut Frame, area: Rect, app: &App) {
-    let text = format!("Enter problem id / slug / question #:\n\n  {}", app.input_buf);
+/// Distribute horizontal space: fixed cols for q#, diff, cases, st; task_id gets the rest.
+fn browse_col_widths(inner_w: usize) -> (usize, usize, usize, usize) {
+    let q_w = 6usize;
+    let diff_w = 8usize;
+    let cases_w = 7usize;
+    let st_w = 3usize;
+    let gutters = 6usize;
+    let task_w = inner_w
+        .saturating_sub(q_w + diff_w + cases_w + st_w + gutters)
+        .max(12);
+    (q_w, task_w, diff_w, cases_w)
+}
+
+fn format_browse_header(
+    q_w: usize,
+    task_w: usize,
+    diff_w: usize,
+    cases_w: usize,
+    inner_w: usize,
+) -> String {
+    pad_line(
+        &format!(
+            "{:<q_w$} {:<task_w$} {:<diff_w$} {:>cases_w$}  st",
+            "q#", "task_id", "diff", "cases"
+        ),
+        inner_w,
+    )
+}
+
+fn format_browse_row(
+    row: &ProblemRow,
+    st: &str,
+    q_w: usize,
+    task_w: usize,
+    diff_w: usize,
+    cases_w: usize,
+    inner_w: usize,
+) -> String {
+    pad_line(
+        &format!(
+            "{:<q_w$} {:<task_w$} {:<diff_w$} {:>cases_w$}  {st}",
+            row.question_id.as_deref().unwrap_or(""),
+            trunc(&row.task_id, task_w),
+            row.difficulty.as_deref().unwrap_or(""),
+            row.test_count,
+        ),
+        inner_w,
+    )
+}
+
+fn pad_line(line: &str, width: usize) -> String {
+    if line.len() >= width {
+        line.to_string()
+    } else {
+        format!("{line}{}", " ".repeat(width - line.len()))
+    }
+}
+
+fn draw_input(f: &mut Frame, area: Rect, app: &App, title: &str, prompt: &str) {
+    let text = format!("{prompt}\n\n  {}", app.input_buf);
     let block = Paragraph::new(text).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("add by id"),
+            .title(title),
     );
     f.render_widget(block, area);
 }
@@ -935,8 +1271,15 @@ fn draw_message(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let keys = match app.screen {
-        Screen::Browse => "W/S select · A/D page · T tag · O sort · Enter open · Esc back",
+        Screen::Browse => {
+            if app.browse_search_active {
+                "typing search · Enter apply · Esc cancel"
+            } else {
+                "W/S select · A/D page · / search · T tag · E diff · O sort · L add list · R random→list · I id"
+            }
+        }
         Screen::InputId => "type id · Enter confirm · Esc cancel",
+        Screen::InputListName => "type list name · Enter confirm · Esc cancel",
         Screen::Message => "W/S scroll · Enter/Esc back",
         Screen::Main => "W/S move · Enter select · Q quit",
         _ => "W/S move · Enter select · Esc back",

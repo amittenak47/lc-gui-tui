@@ -117,20 +117,50 @@ fn title_from_slug(slug: &str) -> String {
         .join(" ")
 }
 
-/// Best-effort `cursor <dir>`; prints the path if the editor can't be launched.
+/// Open `solution.py` in the current Cursor/VS Code window (`-r` / `--reuse-window`).
 pub fn open_in_editor(dir: &Path) {
+    open_in_editor_impl(dir, false);
+}
+
+/// Same as [`open_in_editor`] but without stdout messages (for TUI).
+pub fn open_in_editor_quiet(dir: &Path) {
+    open_in_editor_impl(dir, true);
+}
+
+fn open_in_editor_impl(dir: &Path, quiet: bool) {
+    let target = dir.join("solution.py");
+    let target = if target.is_file() {
+        target
+    } else {
+        dir.to_path_buf()
+    };
+    let path = target.display().to_string();
+
+    let editors = ["cursor", "code"];
+    for editor in editors {
+        if launch_editor(editor, &path) {
+            if !quiet {
+                println!("Opened in {editor} (reuse window).");
+            }
+            return;
+        }
+    }
+
+    if !quiet {
+        eprintln!(
+            "Could not launch cursor/code — open manually: {}",
+            target.display()
+        );
+    }
+}
+
+fn launch_editor(editor: &str, path: &str) -> bool {
     let status = if cfg!(windows) {
         std::process::Command::new("cmd")
-            .args(["/C", "cursor", &dir.display().to_string()])
+            .args(["/C", editor, "-r", path])
             .status()
     } else {
-        std::process::Command::new("cursor").arg(dir).status()
+        std::process::Command::new(editor).args(["-r", path]).status()
     };
-    match status {
-        Ok(s) if s.success() => println!("Opened in Cursor."),
-        _ => println!(
-            "Could not launch `cursor` — open the folder manually: {}",
-            dir.display()
-        ),
-    }
+    matches!(status, Ok(s) if s.success())
 }

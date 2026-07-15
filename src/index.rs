@@ -271,6 +271,19 @@ fn upsert(conn: &Connection, p: &Problem, json_path: &str, mtime: i64) -> Result
     Ok(())
 }
 
+fn push_text_query_filter(clauses: &mut Vec<String>, params: &mut Vec<String>, query: Option<&str>) {
+    if let Some(q) = query {
+        if !q.is_empty() {
+            params.push(format!("%{q}%"));
+            let p = params.len();
+            clauses.push(format!(
+                "(task_id LIKE ?{p} OR question_id LIKE ?{p} OR \
+                 task_id IN (SELECT task_id FROM problem_tags WHERE tag LIKE ?{p}))",
+            ));
+        }
+    }
+}
+
 pub fn search(
     conn: &Connection,
     difficulty: Option<&str>,
@@ -295,10 +308,7 @@ pub fn search(
             params.len()
         ));
     }
-    if let Some(q) = query {
-        params.push(format!("%{q}%"));
-        clauses.push(format!("task_id LIKE ?{}", params.len()));
-    }
+    push_text_query_filter(&mut clauses, &mut params, query);
     if !clauses.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&clauses.join(" AND "));
@@ -345,10 +355,7 @@ pub fn search_count(
             params.len()
         ));
     }
-    if let Some(q) = query {
-        params.push(format!("%{q}%"));
-        clauses.push(format!("task_id LIKE ?{}", params.len()));
-    }
+    push_text_query_filter(&mut clauses, &mut params, query);
     if !clauses.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&clauses.join(" AND "));
@@ -386,10 +393,7 @@ pub fn search_page(
             params.len()
         ));
     }
-    if let Some(q) = query {
-        params.push(format!("%{q}%"));
-        clauses.push(format!("task_id LIKE ?{}", params.len()));
-    }
+    push_text_query_filter(&mut clauses, &mut params, query);
     if !clauses.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&clauses.join(" AND "));
@@ -421,8 +425,9 @@ pub fn random_one(
     conn: &Connection,
     difficulty: Option<&str>,
     tag: Option<&str>,
+    query: Option<&str>,
 ) -> Result<Option<ProblemRow>> {
-    let rows = search(conn, difficulty, tag, None, 1, true, SearchSort::TaskId)?;
+    let rows = search(conn, difficulty, tag, query, 1, true, SearchSort::TaskId)?;
     Ok(rows.into_iter().next())
 }
 
