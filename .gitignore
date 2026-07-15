@@ -1,0 +1,59 @@
+# --- Rust ---
+/target/
+
+# --- Generated practice workspaces ---
+# Default workspace is ~/lc-workspace; on Windows a mistaken path can create this folder:
+$HOME/
+lc-workspace/
+
+# Python artifacts from generated problem workspaces
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# --- Secrets & local config (normally lives in OS config dir) ---
+.env
+.env.*
+!.env.example
+config.toml
+*.local.toml
+secrets.*
+
+# --- SQLite / session state (if copied into the repo) ---
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+session.json
+last_run.json
+
+# --- IDE ---
+.idea/
+*.iml
+/.vscode
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs & coverage ---
+*.log
+coverage/
+htmlcov/
+.coverage
+
+# --- Misc tooling ---
+.mimicflow/

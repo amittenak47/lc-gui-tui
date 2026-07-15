@@ -1,0 +1,30 @@
+# {{ title }}
+
+- **Task:** `{{ task_id }}`
+{% if question_id %}- **LeetCode question:** #{{ question_id }}
+{% endif %}{% if difficulty %}- **Difficulty:** {{ difficulty }}
+{% endif %}{% if tags %}- **Tags:** {{ tags | join(", ") }}
+{% endif %}
+---
+
+{{ description }}
+
+{% if examples %}## Sample cases ({{ total_cases }} total)
+
+{% for ex in examples %}### Case {{ loop.index }}
+
+```text
+Input:    {{ ex.input }}
+Expected: {{ ex.output }}
+```
+
+{% endfor %}{% endif %}---
+
+Workflow: edit `solution.py`, then
+
+```bash
+lc test              # run every case
+lc test --case 3     # run one case
+lc test --full       # run the original assert suite
+lc ask --case 3      # LLM tutor help on a failure (never reveals solutions)
+```

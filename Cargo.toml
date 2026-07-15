@@ -1,0 +1,28 @@
+[package]
+name = "lc"
+version = "0.1.0"
+edition = "2021"
+description = "LeetCode practice harness: index a local JSON corpus, materialize Python workspaces, run tests, ask an LLM tutor"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+minijinja = "2"
+toml = "0.8"
+directories = "5"
+colored = "2"
+comfy-table = "7"
+rand = "0.8"
+arboard = "3"
+ratatui = "0.29"
+crossterm = "0.28"
+walkdir = "2"
+
+[profile.release]
+lto = true
+strip = true
