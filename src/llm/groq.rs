@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-use super::LlmProvider;
+use super::{ChatReply, ChatRequest, LlmProvider};
 use crate::config::Config;
 
 pub struct Groq {
@@ -33,5 +33,9 @@ impl LlmProvider for Groq {
 
     fn chat(&self, system: &str, user: &str) -> Result<String> {
         super::chat_completions(&self.base_url, Some(&self.api_key), &self.model, system, user)
+    }
+
+    fn chat_ex(&self, req: &ChatRequest) -> Result<ChatReply> {
+        super::chat_completions_ex(&self.base_url, Some(&self.api_key), &self.model, req)
     }
 }

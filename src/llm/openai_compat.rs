@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use super::LlmProvider;
+use super::{ChatReply, ChatRequest, LlmProvider};
 use crate::config::Config;
 
 /// Any local OpenAI-compatible server: Ollama, vLLM, LM Studio.
@@ -26,22 +26,45 @@ impl LlmProvider for OpenAiCompat {
 
     fn chat(&self, system: &str, user: &str) -> Result<String> {
         let api_key = std::env::var("LC_LOCAL_API_KEY").ok();
-        super::chat_completions(&self.base_url, api_key.as_deref(), &self.model, system, user)
-            .map_err(|err| {
-                let is_unreachable = err.chain().any(|cause| {
-                    cause
-                        .downcast_ref::<reqwest::Error>()
-                        .map_or(false, |e| e.is_connect() || e.is_timeout())
-                });
-                if is_unreachable {
-                    err.context(format!(
-                        "cannot reach the local LLM at {} — start your server first \
-                         (Ollama: `ollama serve`, then `ollama pull {}`)",
-                        self.base_url, self.model
-                    ))
-                } else {
-                    err
-                }
-            })
+        self.explain_unreachable(super::chat_completions(
+            &self.base_url,
+            api_key.as_deref(),
+            &self.model,
+            system,
+            user,
+        ))
+    }
+
+    fn chat_ex(&self, req: &ChatRequest) -> Result<ChatReply> {
+        let api_key = std::env::var("LC_LOCAL_API_KEY").ok();
+        self.explain_unreachable(super::chat_completions_ex(
+            &self.base_url,
+            api_key.as_deref(),
+            &self.model,
+            req,
+        ))
+    }
+}
+
+impl OpenAiCompat {
+    /// A connect/timeout failure almost always means the server isn't running;
+    /// say so instead of surfacing a bare reqwest error.
+    fn explain_unreachable<T>(&self, result: Result<T>) -> Result<T> {
+        result.map_err(|err| {
+            let is_unreachable = err.chain().any(|cause| {
+                cause
+                    .downcast_ref::<reqwest::Error>()
+                    .is_some_and(|e| e.is_connect() || e.is_timeout())
+            });
+            if is_unreachable {
+                err.context(format!(
+                    "cannot reach the local LLM at {} — start your server first \
+                     (Ollama: `ollama serve`, then `ollama pull {}`)",
+                    self.base_url, self.model
+                ))
+            } else {
+                err
+            }
+        })
     }
 }

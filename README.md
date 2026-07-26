@@ -49,8 +49,10 @@ Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorre
 | **Rust** (stable, 1.75+) | Build and run `lc` |
 | **Python 3.10+** | Runs generated `run_tests.py` |
 | **Cursor or VS Code** *(optional)* | Edit `solution.py`; `--open` reuses the current window |
-| **Ollama** *(optional)* | Local LLM tutor (`lc ask --provider local`) |
+| **Ollama / llama.cpp** *(optional)* | Local LLM tutor (`lc ask --provider local`) |
 | **`GROQ_API_KEY`** *(optional)* | Cloud LLM tutor (`lc ask --provider groq`) |
+| **Node 20+** *(whiteboard only)* | Build the canvas client in [`app/`](app/) |
+| **Android SDK + NDK** *(tablet only)* | `npm run tauri android dev` |
 
 ---
 
@@ -183,6 +185,7 @@ lc list stats grind
 | `lc load <id> [--open] [--force]` | Generate workspace; id = slug, question #, or prefix |
 | `lc test [id] [--case N] [--full] [-v]` | Run Python tests |
 | `lc ask [id] [--case N] [--provider local\|groq] [--clipboard]` | LLM debugging help |
+| `lc serve [--port N] [--lan]` | Daemon for the whiteboard coach client |
 | `lc stats [--corpus]` | Session or corpus progress |
 | `lc session reset` | Clear session counters |
 | `lc list …` | Create, add, remove, show, shuffle, export, import lists |
@@ -226,6 +229,114 @@ lc ask --case 3 --provider groq
 
 ---
 
+## Whiteboard coach
+
+Practice by *sketching* an approach by hand while a coach watches, grills you, and points at the specific test case your approach breaks on. The canvas runs on a tablet; the corpus, workspaces, and Python runner stay on this machine behind `lc serve`.
+
+Full client docs: **[`app/README.md`](app/README.md)**.
+
+### Build and run
+
+**1. Start the daemon** (loopback only — this is all you need on a desktop):
+
+```bash
+cargo run -- serve
+```
+
+**2. Build and launch the canvas** in a second terminal:
+
+```bash
+cd app && npm install && npm run tauri dev
+```
+
+That opens a desktop window pointed at `http://127.0.0.1:7878`. Validate the whole loop with a mouse here before touching Android.
+
+To build release artifacts instead of running:
+
+```bash
+cargo build --release                 # the lc binary, including `lc serve`
+cd app && npm run build               # typecheck + bundle the canvas to app/dist
+cd app && npm run tauri build         # packaged desktop app
+```
+
+### Connecting a tablet
+
+```bash
+cargo run -- serve --lan
+```
+
+`--lan` binds all interfaces, generates a pairing token once, and prints it as a QR code plus a URL like `http://192.168.1.20:7878?token=…`. In the app, tap the host name in the header and paste that URL. The token is stored locally, so pairing is a once-ever step.
+
+> `--lan` means anyone on your network holding the token can drive your workspaces. Prefer plain `lc serve` when you're at the desk.
+
+Android:
+
+```bash
+cd app
+npm run tauri android init
+npm run tauri android dev
+```
+
+After `init`, copy [`app/src-tauri/android-overlay/network_security_config.xml`](app/src-tauri/android-overlay/network_security_config.xml) into the generated project — Android 9+ blocks the cleartext HTTP the daemon speaks on the LAN. Instructions are in that file.
+
+### Modes
+
+| Mode | What it does |
+| --- | --- |
+| **Review** | Draw, tap **Submit** → verdict, ratings, gaps, a Socratic question, and a counterexample citing one of the problem's real sample cases |
+| **Ambient** | The coach glances every 15s, stays silent while nothing changes, and escalates rather than repeating itself. Replies land in a side panel, never on the canvas |
+| **Draw it** | The coach answers with a diagram. Multi-frame traces are *one* diagram with a scrubber, not five copies of the same array |
+| **Reveal** | Explicit, confirmed opt-in → a stepwise path from *your* approach to a working one. Never a solution dump; logged so `lc stats` shows how often you tapped out |
+
+### Per-mode models
+
+Each coach mode picks its own provider, so the cheap 15-second loop can stay local while deeper analysis goes to a stronger model:
+
+```bash
+lc config set llm.modes.ambient local    # runs every 15s — keep it cheap
+lc config set llm.modes.review  groq     # deeper analysis on submit
+lc config set llm.modes.bridge  local
+lc config set llm.modes.viz     groq     # tool-calling for diagrams
+```
+
+All four default to `local`. Values are `local` or `groq`; the underlying URL/model come from `llm.local.*` / `llm.groq.*`.
+
+### Daemon API
+
+Useful for testing the coach without a tablet:
+
+```bash
+curl "localhost:7878/problems?difficulty=Easy&q=two-sum"
+curl -X POST localhost:7878/problems/two-sum/load
+curl -X POST localhost:7878/workspace/two-sum/test
+curl -X POST localhost:7878/coach/review -H 'Content-Type: application/json' \
+  -d '{"task_id":"two-sum","recognized_text":"sort, then two pointers inward"}'
+```
+
+| Route | Backed by |
+| --- | --- |
+| `GET /health` | Unauthenticated, so a client can find the daemon before pairing |
+| `GET /problems?difficulty=&tag=&q=&limit=&sort=` | `index::search` |
+| `GET /problems/:id` | Redacted problem detail |
+| `POST /problems/:id/load` | `generator::generate` |
+| `GET /workspace/:id/meta` | `.lc/meta.json` |
+| `POST /workspace/:id/test` | `runner::cmd_test_quiet` → `CaseResult` JSON |
+| `GET`/`PUT /workspace/:id/solution` | Read/write `solution.py` |
+| `POST /coach/review` | Mode A |
+| `POST /coach/viz` | Diagram tool calls |
+| `WS /coach/session` | Ambient loop |
+| `POST /coach/reveal` | **Gated** — requires `"confirm_reveal": true` |
+
+With `--lan`, every route except `/health` needs the token as an `X-LC-Token` header, or `?token=` for the WebSocket (browsers can't set headers on `WebSocket`).
+
+### What the coach is not trusted with
+
+The daemon **verifies cited test cases rather than trusting them**. When the coach cites a sample case, `lc` checks the index exists and overwrites the quoted input/expected with the corpus's own text, so a model that cites a real case but misquotes it cannot show you a fabricated one. A citation to a case that doesn't exist is dropped and reported.
+
+This matters with small local models. Tested against `granite-4.1-8b` (llama.cpp): review, ambient, and the reveal bridge are solid; diagram tool calls needed schema tuning and remain hit-or-miss — point `llm.modes.viz` at a stronger model if diagrams matter to you.
+
+---
+
 ## How it works
 
 ```
@@ -242,6 +353,8 @@ JSON corpus ──lc index──▶ SQLite (problems.db)
                         lc test ──▶ python run_tests.py ──▶ results table
                               │
                         lc ask  ──▶ redacted prompt ──▶ LLM tutor
+                              │
+                        lc serve ──▶ HTTP + WS ──▶ whiteboard canvas (app/)
 ```
 
 - Templates in [`templates/`](templates/) are embedded at compile time (minijinja).
@@ -259,6 +372,11 @@ JSON corpus ──lc index──▶ SQLite (problems.db)
 | `failed to launch "python"` | `lc config set python C:\Python312\python.exe` |
 | `cannot reach the local LLM` | Start Ollama; check `lc config get llm.local.base_url` |
 | `GROQ_API_KEY is not set` | Export the key or use `--provider local` |
+| `cannot bind 127.0.0.1:7878` | Another `lc serve` is running, or pick `--port` |
+| Canvas says `cannot reach lc serve` | Start `lc serve`; on a tablet you need `--lan` and the same network |
+| Tablet gets `pair first` (401) | Re-scan the QR from `lc serve --lan`, or `lc config get serve.token` |
+| Tablet connects on desktop but not Android | Cleartext HTTP — see `app/src-tauri/android-overlay/network_security_config.xml` |
+| `produced nothing drawable` | The `viz` model can't tool-call; try `lc config set llm.modes.viz groq` |
 | Editor opens a new window | Rebuild latest `lc`; `load --open` uses `cursor -r` / `code -r` |
 | TUI keystrokes duplicated | Fixed in recent builds (ignores key-repeat events) |
 | Weird failures on tuple/list answers | `lc test --full` uses the corpus assert suite |
@@ -277,11 +395,22 @@ JSON corpus ──lc index──▶ SQLite (problems.db)
 ## Development
 
 ```bash
-cargo build --release
-cargo test
+cargo build --release      # CLI, TUI, and the `lc serve` daemon
+cargo test                 # includes the redaction-invariant tests
+cargo clippy --all-targets
 ```
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Whiteboard client:
+
+```bash
+cd app
+npm install
+npm test                   # renderers, capture, ambient loop, local-model fixtures
+npm run build              # tsc --noEmit + vite build
+cd src-tauri && cargo test  # Tauri shell
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes and [`app/README.md`](app/README.md) for client internals.
 
 ---
 

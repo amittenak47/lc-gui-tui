@@ -34,6 +34,10 @@ pub struct Session {
     /// Problems added to the current practice session (in order).
     #[serde(default)]
     pub queue: Vec<String>,
+    /// How many times the reference solution was revealed, per problem — i.e.
+    /// how often the user tapped out. Written only by the `/coach/reveal` path.
+    #[serde(default)]
+    pub reveals: HashMap<String, u32>,
 }
 
 impl Session {
@@ -43,6 +47,7 @@ impl Session {
             active_list: None,
             problems: HashMap::new(),
             queue: Vec::new(),
+            reveals: HashMap::new(),
         }
     }
 
@@ -117,6 +122,31 @@ impl Session {
 
     pub fn progress(&self, task_id: &str) -> Option<&ProblemProgress> {
         self.problems.get(task_id)
+    }
+
+    /// Record that the user revealed the reference solution, returning the new
+    /// count for this problem.
+    pub fn mark_revealed(&mut self, task_id: &str) -> Result<u32> {
+        let count = self.reveals.entry(task_id.to_string()).or_insert(0);
+        *count += 1;
+        let count = *count;
+        self.save()?;
+        Ok(count)
+    }
+
+    pub fn reveal_count(&self, task_id: &str) -> u32 {
+        self.reveals.get(task_id).copied().unwrap_or(0)
+    }
+
+    /// Problems the user tapped out on, and how many times, worst first.
+    pub fn revealed_problems(&self) -> Vec<(&str, u32)> {
+        let mut out: Vec<(&str, u32)> = self
+            .reveals
+            .iter()
+            .map(|(task_id, count)| (task_id.as_str(), *count))
+            .collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        out
     }
 
     pub fn add_to_queue(&mut self, task_id: &str) -> Result<()> {
