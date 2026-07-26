@@ -6,6 +6,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — handwriting whiteboard coach
+
+- **`lc` is now a library** (`src/lib.rs`) as well as a binary. `main.rs` swapped
+  its `mod` declarations for `use lc::*`; nothing else moved.
+- **`lc serve [--port] [--lan]`** — an axum daemon over the existing `index`,
+  `loader`, `problem`, `generator`, and `runner` modules, so a tablet can drive
+  workspaces that stay on the PC. Loopback by default; `--lan` requires a pairing
+  token, generated once and printed as a QR code.
+- **Whiteboard coach modes** (`src/llm/coach.rs`):
+  - `POST /coach/review` — verdict, ratings, gaps, Socratic question, and a
+    counterexample citing one of the problem's **real** sample cases.
+  - `WS /coach/session` — 15-second ambient nudges with a server-side escalation
+    ladder, so the coach escalates instead of repeating itself.
+  - `POST /coach/viz` — diagrams and animations via tool calls.
+  - `POST /coach/reveal` — opt-in reference-solution bridge (see below).
+- **Cited test cases are verified, not trusted.** The daemon checks a cited index
+  against the workspace's cases and overwrites the quoted input/expected with the
+  corpus's own text; a fabricated citation is dropped and reported to the client.
+- **Per-mode LLM config** — `llm.modes.{ambient,review,bridge,viz}`, each `local`
+  or `groq`, so `review` can point at a stronger model while `ambient` stays
+  local and cheap.
+- **`chat_completions_ex`** — multi-turn calls with tool definitions, image
+  parts, and JSON-object output, added alongside the existing
+  `chat_completions` so `lc ask` is untouched.
+- **`src/reveal.rs`** — the one deliberate exception to the redaction invariant.
+  Reading the corpus's `completion` requires a `UserConsent` token that only
+  `UserConsent::from_explicit_user_action()` can produce, and the `/coach/reveal`
+  handler is the sole caller. Enforced by tests.
+- **Reveal tracking** — `session.json` records tap-outs; `lc stats` reports them.
+- **`src/coach.rs`** — a `CoachContext` trait (`system_prompt`, `ground_truth`,
+  `verify`) with `LeetCodeContext` as the first implementation, so a future
+  screen/camera context slots in without touching the canvas or transport.
+- **`app/`** — Tauri v2 whiteboard client (React + Excalidraw), with deterministic
+  renderers for nine data structures, a frame scrubber, and an ML Kit Digital Ink
+  Kotlin plugin for on-device handwriting recognition. See `app/README.md`.
+- **Config keys** — `serve.port`, `serve.token`, `llm.modes.*`.
+
 ### Added
 
 - **Interactive TUI** (`lc` with no subcommand) — ASCII banner, menu-driven navigation, WASD controls.

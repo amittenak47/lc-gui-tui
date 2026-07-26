@@ -1,0 +1,929 @@
+/*
+ * Built for a stylus first: large hit targets, no hover-only affordances, and a
+ * side panel that never overlaps the canvas so a nudge can't land under the pen.
+ */
+
+:root {
+  --ink: #1e1e1e;
+  --muted: #6b7280;
+  --hint: #adb5bd;
+  --line: #e5e7eb;
+  --bg: #ffffff;
+  --panel: #f8fafc;
+  --accent: #c2410c;
+  --ok: #15803d;
+  --bad: #b91c1c;
+  --touch: 44px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  /* The pen should draw, not scroll or select. */
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.lc-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ---------------------------------------------------------------- header --- */
+
+.lc-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.lc-brand {
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+.lc-current {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.lc-modes,
+.lc-actions,
+.lc-action-group,
+.lc-problem-nav {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* Grouped, with a divider between "ask the coach" and "run the tests" — they
+   do different things and shouldn't read as one undifferentiated row. */
+.lc-actions {
+  margin-left: auto;
+  gap: 14px;
+}
+
+.lc-action-group + .lc-action-group {
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+}
+
+.lc-icon {
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+  font-size: 16px;
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.lc-pairing {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+.lc-pairing-form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex: 1 1 320px;
+}
+
+.lc-pairing-form input {
+  flex: 1;
+  min-width: 180px;
+}
+
+/* --------------------------------------------------------------- controls --- */
+
+button {
+  min-height: var(--touch);
+  padding: 0 14px;
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.lc-secondary,
+.lc-mode {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.lc-mode-active {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.lc-link {
+  min-height: auto;
+  padding: 4px 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: underline;
+}
+
+input,
+select {
+  min-height: var(--touch);
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+input[type="range"] {
+  width: 100%;
+  padding: 0;
+}
+
+input[type="checkbox"] {
+  min-height: auto;
+  width: 20px;
+  height: 20px;
+}
+
+/* ------------------------------------------------------------------ main --- */
+
+.lc-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.lc-canvas-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.lc-board {
+  position: relative;
+  height: 100%;
+}
+
+/*
+ * Hide Excalidraw's own chrome: the app supplies a minimal toolbar instead, so
+ * a stylus session never has to hit a menu.
+ */
+.lc-board .App-menu,
+.lc-board .App-toolbar-content,
+.lc-board .layer-ui__wrapper__footer,
+.lc-board .App-bottom-bar,
+.lc-board .help-icon,
+.lc-board .ToolIcon_type_button__hints {
+  display: none !important;
+}
+
+.lc-toolbar {
+  position: absolute;
+  z-index: 5;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
+}
+
+.lc-tool {
+  width: var(--touch);
+  min-height: var(--touch);
+  padding: 0;
+  font-size: 18px;
+  background: transparent;
+  color: var(--ink);
+  border-color: transparent;
+}
+
+.lc-tool-active {
+  background: var(--ink);
+  color: #fff;
+}
+
+.lc-tool-danger {
+  color: var(--bad);
+}
+
+.lc-tool-mini {
+  width: 36px;
+  min-height: 30px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.lc-tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+}
+
+.lc-tool-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
+
+.lc-swatches {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  padding: 2px;
+}
+
+.lc-swatch {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.lc-swatch-active {
+  border-color: var(--ink);
+  border-width: 2px;
+}
+
+/* Shape library, anchored beside the tool strip. */
+.lc-shapes {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 0;
+  width: 200px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 10%);
+  animation: lc-fade 140ms ease-out;
+}
+
+.lc-shape-group h4 {
+  margin: 8px 0 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+
+.lc-shape {
+  width: 100%;
+  min-height: 34px;
+  margin-bottom: 3px;
+  padding: 0 10px;
+  text-align: left;
+  font-size: 13px;
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.lc-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(255 255 255 / 97%);
+  overflow: auto;
+  animation: lc-fade 200ms ease-out;
+}
+
+/* Fade the board in when a problem opens, rather than cutting to it. */
+.lc-entering .lc-board {
+  animation: lc-board-in 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes lc-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes lc-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes lc-board-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-browser,
+  .lc-overlay,
+  .lc-shapes,
+  .lc-entering .lc-board {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------------ side panel --- */
+
+.lc-side {
+  width: 380px;
+  flex: 0 0 380px;
+  border-left: 1px solid var(--line);
+  padding: 12px;
+  overflow-y: auto;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lc-panel,
+.lc-timeline {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--bg);
+}
+
+.lc-panel h3 {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.lc-panel p,
+.lc-panel li {
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 4px 0;
+}
+
+.lc-panel ul,
+.lc-panel ol {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.lc-panel-head,
+.lc-panel-foot,
+.lc-timeline-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lc-panel-foot {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.lc-panel-head .lc-link,
+.lc-timeline-head .lc-link {
+  margin-left: auto;
+}
+
+.lc-muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.lc-warning {
+  color: var(--bad);
+  font-size: 13px;
+}
+
+.lc-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fef2f2;
+  border-bottom: 1px solid #fecaca;
+}
+
+.lc-banner span {
+  flex: 1;
+}
+
+.lc-busy {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.lc-pass {
+  color: var(--ok);
+}
+
+.lc-fail {
+  color: var(--bad);
+}
+
+code {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  background: var(--panel);
+  padding: 1px 4px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+/* --------------------------------------------------------------- verdicts --- */
+
+.lc-verdict {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid currentcolor;
+}
+
+.lc-verdict-on_track {
+  color: var(--ok);
+}
+
+.lc-verdict-subtly_wrong {
+  color: var(--accent);
+}
+
+.lc-verdict-wrong_track {
+  color: var(--bad);
+}
+
+.lc-verdict-unclear {
+  color: var(--muted);
+}
+
+.lc-ratings {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lc-ratings li {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.lc-rating-label {
+  width: 90px;
+  color: var(--muted);
+}
+
+.lc-rating-score {
+  letter-spacing: 2px;
+}
+
+.lc-counterexample {
+  margin-top: 12px;
+  padding: 10px;
+  border-left: 3px solid var(--accent);
+  background: #fff7ed;
+  border-radius: 0 8px 8px 0;
+}
+
+.lc-counterexample dl {
+  margin: 6px 0;
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 2px 8px;
+  font-size: 13px;
+}
+
+.lc-counterexample dt {
+  color: var(--muted);
+}
+
+.lc-counterexample dd {
+  margin: 0;
+}
+
+.lc-question {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--ink);
+  font-style: italic;
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------- ambient --- */
+
+.lc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--hint);
+  flex: 0 0 8px;
+}
+
+.lc-dot-on {
+  background: var(--ok);
+}
+
+.lc-nudges {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lc-nudges li {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.lc-nudges li:last-child {
+  border-bottom: none;
+}
+
+.lc-nudge-text {
+  margin: 0;
+  font-size: 14px;
+}
+
+.lc-nudge-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lc-closeness {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+}
+
+.lc-closeness-close,
+.lc-closeness-there {
+  color: var(--ok);
+  border-color: currentcolor;
+}
+
+.lc-closeness-cold {
+  color: var(--bad);
+  border-color: currentcolor;
+}
+
+/* --------------------------------------------------------------- timeline --- */
+
+.lc-timeline-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.lc-timeline-controls button {
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 13px;
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.lc-timeline-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lc-timeline-label {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.lc-timeline-note {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+/* ---------------------------------------------------------------- browser --- */
+
+/* Laid out as the TUI's table: same columns, same 15-row page. */
+.lc-browser {
+  width: min(1180px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: lc-rise 260ms ease-out;
+}
+
+.lc-browser-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lc-browser-filters input[type="search"] {
+  flex: 1 1 260px;
+}
+
+.lc-table-head,
+.lc-row {
+  display: grid;
+  grid-template-columns: 64px minmax(220px, 1.4fr) 110px minmax(200px, 2fr) 72px;
+  gap: 12px;
+  align-items: center;
+  text-align: left;
+}
+
+.lc-table-head {
+  padding: 0 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+
+.lc-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 58vh;
+  overflow-y: auto;
+}
+
+.lc-row {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.lc-row-selected {
+  border-color: var(--ink);
+  background: var(--panel);
+}
+
+.lc-col-q,
+.lc-col-cases {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lc-col-cases {
+  text-align: right;
+}
+
+.lc-col-slug {
+  font-family: ui-monospace, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-col-tags {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-col-diff {
+  font-size: 12px;
+}
+
+.lc-table-empty {
+  padding: 20px 12px;
+}
+
+.lc-browser-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.lc-browser-foot button {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.lc-keys {
+  flex-basis: 100%;
+  font-size: 11px;
+  font-family: ui-monospace, Consolas, monospace;
+  color: var(--hint);
+}
+
+.lc-diff-easy {
+  color: var(--ok);
+}
+
+.lc-diff-medium {
+  color: var(--accent);
+}
+
+.lc-diff-hard {
+  color: var(--bad);
+}
+
+/* ------------------------------------------------------------- pseudocode --- */
+
+.lc-pseudo {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  padding: 8px 12px;
+}
+
+.lc-pseudo-open {
+  padding-bottom: 12px;
+}
+
+.lc-pseudo-toggle {
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+.lc-pseudo-lang {
+  margin-left: auto;
+  min-height: 30px;
+  font-size: 12px;
+  padding: 0 6px;
+}
+
+.lc-pseudo-body {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.lc-pseudo-fallback {
+  width: 100%;
+  height: 240px;
+  border: none;
+  padding: 10px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.lc-pseudo-note {
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+}
+
+.lc-pseudo-loading {
+  height: 240px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ modal --- */
+
+.lc-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 40%);
+}
+
+.lc-modal {
+  width: min(460px, 100%);
+  padding: 20px;
+  border-radius: 14px;
+  background: var(--bg);
+}
+
+.lc-modal h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.lc-modal p {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.lc-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0;
+  font-size: 14px;
+}
+
+.lc-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.lc-steps li {
+  margin-bottom: 8px;
+}
+
+.lc-steps p {
+  margin: 2px 0 0;
+}
+
+.lc-next-edit {
+  margin-top: 12px;
+  padding: 10px;
+  border-left: 3px solid var(--ok);
+  background: #f0fdf4;
+  border-radius: 0 8px 8px 0;
+}
+
+.lc-case-fail {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+/*
+ * On the tablet in portrait, the panel goes underneath rather than stealing
+ * canvas width.
+ */
+@media (max-width: 900px) {
+  .lc-main {
+    flex-direction: column;
+  }
+
+  .lc-side {
+    width: auto;
+    flex: 0 0 auto;
+    max-height: 45vh;
+    border-left: none;
+    border-top: 1px solid var(--line);
+  }
+}

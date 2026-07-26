@@ -86,7 +86,8 @@ pub fn build_user_prompt(
     out
 }
 
-fn clip(text: &str, max: usize) -> String {
+/// Shared by [`crate::llm::coach`], which follows the same section-heading style.
+pub(crate) fn clip(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
     }

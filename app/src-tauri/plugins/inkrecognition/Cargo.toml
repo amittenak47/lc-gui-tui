@@ -1,0 +1,16 @@
+[package]
+name = "tauri-plugin-inkrecognition"
+version = "0.1.0"
+edition = "2021"
+description = "On-device handwriting recognition via ML Kit Digital Ink, for the lc whiteboard coach"
+license = "PolyForm-Noncommercial-1.0.0"
+links = "tauri-plugin-inkrecognition"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dependencies]
+tauri = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"

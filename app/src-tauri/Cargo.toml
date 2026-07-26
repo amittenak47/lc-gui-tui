@@ -1,0 +1,31 @@
+[package]
+name = "lc-whiteboard"
+version = "0.1.0"
+edition = "2021"
+description = "Handwriting whiteboard coach for the lc harness"
+license = "PolyForm-Noncommercial-1.0.0"
+
+# `staticlib`/`cdylib` are what the Android and iOS targets link against; `rlib`
+# keeps `cargo test` working on the desktop.
+[lib]
+name = "lc_whiteboard_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+# ML Kit exists only on Android; the desktop build never compiles it and falls
+# back to typed text or a PNG sent to a vision model.
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-inkrecognition = { path = "plugins/inkrecognition" }
+
+[profile.release]
+lto = true
+strip = true

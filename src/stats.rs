@@ -36,7 +36,27 @@ pub fn session(conn: &Connection, session: &Session) -> Result<()> {
         &agg,
         session.started_at,
     );
+    print_reveals(session);
     Ok(())
+}
+
+/// How often the whiteboard coach's reveal was tapped. Absent entirely when it
+/// never was, so the usual output is unchanged.
+fn print_reveals(session: &Session) {
+    let revealed = session.revealed_problems();
+    if revealed.is_empty() {
+        return;
+    }
+    let total: u32 = revealed.iter().map(|(_, count)| count).sum();
+    println!(
+        "\n  reference revealed: {total} time{} across {} problem{}",
+        if total == 1 { "" } else { "s" },
+        revealed.len(),
+        if revealed.len() == 1 { "" } else { "s" }
+    );
+    for (task_id, count) in revealed.iter().take(10) {
+        println!("    {task_id} ×{count}");
+    }
 }
 
 pub fn list(conn: &Connection, name: &str, session: Option<&Session>) -> Result<()> {

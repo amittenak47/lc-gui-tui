@@ -1,20 +1,11 @@
-mod config;
-mod generator;
-mod index;
-mod lists;
-mod llm;
-mod loader;
-mod problem;
-mod runner;
-mod session;
-mod stats;
-mod tui;
-
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use comfy_table::Table;
 use std::path::{Path, PathBuf};
+
+// The CLI and `lc serve` are both shells over the same library crate.
+use lc::{config, generator, index, lists, llm, loader, problem, runner, serve, session, stats, tui};
 
 use config::Config;
 use index::{ProblemRow, SearchSort};
@@ -122,6 +113,16 @@ enum Cmd {
         #[arg(long)]
         clipboard: bool,
     },
+    /// Run the daemon the whiteboard coach client talks to
+    Serve {
+        /// Port to listen on (defaults to the `serve.port` config value)
+        #[arg(long)]
+        port: Option<u16>,
+        /// Bind all interfaces so a tablet on the LAN can connect. Requires a
+        /// pairing token, printed as a QR code on first use.
+        #[arg(long)]
+        lan: bool,
+    },
     /// Manage named problem lists
     #[command(subcommand)]
     List(ListCmd),
@@ -132,7 +133,8 @@ enum Cmd {
 #[derive(Subcommand)]
 enum ConfigCmd {
     /// Set a value. Keys: data-dir, workspace, python, llm.provider,
-    /// llm.local.base_url, llm.local.model, llm.groq.model
+    /// llm.local.base_url, llm.local.model, llm.groq.model,
+    /// llm.modes.{ambient,review,bridge,viz}, serve.port, serve.token
     Set { key: String, value: String },
     /// Print one value
     Get { key: String },
@@ -305,6 +307,10 @@ fn run_cmd(cmd: Cmd) -> Result<()> {
         } => {
             let cfg = Config::load()?;
             cmd_ask(&cfg, id.as_deref(), case, provider.as_deref(), clipboard)
+        }
+        Cmd::Serve { port, lan } => {
+            let cfg = Config::load()?;
+            serve::run(cfg, port, lan)
         }
         Cmd::List(cmd) => cmd_list(cmd),
         Cmd::Submit => {

@@ -10,6 +10,7 @@ pub struct Config {
     pub workspace: WorkspaceConfig,
     pub python: PythonConfig,
     pub llm: LlmConfig,
+    pub serve: ServeConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -54,6 +55,8 @@ pub struct LlmConfig {
     pub default_provider: String,
     pub local: LocalLlmConfig,
     pub groq: GroqLlmConfig,
+    /// Per-coach-mode provider overrides.
+    pub modes: LlmModes,
 }
 
 impl Default for LlmConfig {
@@ -62,6 +65,91 @@ impl Default for LlmConfig {
             default_provider: "local".into(),
             local: LocalLlmConfig::default(),
             groq: GroqLlmConfig::default(),
+            modes: LlmModes::default(),
+        }
+    }
+}
+
+/// Which provider each coach mode talks to. Every mode defaults to `local`, so
+/// the whole whiteboard loop runs offline until the user points one at Groq.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LlmModes {
+    /// Cheap, runs on the 15s ambient loop.
+    pub ambient: String,
+    /// Deeper analysis when the user submits the board.
+    pub review: String,
+    /// Solution refactor path, after an explicit reveal.
+    pub bridge: String,
+    /// Tool-calling for diagrams and animations.
+    pub viz: String,
+}
+
+impl Default for LlmModes {
+    fn default() -> Self {
+        Self {
+            ambient: "local".into(),
+            review: "local".into(),
+            bridge: "local".into(),
+            viz: "local".into(),
+        }
+    }
+}
+
+pub const COACH_MODES: [&str; 4] = ["ambient", "review", "bridge", "viz"];
+
+impl LlmModes {
+    pub fn get(&self, mode: &str) -> Result<&str> {
+        Ok(match mode {
+            "ambient" => &self.ambient,
+            "review" => &self.review,
+            "bridge" => &self.bridge,
+            "viz" => &self.viz,
+            other => bail!(
+                "unknown coach mode {other:?} — expected one of {}",
+                COACH_MODES.join(", ")
+            ),
+        })
+    }
+
+    fn set(&mut self, mode: &str, provider: &str) -> Result<()> {
+        validate_provider(provider)?;
+        match mode {
+            "ambient" => self.ambient = provider.to_string(),
+            "review" => self.review = provider.to_string(),
+            "bridge" => self.bridge = provider.to_string(),
+            "viz" => self.viz = provider.to_string(),
+            other => bail!(
+                "unknown coach mode {other:?} — expected one of {}",
+                COACH_MODES.join(", ")
+            ),
+        }
+        Ok(())
+    }
+}
+
+fn validate_provider(value: &str) -> Result<()> {
+    if value != "local" && value != "groq" {
+        bail!("provider must be \"local\" or \"groq\", got {value:?}");
+    }
+    Ok(())
+}
+
+/// Settings for `lc serve`, the daemon the whiteboard client talks to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServeConfig {
+    pub port: u16,
+    /// Pairing token required by `--lan`. Generated on first `--lan` start and
+    /// shown as a QR code for the tablet to scan.
+    pub token: Option<String>,
+}
+
+impl Default for ServeConfig {
+    fn default() -> Self {
+        Self {
+            port: 7878,
+            token: None,
         }
     }
 }
@@ -110,18 +198,46 @@ pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
 }
 
+/// Ways a config file might spell "my home directory".
+///
+/// `~` alone is not enough in practice: a shell that doesn't expand `$HOME`
+/// (`cmd.exe`, PowerShell for POSIX-style names) passes it through literally,
+/// and the result is a directory *named* `$HOME` next to wherever the command
+/// ran. Recognizing the spellings here means such a config self-heals instead of
+/// silently creating one.
+const HOME_PREFIXES: [&str; 5] = ["~", "$HOME", "${HOME}", "%USERPROFILE%", "$USERPROFILE"];
+
 pub fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix('~') {
-        if let Some(dirs) = UserDirs::new() {
-            let rest = rest.trim_start_matches(['/', '\\']);
-            return if rest.is_empty() {
-                dirs.home_dir().to_path_buf()
-            } else {
-                dirs.home_dir().join(rest)
-            };
+    for prefix in HOME_PREFIXES {
+        if let Some(rest) = strip_home_prefix(path, prefix) {
+            if let Some(dirs) = UserDirs::new() {
+                return if rest.is_empty() {
+                    dirs.home_dir().to_path_buf()
+                } else {
+                    dirs.home_dir().join(rest)
+                };
+            }
         }
     }
     PathBuf::from(path)
+}
+
+/// The remainder after a home prefix, or `None` if `path` doesn't start with
+/// one. Requires the prefix to be followed by a separator or nothing, so
+/// `$HOMEWORK/notes` is left alone.
+fn strip_home_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    // Windows environment variables are case-insensitive.
+    if path.len() < prefix.len() || !path[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        return None;
+    }
+    let rest = &path[prefix.len()..];
+    if rest.is_empty() {
+        return Some(rest);
+    }
+    if rest.starts_with('/') || rest.starts_with('\\') {
+        return Some(rest.trim_start_matches(['/', '\\']));
+    }
+    None
 }
 
 impl Config {
@@ -151,18 +267,33 @@ impl Config {
             "workspace" | "workspace.dir" => self.workspace.dir = value.to_string(),
             "python" | "python.executable" => self.python.executable = value.to_string(),
             "llm.provider" | "llm.default_provider" => {
-                if value != "local" && value != "groq" {
-                    bail!("llm.provider must be \"local\" or \"groq\", got {value:?}");
-                }
+                validate_provider(value)?;
                 self.llm.default_provider = value.to_string();
             }
             "llm.local.base_url" => self.llm.local.base_url = value.to_string(),
             "llm.local.model" => self.llm.local.model = value.to_string(),
             "llm.groq.base_url" => self.llm.groq.base_url = value.to_string(),
             "llm.groq.model" => self.llm.groq.model = value.to_string(),
+            "serve.port" => {
+                self.serve.port = value
+                    .parse()
+                    .with_context(|| format!("serve.port must be a port number, got {value:?}"))?
+            }
+            "serve.token" => {
+                self.serve.token = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                }
+            }
+            _ if key.starts_with("llm.modes.") => {
+                self.llm.modes.set(&key["llm.modes.".len()..], value)?
+            }
             other => bail!(
                 "unknown config key {other:?}; known keys: data-dir, workspace, python, \
-                 llm.provider, llm.local.base_url, llm.local.model, llm.groq.base_url, llm.groq.model"
+                 llm.provider, llm.local.base_url, llm.local.model, llm.groq.base_url, \
+                 llm.groq.model, llm.modes.<{}>, serve.port, serve.token",
+                COACH_MODES.join("|")
             ),
         }
         Ok(())
@@ -178,6 +309,11 @@ impl Config {
             "llm.local.model" => self.llm.local.model.clone(),
             "llm.groq.base_url" => self.llm.groq.base_url.clone(),
             "llm.groq.model" => self.llm.groq.model.clone(),
+            "serve.port" => self.serve.port.to_string(),
+            "serve.token" => self.serve.token.clone().unwrap_or_default(),
+            _ if key.starts_with("llm.modes.") => {
+                self.llm.modes.get(&key["llm.modes.".len()..])?.to_string()
+            }
             other => bail!("unknown config key {other:?}"),
         })
     }
@@ -191,5 +327,138 @@ impl Config {
 
     pub fn workspace_dir(&self) -> PathBuf {
         expand_tilde(&self.workspace.dir)
+    }
+
+    /// Pairing token for `lc serve --lan`, generated and persisted on first use
+    /// so the tablet only ever has to scan one QR code.
+    pub fn ensure_serve_token(&mut self) -> Result<String> {
+        if let Some(token) = self.serve.token.as_deref().filter(|t| !t.trim().is_empty()) {
+            return Ok(token.to_string());
+        }
+        let token = random_token();
+        self.serve.token = Some(token.clone());
+        self.save()?;
+        Ok(token)
+    }
+}
+
+fn random_token() -> String {
+    use rand::Rng as _;
+    const ALPHABET: &[u8] = b"abcdefghijkmnopqrstuvwxyz23456789";
+    let mut rng = rand::thread_rng();
+    (0..32)
+        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn home() -> PathBuf {
+        UserDirs::new().expect("a home directory").home_dir().to_path_buf()
+    }
+
+    #[test]
+    fn tilde_expands() {
+        assert_eq!(expand_tilde("~/lc-workspace"), home().join("lc-workspace"));
+        assert_eq!(expand_tilde("~\\lc-workspace"), home().join("lc-workspace"));
+        assert_eq!(expand_tilde("~"), home());
+    }
+
+    /// The bug this guards: a shell that doesn't expand `$HOME` passes it
+    /// through, and `lc` used to create a directory literally named `$HOME`.
+    #[test]
+    fn unexpanded_home_variables_are_recognized_not_taken_literally() {
+        for spelling in [
+            "$HOME/lc-workspace",
+            "$HOME\\lc-workspace",
+            "${HOME}/lc-workspace",
+            "%USERPROFILE%\\lc-workspace",
+            "$USERPROFILE/lc-workspace",
+        ] {
+            assert_eq!(
+                expand_tilde(spelling),
+                home().join("lc-workspace"),
+                "{spelling} should resolve to the home directory"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_variable_names_are_case_insensitive() {
+        assert_eq!(expand_tilde("%userprofile%/lc"), home().join("lc"));
+        assert_eq!(expand_tilde("$home/lc"), home().join("lc"));
+    }
+
+    #[test]
+    fn a_path_that_merely_starts_with_a_prefix_is_left_alone() {
+        // Without the separator check, these would be mangled into the home dir.
+        for literal in ["$HOMEWORK/notes", "~backup/x", "/srv/$HOME/x", "C:\\lc"] {
+            assert_eq!(expand_tilde(literal), PathBuf::from(literal), "{literal}");
+        }
+    }
+
+    #[test]
+    fn absolute_paths_pass_through() {
+        assert_eq!(
+            expand_tilde("C:\\Users\\Amit\\lc-workspace"),
+            PathBuf::from("C:\\Users\\Amit\\lc-workspace")
+        );
+        assert_eq!(expand_tilde("/var/lc"), PathBuf::from("/var/lc"));
+    }
+
+    #[test]
+    fn coach_modes_default_to_local_and_reject_unknown_providers() {
+        let mut cfg = Config::default();
+        for mode in COACH_MODES {
+            assert_eq!(cfg.llm.modes.get(mode).unwrap(), "local");
+        }
+        cfg.set("llm.modes.review", "groq").unwrap();
+        assert_eq!(cfg.get("llm.modes.review").unwrap(), "groq");
+        assert_eq!(cfg.get("llm.modes.ambient").unwrap(), "local", "modes are independent");
+
+        assert!(cfg.set("llm.modes.review", "gpt5").is_err());
+        assert!(cfg.set("llm.modes.telepathy", "local").is_err());
+        assert!(cfg.get("llm.modes.telepathy").is_err());
+    }
+
+    #[test]
+    fn serve_port_must_be_a_port() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.serve.port, 7878);
+        cfg.set("serve.port", "9000").unwrap();
+        assert_eq!(cfg.serve.port, 9000);
+        assert!(cfg.set("serve.port", "not-a-port").is_err());
+        assert!(cfg.set("serve.port", "70000").is_err(), "must not overflow u16");
+    }
+
+    #[test]
+    fn clearing_the_serve_token_stores_none_not_an_empty_string() {
+        let mut cfg = Config::default();
+        cfg.set("serve.token", "abc").unwrap();
+        assert_eq!(cfg.serve.token.as_deref(), Some("abc"));
+        cfg.set("serve.token", "").unwrap();
+        assert!(cfg.serve.token.is_none());
+    }
+
+    /// An existing config predates every new section, so all of them must
+    /// default in rather than failing the parse.
+    #[test]
+    fn an_older_config_still_loads() {
+        let older = r#"
+            [data]
+            json_dir = 'C:\corpus'
+            [llm]
+            default_provider = "local"
+            [llm.local]
+            base_url = "http://localhost:8080/"
+            model = "granite"
+        "#;
+        let cfg: Config = toml::from_str(older).expect("older config still parses");
+        assert_eq!(cfg.llm.local.model, "granite");
+        assert_eq!(cfg.llm.modes.ambient, "local");
+        assert_eq!(cfg.serve.port, 7878);
+        assert!(cfg.serve.token.is_none());
     }
 }
