@@ -104,17 +104,77 @@ fn code_body(problem: &Problem) -> String {
     format!("{prompt}\n\n\n{starter}")
 }
 
-fn title_from_slug(slug: &str) -> String {
+pub(crate) fn title_from_slug(slug: &str) -> String {
     slug.split('-')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
+        .filter(|word| !word.is_empty())
+        .map(title_word)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn title_word(word: &str) -> String {
+    let lower = word.to_ascii_lowercase();
+    if is_roman_segment(&lower) {
+        return lower.to_ascii_uppercase();
+    }
+    let mut chars = lower.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// LeetCode slug tails like `-ii` / `-iii` should render as `II` / `III`.
+fn is_roman_segment(word: &str) -> bool {
+    matches!(
+        word,
+        "i" | "ii"
+            | "iii"
+            | "iv"
+            | "v"
+            | "vi"
+            | "vii"
+            | "viii"
+            | "ix"
+            | "x"
+            | "xi"
+            | "xii"
+            | "xiii"
+            | "xiv"
+            | "xv"
+            | "xvi"
+            | "xvii"
+            | "xviii"
+            | "xix"
+            | "xx"
+    )
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::title_from_slug;
+
+    #[test]
+    fn roman_numeral_tails_are_fully_uppercased() {
+        assert_eq!(
+            title_from_slug("longest-uncommon-subsequence-ii"),
+            "Longest Uncommon Subsequence II"
+        );
+        assert_eq!(
+            title_from_slug("house-robber-iii"),
+            "House Robber III"
+        );
+        assert_eq!(title_from_slug("n-queens-ii"), "N Queens II");
+    }
+
+    #[test]
+    fn ordinary_words_stay_title_case() {
+        assert_eq!(title_from_slug("two-sum"), "Two Sum");
+        assert_eq!(
+            title_from_slug("1-bit-and-2-bit-characters"),
+            "1 Bit And 2 Bit Characters"
+        );
+    }
 }
 
 /// Open `solution.py` in the current Cursor/VS Code window (`-r` / `--reuse-window`).

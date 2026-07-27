@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LcClient, SearchOptions } from "../api/client";
 import type { ProblemSummary, SessionSnapshot } from "../api/types";
 import { BackgroundPalette } from "../components/BackgroundPalette";
+import { titleFromSlug } from "../util/text";
 
 export const PAGE_SIZE = 15;
 
@@ -429,13 +430,13 @@ export function ProblemBrowser({
                       onClick={() => activateRow(problem.task_id)}
                     >
                       <span className="lc-col-q">{problem.question_id ?? ""}</span>
-                      <span className="lc-col-name">
+                      <span className="lc-col-name" title={problem.task_id}>
                         {selectMode && (
                           <span className={isPicked ? "lc-pick-mark is-on" : "lc-pick-mark"} aria-hidden="true">
                             {isPicked ? "✓" : "○"}
                           </span>
                         )}
-                        {problem.task_id}
+                        {titleFromSlug(problem.task_id)}
                         {session?.problems[problem.task_id] && (
                           <span
                             className={`lc-session-badge is-${session.problems[problem.task_id].state}`}

@@ -166,7 +166,7 @@ describe("syncRegionLayout", () => {
     const widths = ["constraints", "code", "approach"].map((region) => {
       return synced.find((element) => element.id === regionFrameId(region as never))?.width;
     });
-    expect(widths.every((width) => (width ?? 0) >= 1200)).toBe(true);
+    expect(widths.every((width) => (width ?? 0) >= 1680)).toBe(true);
   });
 
   it("keeps the coach lane beside the shared student column", () => {

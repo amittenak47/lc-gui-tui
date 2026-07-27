@@ -37,19 +37,27 @@ import {
   saveImportedLibrary,
   type ImportedLibraryItem,
 } from "../templates/libraryImport";
-import { regionFrameId, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
+import { regionFrameId, regionFramesOf, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
 import { recolorTemplateElements } from "../templates/problemBoard";
-import { codeFrameHeightForSource, CODE_LABEL_RESERVE } from "../util/solutionPad";
+import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
 import { REGIONS } from "../templates/regions";
 import {
   BOARD_THEMES,
   DEFAULT_FONT_SIZE,
+  FONT_SIZE_LABELS,
   FONT_SIZES,
   FONT_UI,
   type Skeleton,
 } from "../templates/skeleton";
 import { BackgroundPalette } from "../components/BackgroundPalette";
+import { ReadingSizeControl } from "../components/ReadingSizeControl";
 import { isDarkTheme } from "../theme/appThemes";
+import {
+  loadBoardReadingSize,
+  saveBoardReadingSize,
+  type BoardReadingSize,
+} from "../modes/codeFontSize";
+import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
 import type { BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
 import { applyMetadata, keepOnClear, isCoachElement } from "./scene";
@@ -169,6 +177,9 @@ export interface BoardProps {
   interactive?: boolean;
   /** Screen rect of the solution-code region, updated as you pan/zoom/resize. */
   onCodeSlot?: (rect: ScreenRect | null) => void;
+  /** Shared S/M/L size for problem statement + code. */
+  readingSize?: BoardReadingSize;
+  onReadingSizeChange?: (size: BoardReadingSize) => void;
 }
 
 const INK_COLORS_LIGHT = ["#1e1e1e", "#64748b", "#b45309", "#1d4ed8", "#166534", "#b91c1c"] as const;
@@ -224,7 +235,15 @@ function sameCodeSlot(a: ScreenRect | null, b: ScreenRect | null): boolean {
 }
 
 export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
-  { onChange, themeId, onThemePick, interactive = true, onCodeSlot },
+  {
+    onChange,
+    themeId,
+    onThemePick,
+    interactive = true,
+    onCodeSlot,
+    readingSize: readingSizeProp,
+    onReadingSizeChange,
+  },
   ref,
 ) {
   const apiRef = useRef<ExcalidrawApi | null>(null);
@@ -238,14 +257,44 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const rasterInkRef = useRef<RasterInkHandle>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [zoomPct, setZoomPct] = useState(100);
+  const [readingSizeLocal, setReadingSizeLocal] = useState<BoardReadingSize>(() => loadBoardReadingSize());
+  const readingSize = readingSizeProp ?? readingSizeLocal;
+  const readingSizeRef = useRef(readingSize);
+  readingSizeRef.current = readingSize;
   const templateRef = useRef<unknown[]>([]);
   const seedSkeletonsRef = useRef<Skeleton[]>([]);
   const scrollUnsubRef = useRef<(() => void) | null>(null);
   const layoutSyncingRef = useRef(false);
   const codeContentHeightRef = useRef<number | null>(null);
+  const lastCodeSourceRef = useRef<string>("");
   const lastCodeSlotRef = useRef<ScreenRect | null>(null);
   const onCodeSlotRef = useRef(onCodeSlot);
   onCodeSlotRef.current = onCodeSlot;
+
+  // Library stamps must stay draggable — older imports may still be locked.
+  useEffect(() => {
+    if (!interactive) return;
+    const api = apiRef.current;
+    if (!api) return;
+    const current = api.getSceneElements() as Array<{
+      locked?: boolean;
+      customData?: { lcStamp?: boolean } | null;
+      [key: string]: unknown;
+    }>;
+    let changed = false;
+    const next = current.map((element) => {
+      if (element.customData?.lcStamp && element.locked) {
+        changed = true;
+        return { ...element, locked: false };
+      }
+      return element;
+    });
+    if (!changed) return;
+    api.updateScene({
+      elements: next,
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+  }, [interactive]);
 
   const elements = useCallback((): SceneElementLike[] => {
     return (apiRef.current?.getSceneElements() ?? []) as SceneElementLike[];
@@ -284,7 +333,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // viewport — do not add page offsets (those are for clientX/clientY only).
     const inset = Math.max(6, Math.round(8 * zoom));
     // Leave room for the CODE label + hint above Monaco (same chrome as Approach).
-    const headerReserve = Math.round(CODE_LABEL_RESERVE * zoom);
+    const headerReserve = Math.round(codeLabelReserve(readingSizeRef.current) * zoom);
     const next: ScreenRect = {
       left: roundPx((frame.x + scrollX) * zoom + inset),
       top: roundPx((frame.y + scrollY) * zoom + inset + headerReserve),
@@ -597,26 +646,71 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const fitView = useCallback(() => {
     const api = apiRef.current;
     if (!api) return;
-    const template = templateRef.current as Array<{
-      customData?: { lcRegion?: string } | null;
-    }>;
-    // Prefer the problem statement + code slot so the statement stays readable.
-    // Full-board fit zooms out too far and makes the statement tiny.
-    const focus = template.filter((element) => {
-      const region = element.customData?.lcRegion;
-      return region === "constraints" || region === "code";
-    });
+
+    const live = api.getSceneElements() as LayoutElement[];
+    const frames = regionFramesOf(live);
+    // Land on the problem statement + code only — never the full board
+    // (Approach / Walkthrough / Coach), which zooms out to a tiny corner.
+    const focusFrames = (["constraints", "code"] as const)
+      .map((id) => frames.get(id))
+      .filter((frame): frame is LayoutElement => Boolean(frame));
+
+    const tagged =
+      focusFrames.length > 0
+        ? focusFrames
+        : live.filter((element) => {
+            const region = element.customData?.lcRegion;
+            return region === "constraints" || region === "code";
+          });
+
+    const template = templateRef.current as LayoutElement[];
     const target =
-      focus.length > 0
-        ? focus
+      tagged.length > 0
+        ? tagged
         : template.length > 0
-          ? template
-          : (api.getSceneElements?.() ?? []);
-    api.scrollToContent(target, {
+          ? template.filter((element) => {
+              const region = element.customData?.lcRegion;
+              return region === "constraints" || region === "code";
+            })
+          : live;
+
+    const focus = target.length > 0 ? target : live;
+
+    // Leave room for the floating toolbar; bottom inset is larger so fit prefers
+    // the upper viewport instead of vertically centering the stack.
+    api.scrollToContent(focus, {
       fitToViewport: true,
       viewportZoomFactor: 0.92,
       animate: false,
+      canvasOffsets: { top: 28, left: 72, right: 28, bottom: 120 },
     });
+
+    // scrollToContent still centers within the inset — pin the focus block near
+    // the top-left so load matches the composed problem layout.
+    const state = api.getAppState() as {
+      scrollX?: number;
+      scrollY?: number;
+      zoom?: { value?: number };
+    };
+    const zoom = state.zoom?.value ?? 1;
+    let minX = Infinity;
+    let minY = Infinity;
+    for (const element of focus) {
+      if (typeof element.x === "number") minX = Math.min(minX, element.x);
+      if (typeof element.y === "number") minY = Math.min(minY, element.y);
+    }
+    if (Number.isFinite(minX) && Number.isFinite(minY)) {
+      const topMargin = 36;
+      const leftMargin = 88;
+      // scene → screen: (scene + scroll) * zoom  (see Board.stamp)
+      api.updateScene({
+        appState: {
+          scrollX: leftMargin / zoom - minX,
+          scrollY: topMargin / zoom - minY,
+        },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    }
     setZoomPct(Math.round(readZoom() * 100));
     requestAnimationFrame(reportCodeSlot);
   }, [readZoom, reportCodeSlot]);
@@ -631,6 +725,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         window.setTimeout(run, 200);
       });
     });
+  }, [fitView]);
+
+  const settleFitView = useCallback((): Promise<void> => {
+    const waitFrame = () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        window.setTimeout(resolve, ms);
+      });
+    return (async () => {
+      await waitFrame();
+      await waitFrame();
+      fitView();
+      await wait(50);
+      fitView();
+      await wait(120);
+      fitView();
+      await waitFrame();
+    })();
   }, [fitView]);
 
   /** Drop a configured stamp near the middle of what's currently on screen. */
@@ -661,11 +774,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const groupId = `lcstamp-${shape.id}-${Date.now().toString(36)}`;
         pieces = pieces.map((element) => ({
           ...element,
+          locked: false,
           groupIds: [...(element.groupIds ?? []), groupId],
           customData: {
             ...(element.customData ?? {}),
             lcStamp: true,
             lcStampGroup: groupId,
+          },
+        }));
+      } else {
+        pieces = pieces.map((element) => ({
+          ...element,
+          locked: false,
+          customData: {
+            ...(element.customData ?? {}),
+            lcStamp: true,
           },
         }));
       }
@@ -722,10 +845,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (skeletons.length === 0) return;
     const dark = isDarkTheme(themeId);
     const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
-    const next = recolorTemplateElements(converted, dark) ?? converted;
-    templateRef.current = next;
+    const recolored = recolorTemplateElements(converted, dark) ?? converted;
+    const sized = applyBoardReadingSize(recolored, readingSizeRef.current, { captureFrom: "M" });
+    templateRef.current = sized;
     apiRef.current?.updateScene({
-      elements: next as unknown[],
+      elements: sized as unknown[],
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
     requestAnimationFrame(() => {
@@ -752,11 +876,50 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const fitCodeToSource = useCallback(
     (source: string) => {
-      codeContentHeightRef.current = codeFrameHeightForSource(source);
+      lastCodeSourceRef.current = source;
+      codeContentHeightRef.current = codeFrameHeightForSource(source, readingSizeRef.current);
       applyRegionLayout();
       requestAnimationFrame(reportCodeSlot);
     },
     [applyRegionLayout, reportCodeSlot],
+  );
+
+  const setReadingSize = useCallback(
+    (next: BoardReadingSize) => {
+      const prev = readingSizeRef.current;
+      if (next === prev) {
+        onReadingSizeChange?.(next);
+        return;
+      }
+      readingSizeRef.current = next;
+      setReadingSizeLocal(next);
+      saveBoardReadingSize(next);
+      onReadingSizeChange?.(next);
+
+      const api = apiRef.current;
+      if (!api) return;
+
+      const scaled = applyBoardReadingSize(api.getSceneElements() as SceneElementLike[], next, {
+        captureFrom: prev,
+      });
+      layoutSyncingRef.current = true;
+      api.updateScene({
+        elements: scaled as unknown[],
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+      requestAnimationFrame(() => {
+        layoutSyncingRef.current = false;
+        if (lastCodeSourceRef.current) {
+          codeContentHeightRef.current = codeFrameHeightForSource(
+            lastCodeSourceRef.current,
+            next,
+          );
+        }
+        applyRegionLayout();
+        reportCodeSlot();
+      });
+    },
+    [applyRegionLayout, onReadingSizeChange, reportCodeSlot],
   );
 
   const handleSceneChange = useCallback(() => {
@@ -775,7 +938,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         seedSkeletonsRef.current = skeletons;
         const dark = isDarkTheme(themeId);
         const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
-        const next = recolorTemplateElements(converted, dark) ?? converted;
+        const recolored = recolorTemplateElements(converted, dark) ?? converted;
+        const next = applyBoardReadingSize(recolored, readingSizeRef.current, { captureFrom: "M" });
         templateRef.current = next;
         apiRef.current?.updateScene({
           elements: next as unknown[],
@@ -821,6 +985,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       zoomIn,
       zoomOut,
       fitView,
+      settleFitView,
       fitCodeToSource,
       saveBoard: () => {
         const api = apiRef.current;
@@ -841,9 +1006,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         };
       },
       restoreBoard: (nextElements, appState) => {
+        // Keep a fit target so landing zooms to problem+code, not the full board.
+        templateRef.current = nextElements as unknown[];
+        // Drop saved zoom/pan — never pass zoom: undefined (Excalidraw crashes).
+        const saved = { ...((appState as Record<string, unknown> | undefined) ?? {}) };
+        delete saved.zoom;
+        delete saved.scrollX;
+        delete saved.scrollY;
         apiRef.current?.updateScene({
           elements: nextElements,
-          appState: (appState as Record<string, unknown> | undefined) ?? undefined,
+          ...(Object.keys(saved).length > 0 ? { appState: saved } : {}),
           captureUpdate: CaptureUpdateAction.NEVER,
         });
         requestAnimationFrame(() => {
@@ -852,7 +1024,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
       },
     }),
-    [convert, elements, fitCodeToSource, fitView, resetTemplate, scheduleFitView, setTool, themeId, undoBoard, zoomIn, zoomOut],
+    [convert, elements, fitCodeToSource, fitView, settleFitView, resetTemplate, scheduleFitView, setTool, themeId, undoBoard, zoomIn, zoomOut],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
@@ -868,7 +1040,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         currentItemFontFamily: FONT_UI,
         currentItemFontSize: DEFAULT_FONT_SIZE,
       },
-      scrollToContent: true,
+      // We call settleFitView ourselves — Excalidraw's default fits the entire
+      // board and lands the problem as a postage stamp in the corner.
+      scrollToContent: false,
     }),
     [theme.background, themeId],
   );
@@ -890,7 +1064,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             fontSize={fontSize}
             onFontSize={setFontSize}
             shapesOpen={shapesOpen}
-            onToggleShapes={() => setShapesOpen((open) => !open)}
+            onToggleShapes={() => {
+              if (shapesOpen) {
+                setShapesOpen(false);
+                return;
+              }
+              // Shape library is exclusive with drawing tools.
+              setTool("selection");
+              setShapesOpen(true);
+            }}
             onStamp={stamp}
             onStampImported={stampImported}
             onClear={() => {
@@ -908,12 +1090,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             {onThemePick && (
               <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
             )}
-            <ZoomControls
-              zoomPct={zoomPct}
-              onZoomIn={zoomIn}
-              onZoomOut={zoomOut}
-              onFit={fitView}
-            />
+            <div className="lc-map-chrome-right">
+              <ReadingSizeControl value={readingSize} onChange={setReadingSize} />
+              <ZoomControls
+                zoomPct={zoomPct}
+                onZoomIn={zoomIn}
+                onZoomOut={zoomOut}
+                onFit={fitView}
+              />
+            </div>
           </div>
         </>
       )}
@@ -1093,17 +1278,22 @@ function BoardToolbar({
 
   const modifierTitle = configuring?.label ?? configuringImport?.name ?? "";
 
+  const pickTool = (tool: ToolName) => {
+    if (shapesOpen) onToggleShapes();
+    onPick(tool);
+  };
+
   return (
     <div className="lc-toolbar" role="toolbar" aria-label="Drawing tools">
       {TOOLS.map(({ tool, label, hint, emoji }) => (
         <button
           key={tool}
           type="button"
-          className={tool === active ? "lc-tool lc-tool-active" : "lc-tool"}
+          className={tool === active && !shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
           title={hint}
           aria-label={hint}
-          aria-pressed={tool === active}
-          onClick={() => onPick(tool)}
+          aria-pressed={tool === active && !shapesOpen}
+          onClick={() => pickTool(tool)}
         >
           {emoji === "erasersvg" ? (
             <PinkEraserIcon />
@@ -1172,13 +1362,13 @@ function BoardToolbar({
                   ? "lc-tool lc-tool-mini lc-tool-active lc-tip-target"
                   : "lc-tool lc-tool-mini lc-tip-target"
               }
-              data-tip={`Font size ${size}`}
+              data-tip={`Text size ${FONT_SIZE_LABELS[size]} (${size}px)`}
               data-tip-placement="right"
-              title={`Font size ${size}`}
+              title={`Text size ${FONT_SIZE_LABELS[size]}`}
               aria-pressed={size === fontSize}
               onClick={() => onFontSize(size)}
             >
-              {size}
+              {FONT_SIZE_LABELS[size]}
             </button>
           ))}
         </div>
@@ -1253,16 +1443,6 @@ function BoardToolbar({
                     ? []
                     : SHAPES.filter((shape) => shape.group === group);
                 if (group === "imported") {
-                  if (imported.length === 0 && shapePhase === "list") {
-                    return (
-                      <div key={group} className="lc-shape-group">
-                        <h4>{group}</h4>
-                        <p className="lc-muted lc-shape-import-hint">
-                          Import a local <code>.excalidrawlib</code> (download from libraries.excalidraw.com on another machine).
-                        </p>
-                      </div>
-                    );
-                  }
                   if (imported.length === 0) return null;
                   return (
                     <div key={group} className="lc-shape-group">
@@ -1354,7 +1534,9 @@ function BoardToolbar({
                 />
                 <button
                   type="button"
-                  className="lc-secondary lc-shape-import"
+                  className="lc-secondary lc-shape-import lc-tip-target"
+                  data-tip="Import a local .excalidrawlib — download from libraries.excalidraw.com on another machine"
+                  data-tip-placement="right"
                   onClick={() => importRef.current?.click()}
                 >
                   Import library…
@@ -1417,10 +1599,10 @@ function BoardToolbar({
                   onChange={(event) => setMoveAsOne(event.target.checked)}
                 />
                 <span>
-                  <strong>Lock as one piece</strong>
+                  <strong>Move as one piece</strong>
                   <span className="lc-muted">
                     {" "}
-                    — on: drag the whole stamp; off: move parts separately
+                    — on: drag the whole graphic together; off: move parts separately
                   </span>
                 </span>
               </label>

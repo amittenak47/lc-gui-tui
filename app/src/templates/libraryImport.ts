@@ -151,7 +151,8 @@ export function saveImportedLibrary(items: ImportedLibraryItem[]): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
 }
 
-/** Shift normalized library elements to a drop point. */
+/** Shift normalized library elements to a drop point. Always unlocked so the
+ * student can drag them — library files often ship with `locked: true`. */
 export function placeImportedElements(
   elements: ImportedElement[],
   x: number,
@@ -169,6 +170,8 @@ export function placeImportedElements(
       id: newId(String(element.type || "el")),
       x: (typeof element.x === "number" ? element.x : 0) + x,
       y: (typeof element.y === "number" ? element.y : 0) + y,
+      // Imports from .excalidrawlib frequently mark every piece locked.
+      locked: false,
       groupIds: nextGroups.length > 0 ? nextGroups : undefined,
       customData: {
         ...(asRecord(element.customData) ?? {}),

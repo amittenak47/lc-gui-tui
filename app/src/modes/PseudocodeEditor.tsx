@@ -10,6 +10,8 @@
 
 import { Component, Suspense, lazy, type ErrorInfo, type ReactNode, useState } from "react";
 
+import type { BoardReadingSize } from "./codeFontSize";
+
 const MonacoBlock = lazy(() => import("./MonacoBlock"));
 
 export interface PseudocodeEditorProps {
@@ -18,6 +20,8 @@ export interface PseudocodeEditorProps {
   themeId?: string;
   /** Board zoom — scales Monaco so code tracks Excalidraw text. */
   zoom?: number;
+  /** Shared S/M/L reading size (problem statement + code). */
+  readingSize?: BoardReadingSize;
   /** Collapsed by default so it never competes with the canvas for space. */
   defaultOpen?: boolean;
   /** Docked on the canvas beneath the problem statement. */
@@ -29,6 +33,7 @@ export function PseudocodeEditor({
   onChange,
   themeId = "parchment",
   zoom = 1,
+  readingSize = "M",
   defaultOpen = true,
   variant = "panel",
 }: PseudocodeEditorProps) {
@@ -54,6 +59,7 @@ export function PseudocodeEditor({
           language="python"
           themeId={themeId}
           zoom={dock ? zoom : 1}
+          fontSizePref={readingSize}
           height={dock ? "100%" : "min(42vh, 360px)"}
           onChange={onChange}
           onReady={() => {}}

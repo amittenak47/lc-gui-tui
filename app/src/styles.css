@@ -51,12 +51,12 @@ body {
 }
 
 .lc-app-coach-open .lc-main {
-  margin-right: var(--lc-coach-width, 380px);
+  margin-right: var(--lc-coach-width, 460px);
 }
 
 .lc-app-problem {
   --lc-header-height: 64px;
-  --lc-coach-width: 380px;
+  --lc-coach-width: 460px;
 }
 
 .lc-app-problem .lc-side {
@@ -111,6 +111,13 @@ body {
 .lc-header .lc-icon,
 .lc-header .lc-coach-toggle {
   border-color: var(--chrome-edge);
+}
+
+/* Beat `.lc-header button { padding: 0 10px }` so the gear sits dead-center. */
+.lc-header .lc-icon {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
 }
 
 .lc-header .lc-coach-toggle-open {
@@ -196,13 +203,25 @@ body {
 
 .lc-icon {
   width: 28px;
+  min-width: 28px;
   min-height: 28px;
   height: 28px;
   padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
   font-size: 15px;
   background: transparent;
   color: var(--ink);
   border-color: var(--line);
+}
+
+.lc-icon-svg {
+  display: block;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
 }
 
 .lc-pairing {
@@ -513,7 +532,7 @@ input[type="checkbox"] {
 
 .lc-toolbar {
   position: absolute;
-  z-index: 5;
+  z-index: 15;
   top: 10px;
   left: 10px;
   display: flex;
@@ -663,16 +682,18 @@ input[type="checkbox"] {
 /* Shape library, anchored beside the tool strip. */
 .lc-shapes {
   position: absolute;
+  z-index: 20;
   left: calc(100% + 8px);
   top: 0;
   width: 200px;
   max-height: 70vh;
   overflow-y: auto;
   padding: 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--chrome-edge);
   border-radius: 12px;
-  background: var(--bg);
-  box-shadow: 0 4px 16px rgb(0 0 0 / 10%);
+  /* Solid panel — never translucent over Monaco / the board. */
+  background: var(--panel);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
   animation: lc-fade 140ms ease-out;
 }
 
@@ -839,6 +860,12 @@ input[type="checkbox"] {
 
 .lc-canvas-idle .lc-board {
   visibility: hidden;
+}
+
+/* Laid out and fitted while hidden, then revealed via .lc-entering */
+.lc-canvas-preparing .lc-board {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .lc-switching .lc-board,
@@ -1028,6 +1055,14 @@ input[type="checkbox"] {
   pointer-events: auto;
 }
 
+.lc-map-chrome-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.lc-reading-size,
 .lc-zoom,
 .lc-palette-compact {
   border: 1px solid var(--chrome-edge);
@@ -1036,10 +1071,17 @@ input[type="checkbox"] {
   box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
 }
 
+.lc-reading-size,
 .lc-zoom {
   display: flex;
   flex-direction: row;
   overflow: hidden;
+}
+
+.lc-reading-size .lc-map-btn.is-active {
+  background: var(--panel);
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .lc-map-btn {
@@ -1224,7 +1266,7 @@ input[type="checkbox"] {
   right: 0;
   bottom: 0;
   z-index: 40;
-  width: var(--lc-coach-width, 380px);
+  width: var(--lc-coach-width, 460px);
   border-left: 1px solid var(--chrome-edge);
   border-top: none;
   padding: 0;
@@ -1515,6 +1557,7 @@ input[type="checkbox"] {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: visible;
 }
 
 .lc-code-dock-fallback {
@@ -2137,6 +2180,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-pseudo-dock {
+  position: relative;
   padding: 0;
   border: none;
   background: transparent;

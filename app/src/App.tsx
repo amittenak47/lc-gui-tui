@@ -27,6 +27,7 @@ import type {
 import { Tip } from "./components/Tip";
 import { SettingsModal } from "./components/SettingsModal";
 import { Board } from "./canvas/Board";
+import { loadBoardReadingSize, saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
 import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
 import { sceneHash, studentElements } from "./canvas/capture";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
@@ -73,6 +74,10 @@ export function App() {
   const [pseudocode, setPseudocode] = useState("");
   /** Drives the fade between the browser and the board. */
   const [entering, setEntering] = useState(false);
+  /** Board is mounted but opacity-0 until fit settles — avoids a post-load jump. */
+  const [boardPreparing, setBoardPreparing] = useState(false);
+  /** Keep the problem browser overlay up while the first board fit settles. */
+  const [holdBrowseOverlay, setHoldBrowseOverlay] = useState(false);
   /** Browser overlay: idle / enter / busy (spin) / exit (slide+spin) / done (check). */
   const [browseMotion, setBrowseMotion] = useState<"enter" | "idle" | "busy" | "exit" | "done">("idle");
   /** Same spinner → check transition when stepping ‹ › between problems. */
@@ -86,6 +91,7 @@ export function App() {
   /** Distinguishes header Run tests vs Submit for the results panel. */
   const [lastRunKind, setLastRunKind] = useState<"run" | "submit">("run");
   const [themeId, setThemeId] = useState(loadThemeId);
+  const [readingSize, setReadingSize] = useState<BoardReadingSize>(() => loadBoardReadingSize());
   const [coachOpen, setCoachOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [codeSlot, setCodeSlot] = useState<ScreenRect | null>(null);
@@ -117,6 +123,10 @@ export function App() {
     applyAppTheme(themeId);
     saveThemeId(themeId);
   }, [themeId]);
+
+  useEffect(() => {
+    saveBoardReadingSize(readingSize);
+  }, [readingSize]);
 
   const [review, setReview] = useState<ReviewResponse | null>(null);
   const [tests, setTests] = useState<TestResponse | null>(null);
@@ -278,7 +288,10 @@ export function App() {
       lastReviewIdsRef.current = new Set();
       reviewTurnRef.current = 0;
       if (bank) setBankFilters(bank);
-      if (fromBrowse) setBrowseMotion("busy");
+      if (fromBrowse) {
+        setHoldBrowseOverlay(true);
+        setBrowseMotion("busy");
+      }
       if (switching) setSwitchMotion("busy");
       try {
         // Materialize the workspace on the PC, then read back the redacted
@@ -312,9 +325,10 @@ export function App() {
         }
 
         setPseudocode(source);
+        // Mount the board under the overlay / blur, but keep it invisible until
+        // fit settles — then crossfade so the viewport does not jump.
+        setBoardPreparing(true);
         setProblem(detail);
-        setBrowseMotion("idle");
-        setSwitchMotion("idle");
         await refreshSession();
 
         let restoredBoard = false;
@@ -343,14 +357,21 @@ export function App() {
         }
         boardRef.current?.fitCodeToSource(source);
         lastIdsRef.current = new Set();
+
+        await boardRef.current?.settleFitView();
+
+        setBrowseMotion("idle");
+        setSwitchMotion("idle");
+        setHoldBrowseOverlay(false);
+        setBoardPreparing(false);
         setEntering(true);
-        setTimeout(() => {
+        window.setTimeout(() => {
           setEntering(false);
-          // Fit again after the enter fade so Excalidraw has final canvas size.
-          boardRef.current?.fitView();
         }, boardFadeMs() || 1);
       } catch (cause) {
         setError(messageOf(cause));
+        setHoldBrowseOverlay(false);
+        setBoardPreparing(false);
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
@@ -817,6 +838,9 @@ export function App() {
   const returnToBrowse = useCallback(() => {
     setBrowseMotion("enter");
     setProblem(null);
+    setBoardPreparing(false);
+    setHoldBrowseOverlay(false);
+    setEntering(false);
     setReview(null);
     setTests(null);
     setBridge(null);
@@ -873,7 +897,7 @@ export function App() {
                   ‹
                 </button>
                 <span className="lc-current" title={problem.task_id}>
-                  {problem.task_id}
+                  {titleFromSlug(problem.task_id)}
                 </span>
                 <button
                   type="button"
@@ -894,6 +918,30 @@ export function App() {
           ) : (
             <span className="lc-muted">pick a problem to start</span>
           )}
+          <button
+            type="button"
+            className="lc-icon lc-tip-target"
+            aria-label="Settings"
+            data-tip="Settings — paths, LLM, serve"
+            data-tip-placement="bottom"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <svg
+              className="lc-icon-svg"
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+            </svg>
+          </button>
         </div>
 
         <div className="lc-header-center">
@@ -917,13 +965,6 @@ export function App() {
               >
                 Submit
               </button>
-            </div>
-          )}
-        </div>
-
-        <div className="lc-header-right">
-          {problem && (
-            <>
               <button
                 type="button"
                 className="lc-secondary"
@@ -931,33 +972,28 @@ export function App() {
                 onClick={() => void openInIde()}
                 title="Open solution.py in Cursor / VS Code"
               >
-                IDE
+                Open in IDE
               </button>
-              <button
-                type="button"
-                className={
-                  coachOpen
-                    ? "lc-secondary lc-coach-toggle lc-coach-toggle-open"
-                    : "lc-secondary lc-coach-toggle"
-                }
-                aria-expanded={coachOpen}
-                aria-controls="lc-coach-panel"
-                onClick={() => setCoachOpen((current) => !current)}
-              >
-                Coach
-              </button>
-            </>
+            </div>
           )}
-          <button
-            type="button"
-            className="lc-icon lc-tip-target"
-            aria-label="Settings"
-            data-tip="Settings — paths, LLM, serve"
-            data-tip-placement="bottom"
-            onClick={() => setSettingsOpen(true)}
-          >
-            ⚙
-          </button>
+        </div>
+
+        <div className="lc-header-right">
+          {problem && (
+            <button
+              type="button"
+              className={
+                coachOpen
+                  ? "lc-secondary lc-coach-toggle lc-coach-toggle-open"
+                  : "lc-secondary lc-coach-toggle"
+              }
+              aria-expanded={coachOpen}
+              aria-controls="lc-coach-panel"
+              onClick={() => setCoachOpen((current) => !current)}
+            >
+              Coach
+            </button>
+          )}
         </div>
       </header>
 
@@ -976,6 +1012,7 @@ export function App() {
           className={[
             "lc-canvas-wrap",
             entering && "lc-entering",
+            boardPreparing && "lc-canvas-preparing",
             !problem && "lc-canvas-idle",
             (switchMotion === "busy" || switchMotion === "done") && "lc-switching",
           ]
@@ -986,17 +1023,22 @@ export function App() {
             ref={boardRef}
             themeId={themeId}
             onThemePick={setThemeId}
-            interactive={Boolean(problem) && switchMotion === "idle"}
+            readingSize={readingSize}
+            onReadingSizeChange={setReadingSize}
+            interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
             onCodeSlot={onCodeSlot}
           />
-          {!problem && (
+          {(!problem || holdBrowseOverlay) && (
             <div
               className={[
                 "lc-overlay",
                 browseMotion === "enter" && "lc-overlay-enter",
-                browseMotion === "busy" && "lc-overlay-busy",
+                (browseMotion === "busy" || (holdBrowseOverlay && boardPreparing)) &&
+                  "lc-overlay-busy",
                 browseMotion === "exit" && "lc-overlay-exit",
-                browseMotion === "done" && "lc-overlay-done",
+                (browseMotion === "done" ||
+                  (holdBrowseOverlay && boardPreparing && browseMotion === "idle")) &&
+                  "lc-overlay-done",
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -1005,7 +1047,7 @@ export function App() {
                 <ProblemBrowser
                   client={client}
                   onPick={pickProblem}
-                  busy={busy !== null}
+                  busy={busy !== null || boardPreparing}
                   themeId={themeId}
                   onThemePick={setThemeId}
                   session={session}
@@ -1016,8 +1058,11 @@ export function App() {
               </div>
               {(browseMotion === "busy" ||
                 browseMotion === "exit" ||
-                browseMotion === "done") && (
-                <WorkspaceLoadStatus done={browseMotion === "done"} />
+                browseMotion === "done" ||
+                (holdBrowseOverlay && boardPreparing)) && (
+                <WorkspaceLoadStatus
+                  done={browseMotion === "done" || (holdBrowseOverlay && boardPreparing)}
+                />
               )}
             </div>
           )}
@@ -1045,6 +1090,7 @@ export function App() {
                   onChange={setPseudocode}
                   themeId={themeId}
                   zoom={slot.zoom ?? 1}
+                  readingSize={readingSize}
                   defaultOpen
                   variant="dock"
                 />

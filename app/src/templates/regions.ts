@@ -36,28 +36,31 @@ export interface Region {
  */
 export const REGION_GUTTER = 64;
 const GUTTER = REGION_GUTTER;
-const STUDENT_WIDTH = 2800;
-const AGENT_WIDTH = 1400;
+/** Student column — 40% larger than the original 2800 layout. */
+const STUDENT_WIDTH = 3920;
+/** Coach lane — same width as the student column (was far too narrow at 1400). */
+const AGENT_WIDTH = STUDENT_WIDTH;
 
 /** Problem statements need real room to breathe at a readable font size. */
-const CONSTRAINTS_H = 1400;
+const CONSTRAINTS_H = 1960;
 /** Monaco solution editor sits in this slot under the problem statement. */
-const CODE_H = 560;
-const APPROACH_H = 1700;
-const COMPLEXITY_H = 640;
-const WALKTHROUGH_H = 1400;
+const CODE_H = 784;
+const APPROACH_H = 2380;
+const COMPLEXITY_H = 896;
+const WALKTHROUGH_H = 1960;
 
 /**
  * Floors when the student shrinks a dashed frame. Shared student width uses
  * `minW` from any student region (they stay one column).
+ * Agent minW matches the default so older saved boards expand on sync.
  */
 export const REGION_MIN: Record<RegionId, { minW: number; minH: number }> = {
-  constraints: { minW: 1200, minH: 900 },
-  code: { minW: 1200, minH: 320 },
-  approach: { minW: 1200, minH: 700 },
-  complexity: { minW: 1200, minH: 320 },
-  walkthrough: { minW: 1200, minH: 560 },
-  agent: { minW: 640, minH: 900 },
+  constraints: { minW: 1680, minH: 1260 },
+  code: { minW: 1680, minH: 448 },
+  approach: { minW: 1680, minH: 980 },
+  complexity: { minW: 1680, minH: 448 },
+  walkthrough: { minW: 1680, minH: 784 },
+  agent: { minW: AGENT_WIDTH, minH: 1260 },
 };
 
 const CODE_Y = CONSTRAINTS_H + GUTTER;

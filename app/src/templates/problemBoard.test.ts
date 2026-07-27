@@ -222,12 +222,12 @@ describe("recolorTemplateElements", () => {
 describe("board size", () => {
   it("is roomy enough to sketch in", () => {
     // Reported: "size of the whiteboard larger".
-    expect(REGIONS.constraints.w).toBeGreaterThanOrEqual(2000);
-    expect(REGIONS.constraints.h).toBeGreaterThanOrEqual(1200);
-    expect(REGIONS.approach.h).toBeGreaterThanOrEqual(1500);
-    expect(REGIONS.complexity.h).toBeGreaterThanOrEqual(500);
-    expect(REGIONS.walkthrough.h).toBeGreaterThanOrEqual(1200);
-    expect(REGIONS.agent.w).toBeGreaterThanOrEqual(1200);
+    expect(REGIONS.constraints.w).toBeGreaterThanOrEqual(2800);
+    expect(REGIONS.constraints.h).toBeGreaterThanOrEqual(1680);
+    expect(REGIONS.approach.h).toBeGreaterThanOrEqual(2100);
+    expect(REGIONS.complexity.h).toBeGreaterThanOrEqual(700);
+    expect(REGIONS.walkthrough.h).toBeGreaterThanOrEqual(1680);
+    expect(REGIONS.agent.w).toBeGreaterThanOrEqual(3500);
   });
 
   it("keeps the agent lane clear of the student's columns", () => {
