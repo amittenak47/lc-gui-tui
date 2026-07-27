@@ -25,6 +25,8 @@ export interface RasterInkHandle {
   undo(): boolean;
   redo(): boolean;
   canUndo(): boolean;
+  /** True once anything has been painted or erased on this layer. */
+  hasInk(): boolean;
   repaint(): void;
 }
 
@@ -146,6 +148,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         },
         canUndo() {
           return undoRef.current.length > 0 || opsRef.current.length > 0;
+        },
+        hasInk() {
+          // An erase-only history still counts as "they drew something": the
+          // pixels are gone but the board is not the untouched one we seeded.
+          return opsRef.current.length > 0;
         },
         repaint,
       }),

@@ -438,14 +438,20 @@ input[type="checkbox"] {
 }
 
 /* Eraser brush preview: circle + crosshair (pen uses crosshair; Excalidraw uses a fixed circle). */
+/*
+ * Position comes from an inline `transform` written by Board's pointer handler
+ * (translate3d + the -50% centring), never from React — see EraserBrush.tsx.
+ */
 .lc-eraser-brush {
   position: absolute;
+  left: 0;
+  top: 0;
   pointer-events: none;
   z-index: 4;
   border: 1.5px solid var(--ink);
   border-radius: 50%;
   background: color-mix(in srgb, var(--ink) 10%, transparent);
-  transform: translate(-50%, -50%);
+  will-change: transform;
   box-sizing: border-box;
 }
 
@@ -548,11 +554,37 @@ input[type="checkbox"] {
  * a stylus session never has to hit a menu.
  */
 .lc-board .App-menu,
+.lc-board .App-menu__left,
+.lc-board .App-menu__right,
+.lc-board .App-toolbar,
 .lc-board .App-toolbar-content,
+.lc-board .App-toolbar__extra-tools-trigger,
 .lc-board .layer-ui__wrapper__footer,
+.lc-board .layer-ui__wrapper__top-right,
 .lc-board .App-bottom-bar,
+.lc-board .mobile-misc-tools-container,
+.lc-board .App-mobile-menu,
+.lc-board .welcome-screen-center,
+.lc-board .welcome-screen-decor,
+.lc-board .sidebar-trigger,
+.lc-board .default-sidebar-trigger,
 .lc-board .help-icon,
 .lc-board .ToolIcon_type_button__hints {
+  display: none !important;
+}
+
+/*
+ * Touch browsers mount an extra layer of stock chrome (the whole fixed top
+ * container, the mobile island, the zoom/undo stacks) that the selectors above
+ * don't reach. On a phone or tablet nothing of Excalidraw's own UI is wanted,
+ * so the fixed containers go wholesale — our toolbar and map controls are
+ * siblings of `.excalidraw`, not children, so they survive.
+ */
+.lc-mobile .lc-board .FixedSideContainer,
+.lc-mobile .lc-board .layer-ui__wrapper .Island,
+.lc-mobile .lc-board .Stack.zoom-actions,
+.lc-mobile .lc-board .undo-redo-buttons,
+.lc-mobile .lc-board .scroll-back-to-content {
   display: none !important;
 }
 
@@ -2789,4 +2821,262 @@ button.lc-row-selected:hover:not(:disabled) {
     border-radius: 8px;
     border-right: 1px solid var(--line);
   }
+}
+
+/* ------------------------------------------------------------ mobile UI --- */
+
+/*
+ * `lc-mobile` is set from `useIsMobile()` (app/src/util/mobile.ts), which uses
+ * the same query as the media rules below — narrow, or coarse-pointered and not
+ * very wide. A desktop window keeps every rule in this file untouched.
+ */
+
+.lc-label-short {
+  display: none;
+}
+
+.lc-mobile .lc-label-long {
+  display: none;
+}
+
+.lc-mobile .lc-label-short {
+  display: inline;
+}
+
+.lc-mobile .lc-desktop-only {
+  display: none !important;
+}
+
+.lc-mobile .lc-header {
+  column-gap: 6px;
+  padding: 4px 6px;
+  min-height: 34px;
+}
+
+.lc-mobile .lc-header-left,
+.lc-mobile .lc-header-right {
+  gap: 6px;
+}
+
+.lc-mobile .lc-brand {
+  display: none;
+}
+
+.lc-mobile .lc-header-center {
+  max-width: 52vw;
+  gap: 2px;
+}
+
+.lc-mobile .lc-header button,
+.lc-mobile .lc-header-center .lc-actions button {
+  min-height: 30px;
+  height: 30px;
+  padding: 0 8px;
+  font-size: 13px;
+}
+
+.lc-mobile .lc-header .lc-icon {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+}
+
+.lc-mobile .lc-home {
+  padding: 0 6px;
+  font-size: 0;
+}
+
+/* Keep the affordance, drop the word — the arrow is the whole message. */
+.lc-mobile .lc-home::before {
+  content: "←";
+  font-size: 15px;
+}
+
+.lc-mobile .lc-current {
+  max-width: 30vw;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.lc-mobile .lc-pairing {
+  font-size: 11px;
+}
+
+.lc-overflow {
+  position: relative;
+}
+
+.lc-overflow-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 18%);
+}
+
+.lc-overflow-item {
+  min-height: 38px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  text-align: left;
+}
+
+.lc-overflow-item:hover:not(:disabled) {
+  background: var(--panel);
+}
+
+/* --- compact drawing chrome --- */
+
+.lc-mobile .lc-toolbar {
+  top: 6px;
+  left: 6px;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 10px;
+  max-height: calc(100% - 84px);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.lc-mobile .lc-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.lc-mobile .lc-tool {
+  width: 36px;
+  min-height: 36px;
+  font-size: 15px;
+}
+
+.lc-mobile .lc-tool-labeled {
+  min-height: 36px;
+  padding: 0;
+}
+
+.lc-mobile .lc-tool-caption {
+  display: none;
+}
+
+.lc-mobile .lc-tool-emoji {
+  font-size: 15px;
+}
+
+.lc-mobile .lc-tool-mini {
+  width: 28px;
+  min-height: 24px;
+  font-size: 11px;
+}
+
+.lc-mobile .lc-ink-swatch {
+  width: 14px;
+  height: 14px;
+  min-height: 14px;
+}
+
+.lc-mobile .lc-stroke-controls {
+  gap: 2px;
+}
+
+.lc-mobile .lc-map-controls {
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+}
+
+.lc-mobile .lc-map-btn {
+  width: 26px;
+  min-height: 26px;
+  font-size: 13px;
+}
+
+.lc-mobile .lc-palette-trigger-header {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+/* --- region pager --- */
+
+.lc-pager {
+  position: absolute;
+  z-index: 16;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
+  max-width: calc(100% - 92px);
+}
+
+.lc-pager-step {
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.lc-pager-step:disabled {
+  opacity: 0.35;
+}
+
+.lc-pager-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  min-width: 0;
+}
+
+.lc-pager-label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40vw;
+}
+
+.lc-pager-dots {
+  display: flex;
+  gap: 5px;
+}
+
+.lc-pager-dot {
+  width: 8px;
+  height: 8px;
+  min-height: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+
+.lc-pager-dot-active {
+  background: var(--accent);
 }

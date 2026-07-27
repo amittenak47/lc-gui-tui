@@ -41,7 +41,7 @@ import { healBoardLayout } from "./healBoardLayout";
 import { regionFrameId, regionFramesOf, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
-import { REGIONS } from "../templates/regions";
+import { REGIONS, type RegionId } from "../templates/regions";
 import {
   BOARD_THEMES,
   DEFAULT_FONT_SIZE,
@@ -63,7 +63,7 @@ import type { BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
 import { applyMetadata, keepOnClear, isCoachElement } from "./scene";
 import { eraserScreenRadius } from "./rasterInk";
-import { EraserBrush } from "./EraserBrush";
+import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
@@ -181,6 +181,14 @@ export interface BoardProps {
   /** Shared S/M/L size for problem statement + code. */
   readingSize?: BoardReadingSize;
   onReadingSizeChange?: (size: BoardReadingSize) => void;
+  /**
+   * Mobile "page": the one student region the viewport is fitted to. `null` on
+   * desktop, where the whole stacked column stays one wide canvas.
+   *
+   * The scene is untouched either way — this only changes what `fitView` aims
+   * at and whether the code dock is reported.
+   */
+  mobileRegion?: RegionId | null;
 }
 
 const INK_COLORS_LIGHT = ["#1e1e1e", "#64748b", "#b45309", "#1d4ed8", "#166534", "#b91c1c"] as const;
@@ -244,6 +252,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onCodeSlot,
     readingSize: readingSizeProp,
     onReadingSizeChange,
+    mobileRegion = null,
   },
   ref,
 ) {
@@ -254,7 +263,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkColor, setInkColor] = useState(() => defaultInk(themeId));
   const [strokeWidth, setStrokeWidthState] = useState(STROKE_WIDTH_DEFAULT);
   const [pressureSensitive, setPressureSensitive] = useState(true);
-  const [eraserBrush, setEraserBrush] = useState({ visible: false, x: 0, y: 0, zoom: 1 });
+  const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [zoomPct, setZoomPct] = useState(100);
@@ -271,6 +280,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const lastCodeSlotRef = useRef<ScreenRect | null>(null);
   const onCodeSlotRef = useRef(onCodeSlot);
   onCodeSlotRef.current = onCodeSlot;
+  /** Read by `fitView` and `reportCodeSlot`, which must not re-bind per page. */
+  const mobileRegionRef = useRef<RegionId | null>(mobileRegion);
+  const strokeWidthRef = useRef(strokeWidth);
+  strokeWidthRef.current = strokeWidth;
+  /** Zoom at the last brush sample, so a size change can resize the ring. */
+  const brushZoomRef = useRef(1);
 
   // Library stamps must stay draggable — older imports may still be locked.
   useEffect(() => {
@@ -305,6 +320,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const api = apiRef.current;
     const notify = onCodeSlotRef.current;
     if (!api || !notify) return;
+
+    // Mobile paging: Monaco only exists on the Code page. Leaving the page has
+    // to clear the slot, or the dock hangs over whatever region is now fitted.
+    const page = mobileRegionRef.current;
+    if (page !== null && page !== "code") {
+      if (lastCodeSlotRef.current !== null) {
+        lastCodeSlotRef.current = null;
+        notify(null);
+      }
+      return;
+    }
 
     const frame = (api.getSceneElements() as LayoutElement[]).find(
       (element) =>
@@ -383,15 +409,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (tool === "freedraw") {
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcInk" });
       apiRef.current?.resetCursor?.();
-      setEraserBrush({ visible: false, x: 0, y: 0, zoom: 1 });
     } else if (tool === "eraser") {
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcEraser" });
       apiRef.current?.setCursor?.(eraserCanvasCursorCss());
     } else {
       apiRef.current?.setActiveTool({ type: tool });
       apiRef.current?.resetCursor?.();
-      setEraserBrush({ visible: false, x: 0, y: 0, zoom: 1 });
     }
+    // The brush node unmounts with the tool; hiding it here keeps a stale ring
+    // off the canvas for the frame between the click and the unmount.
+    if (tool !== "eraser") eraserBrushRef.current?.setVisible(false);
     setActiveTool(tool);
   }, []);
 
@@ -444,10 +471,40 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   // Eraser ring follows the pointer via window listeners so a click-without-move
   // does not lose the brush (pointerleave on the board fired sporadically).
+  //
+  // Nothing here touches React state: a pen streams `pointermove` at the panel's
+  // refresh rate, and re-rendering Board per sample was what made erasing feel
+  // sluggish. Position/size go straight to the node, coalesced to one rAF, and
+  // the ring's mount/unmount is the only thing React still decides.
   useEffect(() => {
     if (!interactive || activeTool !== "eraser") return;
     const root = boardRef.current;
     if (!root) return;
+
+    let frame = 0;
+    let pending: { x: number; y: number; zoom: number } | null = null;
+    let visible = false;
+
+    const flush = () => {
+      frame = 0;
+      const next = pending;
+      pending = null;
+      const brush = eraserBrushRef.current;
+      if (!brush || !next) return;
+      brush.setDiameter(eraserScreenRadius(strokeWidthRef.current, next.zoom) * 2);
+      brush.move(next.x, next.y);
+      if (!visible) {
+        visible = true;
+        brush.setVisible(true);
+      }
+    };
+
+    const hide = () => {
+      pending = null;
+      if (!visible) return;
+      visible = false;
+      eraserBrushRef.current?.setVisible(false);
+    };
 
     const positionBrush = (event: PointerEvent) => {
       const hitCanvas =
@@ -461,17 +518,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         event.clientY >= rect.top &&
         event.clientY <= rect.bottom;
       if (!inside) {
-        setEraserBrush((brush) => (brush.visible ? { ...brush, visible: false } : brush));
+        hide();
         return;
       }
       const boardRect = root.getBoundingClientRect();
       const { zoom } = clientToScene(event.clientX, event.clientY);
-      setEraserBrush({
-        visible: true,
+      brushZoomRef.current = zoom;
+      pending = {
         x: event.clientX - boardRect.left,
         y: event.clientY - boardRect.top,
         zoom,
-      });
+      };
+      if (!frame) frame = requestAnimationFrame(flush);
     };
 
     window.addEventListener("pointermove", positionBrush);
@@ -481,9 +539,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => {
       window.removeEventListener("pointermove", positionBrush);
       window.removeEventListener("pointerdown", positionBrush, true);
-      setEraserBrush({ visible: false, x: 0, y: 0, zoom: 1 });
+      if (frame) cancelAnimationFrame(frame);
+      hide();
     };
   }, [activeTool, clientToScene, interactive]);
+
+  // Dragging the eraser-size slider must resize the ring without waiting for the
+  // next pointer sample. This runs per slider step, not per move.
+  useEffect(() => {
+    if (activeTool !== "eraser") return;
+    eraserBrushRef.current?.setDiameter(eraserScreenRadius(strokeWidth, brushZoomRef.current) * 2);
+  }, [activeTool, strokeWidth]);
 
   const undoBoard = useCallback(() => {
     if (rasterInkRef.current?.undo()) return;
@@ -644,46 +710,50 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
   }, [interactive, reportCodeSlot]);
 
-  const fitView = useCallback(() => {
+  const fitView = useCallback((regionId?: RegionId | null) => {
     const api = apiRef.current;
     if (!api) return;
 
+    // One region per page on mobile; on desktop, land on the problem statement
+    // + code only — never the full board (Approach / Walkthrough / Coach),
+    // which zooms out to a tiny corner.
+    const page = regionId ?? mobileRegionRef.current;
+    const wanted: RegionId[] = page ? [page] : ["constraints", "code"];
+    const paged = wanted.length === 1;
+
     const live = api.getSceneElements() as LayoutElement[];
     const frames = regionFramesOf(live);
-    // Land on the problem statement + code only — never the full board
-    // (Approach / Walkthrough / Coach), which zooms out to a tiny corner.
-    const focusFrames = (["constraints", "code"] as const)
+    const focusFrames = wanted
       .map((id) => frames.get(id))
       .filter((frame): frame is LayoutElement => Boolean(frame));
 
-    const tagged =
-      focusFrames.length > 0
-        ? focusFrames
-        : live.filter((element) => {
-            const region = element.customData?.lcRegion;
-            return region === "constraints" || region === "code";
-          });
+    const inWanted = (element: LayoutElement) => {
+      const region = element.customData?.lcRegion;
+      return typeof region === "string" && wanted.includes(region as RegionId);
+    };
+
+    const tagged = focusFrames.length > 0 ? focusFrames : live.filter(inWanted);
 
     const template = templateRef.current as LayoutElement[];
     const target =
       tagged.length > 0
         ? tagged
         : template.length > 0
-          ? template.filter((element) => {
-              const region = element.customData?.lcRegion;
-              return region === "constraints" || region === "code";
-            })
+          ? template.filter(inWanted)
           : live;
 
     const focus = target.length > 0 ? target : live;
 
     // Leave room for the floating toolbar; bottom inset is larger so fit prefers
-    // the upper viewport instead of vertically centering the stack.
+    // the upper viewport instead of vertically centering the stack. A paged fit
+    // wants the frame to fill the screen, so its insets are just the chrome.
     api.scrollToContent(focus, {
       fitToViewport: true,
-      viewportZoomFactor: 0.92,
+      viewportZoomFactor: paged ? 0.98 : 0.92,
       animate: false,
-      canvasOffsets: { top: 28, left: 72, right: 28, bottom: 120 },
+      canvasOffsets: paged
+        ? { top: 12, left: 56, right: 12, bottom: 56 }
+        : { top: 28, left: 72, right: 28, bottom: 120 },
     });
 
     // scrollToContent still centers within the inset — pin the focus block near
@@ -701,8 +771,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (typeof element.y === "number") minY = Math.min(minY, element.y);
     }
     if (Number.isFinite(minX) && Number.isFinite(minY)) {
-      const topMargin = 36;
-      const leftMargin = 88;
+      const topMargin = paged ? 14 : 36;
+      const leftMargin = paged ? 56 : 88;
       // scene → screen: (scene + scroll) * zoom  (see Board.stamp)
       api.updateScene({
         appState: {
@@ -726,6 +796,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         window.setTimeout(run, 200);
       });
     });
+  }, [fitView]);
+
+  /** Fit the current page, or the landing pair on desktop. Event-handler safe. */
+  const fitCurrentView = useCallback(() => {
+    fitView();
   }, [fitView]);
 
   const settleFitView = useCallback((): Promise<void> => {
@@ -934,6 +1009,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [onReadingSizeChange, reflowReadingText],
   );
 
+  // Page turn: refit on the new region and re-report (or clear) the code slot.
+  // Same settle pattern as problem load — Excalidraw needs a couple of frames
+  // before scroll/zoom land where they were asked to.
+  useEffect(() => {
+    const next = mobileRegion ?? null;
+    const previous = mobileRegionRef.current;
+    mobileRegionRef.current = next;
+    if (!interactive || previous === next) return;
+    reportCodeSlot();
+    void settleFitView().then(() => {
+      reportCodeSlot();
+    });
+  }, [interactive, mobileRegion, reportCodeSlot, settleFitView]);
+
   const handleSceneChange = useCallback(() => {
     applyRegionLayout();
     reportCodeSlot();
@@ -998,9 +1087,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       scrollToContent: () => apiRef.current?.scrollToContent(),
       zoomIn,
       zoomOut,
-      fitView,
+      fitView: fitCurrentView,
+      fitRegion: (regionId: RegionId) => fitView(regionId),
       settleFitView,
       fitCodeToSource,
+      hasRasterInk: () => rasterInkRef.current?.hasInk() ?? false,
       saveBoard: () => {
         const api = apiRef.current;
         const state = (api?.getAppState() ?? {}) as {
@@ -1045,7 +1136,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
       },
     }),
-    [convert, elements, fitCodeToSource, fitView, settleFitView, resetTemplate, scheduleFitView, setTool, themeId, undoBoard, zoomIn, zoomOut],
+    [convert, elements, fitCodeToSource, fitCurrentView, fitView, settleFitView, resetTemplate, scheduleFitView, setTool, themeId, undoBoard, zoomIn, zoomOut],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
@@ -1117,7 +1208,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 zoomPct={zoomPct}
                 onZoomIn={zoomIn}
                 onZoomOut={zoomOut}
-                onFit={fitView}
+                onFit={fitCurrentView}
               />
             </div>
           </div>
@@ -1135,14 +1226,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           onChange={onChange}
         />
       )}
-      {interactive && activeTool === "eraser" && (
-        <EraserBrush
-          visible={eraserBrush.visible}
-          x={eraserBrush.x}
-          y={eraserBrush.y}
-          diameter={eraserScreenRadius(strokeWidth, eraserBrush.zoom) * 2}
-        />
-      )}
+      {interactive && activeTool === "eraser" && <EraserBrush ref={eraserBrushRef} />}
       <Excalidraw
         viewModeEnabled={!interactive}
         handleKeyboardGlobally={interactive}
