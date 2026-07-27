@@ -1012,6 +1012,23 @@ input[type="checkbox"] {
   width: 100%;
 }
 
+.lc-submit-pass {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lc-submit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lc-submit-actions button {
+  min-height: 36px;
+  font-size: 13px;
+}
+
 .lc-code-dock {
   position: absolute;
   z-index: 8;

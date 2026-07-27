@@ -111,6 +111,42 @@ describe("syncRegionLayout", () => {
     expect(nextTitle.y).toBeGreaterThanOrEqual(nextConstraints.y);
   });
 
+  it("enforces a minimum height when a frame is shrunk too far", () => {
+    const elements = framesFromTemplate();
+    const code = elements.find((element) => element.id === regionFrameId("code"))!;
+    code.height = 40;
+
+    const synced = syncRegionLayout(elements)!;
+    const nextCode = synced.find((element) => element.id === regionFrameId("code"))!;
+    expect(nextCode.height).toBeGreaterThanOrEqual(320);
+  });
+
+  it("will not shrink the problem frame below its statement content", () => {
+    const elements = framesFromTemplate();
+    const constraints = elements.find((element) => element.id === regionFrameId("constraints"))!;
+    const body = elements.filter((element) => element.id.startsWith("lcregion-constraints-body-"));
+    expect(body.length).toBeGreaterThan(0);
+    constraints.height = 120;
+
+    const synced = syncRegionLayout(elements)!;
+    const next = synced.find((element) => element.id === regionFrameId("constraints"))!;
+    expect(next.height).toBeGreaterThan(400);
+  });
+
+  it("enforces a minimum shared student column width", () => {
+    const elements = framesFromTemplate();
+    for (const region of ["constraints", "code", "approach", "complexity", "walkthrough"] as const) {
+      const frame = elements.find((element) => element.id === regionFrameId(region))!;
+      frame.width = 200;
+    }
+
+    const synced = syncRegionLayout(elements)!;
+    const widths = ["constraints", "code", "approach"].map((region) => {
+      return synced.find((element) => element.id === regionFrameId(region as never))?.width;
+    });
+    expect(widths.every((width) => (width ?? 0) >= 1200)).toBe(true);
+  });
+
   it("keeps the coach lane beside the shared student column", () => {
     const elements = framesFromTemplate();
     const code = elements.find((element) => element.id === regionFrameId("code"))!;

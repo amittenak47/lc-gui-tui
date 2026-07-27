@@ -74,6 +74,28 @@ export interface TestResponse {
   results: CaseResult[];
 }
 
+export interface SessionSnapshot {
+  started_at: number;
+  active_list: string | null;
+  queue: string[];
+  problems: Record<
+    string,
+    {
+      state: "loaded" | "passed" | "failed";
+      passed_cases: number;
+      total_cases: number;
+      updated_at: number;
+    }
+  >;
+  reveals: Record<string, number>;
+}
+
+export interface AdjacentProblems {
+  task_id: string;
+  prev: string | null;
+  next: string | null;
+}
+
 export interface LoadResponse {
   task_id: string;
   workspace_dir: string;
