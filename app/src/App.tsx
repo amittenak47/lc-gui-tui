@@ -4,7 +4,7 @@
  * Two modes, per the plan:
  *
  * - **Review** — draw, tap Submit, get a verdict and a counterexample.
- * - **Ambient** — the coach glances at the board every 15 seconds and nudges,
+ * - **Ambient** — the coach glances at the board every 60 seconds and nudges,
  *   in the side panel only, never on the canvas.
  *
  * Both talk to `lc serve`. Nothing about the corpus, the workspaces, or the
@@ -23,11 +23,13 @@ import type {
   ServerFrame,
   TestResponse,
 } from "./api/types";
+import { Tip } from "./components/Tip";
 import { Board } from "./canvas/Board";
-import type { BoardHandle } from "./canvas/BoardHandle";
+import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
 import { sceneHash, studentElements } from "./canvas/capture";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
 import { buildSnapshot } from "./canvas/snapshot";
+import { AgentSidePanel } from "./modes/AgentSidePanel";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
@@ -35,6 +37,7 @@ import { BridgePanel, RevealDialog } from "./modes/RevealDialog";
 import { ReviewPanel } from "./modes/ReviewPanel";
 import { buildProblemTemplate } from "./templates/problemBoard";
 import { titleFromSlug } from "./util/text";
+import { applyAppTheme, isDarkTheme, loadThemeId, saveThemeId } from "./theme/appThemes";
 import { Timeline } from "./viz/Timeline";
 import { applyViz, clearAllViz, type SceneApi } from "./viz/apply";
 import { parseVizProgram, type VizProgram } from "./viz/schema";
@@ -55,8 +58,34 @@ export function App() {
   const [pseudocode, setPseudocode] = useState("");
   /** Drives the fade between the browser and the board. */
   const [entering, setEntering] = useState(false);
+  /** Browser overlay: idle / enter / busy (spin) / exit (slide+spin) / done (check). */
+  const [browseMotion, setBrowseMotion] = useState<"enter" | "idle" | "busy" | "exit" | "done">("idle");
   /** Recently opened problems, so prev/next works without re-searching. */
   const [history, setHistory] = useState<string[]>([]);
+  const [themeId, setThemeId] = useState(loadThemeId);
+  const [coachOpen, setCoachOpen] = useState(false);
+  const [codeSlot, setCodeSlot] = useState<ScreenRect | null>(null);
+
+  const onCodeSlot = useCallback((next: ScreenRect | null) => {
+    setCodeSlot((prev) => {
+      if (prev === next) return prev;
+      if (!prev || !next) return next;
+      if (
+        prev.left === next.left &&
+        prev.top === next.top &&
+        prev.width === next.width &&
+        prev.height === next.height
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    applyAppTheme(themeId);
+    saveThemeId(themeId);
+  }, [themeId]);
 
   const [review, setReview] = useState<ReviewResponse | null>(null);
   const [tests, setTests] = useState<TestResponse | null>(null);
@@ -81,7 +110,7 @@ export function App() {
   const recognizerRef = useRef(recognizer);
   recognizerRef.current = recognizer;
   // Read through a ref for the same reason: otherwise every keystroke in the
-  // pseudocode editor would tear down and restart the 15-second loop.
+  // pseudocode editor would tear down and restart the ambient loop.
   const pseudocodeRef = useRef(pseudocode);
   pseudocodeRef.current = pseudocode;
 
@@ -138,6 +167,7 @@ export function App() {
 
   const pickProblem = useCallback(
     async (taskId: string) => {
+      const fromBrowse = !problem;
       setBusy("loading the workspace…");
       setError(null);
       setReview(null);
@@ -145,13 +175,25 @@ export function App() {
       setBridge(null);
       setProgram(null);
       setNudges([]);
-      setPseudocode("");
+      if (fromBrowse) setBrowseMotion("busy");
       try {
         // Materialize the workspace on the PC, then read back the redacted
         // statement for the board template.
         await client.loadProblem(taskId);
         const detail = await client.getProblem(taskId);
+
+        if (fromBrowse) {
+          // Ready: keep the spinner, slide the browser away under the blur.
+          setBrowseMotion("exit");
+          await waitMs(slideDurationMs());
+          // Spinner → checkmark, then a short beat before the board.
+          setBrowseMotion("done");
+          await waitMs(doneHoldMs());
+        }
+
+        setPseudocode(detail.starter_code ?? "");
         setProblem(detail);
+        setBrowseMotion("idle");
         setHistory((current) =>
           current.includes(detail.task_id) ? current : [...current, detail.task_id],
         );
@@ -163,19 +205,24 @@ export function App() {
             tags: detail.tags,
             description: detail.problem_description,
             caseCount: detail.cases.length,
+            dark: isDarkTheme(themeId),
           }),
         );
         lastIdsRef.current = new Set();
-        // Fade the board in rather than cutting to it.
         setEntering(true);
-        setTimeout(() => setEntering(false), 380);
+        setTimeout(() => {
+          setEntering(false);
+          // Fit again after the enter fade so Excalidraw has final canvas size.
+          boardRef.current?.fitView();
+        }, boardFadeMs() || 1);
       } catch (cause) {
         setError(messageOf(cause));
+        if (fromBrowse) setBrowseMotion("idle");
       } finally {
         setBusy(null);
       }
     },
-    [client],
+    [client, themeId, problem],
   );
 
   /** Step through problems opened this session, without leaving the board. */
@@ -188,6 +235,14 @@ export function App() {
     },
     [problem, history, pickProblem],
   );
+
+  // When the coach panel opens/closes, the canvas width changes — re-fit so
+  // the problem page isn't clipped under the side panel.
+  useEffect(() => {
+    if (!problem) return;
+    const timer = window.setTimeout(() => boardRef.current?.fitView(), 80);
+    return () => window.clearTimeout(timer);
+  }, [coachOpen, problem]);
 
   // Ambient mode's lifecycle.
   useEffect(() => {
@@ -338,12 +393,37 @@ export function App() {
     setProgram(null);
   }, [sceneApi]);
 
+  const returnToBrowse = useCallback(() => {
+    setBrowseMotion("enter");
+    setProblem(null);
+    setReview(null);
+    setTests(null);
+    setBridge(null);
+    setProgram(null);
+    setNudges([]);
+    setError(null);
+    setCodeSlot(null);
+    window.setTimeout(() => setBrowseMotion("idle"), slideDurationMs() || 1);
+  }, []);
+
   return (
     <div className="lc-app">
       <header className="lc-header">
-        <strong className="lc-brand">lc whiteboard</strong>
+        <Tip tip="lc whiteboard — your coding workspace">
+          <strong className="lc-brand">lc whiteboard</strong>
+        </Tip>
         {problem ? (
           <>
+            <button
+              type="button"
+              className="lc-secondary lc-home lc-tip-target"
+              data-tip="Return to the problem list"
+              data-tip-placement="bottom"
+              disabled={busy !== null}
+              onClick={returnToBrowse}
+            >
+              ← Problems
+            </button>
             {/* Problem identity and navigation, together on the left. */}
             <div className="lc-problem-nav" role="group" aria-label="Problem">
               <button
@@ -371,68 +451,37 @@ export function App() {
               >
                 ›
               </button>
+            </div>
+
+            <div className="lc-actions">
               <button
                 type="button"
-                className="lc-link"
-                onClick={() => setProblem(null)}
+                className="lc-secondary"
+                onClick={() => void runTests()}
                 disabled={busy !== null}
               >
-                browse…
+                Run tests
               </button>
-            </div>
-
-            <div className="lc-modes" role="group" aria-label="Coach mode">
-              {(["review", "ambient"] as Mode[]).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={mode === value ? "lc-mode lc-mode-active" : "lc-mode"}
-                  aria-pressed={mode === value}
-                  onClick={() => setMode(value)}
-                >
-                  {value === "review" ? "Review" : "Ambient"}
-                </button>
-              ))}
-            </div>
-
-            {/* Coach actions on the right, grouped by what they talk to: the
-                model first, then the test runner. `Clear` is not here — it
-                changes the canvas, so it lives with the drawing tools. */}
-            <div className="lc-actions">
-              <div className="lc-action-group" role="group" aria-label="Ask the coach">
-                {mode === "review" && (
-                  <button type="button" onClick={() => void submitForReview()} disabled={busy !== null}>
-                    Submit
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  onClick={() => void askForDiagram()}
-                  disabled={busy !== null}
-                >
-                  Draw it
-                </button>
-              </div>
-              <div className="lc-action-group" role="group" aria-label="Workspace">
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  onClick={() => void runTests()}
-                  disabled={busy !== null}
-                >
-                  Run tests
-                </button>
-              </div>
+              <button
+                type="button"
+                className={coachOpen ? "lc-secondary lc-coach-toggle lc-coach-toggle-open" : "lc-secondary lc-coach-toggle"}
+                aria-expanded={coachOpen}
+                aria-controls="lc-coach-panel"
+                onClick={() => setCoachOpen((current) => !current)}
+              >
+                Coach
+              </button>
             </div>
           </>
         ) : (
           <span className="lc-muted">pick a problem to start</span>
         )}
-        <PairingBadge pairing={pairing} onPair={setPairing} />
+        <div className="lc-header-center">
+          <PairingBadge pairing={pairing} onPair={setPairing} />
+        </div>
       </header>
 
-      {busy && <div className="lc-busy">{busy}</div>}
+      {busy && problem && <div className="lc-busy">{busy}</div>}
       {error && (
         <div className="lc-warning lc-banner">
           <span>{error}</span>
@@ -443,53 +492,150 @@ export function App() {
       )}
 
       <main className="lc-main">
-        <div className={entering ? "lc-canvas-wrap lc-entering" : "lc-canvas-wrap"}>
-          <Board ref={boardRef} />
+        <div
+          className={
+            entering
+              ? "lc-canvas-wrap lc-entering"
+              : problem
+                ? "lc-canvas-wrap"
+                : "lc-canvas-wrap lc-canvas-idle"
+          }
+        >
+          <Board
+            ref={boardRef}
+            themeId={themeId}
+            onThemePick={setThemeId}
+            interactive={Boolean(problem)}
+            onCodeSlot={onCodeSlot}
+          />
           {!problem && (
-            <div className="lc-overlay">
-              <ProblemBrowser client={client} onPick={pickProblem} busy={busy !== null} />
+            <div
+              className={[
+                "lc-overlay",
+                browseMotion === "enter" && "lc-overlay-enter",
+                browseMotion === "busy" && "lc-overlay-busy",
+                browseMotion === "exit" && "lc-overlay-exit",
+                browseMotion === "done" && "lc-overlay-done",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
+              <div className="lc-overlay-content">
+                <ProblemBrowser
+                  client={client}
+                  onPick={pickProblem}
+                  busy={busy !== null}
+                  themeId={themeId}
+                  onThemePick={setThemeId}
+                />
+              </div>
+              {(browseMotion === "busy" ||
+                browseMotion === "exit" ||
+                browseMotion === "done") && (
+                <div
+                  className="lc-overlay-spinner"
+                  role="status"
+                  aria-live="polite"
+                  aria-label={
+                    browseMotion === "done" ? "Workspace ready" : "Loading workspace"
+                  }
+                >
+                  {browseMotion === "done" ? (
+                    <div className="lc-spinner-check" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="22" height="22">
+                        <path
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M5 13l4 4L19 7"
+                        />
+                      </svg>
+                    </div>
+                  ) : (
+                    <div className="lc-spinner" aria-hidden="true" />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {problem && (
+            <div
+              className={
+                codeSlot && codeSlot.width > 24 && codeSlot.height > 24
+                  ? "lc-code-dock"
+                  : "lc-code-dock lc-code-dock-fallback"
+              }
+              style={
+                codeSlot && codeSlot.width > 24 && codeSlot.height > 24
+                  ? {
+                      left: codeSlot.left,
+                      top: codeSlot.top,
+                      width: codeSlot.width,
+                      height: codeSlot.height,
+                    }
+                  : undefined
+              }
+            >
+              <PseudocodeEditor
+                key={problem.task_id}
+                value={pseudocode}
+                onChange={setPseudocode}
+                themeId={themeId}
+                defaultOpen
+                variant="dock"
+              />
             </div>
           )}
         </div>
 
-        <aside className="lc-side">
-          <PseudocodeEditor value={pseudocode} onChange={setPseudocode} />
-          {mode === "ambient" && (
-            <AmbientPanel
-              entries={nudges}
-              connected={connected}
-              thinking={thinking}
-              provider={ambientProvider}
-              lastSkip={lastSkip}
-              onAnalyzeNow={() => {
-                if (!problem) return;
-                void coachRef.current?.analyzeNow(problem.task_id, capture, probe().sceneHash);
-              }}
-              onReset={() => {
-                coachRef.current?.reset();
-                setNudges([]);
-                lastIdsRef.current = new Set();
-              }}
-            />
-          )}
+        {problem && (
+          <AgentSidePanel
+            open={coachOpen}
+            mode={mode}
+            onModeChange={setMode}
+            busy={busy !== null}
+            onSubmit={() => void submitForReview()}
+            onDiagram={() => void askForDiagram()}
+          >
+            {mode === "ambient" && (
+              <AmbientPanel
+                entries={nudges}
+                connected={connected}
+                thinking={thinking}
+                provider={ambientProvider}
+                lastSkip={lastSkip}
+                onAnalyzeNow={() => {
+                  if (!problem) return;
+                  void coachRef.current?.analyzeNow(problem.task_id, capture, probe().sceneHash);
+                }}
+                onReset={() => {
+                  coachRef.current?.reset();
+                  setNudges([]);
+                  lastIdsRef.current = new Set();
+                }}
+              />
+            )}
 
-          {review && (
-            <ReviewPanel
-              review={review}
-              onRequestBridge={() => {
-                setRevealError(null);
-                setRevealOpen(true);
-              }}
-              onDismiss={() => setReview(null)}
-            />
-          )}
+            {review && (
+              <ReviewPanel
+                review={review}
+                onRequestBridge={() => {
+                  setRevealError(null);
+                  setRevealOpen(true);
+                }}
+                onDismiss={() => setReview(null)}
+              />
+            )}
 
-          {program && <Timeline program={program} onFrame={showFrame} onDismiss={dismissProgram} />}
+            {program && <Timeline program={program} onFrame={showFrame} onDismiss={dismissProgram} />}
 
-          {bridge && <BridgePanel bridge={bridge} onDismiss={() => setBridge(null)} />}
+            {bridge && <BridgePanel bridge={bridge} onDismiss={() => setBridge(null)} />}
 
-          {tests && <TestSummary tests={tests} onDismiss={() => setTests(null)} />}
-        </aside>
+            {tests && <TestSummary tests={tests} onDismiss={() => setTests(null)} />}
+          </AgentSidePanel>
+        )}
       </main>
 
       {revealOpen && problem && (
@@ -611,6 +757,31 @@ async function loadTauriInvoke() {
   } catch {
     return null;
   }
+}
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+function slideDurationMs(): number {
+  return prefersReducedMotion() ? 0 : 320;
+}
+
+function doneHoldMs(): number {
+  return prefersReducedMotion() ? 0 : 560;
+}
+
+function boardFadeMs(): number {
+  return prefersReducedMotion() ? 0 : 420;
 }
 
 function messageOf(cause: unknown): string {

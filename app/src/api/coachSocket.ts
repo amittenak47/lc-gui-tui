@@ -1,7 +1,7 @@
 /**
  * The ambient coach's client half.
  *
- * The 15-second cadence lives here rather than on the daemon, because the cheap
+ * The 60-second cadence lives here rather than on the daemon, because the cheap
  * decision — *has anything changed?* — needs the scene, and the scene is here.
  * An untouched board therefore costs nothing at all: no socket traffic, no
  * tokens, and no ink recognition.
@@ -17,7 +17,7 @@
 import { coachSocketUrl, type Pairing } from "./pairing";
 import type { BoardSnapshot, ServerFrame } from "./types";
 
-export const AMBIENT_INTERVAL_MS = 15_000;
+export const AMBIENT_INTERVAL_MS = 60_000;
 /**
  * Below this many new elements, wait. One stray dot is not a new idea, and
  * nudging on it makes the coach feel twitchy.

@@ -13,9 +13,7 @@ import { REGIONS, type RegionId } from "./regions";
 import {
   FONT_CODE,
   FONT_UI,
-  STUDENT_HINT,
-  TEXT_BODY,
-  TEXT_PRIMARY,
+  templatePalette,
   type Skeleton,
 } from "./skeleton";
 
@@ -27,11 +25,14 @@ export interface ProblemTemplateInput {
   /** From `problem_description`. */
   description?: string | null;
   caseCount?: number;
+  /** Dark board themes need light statement ink. */
+  dark?: boolean;
 }
 
 /** Prompts, so an empty region still says what belongs there. */
 const HINTS: Record<RegionId, string> = {
   constraints: "",
+  code: "",
   approach: "What are you scanning, and what invariant holds at each step?",
   complexity: "time / space — and why",
   walkthrough: "Trace one example by hand.",
@@ -93,6 +94,15 @@ export function parseStatement(
 
 export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
   const skeletons: Skeleton[] = [];
+  const ink = templatePalette(Boolean(input.dark));
+  const textWidth = REGIONS.constraints.w - 72;
+
+  const at = (region: { id: RegionId; x: number; y: number }, x: number, y: number, extra: Record<string, unknown> = {}) => ({
+    lcRegion: region.id,
+    lcRegionOx: x - region.x,
+    lcRegionOy: y - region.y,
+    ...extra,
+  });
 
   for (const region of Object.values(REGIONS)) {
     skeletons.push({
@@ -102,44 +112,53 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       y: region.y,
       width: region.w,
       height: region.h,
-      strokeColor: STUDENT_HINT,
+      strokeColor: ink.border,
       backgroundColor: "transparent",
       strokeStyle: "dashed",
-      strokeWidth: 1,
+      strokeWidth: 1.5,
       roughness: 0,
-      opacity: 35,
-      locked: true,
-      customData: { lcRegion: region.id },
+      opacity: 80,
+      locked: false,
+      customData: { lcRegion: region.id, lcRegionFrame: true },
     });
 
+    // Monaco owns the solution-code UI — only the dashed frame is scaffolding.
+    if (region.id === "code") continue;
+
+    const labelX = region.x + 36;
+    const labelY = region.y + 24;
     skeletons.push({
       id: `lcregion-${region.id}-label`,
       type: "text",
-      x: region.x + 28,
-      y: region.y + 20,
+      x: labelX,
+      y: labelY,
+      width: textWidth,
       text: region.label.toUpperCase(),
-      fontSize: 22,
+      fontSize: region.id === "constraints" ? 24 : 20,
       fontFamily: FONT_UI,
-      strokeColor: STUDENT_HINT,
-      opacity: 80,
+      strokeColor: ink.hint,
+      opacity: 100,
       locked: true,
-      customData: { lcRegion: region.id },
+      customData: at(region, labelX, labelY),
     });
 
     const hint = HINTS[region.id];
     if (hint) {
+      const hintX = region.x + 36;
+      const hintY = region.y + 64;
       skeletons.push({
         id: `lcregion-${region.id}-hint`,
         type: "text",
-        x: region.x + 28,
-        y: region.y + 56,
+        x: hintX,
+        y: hintY,
+        width: textWidth,
         text: hint,
-        fontSize: 18,
+        fontSize: 22,
         fontFamily: FONT_UI,
-        strokeColor: STUDENT_HINT,
-        opacity: 55,
+        strokeColor: ink.hint,
+        opacity: 90,
         locked: true,
-        customData: { lcRegion: region.id },
+        customData: at(region, hintX, hintY),
       });
     }
   }
@@ -149,14 +168,15 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
   skeletons.push({
     id: "lcregion-constraints-title",
     type: "text",
-    x: constraints.x + 28,
-    y: constraints.y + 62,
+    x: constraints.x + 36,
+    y: constraints.y + 64,
+    width: textWidth,
     text: input.title,
-    fontSize: 40,
+    fontSize: 56,
     fontFamily: FONT_UI,
-    strokeColor: TEXT_PRIMARY,
+    strokeColor: ink.primary,
     locked: true,
-    customData: { lcRegion: "constraints" },
+    customData: at(constraints, constraints.x + 36, constraints.y + 64),
   });
 
   const meta = [
@@ -173,35 +193,38 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
     skeletons.push({
       id: "lcregion-constraints-meta",
       type: "text",
-      x: constraints.x + 28,
-      y: constraints.y + 116,
+      x: constraints.x + 36,
+      y: constraints.y + 140,
+      width: textWidth,
       text: meta,
-      fontSize: 18,
+      fontSize: 26,
       fontFamily: FONT_UI,
-      strokeColor: STUDENT_HINT,
+      strokeColor: ink.hint,
       locked: true,
-      customData: { lcRegion: "constraints" },
+      customData: at(constraints, constraints.x + 36, constraints.y + 140),
     });
   }
 
   // Statement body, block by block, so examples keep the monospace face.
-  let y = constraints.y + 164;
-  parseStatement(input.description).forEach((block, index) => {
+  let y = constraints.y + 200;
+  parseStatement(input.description, 48).forEach((block, index) => {
+    const fontSize = block.code ? 24 : 28;
+    const lineHeight = block.code ? 34 : 40;
+    const x = constraints.x + 36;
     skeletons.push({
       id: `lcregion-constraints-body-${index}`,
       type: "text",
-      x: constraints.x + 28,
+      x,
       y,
+      width: textWidth,
       text: block.text,
-      fontSize: block.code ? 17 : 19,
+      fontSize,
       fontFamily: block.code ? FONT_CODE : FONT_UI,
-      strokeColor: block.code ? TEXT_PRIMARY : TEXT_BODY,
+      strokeColor: block.code ? ink.primary : ink.body,
       locked: true,
-      customData: { lcRegion: "constraints" },
+      customData: at(constraints, x, y),
     });
-    // Excalidraw lays text out from the top-left; advance by the line count.
-    const lineHeight = block.code ? 24 : 27;
-    y += block.text.split("\n").length * lineHeight + 16;
+    y += block.text.split("\n").length * lineHeight + 22;
   });
 
   return skeletons;
