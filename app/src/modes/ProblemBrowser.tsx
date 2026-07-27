@@ -3,8 +3,8 @@
  *
  * Same table (q#, slug, difficulty, tags, cases), same 15-per-page paging, same
  * filters, and the same keys — `W`/`S` to move, `A`/`D` to page, `/` to search,
- * `T` tag, `E` difficulty, `O` sort, `R` random, `Enter` to open. Someone who
- * knows `lc` in the terminal already knows this screen.
+ * `T` tag, `E` difficulty, `O` sort, `R` randomize session, `M` select mode,
+ * `Space` add to session picks, `X` reset session, `Enter` to open.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -33,8 +33,10 @@ export interface ProblemBrowserProps {
   themeId: string;
   onThemePick: (id: string) => void;
   session?: SessionSnapshot | null;
-  onStartSession?: () => void;
+  /** Start a session with the given picks (empty = fresh empty queue). */
+  onStartSession?: (taskIds: string[]) => void;
   onResetSession?: () => void;
+  /** Build a random session queue from current filters (Random button / R). */
   onRandomSession?: (bank: SearchOptions) => void;
 }
 
@@ -70,6 +72,9 @@ export function ProblemBrowser({
   /** False until the first search returns — avoids filters-then-table flash. */
   const [tableReady, setTableReady] = useState(false);
   const tableReadyRef = useRef(false);
+  /** Multi-select mode: clicks toggle picks instead of opening. */
+  const [selectMode, setSelectMode] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
 
   const searchRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -164,19 +169,40 @@ export function ProblemBrowser({
     [onPick, bankFilters],
   );
 
-  const pickRandom = useCallback(async () => {
-    try {
-      const problem = await client.randomProblem({
-        q: query || undefined,
-        difficulty: difficulty || undefined,
-        tag: tag || undefined,
-      });
-      if (problem) pick(problem.task_id);
-      else setError("no problems match the current filters");
-    } catch (cause) {
-      setError(messageOf(cause));
-    }
-  }, [client, query, difficulty, tag, pick]);
+  const togglePick = useCallback((taskId: string) => {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }, []);
+
+  const activateRow = useCallback(
+    (taskId: string) => {
+      if (selectMode) togglePick(taskId);
+      else pick(taskId);
+    },
+    [selectMode, togglePick, pick],
+  );
+
+  const commitStart = useCallback(() => {
+    onStartSession?.([...picked]);
+    setPicked(new Set());
+    setSelectMode(false);
+  }, [onStartSession, picked]);
+
+  const commitReset = useCallback(() => {
+    onResetSession?.();
+    setPicked(new Set());
+    setSelectMode(false);
+  }, [onResetSession]);
+
+  const randomizeSession = useCallback(() => {
+    onRandomSession?.(bankFilters);
+    setPicked(new Set());
+    setSelectMode(false);
+  }, [onRandomSession, bankFilters]);
 
   // TUI keybindings. Ignored while typing in the search box, so `/`-then-text
   // behaves the way it does in the terminal.
@@ -224,7 +250,21 @@ export function ProblemBrowser({
           setSort((current) => cycle(SORTS as readonly string[], current));
           break;
         case "r":
-          void pickRandom();
+          event.preventDefault();
+          randomizeSession();
+          break;
+        case "m":
+          event.preventDefault();
+          setSelectMode((on) => !on);
+          break;
+        case " ":
+          event.preventDefault();
+          if (rows[selected]) togglePick(rows[selected].task_id);
+          if (!selectMode) setSelectMode(true);
+          break;
+        case "x":
+          event.preventDefault();
+          commitReset();
           break;
         case "enter":
           if (rows[selected]) pick(rows[selected].task_id);
@@ -235,7 +275,18 @@ export function ProblemBrowser({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [move, turnPage, tags, rows, selected, pick, pickRandom]);
+  }, [
+    move,
+    turnPage,
+    tags,
+    rows,
+    selected,
+    pick,
+    randomizeSession,
+    togglePick,
+    selectMode,
+    commitReset,
+  ]);
 
   // Keep the highlighted row visible when moving with the keyboard.
   useEffect(() => {
@@ -260,46 +311,6 @@ export function ProblemBrowser({
           </div>
         ) : (
           <div className="lc-browser-body lc-browser-body-ready">
-            <div className="lc-browser-session-bar">
-              <span className="lc-muted">
-                {session && (session.queue.length > 0 || (session.stats?.loaded ?? 0) > 0)
-                  ? `Session · ${session.queue.length} in queue · ${session.stats?.passed ?? 0} passed · ${session.stats?.failed ?? 0} failed`
-                  : "No active session queue — prev/next uses bank filters"}
-              </span>
-              {onStartSession && (
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  disabled={busy}
-                  onClick={onStartSession}
-                  title="Reset and start a fresh session (picks enqueue)"
-                >
-                  Start session
-                </button>
-              )}
-              {onRandomSession && (
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  disabled={busy}
-                  onClick={() => onRandomSession(bankFilters)}
-                  title="Build a random session queue from current filters"
-                >
-                  Random session
-                </button>
-              )}
-              {onResetSession && (
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  disabled={busy}
-                  onClick={onResetSession}
-                >
-                  Reset session
-                </button>
-              )}
-            </div>
-
             <div className="lc-browser-filters">
               <input
                 ref={searchRef}
@@ -358,9 +369,10 @@ export function ProblemBrowser({
               <button
                 type="button"
                 className="lc-secondary lc-tip-target"
-                data-tip="Open a random problem matching current filters — press R"
+                data-tip="Random session from filters — R"
                 data-tip-placement="bottom"
-                onClick={() => void pickRandom()}
+                disabled={busy || !onRandomSession}
+                onClick={randomizeSession}
               >
                 Random
               </button>
@@ -387,41 +399,63 @@ export function ProblemBrowser({
                 </span>
               </div>
 
-              <div className="lc-table" ref={listRef} role="listbox" aria-label="Problems" tabIndex={-1}>
-                {rows.map((problem, index) => (
-                  <button
-                    key={problem.task_id}
-                    type="button"
-                    role="option"
-                    data-row={index}
-                    aria-selected={index === selected}
-                    className={index === selected ? "lc-row lc-row-selected" : "lc-row"}
-                    disabled={busy || loading}
-                    onMouseEnter={() => setSelected(index)}
-                    onClick={() => pick(problem.task_id)}
-                  >
-                    <span className="lc-col-q">{problem.question_id ?? ""}</span>
-                    <span className="lc-col-name">
-                      {problem.task_id}
-                      {session?.problems[problem.task_id] && (
-                        <span
-                          className={`lc-session-badge is-${session.problems[problem.task_id].state}`}
-                        >
-                          {session.problems[problem.task_id].state === "passed"
-                            ? "pass"
-                            : session.problems[problem.task_id].state === "failed"
-                              ? "fail"
-                              : "ld"}
-                        </span>
-                      )}
-                    </span>
-                    <span className={`lc-col-diff lc-diff-${(problem.difficulty ?? "").toLowerCase()}`}>
-                      {problem.difficulty ?? ""}
-                    </span>
-                    <span className="lc-col-tags">{problem.tags.join(", ")}</span>
-                    <span className="lc-col-cases">{problem.test_count}</span>
-                  </button>
-                ))}
+              <div
+                className={selectMode ? "lc-table lc-table-selecting" : "lc-table"}
+                ref={listRef}
+                role="listbox"
+                aria-label="Problems"
+                aria-multiselectable={selectMode}
+                tabIndex={-1}
+              >
+                {rows.map((problem, index) => {
+                  const isPicked = picked.has(problem.task_id);
+                  const rowClass = [
+                    "lc-row",
+                    index === selected ? "lc-row-selected" : "",
+                    isPicked ? "lc-row-picked" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+                  return (
+                    <button
+                      key={problem.task_id}
+                      type="button"
+                      role="option"
+                      data-row={index}
+                      aria-selected={selectMode ? isPicked : index === selected}
+                      className={rowClass}
+                      disabled={busy || loading}
+                      onMouseEnter={() => setSelected(index)}
+                      onClick={() => activateRow(problem.task_id)}
+                    >
+                      <span className="lc-col-q">{problem.question_id ?? ""}</span>
+                      <span className="lc-col-name">
+                        {selectMode && (
+                          <span className={isPicked ? "lc-pick-mark is-on" : "lc-pick-mark"} aria-hidden="true">
+                            {isPicked ? "✓" : "○"}
+                          </span>
+                        )}
+                        {problem.task_id}
+                        {session?.problems[problem.task_id] && (
+                          <span
+                            className={`lc-session-badge is-${session.problems[problem.task_id].state}`}
+                          >
+                            {session.problems[problem.task_id].state === "passed"
+                              ? "pass"
+                              : session.problems[problem.task_id].state === "failed"
+                                ? "fail"
+                                : "ld"}
+                          </span>
+                        )}
+                      </span>
+                      <span className={`lc-col-diff lc-diff-${(problem.difficulty ?? "").toLowerCase()}`}>
+                        {problem.difficulty ?? ""}
+                      </span>
+                      <span className="lc-col-tags">{problem.tags.join(", ")}</span>
+                      <span className="lc-col-cases">{problem.test_count}</span>
+                    </button>
+                  );
+                })}
                 {!loading && rows.length === 0 && (
                   <p className="lc-muted lc-table-empty">
                     No matches. If the corpus changed, run <code>lc index</code>.
@@ -430,62 +464,131 @@ export function ProblemBrowser({
               </div>
 
               <div className="lc-browser-foot">
-                <button
-                  type="button"
-                  className="lc-secondary lc-tip-target"
-                  disabled={page === 0 || loading}
-                  data-tip="Previous page — press A"
-                  data-tip-placement="top"
-                  onClick={() => turnPage(-1)}
-                >
-                  ‹ prev
-                </button>
-                <span className="lc-muted lc-tip-target" data-tip="Current page within filtered results" data-tip-placement="top">
-                  {rangeLabel} · page {page + 1}/{pageCount}
-                </span>
-                <button
-                  type="button"
-                  className="lc-secondary lc-tip-target"
-                  disabled={page >= pageCount - 1 || loading}
-                  data-tip="Next page — press D"
-                  data-tip-placement="top"
-                  onClick={() => turnPage(1)}
-                >
-                  next ›
-                </button>
-                <span className="lc-keys lc-muted">
-                  <span className="lc-tip-target" data-tip="Move selection up or down" data-tip-placement="top">
-                    W/S move
+                <div className="lc-browser-foot-session">
+                  <span className="lc-browser-foot-label">Session</span>
+                  <button
+                    type="button"
+                    className="lc-secondary lc-tip-target"
+                    disabled={busy || !onStartSession}
+                    data-tip={
+                      picked.size > 0
+                        ? `Start session with ${picked.size} selected`
+                        : "Start a fresh empty session"
+                    }
+                    data-tip-placement="top"
+                    onClick={commitStart}
+                  >
+                    Start
+                  </button>
+                  <button
+                    type="button"
+                    className="lc-secondary lc-tip-target"
+                    disabled={busy || !onResetSession}
+                    data-tip="Clear session queue and progress — press X"
+                    data-tip-placement="top"
+                    onClick={commitReset}
+                  >
+                    Reset
+                  </button>
+                  <button
+                    type="button"
+                    className={
+                      selectMode
+                        ? "lc-secondary lc-tip-target is-active"
+                        : "lc-secondary lc-tip-target"
+                    }
+                    disabled={busy}
+                    data-tip="Toggle select mode — click rows or press Space to add — press M"
+                    data-tip-placement="top"
+                    aria-pressed={selectMode}
+                    onClick={() => setSelectMode((on) => !on)}
+                  >
+                    Select{picked.size > 0 ? ` (${picked.size})` : ""}
+                  </button>
+                  <div className="lc-browser-foot-nav">
+                    <button
+                      type="button"
+                      className="lc-secondary lc-tip-target"
+                      disabled={page === 0 || loading}
+                      data-tip="Previous page — press A"
+                      data-tip-placement="top"
+                      onClick={() => turnPage(-1)}
+                    >
+                      ‹ prev
+                    </button>
+                    <span className="lc-muted lc-tip-target" data-tip="Current page within filtered results" data-tip-placement="top">
+                      {rangeLabel} · page {page + 1}/{pageCount}
+                    </span>
+                    <button
+                      type="button"
+                      className="lc-secondary lc-tip-target"
+                      disabled={page >= pageCount - 1 || loading}
+                      data-tip="Next page — press D"
+                      data-tip-placement="top"
+                      onClick={() => turnPage(1)}
+                    >
+                      next ›
+                    </button>
+                  </div>
+                </div>
+                <div className="lc-browser-foot-keys">
+                  <span className="lc-keys lc-muted">
+                    <span className="lc-tip-target" data-tip="Move highlight up or down" data-tip-placement="top">
+                      W/S move
+                    </span>
+                    {" · "}
+                    <span className="lc-tip-target" data-tip="Previous / next page" data-tip-placement="top">
+                      A/D page
+                    </span>
+                    {" · "}
+                    <span className="lc-tip-target" data-tip="Focus the search box" data-tip-placement="top">
+                      / search
+                    </span>
+                    {" · "}
+                    <span className="lc-tip-target" data-tip="Cycle topic tag filter" data-tip-placement="top">
+                      T tag
+                    </span>
+                    {" · "}
+                    <span className="lc-tip-target" data-tip="Cycle difficulty filter" data-tip-placement="top">
+                      E diff
+                    </span>
+                    {" · "}
+                    <span className="lc-tip-target" data-tip="Cycle sort column" data-tip-placement="top">
+                      O sort
+                    </span>
+                    {" · "}
+                    <span className="lc-tip-target" data-tip="Randomize session from filters" data-tip-placement="top">
+                      R random
+                    </span>
+                    {" · "}
+                    <span className="lc-tip-target" data-tip="Toggle select mode" data-tip-placement="top">
+                      M select
+                    </span>
+                    {" · "}
+                    <span className="lc-tip-target" data-tip="Add/remove highlighted problem from session picks" data-tip-placement="top">
+                      Space add
+                    </span>
+                    {" · "}
+                    <span className="lc-tip-target" data-tip="Reset session" data-tip-placement="top">
+                      X reset
+                    </span>
+                    {" · "}
+                    <span
+                      className="lc-tip-target"
+                      data-tip="Open the highlighted problem"
+                      data-tip-placement="top"
+                    >
+                      Enter open
+                    </span>
                   </span>
-                  {" · "}
-                  <span className="lc-tip-target" data-tip="Previous / next page" data-tip-placement="top">
-                    A/D page
+                  <span className="lc-browser-foot-stats lc-muted">
+                    {picked.size > 0
+                      ? `${picked.size} selected`
+                      : session && session.queue.length > 0
+                        ? `${session.queue.length} in queue · ${session.stats?.passed ?? 0} passed · ${session.stats?.failed ?? 0} failed`
+                        : "no session queue"}
                   </span>
-                  {" · "}
-                  <span className="lc-tip-target" data-tip="Focus the search box" data-tip-placement="top">
-                    / search
-                  </span>
-                  {" · "}
-                  <span className="lc-tip-target" data-tip="Cycle topic tag filter" data-tip-placement="top">
-                    T tag
-                  </span>
-                  {" · "}
-                  <span className="lc-tip-target" data-tip="Cycle difficulty filter" data-tip-placement="top">
-                    E diff
-                  </span>
-                  {" · "}
-                  <span className="lc-tip-target" data-tip="Cycle sort column" data-tip-placement="top">
-                    O sort
-                  </span>
-                  {" · "}
-                  <span className="lc-tip-target" data-tip="Open a random matching problem" data-tip-placement="top">
-                    R random
-                  </span>
-                  {" · "}
-                  <span className="lc-tip-target" data-tip="Open the selected problem" data-tip-placement="top">
-                    Enter open
-                  </span>
-                </span>
+                </div>
               </div>
             </div>
           </div>
@@ -496,6 +599,7 @@ export function ProblemBrowser({
     </section>
   );
 }
+
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);

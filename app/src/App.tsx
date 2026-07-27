@@ -688,13 +688,21 @@ export function App() {
     }
   }, [client, bankFilters, pickProblem]);
 
-  const startFreshSession = useCallback(async () => {
-    try {
-      setSession(await client.resetSession());
-    } catch (cause) {
-      setError(messageOf(cause));
-    }
-  }, [client]);
+  const startFreshSession = useCallback(
+    async (taskIds: string[] = []) => {
+      try {
+        let next = await client.resetSession();
+        for (const id of taskIds) {
+          next = await client.enqueueSession(id);
+        }
+        setSession(next);
+        if (taskIds[0]) void pickProblem(taskIds[0], bankFilters);
+      } catch (cause) {
+        setError(messageOf(cause));
+      }
+    },
+    [client, pickProblem, bankFilters],
+  );
 
   const resetSession = useCallback(async () => {
     if (!window.confirm("Reset the practice session? Queue and progress will be cleared.")) return;
@@ -953,27 +961,6 @@ export function App() {
         </div>
       </header>
 
-      {(session?.queue?.length ?? 0) > 0 && (
-        <div className="lc-session-strip">
-          <strong>Session</strong>
-          <span>
-            {session!.queue.length} in queue
-            {problem && session!.queue.includes(problem.task_id)
-              ? ` · ${session!.queue.indexOf(problem.task_id) + 1}/${session!.queue.length}`
-              : ""}
-          </span>
-          {session?.stats && (
-            <span>
-              {session.stats.passed} passed · {session.stats.failed} failed · {session.stats.reveals}{" "}
-              reveals
-            </span>
-          )}
-          <button type="button" className="lc-secondary" onClick={() => void resetSession()}>
-            Reset
-          </button>
-        </div>
-      )}
-
       {busy && problem && switchMotion === "idle" && <div className="lc-busy">{busy}</div>}
       {error && (
         <div className="lc-warning lc-banner">
@@ -1022,7 +1009,7 @@ export function App() {
                   themeId={themeId}
                   onThemePick={setThemeId}
                   session={session}
-                  onStartSession={() => void startFreshSession()}
+                  onStartSession={(ids) => void startFreshSession(ids)}
                   onResetSession={() => void resetSession()}
                   onRandomSession={(filters) => void startRandomSession(filters)}
                 />
