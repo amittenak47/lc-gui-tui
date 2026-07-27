@@ -69,9 +69,25 @@ your approach to a working one. It is never a solution dump, and it is logged so
 cargo run -- serve --lan
 ```
 
-That binds all interfaces, generates a pairing token once, and prints it as a QR
-code. Tap the host name in the app's header and paste the URL (or scan it). The
-token is stored locally, so pairing is a once-ever step.
+That binds all interfaces and prints the three things to type into the app's
+header — **Host**, **Port** and a **6-digit Code**:
+
+```
+  Pair the tablet — type these into the app's header:
+    Host: 192.168.1.20
+    Port: 7878
+    Code: 482917
+```
+
+Tap the host name in the header, type them, and the app trades the code for the
+daemon's long token (`POST /pair`) and stores it. Pairing is a once-ever step per
+device: the code rotates on every `serve --lan` start, but a device that already
+holds the token keeps working. Settings → Serve shows the current code without
+going back to the terminal.
+
+The QR and the full `http://host:port?token=…` URL still print underneath, and
+pasting that URL into the Host field still works — a tablet with only a
+front-facing camera cannot scan its own PC, which is why the code is the path.
 
 `--lan` means anyone on your network who has the token can drive your
 workspaces. Prefer loopback when you're at the desk.

@@ -53,6 +53,12 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [providerFocus, setProviderFocus] = useState<"local" | "ollama" | "openai">("local");
+  /** Host / port / six-digit code to type on a tablet — null until loaded. */
+  const [pairInfo, setPairInfo] = useState<{
+    code: string | null;
+    host: string | null;
+    port: number;
+  } | null>(null);
 
   const refreshLlm = useCallback(async () => {
     try {
@@ -75,6 +81,13 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
           setBusy(null);
         }
         await refreshLlm();
+        try {
+          const pair = await client.pairCode();
+          if (!cancelled) setPairInfo(pair);
+        } catch {
+          // An older daemon has no /pair/code — the Serve tab just says so.
+          if (!cancelled) setPairInfo(null);
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
@@ -336,6 +349,36 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
               <p className="lc-muted">
                 Pairing token: {draft.token_set ? "set (use lc serve --lan to rotate)" : "not set (loopback only)"}
               </p>
+
+              <div className="lc-settings-subhead">Pair a tablet</div>
+              {pairInfo?.code ? (
+                <>
+                  <dl className="lc-pair-readout">
+                    <div>
+                      <dt>Host</dt>
+                      <dd>{pairInfo.host ?? "this machine's LAN address"}</dd>
+                    </div>
+                    <div>
+                      <dt>Port</dt>
+                      <dd>{pairInfo.port}</dd>
+                    </div>
+                    <div>
+                      <dt>Code</dt>
+                      <dd className="lc-pair-code">{pairInfo.code}</dd>
+                    </div>
+                  </dl>
+                  <p className="lc-muted">
+                    Type these three into the tablet's header. The code changes every time
+                    `lc serve --lan` restarts; devices already paired keep working.
+                  </p>
+                </>
+              ) : (
+                <p className="lc-muted">
+                  No pairing code — this daemon is loopback-only. Restart it with
+                  {" "}
+                  <code>lc serve --lan</code> to pair a tablet.
+                </p>
+              )}
             </div>
           )}
         </div>

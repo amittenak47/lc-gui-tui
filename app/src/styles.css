@@ -304,6 +304,78 @@ body {
   outline: none;
 }
 
+/* Host / Port / Code share one bordered field, split by hairlines. */
+.lc-pairing-field {
+  width: min(360px, 58vw);
+}
+
+.lc-pairing-form .lc-pair-host {
+  flex: 3 1 0;
+  padding-right: 6px;
+}
+
+.lc-pairing-form .lc-pair-port {
+  flex: 0 0 46px;
+  padding: 0 4px;
+  text-align: center;
+  border-left: 1px solid var(--line);
+}
+
+.lc-pairing-form .lc-pair-code-input {
+  flex: 0 0 78px;
+  padding: 0 28px 0 6px;
+  letter-spacing: 0.08em;
+  border-left: 1px solid var(--line);
+}
+
+.lc-pairing-hint {
+  font-size: 11px;
+  text-align: center;
+}
+
+.lc-mobile .lc-pairing-field {
+  width: min(340px, 74vw);
+  min-width: 190px;
+}
+
+.lc-mobile .lc-pairing-hint {
+  display: none;
+}
+
+/* Settings → Serve: what to type on the tablet. */
+.lc-pair-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0;
+}
+
+.lc-pair-readout div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lc-pair-readout dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--hint);
+}
+
+.lc-pair-readout dd {
+  margin: 0;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 15px;
+}
+
+.lc-pair-code {
+  font-size: 22px !important;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+
 .lc-pairing-return {
   position: absolute;
   top: 0;

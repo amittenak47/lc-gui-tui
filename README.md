@@ -267,7 +267,18 @@ cd app && npm run tauri build         # packaged desktop app
 cargo run -- serve --lan
 ```
 
-`--lan` binds all interfaces, generates a pairing token once, and prints it as a QR code plus a URL like `http://192.168.1.20:7878?token=…`. In the app, tap the host name in the header and paste that URL. The token is stored locally, so pairing is a once-ever step.
+`--lan` binds all interfaces and prints three short lines:
+
+```
+  Pair the tablet — type these into the app's header:
+    Host: 192.168.1.20
+    Port: 7878
+    Code: 482917
+```
+
+In the app, tap the host name in the header and type those three. The code buys one `POST /pair`, which hands back the long token every later request carries; the token is stored locally, so pairing is a once-ever step per device. A new code is generated on every `lc serve --lan` start — devices already paired keep working, because they hold the token, not the code.
+
+The QR and the full `http://192.168.1.20:7878?token=…` URL are still printed underneath for anyone who would rather scan or paste. Settings → Serve shows the current code too, so you don't have to go back to the terminal.
 
 > `--lan` means anyone on your network holding the token can drive your workspaces. Prefer plain `lc serve` when you're at the desk.
 
@@ -275,11 +286,11 @@ Android:
 
 ```bash
 cd app
-npm run tauri android init
-npm run tauri android dev
+npm run android:init      # tauri android init + the cleartext-HTTP overlay
+npm run android:dev       # or: npm run android:apk  → sideloadable debug APK
 ```
 
-After `init`, copy [`app/src-tauri/android-overlay/network_security_config.xml`](app/src-tauri/android-overlay/network_security_config.xml) into the generated project — Android 9+ blocks the cleartext HTTP the daemon speaks on the LAN. Instructions are in that file.
+`android:init` also applies [`app/src-tauri/android-overlay/network_security_config.xml`](app/src-tauri/android-overlay/network_security_config.xml) to the generated Gradle project — Android 9+ blocks the cleartext HTTP the daemon speaks on the LAN. Full sideload instructions (Android 12 / 14, `adb install`, unknown sources) are in [`app/README.md`](app/README.md).
 
 ### Modes
 
@@ -318,6 +329,7 @@ curl -X POST localhost:7878/coach/review -H 'Content-Type: application/json' \
 | Route | Backed by |
 | --- | --- |
 | `GET /health` | Unauthenticated, so a client can find the daemon before pairing |
+| `POST /pair` | Unauthenticated: six-digit session code in, serve token out (rate-limited) |
 | `GET /problems?difficulty=&tag=&q=&limit=&sort=` | `index::search` |
 | `GET /problems/:id` | Redacted problem detail |
 | `POST /problems/:id/load` | `generator::generate` |
@@ -329,7 +341,7 @@ curl -X POST localhost:7878/coach/review -H 'Content-Type: application/json' \
 | `WS /coach/session` | Ambient loop |
 | `POST /coach/reveal` | **Gated** — requires `"confirm_reveal": true` |
 
-With `--lan`, every route except `/health` needs the token as an `X-LC-Token` header, or `?token=` for the WebSocket (browsers can't set headers on `WebSocket`).
+With `--lan`, every route except `/health` and `/pair` needs the token as an `X-LC-Token` header, or `?token=` for the WebSocket (browsers can't set headers on `WebSocket`).
 
 ### What the coach is not trusted with
 
@@ -376,7 +388,8 @@ JSON corpus ──lc index──▶ SQLite (problems.db)
 | `GROQ_API_KEY is not set` | Export the key or use `--provider local` |
 | `cannot bind 127.0.0.1:7878` | Another `lc serve` is running, or pick `--port` |
 | Canvas says `cannot reach lc serve` | Start `lc serve`; on a tablet you need `--lan` and the same network |
-| Tablet gets `pair first` (401) | Re-scan the QR from `lc serve --lan`, or `lc config get serve.token` |
+| Tablet gets `pair first` (401) | Re-pair with the Host/Port/Code from the `lc serve --lan` banner (or Settings → Serve) |
+| `that code doesn't match` | The code rotates every `serve --lan` start — read the current one off the banner |
 | Tablet connects on desktop but not Android | Cleartext HTTP — see `app/src-tauri/android-overlay/network_security_config.xml` |
 | `produced nothing drawable` | The `viz` model can't tool-call; try `lc config set llm.modes.viz groq` |
 | Editor opens a new window | Rebuild latest `lc`; `load --open` uses `cursor -r` / `code -r` |

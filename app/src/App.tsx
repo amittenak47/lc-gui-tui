@@ -15,7 +15,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { LcApiError, LcClient, type SearchOptions } from "./api/client";
 import { AmbientCoach, type AmbientProbe } from "./api/coachSocket";
-import { loadPairing, parsePairingUrl, savePairing, type Pairing } from "./api/pairing";
+import {
+  DEFAULT_PORT,
+  loadPairing,
+  normalizePairCode,
+  pairWithCode,
+  pairingBaseUrl,
+  parsePairingUrl,
+  savePairing,
+  type Pairing,
+} from "./api/pairing";
 import type {
   BridgeResponse,
   ProblemDetail,
@@ -1490,6 +1499,15 @@ function TestSummary({
   );
 }
 
+/**
+ * Pairing, as three short fields: Host, Port, Code.
+ *
+ * The tablet has no rear camera worth pointing at a PC and nobody should retype
+ * a 32-character token, so the six digits from the `lc serve --lan` banner are
+ * the path — they buy one `POST /pair` and the app stores the real token that
+ * comes back. Pasting the full `http://host:port?token=…` URL into Host still
+ * works for anyone who has it on the clipboard.
+ */
 function PairingBadge({
   pairing,
   onPair,
@@ -1498,39 +1516,72 @@ function PairingBadge({
   onPair: (pairing: Pairing) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(pairing.baseUrl);
+  const [host, setHost] = useState(() => hostnameOf(pairing.baseUrl));
+  const [port, setPort] = useState(() => portOf(pairing.baseUrl));
+  const [code, setCode] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const formRef = useRef<HTMLFormElement | null>(null);
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
+  const fields = useRef({ host, port, code, pending });
+  fields.current = { host, port, code, pending };
 
   const dismiss = useCallback(() => {
     setEditing(false);
-    setDraft(pairing.baseUrl);
+    setHost(hostnameOf(pairing.baseUrl));
+    setPort(portOf(pairing.baseUrl));
+    setCode("");
     setProblem(null);
   }, [pairing.baseUrl]);
 
-  const commit = useCallback(() => {
-    const value = draftRef.current;
-    // Accept either the full QR payload or a bare host:port.
-    const parsed = parsePairingUrl(value) ?? parsePairingUrl(`http://${value}`);
-    if (!parsed) {
-      setProblem("that doesn't look like the URL `lc serve --lan` printed");
-      return false;
-    }
-    savePairing(parsed);
-    onPair(parsed);
-    setEditing(false);
+  const commit = useCallback(async () => {
+    const current = fields.current;
+    if (current.pending) return;
     setProblem(null);
-    return true;
-  }, [onPair]);
+
+    // Power-user path: the whole URL from the banner, token and all.
+    const pasted = parsePairingUrl(current.host.trim());
+    if (pasted?.token) {
+      savePairing(pasted);
+      onPair(pasted);
+      setEditing(false);
+      return;
+    }
+
+    // No code typed: they are just moving the daemon's address, so keep the
+    // token we already hold rather than forcing a re-pair.
+    if (normalizePairCode(current.code).length === 0) {
+      const baseUrl = pairingBaseUrl(current.host, current.port);
+      if (!baseUrl) {
+        setProblem("that host doesn't look right — try the Host line from the PC");
+        return;
+      }
+      const next: Pairing = { baseUrl, token: pairing.token };
+      savePairing(next);
+      onPair(next);
+      setEditing(false);
+      return;
+    }
+
+    setPending(true);
+    try {
+      const paired = await pairWithCode(current.host, current.port, current.code);
+      savePairing(paired);
+      onPair(paired);
+      setCode("");
+      setEditing(false);
+    } catch (cause) {
+      setProblem(messageOf(cause));
+    } finally {
+      setPending(false);
+    }
+  }, [onPair, pairing.token]);
 
   useEffect(() => {
     if (!editing) return;
     const onPointerDown = (event: PointerEvent) => {
       if (formRef.current?.contains(event.target as Node)) return;
       // Tablet: tap away = Enter / pair.
-      commit();
+      void commit();
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") dismiss();
@@ -1548,9 +1599,11 @@ function PairingBadge({
       <button
         type="button"
         className="lc-link lc-pairing"
-        title={pairing.token ? "paired" : "loopback"}
+        title={pairing.token ? "paired — tap to change" : "loopback — tap to pair a daemon"}
         onClick={() => {
-          setDraft(pairing.baseUrl);
+          setHost(hostnameOf(pairing.baseUrl));
+          setPort(portOf(pairing.baseUrl));
+          setCode("");
           setProblem(null);
           setEditing(true);
         }}
@@ -1566,23 +1619,46 @@ function PairingBadge({
       className="lc-pairing-form"
       onSubmit={(event) => {
         event.preventDefault();
-        commit();
+        void commit();
       }}
     >
       <div className="lc-pairing-field">
         <input
-          value={draft}
-          aria-label="Daemon URL"
-          placeholder="http://192.168.1.20:7878?token=…"
+          className="lc-pair-host"
+          value={host}
+          aria-label="Host"
+          placeholder="192.168.1.20"
           autoFocus
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={(event) => {
-            const next = event.relatedTarget as Node | null;
-            if (next && formRef.current?.contains(next)) return;
-            commit();
-          }}
+          inputMode="decimal"
+          disabled={pending}
+          onChange={(event) => setHost(event.target.value)}
         />
-        <button type="submit" className="lc-pairing-return" aria-label="Pair" title="Pair">
+        <input
+          className="lc-pair-port"
+          value={port}
+          aria-label="Port"
+          placeholder="7878"
+          inputMode="numeric"
+          disabled={pending}
+          onChange={(event) => setPort(event.target.value)}
+        />
+        <input
+          className="lc-pair-code-input"
+          value={code}
+          aria-label="Pairing code"
+          placeholder="code"
+          inputMode="numeric"
+          maxLength={7}
+          disabled={pending}
+          onChange={(event) => setCode(event.target.value)}
+        />
+        <button
+          type="submit"
+          className="lc-pairing-return"
+          aria-label="Pair"
+          title="Pair"
+          disabled={pending}
+        >
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
             <path
               fill="none"
@@ -1595,16 +1671,40 @@ function PairingBadge({
           </svg>
         </button>
       </div>
-      {problem && <span className="lc-warning">{problem}</span>}
+      {problem ? (
+        <span className="lc-warning">{problem}</span>
+      ) : (
+        <span className="lc-muted lc-pairing-hint">
+          {pending ? "pairing…" : "Host, Port and the 6-digit Code from `lc serve --lan`"}
+        </span>
+      )}
     </form>
   );
 }
 
+/** `host:port`, for the badge — what you'd tell someone the app is talking to. */
 function hostOf(baseUrl: string): string {
   try {
     return new URL(baseUrl).host;
   } catch {
     return baseUrl;
+  }
+}
+
+/** Just the host, for the Host field. */
+function hostnameOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return baseUrl;
+  }
+}
+
+function portOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).port || String(DEFAULT_PORT);
+  } catch {
+    return String(DEFAULT_PORT);
   }
 }
 

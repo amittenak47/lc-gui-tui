@@ -23,9 +23,10 @@ pub mod viz;
 pub mod ws;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
@@ -33,6 +34,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use colored::Colorize;
+use rand::Rng;
+use serde::Deserialize;
 use tower_http::cors::CorsLayer;
 
 use crate::config::Config;
@@ -42,11 +45,26 @@ pub struct AppState {
     pub cfg: RwLock<Config>,
     /// `None` on a loopback-only bind, where the OS is the access control.
     pub token: Option<String>,
+    /// Six digits, regenerated on every `lc serve --lan` start, never persisted.
+    ///
+    /// This is a *handshake* credential, not an auth one: it buys the caller
+    /// one `POST /pair`, which hands back the long token every later request
+    /// carries. Six digits are guessable on an open LAN, which is exactly why
+    /// they are not the thing the API checks.
+    pub pair_code: Option<String>,
+    /// Wrong codes since the last success. Crude, deliberate: a restart is the
+    /// reset, and a restart also rotates the code.
+    pub pair_failures: AtomicU32,
+    /// Port actually bound, so Settings can show what to type on the tablet.
+    pub port: u16,
     pub sessions: tokio::sync::Mutex<SessionStore>,
     /// `runner` records each run to a single `last_run.json`; serialize test
     /// runs so two clients can't interleave and read each other's results.
     pub test_lock: tokio::sync::Mutex<()>,
 }
+
+/// Wrong codes tolerated before pairing shuts until the daemon restarts.
+const MAX_PAIR_FAILURES: u32 = 10;
 
 impl AppState {
     pub fn cfg_snapshot(&self) -> Config {
@@ -77,6 +95,9 @@ pub fn run(mut cfg: Config, port: Option<u16>, lan: bool) -> Result<()> {
     let state = Arc::new(AppState {
         cfg: RwLock::new(cfg),
         token,
+        pair_code: if lan { Some(new_pair_code()) } else { None },
+        pair_failures: AtomicU32::new(0),
+        port,
         sessions: tokio::sync::Mutex::new(SessionStore::default()),
         test_lock: tokio::sync::Mutex::new(()),
     });
@@ -115,6 +136,9 @@ pub fn router(state: Shared) -> Router {
         .route("/session/enqueue", post(routes::enqueue_session))
         .route("/session/random", post(routes::random_session))
         .route("/config", get(routes::get_config).put(routes::put_config))
+        // Authenticated: the desktop app reads the current code out of Settings
+        // so the user does not have to go back to the terminal.
+        .route("/pair/code", get(pair_code))
         .route("/llm/status", get(routes::llm_status))
         .route("/llm/start", post(routes::llm_start))
         .route("/llm/stop", post(routes::llm_stop))
@@ -138,9 +162,10 @@ pub fn router(state: Shared) -> Router {
             get(routes::get_board).put(routes::put_board),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token))
-        // /health stays unauthenticated so the client can find the daemon
-        // before it has been paired.
+        // /health and /pair stay unauthenticated so the client can find the
+        // daemon, and trade the short code for the token, before it has one.
         .route("/health", get(health))
+        .route("/pair", post(pair))
         // Axum's default is ~2MB, which a board PNG from a vision model blows
         // through — the client saw "Failed to buffer the request body: length
         // limit exceeded" on every Share/Send with vision on. 32MB covers a
@@ -161,6 +186,61 @@ async fn health(State(state): State<Shared>) -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "requires_token": state.token.is_some(),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct PairRequest {
+    code: String,
+}
+
+/// Trade the six-digit session code for the long serve token.
+///
+/// Unauthenticated by necessity — a device calling this has nothing yet. What
+/// keeps it honest is that the code is short-lived (one `serve` run), single
+/// purpose (it is not accepted anywhere else), and rate-limited.
+async fn pair(
+    State(state): State<Shared>,
+    Json(request): Json<PairRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (Some(expected), Some(token)) = (state.pair_code.as_deref(), state.token.as_deref()) else {
+        return Err(AppError::status(
+            StatusCode::NOT_FOUND,
+            anyhow!("this daemon is loopback-only and has no pair code — start it with `lc serve --lan`"),
+        ));
+    };
+
+    if state.pair_failures.load(Ordering::Relaxed) >= MAX_PAIR_FAILURES {
+        return Err(AppError::status(
+            StatusCode::TOO_MANY_REQUESTS,
+            anyhow!("too many wrong codes — restart `lc serve --lan` to get a fresh one"),
+        ));
+    }
+
+    if !constant_time_eq(request.code.trim().as_bytes(), expected.as_bytes()) {
+        state.pair_failures.fetch_add(1, Ordering::Relaxed);
+        return Err(AppError::status(
+            StatusCode::UNAUTHORIZED,
+            anyhow!("that code doesn't match — read the Code line from the `lc serve --lan` banner"),
+        ));
+    }
+
+    state.pair_failures.store(0, Ordering::Relaxed);
+    Ok(Json(serde_json::json!({ "token": token })))
+}
+
+/// What to type on the tablet, for the desktop app's Settings → Serve tab.
+async fn pair_code(State(state): State<Shared>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "code": state.pair_code,
+        "host": local_ip(),
+        "port": state.port,
+    }))
+}
+
+/// Six digits, uniformly drawn. Short enough to read off a screen and type on a
+/// tablet; only ever exchanged for the real token.
+fn new_pair_code() -> String {
+    format!("{:06}", rand::thread_rng().gen_range(0..1_000_000u32))
 }
 
 /// Pairing-token check. A no-op on a loopback bind.
@@ -228,8 +308,21 @@ fn print_banner(state: &AppState, addr: SocketAddr, lan: bool) {
         return;
     };
     let host = local_ip().unwrap_or_else(|| "<this-machine>".to_string());
-    let pair_url = format!("http://{host}:{}?token={token}", addr.port());
-    println!("\n  Pair the tablet with this URL:\n  {}", pair_url.bold());
+    let port = addr.port();
+
+    // Three short lines the user can read off the screen and type on a tablet.
+    // The QR and the token URL still work, but a tablet with only a front-facing
+    // webcam cannot scan its own PC, so they are the fallback, not the path.
+    println!("\n  Pair the tablet — type these into the app's header:");
+    println!("    Host: {}", host.bold());
+    println!("    Port: {}", port.to_string().bold());
+    if let Some(code) = state.pair_code.as_deref() {
+        println!("    Code: {}", code.bold());
+        println!("  (a new code every time this daemon starts; already-paired devices keep working)");
+    }
+
+    let pair_url = format!("http://{host}:{port}?token={token}");
+    println!("\n  Or paste the full URL / scan the code:\n  {pair_url}");
     match qr_ascii(&pair_url) {
         Ok(qr) => println!("\n{qr}"),
         Err(err) => eprintln!("  (could not render the QR code: {err})"),
@@ -359,6 +452,17 @@ mod tests {
         assert!(constant_time_eq(b"abc123", b"abc123"));
         assert!(!constant_time_eq(b"abc123", b"abc124"));
         assert!(!constant_time_eq(b"abc", b"abc123"));
+    }
+
+    #[test]
+    fn a_pair_code_is_always_six_typeable_digits() {
+        // Zero-padding matters: `{:06}` is what keeps 42 from being shown as a
+        // two-character code the user would type as "42" and have rejected.
+        for _ in 0..200 {
+            let code = new_pair_code();
+            assert_eq!(code.len(), 6, "{code}");
+            assert!(code.chars().all(|c| c.is_ascii_digit()), "{code}");
+        }
     }
 
     #[test]
