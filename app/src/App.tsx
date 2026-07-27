@@ -331,29 +331,29 @@ export function App() {
         setProblem(detail);
         await refreshSession();
 
+        const skeletons = buildProblemTemplate({
+          taskId: detail.task_id,
+          title: titleFromSlug(detail.task_id),
+          difficulty: detail.difficulty,
+          tags: detail.tags,
+          description: detail.problem_description,
+          caseCount: detail.cases.length,
+          dark: isDarkTheme(themeId),
+        });
+
         let restoredBoard = false;
         try {
           const saved = await client.getBoard(taskId);
           const blob = saved.board as { v?: number; elements?: unknown[]; appState?: unknown } | null;
           if (blob && blob.v === 1 && Array.isArray(blob.elements) && blob.elements.length > 0) {
-            boardRef.current?.restoreBoard(blob.elements, blob.appState);
+            boardRef.current?.restoreBoard(blob.elements, blob.appState, { skeletons });
             restoredBoard = true;
           }
         } catch {
           // Missing board.json is fine — seed a fresh template.
         }
         if (!restoredBoard) {
-          boardRef.current?.seedTemplate(
-            buildProblemTemplate({
-              taskId: detail.task_id,
-              title: titleFromSlug(detail.task_id),
-              difficulty: detail.difficulty,
-              tags: detail.tags,
-              description: detail.problem_description,
-              caseCount: detail.cases.length,
-              dark: isDarkTheme(themeId),
-            }),
-          );
+          boardRef.current?.seedTemplate(skeletons);
         }
         boardRef.current?.fitCodeToSource(source);
         lastIdsRef.current = new Set();
