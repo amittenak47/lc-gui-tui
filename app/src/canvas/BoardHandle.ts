@@ -65,5 +65,9 @@ export interface BoardHandle {
   /** Persistable board blob (excludes coach viz). */
   saveBoard(): { v: 1; elements: unknown[]; appState: { scrollX: number; scrollY: number; zoom: number } };
   /** Restore a saved board without recording undo history. */
-  restoreBoard(elements: unknown[], appState?: unknown): void;
+  restoreBoard(
+    elements: unknown[],
+    appState?: unknown,
+    options?: { skeletons?: Skeleton[] },
+  ): void;
 }

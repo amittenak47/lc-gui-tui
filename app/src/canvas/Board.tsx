@@ -37,6 +37,7 @@ import {
   saveImportedLibrary,
   type ImportedLibraryItem,
 } from "../templates/libraryImport";
+import { healBoardLayout } from "./healBoardLayout";
 import { regionFrameId, regionFramesOf, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
@@ -1018,16 +1019,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           },
         };
       },
-      restoreBoard: (nextElements, appState) => {
+      restoreBoard: (nextElements, appState, options) => {
+        if (options?.skeletons?.length) {
+          seedSkeletonsRef.current = options.skeletons;
+        }
+        const healed = healBoardLayout(nextElements as SceneElementLike[], {
+          readingSize: readingSizeRef.current,
+          codeContentHeight: codeContentHeightRef.current ?? undefined,
+        });
         // Keep a fit target so landing zooms to problem+code, not the full board.
-        templateRef.current = nextElements as unknown[];
+        templateRef.current = healed as unknown[];
         // Drop saved zoom/pan — never pass zoom: undefined (Excalidraw crashes).
         const saved = { ...((appState as Record<string, unknown> | undefined) ?? {}) };
         delete saved.zoom;
         delete saved.scrollX;
         delete saved.scrollY;
         apiRef.current?.updateScene({
-          elements: nextElements,
+          elements: healed,
           ...(Object.keys(saved).length > 0 ? { appState: saved } : {}),
           captureUpdate: CaptureUpdateAction.NEVER,
         });
