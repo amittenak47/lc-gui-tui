@@ -39,6 +39,8 @@ import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { BridgePanel, RevealDialog } from "./modes/RevealDialog";
 import { ReviewPanel } from "./modes/ReviewPanel";
 import { buildProblemTemplate } from "./templates/problemBoard";
+import { REGIONS, STUDENT_REGION_ORDER, type RegionId } from "./templates/regions";
+import { useIsMobile } from "./util/mobile";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
 import { applyAppTheme, isDarkTheme, loadThemeId, saveThemeId } from "./theme/appThemes";
@@ -61,6 +63,13 @@ const MAX_CONCURRENT_PROGRAMS = 4;
 type Mode = "review" | "ambient";
 
 export function App() {
+  const mobile = useIsMobile();
+  /**
+   * Mobile paging. Desktop keeps the one wide stacked canvas; on a tablet each
+   * dashed template frame gets the viewport to itself, in the order a session
+   * actually moves through them.
+   */
+  const [activeRegion, setActiveRegion] = useState<RegionId>("constraints");
   const [pairing, setPairing] = useState<Pairing>(() => loadPairing());
   const client = useMemo(() => new LcClient(pairing), [pairing]);
 
@@ -276,6 +285,7 @@ export function App() {
     async (taskId: string, bank?: SearchOptions) => {
       const fromBrowse = !problem;
       const switching = Boolean(problem);
+      setActiveRegion("constraints");
       setBusy("loading the workspace…");
       setError(null);
       setReview(null);
@@ -837,6 +847,7 @@ export function App() {
 
   const returnToBrowse = useCallback(() => {
     setBrowseMotion("enter");
+    setActiveRegion("constraints");
     setProblem(null);
     setBoardPreparing(false);
     setHoldBrowseOverlay(false);
@@ -858,6 +869,7 @@ export function App() {
     <div
       className={[
         "lc-app",
+        mobile ? "lc-mobile" : "",
         problem ? "lc-app-problem" : "",
         coachOpen && problem ? "lc-app-coach-open" : "",
       ]
@@ -918,9 +930,10 @@ export function App() {
           ) : (
             <span className="lc-muted">pick a problem to start</span>
           )}
+          {/* On mobile the gear moves into the ⋯ menu — see HeaderOverflow. */}
           <button
             type="button"
-            className="lc-icon lc-tip-target"
+            className="lc-icon lc-tip-target lc-desktop-only"
             aria-label="Settings"
             data-tip="Settings — paths, LLM, serve"
             data-tip-placement="bottom"
@@ -953,8 +966,13 @@ export function App() {
                 className="lc-secondary"
                 onClick={() => void runTests()}
                 disabled={busy !== null}
+                title="Run the sample tests"
+                aria-label="Run tests"
               >
-                Run tests
+                <span className="lc-label-long">Run tests</span>
+                <span className="lc-label-short" aria-hidden>
+                  ▶
+                </span>
               </button>
               <button
                 type="button"
@@ -962,12 +980,16 @@ export function App() {
                 onClick={() => void submitSolution()}
                 disabled={busy !== null}
                 title="Sync solution, run all tests, and continue if they pass"
+                aria-label="Submit"
               >
-                Submit
+                <span className="lc-label-long">Submit</span>
+                <span className="lc-label-short" aria-hidden>
+                  ✓
+                </span>
               </button>
               <button
                 type="button"
-                className="lc-secondary"
+                className="lc-secondary lc-desktop-only"
                 disabled={busy !== null}
                 onClick={() => void openInIde()}
                 title="Open solution.py in Cursor / VS Code"
@@ -979,6 +1001,23 @@ export function App() {
         </div>
 
         <div className="lc-header-right">
+          {mobile && (
+            <HeaderOverflow
+              items={[
+                ...(problem
+                  ? [
+                      {
+                        id: "ide",
+                        label: "Open in IDE",
+                        disabled: busy !== null,
+                        run: () => void openInIde(),
+                      },
+                    ]
+                  : []),
+                { id: "settings", label: "Settings", disabled: false, run: () => setSettingsOpen(true) },
+              ]}
+            />
+          )}
           {problem && (
             <button
               type="button"
@@ -1027,7 +1066,15 @@ export function App() {
             onReadingSizeChange={setReadingSize}
             interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
             onCodeSlot={onCodeSlot}
+            mobileRegion={mobile && problem ? activeRegion : null}
           />
+          {problem && mobile && (
+            <RegionPager
+              active={activeRegion}
+              onPick={setActiveRegion}
+              disabled={busy !== null || boardPreparing}
+            />
+          )}
           {(!problem || holdBrowseOverlay) && (
             <div
               className={[
@@ -1069,7 +1116,9 @@ export function App() {
           {problem && (switchMotion === "busy" || switchMotion === "done") && (
             <WorkspaceLoadStatus done={switchMotion === "done"} />
           )}
-          {problem && (() => {
+          {/* Monaco docks into the code frame — and on mobile that frame only
+              exists on its own page, so the dock is mounted nowhere else. */}
+          {problem && (!mobile || activeRegion === "code") && (() => {
             const slot = codeSlot ?? lastCodeSlotRef.current;
             if (!slot || slot.width <= 24 || slot.height <= 24) return null;
             const visible = Boolean(codeSlot);
@@ -1200,6 +1249,131 @@ export function App() {
         }}
       />
     </div>
+  );
+}
+
+interface OverflowItem {
+  id: string;
+  label: string;
+  disabled: boolean;
+  run: () => void;
+}
+
+/** The mobile "⋯": everything that doesn't earn a thumb-sized slot in the header. */
+function HeaderOverflow({ items }: { items: OverflowItem[] }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (wrapRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="lc-overflow" ref={wrapRef}>
+      <button
+        type="button"
+        className="lc-icon"
+        aria-label="More actions"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div className="lc-overflow-menu" role="menu">
+          {items.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="menuitem"
+              className="lc-overflow-item"
+              disabled={item.disabled}
+              onClick={() => {
+                setOpen(false);
+                item.run();
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The mobile page turner: Prev / label / Next plus dots, over the canvas.
+ *
+ * It moves the *viewport*, not the scene — the board geography is identical to
+ * desktop, so `board.json`, healing, and capture keep working unchanged.
+ */
+function RegionPager({
+  active,
+  onPick,
+  disabled,
+}: {
+  active: RegionId;
+  onPick: (region: RegionId) => void;
+  disabled: boolean;
+}) {
+  const index = Math.max(0, STUDENT_REGION_ORDER.indexOf(active));
+  const previous = STUDENT_REGION_ORDER[index - 1];
+  const next = STUDENT_REGION_ORDER[index + 1];
+  return (
+    <nav className="lc-pager" aria-label="Board pages">
+      <button
+        type="button"
+        className="lc-pager-step"
+        aria-label={previous ? `Previous page: ${REGIONS[previous].label}` : "Previous page"}
+        disabled={disabled || !previous}
+        onClick={() => previous && onPick(previous)}
+      >
+        ‹
+      </button>
+      <div className="lc-pager-body">
+        <span className="lc-pager-label">{REGIONS[active].label}</span>
+        <div className="lc-pager-dots" role="tablist" aria-label="Board pages">
+          {STUDENT_REGION_ORDER.map((region) => (
+            <button
+              key={region}
+              type="button"
+              role="tab"
+              className={region === active ? "lc-pager-dot lc-pager-dot-active" : "lc-pager-dot"}
+              aria-selected={region === active}
+              aria-label={REGIONS[region].label}
+              title={REGIONS[region].label}
+              disabled={disabled}
+              onClick={() => onPick(region)}
+            />
+          ))}
+        </div>
+      </div>
+      <button
+        type="button"
+        className="lc-pager-step"
+        aria-label={next ? `Next page: ${REGIONS[next].label}` : "Next page"}
+        disabled={disabled || !next}
+        onClick={() => next && onPick(next)}
+      >
+        ›
+      </button>
+    </nav>
   );
 }
 

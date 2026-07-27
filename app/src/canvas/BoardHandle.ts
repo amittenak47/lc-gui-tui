@@ -8,6 +8,7 @@
  * implements this same interface and nothing else changes.
  */
 
+import type { RegionId } from "../templates/regions";
 import type { Skeleton } from "../templates/skeleton";
 import type { InkStroke, SceneElementLike } from "./capture";
 
@@ -46,6 +47,12 @@ export interface BoardHandle {
   resetTemplate(): void;
   /** Base64 PNG of the board, for vision-capable models only. */
   exportPng(): Promise<string>;
+  /**
+   * True when the bitmap ink layer holds strokes. Pen ink is pixels, not scene
+   * elements, so this is the only way to know handwriting exists on a browser
+   * build where nothing OCRs it.
+   */
+  hasRasterInk(): boolean;
   /** Freedraw strokes in absolute coordinates, for the ink recognizer. */
   getStrokes(): InkStroke[];
   setTool(tool: ToolName): void;
@@ -53,8 +60,10 @@ export interface BoardHandle {
   scrollToContent(): void;
   zoomIn(): void;
   zoomOut(): void;
-  /** Re-center the viewport on the problem template. */
+  /** Re-center the viewport on the current page (or problem+code on desktop). */
   fitView(): void;
+  /** Fit one template region to the viewport — the mobile "page turn". */
+  fitRegion(regionId: RegionId): void;
   /**
    * Fit after layout has settled (double rAF + short delays). Resolves when
    * the final fit has been applied — call while the board is still hidden.
