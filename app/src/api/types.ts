@@ -88,6 +88,46 @@ export interface SessionSnapshot {
     }
   >;
   reveals: Record<string, number>;
+  stats?: {
+    loaded: number;
+    passed: number;
+    failed: number;
+    reveals: number;
+    queue_len: number;
+  };
+}
+
+export interface ProviderConfig {
+  base_url: string;
+  model: string;
+  vision_model: string;
+}
+
+export interface LcConfig {
+  data_json_dir: string | null;
+  workspace_dir: string;
+  python_executable: string;
+  default_provider: string;
+  local: ProviderConfig;
+  ollama: ProviderConfig;
+  openai: ProviderConfig;
+  groq: ProviderConfig;
+  modes: {
+    ambient: string;
+    review: string;
+    bridge: string;
+    viz: string;
+  };
+  serve_port: number;
+  token_set: boolean;
+}
+
+export interface LlmStatus {
+  running: boolean;
+  base_url: string;
+  pid: number | null;
+  owned: boolean;
+  detail: string;
 }
 
 export interface AdjacentProblems {

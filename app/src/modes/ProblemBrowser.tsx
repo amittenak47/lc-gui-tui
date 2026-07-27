@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { LcClient, SearchOptions } from "../api/client";
-import type { ProblemSummary } from "../api/types";
+import type { ProblemSummary, SessionSnapshot } from "../api/types";
 import { BackgroundPalette } from "../components/BackgroundPalette";
 
 export const PAGE_SIZE = 15;
@@ -32,6 +32,10 @@ export interface ProblemBrowserProps {
   busy: boolean;
   themeId: string;
   onThemePick: (id: string) => void;
+  session?: SessionSnapshot | null;
+  onStartSession?: () => void;
+  onResetSession?: () => void;
+  onRandomSession?: (bank: SearchOptions) => void;
 }
 
 /** Step through a cycle of options, wrapping — the TUI's T/E/O behaviour. */
@@ -40,7 +44,17 @@ export function cycle<T>(options: readonly T[], current: T): T {
   return options[(index + 1) % options.length];
 }
 
-export function ProblemBrowser({ client, onPick, busy, themeId, onThemePick }: ProblemBrowserProps) {
+export function ProblemBrowser({
+  client,
+  onPick,
+  busy,
+  themeId,
+  onThemePick,
+  session = null,
+  onStartSession,
+  onResetSession,
+  onRandomSession,
+}: ProblemBrowserProps) {
   const [query, setQuery] = useState("");
   const [difficulty, setDifficulty] = useState<string>("");
   const [tag, setTag] = useState<string>("");
@@ -246,6 +260,46 @@ export function ProblemBrowser({ client, onPick, busy, themeId, onThemePick }: P
           </div>
         ) : (
           <div className="lc-browser-body lc-browser-body-ready">
+            <div className="lc-browser-session-bar">
+              <span className="lc-muted">
+                {session && (session.queue.length > 0 || (session.stats?.loaded ?? 0) > 0)
+                  ? `Session · ${session.queue.length} in queue · ${session.stats?.passed ?? 0} passed · ${session.stats?.failed ?? 0} failed`
+                  : "No active session queue — prev/next uses bank filters"}
+              </span>
+              {onStartSession && (
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={busy}
+                  onClick={onStartSession}
+                  title="Reset and start a fresh session (picks enqueue)"
+                >
+                  Start session
+                </button>
+              )}
+              {onRandomSession && (
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={busy}
+                  onClick={() => onRandomSession(bankFilters)}
+                  title="Build a random session queue from current filters"
+                >
+                  Random session
+                </button>
+              )}
+              {onResetSession && (
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={busy}
+                  onClick={onResetSession}
+                >
+                  Reset session
+                </button>
+              )}
+            </div>
+
             <div className="lc-browser-filters">
               <input
                 ref={searchRef}
@@ -347,7 +401,20 @@ export function ProblemBrowser({ client, onPick, busy, themeId, onThemePick }: P
                     onClick={() => pick(problem.task_id)}
                   >
                     <span className="lc-col-q">{problem.question_id ?? ""}</span>
-                    <span className="lc-col-name">{problem.task_id}</span>
+                    <span className="lc-col-name">
+                      {problem.task_id}
+                      {session?.problems[problem.task_id] && (
+                        <span
+                          className={`lc-session-badge is-${session.problems[problem.task_id].state}`}
+                        >
+                          {session.problems[problem.task_id].state === "passed"
+                            ? "pass"
+                            : session.problems[problem.task_id].state === "failed"
+                              ? "fail"
+                              : "ld"}
+                        </span>
+                      )}
+                    </span>
                     <span className={`lc-col-diff lc-diff-${(problem.difficulty ?? "").toLowerCase()}`}>
                       {problem.difficulty ?? ""}
                     </span>

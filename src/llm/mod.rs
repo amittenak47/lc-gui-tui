@@ -1,5 +1,6 @@
 pub mod coach;
 pub mod groq;
+pub mod lifecycle;
 pub mod openai_compat;
 pub mod prompt;
 pub mod tools;
@@ -20,9 +21,16 @@ pub trait LlmProvider {
 pub fn make_provider(cfg: &Config, name: Option<&str>) -> Result<Box<dyn LlmProvider>> {
     let name = name.unwrap_or(&cfg.llm.default_provider);
     match name {
-        "local" => Ok(Box::new(openai_compat::OpenAiCompat::from_config(cfg))),
+        "local" | "ollama" => Ok(Box::new(openai_compat::OpenAiCompat::from_provider(
+            cfg, name,
+        ))),
+        "openai" => Ok(Box::new(openai_compat::OpenAiCompat::from_provider(
+            cfg, "openai",
+        ))),
         "groq" => Ok(Box::new(groq::Groq::from_config(cfg)?)),
-        other => bail!("unknown LLM provider {other:?} — expected \"local\" or \"groq\""),
+        other => bail!(
+            "unknown LLM provider {other:?} — expected one of local, ollama, openai, groq"
+        ),
     }
 }
 

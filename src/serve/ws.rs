@@ -112,7 +112,7 @@ async fn handle(state: &Shared, frame: ClientFrame) -> ServerFrame {
                 let mut sessions = state.sessions.lock().await;
                 sessions.entry(&session_id, &task_id).nudges_so_far()
             };
-            let provider = crate::llm::make_provider_for_mode(&state.cfg, "ambient")
+            let provider = crate::llm::make_provider_for_mode(&state.cfg_snapshot(), "ambient")
                 .map(|p| p.label())
                 .unwrap_or_else(|err| format!("unavailable: {err:#}"));
             ServerFrame::Ready {
@@ -180,7 +180,7 @@ async fn ambient_nudge(
     already_said: Vec<String>,
     nudges_so_far: u32,
 ) -> Result<AmbientNudge> {
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     let task_id = task_id.to_string();
     tokio::task::spawn_blocking(move || {
         let meta = load_meta(&cfg, &task_id)?;

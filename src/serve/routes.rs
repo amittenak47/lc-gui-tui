@@ -200,23 +200,313 @@ pub async fn random_problem(
 
 /// Practice session on disk (`session.json`) — queue, progress, active list.
 #[derive(Debug, Serialize)]
+pub struct SessionStats {
+    pub loaded: u32,
+    pub passed: u32,
+    pub failed: u32,
+    pub reveals: u32,
+    pub queue_len: u32,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SessionResponse {
     pub started_at: u64,
     pub active_list: Option<String>,
     pub queue: Vec<String>,
     pub problems: std::collections::HashMap<String, crate::session::ProblemProgress>,
     pub reveals: std::collections::HashMap<String, u32>,
+    pub stats: SessionStats,
 }
 
-pub async fn get_session() -> Result<Json<SessionResponse>, AppError> {
-    let session = blocking(move || Session::load_or_new()).await?;
-    Ok(Json(SessionResponse {
+fn session_response(session: Session) -> SessionResponse {
+    use crate::session::ProblemState;
+    let mut loaded = 0u32;
+    let mut passed = 0u32;
+    let mut failed = 0u32;
+    for p in session.problems.values() {
+        match p.state {
+            ProblemState::Loaded => loaded += 1,
+            ProblemState::Passed => passed += 1,
+            ProblemState::Failed => failed += 1,
+        }
+    }
+    let reveals: u32 = session.reveals.values().copied().sum();
+    let queue_len = session.queue.len() as u32;
+    SessionResponse {
         started_at: session.started_at,
         active_list: session.active_list,
         queue: session.queue,
         problems: session.problems,
         reveals: session.reveals,
-    }))
+        stats: SessionStats {
+            loaded,
+            passed,
+            failed,
+            reveals,
+            queue_len,
+        },
+    }
+}
+
+pub async fn get_session() -> Result<Json<SessionResponse>, AppError> {
+    let session = blocking(move || Session::load_or_new()).await?;
+    Ok(Json(session_response(session)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EnqueueBody {
+    pub task_id: String,
+}
+
+pub async fn reset_session() -> Result<Json<SessionResponse>, AppError> {
+    let session = blocking(move || Session::reset()).await?;
+    Ok(Json(session_response(session)))
+}
+
+pub async fn enqueue_session(
+    Json(body): Json<EnqueueBody>,
+) -> Result<Json<SessionResponse>, AppError> {
+    let session = blocking(move || {
+        let mut session = Session::load_or_new()?;
+        session.add_to_queue(&body.task_id)?;
+        Session::load_or_new()
+    })
+    .await?;
+    Ok(Json(session_response(session)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RandomSessionBody {
+    pub count: Option<u32>,
+    pub difficulty: Option<String>,
+    pub tag: Option<String>,
+    pub q: Option<String>,
+}
+
+/// Start a random practice session: reset, then fill the queue with N distinct
+/// random problems matching the optional filters.
+pub async fn random_session(
+    Json(body): Json<RandomSessionBody>,
+) -> Result<Json<SessionResponse>, AppError> {
+    let session = blocking(move || {
+        let count = body.count.unwrap_or(5).clamp(1, 50) as usize;
+        let mut session = Session::reset()?;
+        let conn = index::open_db()?;
+        let mut seen = std::collections::HashSet::new();
+        let mut attempts = 0;
+        while session.queue.len() < count && attempts < count * 20 {
+            attempts += 1;
+            let Some(row) = index::random_one(
+                &conn,
+                body.difficulty.as_deref(),
+                body.tag.as_deref(),
+                body.q.as_deref(),
+            )?
+            else {
+                break;
+            };
+            if seen.insert(row.task_id.clone()) {
+                session.add_to_queue(&row.task_id)?;
+            }
+        }
+        Session::load_or_new()
+    })
+    .await?;
+    Ok(Json(session_response(session)))
+}
+
+// ---------------------------------------------------------------------------
+// Config (shared with TUI / `lc config`)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProviderConfigDto {
+    pub base_url: String,
+    pub model: String,
+    pub vision_model: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ModesConfigDto {
+    pub ambient: String,
+    pub review: String,
+    pub bridge: String,
+    pub viz: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ConfigDto {
+    pub data_json_dir: Option<String>,
+    pub workspace_dir: String,
+    pub python_executable: String,
+    pub default_provider: String,
+    pub local: ProviderConfigDto,
+    pub ollama: ProviderConfigDto,
+    pub openai: ProviderConfigDto,
+    pub groq: ProviderConfigDto,
+    pub modes: ModesConfigDto,
+    pub serve_port: u16,
+    /// Present on GET only — never echo the secret.
+    #[serde(default)]
+    pub token_set: bool,
+}
+
+fn config_dto(cfg: &Config) -> ConfigDto {
+    ConfigDto {
+        data_json_dir: cfg.data.json_dir.clone(),
+        workspace_dir: cfg.workspace.dir.clone(),
+        python_executable: cfg.python.executable.clone(),
+        default_provider: cfg.llm.default_provider.clone(),
+        local: ProviderConfigDto {
+            base_url: cfg.llm.local.base_url.clone(),
+            model: cfg.llm.local.model.clone(),
+            vision_model: cfg.llm.local.vision_model.clone(),
+        },
+        ollama: ProviderConfigDto {
+            base_url: cfg.llm.ollama.base_url.clone(),
+            model: cfg.llm.ollama.model.clone(),
+            vision_model: cfg.llm.ollama.vision_model.clone(),
+        },
+        openai: ProviderConfigDto {
+            base_url: cfg.llm.openai.base_url.clone(),
+            model: cfg.llm.openai.model.clone(),
+            vision_model: cfg.llm.openai.vision_model.clone(),
+        },
+        groq: ProviderConfigDto {
+            base_url: cfg.llm.groq.base_url.clone(),
+            model: cfg.llm.groq.model.clone(),
+            vision_model: cfg.llm.groq.vision_model.clone(),
+        },
+        modes: ModesConfigDto {
+            ambient: cfg.llm.modes.ambient.clone(),
+            review: cfg.llm.modes.review.clone(),
+            bridge: cfg.llm.modes.bridge.clone(),
+            viz: cfg.llm.modes.viz.clone(),
+        },
+        serve_port: cfg.serve.port,
+        token_set: cfg
+            .serve
+            .token
+            .as_ref()
+            .is_some_and(|t| !t.trim().is_empty()),
+    }
+}
+
+fn apply_config_dto(cfg: &mut Config, dto: &ConfigDto) -> Result<()> {
+    cfg.data.json_dir = dto
+        .data_json_dir
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    cfg.workspace.dir = dto.workspace_dir.clone();
+    cfg.python.executable = dto.python_executable.clone();
+    cfg.set("llm.default_provider", &dto.default_provider)?;
+    cfg.llm.local.base_url = dto.local.base_url.clone();
+    cfg.llm.local.model = dto.local.model.clone();
+    cfg.llm.local.vision_model = dto.local.vision_model.clone();
+    cfg.llm.ollama.base_url = dto.ollama.base_url.clone();
+    cfg.llm.ollama.model = dto.ollama.model.clone();
+    cfg.llm.ollama.vision_model = dto.ollama.vision_model.clone();
+    cfg.llm.openai.base_url = dto.openai.base_url.clone();
+    cfg.llm.openai.model = dto.openai.model.clone();
+    cfg.llm.openai.vision_model = dto.openai.vision_model.clone();
+    cfg.llm.groq.base_url = dto.groq.base_url.clone();
+    cfg.llm.groq.model = dto.groq.model.clone();
+    cfg.llm.groq.vision_model = dto.groq.vision_model.clone();
+    cfg.set("llm.modes.ambient", &dto.modes.ambient)?;
+    cfg.set("llm.modes.review", &dto.modes.review)?;
+    cfg.set("llm.modes.bridge", &dto.modes.bridge)?;
+    cfg.set("llm.modes.viz", &dto.modes.viz)?;
+    cfg.serve.port = dto.serve_port;
+    Ok(())
+}
+
+pub async fn get_config(State(state): State<Shared>) -> Result<Json<ConfigDto>, AppError> {
+    Ok(Json(config_dto(&state.cfg_snapshot())))
+}
+
+pub async fn put_config(
+    State(state): State<Shared>,
+    Json(dto): Json<ConfigDto>,
+) -> Result<Json<ConfigDto>, AppError> {
+    let mut cfg = state.cfg_snapshot();
+    let updated = blocking(move || {
+        apply_config_dto(&mut cfg, &dto)?;
+        cfg.save()?;
+        Ok(cfg)
+    })
+    .await?;
+    {
+        let mut guard = state.cfg.write().unwrap_or_else(|e| e.into_inner());
+        *guard = updated.clone();
+    }
+    Ok(Json(config_dto(&updated)))
+}
+
+// ---------------------------------------------------------------------------
+// Local LLM lifecycle
+// ---------------------------------------------------------------------------
+
+pub async fn llm_status(State(state): State<Shared>) -> Result<Json<crate::llm::lifecycle::LlmStatus>, AppError> {
+    let cfg = state.cfg_snapshot();
+    Ok(Json(blocking(move || Ok(crate::llm::lifecycle::status(&cfg))).await?))
+}
+
+pub async fn llm_start(State(state): State<Shared>) -> Result<Json<crate::llm::lifecycle::LlmStatus>, AppError> {
+    let cfg = state.cfg_snapshot();
+    Ok(Json(
+        blocking(move || crate::llm::lifecycle::start_local_llm(&cfg)).await?,
+    ))
+}
+
+pub async fn llm_stop(State(state): State<Shared>) -> Result<Json<crate::llm::lifecycle::LlmStatus>, AppError> {
+    let cfg = state.cfg_snapshot();
+    Ok(Json(
+        blocking(move || crate::llm::lifecycle::stop_local_llm(&cfg)).await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenWorkspaceBody {
+    /// `"ide"` opens Cursor/VS Code; `"canvas"` is a no-op on the daemon (client navigates).
+    pub target: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OpenWorkspaceResponse {
+    pub task_id: String,
+    pub target: String,
+    pub workspace_dir: String,
+}
+
+pub async fn open_workspace(
+    State(state): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    Json(body): Json<OpenWorkspaceBody>,
+) -> Result<Json<OpenWorkspaceResponse>, AppError> {
+    let cfg = state.cfg_snapshot();
+    let target = body.target.to_ascii_lowercase();
+    if target != "ide" && target != "canvas" {
+        return Err(AppError::bad_request(anyhow!(
+            "target must be \"ide\" or \"canvas\", got {:?}",
+            body.target
+        )));
+    }
+    let response = blocking(move || {
+        let dir = runner::locate_workspace(&cfg, Some(&id))?;
+        let meta = runner::read_meta(&dir)?;
+        if target == "ide" {
+            generator::open_in_editor(&dir);
+        }
+        Ok(OpenWorkspaceResponse {
+            task_id: meta.task_id,
+            target,
+            workspace_dir: dir.display().to_string(),
+        })
+    })
+    .await
+    .map_err(not_found_if_unresolved)?;
+    Ok(Json(response))
 }
 
 /// Neighbors of `id` in the same filtered bank order the browser uses.
@@ -274,7 +564,7 @@ pub async fn load_problem(
     State(state): State<Shared>,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<LoadResponse>, AppError> {
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     let response = blocking(move || {
         let conn = index::open_db()?;
         let row = loader::resolve(&conn, &id)?;
@@ -301,7 +591,7 @@ pub async fn workspace_meta(
     State(state): State<Shared>,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<WorkspaceMeta>, AppError> {
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     let meta = blocking(move || load_meta(&cfg, &id))
         .await
         .map_err(not_found_if_unresolved)?;
@@ -312,7 +602,7 @@ pub async fn run_tests(
     State(state): State<Shared>,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<TestResponse>, AppError> {
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     // `runner` writes results to a single last_run.json and returns only a
     // bool, so read them back under the lock rather than racing another client.
     let guard = state.test_lock.lock().await;
@@ -340,7 +630,7 @@ pub async fn get_solution(
     State(state): State<Shared>,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<SolutionResponse>, AppError> {
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     let response = blocking(move || {
         let dir = runner::locate_workspace(&cfg, Some(&id))?;
         let meta = runner::read_meta(&dir)?;
@@ -361,7 +651,7 @@ pub async fn put_solution(
     UrlPath(id): UrlPath<String>,
     Json(update): Json<SolutionUpdate>,
 ) -> Result<Json<SolutionResponse>, AppError> {
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     let response = blocking(move || {
         let dir = runner::locate_workspace(&cfg, Some(&id))?;
         let meta = runner::read_meta(&dir)?;
@@ -394,7 +684,7 @@ pub async fn get_board(
     State(state): State<Shared>,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<BoardResponse>, AppError> {
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     let response = blocking(move || {
         let dir = runner::locate_workspace(&cfg, Some(&id))?;
         let meta = runner::read_meta(&dir)?;
@@ -421,7 +711,7 @@ pub async fn put_board(
     UrlPath(id): UrlPath<String>,
     Json(update): Json<BoardBlob>,
 ) -> Result<Json<BoardResponse>, AppError> {
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     let response = blocking(move || {
         let dir = runner::locate_workspace(&cfg, Some(&id))?;
         let meta = runner::read_meta(&dir)?;

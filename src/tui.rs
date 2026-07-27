@@ -365,15 +365,42 @@ impl App {
         Ok(())
     }
 
-    fn work_on_problem(&mut self) -> Result<()> {
+    /// `target`: "canvas" | "ide" | "tui"
+    fn open_problem_target(&mut self, target: &str) -> Result<()> {
         let row = self.selected_problem.clone().context("no problem")?;
         let json_path = Path::new(&row.json_path);
         let prob = problem::load_task(json_path, &row.task_id)?;
         let dir = generator::generate(&self.cfg, &prob, json_path, false)?;
         self.session.mark_loaded(&row.task_id)?;
+        let _ = self.session.add_to_queue(&row.task_id);
         self.session = Session::load_or_new()?;
-        generator::open_in_editor_quiet(&dir);
-        self.status = format!("workspace: {}", dir.display());
+        match target {
+            "ide" => {
+                generator::open_in_editor_quiet(&dir);
+                self.status = format!("opened in IDE · {}", dir.display());
+            }
+            "canvas" => {
+                let port = self.cfg.serve.port;
+                let url = format!("http://127.0.0.1:{port}/?task={}", row.task_id);
+                self.status = format!(
+                    "canvas: open whiteboard at {url} (run `lc serve` if needed) · {}",
+                    dir.display()
+                );
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/C", "start", "", &url])
+                        .spawn();
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                }
+            }
+            _ => {
+                self.status = format!("workspace ready (TUI) · {}", dir.display());
+            }
+        }
         Ok(())
     }
 
@@ -719,8 +746,8 @@ fn menu_len(app: &App) -> usize {
         Screen::DifficultyPick => 4,
         Screen::ListPick => app.list_names.len() + 2,
         Screen::Browse => app.browse_rows.len(),
-        Screen::ProblemActions => 7,
-        Screen::Settings => 4,
+        Screen::ProblemActions => 9,
+        Screen::Settings => 7,
         Screen::Help => 1,
         Screen::InputId | Screen::InputListName | Screen::Message => 0,
     }
@@ -896,31 +923,41 @@ fn activate(app: &mut App) -> Result<bool> {
         }
         Screen::ProblemActions => match app.menu_sel {
             0 => {
-                if let Err(e) = app.work_on_problem() {
+                if let Err(e) = app.open_problem_target("canvas") {
                     app.status = format!("{e:#}");
                 }
             }
             1 => {
-                if let Err(e) = app.run_tests() {
+                if let Err(e) = app.open_problem_target("ide") {
                     app.status = format!("{e:#}");
                 }
             }
             2 => {
-                if let Err(e) = app.ai_overview() {
+                if let Err(e) = app.open_problem_target("tui") {
                     app.status = format!("{e:#}");
                 }
             }
             3 => {
-                if let Err(e) = app.view_solution() {
+                if let Err(e) = app.run_tests() {
                     app.status = format!("{e:#}");
                 }
             }
             4 => {
-                if let Err(e) = app.submit_locally() {
+                if let Err(e) = app.ai_overview() {
                     app.status = format!("{e:#}");
                 }
             }
             5 => {
+                if let Err(e) = app.view_solution() {
+                    app.status = format!("{e:#}");
+                }
+            }
+            6 => {
+                if let Err(e) = app.submit_locally() {
+                    app.status = format!("{e:#}");
+                }
+            }
+            7 => {
                 if let Some(row) = app.selected_problem.clone() {
                     app.open_list_pick(
                         ListPickPurpose::AddTask {
@@ -937,8 +974,31 @@ fn activate(app: &mut App) -> Result<bool> {
         },
         Screen::Settings => match app.menu_sel {
             0 => app.status = format!("config: {}", crate::config::config_path()?.display()),
-            1 => app.status = "run `lc index` from a shell to rebuild the corpus".into(),
+            1 => {
+                app.status = format!(
+                    "data={} · workspace={} · python={}",
+                    app.cfg.data.json_dir.as_deref().unwrap_or("(unset)"),
+                    app.cfg.workspace.dir,
+                    app.cfg.python.executable
+                );
+            }
             2 => {
+                match crate::llm::lifecycle::start_local_llm(&app.cfg) {
+                    Ok(st) => app.status = st.detail,
+                    Err(e) => app.status = format!("{e:#}"),
+                }
+            }
+            3 => {
+                match crate::llm::lifecycle::stop_local_llm(&app.cfg) {
+                    Ok(st) => app.status = st.detail,
+                    Err(e) => app.status = format!("{e:#}"),
+                }
+            }
+            4 => {
+                let st = crate::llm::lifecycle::status(&app.cfg);
+                app.status = format!("{} · {}", st.detail, st.base_url);
+            }
+            5 => {
                 app.session = Session::reset()?;
                 app.status = "session reset".into();
             }
@@ -1081,12 +1141,14 @@ fn menu_items(app: &App) -> (&'static str, Vec<String>) {
             "problem",
             vec![
                 format!(
-                    "Work on problem — {}",
+                    "Open in Canvas — {}",
                     app.selected_problem
                         .as_ref()
                         .map(|r| r.task_id.as_str())
                         .unwrap_or("?")
                 ),
+                "Open in IDE".into(),
+                "Load workspace (stay in TUI)".into(),
                 "Run tests".into(),
                 "AI overview".into(),
                 "View my solution".into(),
@@ -1099,7 +1161,10 @@ fn menu_items(app: &App) -> (&'static str, Vec<String>) {
             "settings",
             vec![
                 "Show config path".into(),
-                "Index corpus (shell)".into(),
+                "Show paths (data / workspace / python)".into(),
+                "Start local LLM".into(),
+                "Stop local LLM".into(),
+                "LLM status".into(),
                 "Reset session".into(),
                 "Back".into(),
             ],

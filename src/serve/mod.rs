@@ -23,7 +23,7 @@ pub mod viz;
 pub mod ws;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
 use axum::extract::{Request, State};
@@ -39,13 +39,22 @@ use crate::config::Config;
 use session::SessionStore;
 
 pub struct AppState {
-    pub cfg: Config,
+    pub cfg: RwLock<Config>,
     /// `None` on a loopback-only bind, where the OS is the access control.
     pub token: Option<String>,
     pub sessions: tokio::sync::Mutex<SessionStore>,
     /// `runner` records each run to a single `last_run.json`; serialize test
     /// runs so two clients can't interleave and read each other's results.
     pub test_lock: tokio::sync::Mutex<()>,
+}
+
+impl AppState {
+    pub fn cfg_snapshot(&self) -> Config {
+        self.cfg
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
 }
 
 pub type Shared = Arc<AppState>;
@@ -66,7 +75,7 @@ pub fn run(mut cfg: Config, port: Option<u16>, lan: bool) -> Result<()> {
     };
 
     let state = Arc::new(AppState {
-        cfg,
+        cfg: RwLock::new(cfg),
         token,
         sessions: tokio::sync::Mutex::new(SessionStore::default()),
         test_lock: tokio::sync::Mutex::new(()),
@@ -102,11 +111,19 @@ pub fn router(state: Shared) -> Router {
         .route("/tags", get(routes::list_tags))
         .route("/random", get(routes::random_problem))
         .route("/session", get(routes::get_session))
+        .route("/session/reset", post(routes::reset_session))
+        .route("/session/enqueue", post(routes::enqueue_session))
+        .route("/session/random", post(routes::random_session))
+        .route("/config", get(routes::get_config).put(routes::put_config))
+        .route("/llm/status", get(routes::llm_status))
+        .route("/llm/start", post(routes::llm_start))
+        .route("/llm/stop", post(routes::llm_stop))
         .route("/problems/:id", get(routes::get_problem))
         .route("/problems/:id/adjacent", get(routes::adjacent_problem))
         .route("/problems/:id/load", post(routes::load_problem))
         .route("/workspace/:id/meta", get(routes::workspace_meta))
         .route("/workspace/:id/test", post(routes::run_tests))
+        .route("/workspace/:id/open", post(routes::open_workspace))
         .route("/coach/review", post(coach::review))
         .route("/coach/viz", post(viz::viz))
         .route("/coach/reveal", post(coach::reveal))
@@ -181,13 +198,14 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 fn print_banner(state: &AppState, addr: SocketAddr, lan: bool) {
+    let cfg = state.cfg_snapshot();
     println!("{} listening on http://{addr}", "lc serve".bold());
     println!(
         "  llm modes: ambient={} review={} bridge={} viz={}",
-        state.cfg.llm.modes.ambient,
-        state.cfg.llm.modes.review,
-        state.cfg.llm.modes.bridge,
-        state.cfg.llm.modes.viz,
+        cfg.llm.modes.ambient,
+        cfg.llm.modes.review,
+        cfg.llm.modes.bridge,
+        cfg.llm.modes.viz,
     );
     if !lan {
         println!(

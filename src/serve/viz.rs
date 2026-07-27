@@ -51,7 +51,7 @@ pub async fn viz(
     State(state): State<Shared>,
     Json(request): Json<VizRequest>,
 ) -> Result<Json<VizEnvelope>, AppError> {
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     let envelope = blocking(move || {
         let meta = load_meta(&cfg, &request.task_id)?;
         let description = description_for(&meta);

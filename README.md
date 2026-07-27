@@ -105,7 +105,7 @@ Run `lc` with no arguments to open the menu-driven terminal UI.
 | --- | --- |
 | **Start new session** | Reset session counters; browse, randomize, or load a list |
 | **Browse problems** | Paginated table of the full index |
-| **Settings** | Config path, session reset |
+| **Settings** | Paths, local LLM start/stop, session reset (same `config.toml` as GUI) |
 | **Help** | CLI command reminders |
 
 ### Browse controls
@@ -130,7 +130,7 @@ Columns resize to fit your terminal width.
 
 | Action | Description |
 | --- | --- |
-| **Work on problem** | Generate workspace and open `solution.py` in the **current** Cursor/VS Code window |
+| **Open in Canvas / IDE / stay in TUI** | Generate workspace; open whiteboard (`?task=`), Cursor/VS Code, or stay here |
 | **Run tests** | Execute `run_tests.py` and update session stats |
 | **AI overview** | LLM tutoring summary (hints only, no full solution) |
 | **View my solution** | Show your `solution.py` |
@@ -232,6 +232,8 @@ lc ask --case 3 --provider groq
 ## Whiteboard coach
 
 Practice by *sketching* an approach by hand while a coach watches, grills you, and points at the specific test case your approach breaks on. The canvas runs on a tablet; the corpus, workspaces, and Python runner stay on this machine behind `lc serve`.
+
+**Shared with the TUI:** the gear in the whiteboard edits the same `config.toml` (paths, Local/Ollama/OpenAI/Groq, vision model). Session queue / reset / random session use the same `session.json`. Prev/next walks the session queue when non-empty, otherwise the filtered problem bank. Open a problem from the TUI via **Open in Canvas** (deep link `?task=`), **Open in IDE**, or stay in the TUI. Start/stop the local LLM (`ollama serve`) from Settings in either UI.
 
 Full client docs: **[`app/README.md`](app/README.md)**.
 
@@ -385,7 +387,7 @@ JSON corpus ──lc index──▶ SQLite (problems.db)
 
 ## Pairing with LLM Autocorrect
 
-1. Run `lc load <id> --open` (or **Work on problem** in the TUI).
+1. Run `lc load <id> --open` (or **Open in IDE** in the TUI).
 2. Edit `solution.py` in Cursor with [LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorrect) enabled.
 3. Run `lc test` or **Run tests** in the TUI.
 4. On failure, use `lc ask --case N` or **AI overview** for coaching.
