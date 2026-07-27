@@ -107,14 +107,19 @@ pub fn router(state: Shared) -> Router {
         .route("/problems/:id/load", post(routes::load_problem))
         .route("/workspace/:id/meta", get(routes::workspace_meta))
         .route("/workspace/:id/test", post(routes::run_tests))
+        .route("/coach/review", post(coach::review))
+        .route("/coach/viz", post(viz::viz))
+        .route("/coach/reveal", post(coach::reveal))
+        .route("/coach/capabilities", get(coach::capabilities))
+        .route("/coach/session", get(ws::session))
         .route(
             "/workspace/:id/solution",
             get(routes::get_solution).put(routes::put_solution),
         )
-        .route("/coach/review", post(coach::review))
-        .route("/coach/viz", post(viz::viz))
-        .route("/coach/reveal", post(coach::reveal))
-        .route("/coach/session", get(ws::session))
+        .route(
+            "/workspace/:id/board",
+            get(routes::get_board).put(routes::put_board),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token))
         // /health stays unauthenticated so the client can find the daemon
         // before it has been paired.

@@ -119,7 +119,11 @@ describe("eraseSceneAt", () => {
         { locked: true, customData: { lcRegion: "approach" } },
       ),
     ];
-    const next = eraseSceneAt(scene, 40, 0, 8)!;
+    const next = eraseSceneAt(scene, 40, 0, 8)! as Array<{
+      id: string;
+      type: string;
+      isDeleted?: boolean;
+    }>;
     expect(next.find((el) => el.id === "tmpl")).toEqual(scene[1]);
     expect(next.some((el) => el.id === "tmpl" && el.isDeleted)).toBe(false);
     expect(next.filter((el) => el.id === "tmpl")).toHaveLength(1);

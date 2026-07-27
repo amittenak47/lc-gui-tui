@@ -98,6 +98,14 @@ impl Default for LlmModes {
 
 pub const COACH_MODES: [&str; 4] = ["ambient", "review", "bridge", "viz"];
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModeCapability {
+    pub mode: String,
+    pub provider: String,
+    pub model: String,
+    pub vision: bool,
+}
+
 impl LlmModes {
     pub fn get(&self, mode: &str) -> Result<&str> {
         Ok(match mode {
@@ -110,6 +118,25 @@ impl LlmModes {
                 COACH_MODES.join(", ")
             ),
         })
+    }
+
+    /// Provider name + model + vision capability for every coach mode.
+    pub fn capabilities(&self, llm: &LlmConfig) -> Result<Vec<ModeCapability>> {
+        let mut out = Vec::with_capacity(COACH_MODES.len());
+        for mode in COACH_MODES {
+            let provider = self.get(mode)?;
+            let (model, vision_flag) = match provider {
+                "groq" => (llm.groq.model.as_str(), llm.groq.vision),
+                _ => (llm.local.model.as_str(), llm.local.vision),
+            };
+            out.push(ModeCapability {
+                mode: mode.to_string(),
+                provider: provider.to_string(),
+                model: model.to_string(),
+                vision: model_supports_vision(vision_flag, model),
+            });
+        }
+        Ok(out)
     }
 
     fn set(&mut self, mode: &str, provider: &str) -> Result<()> {
@@ -160,6 +187,9 @@ pub struct LocalLlmConfig {
     /// Any OpenAI-compatible server: Ollama, vLLM, LM Studio.
     pub base_url: String,
     pub model: String,
+    /// Whether the model accepts images. `None` → infer from the model name.
+    #[serde(default)]
+    pub vision: Option<bool>,
 }
 
 impl Default for LocalLlmConfig {
@@ -167,6 +197,7 @@ impl Default for LocalLlmConfig {
         Self {
             base_url: "http://localhost:11434/v1".into(),
             model: "qwen2.5-coder:7b".into(),
+            vision: None,
         }
     }
 }
@@ -176,6 +207,9 @@ impl Default for LocalLlmConfig {
 pub struct GroqLlmConfig {
     pub base_url: String,
     pub model: String,
+    /// Whether the model accepts images. `None` → infer from the model name.
+    #[serde(default)]
+    pub vision: Option<bool>,
     // API key comes from the GROQ_API_KEY environment variable, never this file.
 }
 
@@ -184,8 +218,31 @@ impl Default for GroqLlmConfig {
         Self {
             base_url: "https://api.groq.com/openai/v1".into(),
             model: "llama-3.1-8b-instant".into(),
+            vision: None,
         }
     }
+}
+
+/// Explicit config wins; otherwise guess from common vision model name markers.
+pub fn model_supports_vision(explicit: Option<bool>, model: &str) -> bool {
+    if let Some(flag) = explicit {
+        return flag;
+    }
+    let lower = model.to_ascii_lowercase();
+    [
+        "llava",
+        "-vl",
+        "vision",
+        "minicpm-v",
+        "moondream",
+        "gpt-4o",
+        "gpt-4-turbo",
+        "gemini",
+        "claude-3",
+        "claude-4",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 pub fn config_dir() -> Result<PathBuf> {

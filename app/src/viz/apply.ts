@@ -92,6 +92,43 @@ export function applyViz(
   api.updateScene({ elements: mergeVizElements(existing, converted, program.id) });
 }
 
+/** Draw (or replace) an annotation sticky in the agent lane. */
+export function applyAnnotation(
+  api: SceneApi,
+  convert: ConvertSkeletons,
+  annotation: import("../api/types").Annotation,
+  render: (
+    annotation: import("../api/types").Annotation,
+    origin: { x: number; y: number },
+  ) => Skeleton[],
+): void {
+  const vizId = `annotation:${annotation.region}`;
+  const existing = api.getSceneElements();
+  const origin = originForProgram(existing, vizId);
+  const converted = convert(render(annotation, origin));
+  api.updateScene({ elements: mergeVizElements(existing, converted, vizId) });
+}
+
+/** Draw highlight overlays over student elements. */
+export function applyHighlight(
+  api: SceneApi,
+  convert: ConvertSkeletons,
+  highlight: import("../api/types").Highlight,
+  index: number,
+  render: (
+    highlight: import("../api/types").Highlight,
+    elements: ReadonlyArray<VizSceneElement & { x: number; y: number; width: number; height: number }>,
+    index: number,
+  ) => Skeleton[],
+): void {
+  const vizId = `highlight:${index}`;
+  const existing = api.getSceneElements() as Array<
+    VizSceneElement & { x: number; y: number; width: number; height: number }
+  >;
+  const converted = convert(render(highlight, existing, index));
+  api.updateScene({ elements: mergeVizElements(existing, converted, vizId) });
+}
+
 /** Remove one of the coach's diagrams, leaving the student's work alone. */
 export function removeViz(api: SceneApi, vizId: string): void {
   const existing = api.getSceneElements();

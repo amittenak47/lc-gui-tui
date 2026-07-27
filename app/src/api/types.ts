@@ -115,6 +115,10 @@ export interface BoardSnapshot {
    * guessing it the way it must with handwriting.
    */
   pseudocode?: string;
+  /** Truncated element ids added since the last successful review. */
+  new_since_last?: string[];
+  /** Successful review count this session (0 = first look). */
+  turn_index?: number;
 }
 
 export type Verdict = "on_track" | "subtly_wrong" | "wrong_track" | "unclear";
@@ -177,6 +181,13 @@ export interface Citation {
   why: string;
 }
 
+/** Read-only overlay pointing at student elements. */
+export interface Highlight {
+  ids: string[];
+  tone: string;
+  note: string;
+}
+
 export interface VizEnvelope {
   task_id: string;
   provider: string;
@@ -184,9 +195,21 @@ export interface VizEnvelope {
   programs: unknown[];
   annotations: Annotation[];
   citations: Citation[];
+  highlights?: Highlight[];
   message: string;
   /** Tool calls the daemon dropped as unrenderable or unverifiable. */
   rejected: string[];
+}
+
+export interface ModeCapability {
+  mode: string;
+  provider: string;
+  model: string;
+  vision: boolean;
+}
+
+export interface CoachCapabilities {
+  modes: ModeCapability[];
 }
 
 export interface AmbientNudge {
