@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { LcClient } from "../api/client";
+import type { LcClient, SearchOptions } from "../api/client";
 import type { ProblemSummary } from "../api/types";
 import { BackgroundPalette } from "../components/BackgroundPalette";
 
@@ -27,7 +27,8 @@ const SORT_LABEL: Record<string, string> = {
 
 export interface ProblemBrowserProps {
   client: LcClient;
-  onPick: (taskId: string) => void;
+  /** Opens a problem; `bank` is the active filter so header prev/next can walk the corpus. */
+  onPick: (taskId: string, bank?: SearchOptions) => void;
   busy: boolean;
   themeId: string;
   onThemePick: (id: string) => void;
@@ -134,6 +135,21 @@ export function ProblemBrowser({ client, onPick, busy, themeId, onThemePick }: P
     [pageCount],
   );
 
+  const bankFilters = useMemo(
+    (): SearchOptions => ({
+      q: query || undefined,
+      difficulty: difficulty || undefined,
+      tag: tag || undefined,
+      sort: sort || undefined,
+    }),
+    [query, difficulty, tag, sort],
+  );
+
+  const pick = useCallback(
+    (taskId: string) => onPick(taskId, bankFilters),
+    [onPick, bankFilters],
+  );
+
   const pickRandom = useCallback(async () => {
     try {
       const problem = await client.randomProblem({
@@ -141,12 +157,12 @@ export function ProblemBrowser({ client, onPick, busy, themeId, onThemePick }: P
         difficulty: difficulty || undefined,
         tag: tag || undefined,
       });
-      if (problem) onPick(problem.task_id);
+      if (problem) pick(problem.task_id);
       else setError("no problems match the current filters");
     } catch (cause) {
       setError(messageOf(cause));
     }
-  }, [client, query, difficulty, tag, onPick]);
+  }, [client, query, difficulty, tag, pick]);
 
   // TUI keybindings. Ignored while typing in the search box, so `/`-then-text
   // behaves the way it does in the terminal.
@@ -163,7 +179,7 @@ export function ProblemBrowser({ client, onPick, busy, themeId, onThemePick }: P
       }
       if (typing) {
         if (event.key === "Escape") (target as HTMLInputElement).blur();
-        if (event.key === "Enter" && rows[selected]) onPick(rows[selected].task_id);
+        if (event.key === "Enter" && rows[selected]) pick(rows[selected].task_id);
         return;
       }
 
@@ -197,7 +213,7 @@ export function ProblemBrowser({ client, onPick, busy, themeId, onThemePick }: P
           void pickRandom();
           break;
         case "enter":
-          if (rows[selected]) onPick(rows[selected].task_id);
+          if (rows[selected]) pick(rows[selected].task_id);
           break;
         default:
           break;
@@ -205,7 +221,7 @@ export function ProblemBrowser({ client, onPick, busy, themeId, onThemePick }: P
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [move, turnPage, tags, rows, selected, onPick, pickRandom]);
+  }, [move, turnPage, tags, rows, selected, pick, pickRandom]);
 
   // Keep the highlighted row visible when moving with the keyboard.
   useEffect(() => {
@@ -328,7 +344,7 @@ export function ProblemBrowser({ client, onPick, busy, themeId, onThemePick }: P
                     className={index === selected ? "lc-row lc-row-selected" : "lc-row"}
                     disabled={busy || loading}
                     onMouseEnter={() => setSelected(index)}
-                    onClick={() => onPick(problem.task_id)}
+                    onClick={() => pick(problem.task_id)}
                   >
                     <span className="lc-col-q">{problem.question_id ?? ""}</span>
                     <span className="lc-col-name">{problem.task_id}</span>

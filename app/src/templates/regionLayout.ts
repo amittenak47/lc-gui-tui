@@ -3,17 +3,17 @@
  *
  * Students can drag any dashed student-column border to change height or width.
  * Every student region shares that column width; the coach lane tracks to the
- * right. Frames are found by `customData` (not fixed ids) so layout still works
- * after Excalidraw conversion.
+ * right. Frames are found by `customData` or stable `lcregion-*-frame` ids.
  *
  * Template text stores `lcRegionOx` / `lcRegionOy` relative to its frame so
  * resizing from the top/left handle cannot leave the problem statement stranded
- * above the box.
+ * above the box. Heights never drop below the content or REGION_MIN floors.
  */
 
 import {
   REGIONS,
   REGION_GUTTER,
+  REGION_MIN,
   STUDENT_REGION_ORDER,
   type RegionId,
 } from "./regions";
@@ -38,8 +38,25 @@ export interface LayoutElement {
   [key: string]: unknown;
 }
 
+const REGION_IDS = new Set<string>(Object.keys(REGIONS));
+
 function num(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function regionFromFrameId(id: string): RegionId | null {
+  const match = /^lcregion-([a-z]+)-frame$/i.exec(id);
+  if (!match) return null;
+  return REGION_IDS.has(match[1]) ? (match[1] as RegionId) : null;
+}
+
+function frameRegionOf(element: LayoutElement): RegionId | null {
+  if (element.type !== "rectangle") return null;
+  const meta = element.customData;
+  if (meta?.lcRegionFrame && meta.lcRegion && REGION_IDS.has(meta.lcRegion)) {
+    return meta.lcRegion as RegionId;
+  }
+  return regionFromFrameId(element.id);
 }
 
 /** Region frames on the board, keyed by region id. */
@@ -48,10 +65,8 @@ export function regionFramesOf(
 ): Map<RegionId, LayoutElement> {
   const frames = new Map<RegionId, LayoutElement>();
   for (const element of elements) {
-    if (element.type !== "rectangle") continue;
-    const meta = element.customData;
-    if (!meta?.lcRegionFrame || !meta.lcRegion) continue;
-    frames.set(meta.lcRegion as RegionId, element);
+    const region = frameRegionOf(element);
+    if (region) frames.set(region, element);
   }
   return frames;
 }
@@ -61,13 +76,14 @@ export function regionFramesOf(
  * that width wins; otherwise keep the common / constraints width.
  */
 function sharedStudentWidth(frames: Map<RegionId, LayoutElement>): number {
+  const minColumn = Math.max(...STUDENT_REGION_ORDER.map((region) => REGION_MIN[region].minW));
   const widths = STUDENT_REGION_ORDER.map((region) => {
     const frame = frames.get(region);
     return frame ? num(frame.width, REGIONS[region].w) : null;
   }).filter((width): width is number => width !== null);
 
-  if (widths.length === 0) return REGIONS.constraints.w;
-  if (widths.every((width) => width === widths[0])) return widths[0];
+  if (widths.length === 0) return Math.max(minColumn, REGIONS.constraints.w);
+  if (widths.every((width) => width === widths[0])) return Math.max(minColumn, widths[0]);
 
   const counts = new Map<number, number>();
   for (const width of widths) {
@@ -84,19 +100,45 @@ function sharedStudentWidth(frames: Map<RegionId, LayoutElement>): number {
   }
 
   const outliers = widths.filter((width) => width !== majorityWidth);
-  // One resized box → adopt its width. Messy multi-widths → prefer constraints
-  // (or the majority) so the column snaps back together.
+  let picked = majorityWidth;
   if (new Set(outliers).size === 1 && outliers.length <= Math.ceil(widths.length / 2)) {
-    return outliers[0];
+    picked = outliers[0];
+  } else {
+    const constraints = frames.get("constraints");
+    picked = constraints ? num(constraints.width, majorityWidth) : majorityWidth;
   }
 
-  const constraints = frames.get("constraints");
-  return constraints ? num(constraints.width, majorityWidth) : majorityWidth;
+  return Math.max(minColumn, picked);
+}
+
+/** How tall a frame must be to keep its template content inside. */
+function contentMinHeight(
+  elements: readonly LayoutElement[],
+  region: RegionId,
+  frameOriginY: number,
+): number {
+  let bottomRel = 0;
+  for (const element of elements) {
+    if (frameRegionOf(element)) continue;
+    if (element.customData?.lcRegion !== region) continue;
+    const meta = element.customData;
+    const offsetY =
+      typeof meta?.lcRegionOy === "number" ? meta.lcRegionOy : element.y - frameOriginY;
+    const height =
+      typeof element.height === "number" && Number.isFinite(element.height)
+        ? element.height
+        : element.type === "text"
+          ? 36
+          : 0;
+    bottomRel = Math.max(bottomRel, offsetY + height);
+  }
+  // Leave a little air under the last line so it isn't flush with the border.
+  return bottomRel + 56;
 }
 
 /**
- * Enforce shared student width, vertical stacking, and coach-lane placement.
- * Returns a new element list when something changed, otherwise `null`.
+ * Enforce shared student width, vertical stacking, coach-lane placement, and
+ * hard minimum sizes. Returns a new element list when something changed.
  */
 export function syncRegionLayout(elements: readonly LayoutElement[]): LayoutElement[] | null {
   const byId = new Map(elements.map((element) => [element.id, { ...element }]));
@@ -118,8 +160,23 @@ export function syncRegionLayout(elements: readonly LayoutElement[]): LayoutElem
     const frame = frames.get(region);
     if (!frame) continue;
 
-    const height = Math.max(120, num(frame.height, REGIONS[region].h));
-    const next = { ...frame, x: 0, y, width: sharedWidth, height };
+    const requested = num(frame.height, REGIONS[region].h);
+    const originY = oldOrigins.get(region)?.y ?? frame.y;
+    const contentFloor = contentMinHeight([...byId.values()], region, originY);
+    const height = Math.max(REGION_MIN[region].minH, contentFloor, requested);
+    const next = {
+      ...frame,
+      x: 0,
+      y,
+      width: sharedWidth,
+      height,
+      // Ensure metadata survives Excalidraw updates that drop customData.
+      customData: {
+        ...(frame.customData ?? {}),
+        lcRegion: region,
+        lcRegionFrame: true,
+      },
+    };
     if (
       frame.x !== next.x ||
       frame.y !== next.y ||
@@ -136,14 +193,23 @@ export function syncRegionLayout(elements: readonly LayoutElement[]): LayoutElem
   const studentStackHeight = Math.max(0, y - REGION_GUTTER);
   const agent = frames.get("agent");
   if (agent) {
-    const agentWidth = num(agent.width, REGIONS.agent.w);
-    const agentHeight = Math.max(num(agent.height, REGIONS.agent.h), studentStackHeight);
+    const agentWidth = Math.max(REGION_MIN.agent.minW, num(agent.width, REGIONS.agent.w));
+    const agentHeight = Math.max(
+      REGION_MIN.agent.minH,
+      num(agent.height, REGIONS.agent.h),
+      studentStackHeight,
+    );
     const next = {
       ...agent,
       x: sharedWidth + REGION_GUTTER * 2,
       y: 0,
       width: agentWidth,
       height: agentHeight,
+      customData: {
+        ...(agent.customData ?? {}),
+        lcRegion: "agent" as const,
+        lcRegionFrame: true,
+      },
     };
     if (
       agent.x !== next.x ||
@@ -160,7 +226,7 @@ export function syncRegionLayout(elements: readonly LayoutElement[]): LayoutElem
   const contentWidth = Math.max(200, sharedWidth - 72);
 
   for (const element of byId.values()) {
-    if (element.customData?.lcRegionFrame) continue;
+    if (frameRegionOf(element)) continue;
     const region = element.customData?.lcRegion as RegionId | undefined;
     if (!region) continue;
 
@@ -169,7 +235,6 @@ export function syncRegionLayout(elements: readonly LayoutElement[]): LayoutElem
     if (!frame || !oldOrigin) continue;
 
     const meta = element.customData;
-    // Prefer baked-in anchors so top/left resize cannot orphan statement text.
     const offsetX =
       typeof meta?.lcRegionOx === "number" ? meta.lcRegionOx : element.x - oldOrigin.x;
     const offsetY =

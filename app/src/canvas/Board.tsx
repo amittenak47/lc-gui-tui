@@ -470,18 +470,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const handleSceneChange = useCallback(() => {
     const api = apiRef.current;
     if (api && !layoutSyncingRef.current) {
-      const synced = syncRegionLayout(api.getSceneElements() as LayoutElement[]);
-      if (synced) {
-        // Hold the guard through the synchronous onChange that updateScene may
-        // re-enter with; clear on the next frame.
+      const applySync = () => {
+        const synced = syncRegionLayout(api.getSceneElements() as LayoutElement[]);
+        if (!synced) return false;
         layoutSyncingRef.current = true;
         api.updateScene({
           elements: synced,
           captureUpdate: CaptureUpdateAction.NEVER,
         });
+        return true;
+      };
+      if (applySync()) {
+        // Excalidraw can overwrite mid-resize; re-clamp after it settles.
         requestAnimationFrame(() => {
           layoutSyncingRef.current = false;
+          if (applySync()) {
+            requestAnimationFrame(() => {
+              layoutSyncingRef.current = false;
+            });
+          }
         });
+        window.setTimeout(() => {
+          if (!layoutSyncingRef.current) applySync();
+          requestAnimationFrame(() => {
+            layoutSyncingRef.current = false;
+          });
+        }, 80);
       }
     }
     reportCodeSlot();

@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { LcClient } from "./api/client";
+import { LcClient, type SearchOptions } from "./api/client";
 import { AmbientCoach, type AmbientProbe } from "./api/coachSocket";
 import { loadPairing, parsePairingUrl, savePairing, type Pairing } from "./api/pairing";
 import type {
@@ -21,6 +21,7 @@ import type {
   ProblemDetail,
   ReviewResponse,
   ServerFrame,
+  SessionSnapshot,
   TestResponse,
 } from "./api/types";
 import { Tip } from "./components/Tip";
@@ -60,8 +61,14 @@ export function App() {
   const [entering, setEntering] = useState(false);
   /** Browser overlay: idle / enter / busy (spin) / exit (slide+spin) / done (check). */
   const [browseMotion, setBrowseMotion] = useState<"enter" | "idle" | "busy" | "exit" | "done">("idle");
-  /** Recently opened problems, so prev/next works without re-searching. */
-  const [history, setHistory] = useState<string[]>([]);
+  /** Active problem-bank filter — header prev/next walk this when there's no session queue. */
+  const [bankFilters, setBankFilters] = useState<SearchOptions>({});
+  /** Disk practice session from `lc serve` (queue + progress). */
+  const [session, setSession] = useState<SessionSnapshot | null>(null);
+  const [canStepPrev, setCanStepPrev] = useState(false);
+  const [canStepNext, setCanStepNext] = useState(false);
+  /** Distinguishes header Run tests vs Submit for the results panel. */
+  const [lastRunKind, setLastRunKind] = useState<"run" | "submit">("run");
   const [themeId, setThemeId] = useState(loadThemeId);
   const [coachOpen, setCoachOpen] = useState(false);
   const [codeSlot, setCodeSlot] = useState<ScreenRect | null>(null);
@@ -165,8 +172,25 @@ export function App() {
     return snapshot.board;
   }, []);
 
+  const refreshSession = useCallback(async () => {
+    try {
+      setSession(await client.getSession());
+    } catch {
+      setSession(null);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void refreshSession();
+  }, [refreshSession]);
+
+  const syncSolution = useCallback(async () => {
+    if (!problem) return;
+    await client.putSolution(problem.task_id, pseudocodeRef.current);
+  }, [client, problem]);
+
   const pickProblem = useCallback(
-    async (taskId: string) => {
+    async (taskId: string, bank?: SearchOptions) => {
       const fromBrowse = !problem;
       setBusy("loading the workspace…");
       setError(null);
@@ -175,12 +199,20 @@ export function App() {
       setBridge(null);
       setProgram(null);
       setNudges([]);
+      if (bank) setBankFilters(bank);
       if (fromBrowse) setBrowseMotion("busy");
       try {
         // Materialize the workspace on the PC, then read back the redacted
         // statement for the board template.
         await client.loadProblem(taskId);
         const detail = await client.getProblem(taskId);
+        let source = detail.starter_code ?? "";
+        try {
+          const disk = await client.getSolution(taskId);
+          if (disk.source.trim().length > 0) source = disk.source;
+        } catch {
+          // Fresh load — starter_code is fine.
+        }
 
         if (fromBrowse) {
           // Ready: keep the spinner, slide the browser away under the blur.
@@ -191,12 +223,10 @@ export function App() {
           await waitMs(doneHoldMs());
         }
 
-        setPseudocode(detail.starter_code ?? "");
+        setPseudocode(source);
         setProblem(detail);
         setBrowseMotion("idle");
-        setHistory((current) =>
-          current.includes(detail.task_id) ? current : [...current, detail.task_id],
-        );
+        await refreshSession();
         boardRef.current?.seedTemplate(
           buildProblemTemplate({
             taskId: detail.task_id,
@@ -222,19 +252,65 @@ export function App() {
         setBusy(null);
       }
     },
-    [client, themeId, problem],
+    [client, themeId, problem, refreshSession],
   );
 
-  /** Step through problems opened this session, without leaving the board. */
+  /** Session queue when present; otherwise the filtered problem bank. */
   const stepProblem = useCallback(
-    (delta: number) => {
-      if (!problem) return;
-      const index = history.indexOf(problem.task_id);
-      const next = history[index + delta];
-      if (next) void pickProblem(next);
+    async (delta: number) => {
+      if (!problem || busy !== null) return;
+      const queue = session?.queue ?? [];
+      const queueIndex = queue.indexOf(problem.task_id);
+      if (queue.length > 0 && queueIndex >= 0) {
+        const next = queue[queueIndex + delta];
+        if (next) void pickProblem(next);
+        return;
+      }
+      try {
+        const adjacent = await client.adjacentProblems(problem.task_id, bankFilters);
+        const next = delta < 0 ? adjacent.prev : adjacent.next;
+        if (next) void pickProblem(next, bankFilters);
+      } catch (cause) {
+        setError(messageOf(cause));
+      }
     },
-    [problem, history, pickProblem],
+    [problem, busy, session, client, bankFilters, pickProblem],
   );
+
+  useEffect(() => {
+    if (!problem) {
+      setCanStepPrev(false);
+      setCanStepNext(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const queue = session?.queue ?? [];
+      const queueIndex = queue.indexOf(problem.task_id);
+      if (queue.length > 0 && queueIndex >= 0) {
+        if (!cancelled) {
+          setCanStepPrev(queueIndex > 0);
+          setCanStepNext(queueIndex < queue.length - 1);
+        }
+        return;
+      }
+      try {
+        const adjacent = await client.adjacentProblems(problem.task_id, bankFilters);
+        if (!cancelled) {
+          setCanStepPrev(Boolean(adjacent.prev));
+          setCanStepNext(Boolean(adjacent.next));
+        }
+      } catch {
+        if (!cancelled) {
+          setCanStepPrev(false);
+          setCanStepNext(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [problem, session, bankFilters, client]);
 
   // When the coach panel opens/closes, the canvas width changes — re-fit so
   // the problem page isn't clipped under the side panel.
@@ -296,6 +372,7 @@ export function App() {
     setBusy("asking the coach…");
     setError(null);
     try {
+      await syncSolution();
       const snapshot = await buildSnapshot(board, recognizerRef.current, { pseudocode: pseudocodeRef.current });
       if (snapshot.board.recognized_text.trim().length === 0) {
         setError(
@@ -311,7 +388,7 @@ export function App() {
     } finally {
       setBusy(null);
     }
-  }, [client, problem]);
+  }, [client, problem, syncSolution]);
 
   const askForDiagram = useCallback(async () => {
     const board = boardRef.current;
@@ -344,13 +421,46 @@ export function App() {
     setBusy("running the tests…");
     setError(null);
     try {
-      setTests(await client.runTests(problem.task_id));
+      await syncSolution();
+      const result = await client.runTests(problem.task_id);
+      setLastRunKind("run");
+      setTests(result);
+      setCoachOpen(true);
+      await refreshSession();
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
       setBusy(null);
     }
-  }, [client, problem]);
+  }, [client, problem, syncSolution, refreshSession]);
+
+  const submitSolution = useCallback(async () => {
+    if (!problem) return;
+    setBusy("submitting…");
+    setError(null);
+    try {
+      await syncSolution();
+      const result = await client.runTests(problem.task_id);
+      setLastRunKind("submit");
+      setTests(result);
+      setCoachOpen(true);
+      await refreshSession();
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(null);
+    }
+  }, [client, problem, syncSolution, refreshSession]);
+
+  const pickRandomProblem = useCallback(async () => {
+    try {
+      const next = await client.randomProblem(bankFilters);
+      if (next) void pickProblem(next.task_id, bankFilters);
+      else setError("no problems match the current filters");
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  }, [client, bankFilters, pickProblem]);
 
   const confirmReveal = useCallback(async () => {
     const board = boardRef.current;
@@ -429,10 +539,14 @@ export function App() {
               <button
                 type="button"
                 className="lc-icon"
-                title="Previous problem"
+                title={
+                  (session?.queue?.length ?? 0) > 0
+                    ? "Previous in session queue"
+                    : "Previous in problem bank"
+                }
                 aria-label="Previous problem"
-                disabled={history.indexOf(problem.task_id) <= 0 || busy !== null}
-                onClick={() => stepProblem(-1)}
+                disabled={!canStepPrev || busy !== null}
+                onClick={() => void stepProblem(-1)}
               >
                 ‹
               </button>
@@ -442,12 +556,14 @@ export function App() {
               <button
                 type="button"
                 className="lc-icon"
-                title="Next problem"
-                aria-label="Next problem"
-                disabled={
-                  history.indexOf(problem.task_id) >= history.length - 1 || busy !== null
+                title={
+                  (session?.queue?.length ?? 0) > 0
+                    ? "Next in session queue"
+                    : "Next in problem bank"
                 }
-                onClick={() => stepProblem(1)}
+                aria-label="Next problem"
+                disabled={!canStepNext || busy !== null}
+                onClick={() => void stepProblem(1)}
               >
                 ›
               </button>
@@ -461,6 +577,15 @@ export function App() {
                 disabled={busy !== null}
               >
                 Run tests
+              </button>
+              <button
+                type="button"
+                className="lc-secondary"
+                onClick={() => void submitSolution()}
+                disabled={busy !== null}
+                title="Sync solution, run all tests, and continue if they pass"
+              >
+                Submit
               </button>
               <button
                 type="button"
@@ -633,7 +758,17 @@ export function App() {
 
             {bridge && <BridgePanel bridge={bridge} onDismiss={() => setBridge(null)} />}
 
-            {tests && <TestSummary tests={tests} onDismiss={() => setTests(null)} />}
+            {tests && (
+              <TestSummary
+                tests={tests}
+                kind={lastRunKind}
+                onDismiss={() => setTests(null)}
+                onNext={() => void stepProblem(1)}
+                onRandom={() => void pickRandomProblem()}
+                onBrowse={returnToBrowse}
+                canNext={canStepNext}
+              />
+            )}
           </AgentSidePanel>
         )}
       </main>
@@ -651,36 +786,74 @@ export function App() {
   );
 }
 
-function TestSummary({ tests, onDismiss }: { tests: TestResponse; onDismiss: () => void }) {
+function TestSummary({
+  tests,
+  kind,
+  onDismiss,
+  onNext,
+  onRandom,
+  onBrowse,
+  canNext,
+}: {
+  tests: TestResponse;
+  kind: "run" | "submit";
+  onDismiss: () => void;
+  onNext: () => void;
+  onRandom: () => void;
+  onBrowse: () => void;
+  canNext: boolean;
+}) {
   const failures = tests.results.filter((result) => !result.pass);
+  const celebrate = kind === "submit" && tests.all_passed;
   return (
     <section className="lc-panel" aria-label="Test results">
       <header className="lc-panel-head">
         <strong className={tests.all_passed ? "lc-pass" : "lc-fail"}>
-          {tests.passed}/{tests.total} passed
+          {celebrate
+            ? `All ${tests.total} cases passed`
+            : `${tests.passed}/${tests.total} passed`}
         </strong>
         <button type="button" className="lc-link" onClick={onDismiss}>
           close
         </button>
       </header>
-      {failures.slice(0, 5).map((result) => (
-        <div key={result.case} className="lc-case-fail">
-          <strong>case {result.case}</strong>
-          <div>
-            <code>{result.input}</code>
-          </div>
-          <div className="lc-muted">
-            expected <code>{result.expected}</code>
-            {result.actual !== null && (
-              <>
-                {" · got "}
-                <code>{result.actual}</code>
-              </>
-            )}
+      {celebrate ? (
+        <div className="lc-submit-pass">
+          <p className="lc-muted">Nice work — pick where to go next.</p>
+          <div className="lc-submit-actions">
+            <button type="button" disabled={!canNext} onClick={onNext}>
+              Next problem
+            </button>
+            <button type="button" className="lc-secondary" onClick={onRandom}>
+              Random
+            </button>
+            <button type="button" className="lc-secondary" onClick={onBrowse}>
+              Browse
+            </button>
           </div>
         </div>
-      ))}
-      {failures.length > 5 && <p className="lc-muted">…and {failures.length - 5} more</p>}
+      ) : (
+        <>
+          {failures.slice(0, 5).map((result) => (
+            <div key={result.case} className="lc-case-fail">
+              <strong>case {result.case}</strong>
+              <div>
+                <code>{result.input}</code>
+              </div>
+              <div className="lc-muted">
+                expected <code>{result.expected}</code>
+                {result.actual !== null && (
+                  <>
+                    {" · got "}
+                    <code>{result.actual}</code>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+          {failures.length > 5 && <p className="lc-muted">…and {failures.length - 5} more</p>}
+        </>
+      )}
     </section>
   );
 }

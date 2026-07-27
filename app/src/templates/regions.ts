@@ -44,6 +44,19 @@ const APPROACH_H = 1100;
 const COMPLEXITY_H = 360;
 const WALKTHROUGH_H = 900;
 
+/**
+ * Floors when the student shrinks a dashed frame. Shared student width uses
+ * `minW` from any student region (they stay one column).
+ */
+export const REGION_MIN: Record<RegionId, { minW: number; minH: number }> = {
+  constraints: { minW: 1200, minH: 900 },
+  code: { minW: 1200, minH: 320 },
+  approach: { minW: 1200, minH: 400 },
+  complexity: { minW: 1200, minH: 180 },
+  walkthrough: { minW: 1200, minH: 320 },
+  agent: { minW: 480, minH: 600 },
+};
+
 const CODE_Y = CONSTRAINTS_H + GUTTER;
 const APPROACH_Y = CODE_Y + CODE_H + GUTTER;
 const COMPLEXITY_Y = APPROACH_Y + APPROACH_H + GUTTER;

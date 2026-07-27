@@ -36,7 +36,7 @@ export function AgentSidePanel({
         <section className="lc-agent-actions" aria-label="Ask the agent">
           <p className="lc-section-label">When the agent reviews</p>
           <div className="lc-modes" role="group" aria-label="Review timing">
-            <Tip tip="The agent reviews only when you click Submit work for review" placement="left">
+            <Tip tip="The agent reviews only when you click Ask coach" placement="left">
               <button
                 type="button"
                 className={mode === "review" ? "lc-mode lc-mode-active" : "lc-mode"}
@@ -62,11 +62,11 @@ export function AgentSidePanel({
 
           <div className="lc-agent-buttons">
             {mode === "review" && (
-              <Tip tip="Send your board and solution code to the agent for feedback" placement="left">
-                <button type="button" disabled={busy} onClick={onSubmit}>
-                  Submit work for review
-                </button>
-              </Tip>
+            <Tip tip="Send your board and solution code to the coach for feedback" placement="left">
+              <button type="button" disabled={busy} onClick={onSubmit}>
+                Ask coach
+              </button>
+            </Tip>
             )}
             <Tip
               tip="Ask the agent to draw a diagram on the board (experimental — not fully wired yet)"

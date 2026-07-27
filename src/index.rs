@@ -431,6 +431,73 @@ pub fn random_one(
     Ok(rows.into_iter().next())
 }
 
+/// Previous/next task ids in the same filtered, sorted bank order as the browser.
+pub fn adjacent_task_ids(
+    conn: &Connection,
+    task_id: &str,
+    difficulty: Option<&str>,
+    tag: Option<&str>,
+    query: Option<&str>,
+    sort: SearchSort,
+) -> Result<(Option<String>, Option<String>)> {
+    let mut sql = String::from("SELECT task_id FROM problems");
+    let mut clauses: Vec<String> = Vec::new();
+    let mut params: Vec<String> = Vec::new();
+
+    if let Some(d) = difficulty {
+        params.push(d.to_string());
+        clauses.push(format!("difficulty = ?{} COLLATE NOCASE", params.len()));
+    }
+    if let Some(t) = tag {
+        params.push(t.to_lowercase());
+        clauses.push(format!(
+            "task_id IN (SELECT task_id FROM problem_tags WHERE tag = ?{})",
+            params.len()
+        ));
+    }
+    push_text_query_filter(&mut clauses, &mut params, query);
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY ");
+    sql.push_str(sort.order_clause());
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(params.iter()), |r| r.get::<_, String>(0))?;
+    let mut ids = Vec::new();
+    for row in rows {
+        ids.push(row?);
+    }
+
+    if let Some(index) = ids.iter().position(|id| id == task_id) {
+        let prev = if index > 0 {
+            Some(ids[index - 1].clone())
+        } else {
+            None
+        };
+        let next = ids.get(index + 1).cloned();
+        return Ok((prev, next));
+    }
+
+    // Current id isn't in this filter — still offer neighbors by task_id order.
+    let prev = conn
+        .query_row(
+            "SELECT task_id FROM problems WHERE task_id < ?1 ORDER BY task_id DESC LIMIT 1",
+            params![task_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?;
+    let next = conn
+        .query_row(
+            "SELECT task_id FROM problems WHERE task_id > ?1 ORDER BY task_id ASC LIMIT 1",
+            params![task_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok((prev, next))
+}
+
 pub fn record_submission(
     conn: &Connection,
     task_id: &str,

@@ -8,6 +8,7 @@
 
 import type { Pairing } from "./pairing";
 import type {
+  AdjacentProblems,
   BoardSnapshot,
   BridgeResponse,
   LoadResponse,
@@ -15,6 +16,7 @@ import type {
   ProblemPage,
   ProblemSummary,
   ReviewResponse,
+  SessionSnapshot,
   TestResponse,
   VizEnvelope,
   WorkspaceMeta,
@@ -82,6 +84,24 @@ export class LcClient {
     }
     const suffix = query.toString();
     return this.request("GET", `/random${suffix ? `?${suffix}` : ""}`);
+  }
+
+  /** Practice session on disk (queue + progress). */
+  async getSession(): Promise<SessionSnapshot> {
+    return this.request("GET", "/session");
+  }
+
+  /** Prev/next in the filtered problem bank (same order as the browser). */
+  async adjacentProblems(id: string, options: SearchOptions = {}): Promise<AdjacentProblems> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    const suffix = query.toString();
+    return this.request(
+      "GET",
+      `/problems/${encodeURIComponent(id)}/adjacent${suffix ? `?${suffix}` : ""}`,
+    );
   }
 
   async getProblem(id: string): Promise<ProblemDetail> {

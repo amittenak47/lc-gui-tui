@@ -198,6 +198,65 @@ pub async fn random_problem(
     Ok(Json(row.map(ProblemSummary::from)))
 }
 
+/// Practice session on disk (`session.json`) — queue, progress, active list.
+#[derive(Debug, Serialize)]
+pub struct SessionResponse {
+    pub started_at: u64,
+    pub active_list: Option<String>,
+    pub queue: Vec<String>,
+    pub problems: std::collections::HashMap<String, crate::session::ProblemProgress>,
+    pub reveals: std::collections::HashMap<String, u32>,
+}
+
+pub async fn get_session() -> Result<Json<SessionResponse>, AppError> {
+    let session = blocking(move || Session::load_or_new()).await?;
+    Ok(Json(SessionResponse {
+        started_at: session.started_at,
+        active_list: session.active_list,
+        queue: session.queue,
+        problems: session.problems,
+        reveals: session.reveals,
+    }))
+}
+
+/// Neighbors of `id` in the same filtered bank order the browser uses.
+#[derive(Debug, Serialize)]
+pub struct AdjacentResponse {
+    pub task_id: String,
+    pub prev: Option<String>,
+    pub next: Option<String>,
+}
+
+pub async fn adjacent_problem(
+    UrlPath(id): UrlPath<String>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<AdjacentResponse>, AppError> {
+    let response = blocking(move || {
+        let sort = match query.sort.as_deref() {
+            Some(raw) => SearchSort::parse(raw).ok_or_else(|| {
+                anyhow!("unknown sort {raw:?} — expected task_id, question, difficulty, cases, or tags")
+            })?,
+            None => SearchSort::TaskId,
+        };
+        let conn = index::open_db()?;
+        let (prev, next) = index::adjacent_task_ids(
+            &conn,
+            &id,
+            query.difficulty.as_deref(),
+            query.tag.as_deref(),
+            query.q.as_deref(),
+            sort,
+        )?;
+        Ok(AdjacentResponse {
+            task_id: id,
+            prev,
+            next,
+        })
+    })
+    .await?;
+    Ok(Json(response))
+}
+
 pub async fn get_problem(
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<ProblemDetail>, AppError> {
