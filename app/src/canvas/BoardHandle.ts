@@ -27,6 +27,8 @@ export interface ScreenRect {
   top: number;
   width: number;
   height: number;
+  /** Excalidraw zoom — Monaco must scale fonts with this (HTML doesn't). */
+  zoom: number;
 }
 
 export interface BoardHandle {

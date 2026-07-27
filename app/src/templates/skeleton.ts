@@ -29,6 +29,8 @@ export interface Skeleton {
   strokeStyle?: "solid" | "dashed" | "dotted";
   roughness?: number;
   opacity?: number;
+  /** Excalidraw roundness; `{ type: 3 }` is adaptive corner radius. */
+  roundness?: null | { type: number };
   textAlign?: "left" | "center" | "right";
   verticalAlign?: "top" | "middle" | "bottom";
   points?: Array<[number, number]>;
@@ -49,6 +51,11 @@ export interface SkeletonMeta {
   lcRegionOx?: number;
   lcRegionOy?: number;
   /**
+   * Keep width/height as authored (chips, badges). Statement body text still
+   * stretches to the frame content width.
+   */
+  lcFixedSize?: boolean;
+  /**
    * Set on every element the coach injected. Two jobs: the capture layer skips
    * these so the coach never reads its own output back, and the viz applier
    * replaces exactly this group when the frame changes.
@@ -63,7 +70,8 @@ export const COACH_INK = "#5b6478";
 export const COACH_ACCENT = "#c2410c";
 export const COACH_FILL = "#f1f5f9";
 export const STUDENT_HINT = "#4b5563";
-export const REGION_BORDER = "#1a1612";
+/** Near-black dashed frames — stay readable on parchment when zoomed out. */
+export const REGION_BORDER = "#0c0a08";
 export const TEXT_PRIMARY = "#14110e";
 export const TEXT_BODY = "#1f1a14";
 
@@ -74,13 +82,13 @@ export function templatePalette(dark: boolean) {
         primary: "#f3f4f6",
         body: "#e5e7eb",
         hint: "#9ca3af",
-        border: "#9ca3af",
+        // Lighter than board so dashed frames stay visible on midnight/graphite.
+        border: "#d1d5db",
       }
     : {
         primary: TEXT_PRIMARY,
         body: TEXT_BODY,
         hint: STUDENT_HINT,
-        // Dark dashed frames on light boards so regions stay readable on parchment.
         border: REGION_BORDER,
       };
 }

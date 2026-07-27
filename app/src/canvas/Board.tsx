@@ -39,7 +39,7 @@ import {
 } from "../templates/libraryImport";
 import { regionFrameId, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
 import { recolorTemplateElements } from "../templates/problemBoard";
-import { codeFrameHeightForSource } from "../util/solutionPad";
+import { codeFrameHeightForSource, CODE_LABEL_RESERVE } from "../util/solutionPad";
 import { REGIONS } from "../templates/regions";
 import {
   BOARD_THEMES,
@@ -83,9 +83,38 @@ interface ExcalidrawApi {
 const ZOOM_MIN = 0.1;
 const ZOOM_MAX = 3;
 const ZOOM_STEP = 1.15;
+/** Matches Excalidraw's internal wheel-zoom step (not our button ZOOM_STEP). */
+const WHEEL_ZOOM_STEP = 0.1;
 
 function clampZoom(value: number): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+}
+
+/** Zoom toward a viewport point so scroll-wheel zoom feels anchored under the cursor. */
+function getStateForZoom(
+  {
+    viewportX,
+    viewportY,
+    nextZoom,
+  }: { viewportX: number; viewportY: number; nextZoom: number },
+  appState: {
+    offsetLeft?: number;
+    offsetTop?: number;
+    scrollX?: number;
+    scrollY?: number;
+    zoom?: { value?: number };
+  },
+): { scrollX: number; scrollY: number; zoom: { value: number } } {
+  const appLayerX = viewportX - (appState.offsetLeft ?? 0);
+  const appLayerY = viewportY - (appState.offsetTop ?? 0);
+  const currentZoom = appState.zoom?.value ?? 1;
+  const baseScrollX = (appState.scrollX ?? 0) + (appLayerX - appLayerX / currentZoom);
+  const baseScrollY = (appState.scrollY ?? 0) + (appLayerY - appLayerY / currentZoom);
+  return {
+    scrollX: baseScrollX - (appLayerX - appLayerX / nextZoom),
+    scrollY: baseScrollY - (appLayerY - appLayerY / nextZoom),
+    zoom: { value: nextZoom },
+  };
 }
 
 /** Pink rubber eraser cursor; size tracks Thin / Bold / Heavy. */
@@ -164,7 +193,7 @@ function inkSwatches(themeId: string): readonly string[] {
 }
 
 const TOOLS: Array<{ tool: ToolName; label: string; hint: string; emoji?: string }> = [
-  { tool: "hand", label: "hand", hint: "Pan — drag to move around the board", emoji: "✋" },
+  { tool: "hand", label: "hand", hint: "Pan — drag to move; scroll wheel zooms", emoji: "✋" },
   { tool: "selection", label: "⬚", hint: "Select — resize region boxes or move your work" },
   { tool: "freedraw", label: "Pen", hint: "Pen", emoji: "✏️" },
   { tool: "eraser", label: "Eraser", hint: "Eraser", emoji: "erasersvg" },
@@ -195,7 +224,13 @@ function roundPx(value: number): number {
 function sameCodeSlot(a: ScreenRect | null, b: ScreenRect | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
+  return (
+    a.left === b.left &&
+    a.top === b.top &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.zoom === b.zoom
+  );
 }
 
 export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
@@ -203,6 +238,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   ref,
 ) {
   const apiRef = useRef<ExcalidrawApi | null>(null);
+  const boardRef = useRef<HTMLDivElement | null>(null);
   const [activeTool, setActiveTool] = useState<ToolName>("hand");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
   const [inkColor, setInkColor] = useState(() => defaultInk(themeId));
@@ -254,11 +290,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // Overlay is positioned inside `.lc-canvas-wrap`, which matches the Excalidraw
     // viewport — do not add page offsets (those are for clientX/clientY only).
     const inset = Math.max(6, Math.round(8 * zoom));
+    // Leave room for the CODE label + hint above Monaco (same chrome as Approach).
+    const headerReserve = Math.round(CODE_LABEL_RESERVE * zoom);
     const next: ScreenRect = {
       left: roundPx((frame.x + scrollX) * zoom + inset),
-      top: roundPx((frame.y + scrollY) * zoom + inset),
+      top: roundPx((frame.y + scrollY) * zoom + inset + headerReserve),
       width: roundPx(Math.max(0, num(frame.width, REGIONS.code.w) * zoom - inset * 2)),
-      height: roundPx(Math.max(0, num(frame.height, REGIONS.code.h) * zoom - inset * 2)),
+      height: roundPx(
+        Math.max(0, num(frame.height, REGIONS.code.h) * zoom - inset * 2 - headerReserve),
+      ),
+      zoom: Math.round(zoom * 1000) / 1000,
     };
 
     // Hide the dock when the code frame is fully off-screen — switching to the
@@ -308,11 +349,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /**
    * Turn skeletons into elements, then stamp the metadata back on — bound
    * labels get generated ids and would otherwise lose their region/viz tag.
+   *
+   * Template seeds pass `regenerateIds: false` so `lcregion-*` ids survive and
+   * Appearance can recolor statement text. Stamps keep the default (new ids).
    */
-  const convert = useCallback((skeletons: Skeleton[]): unknown[] => {
-    const converted = convertToExcalidrawElements(skeletons as never) as unknown[];
-    return applyMetadata(converted as never, skeletons);
-  }, []);
+  const convert = useCallback(
+    (skeletons: Skeleton[], opts?: { regenerateIds?: boolean }): unknown[] => {
+      const converted = convertToExcalidrawElements(skeletons as never, {
+        regenerateIds: opts?.regenerateIds ?? true,
+      }) as unknown[];
+      return applyMetadata(converted as never, skeletons);
+    },
+    [],
+  );
 
   const setFontSize = useCallback((size: number) => {
     setFontSizeState(size);
@@ -363,6 +412,88 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const zoomIn = useCallback(() => setZoom(readZoom() * ZOOM_STEP), [readZoom, setZoom]);
   const zoomOut = useCallback(() => setZoom(readZoom() / ZOOM_STEP), [readZoom, setZoom]);
+
+  // Excalidraw pans on wheel by default (Ctrl/Cmd+wheel zooms). Prefer scroll =
+  // zoom toward the cursor; hand-tool drag stays the way to pan. Shift+wheel
+  // still pans as an escape hatch. Leave Monaco / chrome alone.
+  useEffect(() => {
+    if (!interactive) return;
+    const root = boardRef.current;
+    if (!root) return;
+
+    const onWheel = (event: WheelEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (
+        target.closest(
+          ".lc-code-dock, .lc-toolbar, .lc-map-controls, .monaco-editor, textarea, input, [contenteditable='true']",
+        )
+      ) {
+        return;
+      }
+      if (!target.closest(".excalidraw")) return;
+
+      const api = apiRef.current;
+      if (!api) return;
+
+      const state = api.getAppState() as {
+        zoom?: { value?: number };
+        scrollX?: number;
+        scrollY?: number;
+        offsetLeft?: number;
+        offsetTop?: number;
+      };
+      const zoom = state.zoom?.value ?? 1;
+
+      // Shift+wheel: pan (trackpad / mouse escape without switching tools).
+      if (event.shiftKey && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        api.updateScene({
+          appState: {
+            scrollX: (state.scrollX ?? 0) - (event.deltaY || event.deltaX) / zoom,
+          },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        requestAnimationFrame(reportCodeSlot);
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const { deltaY } = event;
+      const sign = Math.sign(deltaY) || -1;
+      const maxStep = WHEEL_ZOOM_STEP * 100;
+      const absDelta = Math.abs(deltaY);
+      let delta = deltaY;
+      if (absDelta > maxStep) {
+        delta = maxStep * sign;
+      }
+      let next = zoom - delta / 100;
+      next +=
+        Math.log10(Math.max(1, zoom)) * -sign * Math.min(1, absDelta / 20);
+      const nextZoom = clampZoom(next);
+      if (nextZoom === zoom) return;
+
+      api.updateScene({
+        appState: getStateForZoom(
+          {
+            viewportX: event.clientX,
+            viewportY: event.clientY,
+            nextZoom,
+          },
+          state,
+        ),
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+      setZoomPct(Math.round(nextZoom * 100));
+      requestAnimationFrame(reportCodeSlot);
+    };
+
+    root.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    return () => root.removeEventListener("wheel", onWheel, { capture: true });
+  }, [interactive, reportCodeSlot]);
 
   const fitView = useCallback(() => {
     const api = apiRef.current;
@@ -490,16 +621,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const resetTemplate = useCallback(() => {
     const skeletons = seedSkeletonsRef.current;
     if (skeletons.length === 0) return;
-    const converted = convert(skeletons);
-    templateRef.current = converted;
+    const dark = isDarkTheme(themeId);
+    const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
+    const next = recolorTemplateElements(converted, dark) ?? converted;
+    templateRef.current = next;
     apiRef.current?.updateScene({
-      elements: converted,
+      elements: next as unknown[],
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
     requestAnimationFrame(() => {
       scheduleFitView();
     });
-  }, [convert, scheduleFitView]);
+  }, [convert, scheduleFitView, themeId]);
 
   const applyRegionLayout = useCallback(() => {
     const api = apiRef.current;
@@ -541,10 +674,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       convert,
       seedTemplate: (skeletons: Skeleton[]) => {
         seedSkeletonsRef.current = skeletons;
-        const converted = convert(skeletons);
-        templateRef.current = converted;
+        const dark = isDarkTheme(themeId);
+        const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
+        const next = recolorTemplateElements(converted, dark) ?? converted;
+        templateRef.current = next;
         apiRef.current?.updateScene({
-          elements: converted,
+          elements: next as unknown[],
           captureUpdate: CaptureUpdateAction.NEVER,
         });
         // Clear history after seeding so Ctrl+Z undoes student strokes, not the
@@ -589,7 +724,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       fitView,
       fitCodeToSource,
     }),
-    [convert, elements, fitCodeToSource, fitView, resetTemplate, scheduleFitView, setTool, zoomIn, zoomOut],
+    [convert, elements, fitCodeToSource, fitView, resetTemplate, scheduleFitView, setTool, themeId, zoomIn, zoomOut],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
@@ -611,7 +746,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
 
   return (
-    <div className={interactive ? "lc-board" : "lc-board lc-board-idle"}>
+    <div ref={boardRef} className={interactive ? "lc-board" : "lc-board lc-board-idle"}>
       {interactive && (
         <>
           <BoardToolbar

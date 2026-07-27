@@ -36,22 +36,30 @@ const LIGHT_TOKENS = {
   ink: "#1f2937",
   muted: "#5b6478",
   hint: "#6b7280",
-  line: "#d4d8de",
+  // Darker dividers so coach/composer edges read on parchment.
+  line: "#6b7280",
   accent: "#b45309",
   ok: "#166534",
   bad: "#b91c1c",
   surface: "rgb(255 255 255 / 94%)",
+  // Soft slate selection — not accent orange (that fights Medium difficulty).
+  selectEdge: "#3f4f63",
+  selectFill: "rgb(63 79 99 / 11%)",
 };
 
 const DARK_TOKENS = {
   ink: "#e8eaed",
   muted: "#9aa3af",
   hint: "#7a8494",
-  line: "#3d4450",
+  // Lighter dividers so coach/composer edges read on midnight boards.
+  line: "#9aa3af",
   accent: "#f97316",
   ok: "#4ade80",
   bad: "#f87171",
   surface: "rgb(36 40 48 / 94%)",
+  // Cool sky selection — calm on charcoal, distinct from accent.
+  selectEdge: "#7dd3fc",
+  selectFill: "rgb(125 211 252 / 14%)",
 };
 
 export const APP_THEMES: AppTheme[] = BOARD_THEMES.map((theme) => ({
@@ -105,12 +113,14 @@ export function applyAppTheme(id: string): AppTheme {
   root.style.setProperty("--line", tokens.line);
   root.style.setProperty(
     "--chrome-edge",
-    theme.mode === "dark" ? "#c4c9d4" : "#2a2620",
+    theme.mode === "dark" ? "#e5e7eb" : "#0c0a08",
   );
   root.style.setProperty("--accent", tokens.accent);
   root.style.setProperty("--ok", tokens.ok);
   root.style.setProperty("--bad", tokens.bad);
   root.style.setProperty("--surface", tokens.surface);
+  root.style.setProperty("--select-edge", tokens.selectEdge);
+  root.style.setProperty("--select-fill", tokens.selectFill);
 
   return theme;
 }

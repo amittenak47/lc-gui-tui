@@ -32,7 +32,7 @@ export interface ProblemTemplateInput {
 /** Prompts, so an empty region still says what belongs there. */
 const HINTS: Record<RegionId, string> = {
   constraints: "",
-  code: "",
+  code: "Type your solution here — this is what tests and the coach read.",
   approach: "What are you scanning, and what invariant holds at each step?",
   complexity: "time / space — and why",
   walkthrough: "Trace one example by hand.",
@@ -115,16 +115,14 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       strokeColor: ink.border,
       backgroundColor: "transparent",
       strokeStyle: "dashed",
-      strokeWidth: 1.5,
+      strokeWidth: 2,
       roughness: 0,
-      opacity: 80,
+      opacity: 100,
       locked: false,
       customData: { lcRegion: region.id, lcRegionFrame: true },
     });
 
-    // Monaco owns the solution-code UI — only the dashed frame is scaffolding.
-    if (region.id === "code") continue;
-
+    // Code keeps the same label/hint chrome as Approach; Monaco docks under it.
     const labelX = region.x + 36;
     const labelY = region.y + 24;
     skeletons.push({
@@ -161,6 +159,9 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
         customData: at(region, hintX, hintY),
       });
     }
+
+    // Statement body is filled below; Monaco owns the code region interior.
+    if (region.id === "code") continue;
   }
 
   const constraints = REGIONS.constraints;
@@ -179,34 +180,97 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
     customData: at(constraints, constraints.x + 36, constraints.y + 64),
   });
 
-  const meta = [
-    input.difficulty,
-    (input.tags ?? []).slice(0, 5).join(" · "),
+  const metaParts = [
+    input.difficulty?.trim() || null,
+    ...(input.tags ?? []).slice(0, 5).map((tag) => tag.trim()).filter(Boolean),
     typeof input.caseCount === "number" && input.caseCount > 0
       ? `${input.caseCount} sample cases`
       : null,
-  ]
-    .filter((part): part is string => Boolean(part && part.length > 0))
-    .join("   ·   ");
+  ].filter((part): part is string => Boolean(part && part.length > 0));
 
-  if (meta) {
-    skeletons.push({
-      id: "lcregion-constraints-meta",
-      type: "text",
-      x: constraints.x + 36,
-      y: constraints.y + 140,
-      width: textWidth,
-      text: meta,
-      fontSize: 26,
-      fontFamily: FONT_UI,
-      strokeColor: ink.hint,
-      locked: true,
-      customData: at(constraints, constraints.x + 36, constraints.y + 140),
+  let bodyY = constraints.y + 200;
+  if (metaParts.length > 0) {
+    const metaFont = 26;
+    const padX = 16;
+    const padY = 10;
+    const gap = 14;
+    const boxH = metaFont + padY * 2 + 6;
+    let chipX = constraints.x + 36;
+    let chipY = constraints.y + 140;
+    const rowLeft = constraints.x + 36;
+    const rowRight = rowLeft + textWidth;
+
+    metaParts.forEach((part, index) => {
+      const textW = Math.max(48, Math.ceil(part.length * metaFont * 0.56));
+      const boxW = textW + padX * 2;
+      if (index > 0 && chipX + boxW > rowRight) {
+        chipX = rowLeft;
+        chipY += boxH + gap;
+      }
+      const textX = chipX + padX;
+      const textY = chipY + padY;
+
+      skeletons.push({
+        id: `lcregion-constraints-meta-box-${index}`,
+        type: "rectangle",
+        x: chipX,
+        y: chipY,
+        width: boxW,
+        height: boxH,
+        strokeColor: ink.border,
+        backgroundColor: "transparent",
+        fillStyle: "solid",
+        strokeStyle: "solid",
+        strokeWidth: 1.5,
+        roughness: 0,
+        roundness: { type: 3 },
+        locked: true,
+        customData: { ...at(constraints, chipX, chipY), lcFixedSize: true },
+      });
+
+      skeletons.push({
+        id: `lcregion-constraints-meta-${index}`,
+        type: "text",
+        x: textX,
+        y: textY,
+        width: textW,
+        text: part,
+        fontSize: metaFont,
+        fontFamily: FONT_UI,
+        strokeColor: ink.hint,
+        locked: true,
+        customData: { ...at(constraints, textX, textY), lcFixedSize: true },
+      });
+
+      chipX += boxW + gap;
     });
+
+    const chipsBottom = chipY + boxH;
+    const ruleY = chipsBottom + 22;
+    const ruleX = rowLeft;
+    skeletons.push({
+      id: "lcregion-constraints-meta-rule",
+      type: "line",
+      x: ruleX,
+      y: ruleY,
+      width: textWidth,
+      height: 0,
+      points: [
+        [0, 0],
+        [textWidth, 0],
+      ],
+      strokeColor: ink.border,
+      strokeWidth: 1.5,
+      strokeStyle: "solid",
+      roughness: 0,
+      locked: true,
+      customData: { ...at(constraints, ruleX, ruleY), lcFixedSize: true },
+    });
+    bodyY = ruleY + 28;
   }
 
   // Statement body, block by block, so examples keep the monospace face.
-  let y = constraints.y + 200;
+  let y = bodyY;
   parseStatement(input.description, 48).forEach((block, index) => {
     const fontSize = block.code ? 24 : 28;
     const lineHeight = block.code ? 34 : 40;
@@ -239,46 +303,73 @@ export function isTemplateElementId(id: string): boolean {
  * Recolor scaffold text/frames for the current board brightness without wiping
  * student strokes. Theme switches call this so light boards never keep dark-mode
  * ink (and vice versa).
+ *
+ * Prefer stable `lcregion-*` ids for role (title / hint / body). Also accept
+ * `customData.lcRegion` so boards that lost those ids during conversion still
+ * flip to readable dark-mode ink.
  */
 export function recolorTemplateElements<
   T extends {
     id: string;
     type: string;
     strokeColor?: string;
+    strokeWidth?: number;
     fontFamily?: number;
+    fontSize?: number;
     opacity?: number;
-    customData?: { lcRegionFrame?: boolean; lcVizId?: string } | null;
+    customData?: {
+      lcRegion?: string;
+      lcRegionFrame?: boolean;
+      lcVizId?: string;
+    } | null;
   },
 >(elements: readonly T[], dark: boolean): T[] | null {
   const ink = templatePalette(dark);
   let changed = false;
   const next = elements.map((element) => {
     if (element.customData?.lcVizId) return element;
-    if (!isTemplateElementId(element.id) && !element.customData?.lcRegionFrame) {
-      return element;
-    }
+    const meta = element.customData;
+    const isFrame = meta?.lcRegionFrame === true || element.id.endsWith("-frame");
+    const isTemplate =
+      isTemplateElementId(element.id) || Boolean(meta?.lcRegion) || isFrame;
+    if (!isTemplate) return element;
 
-    const isFrame =
-      element.customData?.lcRegionFrame === true || element.id.endsWith("-frame");
     let strokeColor = ink.body;
-    if (isFrame) strokeColor = ink.border;
-    else if (element.id.includes("-title")) strokeColor = ink.primary;
-    else if (
+    let strokeWidth = element.strokeWidth;
+    if (isFrame) {
+      strokeColor = ink.border;
+      strokeWidth = 2;
+    } else if (element.id.includes("-meta-box") || element.id.includes("-meta-rule")) {
+      strokeColor = ink.border;
+      if (element.id.includes("-meta-box")) strokeWidth = 1.5;
+    } else if (element.id.includes("-title") || (element.fontSize ?? 0) >= 48) {
+      strokeColor = ink.primary;
+    } else if (
       element.id.includes("-label") ||
       element.id.includes("-hint") ||
-      element.id.includes("-meta")
+      element.id.includes("-meta") ||
+      element.opacity === 90
     ) {
       strokeColor = ink.hint;
-    } else if (element.id.includes("-body-")) {
+    } else if (element.id.includes("-body-") || element.type === "text") {
       strokeColor = element.fontFamily === FONT_CODE ? ink.primary : ink.body;
     }
 
     const opacity = isFrame ? 100 : element.opacity;
-    if (element.strokeColor === strokeColor && element.opacity === opacity) {
+    if (
+      element.strokeColor === strokeColor &&
+      element.opacity === opacity &&
+      element.strokeWidth === strokeWidth
+    ) {
       return element;
     }
     changed = true;
-    return { ...element, strokeColor, ...(opacity !== undefined ? { opacity } : {}) };
+    return {
+      ...element,
+      strokeColor,
+      ...(opacity !== undefined ? { opacity } : {}),
+      ...(strokeWidth !== undefined ? { strokeWidth } : {}),
+    };
   });
 
   return changed ? next : null;

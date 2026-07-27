@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { codeFrameHeightForSource, ensureCodingRoom } from "./solutionPad";
+import { CODE_LABEL_RESERVE, codeFrameHeightForSource, ensureCodingRoom } from "./solutionPad";
 
 describe("ensureCodingRoom", () => {
   it("appends blank lines after a function stub", () => {
@@ -25,5 +25,10 @@ describe("codeFrameHeightForSource", () => {
     const long = codeFrameHeightForSource(Array.from({ length: 80 }, () => "x = 1").join("\n"));
     expect(long).toBeGreaterThan(short);
     expect(long).toBeGreaterThan(560);
+  });
+
+  it("reserves space for the CODE label above Monaco", () => {
+    const height = codeFrameHeightForSource("def f():\n    pass\n");
+    expect(height).toBeGreaterThanOrEqual(CODE_LABEL_RESERVE + 22 * 3);
   });
 });
