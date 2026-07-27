@@ -8,6 +8,7 @@ import {
   resolveCaptureIds,
   sceneHash,
   strokeDelta,
+  studentAuthoredElements,
   studentElements,
   type SceneElementLike,
 } from "./capture";
@@ -39,6 +40,21 @@ describe("studentElements", () => {
       element({ id: "coach", customData: { lcVizId: "nums" } }),
     ];
     expect(studentElements(scene).map((el) => el.id)).toEqual(["mine"]);
+  });
+});
+
+describe("studentAuthoredElements", () => {
+  it("keeps only what the student put down, not the seeded template", () => {
+    // This is the submit gate: a board carrying nothing but the problem
+    // statement is empty, and one shape of their own is not.
+    const scene = [
+      element({ id: "frame", customData: { lcRegion: "approach" } }),
+      element({ id: "statement", customData: { lcRegion: "constraints" } }),
+      element({ id: "coach", customData: { lcVizId: "nums" } }),
+      element({ id: "theirs", type: "rectangle" }),
+    ];
+    expect(studentAuthoredElements(scene).map((el) => el.id)).toEqual(["theirs"]);
+    expect(studentAuthoredElements(scene.slice(0, 3))).toHaveLength(0);
   });
 });
 

@@ -1069,6 +1069,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       exportPng: async () => {
         const api = apiRef.current;
         if (!api) return "";
+        // Downscaled inside captureImage — a full-size export of this board is
+        // tens of megabytes, which is what the daemon refused to buffer.
         return captureImage(async () =>
           exportToBlob({
             elements: api.getSceneElements() as never,

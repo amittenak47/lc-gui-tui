@@ -63,6 +63,21 @@ export function studentElements(elements: readonly SceneElementLike[]): SceneEle
   return elements.filter((el) => !el.isDeleted && !el.customData?.lcVizId);
 }
 
+/**
+ * What the *student* put on the board: their own shapes, stamps and typed text,
+ * with the seeded template (anything carrying `lcRegion`) and the coach's
+ * diagrams removed.
+ *
+ * This is the submit gate's question — "is there anything of theirs here?" —
+ * and it is not the same as "is there recognized text?", because a browser
+ * build has no handwriting OCR at all.
+ */
+export function studentAuthoredElements(
+  elements: readonly SceneElementLike[],
+): SceneElementLike[] {
+  return studentElements(elements).filter((el) => !el.customData?.lcRegion);
+}
+
 /** Structure extractor. Coordinates are rounded — sub-pixel noise is not signal. */
 export function captureStructure(elements: readonly SceneElementLike[]): CapturedElement[] {
   return studentElements(elements).map((el) => {
@@ -159,18 +174,73 @@ export function elementIds(elements: readonly SceneElementLike[]): Set<string> {
   return new Set(studentElements(elements).map((el) => el.id));
 }
 
+/** Longest edge of the board PNG, in pixels, before it is base64'd. */
+export const CAPTURE_MAX_EDGE = 1600;
+
+/**
+ * Give up on the image rather than the review. A board that is still this large
+ * after downscaling is a pathological export; the coach gets the structure and
+ * the text instead of a request the daemon will refuse to buffer.
+ */
+export const CAPTURE_MAX_BASE64 = 12 * 1024 * 1024;
+
+/**
+ * Shrink an exported board so it fits in a request body.
+ *
+ * The full-size export of a doubled whiteboard runs to tens of megabytes, which
+ * is what pushed `POST /coach/review` past the daemon's body limit. Returns the
+ * original blob when it is already small enough, or when the environment has no
+ * canvas to draw into (tests, workers).
+ */
+export async function shrinkImageBlob(blob: Blob, maxEdge: number): Promise<Blob> {
+  if (typeof createImageBitmap !== "function" || typeof document === "undefined") return blob;
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(blob);
+  } catch {
+    return blob;
+  }
+  const longest = Math.max(bitmap.width, bitmap.height);
+  if (longest <= maxEdge) {
+    bitmap.close?.();
+    return blob;
+  }
+  const scale = maxEdge / longest;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    bitmap.close?.();
+    return blob;
+  }
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  // PNG, not JPEG: the daemon labels the attachment `data:image/png`.
+  const shrunk = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  return shrunk ?? blob;
+}
+
 /**
  * Image extractor. `exportToBlob` is passed in rather than imported so this
  * module stays free of Excalidraw and the caller has to make the deliberate
  * choice to spend a vision model's tokens.
+ *
+ * Returns `""` when the result is still too large to send — the caller treats a
+ * missing PNG as "review without the picture", never as a failure.
  */
 export async function captureImage(
   exportToBlob: () => Promise<Blob>,
+  options: { maxEdge?: number; maxBase64?: number } = {},
 ): Promise<string> {
-  const blob = await exportToBlob();
+  const original = await exportToBlob();
+  const blob = await shrinkImageBlob(original, options.maxEdge ?? CAPTURE_MAX_EDGE);
   const buffer = await blob.arrayBuffer();
-  let binary = "";
   const bytes = new Uint8Array(buffer);
+  const limit = options.maxBase64 ?? CAPTURE_MAX_BASE64;
+  // 4 base64 chars per 3 bytes — check before spending the encode.
+  if (Math.ceil(bytes.length / 3) * 4 > limit) return "";
+  let binary = "";
   const CHUNK = 0x8000; // Avoid blowing the argument limit on large boards.
   for (let i = 0; i < bytes.length; i += CHUNK) {
     binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
