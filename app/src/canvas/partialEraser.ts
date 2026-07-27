@@ -32,17 +32,9 @@ interface SceneSample {
   pressure: number;
 }
 
-/** Scene-unit brush radius for Thin / Bold / Heavy (constant across zoom). */
-export function eraserSceneRadius(strokeWidth: number): number {
-  if (strokeWidth <= 1) return 4;
-  if (strokeWidth <= 2) return 8;
-  return 14;
-}
+import { eraserSceneRadius, eraserScreenRadius } from "./rasterInk";
 
-/** Screen-pixel radius for the brush preview ring. */
-export function eraserScreenRadius(strokeWidth: number, zoom: number): number {
-  return eraserSceneRadius(strokeWidth) * Math.max(0.05, zoom);
-}
+export { eraserSceneRadius, eraserScreenRadius };
 
 function dist2(ax: number, ay: number, bx: number, by: number): number {
   const dx = ax - bx;

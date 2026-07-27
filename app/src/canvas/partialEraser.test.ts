@@ -30,16 +30,17 @@ function stroke(
 }
 
 describe("eraser radius", () => {
-  it("uses scene units for hit testing", () => {
-    expect(eraserSceneRadius(1)).toBeLessThan(eraserSceneRadius(2));
-    expect(eraserSceneRadius(2)).toBeLessThan(eraserSceneRadius(4));
+  it("scales continuously with the slider", () => {
+    expect(eraserSceneRadius(1)).toBe(1.75);
+    expect(eraserSceneRadius(4)).toBe(7);
+    expect(eraserSceneRadius(2)).toBeLessThan(eraserSceneRadius(6));
   });
 
   it("scales the on-screen preview with zoom", () => {
-    const scene = eraserSceneRadius(1);
-    expect(eraserScreenRadius(1, 1)).toBe(scene);
-    expect(eraserScreenRadius(1, 0.5)).toBe(scene * 0.5);
-    expect(eraserScreenRadius(1, 2)).toBe(scene * 2);
+    const scene = eraserSceneRadius(2);
+    expect(eraserScreenRadius(2, 1)).toBe(scene);
+    expect(eraserScreenRadius(2, 0.5)).toBe(scene * 0.5);
+    expect(eraserScreenRadius(2, 2)).toBe(scene * 2);
   });
 });
 
