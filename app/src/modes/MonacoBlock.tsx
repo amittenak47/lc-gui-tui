@@ -9,7 +9,7 @@
 
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 // The package's exports map rewrites `./*` to `./esm/vs/*.js`, so this
 // resolves to esm/vs/editor/editor.worker.js — spelling out the esm path here
@@ -32,6 +32,15 @@ self.MonacoEnvironment = {
 };
 
 const definedThemes = new Set<string>();
+
+/** Base editor size at board zoom 1 — matches statement density on the canvas. */
+const BASE_FONT_SIZE = 13;
+const BASE_PADDING_TOP = 8;
+const BASE_SCROLLBAR = 4;
+
+function scaledFontSize(zoom: number): number {
+  return Math.max(6, Math.round(BASE_FONT_SIZE * zoom * 10) / 10);
+}
 
 /** Mix a hex color toward black (darken) or white (lighten) by `amount` 0–1. */
 function mixHex(hex: string, toward: "#000000" | "#ffffff", amount: number): string {
@@ -74,8 +83,9 @@ function ensureMonacoTheme(themeId: string): string {
       "editorCursor.foreground": dark ? "#f97316" : "#b45309",
       "editorWidget.background": appTheme.panel,
       "editorSuggestWidget.background": appTheme.panel,
-      "scrollbarSlider.background": dark ? "#ffffff22" : "#00000018",
-      "scrollbarSlider.hoverBackground": dark ? "#ffffff33" : "#00000028",
+      "scrollbarSlider.background": dark ? "#ffffff3d" : "#00000033",
+      "scrollbarSlider.hoverBackground": dark ? "#ffffff55" : "#00000045",
+      "scrollbarSlider.activeBackground": dark ? "#ffffff66" : "#00000055",
     },
   });
   definedThemes.add(name);
@@ -86,6 +96,8 @@ export interface MonacoBlockProps {
   value: string;
   language: string;
   themeId?: string;
+  /** Excalidraw zoom — font/padding track the board. */
+  zoom?: number;
   height?: string;
   onChange: (value: string) => void;
   onReady: () => void;
@@ -95,16 +107,32 @@ export default function MonacoBlock({
   value,
   language,
   themeId = "parchment",
+  zoom = 1,
   height = "min(42vh, 360px)",
   onChange,
   onReady,
 }: MonacoBlockProps) {
   const monacoTheme = useMemo(() => ensureMonacoTheme(themeId), [themeId]);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const fontSize = scaledFontSize(zoom);
+  const padTop = Math.max(2, Math.round(BASE_PADDING_TOP * zoom));
+  const scrollbar = Math.max(2, Math.round(BASE_SCROLLBAR * zoom));
 
   useEffect(() => {
     ensureMonacoTheme(themeId);
     monaco.editor.setTheme(monacoThemeName(themeId));
   }, [themeId]);
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({
+      fontSize,
+      padding: { top: padTop },
+      scrollbar: {
+        verticalScrollbarSize: scrollbar,
+        horizontalScrollbarSize: scrollbar,
+      },
+    });
+  }, [fontSize, padTop, scrollbar]);
 
   return (
     <Editor
@@ -113,8 +141,17 @@ export default function MonacoBlock({
       theme={monacoTheme}
       value={value}
       onMount={(editor) => {
+        editorRef.current = editor;
         ensureMonacoTheme(themeId);
         monaco.editor.setTheme(monacoThemeName(themeId));
+        editor.updateOptions({
+          fontSize,
+          padding: { top: padTop },
+          scrollbar: {
+            verticalScrollbarSize: scrollbar,
+            horizontalScrollbarSize: scrollbar,
+          },
+        });
         onReady();
         editor.layout();
       }}
@@ -122,14 +159,25 @@ export default function MonacoBlock({
       options={{
         minimap: { enabled: false },
         lineNumbers: "on",
-        fontSize: 13,
+        fontSize,
         fontFamily: "Consolas, 'Cascadia Code', 'Courier New', monospace",
         scrollBeyondLastLine: false,
         wordWrap: "on",
         tabSize: 4,
         renderLineHighlight: "line",
         overviewRulerLanes: 0,
-        padding: { top: 8 },
+        overviewRulerBorder: false,
+        hideCursorInOverviewRuler: true,
+        padding: { top: padTop },
+        // Thin overlay thumb — closer to iOS than Monaco's default gutter bar.
+        scrollbar: {
+          verticalScrollbarSize: scrollbar,
+          horizontalScrollbarSize: scrollbar,
+          arrowSize: 0,
+          useShadows: false,
+          verticalHasArrows: false,
+          horizontalHasArrows: false,
+        },
         // A stylus can't easily dismiss an autocomplete popup.
         quickSuggestions: false,
         suggestOnTriggerCharacters: false,

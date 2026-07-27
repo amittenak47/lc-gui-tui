@@ -62,6 +62,8 @@ export function App() {
   const [entering, setEntering] = useState(false);
   /** Browser overlay: idle / enter / busy (spin) / exit (slide+spin) / done (check). */
   const [browseMotion, setBrowseMotion] = useState<"enter" | "idle" | "busy" | "exit" | "done">("idle");
+  /** Same spinner → check transition when stepping ‹ › between problems. */
+  const [switchMotion, setSwitchMotion] = useState<"idle" | "busy" | "done">("idle");
   /** Active problem-bank filter — header prev/next walk this when there's no session queue. */
   const [bankFilters, setBankFilters] = useState<SearchOptions>({});
   /** Disk practice session from `lc serve` (queue + progress). */
@@ -86,7 +88,8 @@ export function App() {
         prev.left === next.left &&
         prev.top === next.top &&
         prev.width === next.width &&
-        prev.height === next.height
+        prev.height === next.height &&
+        prev.zoom === next.zoom
       ) {
         return prev;
       }
@@ -205,6 +208,7 @@ export function App() {
   const pickProblem = useCallback(
     async (taskId: string, bank?: SearchOptions) => {
       const fromBrowse = !problem;
+      const switching = Boolean(problem);
       setBusy("loading the workspace…");
       setError(null);
       setReview(null);
@@ -215,6 +219,7 @@ export function App() {
       setCoachMessages([]);
       if (bank) setBankFilters(bank);
       if (fromBrowse) setBrowseMotion("busy");
+      if (switching) setSwitchMotion("busy");
       try {
         // Materialize the workspace on the PC, then read back the redacted
         // statement for the board template.
@@ -236,11 +241,15 @@ export function App() {
           // Spinner → checkmark, then a short beat before the board.
           setBrowseMotion("done");
           await waitMs(doneHoldMs());
+        } else if (switching) {
+          setSwitchMotion("done");
+          await waitMs(doneHoldMs());
         }
 
         setPseudocode(source);
         setProblem(detail);
         setBrowseMotion("idle");
+        setSwitchMotion("idle");
         await refreshSession();
         boardRef.current?.seedTemplate(
           buildProblemTemplate({
@@ -264,6 +273,7 @@ export function App() {
       } catch (cause) {
         setError(messageOf(cause));
         if (fromBrowse) setBrowseMotion("idle");
+        setSwitchMotion("idle");
       } finally {
         setBusy(null);
       }
@@ -700,7 +710,7 @@ export function App() {
         </div>
       </header>
 
-      {busy && problem && <div className="lc-busy">{busy}</div>}
+      {busy && problem && switchMotion === "idle" && <div className="lc-busy">{busy}</div>}
       {error && (
         <div className="lc-warning lc-banner">
           <span>{error}</span>
@@ -712,19 +722,20 @@ export function App() {
 
       <main className="lc-main">
         <div
-          className={
-            entering
-              ? "lc-canvas-wrap lc-entering"
-              : problem
-                ? "lc-canvas-wrap"
-                : "lc-canvas-wrap lc-canvas-idle"
-          }
+          className={[
+            "lc-canvas-wrap",
+            entering && "lc-entering",
+            !problem && "lc-canvas-idle",
+            (switchMotion === "busy" || switchMotion === "done") && "lc-switching",
+          ]
+            .filter(Boolean)
+            .join(" ")}
         >
           <Board
             ref={boardRef}
             themeId={themeId}
             onThemePick={setThemeId}
-            interactive={Boolean(problem)}
+            interactive={Boolean(problem) && switchMotion === "idle"}
             onCodeSlot={onCodeSlot}
           />
           {!problem && (
@@ -751,33 +762,12 @@ export function App() {
               {(browseMotion === "busy" ||
                 browseMotion === "exit" ||
                 browseMotion === "done") && (
-                <div
-                  className="lc-overlay-spinner"
-                  role="status"
-                  aria-live="polite"
-                  aria-label={
-                    browseMotion === "done" ? "Workspace ready" : "Loading workspace"
-                  }
-                >
-                  {browseMotion === "done" ? (
-                    <div className="lc-spinner-check" aria-hidden="true">
-                      <svg viewBox="0 0 24 24" width="22" height="22">
-                        <path
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                    </div>
-                  ) : (
-                    <div className="lc-spinner" aria-hidden="true" />
-                  )}
-                </div>
+                <WorkspaceLoadStatus done={browseMotion === "done"} />
               )}
             </div>
+          )}
+          {problem && (switchMotion === "busy" || switchMotion === "done") && (
+            <WorkspaceLoadStatus done={switchMotion === "done"} />
           )}
           {problem && (() => {
             const slot = codeSlot ?? lastCodeSlotRef.current;
@@ -791,6 +781,7 @@ export function App() {
                   top: slot.top,
                   width: slot.width,
                   height: slot.height,
+                  ["--lc-code-zoom" as string]: String(slot.zoom ?? 1),
                 }}
               >
                 <PseudocodeEditor
@@ -798,6 +789,7 @@ export function App() {
                   value={pseudocode}
                   onChange={setPseudocode}
                   themeId={themeId}
+                  zoom={slot.zoom ?? 1}
                   defaultOpen
                   variant="dock"
                 />
@@ -1115,4 +1107,33 @@ function boardFadeMs(): number {
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** Shared spinner → checkmark used by browse pick and ‹ › problem switch. */
+function WorkspaceLoadStatus({ done }: { done: boolean }) {
+  return (
+    <div
+      className="lc-overlay-spinner"
+      role="status"
+      aria-live="polite"
+      aria-label={done ? "Workspace ready" : "Loading workspace"}
+    >
+      {done ? (
+        <div className="lc-spinner-check" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22">
+            <path
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
+        </div>
+      ) : (
+        <div className="lc-spinner" aria-hidden="true" />
+      )}
+    </div>
+  );
 }

@@ -34,6 +34,7 @@ export interface LayoutElement {
     lcRegionFrame?: boolean;
     lcRegionOx?: number;
     lcRegionOy?: number;
+    lcFixedSize?: boolean;
   } | null;
   [key: string]: unknown;
 }
@@ -262,7 +263,9 @@ export function syncRegionLayout(
     const nextX = frame.x + offsetX;
     const nextY = frame.y + offsetY;
     const nextWidth =
-      element.type === "text" && typeof meta?.lcRegionOx === "number"
+      element.type === "text" &&
+      typeof meta?.lcRegionOx === "number" &&
+      !meta?.lcFixedSize
         ? contentWidth
         : element.width;
 

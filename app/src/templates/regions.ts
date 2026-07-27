@@ -83,7 +83,7 @@ export const REGIONS: Record<RegionId, Region> = {
   },
   code: {
     id: "code",
-    label: "Solution code",
+    label: "Code",
     x: 0,
     y: CODE_Y,
     w: STUDENT_WIDTH,

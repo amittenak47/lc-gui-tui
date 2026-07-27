@@ -4,6 +4,8 @@
  * Handwriting recognition is weak on brackets, indices, and `<=`. Typing the
  * solution means the coach reads it exactly. Monaco lives in {@link ./MonacoBlock}
  * and loads only when this panel mounts.
+ *
+ * Only Python is wired through the workspace for now — no language picker.
  */
 
 import { Component, Suspense, lazy, type ErrorInfo, type ReactNode, useState } from "react";
@@ -13,27 +15,24 @@ const MonacoBlock = lazy(() => import("./MonacoBlock"));
 export interface PseudocodeEditorProps {
   value: string;
   onChange: (value: string) => void;
-  language?: string;
   themeId?: string;
+  /** Board zoom — scales Monaco so code tracks Excalidraw text. */
+  zoom?: number;
   /** Collapsed by default so it never competes with the canvas for space. */
   defaultOpen?: boolean;
   /** Docked on the canvas beneath the problem statement. */
   variant?: "panel" | "dock";
 }
 
-/** Only Python is wired through the workspace for now. */
-const LANGUAGES = ["python"] as const;
-
 export function PseudocodeEditor({
   value,
   onChange,
-  language = "python",
   themeId = "parchment",
+  zoom = 1,
   defaultOpen = true,
   variant = "panel",
 }: PseudocodeEditorProps) {
   const [open, setOpen] = useState(defaultOpen);
-  const [lang, setLang] = useState<string>(language);
   const [failed, setFailed] = useState(false);
 
   const lineCount = value ? value.split("\n").length : 0;
@@ -52,8 +51,9 @@ export function PseudocodeEditor({
       <Suspense fallback={<div className="lc-pseudo-loading">loading editor…</div>}>
         <MonacoBlock
           value={value}
-          language={lang}
+          language="python"
           themeId={themeId}
+          zoom={dock ? zoom : 1}
           height={dock ? "100%" : "min(42vh, 360px)"}
           onChange={onChange}
           onReady={() => {}}
@@ -62,28 +62,10 @@ export function PseudocodeEditor({
     </ErrorBoundary>
   );
 
-  const langSelect = (
-    <select
-      className={dock ? "lc-pseudo-lang lc-pseudo-lang-dock" : "lc-pseudo-lang"}
-      value={lang}
-      aria-label="Language"
-      onChange={(event) => setLang(event.target.value)}
-    >
-      {LANGUAGES.map((option) => (
-        <option key={option} value={option}>
-          {option}
-        </option>
-      ))}
-    </select>
-  );
-
   if (dock) {
     return (
       <section className="lc-pseudo lc-pseudo-open lc-pseudo-dock" aria-label="Solution code">
-        <div className="lc-pseudo-body">
-          {editor}
-          {langSelect}
-        </div>
+        <div className="lc-pseudo-body">{editor}</div>
       </section>
     );
   }
@@ -106,12 +88,7 @@ export function PseudocodeEditor({
         )}
       </header>
 
-      {open && (
-        <div className="lc-pseudo-body">
-          {editor}
-          {langSelect}
-        </div>
-      )}
+      {open && <div className="lc-pseudo-body">{editor}</div>}
     </section>
   );
 }

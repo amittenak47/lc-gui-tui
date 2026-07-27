@@ -110,6 +110,28 @@ describe("buildProblemTemplate", () => {
     expect(title?.strokeColor).toMatch(/^#f/i);
   });
 
+  it("puts difficulty, tags, and cases in separate chips", () => {
+    const withMeta = buildProblemTemplate({
+      taskId: "01-matrix",
+      title: "01 Matrix",
+      difficulty: "Medium",
+      tags: ["Array", "BFS"],
+      description: "Given a matrix.",
+      caseCount: 12,
+    });
+    const boxes = withMeta.filter((s) => s.id?.startsWith("lcregion-constraints-meta-box-"));
+    const texts = withMeta.filter((s) => /^lcregion-constraints-meta-\d+$/.test(s.id ?? ""));
+    expect(boxes).toHaveLength(4);
+    expect(texts.map((t) => t.text)).toEqual([
+      "Medium",
+      "Array",
+      "BFS",
+      "12 sample cases",
+    ]);
+    expect(boxes.every((box) => box.strokeColor === templatePalette(false).border)).toBe(true);
+    expect(texts.every((text) => text.customData?.lcFixedSize)).toBe(true);
+  });
+
   it("sets a wrap width on statement text", () => {
     const body = skeletons.filter((s) => s.id?.startsWith("lcregion-constraints-body-"));
     expect(body.every((s) => (s.width ?? 0) > 1000)).toBe(true);
@@ -154,6 +176,46 @@ describe("recolorTemplateElements", () => {
     expect(back.find((el) => el.id === "lcregion-constraints-title")?.strokeColor).toBe(
       darkInk.primary,
     );
+  });
+
+  it("recolors region text even when conversion replaced lcregion ids", () => {
+    const darkInk = templatePalette(true);
+    const elements = [
+      {
+        id: "random-frame",
+        type: "rectangle",
+        strokeColor: "#14110e",
+        customData: { lcRegion: "constraints", lcRegionFrame: true },
+      },
+      {
+        id: "random-body",
+        type: "text",
+        strokeColor: "#1f1a14",
+        fontFamily: FONT_UI,
+        fontSize: 28,
+        customData: { lcRegion: "constraints" },
+      },
+      {
+        id: "random-title",
+        type: "text",
+        strokeColor: "#14110e",
+        fontFamily: FONT_UI,
+        fontSize: 56,
+        customData: { lcRegion: "constraints" },
+      },
+      {
+        id: "student-stroke",
+        type: "freedraw",
+        strokeColor: "#ff00aa",
+        customData: null,
+      },
+    ];
+
+    const next = recolorTemplateElements(elements, true)!;
+    expect(next.find((el) => el.id === "random-frame")?.strokeColor).toBe(darkInk.border);
+    expect(next.find((el) => el.id === "random-body")?.strokeColor).toBe(darkInk.body);
+    expect(next.find((el) => el.id === "random-title")?.strokeColor).toBe(darkInk.primary);
+    expect(next.find((el) => el.id === "student-stroke")?.strokeColor).toBe("#ff00aa");
   });
 });
 

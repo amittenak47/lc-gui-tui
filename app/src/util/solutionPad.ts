@@ -11,6 +11,8 @@ const DEFAULT_BLANK_LINES = 16;
 const CODE_LINE_CANVAS = 22;
 /** Top padding + language chip breathing room inside the frame. */
 const CODE_CHROME_CANVAS = 40;
+/** Space for the CODE label + hint above the Monaco dock (matches Approach chrome). */
+export const CODE_LABEL_RESERVE = 104;
 
 /** Trim trailing whitespace, then append blank lines for the implementation. */
 export function ensureCodingRoom(source: string, blankLines = DEFAULT_BLANK_LINES): string {
@@ -22,5 +24,8 @@ export function ensureCodingRoom(source: string, blankLines = DEFAULT_BLANK_LINE
 /** Canvas height so the Monaco dock can show every line without scrolling. */
 export function codeFrameHeightForSource(source: string): number {
   const lines = Math.max(1, source.split("\n").length);
-  return Math.max(REGION_MIN.code.minH, lines * CODE_LINE_CANVAS + CODE_CHROME_CANVAS);
+  return Math.max(
+    REGION_MIN.code.minH,
+    CODE_LABEL_RESERVE + lines * CODE_LINE_CANVAS + CODE_CHROME_CANVAS,
+  );
 }

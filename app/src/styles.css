@@ -7,9 +7,9 @@
   --ink: #111827;
   --muted: #4b5563;
   --hint: #6b7280;
-  --line: #d1d5db;
+  --line: #6b7280;
   /* High-contrast edges for floating chrome (toolbar, coach, header controls). */
-  --chrome-edge: #2a2620;
+  --chrome-edge: #0c0a08;
   --bg: #ffffff;
   --panel: #f8fafc;
   --overlay-bg: rgb(255 255 255 / 97%);
@@ -18,6 +18,8 @@
   --bad: #b91c1c;
   --touch: 44px;
   --surface: rgb(255 255 255 / 94%);
+  --select-edge: #3f4f63;
+  --select-fill: rgb(63 79 99 / 11%);
 }
 
 * {
@@ -49,11 +51,12 @@ body {
 }
 
 .lc-app-coach-open .lc-main {
-  margin-right: 380px;
+  margin-right: var(--lc-coach-width, 380px);
 }
 
 .lc-app-problem {
   --lc-header-height: 64px;
+  --lc-coach-width: 380px;
 }
 
 .lc-app-problem .lc-side {
@@ -79,6 +82,23 @@ body {
   z-index: 45;
 }
 
+/* When Coach is open, stop the header rule before the panel so header + panel
+   read as one surface; the Coach tab sits in the unbroken zone. */
+.lc-app-coach-open .lc-header {
+  border-bottom-color: transparent;
+}
+
+.lc-app-coach-open .lc-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: var(--lc-coach-width);
+  bottom: 0;
+  height: 1px;
+  background: var(--chrome-edge);
+  pointer-events: none;
+}
+
 .lc-header button {
   min-height: 28px;
   height: 28px;
@@ -94,8 +114,9 @@ body {
 }
 
 .lc-header .lc-coach-toggle-open {
-  border-color: var(--chrome-edge);
-  border-bottom-color: var(--panel);
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
 }
 
 .lc-header-left,
@@ -714,6 +735,16 @@ input[type="checkbox"] {
   visibility: hidden;
 }
 
+.lc-switching .lc-board,
+.lc-switching .lc-code-dock {
+  opacity: 0.55;
+  filter: blur(5px);
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    filter 160ms ease;
+}
+
 .lc-overlay {
   position: absolute;
   inset: 0;
@@ -1014,14 +1045,12 @@ input[type="checkbox"] {
 
 .lc-coach-toggle-open {
   position: relative;
-  z-index: 41;
-  border-color: var(--chrome-edge);
-  border-bottom-color: var(--panel);
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-  background: var(--panel);
-  color: var(--accent);
-  margin-bottom: -1px;
+  z-index: 46;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  /* Inverted from the outline secondary: filled accent, light label. */
+  background: var(--accent);
+  color: #fff;
 }
 
 .lc-palette-popover .lc-swatch {
@@ -1063,6 +1092,8 @@ input[type="checkbox"] {
   .lc-shapes,
   .lc-shape-modifier,
   .lc-entering .lc-board,
+  .lc-switching .lc-board,
+  .lc-switching .lc-code-dock,
   .lc-spinner,
   .lc-spinner-check,
   .lc-browser-body-ready,
@@ -1087,8 +1118,9 @@ input[type="checkbox"] {
   right: 0;
   bottom: 0;
   z-index: 40;
-  width: 380px;
+  width: var(--lc-coach-width, 380px);
   border-left: 1px solid var(--chrome-edge);
+  border-top: none;
   padding: 0;
   overflow: hidden;
   background: var(--panel);
@@ -1096,6 +1128,12 @@ input[type="checkbox"] {
   flex-direction: column;
   min-height: 0;
   box-shadow: -6px 0 18px rgb(0 0 0 / 18%);
+}
+
+.lc-app-coach-open .lc-side {
+  /* Flush under the header — no top rule so it continues the header surface. */
+  border-top: none;
+  box-shadow: -6px 8px 18px rgb(0 0 0 / 14%);
 }
 
 .lc-coach-chat {
@@ -1122,7 +1160,7 @@ input[type="checkbox"] {
 }
 
 .lc-coach-turn {
-  border: 1px solid var(--line);
+  border: 1px solid var(--chrome-edge);
   border-radius: 10px;
   padding: 8px 10px;
   background: var(--surface);
@@ -1173,7 +1211,7 @@ input[type="checkbox"] {
 
 .lc-coach-composer {
   flex-shrink: 0;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--chrome-edge);
   padding: 10px 12px 12px;
   display: flex;
   flex-direction: column;
@@ -1186,7 +1224,7 @@ input[type="checkbox"] {
   min-height: 72px;
   resize: vertical;
   border-radius: 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--chrome-edge);
   background: var(--bg);
   color: var(--ink);
   font: inherit;
@@ -1700,6 +1738,11 @@ code {
   flex-direction: column;
   gap: 10px;
   overflow: hidden;
+  padding: 12px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 8%);
 }
 
 .lc-browser-center .lc-table {
@@ -1748,6 +1791,12 @@ code {
   flex-wrap: wrap;
 }
 
+.lc-browser-filters input[type="search"],
+.lc-browser-filters select,
+.lc-browser-filters button {
+  border-color: var(--chrome-edge);
+}
+
 .lc-browser-filters input[type="search"] {
   flex: 1 1 260px;
 }
@@ -1769,6 +1818,9 @@ code {
   letter-spacing: 0.07em;
   color: var(--ink);
   opacity: 0.72;
+  border-bottom: 1px solid var(--chrome-edge);
+  padding-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .lc-table {
@@ -1778,6 +1830,10 @@ code {
   /* Size to the page of rows — foot sits directly underneath, not at the viewport bottom. */
   flex: 0 1 auto;
   overflow-y: auto;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  padding: 6px;
+  background: var(--bg);
 }
 
 .lc-row {
@@ -1790,6 +1846,10 @@ code {
   color: var(--ink);
   font-size: 13px;
   text-align: left;
+  transition:
+    background-color 100ms ease,
+    border-color 100ms ease,
+    box-shadow 100ms ease;
 }
 
 button.lc-row {
@@ -1798,15 +1858,19 @@ button.lc-row {
   color: var(--ink);
 }
 
-button.lc-row:hover:not(:disabled) {
-  background: var(--panel);
+/* Hover must not override the selected row — that caused orange ↔ wash flicker. */
+button.lc-row:hover:not(:disabled):not(.lc-row-selected) {
+  background: color-mix(in srgb, var(--ink) 5%, var(--bg));
+  border-color: color-mix(in srgb, var(--chrome-edge) 65%, transparent);
 }
 
 .lc-row-selected,
-button.lc-row-selected {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+button.lc-row-selected,
+button.lc-row-selected:hover:not(:disabled) {
+  border-color: var(--select-edge);
+  background: var(--select-fill);
   color: var(--ink);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--select-edge) 28%, transparent);
 }
 
 .lc-col-q,
@@ -1850,12 +1914,15 @@ button.lc-row-selected {
   gap: 10px;
   flex-wrap: wrap;
   flex-shrink: 0;
+  border-top: 1px solid var(--chrome-edge);
+  padding-top: 10px;
 }
 
 .lc-browser-foot button {
   min-height: 36px;
   padding: 0 12px;
   font-size: 13px;
+  border-color: var(--chrome-edge);
 }
 
 .lc-keys {
@@ -1921,7 +1988,7 @@ button.lc-row-selected {
 }
 
 .lc-code-dock .monaco-editor,
-.lc-code-dock .lc-pseudo-body > div:not(.lc-pseudo-lang) {
+.lc-code-dock .lc-pseudo-body > div {
   flex: 1;
   min-height: 0;
   height: 100% !important;
@@ -1931,6 +1998,28 @@ button.lc-row-selected {
 .lc-code-dock .monaco-editor .margin,
 .lc-code-dock .monaco-editor .monaco-editor-background {
   background-color: transparent !important;
+}
+
+/* iOS-style thin rounded thumb over the code gutter. */
+.lc-code-dock .monaco-scrollable-element > .scrollbar {
+  background: transparent !important;
+  border: none !important;
+  width: 4px !important;
+}
+
+.lc-code-dock .monaco-scrollable-element > .scrollbar.horizontal {
+  height: 4px !important;
+  width: auto !important;
+}
+
+.lc-code-dock .monaco-scrollable-element > .scrollbar > .slider {
+  border-radius: 999px !important;
+  background: color-mix(in srgb, var(--ink) 28%, transparent) !important;
+}
+
+.lc-code-dock .monaco-scrollable-element > .scrollbar > .slider:hover,
+.lc-code-dock .monaco-scrollable-element > .scrollbar > .slider.active {
+  background: color-mix(in srgb, var(--ink) 42%, transparent) !important;
 }
 
 .lc-pseudo-open {
@@ -1945,28 +2034,6 @@ button.lc-row-selected {
   font-size: 13px;
   text-decoration: none;
   color: var(--ink);
-}
-
-.lc-pseudo-lang {
-  margin-left: auto;
-  min-height: 30px;
-  font-size: 12px;
-  padding: 0 6px;
-}
-
-.lc-pseudo-lang-dock {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  z-index: 4;
-  margin-left: 0;
-  min-height: 28px;
-  padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: var(--ink);
-  box-shadow: 0 1px 4px rgb(0 0 0 / 18%);
 }
 
 .lc-pseudo-body {
@@ -2180,6 +2247,14 @@ button.lc-row-selected {
     margin-bottom: 45vh;
   }
 
+  .lc-app-coach-open .lc-header {
+    border-bottom-color: var(--chrome-edge);
+  }
+
+  .lc-app-coach-open .lc-header::after {
+    display: none;
+  }
+
   .lc-side {
     top: auto;
     left: 0;
@@ -2192,10 +2267,15 @@ button.lc-row-selected {
     box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
   }
 
+  .lc-app-coach-open .lc-side {
+    box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
+  }
+
   .lc-coach-toggle-open {
-    margin-bottom: 0;
     border-radius: 6px;
-    border-bottom-color: var(--line);
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
   }
 
   .lc-side-tab-wrap {
