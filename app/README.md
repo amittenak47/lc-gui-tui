@@ -76,24 +76,88 @@ token is stored locally, so pairing is a once-ever step.
 `--lan` means anyone on your network who has the token can drive your
 workspaces. Prefer loopback when you're at the desk.
 
-## Android
+## Android — sideloading the APK (no Play Store)
+
+Tested target: Android 12 and 14 tablets, installed over USB or by copying the
+APK across. Nothing here needs a Google account or a store listing.
+
+### 1. Prerequisites on the PC
+
+- Android Studio (or the standalone command-line tools) with **SDK Platform 34**
+  and the **NDK**; set `ANDROID_HOME` and `NDK_HOME`.
+- **JDK 17 or newer** (`java -version`).
+- The Android Rust targets:
+
+  ```bash
+  rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+  ```
+
+- On the tablet: Settings → About → tap *Build number* seven times, then
+  Developer options → **USB debugging** on.
+
+### 2. Generate the Gradle project
 
 ```bash
-npm run tauri android init
-npm run tauri android dev
+npm install
+npm run android:init      # tauri android init + the overlay below
 ```
 
-Two things to do after `init`:
+`src-tauri/gen/android/` is generated and git-ignored, so the two edits the app
+needs are scripted rather than hand-applied — `npm run android:overlay` (which
+every android script runs first) copies
+`src-tauri/android-overlay/network_security_config.xml` into the project's
+`res/xml/` and points the manifest's `<application>` at it. Android 9+ blocks
+cleartext HTTP and `lc serve` speaks plain HTTP on the LAN; without this the app
+looks like it simply cannot see the PC. The script is idempotent, so re-run it
+after any `init`/regeneration.
 
-1. Copy `src-tauri/android-overlay/network_security_config.xml` into
-   `src-tauri/gen/android/app/src/main/res/xml/` and reference it from that
-   project's `AndroidManifest.xml` `<application>` tag. Android 9+ blocks
-   cleartext HTTP, and the daemon speaks plain HTTP on the LAN. The alternative
-   is to route requests through `src-tauri/src/lc_client.rs`, which `reqwest`
-   serves outside the WebView's policy.
-2. Nothing for ML Kit — the plugin in `src-tauri/plugins/inkrecognition/`
-   downloads its recognition model on first launch (a few MB) and is offline
-   after that.
+Nothing to do for ML Kit — the plugin in `src-tauri/plugins/inkrecognition/`
+downloads its recognition model on first launch (a few MB) and is offline after
+that.
+
+### 3. Build and install
+
+With the tablet plugged in and unlocked, the fastest loop is:
+
+```bash
+npm run android:dev       # builds, installs, and hot-reloads over USB
+```
+
+For an APK you can keep and re-install:
+
+```bash
+npm run android:apk       # debug-signed → installs as-is
+adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+```
+
+`npm run android:apk:release` builds the release variant instead; that one is
+**unsigned** and Android will refuse it until you sign it with your own
+keystore, so prefer the debug APK for personal sideloading.
+
+No cable? Copy the APK to the tablet and open it from Files:
+
+- **Android 12** — a per-app permission: Settings → Apps → Special app access →
+  Install unknown apps → *Files* / *Chrome* → Allow.
+- **Android 14** — the same prompt appears the first time you tap the APK;
+  allow it for the app you are installing from.
+
+If the installer says *App not installed*, an older build with a different
+signing key is still there: `adb uninstall dev.lc.whiteboard` first.
+
+### 4. Point it at the PC
+
+```bash
+cargo run -- serve --lan     # on the PC itself, not inside WSL
+```
+
+Then pair from the app's header with the **Host**, **Port** and **6-digit code**
+the daemon prints (see *Connecting the tablet* above). Check the daemon is
+reachable at all with `http://<pc-ip>:7878/health` in the tablet's browser; if
+that works but the app cannot connect, the overlay step did not apply.
+
+The mobile layout — one template region per page, compact toolbar, no stock
+Excalidraw chrome — is the same in the WebView as in the browser, so anything
+you validate at `http://<pc-ip>:1420` carries over.
 
 Measure ink latency on a scene of ~200 elements early. If it's intolerable, the
 fallback is a raw-canvas ink layer under Excalidraw — `Board.tsx` sits behind
