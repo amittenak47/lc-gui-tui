@@ -1835,7 +1835,7 @@ code {
 
 /* Laid out as the TUI's table: same columns, same 15-row page. */
 .lc-browser {
-  width: min(1180px, 100%);
+  width: min(1416px, 100%);
   flex: 1;
   min-height: 0;
   height: 100%;
@@ -1860,7 +1860,8 @@ code {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow: hidden;
+  /* visible so tip popovers are not clipped at the panel edge */
+  overflow: visible;
   padding: 12px;
   border: 1px solid var(--chrome-edge);
   border-radius: 12px;
@@ -2033,26 +2034,84 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-browser-foot {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 8px;
   flex-shrink: 0;
   border-top: 1px solid var(--chrome-edge);
   padding-top: 10px;
 }
 
+.lc-browser-foot-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lc-browser-foot-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.lc-browser-foot-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.lc-browser-foot-keys {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.lc-browser-foot-stats {
+  margin-left: auto;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
 .lc-browser-foot button {
-  min-height: 36px;
-  padding: 0 12px;
+  min-height: 32px;
+  padding: 0 10px;
   font-size: 13px;
   border-color: var(--chrome-edge);
 }
 
+.lc-browser-foot button.is-active {
+  border-color: var(--accent, #c47a2c);
+  color: var(--fg);
+  background: var(--panel, rgb(127 127 127 / 14%));
+}
+
 .lc-keys {
-  flex-basis: 100%;
   font-size: 11px;
   font-family: ui-monospace, Consolas, monospace;
   color: var(--muted);
+}
+
+.lc-pick-mark {
+  display: inline-block;
+  width: 1.1em;
+  margin-right: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lc-pick-mark.is-on {
+  color: var(--ok, #1a7f37);
+}
+
+.lc-row-picked {
+  background: rgb(26 127 55 / 8%);
+}
+
+.lc-table-selecting .lc-row {
+  cursor: cell;
 }
 
 .lc-diff-easy {
@@ -2322,23 +2381,6 @@ button.lc-row-selected:hover:not(:disabled) {
   border-top: 1px solid var(--border, rgb(127 127 127 / 20%));
 }
 
-.lc-session-strip {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 6px 16px;
-  font-size: 12px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border, rgb(127 127 127 / 15%));
-  background: var(--panel, transparent);
-}
-
-.lc-session-strip strong {
-  color: var(--fg);
-  font-weight: 600;
-}
-
 .lc-session-badge {
   display: inline-block;
   margin-left: 6px;
@@ -2360,14 +2402,6 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-session-badge.is-loaded {
   color: var(--muted);
-}
-
-.lc-browser-session-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 10px;
 }
 
 .lc-modal {
@@ -2522,6 +2556,25 @@ button.lc-row-selected:hover:not(:disabled) {
   top: 50%;
   bottom: auto;
   transform: translateY(-50%);
+}
+
+/* Browser filter tip on the trailing Random control — keep it inside the panel */
+.lc-browser-filters > .lc-tip-target:last-child[data-tip-placement="bottom"]::after,
+.lc-browser-filters > button.lc-tip-target:last-of-type[data-tip-placement="bottom"]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+/* Footer tips near the right edge open leftward instead of overflowing */
+.lc-browser-foot-nav .lc-tip-target[data-tip-placement="top"]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.lc-browser-foot-stats {
+  position: relative;
 }
 
 @media (max-width: 900px) {
