@@ -111,6 +111,14 @@ export class LcClient {
     return this.request("POST", "/session/random", options);
   }
 
+  /**
+   * What to type on a tablet to pair with this daemon. Authenticated, so the
+   * code is readable from the desktop app but not from the open LAN.
+   */
+  async pairCode(): Promise<{ code: string | null; host: string | null; port: number }> {
+    return this.request("GET", "/pair/code");
+  }
+
   async getConfig(): Promise<LcConfig> {
     return this.request("GET", "/config");
   }

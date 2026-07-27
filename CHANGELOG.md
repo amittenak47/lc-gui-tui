@@ -43,6 +43,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Kotlin plugin for on-device handwriting recognition. See `app/README.md`.
 - **Config keys** — `serve.port`, `serve.token`, `llm.modes.*`.
 
+### Added — tablet pass (mobile layout, Android sideload, short-code pairing)
+
+- **Mobile region pages** — on a phone/tablet viewport the board pages through
+  one template region at a time (constraints → code → approach → complexity →
+  walkthrough) instead of asking for a pan across the whole column. The scene is
+  unchanged, so `board.json`, healing and capture are identical to desktop; only
+  the viewport moves. Desktop keeps the one wide canvas.
+- **Compact mobile chrome** — smaller toolbar and zoom trays, Settings and
+  *Open in IDE* behind a ⋯ menu, and Excalidraw's own docks hidden on touch.
+- **`POST /pair`** — six-digit session code, generated on every `lc serve --lan`
+  start, exchanged once for the long serve token. Pair a tablet by typing Host,
+  Port and Code; the QR and token URL remain as a fallback. `GET /pair/code`
+  (authenticated) backs Settings → Serve.
+- **Android sideload** — `npm run android:init` / `android:apk` apply the
+  cleartext-LAN `network_security_config.xml` to the generated Gradle project
+  and build a debug-signed APK; `app/README.md` covers Android 12/14 install.
+
+### Fixed
+
+- **`length limit exceeded` on Share/Send** — the daemon's body limit was Axum's
+  ~2MB default, which any board PNG exceeded. Now 32MB, with the export
+  downscaled before it is sent and the review retried without the image if the
+  body is still refused.
+- **The coach calling a drawn board blank** — a browser build transcribes no ink,
+  so a hand-drawn board arrived with empty `recognized_text` and the coach told
+  the student to go implement a solution. The prompt now reads the canvas layout
+  and the attached image, and a sparse board gets concrete opening hints instead.
+- **Sluggish eraser rendering** — the brush ring updated React state on every
+  `pointermove`, re-rendering the board at the pen's sample rate.
+
 ### Added
 
 - **Interactive TUI** (`lc` with no subcommand) — ASCII banner, menu-driven navigation, WASD controls.
