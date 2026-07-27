@@ -25,6 +25,7 @@ import type {
   TestResponse,
 } from "./api/types";
 import { Tip } from "./components/Tip";
+import { SettingsModal } from "./components/SettingsModal";
 import { Board } from "./canvas/Board";
 import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
 import { sceneHash, studentElements } from "./canvas/capture";
@@ -86,7 +87,9 @@ export function App() {
   const [lastRunKind, setLastRunKind] = useState<"run" | "submit">("run");
   const [themeId, setThemeId] = useState(loadThemeId);
   const [coachOpen, setCoachOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [codeSlot, setCodeSlot] = useState<ScreenRect | null>(null);
+  const deepLinkHandled = useRef(false);
   const lastCodeSlotRef = useRef<ScreenRect | null>(null);
 
   const onCodeSlot = useCallback((next: ScreenRect | null) => {
@@ -281,6 +284,11 @@ export function App() {
         // Materialize the workspace on the PC, then read back the redacted
         // statement for the board template.
         await client.loadProblem(taskId);
+        try {
+          await client.enqueueSession(taskId);
+        } catch {
+          /* queue write is best-effort when not paired yet */
+        }
         const detail = await client.getProblem(taskId);
         let source = detail.starter_code ?? "";
         try {
@@ -680,6 +688,66 @@ export function App() {
     }
   }, [client, bankFilters, pickProblem]);
 
+  const startFreshSession = useCallback(async () => {
+    try {
+      setSession(await client.resetSession());
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  }, [client]);
+
+  const resetSession = useCallback(async () => {
+    if (!window.confirm("Reset the practice session? Queue and progress will be cleared.")) return;
+    try {
+      setSession(await client.resetSession());
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  }, [client]);
+
+  const startRandomSession = useCallback(
+    async (filters: SearchOptions = bankFilters) => {
+      try {
+        setBankFilters(filters);
+        const next = await client.randomSession({
+          count: 5,
+          difficulty: filters.difficulty,
+          tag: filters.tag,
+          q: filters.q,
+        });
+        setSession(next);
+        const first = next.queue[0];
+        if (first) void pickProblem(first, filters);
+      } catch (cause) {
+        setError(messageOf(cause));
+      }
+    },
+    [client, bankFilters, pickProblem],
+  );
+
+  const openInIde = useCallback(async () => {
+    if (!problem) return;
+    try {
+      await client.openWorkspace(problem.task_id, "ide");
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  }, [client, problem]);
+
+  // Deep link: ?task=<id> loads that problem once.
+  useEffect(() => {
+    if (deepLinkHandled.current || problem) return;
+    const params = new URLSearchParams(window.location.search);
+    const task = params.get("task");
+    if (!task) return;
+    deepLinkHandled.current = true;
+    void pickProblem(task);
+  }, [pickProblem, problem]);
+
+  useEffect(() => {
+    void refreshSession();
+  }, [refreshSession, pairing]);
+
   const confirmReveal = useCallback(async () => {
     const board = boardRef.current;
     if (!problem) return;
@@ -847,22 +915,64 @@ export function App() {
 
         <div className="lc-header-right">
           {problem && (
-            <button
-              type="button"
-              className={
-                coachOpen
-                  ? "lc-secondary lc-coach-toggle lc-coach-toggle-open"
-                  : "lc-secondary lc-coach-toggle"
-              }
-              aria-expanded={coachOpen}
-              aria-controls="lc-coach-panel"
-              onClick={() => setCoachOpen((current) => !current)}
-            >
-              Coach
-            </button>
+            <>
+              <button
+                type="button"
+                className="lc-secondary"
+                disabled={busy !== null}
+                onClick={() => void openInIde()}
+                title="Open solution.py in Cursor / VS Code"
+              >
+                IDE
+              </button>
+              <button
+                type="button"
+                className={
+                  coachOpen
+                    ? "lc-secondary lc-coach-toggle lc-coach-toggle-open"
+                    : "lc-secondary lc-coach-toggle"
+                }
+                aria-expanded={coachOpen}
+                aria-controls="lc-coach-panel"
+                onClick={() => setCoachOpen((current) => !current)}
+              >
+                Coach
+              </button>
+            </>
           )}
+          <button
+            type="button"
+            className="lc-icon lc-tip-target"
+            aria-label="Settings"
+            data-tip="Settings — paths, LLM, serve"
+            data-tip-placement="bottom"
+            onClick={() => setSettingsOpen(true)}
+          >
+            ⚙
+          </button>
         </div>
       </header>
+
+      {(session?.queue?.length ?? 0) > 0 && (
+        <div className="lc-session-strip">
+          <strong>Session</strong>
+          <span>
+            {session!.queue.length} in queue
+            {problem && session!.queue.includes(problem.task_id)
+              ? ` · ${session!.queue.indexOf(problem.task_id) + 1}/${session!.queue.length}`
+              : ""}
+          </span>
+          {session?.stats && (
+            <span>
+              {session.stats.passed} passed · {session.stats.failed} failed · {session.stats.reveals}{" "}
+              reveals
+            </span>
+          )}
+          <button type="button" className="lc-secondary" onClick={() => void resetSession()}>
+            Reset
+          </button>
+        </div>
+      )}
 
       {busy && problem && switchMotion === "idle" && <div className="lc-busy">{busy}</div>}
       {error && (
@@ -911,6 +1021,10 @@ export function App() {
                   busy={busy !== null}
                   themeId={themeId}
                   onThemePick={setThemeId}
+                  session={session}
+                  onStartSession={() => void startFreshSession()}
+                  onResetSession={() => void resetSession()}
+                  onRandomSession={(filters) => void startRandomSession(filters)}
                 />
               </div>
               {(browseMotion === "busy" ||
@@ -1043,6 +1157,15 @@ export function App() {
           error={revealError}
         />
       )}
+
+      <SettingsModal
+        open={settingsOpen}
+        client={client}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={() => {
+          void client.capabilities().then(setCapabilities).catch(() => setCapabilities(null));
+        }}
+      />
     </div>
   );
 }

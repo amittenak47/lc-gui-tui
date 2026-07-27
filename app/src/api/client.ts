@@ -12,6 +12,8 @@ import type {
   BoardSnapshot,
   BridgeResponse,
   CoachCapabilities,
+  LcConfig,
+  LlmStatus,
   LoadResponse,
   ProblemDetail,
   ProblemPage,
@@ -90,6 +92,51 @@ export class LcClient {
   /** Practice session on disk (queue + progress). */
   async getSession(): Promise<SessionSnapshot> {
     return this.request("GET", "/session");
+  }
+
+  async resetSession(): Promise<SessionSnapshot> {
+    return this.request("POST", "/session/reset");
+  }
+
+  async enqueueSession(taskId: string): Promise<SessionSnapshot> {
+    return this.request("POST", "/session/enqueue", { task_id: taskId });
+  }
+
+  async randomSession(options: {
+    count?: number;
+    difficulty?: string;
+    tag?: string;
+    q?: string;
+  } = {}): Promise<SessionSnapshot> {
+    return this.request("POST", "/session/random", options);
+  }
+
+  async getConfig(): Promise<LcConfig> {
+    return this.request("GET", "/config");
+  }
+
+  async putConfig(config: LcConfig): Promise<LcConfig> {
+    return this.request("PUT", "/config", config);
+  }
+
+  async llmStatus(): Promise<LlmStatus> {
+    return this.request("GET", "/llm/status");
+  }
+
+  async llmStart(): Promise<LlmStatus> {
+    return this.request("POST", "/llm/start");
+  }
+
+  async llmStop(): Promise<LlmStatus> {
+    return this.request("POST", "/llm/stop");
+  }
+
+  async openWorkspace(id: string, target: "ide" | "canvas"): Promise<{
+    task_id: string;
+    target: string;
+    workspace_dir: string;
+  }> {
+    return this.request("POST", `/workspace/${encodeURIComponent(id)}/open`, { target });
   }
 
   /** Prev/next in the filtered problem bank (same order as the browser). */

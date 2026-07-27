@@ -51,9 +51,11 @@ impl Default for PythonConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
-    /// "local" or "groq"
+    /// "local", "ollama", "openai", or "groq"
     pub default_provider: String,
     pub local: LocalLlmConfig,
+    pub ollama: OllamaLlmConfig,
+    pub openai: OpenAiLlmConfig,
     pub groq: GroqLlmConfig,
     /// Per-coach-mode provider overrides.
     pub modes: LlmModes,
@@ -64,6 +66,8 @@ impl Default for LlmConfig {
         Self {
             default_provider: "local".into(),
             local: LocalLlmConfig::default(),
+            ollama: OllamaLlmConfig::default(),
+            openai: OpenAiLlmConfig::default(),
             groq: GroqLlmConfig::default(),
             modes: LlmModes::default(),
         }
@@ -125,15 +129,13 @@ impl LlmModes {
         let mut out = Vec::with_capacity(COACH_MODES.len());
         for mode in COACH_MODES {
             let provider = self.get(mode)?;
-            let (model, vision_flag) = match provider {
-                "groq" => (llm.groq.model.as_str(), llm.groq.vision),
-                _ => (llm.local.model.as_str(), llm.local.vision),
-            };
+            let endpoint = llm.endpoint(provider);
+            let vision_name = endpoint.vision_model_name();
             out.push(ModeCapability {
                 mode: mode.to_string(),
                 provider: provider.to_string(),
-                model: model.to_string(),
-                vision: model_supports_vision(vision_flag, model),
+                model: endpoint.model.to_string(),
+                vision: model_supports_vision(endpoint.vision, vision_name),
             });
         }
         Ok(out)
@@ -155,11 +157,67 @@ impl LlmModes {
     }
 }
 
+pub const LLM_PROVIDERS: [&str; 4] = ["local", "ollama", "openai", "groq"];
+
 fn validate_provider(value: &str) -> Result<()> {
-    if value != "local" && value != "groq" {
-        bail!("provider must be \"local\" or \"groq\", got {value:?}");
+    if !LLM_PROVIDERS.contains(&value) {
+        bail!(
+            "provider must be one of {}, got {value:?}",
+            LLM_PROVIDERS.join(", ")
+        );
     }
     Ok(())
+}
+
+/// Resolved endpoint settings for one named provider.
+#[derive(Debug, Clone)]
+pub struct LlmEndpoint<'a> {
+    pub base_url: &'a str,
+    pub model: &'a str,
+    /// Optional dedicated vision model; empty means reuse [`Self::model`].
+    pub vision_model: &'a str,
+    pub vision: Option<bool>,
+}
+
+impl<'a> LlmEndpoint<'a> {
+    pub fn vision_model_name(&self) -> &str {
+        if self.vision_model.trim().is_empty() {
+            self.model
+        } else {
+            self.vision_model
+        }
+    }
+}
+
+impl LlmConfig {
+    pub fn endpoint(&self, provider: &str) -> LlmEndpoint<'_> {
+        match provider {
+            "ollama" => LlmEndpoint {
+                base_url: &self.ollama.base_url,
+                model: &self.ollama.model,
+                vision_model: &self.ollama.vision_model,
+                vision: self.ollama.vision,
+            },
+            "openai" => LlmEndpoint {
+                base_url: &self.openai.base_url,
+                model: &self.openai.model,
+                vision_model: &self.openai.vision_model,
+                vision: self.openai.vision,
+            },
+            "groq" => LlmEndpoint {
+                base_url: &self.groq.base_url,
+                model: &self.groq.model,
+                vision_model: &self.groq.vision_model,
+                vision: self.groq.vision,
+            },
+            _ => LlmEndpoint {
+                base_url: &self.local.base_url,
+                model: &self.local.model,
+                vision_model: &self.local.vision_model,
+                vision: self.local.vision,
+            },
+        }
+    }
 }
 
 /// Settings for `lc serve`, the daemon the whiteboard client talks to.
@@ -187,6 +245,9 @@ pub struct LocalLlmConfig {
     /// Any OpenAI-compatible server: Ollama, vLLM, LM Studio.
     pub base_url: String,
     pub model: String,
+    /// Dedicated vision model. Empty → reuse [`Self::model`].
+    #[serde(default)]
+    pub vision_model: String,
     /// Whether the model accepts images. `None` → infer from the model name.
     #[serde(default)]
     pub vision: Option<bool>,
@@ -197,6 +258,53 @@ impl Default for LocalLlmConfig {
         Self {
             base_url: "http://localhost:11434/v1".into(),
             model: "qwen2.5-coder:7b".into(),
+            vision_model: String::new(),
+            vision: None,
+        }
+    }
+}
+
+/// Ollama via its OpenAI-compatible API (defaults match Local).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OllamaLlmConfig {
+    pub base_url: String,
+    pub model: String,
+    #[serde(default)]
+    pub vision_model: String,
+    #[serde(default)]
+    pub vision: Option<bool>,
+}
+
+impl Default for OllamaLlmConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://localhost:11434/v1".into(),
+            model: "qwen2.5-coder:7b".into(),
+            vision_model: String::new(),
+            vision: None,
+        }
+    }
+}
+
+/// OpenAI (or compatible) remote API. Key from `OPENAI_API_KEY` env, never toml.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenAiLlmConfig {
+    pub base_url: String,
+    pub model: String,
+    #[serde(default)]
+    pub vision_model: String,
+    #[serde(default)]
+    pub vision: Option<bool>,
+}
+
+impl Default for OpenAiLlmConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "https://api.openai.com/v1".into(),
+            model: "gpt-4o-mini".into(),
+            vision_model: String::new(),
             vision: None,
         }
     }
@@ -207,6 +315,8 @@ impl Default for LocalLlmConfig {
 pub struct GroqLlmConfig {
     pub base_url: String,
     pub model: String,
+    #[serde(default)]
+    pub vision_model: String,
     /// Whether the model accepts images. `None` → infer from the model name.
     #[serde(default)]
     pub vision: Option<bool>,
@@ -218,6 +328,7 @@ impl Default for GroqLlmConfig {
         Self {
             base_url: "https://api.groq.com/openai/v1".into(),
             model: "llama-3.1-8b-instant".into(),
+            vision_model: String::new(),
             vision: None,
         }
     }
@@ -329,8 +440,16 @@ impl Config {
             }
             "llm.local.base_url" => self.llm.local.base_url = value.to_string(),
             "llm.local.model" => self.llm.local.model = value.to_string(),
+            "llm.local.vision_model" => self.llm.local.vision_model = value.to_string(),
+            "llm.ollama.base_url" => self.llm.ollama.base_url = value.to_string(),
+            "llm.ollama.model" => self.llm.ollama.model = value.to_string(),
+            "llm.ollama.vision_model" => self.llm.ollama.vision_model = value.to_string(),
+            "llm.openai.base_url" => self.llm.openai.base_url = value.to_string(),
+            "llm.openai.model" => self.llm.openai.model = value.to_string(),
+            "llm.openai.vision_model" => self.llm.openai.vision_model = value.to_string(),
             "llm.groq.base_url" => self.llm.groq.base_url = value.to_string(),
             "llm.groq.model" => self.llm.groq.model = value.to_string(),
+            "llm.groq.vision_model" => self.llm.groq.vision_model = value.to_string(),
             "serve.port" => {
                 self.serve.port = value
                     .parse()
@@ -348,8 +467,10 @@ impl Config {
             }
             other => bail!(
                 "unknown config key {other:?}; known keys: data-dir, workspace, python, \
-                 llm.provider, llm.local.base_url, llm.local.model, llm.groq.base_url, \
-                 llm.groq.model, llm.modes.<{}>, serve.port, serve.token",
+                 llm.provider, llm.local.{{base_url,model,vision_model}}, \
+                 llm.ollama.{{base_url,model,vision_model}}, \
+                 llm.openai.{{base_url,model,vision_model}}, \
+                 llm.groq.{{base_url,model,vision_model}}, llm.modes.<{}>, serve.port, serve.token",
                 COACH_MODES.join("|")
             ),
         }
@@ -364,8 +485,16 @@ impl Config {
             "llm.provider" | "llm.default_provider" => self.llm.default_provider.clone(),
             "llm.local.base_url" => self.llm.local.base_url.clone(),
             "llm.local.model" => self.llm.local.model.clone(),
+            "llm.local.vision_model" => self.llm.local.vision_model.clone(),
+            "llm.ollama.base_url" => self.llm.ollama.base_url.clone(),
+            "llm.ollama.model" => self.llm.ollama.model.clone(),
+            "llm.ollama.vision_model" => self.llm.ollama.vision_model.clone(),
+            "llm.openai.base_url" => self.llm.openai.base_url.clone(),
+            "llm.openai.model" => self.llm.openai.model.clone(),
+            "llm.openai.vision_model" => self.llm.openai.vision_model.clone(),
             "llm.groq.base_url" => self.llm.groq.base_url.clone(),
             "llm.groq.model" => self.llm.groq.model.clone(),
+            "llm.groq.vision_model" => self.llm.groq.vision_model.clone(),
             "serve.port" => self.serve.port.to_string(),
             "serve.token" => self.serve.token.clone().unwrap_or_default(),
             _ if key.starts_with("llm.modes.") => {

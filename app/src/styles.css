@@ -2210,6 +2210,166 @@ button.lc-row-selected:hover:not(:disabled) {
   background: rgb(0 0 0 / 40%);
 }
 
+.lc-settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 35%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.lc-settings-modal {
+  width: min(560px, 100%);
+  max-height: min(90vh, 720px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border, rgb(127 127 127 / 25%));
+  box-shadow: 0 18px 48px rgb(0 0 0 / 28%);
+  overflow: hidden;
+}
+
+.lc-settings-head {
+  padding: 18px 20px 8px;
+}
+
+.lc-settings-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.lc-settings-tabs,
+.lc-settings-provider-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px;
+  flex-wrap: wrap;
+}
+
+.lc-settings-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.lc-settings-tab.is-active {
+  background: var(--panel, rgb(127 127 127 / 12%));
+  color: var(--fg);
+}
+
+.lc-settings-body {
+  padding: 12px 20px 8px;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.lc-settings-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lc-settings-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.lc-settings-fields input,
+.lc-settings-fields select {
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgb(127 127 127 / 30%));
+  background: var(--input-bg, var(--bg));
+  color: var(--fg);
+}
+
+.lc-settings-subhead {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.lc-settings-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lc-settings-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 18px;
+  border-top: 1px solid var(--border, rgb(127 127 127 / 20%));
+}
+
+.lc-session-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border, rgb(127 127 127 / 15%));
+  background: var(--panel, transparent);
+}
+
+.lc-session-strip strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.lc-session-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--panel, rgb(127 127 127 / 18%));
+}
+
+.lc-session-badge.is-passed {
+  color: #1a7f37;
+}
+
+.lc-session-badge.is-failed {
+  color: #cf222e;
+}
+
+.lc-session-badge.is-loaded {
+  color: var(--muted);
+}
+
+.lc-browser-session-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
 .lc-modal {
   width: min(460px, 100%);
   padding: 20px;

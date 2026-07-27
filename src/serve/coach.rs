@@ -29,11 +29,11 @@ use crate::session::Session;
 // ---------------------------------------------------------------------------
 
 pub async fn capabilities(State(state): State<Shared>) -> Result<Json<serde_json::Value>, AppError> {
-    let modes = state
-        .cfg
+    let cfg = state.cfg_snapshot();
+    let modes = cfg
         .llm
         .modes
-        .capabilities(&state.cfg.llm)
+        .capabilities(&cfg.llm)
         .map_err(AppError::from)?;
     Ok(Json(serde_json::json!({ "modes": modes })))
 }
@@ -67,7 +67,7 @@ pub async fn review(
         )));
     }
 
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     let envelope = blocking(move || {
         let meta = load_meta(&cfg, &request.task_id)?;
         let description = description_for(&meta);
@@ -180,7 +180,7 @@ pub async fn reveal(
         )));
     }
 
-    let cfg = state.cfg.clone();
+    let cfg = state.cfg_snapshot();
     let envelope = blocking(move || {
         let meta = load_meta(&cfg, &request.task_id)?;
         let description = description_for(&meta);

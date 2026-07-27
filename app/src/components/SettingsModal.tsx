@@ -1,0 +1,351 @@
+/**
+ * Settings modal — edits the shared `config.toml` via `lc serve`.
+ * Backdrop blurs the board the same way problem-load transitions do.
+ */
+
+import { useCallback, useEffect, useState } from "react";
+
+import type { LcClient } from "../api/client";
+import type { LcConfig, LlmStatus, ProviderConfig } from "../api/types";
+import { Tip } from "./Tip";
+
+type TabId = "paths" | "llm" | "serve";
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: "paths", label: "Paths" },
+  { id: "llm", label: "LLM" },
+  { id: "serve", label: "Serve" },
+];
+
+const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
+const MODES = ["ambient", "review", "bridge", "viz"] as const;
+
+function emptyProvider(): ProviderConfig {
+  return { base_url: "", model: "", vision_model: "" };
+}
+
+function emptyConfig(): LcConfig {
+  return {
+    data_json_dir: null,
+    workspace_dir: "~/lc-workspace",
+    python_executable: "python",
+    default_provider: "local",
+    local: emptyProvider(),
+    ollama: emptyProvider(),
+    openai: emptyProvider(),
+    groq: emptyProvider(),
+    modes: { ambient: "local", review: "local", bridge: "local", viz: "local" },
+    serve_port: 7878,
+    token_set: false,
+  };
+}
+
+export interface SettingsModalProps {
+  open: boolean;
+  client: LcClient;
+  onClose: () => void;
+  onSaved?: () => void;
+}
+
+export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalProps) {
+  const [tab, setTab] = useState<TabId>("paths");
+  const [draft, setDraft] = useState<LcConfig>(emptyConfig);
+  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [providerFocus, setProviderFocus] = useState<"local" | "ollama" | "openai">("local");
+
+  const refreshLlm = useCallback(async () => {
+    try {
+      setLlmStatus(await client.llmStatus());
+    } catch {
+      setLlmStatus(null);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setError(null);
+    setBusy("loading…");
+    void (async () => {
+      try {
+        const cfg = await client.getConfig();
+        if (!cancelled) {
+          setDraft(cfg);
+          setBusy(null);
+        }
+        await refreshLlm();
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+          setBusy(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, client, refreshLlm]);
+
+  if (!open) return null;
+
+  const patchProvider = (key: "local" | "ollama" | "openai" | "groq", patch: Partial<ProviderConfig>) => {
+    setDraft((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+  };
+
+  const save = async () => {
+    setBusy("saving…");
+    setError(null);
+    try {
+      const saved = await client.putConfig(draft);
+      setDraft(saved);
+      onSaved?.();
+      setBusy(null);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(null);
+    }
+  };
+
+  const startLlm = async () => {
+    setBusy("starting local LLM…");
+    setError(null);
+    try {
+      setLlmStatus(await client.llmStart());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const stopLlm = async () => {
+    setBusy("stopping local LLM…");
+    setError(null);
+    try {
+      setLlmStatus(await client.llmStop());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const provider = draft[providerFocus];
+
+  return (
+    <div
+      className="lc-settings-backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !busy) onClose();
+      }}
+    >
+      <div className="lc-settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
+        <div className="lc-settings-head">
+          <h2>Settings</h2>
+          <p className="lc-muted">Synced with TUI via config.toml</p>
+        </div>
+
+        <div className="lc-settings-tabs" role="tablist">
+          {TABS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === entry.id}
+              className={tab === entry.id ? "lc-settings-tab is-active" : "lc-settings-tab"}
+              onClick={() => setTab(entry.id)}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="lc-settings-body">
+          {error && <div className="lc-warning">{error}</div>}
+          {busy && <div className="lc-muted">{busy}</div>}
+
+          {tab === "paths" && (
+            <div className="lc-settings-fields">
+              <label>
+                <Tip tip="Folder of problem JSON files (same corpus the TUI indexes)">
+                  <span>Problems folder</span>
+                </Tip>
+                <input
+                  value={draft.data_json_dir ?? ""}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      data_json_dir: e.target.value.trim() ? e.target.value : null,
+                    }))
+                  }
+                  placeholder="path to JSON corpus"
+                />
+              </label>
+              <label>
+                <Tip tip="Where generated solve folders go (~/lc-workspace/<task>)">
+                  <span>Workspace dir</span>
+                </Tip>
+                <input
+                  value={draft.workspace_dir}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, workspace_dir: e.target.value }))}
+                />
+              </label>
+              <label>
+                <Tip tip="Python used to run tests">
+                  <span>Python executable</span>
+                </Tip>
+                <input
+                  value={draft.python_executable}
+                  onChange={(e) =>
+                    setDraft((prev) => ({ ...prev, python_executable: e.target.value }))
+                  }
+                />
+              </label>
+            </div>
+          )}
+
+          {tab === "llm" && (
+            <div className="lc-settings-fields">
+              <label>
+                <span>Default provider</span>
+                <select
+                  value={draft.default_provider}
+                  onChange={(e) =>
+                    setDraft((prev) => ({ ...prev, default_provider: e.target.value }))
+                  }
+                >
+                  {PROVIDERS.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="lc-settings-provider-tabs">
+                {(["local", "ollama", "openai"] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    className={
+                      providerFocus === p
+                        ? "lc-settings-tab is-active"
+                        : "lc-settings-tab"
+                    }
+                    onClick={() => setProviderFocus(p)}
+                  >
+                    {p === "local" ? "Local" : p === "ollama" ? "Ollama" : "OpenAI"}
+                  </button>
+                ))}
+              </div>
+
+              <label>
+                <span>Base URL</span>
+                <input
+                  value={provider.base_url}
+                  onChange={(e) => patchProvider(providerFocus, { base_url: e.target.value })}
+                />
+              </label>
+              <label>
+                <span>Chat model</span>
+                <input
+                  value={provider.model}
+                  onChange={(e) => patchProvider(providerFocus, { model: e.target.value })}
+                />
+              </label>
+              <label>
+                <Tip tip="Separate vision model for PNG board captures. Leave empty to reuse the chat model.">
+                  <span>Vision model</span>
+                </Tip>
+                <input
+                  value={provider.vision_model}
+                  onChange={(e) =>
+                    patchProvider(providerFocus, { vision_model: e.target.value })
+                  }
+                  placeholder="(same as chat model)"
+                />
+              </label>
+
+              {providerFocus === "openai" && (
+                <p className="lc-muted">API key from OPENAI_API_KEY env — not stored in config.toml.</p>
+              )}
+
+              <div className="lc-settings-subhead">Coach mode providers</div>
+              {MODES.map((mode) => (
+                <label key={mode}>
+                  <span>{mode}</span>
+                  <select
+                    value={draft.modes[mode]}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        modes: { ...prev.modes, [mode]: e.target.value },
+                      }))
+                    }
+                  >
+                    {PROVIDERS.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+
+              <div className="lc-settings-subhead">Local process</div>
+              <p className="lc-muted">
+                {llmStatus?.detail ?? "Status unknown"}
+                {llmStatus?.pid != null ? ` · pid ${llmStatus.pid}` : ""}
+              </p>
+              <div className="lc-settings-actions-row">
+                <button type="button" className="lc-secondary" disabled={!!busy} onClick={() => void startLlm()}>
+                  Start local LLM
+                </button>
+                <button type="button" className="lc-secondary" disabled={!!busy} onClick={() => void stopLlm()}>
+                  Stop local LLM
+                </button>
+                <button type="button" className="lc-secondary" disabled={!!busy} onClick={() => void refreshLlm()}>
+                  Refresh
+                </button>
+              </div>
+            </div>
+          )}
+
+          {tab === "serve" && (
+            <div className="lc-settings-fields">
+              <label>
+                <span>Port</span>
+                <input
+                  type="number"
+                  value={draft.serve_port}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      serve_port: Number(e.target.value) || prev.serve_port,
+                    }))
+                  }
+                />
+              </label>
+              <p className="lc-muted">
+                Pairing token: {draft.token_set ? "set (use lc serve --lan to rotate)" : "not set (loopback only)"}
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="lc-settings-foot">
+          <button type="button" className="lc-secondary" disabled={!!busy} onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="lc-primary" disabled={!!busy} onClick={() => void save()}>
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
