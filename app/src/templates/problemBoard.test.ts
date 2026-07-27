@@ -10,8 +10,8 @@
 import { describe, expect, it } from "vitest";
 
 import { REGIONS } from "./regions";
-import { buildProblemTemplate, parseStatement } from "./problemBoard";
-import { FONT_CODE, FONT_UI } from "./skeleton";
+import { buildProblemTemplate, parseStatement, recolorTemplateElements } from "./problemBoard";
+import { FONT_CODE, FONT_UI, templatePalette } from "./skeleton";
 
 const DESCRIPTION = `Given an m x n binary matrix mat, return the distance of the nearest 0 for each cell.
 The distance between two cells sharing a common edge is 1.
@@ -116,13 +116,56 @@ describe("buildProblemTemplate", () => {
   });
 });
 
+describe("recolorTemplateElements", () => {
+  it("flips scaffold ink between light and dark without touching other ids", () => {
+    const lightInk = templatePalette(false);
+    const darkInk = templatePalette(true);
+    const seeded = buildProblemTemplate({
+      taskId: "01-matrix",
+      title: "01 Matrix",
+      description: "Given a matrix.",
+      dark: true,
+    }).map((skeleton) => ({
+      id: skeleton.id!,
+      type: skeleton.type,
+      strokeColor: skeleton.strokeColor,
+      fontFamily: skeleton.fontFamily,
+      opacity: skeleton.opacity,
+      customData: skeleton.customData ?? null,
+    }));
+    seeded.push({
+      id: "student-stroke",
+      type: "freedraw",
+      strokeColor: "#ff00aa",
+      fontFamily: undefined,
+      opacity: 100,
+      customData: null,
+    });
+
+    const light = recolorTemplateElements(seeded, false)!;
+    const title = light.find((el) => el.id === "lcregion-constraints-title");
+    const frame = light.find((el) => el.id === "lcregion-constraints-frame");
+    const student = light.find((el) => el.id === "student-stroke");
+    expect(title?.strokeColor).toBe(lightInk.primary);
+    expect(frame?.strokeColor).toBe(lightInk.border);
+    expect(student?.strokeColor).toBe("#ff00aa");
+
+    const back = recolorTemplateElements(light, true)!;
+    expect(back.find((el) => el.id === "lcregion-constraints-title")?.strokeColor).toBe(
+      darkInk.primary,
+    );
+  });
+});
+
 describe("board size", () => {
   it("is roomy enough to sketch in", () => {
     // Reported: "size of the whiteboard larger".
     expect(REGIONS.constraints.w).toBeGreaterThanOrEqual(2000);
     expect(REGIONS.constraints.h).toBeGreaterThanOrEqual(1200);
-    expect(REGIONS.approach.h).toBeGreaterThanOrEqual(800);
-    expect(REGIONS.agent.w).toBeGreaterThanOrEqual(800);
+    expect(REGIONS.approach.h).toBeGreaterThanOrEqual(1500);
+    expect(REGIONS.complexity.h).toBeGreaterThanOrEqual(500);
+    expect(REGIONS.walkthrough.h).toBeGreaterThanOrEqual(1200);
+    expect(REGIONS.agent.w).toBeGreaterThanOrEqual(1200);
   });
 
   it("keeps the agent lane clear of the student's columns", () => {

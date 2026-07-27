@@ -121,6 +121,28 @@ describe("syncRegionLayout", () => {
     expect(nextCode.height).toBeGreaterThanOrEqual(320);
   });
 
+  it("sizes the code frame to the solution content height", () => {
+    const elements = framesFromTemplate();
+    const code = elements.find((element) => element.id === regionFrameId("code"))!;
+    code.height = 560;
+
+    const synced = syncRegionLayout(elements, { codeContentHeight: 1800 })!;
+    const nextCode = synced.find((element) => element.id === regionFrameId("code"))!;
+    expect(nextCode.height).toBe(1800);
+    const approach = synced.find((element) => element.id === regionFrameId("approach"))!;
+    expect(approach.y).toBe(nextCode.y + nextCode.height! + 64);
+  });
+
+  it("lets the student keep a code frame taller than the content", () => {
+    const elements = framesFromTemplate();
+    const code = elements.find((element) => element.id === regionFrameId("code"))!;
+    code.height = 2400;
+
+    const synced = syncRegionLayout(elements, { codeContentHeight: 900 })!;
+    const nextCode = synced.find((element) => element.id === regionFrameId("code"))!;
+    expect(nextCode.height).toBe(2400);
+  });
+
   it("will not shrink the problem frame below its statement content", () => {
     const elements = framesFromTemplate();
     const constraints = elements.find((element) => element.id === regionFrameId("constraints"))!;

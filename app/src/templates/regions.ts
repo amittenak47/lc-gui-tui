@@ -34,15 +34,15 @@ export interface Region {
 export const REGION_GUTTER = 64;
 const GUTTER = REGION_GUTTER;
 const STUDENT_WIDTH = 2800;
-const AGENT_WIDTH = 1100;
+const AGENT_WIDTH = 1400;
 
 /** Problem statements need real room to breathe at a readable font size. */
 const CONSTRAINTS_H = 1400;
 /** Monaco solution editor sits in this slot under the problem statement. */
 const CODE_H = 560;
-const APPROACH_H = 1100;
-const COMPLEXITY_H = 360;
-const WALKTHROUGH_H = 900;
+const APPROACH_H = 1700;
+const COMPLEXITY_H = 640;
+const WALKTHROUGH_H = 1400;
 
 /**
  * Floors when the student shrinks a dashed frame. Shared student width uses
@@ -51,10 +51,10 @@ const WALKTHROUGH_H = 900;
 export const REGION_MIN: Record<RegionId, { minW: number; minH: number }> = {
   constraints: { minW: 1200, minH: 900 },
   code: { minW: 1200, minH: 320 },
-  approach: { minW: 1200, minH: 400 },
-  complexity: { minW: 1200, minH: 180 },
-  walkthrough: { minW: 1200, minH: 320 },
-  agent: { minW: 480, minH: 600 },
+  approach: { minW: 1200, minH: 700 },
+  complexity: { minW: 1200, minH: 320 },
+  walkthrough: { minW: 1200, minH: 560 },
+  agent: { minW: 640, minH: 900 },
 };
 
 const CODE_Y = CONSTRAINTS_H + GUTTER;

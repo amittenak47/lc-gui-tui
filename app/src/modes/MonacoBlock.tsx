@@ -9,11 +9,14 @@
 
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
+import { useEffect, useMemo } from "react";
 
 // The package's exports map rewrites `./*` to `./esm/vs/*.js`, so this
 // resolves to esm/vs/editor/editor.worker.js — spelling out the esm path here
 // would double the prefix.
 import editorWorker from "monaco-editor/editor/editor.worker.js?worker";
+
+import { APP_THEMES } from "../theme/appThemes";
 
 /**
  * Point Monaco at the bundled copy.
@@ -28,10 +31,61 @@ self.MonacoEnvironment = {
   getWorker: () => new editorWorker(),
 };
 
+const definedThemes = new Set<string>();
+
+/** Mix a hex color toward black (darken) or white (lighten) by `amount` 0–1. */
+function mixHex(hex: string, toward: "#000000" | "#ffffff", amount: number): string {
+  const raw = hex.replace("#", "");
+  if (raw.length !== 6) return hex;
+  const channel = (index: number) => Number.parseInt(raw.slice(index, index + 2), 16);
+  const target = toward === "#000000" ? 0 : 255;
+  const mix = (value: number) => Math.round(value + (target - value) * amount);
+  const toHex = (value: number) => mix(value).toString(16).padStart(2, "0");
+  return `#${toHex(channel(0))}${toHex(channel(2))}${toHex(channel(4))}`;
+}
+
+function monacoThemeName(themeId: string): string {
+  return `lc-code-${themeId}`;
+}
+
+function ensureMonacoTheme(themeId: string): string {
+  const appTheme = APP_THEMES.find((candidate) => candidate.id === themeId) ?? APP_THEMES[0];
+  const name = monacoThemeName(appTheme.id);
+  if (definedThemes.has(name)) return name;
+
+  const dark = appTheme.mode === "dark";
+  const background = appTheme.background;
+  const line = dark ? mixHex(background, "#ffffff", 0.08) : mixHex(background, "#000000", 0.05);
+  const selection = dark ? mixHex(background, "#ffffff", 0.14) : mixHex(background, "#000000", 0.1);
+
+  monaco.editor.defineTheme(name, {
+    base: dark ? "vs-dark" : "vs",
+    inherit: true,
+    rules: [],
+    colors: {
+      "editor.background": background,
+      "editorGutter.background": background,
+      "editorLineNumber.foreground": appTheme.hint,
+      "editorLineNumber.activeForeground": dark ? "#c8d0dc" : "#5b6478",
+      "editor.lineHighlightBackground": line,
+      "editor.lineHighlightBorder": "#00000000",
+      "editor.selectionBackground": selection,
+      "editor.inactiveSelectionBackground": selection,
+      "editorCursor.foreground": dark ? "#f97316" : "#b45309",
+      "editorWidget.background": appTheme.panel,
+      "editorSuggestWidget.background": appTheme.panel,
+      "scrollbarSlider.background": dark ? "#ffffff22" : "#00000018",
+      "scrollbarSlider.hoverBackground": dark ? "#ffffff33" : "#00000028",
+    },
+  });
+  definedThemes.add(name);
+  return name;
+}
+
 export interface MonacoBlockProps {
   value: string;
   language: string;
-  dark?: boolean;
+  themeId?: string;
   height?: string;
   onChange: (value: string) => void;
   onReady: () => void;
@@ -40,18 +94,30 @@ export interface MonacoBlockProps {
 export default function MonacoBlock({
   value,
   language,
-  dark = false,
+  themeId = "parchment",
   height = "min(42vh, 360px)",
   onChange,
   onReady,
 }: MonacoBlockProps) {
+  const monacoTheme = useMemo(() => ensureMonacoTheme(themeId), [themeId]);
+
+  useEffect(() => {
+    ensureMonacoTheme(themeId);
+    monaco.editor.setTheme(monacoThemeName(themeId));
+  }, [themeId]);
+
   return (
     <Editor
       height={height}
       language={language}
-      theme={dark ? "vs-dark" : "vs"}
+      theme={monacoTheme}
       value={value}
-      onMount={onReady}
+      onMount={(editor) => {
+        ensureMonacoTheme(themeId);
+        monaco.editor.setTheme(monacoThemeName(themeId));
+        onReady();
+        editor.layout();
+      }}
       onChange={(next) => onChange(next ?? "")}
       options={{
         minimap: { enabled: false },

@@ -8,8 +8,6 @@
 
 import { Component, Suspense, lazy, type ErrorInfo, type ReactNode, useState } from "react";
 
-import { isDarkTheme } from "../theme/appThemes";
-
 const MonacoBlock = lazy(() => import("./MonacoBlock"));
 
 export interface PseudocodeEditorProps {
@@ -55,7 +53,7 @@ export function PseudocodeEditor({
         <MonacoBlock
           value={value}
           language={lang}
-          dark={isDarkTheme(themeId)}
+          themeId={themeId}
           height={dock ? "100%" : "min(42vh, 360px)"}
           onChange={onChange}
           onReady={() => {}}

@@ -8,6 +8,8 @@
   --muted: #4b5563;
   --hint: #6b7280;
   --line: #d1d5db;
+  /* High-contrast edges for floating chrome (toolbar, coach, header controls). */
+  --chrome-edge: #2a2620;
   --bg: #ffffff;
   --panel: #f8fafc;
   --overlay-bg: rgb(255 255 255 / 97%);
@@ -50,20 +52,31 @@ body {
   margin-right: 380px;
 }
 
+.lc-app-problem {
+  --lc-header-height: 64px;
+}
+
+.lc-app-problem .lc-side {
+  top: var(--lc-header-height);
+}
+
 /* ---------------------------------------------------------------- header --- */
 
 .lc-header {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
-  height: 38px;
+  column-gap: 12px;
+  height: auto;
   min-height: 38px;
-  max-height: 38px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--line);
-  flex-wrap: nowrap;
+  max-height: none;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--chrome-edge);
+  background: var(--panel);
   box-sizing: border-box;
+  overflow: visible;
+  z-index: 45;
 }
 
 .lc-header button {
@@ -74,13 +87,53 @@ body {
   border-radius: 6px;
 }
 
+.lc-header .lc-secondary,
+.lc-header .lc-icon,
+.lc-header .lc-coach-toggle {
+  border-color: var(--chrome-edge);
+}
+
+.lc-header .lc-coach-toggle-open {
+  border-color: var(--chrome-edge);
+  border-bottom-color: var(--panel);
+}
+
+.lc-header-left,
+.lc-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.lc-header-left {
+  justify-self: start;
+}
+
+.lc-header-right {
+  justify-self: end;
+}
+
 .lc-header-center {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 1;
+  justify-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   max-width: min(420px, 46vw);
+  z-index: 1;
+}
+
+.lc-header-center .lc-actions {
+  margin-left: 0;
+}
+
+.lc-header-center .lc-actions button {
+  min-height: 24px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 5px;
 }
 
 .lc-brand {
@@ -105,13 +158,14 @@ body {
   align-items: center;
 }
 
-/* Grouped, with a divider between "ask the coach" and "run the tests" — they
-   do different things and shouldn't read as one undifferentiated row. */
 .lc-actions {
-  margin-left: auto;
-  gap: 14px;
+  gap: 6px;
   display: flex;
   align-items: center;
+}
+
+.lc-coach-toggle {
+  flex-shrink: 0;
 }
 
 .lc-action-group + .lc-action-group {
@@ -133,18 +187,103 @@ body {
 .lc-pairing {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 12px;
+  transition: color 160ms ease, opacity 160ms ease;
+}
+
+.lc-pairing:hover {
+  color: var(--ink);
 }
 
 .lc-pairing-form {
   display: flex;
-  gap: 6px;
+  flex-direction: column;
   align-items: center;
-  flex: 1 1 320px;
+  gap: 4px;
+  animation: lc-pairing-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lc-pairing-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 220px;
+  max-width: 320px;
+  width: min(320px, 46vw);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.lc-pairing-field:focus-within {
+  border-color: var(--accent);
 }
 
 .lc-pairing-form input {
   flex: 1;
-  min-width: 180px;
+  min-width: 0;
+  min-height: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0 28px 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  font-family: ui-monospace, Consolas, monospace;
+  box-shadow: none;
+}
+
+.lc-pairing-form input:focus {
+  outline: none;
+}
+
+.lc-pairing-return {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent);
+  display: inline-grid;
+  place-items: center;
+}
+
+.lc-header .lc-pairing-return {
+  min-height: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent);
+}
+
+.lc-pairing-return:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.lc-pairing-form .lc-warning {
+  text-align: center;
+  font-size: 11px;
+}
+
+@keyframes lc-pairing-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* --------------------------------------------------------------- controls --- */
@@ -254,7 +393,7 @@ input[type="checkbox"] {
   flex-direction: column;
   gap: 4px;
   padding: 6px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--chrome-edge);
   border-radius: 12px;
   background: var(--surface);
   box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
@@ -754,7 +893,7 @@ input[type="checkbox"] {
 
 .lc-zoom,
 .lc-palette-compact {
-  border: 1px solid var(--line);
+  border: 1px solid var(--chrome-edge);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
@@ -780,7 +919,7 @@ input[type="checkbox"] {
 
 .lc-map-btn + .lc-map-btn {
   border-top: none;
-  border-left: 1px solid var(--line);
+  border-left: 1px solid var(--chrome-edge);
 }
 
 .lc-map-btn:hover {
@@ -876,7 +1015,7 @@ input[type="checkbox"] {
 .lc-coach-toggle-open {
   position: relative;
   z-index: 41;
-  border-color: var(--line);
+  border-color: var(--chrome-edge);
   border-bottom-color: var(--panel);
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
@@ -926,7 +1065,8 @@ input[type="checkbox"] {
   .lc-entering .lc-board,
   .lc-spinner,
   .lc-spinner-check,
-  .lc-browser-body-ready {
+  .lc-browser-body-ready,
+  .lc-pairing-form {
     animation: none;
   }
 
@@ -948,7 +1088,7 @@ input[type="checkbox"] {
   bottom: 0;
   z-index: 40;
   width: 380px;
-  border-left: 1px solid var(--line);
+  border-left: 1px solid var(--chrome-edge);
   padding: 0;
   overflow: hidden;
   background: var(--panel);
@@ -1059,36 +1199,38 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .lc-coach-composer-bar .lc-modes {
   flex-shrink: 0;
+  gap: 4px;
 }
 
 .lc-coach-composer-bar .lc-modes .lc-tip-target {
   display: inline-flex;
 }
 
-.lc-coach-composer-bar .lc-mode {
-  min-height: 32px;
-  padding: 0 10px;
-  font-size: 12px;
+.lc-coach-composer-bar .lc-mode,
+.lc-coach-composer-actions button {
+  min-height: 24px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  border-radius: 5px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .lc-coach-composer-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-wrap: nowrap;
+  gap: 4px;
   justify-content: flex-end;
   margin-left: auto;
-}
-
-.lc-coach-composer-actions button {
-  min-height: 32px;
-  padding: 0 12px;
-  font-size: 12px;
+  min-width: 0;
 }
 
 .lc-coach-composer-actions .lc-tip-target {
@@ -1774,6 +1916,8 @@ button.lc-row-selected {
   height: auto;
   flex: 1;
   min-height: 120px;
+  background: var(--bg);
+  color: var(--ink);
 }
 
 .lc-code-dock .monaco-editor,
@@ -1781,6 +1925,12 @@ button.lc-row-selected {
   flex: 1;
   min-height: 0;
   height: 100% !important;
+  background: transparent !important;
+}
+
+.lc-code-dock .monaco-editor .margin,
+.lc-code-dock .monaco-editor .monaco-editor-background {
+  background-color: transparent !important;
 }
 
 .lc-pseudo-open {
@@ -2038,7 +2188,7 @@ button.lc-row-selected {
     width: auto;
     max-height: 45vh;
     border-left: none;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--chrome-edge);
     box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
   }
 

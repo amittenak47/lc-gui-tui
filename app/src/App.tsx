@@ -128,6 +128,12 @@ export function App() {
   const pseudocodeRef = useRef(pseudocode);
   pseudocodeRef.current = pseudocode;
 
+  // Keep the dashed code frame tall enough for the Monaco solution.
+  useEffect(() => {
+    if (!problem) return;
+    boardRef.current?.fitCodeToSource(pseudocode);
+  }, [problem, pseudocode]);
+
   // ML Kit if we're on Android, otherwise typed text and the PNG fallback.
   useEffect(() => {
     let cancelled = false;
@@ -247,6 +253,7 @@ export function App() {
             dark: isDarkTheme(themeId),
           }),
         );
+        boardRef.current?.fitCodeToSource(source);
         lastIdsRef.current = new Set();
         setEntering(true);
         setTimeout(() => {
@@ -584,58 +591,74 @@ export function App() {
   }, []);
 
   return (
-    <div className={coachOpen && problem ? "lc-app lc-app-coach-open" : "lc-app"}>
+    <div
+      className={[
+        "lc-app",
+        problem ? "lc-app-problem" : "",
+        coachOpen && problem ? "lc-app-coach-open" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <header className="lc-header">
-        <Tip tip="lc whiteboard — your coding workspace">
-          <strong className="lc-brand">lc whiteboard</strong>
-        </Tip>
-        {problem ? (
-          <>
-            <button
-              type="button"
-              className="lc-secondary lc-home lc-tip-target"
-              data-tip="Return to the problem list"
-              data-tip-placement="bottom"
-              disabled={busy !== null}
-              onClick={returnToBrowse}
-            >
-              ← Problems
-            </button>
-            {/* Problem identity and navigation, together on the left. */}
-            <div className="lc-problem-nav" role="group" aria-label="Problem">
+        <div className="lc-header-left">
+          <Tip tip="lc whiteboard — your coding workspace">
+            <strong className="lc-brand">lc whiteboard</strong>
+          </Tip>
+          {problem ? (
+            <>
               <button
                 type="button"
-                className="lc-icon"
-                title={
-                  (session?.queue?.length ?? 0) > 0
-                    ? "Previous in session queue"
-                    : "Previous in problem bank"
-                }
-                aria-label="Previous problem"
-                disabled={!canStepPrev || busy !== null}
-                onClick={() => void stepProblem(-1)}
+                className="lc-secondary lc-home lc-tip-target"
+                data-tip="Return to the problem list"
+                data-tip-placement="bottom"
+                disabled={busy !== null}
+                onClick={returnToBrowse}
               >
-                ‹
+                ← Problems
               </button>
-              <span className="lc-current" title={problem.task_id}>
-                {problem.task_id}
-              </span>
-              <button
-                type="button"
-                className="lc-icon"
-                title={
-                  (session?.queue?.length ?? 0) > 0
-                    ? "Next in session queue"
-                    : "Next in problem bank"
-                }
-                aria-label="Next problem"
-                disabled={!canStepNext || busy !== null}
-                onClick={() => void stepProblem(1)}
-              >
-                ›
-              </button>
-            </div>
+              <div className="lc-problem-nav" role="group" aria-label="Problem">
+                <button
+                  type="button"
+                  className="lc-icon"
+                  title={
+                    (session?.queue?.length ?? 0) > 0
+                      ? "Previous in session queue"
+                      : "Previous in problem bank"
+                  }
+                  aria-label="Previous problem"
+                  disabled={!canStepPrev || busy !== null}
+                  onClick={() => void stepProblem(-1)}
+                >
+                  ‹
+                </button>
+                <span className="lc-current" title={problem.task_id}>
+                  {problem.task_id}
+                </span>
+                <button
+                  type="button"
+                  className="lc-icon"
+                  title={
+                    (session?.queue?.length ?? 0) > 0
+                      ? "Next in session queue"
+                      : "Next in problem bank"
+                  }
+                  aria-label="Next problem"
+                  disabled={!canStepNext || busy !== null}
+                  onClick={() => void stepProblem(1)}
+                >
+                  ›
+                </button>
+              </div>
+            </>
+          ) : (
+            <span className="lc-muted">pick a problem to start</span>
+          )}
+        </div>
 
+        <div className="lc-header-center">
+          <PairingBadge pairing={pairing} onPair={setPairing} />
+          {problem && (
             <div className="lc-actions">
               <button
                 type="button"
@@ -654,22 +677,26 @@ export function App() {
               >
                 Submit
               </button>
-              <button
-                type="button"
-                className={coachOpen ? "lc-secondary lc-coach-toggle lc-coach-toggle-open" : "lc-secondary lc-coach-toggle"}
-                aria-expanded={coachOpen}
-                aria-controls="lc-coach-panel"
-                onClick={() => setCoachOpen((current) => !current)}
-              >
-                Coach
-              </button>
             </div>
-          </>
-        ) : (
-          <span className="lc-muted">pick a problem to start</span>
-        )}
-        <div className="lc-header-center">
-          <PairingBadge pairing={pairing} onPair={setPairing} />
+          )}
+        </div>
+
+        <div className="lc-header-right">
+          {problem && (
+            <button
+              type="button"
+              className={
+                coachOpen
+                  ? "lc-secondary lc-coach-toggle lc-coach-toggle-open"
+                  : "lc-secondary lc-coach-toggle"
+              }
+              aria-expanded={coachOpen}
+              aria-controls="lc-coach-panel"
+              onClick={() => setCoachOpen((current) => !current)}
+            >
+              Coach
+            </button>
+          )}
         </div>
       </header>
 
@@ -943,6 +970,48 @@ function PairingBadge({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(pairing.baseUrl);
   const [problem, setProblem] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  const dismiss = useCallback(() => {
+    setEditing(false);
+    setDraft(pairing.baseUrl);
+    setProblem(null);
+  }, [pairing.baseUrl]);
+
+  const commit = useCallback(() => {
+    const value = draftRef.current;
+    // Accept either the full QR payload or a bare host:port.
+    const parsed = parsePairingUrl(value) ?? parsePairingUrl(`http://${value}`);
+    if (!parsed) {
+      setProblem("that doesn't look like the URL `lc serve --lan` printed");
+      return false;
+    }
+    savePairing(parsed);
+    onPair(parsed);
+    setEditing(false);
+    setProblem(null);
+    return true;
+  }, [onPair]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (formRef.current?.contains(event.target as Node)) return;
+      // Tablet: tap away = Enter / pair.
+      commit();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") dismiss();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [commit, dismiss, editing]);
 
   if (!editing) {
     return (
@@ -950,7 +1019,11 @@ function PairingBadge({
         type="button"
         className="lc-link lc-pairing"
         title={pairing.token ? "paired" : "loopback"}
-        onClick={() => setEditing(true)}
+        onClick={() => {
+          setDraft(pairing.baseUrl);
+          setProblem(null);
+          setEditing(true);
+        }}
       >
         {hostOf(pairing.baseUrl)}
       </button>
@@ -959,31 +1032,39 @@ function PairingBadge({
 
   return (
     <form
+      ref={formRef}
       className="lc-pairing-form"
       onSubmit={(event) => {
         event.preventDefault();
-        // Accept either the full QR payload or a bare host:port.
-        const parsed = parsePairingUrl(draft) ?? parsePairingUrl(`http://${draft}`);
-        if (!parsed) {
-          setProblem("that doesn't look like the URL `lc serve --lan` printed");
-          return;
-        }
-        savePairing(parsed);
-        onPair(parsed);
-        setEditing(false);
-        setProblem(null);
+        commit();
       }}
     >
-      <input
-        value={draft}
-        aria-label="Daemon URL"
-        placeholder="http://192.168.1.20:7878?token=…"
-        onChange={(event) => setDraft(event.target.value)}
-      />
-      <button type="submit">Pair</button>
-      <button type="button" className="lc-link" onClick={() => setEditing(false)}>
-        cancel
-      </button>
+      <div className="lc-pairing-field">
+        <input
+          value={draft}
+          aria-label="Daemon URL"
+          placeholder="http://192.168.1.20:7878?token=…"
+          autoFocus
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={(event) => {
+            const next = event.relatedTarget as Node | null;
+            if (next && formRef.current?.contains(next)) return;
+            commit();
+          }}
+        />
+        <button type="submit" className="lc-pairing-return" aria-label="Pair" title="Pair">
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+            <path
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M19 7v6a4 4 0 0 1-4 4H6m0 0 3.5-3.5M6 17l3.5 3.5"
+            />
+          </svg>
+        </button>
+      </div>
       {problem && <span className="lc-warning">{problem}</span>}
     </form>
   );

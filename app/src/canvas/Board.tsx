@@ -38,6 +38,8 @@ import {
   type ImportedLibraryItem,
 } from "../templates/libraryImport";
 import { regionFrameId, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
+import { recolorTemplateElements } from "../templates/problemBoard";
+import { codeFrameHeightForSource } from "../util/solutionPad";
 import { REGIONS } from "../templates/regions";
 import {
   BOARD_THEMES,
@@ -211,6 +213,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const seedSkeletonsRef = useRef<Skeleton[]>([]);
   const scrollUnsubRef = useRef<(() => void) | null>(null);
   const layoutSyncingRef = useRef(false);
+  const codeContentHeightRef = useRef<number | null>(null);
   const lastCodeSlotRef = useRef<ScreenRect | null>(null);
   const onCodeSlotRef = useRef(onCodeSlot);
   onCodeSlotRef.current = onCodeSlot;
@@ -322,14 +325,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   useEffect(() => {
+    const api = apiRef.current;
     const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
     const ink = defaultInk(themeId);
     setInkColor(ink);
-    apiRef.current?.updateScene({
+    if (!api) return;
+
+    const dark = isDarkTheme(themeId);
+    const elements = api.getSceneElements() as SceneElementLike[];
+    const recolored = recolorTemplateElements(elements, dark);
+
+    api.updateScene({
       appState: {
         viewBackgroundColor: theme.background,
         currentItemStrokeColor: ink,
       },
+      ...(recolored
+        ? { elements: recolored as unknown[], captureUpdate: CaptureUpdateAction.NEVER }
+        : {}),
     });
   }, [themeId]);
 
@@ -488,27 +501,37 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
   }, [convert, scheduleFitView]);
 
-  const handleSceneChange = useCallback(() => {
+  const applyRegionLayout = useCallback(() => {
     const api = apiRef.current;
-    if (api && !layoutSyncingRef.current) {
-      const synced = syncRegionLayout(api.getSceneElements() as LayoutElement[]);
-      if (synced) {
-        // Hold the guard through the synchronous onChange that updateScene may
-        // re-enter with; clear on the next frame. Avoid delayed re-sync timers —
-        // those snapped the viewport while panning past the code dock.
-        layoutSyncingRef.current = true;
-        api.updateScene({
-          elements: synced,
-          captureUpdate: CaptureUpdateAction.NEVER,
-        });
-        requestAnimationFrame(() => {
-          layoutSyncingRef.current = false;
-        });
-      }
-    }
+    if (!api || layoutSyncingRef.current) return;
+    const synced = syncRegionLayout(api.getSceneElements() as LayoutElement[], {
+      codeContentHeight: codeContentHeightRef.current ?? undefined,
+    });
+    if (!synced) return;
+    layoutSyncingRef.current = true;
+    api.updateScene({
+      elements: synced,
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    requestAnimationFrame(() => {
+      layoutSyncingRef.current = false;
+    });
+  }, []);
+
+  const fitCodeToSource = useCallback(
+    (source: string) => {
+      codeContentHeightRef.current = codeFrameHeightForSource(source);
+      applyRegionLayout();
+      requestAnimationFrame(reportCodeSlot);
+    },
+    [applyRegionLayout, reportCodeSlot],
+  );
+
+  const handleSceneChange = useCallback(() => {
+    applyRegionLayout();
     reportCodeSlot();
     onChange?.();
-  }, [onChange, reportCodeSlot]);
+  }, [applyRegionLayout, onChange, reportCodeSlot]);
 
   useImperativeHandle(
     ref,
@@ -564,8 +587,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       zoomIn,
       zoomOut,
       fitView,
+      fitCodeToSource,
     }),
-    [convert, elements, fitView, resetTemplate, scheduleFitView, setTool, zoomIn, zoomOut],
+    [convert, elements, fitCodeToSource, fitView, resetTemplate, scheduleFitView, setTool, zoomIn, zoomOut],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
