@@ -7,7 +7,6 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { LcClient } from "../api/client";
 import type { LcConfig, LlmStatus, ProviderConfig } from "../api/types";
-import { Tip } from "./Tip";
 
 type TabId = "paths" | "llm" | "serve";
 
@@ -171,9 +170,7 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
           {tab === "paths" && (
             <div className="lc-settings-fields">
               <label>
-                <Tip tip="Folder of problem JSON files (same corpus the TUI indexes)">
-                  <span>Problems folder</span>
-                </Tip>
+                <span>Problems folder</span>
                 <input
                   value={draft.data_json_dir ?? ""}
                   onChange={(e) =>
@@ -184,26 +181,29 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                   }
                   placeholder="path to JSON corpus"
                 />
+                <p className="lc-settings-hint">
+                  Folder of problem JSON files — the same corpus the TUI indexes.
+                </p>
               </label>
               <label>
-                <Tip tip="Where generated solve folders go (~/lc-workspace/<task>)">
-                  <span>Workspace dir</span>
-                </Tip>
+                <span>Workspace dir</span>
                 <input
                   value={draft.workspace_dir}
                   onChange={(e) => setDraft((prev) => ({ ...prev, workspace_dir: e.target.value }))}
                 />
+                <p className="lc-settings-hint">
+                  Where generated solve folders go (~/lc-workspace/&lt;task&gt;).
+                </p>
               </label>
               <label>
-                <Tip tip="Python used to run tests">
-                  <span>Python executable</span>
-                </Tip>
+                <span>Python executable</span>
                 <input
                   value={draft.python_executable}
                   onChange={(e) =>
                     setDraft((prev) => ({ ...prev, python_executable: e.target.value }))
                   }
                 />
+                <p className="lc-settings-hint">Python used to run tests.</p>
               </label>
             </div>
           )}
@@ -226,15 +226,17 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                 </select>
               </label>
 
-              <div className="lc-settings-provider-tabs">
+              <div className="lc-settings-provider-tabs" role="tablist">
                 {(["local", "ollama", "openai"] as const).map((p) => (
                   <button
                     key={p}
                     type="button"
+                    role="tab"
+                    aria-selected={providerFocus === p}
                     className={
                       providerFocus === p
-                        ? "lc-settings-tab is-active"
-                        : "lc-settings-tab"
+                        ? "lc-settings-subtab is-active"
+                        : "lc-settings-subtab"
                     }
                     onClick={() => setProviderFocus(p)}
                   >
@@ -258,9 +260,7 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                 />
               </label>
               <label>
-                <Tip tip="Separate vision model for PNG board captures. Leave empty to reuse the chat model.">
-                  <span>Vision model</span>
-                </Tip>
+                <span>Vision model</span>
                 <input
                   value={provider.vision_model}
                   onChange={(e) =>
@@ -268,6 +268,9 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                   }
                   placeholder="(same as chat model)"
                 />
+                <p className="lc-settings-hint">
+                  Separate vision model for PNG board captures. Leave empty to reuse the chat model.
+                </p>
               </label>
 
               {providerFocus === "openai" && (
