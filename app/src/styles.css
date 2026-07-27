@@ -2401,13 +2401,82 @@ button.lc-row-selected:hover:not(:disabled) {
   height: 0;
 }
 
-.lc-settings-tabs,
-.lc-settings-provider-tabs {
+/*
+ * Primary tabs read as a tab strip, not a button row: no fill, no border box —
+ * just an accent underline on the active label sitting on the strip's rule.
+ */
+.lc-settings-tabs {
   display: flex;
   gap: 4px;
-  padding: 0 16px;
+  padding: 0 20px;
   flex-wrap: wrap;
-  overflow: visible;
+  border-bottom: 1px solid var(--border, rgb(127 127 127 / 20%));
+}
+
+.lc-settings-tab {
+  min-height: 38px;
+  margin-bottom: -1px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.lc-settings-tab:hover {
+  color: var(--ink);
+}
+
+.lc-settings-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+/* Provider picker inside the LLM tab — a segmented control, so it can't be
+ * mistaken for a second level of the strip above it. */
+.lc-settings-provider-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  max-width: 100%;
+  flex-wrap: wrap;
+  padding: 3px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+}
+
+.lc-settings-subtab {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: color 120ms ease-out, background 120ms ease-out;
+}
+
+.lc-settings-subtab:hover {
+  color: var(--ink);
+}
+
+.lc-settings-subtab.is-active {
+  border-color: var(--border, rgb(127 127 127 / 22%));
+  background: var(--bg);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
+}
+
+/* On dark boards the raised pill has to be lighter than its track, not the
+ * plain page background, or the selection reads as a hole. */
+[data-theme="dark"] .lc-settings-subtab.is-active {
+  background: color-mix(in srgb, var(--ink) 20%, var(--bg));
+  box-shadow: none;
 }
 
 .lc-settings-fields {
@@ -2432,6 +2501,17 @@ button.lc-row-selected:hover:not(:disabled) {
   border: 1px solid var(--border, rgb(127 127 127 / 30%));
   background: var(--input-bg, var(--bg));
   color: var(--fg);
+}
+
+/*
+ * Field help is inline, not a hover tip: a top-placed tooltip on the first row
+ * is clipped by the body's own scroll box and lands on top of the tab strip.
+ */
+.lc-settings-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--hint);
 }
 
 .lc-settings-subhead {
