@@ -7,7 +7,13 @@
  * there is one source of truth for where anything goes.
  */
 
-export type RegionId = "constraints" | "approach" | "complexity" | "walkthrough" | "agent";
+export type RegionId =
+  | "constraints"
+  | "code"
+  | "approach"
+  | "complexity"
+  | "walkthrough"
+  | "agent";
 
 export interface Region {
   id: RegionId;
@@ -25,20 +31,33 @@ export interface Region {
  * `lcRegion` tag it carries, and `regionAt` derives membership from these same
  * numbers. So the layout can grow purely for legibility and elbow room.
  */
-const GUTTER = 64;
-const STUDENT_WIDTH = 2600;
+export const REGION_GUTTER = 64;
+const GUTTER = REGION_GUTTER;
+const STUDENT_WIDTH = 2800;
 const AGENT_WIDTH = 1100;
 
 /** Problem statements need real room to breathe at a readable font size. */
-const CONSTRAINTS_H = 900;
+const CONSTRAINTS_H = 1400;
+/** Monaco solution editor sits in this slot under the problem statement. */
+const CODE_H = 560;
 const APPROACH_H = 1100;
 const COMPLEXITY_H = 360;
 const WALKTHROUGH_H = 900;
 
-const APPROACH_Y = CONSTRAINTS_H + GUTTER;
+const CODE_Y = CONSTRAINTS_H + GUTTER;
+const APPROACH_Y = CODE_Y + CODE_H + GUTTER;
 const COMPLEXITY_Y = APPROACH_Y + APPROACH_H + GUTTER;
 const WALKTHROUGH_Y = COMPLEXITY_Y + COMPLEXITY_H + GUTTER;
 const TOTAL_H = WALKTHROUGH_Y + WALKTHROUGH_H;
+
+/** Student columns, top to bottom — used when reflowing resizable frames. */
+export const STUDENT_REGION_ORDER: RegionId[] = [
+  "constraints",
+  "code",
+  "approach",
+  "complexity",
+  "walkthrough",
+];
 
 export const REGIONS: Record<RegionId, Region> = {
   constraints: {
@@ -48,6 +67,14 @@ export const REGIONS: Record<RegionId, Region> = {
     y: 0,
     w: STUDENT_WIDTH,
     h: CONSTRAINTS_H,
+  },
+  code: {
+    id: "code",
+    label: "Solution code",
+    x: 0,
+    y: CODE_Y,
+    w: STUDENT_WIDTH,
+    h: CODE_H,
   },
   approach: {
     id: "approach",

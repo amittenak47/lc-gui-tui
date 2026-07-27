@@ -52,7 +52,7 @@ export function AmbientPanel({
 
       {entries.length === 0 && !thinking && (
         <p className="lc-muted">
-          Sketch your approach. I'll look every 15 seconds — and stay quiet while nothing changes.
+          Sketch your approach. I'll look every 60 seconds — and stay quiet while nothing changes.
         </p>
       )}
 

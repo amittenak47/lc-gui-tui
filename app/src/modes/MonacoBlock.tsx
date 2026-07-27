@@ -31,27 +31,39 @@ self.MonacoEnvironment = {
 export interface MonacoBlockProps {
   value: string;
   language: string;
+  dark?: boolean;
+  height?: string;
   onChange: (value: string) => void;
   onReady: () => void;
 }
 
-export default function MonacoBlock({ value, language, onChange, onReady }: MonacoBlockProps) {
+export default function MonacoBlock({
+  value,
+  language,
+  dark = false,
+  height = "min(42vh, 360px)",
+  onChange,
+  onReady,
+}: MonacoBlockProps) {
   return (
     <Editor
-      height="240px"
+      height={height}
       language={language}
+      theme={dark ? "vs-dark" : "vs"}
       value={value}
       onMount={onReady}
       onChange={(next) => onChange(next ?? "")}
       options={{
         minimap: { enabled: false },
         lineNumbers: "on",
-        fontSize: 14,
+        fontSize: 13,
+        fontFamily: "Consolas, 'Cascadia Code', 'Courier New', monospace",
         scrollBeyondLastLine: false,
         wordWrap: "on",
         tabSize: 4,
-        renderLineHighlight: "none",
+        renderLineHighlight: "line",
         overviewRulerLanes: 0,
+        padding: { top: 8 },
         // A stylus can't easily dismiss an autocomplete popup.
         quickSuggestions: false,
         suggestOnTriggerCharacters: false,

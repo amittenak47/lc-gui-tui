@@ -11,13 +11,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { LcClient } from "../api/client";
 import type { ProblemSummary } from "../api/types";
+import { BackgroundPalette } from "../components/BackgroundPalette";
 
 export const PAGE_SIZE = 15;
 
 const DIFFICULTIES = ["", "Easy", "Medium", "Hard"] as const;
 const SORTS = ["task_id", "question", "difficulty", "cases", "tags"] as const;
 const SORT_LABEL: Record<string, string> = {
-  task_id: "slug",
+  task_id: "name",
   question: "q#",
   difficulty: "difficulty",
   cases: "cases",
@@ -28,6 +29,8 @@ export interface ProblemBrowserProps {
   client: LcClient;
   onPick: (taskId: string) => void;
   busy: boolean;
+  themeId: string;
+  onThemePick: (id: string) => void;
 }
 
 /** Step through a cycle of options, wrapping — the TUI's T/E/O behaviour. */
@@ -36,7 +39,7 @@ export function cycle<T>(options: readonly T[], current: T): T {
   return options[(index + 1) % options.length];
 }
 
-export function ProblemBrowser({ client, onPick, busy }: ProblemBrowserProps) {
+export function ProblemBrowser({ client, onPick, busy, themeId, onThemePick }: ProblemBrowserProps) {
   const [query, setQuery] = useState("");
   const [difficulty, setDifficulty] = useState<string>("");
   const [tag, setTag] = useState<string>("");
@@ -49,6 +52,9 @@ export function ProblemBrowser({ client, onPick, busy }: ProblemBrowserProps) {
   const [tags, setTags] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /** False until the first search returns — avoids filters-then-table flash. */
+  const [tableReady, setTableReady] = useState(false);
+  const tableReadyRef = useRef(false);
 
   const searchRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -72,6 +78,8 @@ export function ProblemBrowser({ client, onPick, busy }: ProblemBrowserProps) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    // Debounce typing/filter changes; fetch immediately on first open.
+    const delay = tableReadyRef.current ? 200 : 0;
     const timer = setTimeout(() => {
       client
         .searchProblems({
@@ -88,10 +96,17 @@ export function ProblemBrowser({ client, onPick, busy }: ProblemBrowserProps) {
           setTotal(result.total);
           setSelected((current) => Math.min(current, Math.max(result.items.length - 1, 0)));
           setError(null);
+          tableReadyRef.current = true;
+          setTableReady(true);
         })
-        .catch((cause) => !cancelled && setError(messageOf(cause)))
+        .catch((cause) => {
+          if (cancelled) return;
+          setError(messageOf(cause));
+          tableReadyRef.current = true;
+          setTableReady(true);
+        })
         .finally(() => !cancelled && setLoading(false));
-    }, 200);
+    }, delay);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -208,102 +223,193 @@ export function ProblemBrowser({ client, onPick, busy }: ProblemBrowserProps) {
 
   return (
     <section className="lc-browser" aria-label="Browse problems">
-      <div className="lc-browser-filters">
-        <input
-          ref={searchRef}
-          type="search"
-          value={query}
-          placeholder="/  slug, question number, or tag"
-          aria-label="Search problems"
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <select
-          value={difficulty}
-          aria-label="Difficulty"
-          onChange={(event) => setDifficulty(event.target.value)}
-        >
-          {DIFFICULTIES.map((value) => (
-            <option key={value || "any"} value={value}>
-              {value || "any difficulty"}
-            </option>
-          ))}
-        </select>
-        <select value={tag} aria-label="Tag" onChange={(event) => setTag(event.target.value)}>
-          <option value="">any tag</option>
-          {tags.map((value) => (
-            <option key={value} value={value}>
-              {value}
-            </option>
-          ))}
-        </select>
-        <select value={sort} aria-label="Sort" onChange={(event) => setSort(event.target.value)}>
-          {SORTS.map((value) => (
-            <option key={value} value={value}>
-              sort: {SORT_LABEL[value]}
-            </option>
-          ))}
-        </select>
-        <button type="button" className="lc-secondary" onClick={() => void pickRandom()}>
-          Random
-        </button>
-      </div>
+      <div className="lc-browser-center">
+        {!tableReady ? (
+          <div className="lc-browser-loading" role="status" aria-live="polite" aria-label="Loading problems">
+            <div className="lc-spinner" aria-hidden="true" />
+          </div>
+        ) : (
+          <div className="lc-browser-body lc-browser-body-ready">
+            <div className="lc-browser-filters">
+              <input
+                ref={searchRef}
+                type="search"
+                className="lc-tip-target"
+                value={query}
+                placeholder="/  name, question number, or tag"
+                aria-label="Search problems"
+                data-tip="Search by name, question number, or tag — press / to focus"
+                data-tip-placement="bottom"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              <select
+                className="lc-tip-target"
+                value={difficulty}
+                aria-label="Difficulty"
+                data-tip="Filter by difficulty — press E to cycle"
+                data-tip-placement="bottom"
+                onChange={(event) => setDifficulty(event.target.value)}
+              >
+                {DIFFICULTIES.map((value) => (
+                  <option key={value || "any"} value={value}>
+                    {value || "any difficulty"}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="lc-tip-target"
+                value={tag}
+                aria-label="Tag"
+                data-tip="Filter by topic tag — press T to cycle"
+                data-tip-placement="bottom"
+                onChange={(event) => setTag(event.target.value)}
+              >
+                <option value="">any tag</option>
+                {tags.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="lc-tip-target"
+                value={sort}
+                aria-label="Sort"
+                data-tip="Sort column — press O to cycle"
+                data-tip-placement="bottom"
+                onChange={(event) => setSort(event.target.value)}
+              >
+                {SORTS.map((value) => (
+                  <option key={value} value={value}>
+                    sort: {SORT_LABEL[value]}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="lc-secondary lc-tip-target"
+                data-tip="Open a random problem matching current filters — press R"
+                data-tip-placement="bottom"
+                onClick={() => void pickRandom()}
+              >
+                Random
+              </button>
+            </div>
 
-      {error && <p className="lc-warning">{error}</p>}
+            {error && <p className="lc-warning">{error}</p>}
 
-      <div className="lc-table-head" aria-hidden="true">
-        <span className="lc-col-q">q#</span>
-        <span className="lc-col-slug">task_id</span>
-        <span className="lc-col-diff">difficulty</span>
-        <span className="lc-col-tags">tags</span>
-        <span className="lc-col-cases">cases</span>
-      </div>
+            <div className={loading ? "lc-browser-results lc-browser-results-pending" : "lc-browser-results"}>
+              <div className="lc-table-head" aria-hidden="true">
+                <span className="lc-col-q lc-tip-target" data-tip="LeetCode question number" data-tip-placement="bottom">
+                  q#
+                </span>
+                <span className="lc-col-name lc-tip-target" data-tip="Problem name" data-tip-placement="bottom">
+                  name
+                </span>
+                <span className="lc-col-diff lc-tip-target" data-tip="Easy, Medium, or Hard" data-tip-placement="bottom">
+                  difficulty
+                </span>
+                <span className="lc-col-tags lc-tip-target" data-tip="Topic tags from the corpus" data-tip-placement="bottom">
+                  tags
+                </span>
+                <span className="lc-col-cases lc-tip-target" data-tip="Number of test cases" data-tip-placement="bottom">
+                  cases
+                </span>
+              </div>
 
-      <div className="lc-table" ref={listRef} role="listbox" aria-label="Problems" tabIndex={-1}>
-        {rows.map((problem, index) => (
-          <button
-            key={problem.task_id}
-            type="button"
-            role="option"
-            data-row={index}
-            aria-selected={index === selected}
-            className={index === selected ? "lc-row lc-row-selected" : "lc-row"}
-            disabled={busy}
-            onMouseEnter={() => setSelected(index)}
-            onClick={() => onPick(problem.task_id)}
-          >
-            <span className="lc-col-q">{problem.question_id ?? ""}</span>
-            <span className="lc-col-slug">{problem.task_id}</span>
-            <span className={`lc-col-diff lc-diff-${(problem.difficulty ?? "").toLowerCase()}`}>
-              {problem.difficulty ?? ""}
-            </span>
-            <span className="lc-col-tags">{problem.tags.join(", ")}</span>
-            <span className="lc-col-cases">{problem.test_count}</span>
-          </button>
-        ))}
-        {!loading && rows.length === 0 && (
-          <p className="lc-muted lc-table-empty">
-            No matches. If the corpus changed, run <code>lc index</code>.
-          </p>
+              <div className="lc-table" ref={listRef} role="listbox" aria-label="Problems" tabIndex={-1}>
+                {rows.map((problem, index) => (
+                  <button
+                    key={problem.task_id}
+                    type="button"
+                    role="option"
+                    data-row={index}
+                    aria-selected={index === selected}
+                    className={index === selected ? "lc-row lc-row-selected" : "lc-row"}
+                    disabled={busy || loading}
+                    onMouseEnter={() => setSelected(index)}
+                    onClick={() => onPick(problem.task_id)}
+                  >
+                    <span className="lc-col-q">{problem.question_id ?? ""}</span>
+                    <span className="lc-col-name">{problem.task_id}</span>
+                    <span className={`lc-col-diff lc-diff-${(problem.difficulty ?? "").toLowerCase()}`}>
+                      {problem.difficulty ?? ""}
+                    </span>
+                    <span className="lc-col-tags">{problem.tags.join(", ")}</span>
+                    <span className="lc-col-cases">{problem.test_count}</span>
+                  </button>
+                ))}
+                {!loading && rows.length === 0 && (
+                  <p className="lc-muted lc-table-empty">
+                    No matches. If the corpus changed, run <code>lc index</code>.
+                  </p>
+                )}
+              </div>
+
+              <div className="lc-browser-foot">
+                <button
+                  type="button"
+                  className="lc-secondary lc-tip-target"
+                  disabled={page === 0 || loading}
+                  data-tip="Previous page — press A"
+                  data-tip-placement="top"
+                  onClick={() => turnPage(-1)}
+                >
+                  ‹ prev
+                </button>
+                <span className="lc-muted lc-tip-target" data-tip="Current page within filtered results" data-tip-placement="top">
+                  {rangeLabel} · page {page + 1}/{pageCount}
+                </span>
+                <button
+                  type="button"
+                  className="lc-secondary lc-tip-target"
+                  disabled={page >= pageCount - 1 || loading}
+                  data-tip="Next page — press D"
+                  data-tip-placement="top"
+                  onClick={() => turnPage(1)}
+                >
+                  next ›
+                </button>
+                <span className="lc-keys lc-muted">
+                  <span className="lc-tip-target" data-tip="Move selection up or down" data-tip-placement="top">
+                    W/S move
+                  </span>
+                  {" · "}
+                  <span className="lc-tip-target" data-tip="Previous / next page" data-tip-placement="top">
+                    A/D page
+                  </span>
+                  {" · "}
+                  <span className="lc-tip-target" data-tip="Focus the search box" data-tip-placement="top">
+                    / search
+                  </span>
+                  {" · "}
+                  <span className="lc-tip-target" data-tip="Cycle topic tag filter" data-tip-placement="top">
+                    T tag
+                  </span>
+                  {" · "}
+                  <span className="lc-tip-target" data-tip="Cycle difficulty filter" data-tip-placement="top">
+                    E diff
+                  </span>
+                  {" · "}
+                  <span className="lc-tip-target" data-tip="Cycle sort column" data-tip-placement="top">
+                    O sort
+                  </span>
+                  {" · "}
+                  <span className="lc-tip-target" data-tip="Open a random matching problem" data-tip-placement="top">
+                    R random
+                  </span>
+                  {" · "}
+                  <span className="lc-tip-target" data-tip="Open the selected problem" data-tip-placement="top">
+                    Enter open
+                  </span>
+                </span>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 
-      <div className="lc-browser-foot">
-        <button type="button" className="lc-secondary" disabled={page === 0} onClick={() => turnPage(-1)}>
-          ‹ prev
-        </button>
-        <span className="lc-muted">
-          {rangeLabel} · page {page + 1}/{pageCount}
-        </span>
-        <button
-          type="button"
-          className="lc-secondary"
-          disabled={page >= pageCount - 1}
-          onClick={() => turnPage(1)}
-        >
-          next ›
-        </button>
-        <span className="lc-keys lc-muted">W/S move · A/D page · / search · T tag · E diff · O sort · R random · Enter open</span>
-      </div>
+      <BackgroundPalette themeId={themeId} onPick={onThemePick} variant="inline" />
     </section>
   );
 }

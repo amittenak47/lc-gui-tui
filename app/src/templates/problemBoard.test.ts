@@ -81,27 +81,38 @@ describe("buildProblemTemplate", () => {
 
   it("gives the title and statement a readable size", () => {
     const title = skeletons.find((s) => s.id === "lcregion-constraints-title");
-    expect(title?.fontSize).toBeGreaterThanOrEqual(32);
+    expect(title?.fontSize).toBeGreaterThanOrEqual(48);
     const body = skeletons.filter((s) => s.id?.startsWith("lcregion-constraints-body-"));
-    expect(body.every((s) => (s.fontSize ?? 0) >= 16)).toBe(true);
+    expect(body.every((s) => (s.fontSize ?? 0) >= 22)).toBe(true);
   });
 
   it("tags every element with its region, so Clear can keep them", () => {
     expect(skeletons.every((s) => Boolean(s.customData?.lcRegion))).toBe(true);
   });
 
-  it("locks the scaffolding so a stray palm can't drag the problem away", () => {
-    expect(skeletons.every((s) => s.locked === true)).toBe(true);
+  it("locks statement text but leaves region frames resizable", () => {
+    const frames = skeletons.filter((s) => s.id?.endsWith("-frame"));
+    const content = skeletons.filter((s) => !s.id?.endsWith("-frame"));
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.every((s) => s.locked === false)).toBe(true);
+    expect(content.every((s) => s.locked === true)).toBe(true);
+    expect(frames.every((s) => s.customData?.lcRegionFrame)).toBe(true);
   });
 
-  it("keeps the statement inside its region", () => {
-    const region = REGIONS.constraints;
-    const body = skeletons.filter((s) => s.id?.startsWith("lcregion-constraints-"));
-    for (const element of body) {
-      expect(element.x).toBeGreaterThanOrEqual(region.x);
-      expect(element.y).toBeGreaterThanOrEqual(region.y);
-      expect(element.y).toBeLessThan(region.y + region.h);
-    }
+  it("uses light ink on dark boards", () => {
+    const dark = buildProblemTemplate({
+      taskId: "01-matrix",
+      title: "01 Matrix",
+      description: "Given a matrix.",
+      dark: true,
+    });
+    const title = dark.find((s) => s.id === "lcregion-constraints-title");
+    expect(title?.strokeColor).toMatch(/^#f/i);
+  });
+
+  it("sets a wrap width on statement text", () => {
+    const body = skeletons.filter((s) => s.id?.startsWith("lcregion-constraints-body-"));
+    expect(body.every((s) => (s.width ?? 0) > 1000)).toBe(true);
   });
 });
 
@@ -109,6 +120,7 @@ describe("board size", () => {
   it("is roomy enough to sketch in", () => {
     // Reported: "size of the whiteboard larger".
     expect(REGIONS.constraints.w).toBeGreaterThanOrEqual(2000);
+    expect(REGIONS.constraints.h).toBeGreaterThanOrEqual(1200);
     expect(REGIONS.approach.h).toBeGreaterThanOrEqual(800);
     expect(REGIONS.agent.w).toBeGreaterThanOrEqual(800);
   });

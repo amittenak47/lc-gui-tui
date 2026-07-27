@@ -11,7 +11,23 @@
 import type { Skeleton } from "../templates/skeleton";
 import type { InkStroke, SceneElementLike } from "./capture";
 
-export type ToolName = "selection" | "freedraw" | "eraser" | "text" | "rectangle" | "ellipse" | "arrow";
+export type ToolName =
+  | "hand"
+  | "selection"
+  | "freedraw"
+  | "eraser"
+  | "text"
+  | "rectangle"
+  | "ellipse"
+  | "arrow";
+
+/** Screen-space rectangle relative to the board container. */
+export interface ScreenRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
 
 export interface BoardHandle {
   /** Live scene elements, including the coach's — callers filter. */
@@ -24,6 +40,8 @@ export interface BoardHandle {
   seedTemplate(skeletons: Skeleton[]): void;
   /** Erase the student's work, keeping the template scaffolding. */
   clearStudentWork(): void;
+  /** Restore the original problem template layout (frames + statement). */
+  resetTemplate(): void;
   /** Base64 PNG of the board, for vision-capable models only. */
   exportPng(): Promise<string>;
   /** Freedraw strokes in absolute coordinates, for the ink recognizer. */
@@ -31,4 +49,8 @@ export interface BoardHandle {
   setTool(tool: ToolName): void;
   undo(): void;
   scrollToContent(): void;
+  zoomIn(): void;
+  zoomOut(): void;
+  /** Re-center the viewport on the problem template. */
+  fitView(): void;
 }

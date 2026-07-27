@@ -40,6 +40,14 @@ export interface Skeleton {
 export interface SkeletonMeta {
   /** Set on template scaffolding, so the coach knows which region is which. */
   lcRegion?: string;
+  /** Dashed region border — unlocked so the student can resize the layout. */
+  lcRegionFrame?: boolean;
+  /**
+   * Position relative to the region frame's top-left. Used when syncing layout
+   * so resizing a frame from the top/left doesn't leave statement text stranded.
+   */
+  lcRegionOx?: number;
+  lcRegionOy?: number;
   /**
    * Set on every element the coach injected. Two jobs: the capture layer skips
    * these so the coach never reads its own output back, and the viz applier
@@ -54,9 +62,27 @@ export interface SkeletonMeta {
 export const COACH_INK = "#5b6478";
 export const COACH_ACCENT = "#c2410c";
 export const COACH_FILL = "#f1f5f9";
-export const STUDENT_HINT = "#9aa3af";
+export const STUDENT_HINT = "#64748b";
+export const REGION_BORDER = "#94a3b8";
 export const TEXT_PRIMARY = "#1e1e1e";
 export const TEXT_BODY = "#2f3542";
+
+/** Template ink — pick for board brightness so statement text stays readable. */
+export function templatePalette(dark: boolean) {
+  return dark
+    ? {
+        primary: "#f3f4f6",
+        body: "#e5e7eb",
+        hint: "#9ca3af",
+        border: "#6b7280",
+      }
+    : {
+        primary: TEXT_PRIMARY,
+        body: TEXT_BODY,
+        hint: STUDENT_HINT,
+        border: REGION_BORDER,
+      };
+}
 
 /**
  * Excalidraw font ids.
@@ -84,11 +110,16 @@ export interface BoardTheme {
 }
 
 export const BOARD_THEMES: BoardTheme[] = [
-  { id: "paper", label: "Paper", background: "#ffffff", hint: "#9aa3af" },
-  { id: "warm", label: "Warm", background: "#fdf8f0", hint: "#a8a29e" },
-  { id: "cool", label: "Cool", background: "#f4f8fb", hint: "#94a3b8" },
-  { id: "sage", label: "Sage", background: "#f3f7f3", hint: "#94a89a" },
-  { id: "slate", label: "Slate", background: "#e9ecef", hint: "#8b95a1" },
+  { id: "parchment", label: "Parchment", background: "#f5f0e4", hint: "#8a7f6c" },
+  { id: "linen", label: "Linen", background: "#ebe3d4", hint: "#857a68" },
+  { id: "sand", label: "Sand", background: "#e8dcc4", hint: "#8a7d66" },
+  { id: "papyrus", label: "Papyrus", background: "#ddd0b4", hint: "#7a6f58" },
+  { id: "wheat", label: "Wheat", background: "#e5d4b0", hint: "#8a7758" },
+  { id: "midnight", label: "Midnight", background: "#1a1d23", hint: "#6b7280" },
+  { id: "graphite", label: "Graphite", background: "#23262e", hint: "#7a8494" },
+  { id: "ocean", label: "Ocean", background: "#1a2229", hint: "#6b8099" },
+  { id: "pine", label: "Pine", background: "#1a211e", hint: "#6b8a7a" },
+  { id: "dusk", label: "Dusk", background: "#221e24", hint: "#8a7a85" },
 ];
 
 /** Tag a whole group as the coach's, so capture and replacement both work. */

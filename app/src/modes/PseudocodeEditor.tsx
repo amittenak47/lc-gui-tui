@@ -1,20 +1,14 @@
 /**
- * A code block for pseudocode, alongside the ink.
+ * Solution-code editor docked on the canvas (or as a side panel).
  *
- * Handwriting recognition is good on prose and weak on exactly the things
- * pseudocode is made of — brackets, subscripts, `<=`, array indices. Typing that
- * part means the coach reads it *exactly* instead of guessing, so the daemon
- * carries it in its own `pseudocode` field and tells the model to read it
- * literally rather than second-guessing it like OCR.
- *
- * The block is the student's. The coach reads it and never writes to it, so
- * there is no question about who owns what on screen.
- *
- * Monaco itself lives in {@link ./MonacoBlock} and is loaded only when this
- * panel is opened — it is far too large to sit in the path of first paint.
+ * Handwriting recognition is weak on brackets, indices, and `<=`. Typing the
+ * solution means the coach reads it exactly. Monaco lives in {@link ./MonacoBlock}
+ * and loads only when this panel mounts.
  */
 
-import { Suspense, lazy, useState } from "react";
+import { Component, Suspense, lazy, type ErrorInfo, type ReactNode, useState } from "react";
+
+import { isDarkTheme } from "../theme/appThemes";
 
 const MonacoBlock = lazy(() => import("./MonacoBlock"));
 
@@ -22,26 +16,82 @@ export interface PseudocodeEditorProps {
   value: string;
   onChange: (value: string) => void;
   language?: string;
+  themeId?: string;
   /** Collapsed by default so it never competes with the canvas for space. */
   defaultOpen?: boolean;
+  /** Docked on the canvas beneath the problem statement. */
+  variant?: "panel" | "dock";
 }
 
-const LANGUAGES = ["python", "plaintext", "javascript", "cpp", "java"] as const;
+/** Only Python is wired through the workspace for now. */
+const LANGUAGES = ["python"] as const;
 
 export function PseudocodeEditor({
   value,
   onChange,
   language = "python",
-  defaultOpen = false,
+  themeId = "parchment",
+  defaultOpen = true,
+  variant = "panel",
 }: PseudocodeEditorProps) {
   const [open, setOpen] = useState(defaultOpen);
   const [lang, setLang] = useState<string>(language);
   const [failed, setFailed] = useState(false);
 
   const lineCount = value ? value.split("\n").length : 0;
+  const dock = variant === "dock";
+
+  const editor = failed ? (
+    <textarea
+      className="lc-pseudo-fallback"
+      value={value}
+      spellCheck={false}
+      aria-label="Solution code"
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ) : (
+    <ErrorBoundary onError={() => setFailed(true)}>
+      <Suspense fallback={<div className="lc-pseudo-loading">loading editor…</div>}>
+        <MonacoBlock
+          value={value}
+          language={lang}
+          dark={isDarkTheme(themeId)}
+          height={dock ? "100%" : "min(42vh, 360px)"}
+          onChange={onChange}
+          onReady={() => {}}
+        />
+      </Suspense>
+    </ErrorBoundary>
+  );
+
+  const langSelect = (
+    <select
+      className={dock ? "lc-pseudo-lang lc-pseudo-lang-dock" : "lc-pseudo-lang"}
+      value={lang}
+      aria-label="Language"
+      onChange={(event) => setLang(event.target.value)}
+    >
+      {LANGUAGES.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </select>
+  );
+
+  if (dock) {
+    return (
+      <section className="lc-pseudo lc-pseudo-open lc-pseudo-dock" aria-label="Solution code">
+        <div className="lc-pseudo-body">
+          {editor}
+          {langSelect}
+        </div>
+      </section>
+    );
+  }
 
   return (
-    <section className={open ? "lc-pseudo lc-pseudo-open" : "lc-pseudo"} aria-label="Pseudocode">
+    <section className={open ? "lc-pseudo lc-pseudo-open" : "lc-pseudo"} aria-label="Solution code">
       <header className="lc-panel-head">
         <button
           type="button"
@@ -49,55 +99,19 @@ export function PseudocodeEditor({
           aria-expanded={open}
           onClick={() => setOpen((current) => !current)}
         >
-          {open ? "▾" : "▸"} Pseudocode
+          {open ? "▾" : "▸"} Solution code
         </button>
         {!open && lineCount > 0 && (
           <span className="lc-muted">
             {lineCount} line{lineCount === 1 ? "" : "s"}
           </span>
         )}
-        {open && (
-          <select
-            className="lc-pseudo-lang"
-            value={lang}
-            aria-label="Language"
-            onChange={(event) => setLang(event.target.value)}
-          >
-            {LANGUAGES.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        )}
       </header>
 
       {open && (
         <div className="lc-pseudo-body">
-          {failed ? (
-            // A plain textarea beats no way to type pseudocode at all.
-            <textarea
-              className="lc-pseudo-fallback"
-              value={value}
-              spellCheck={false}
-              aria-label="Pseudocode"
-              onChange={(event) => onChange(event.target.value)}
-            />
-          ) : (
-            <ErrorBoundary onError={() => setFailed(true)}>
-              <Suspense fallback={<div className="lc-pseudo-loading">loading editor…</div>}>
-                <MonacoBlock
-                  value={value}
-                  language={lang}
-                  onChange={onChange}
-                  onReady={() => {}}
-                />
-              </Suspense>
-            </ErrorBoundary>
-          )}
-          <p className="lc-muted lc-pseudo-note">
-            The coach reads this exactly — no handwriting guesswork.
-          </p>
+          {editor}
+          {langSelect}
         </div>
       )}
     </section>
@@ -108,8 +122,6 @@ export function PseudocodeEditor({
  * Minimal boundary so a Monaco load failure degrades to the textarea instead of
  * taking the whole app down mid-session.
  */
-import { Component, type ErrorInfo, type ReactNode } from "react";
-
 class ErrorBoundary extends Component<
   { children: ReactNode; onError: () => void },
   { crashed: boolean }
