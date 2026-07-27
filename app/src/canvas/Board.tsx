@@ -53,6 +53,14 @@ import { isDarkTheme } from "../theme/appThemes";
 import type { BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
 import { applyMetadata, keepOnClear } from "./scene";
+import {
+  eraseSceneAlong,
+  eraseSceneAt,
+  eraserSceneRadius,
+  eraserScreenRadius,
+  type ErasableFreedraw,
+} from "./partialEraser";
+import { EraserBrush } from "./EraserBrush";
 
 /**
  * The slice of Excalidraw's imperative API this file uses, declared locally so a
@@ -70,7 +78,7 @@ interface ExcalidrawApi {
       | typeof CaptureUpdateAction.IMMEDIATELY
       | typeof CaptureUpdateAction.EVENTUALLY;
   }): void;
-  setActiveTool(tool: { type: string }): void;
+  setActiveTool(tool: { type: string; customType?: string }): void;
   setCursor?(cursor: string): void;
   resetCursor?(): void;
   scrollToContent(target?: unknown, opts?: unknown): void;
@@ -117,19 +125,15 @@ function getStateForZoom(
   };
 }
 
-/** Pink rubber eraser cursor; size tracks Thin / Bold / Heavy. */
-function eraserCursorCss(strokeWidth: number): string {
-  const px = strokeWidth <= 1 ? 18 : strokeWidth <= 2 ? 26 : 36;
-  const svg = encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 24 24">` +
-      `<g transform="rotate(-28 12 12)">` +
-      `<rect x="5" y="7" width="14" height="10" rx="2" fill="#f9a8d4" stroke="#be185d" stroke-width="1.2"/>` +
-      `<rect x="5" y="7" width="14" height="3.5" rx="1" fill="#fda4af"/>` +
-      `<rect x="5" y="14.5" width="14" height="2.5" fill="#fff1f2" opacity="0.9"/>` +
-      `</g></svg>`,
-  );
-  const hot = Math.round(px / 2);
-  return `url("data:image/svg+xml,${svg}") ${hot} ${hot}, crosshair`;
+/** Hide the OS cursor on the canvas — {@link EraserBrush} draws the ring. */
+function eraserCanvasCursorCss(): string {
+  return "none";
+}
+
+function isEraserCanvasTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock")) return false;
+  return Boolean(target.closest("canvas.excalidraw__canvas"));
 }
 
 function num(value: number | undefined, fallback: number): number {
@@ -196,7 +200,7 @@ const TOOLS: Array<{ tool: ToolName; label: string; hint: string; emoji?: string
   { tool: "hand", label: "hand", hint: "Pan — drag to move; scroll wheel zooms", emoji: "✋" },
   { tool: "selection", label: "⬚", hint: "Select — resize region boxes or move your work" },
   { tool: "freedraw", label: "Pen", hint: "Pen", emoji: "✏️" },
-  { tool: "eraser", label: "Eraser", hint: "Eraser", emoji: "erasersvg" },
+  { tool: "eraser", label: "Eraser", hint: "Eraser — only removes ink under the brush", emoji: "erasersvg" },
   { tool: "text", label: "T", hint: "Text" },
   { tool: "rectangle", label: "▭", hint: "Rectangle" },
   { tool: "ellipse", label: "◯", hint: "Ellipse" },
@@ -243,6 +247,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
   const [inkColor, setInkColor] = useState(() => defaultInk(themeId));
   const [strokeWidth, setStrokeWidthState] = useState(1);
+  const [eraserBrush, setEraserBrush] = useState({ visible: false, x: 0, y: 0, zoom: 1 });
   const [shapesOpen, setShapesOpen] = useState(false);
   const [zoomPct, setZoomPct] = useState(100);
   const templateRef = useRef<unknown[]>([]);
@@ -332,19 +337,158 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     setStrokeWidthState(width);
     apiRef.current?.updateScene({ appState: { currentItemStrokeWidth: width } });
     if (activeTool === "eraser") {
-      apiRef.current?.setCursor?.(eraserCursorCss(width));
+      apiRef.current?.setCursor?.(eraserCanvasCursorCss());
     }
   }, [activeTool]);
 
   const setTool = useCallback((tool: ToolName) => {
-    apiRef.current?.setActiveTool({ type: tool });
-    setActiveTool(tool);
     if (tool === "eraser") {
-      apiRef.current?.setCursor?.(eraserCursorCss(strokeWidth));
+      // Custom tool so Excalidraw does not run its whole-element eraser.
+      apiRef.current?.setActiveTool({ type: "custom", customType: "lcEraser" });
+      apiRef.current?.setCursor?.(eraserCanvasCursorCss());
     } else {
+      apiRef.current?.setActiveTool({ type: tool });
       apiRef.current?.resetCursor?.();
+      setEraserBrush({ visible: false, x: 0, y: 0, zoom: 1 });
     }
-  }, [strokeWidth]);
+    setActiveTool(tool);
+  }, []);
+
+  /** Scene coords from a pointer event over the Excalidraw viewport. */
+  const clientToScene = useCallback((clientX: number, clientY: number) => {
+    const state = apiRef.current?.getAppState() as
+      | {
+          zoom?: { value?: number };
+          scrollX?: number;
+          scrollY?: number;
+          offsetLeft?: number;
+          offsetTop?: number;
+        }
+      | undefined;
+    const zoom = state?.zoom?.value ?? 1;
+    return {
+      x: (clientX - (state?.offsetLeft ?? 0)) / zoom - (state?.scrollX ?? 0),
+      y: (clientY - (state?.offsetTop ?? 0)) / zoom - (state?.scrollY ?? 0),
+      zoom,
+    };
+  }, []);
+
+  // Partial spherical eraser: only frees ink under the tip; never deletes
+  // whole strokes, templates, or coach diagrams.
+  useEffect(() => {
+    if (!interactive || activeTool !== "eraser") return;
+    const root = boardRef.current;
+    const api = apiRef.current;
+    if (!root || !api) return;
+
+    let erasing = false;
+    let moved = false;
+    let lastSceneX: number | null = null;
+    let lastSceneY: number | null = null;
+
+    const syncBrush = (event: PointerEvent) => {
+      if (!isEraserCanvasTarget(event.target)) {
+        setEraserBrush((brush) => (brush.visible ? { ...brush, visible: false } : brush));
+        return;
+      }
+      const rect = root.getBoundingClientRect();
+      const { zoom } = clientToScene(event.clientX, event.clientY);
+      setEraserBrush({
+        visible: true,
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+        zoom,
+      });
+    };
+
+    const stamp = (event: PointerEvent, along: boolean) => {
+      if (!isEraserCanvasTarget(event.target)) return;
+      const { x, y, zoom } = clientToScene(event.clientX, event.clientY);
+      const radius = eraserSceneRadius(strokeWidth);
+      const elements = api.getSceneElements() as ErasableFreedraw[];
+      const next =
+        along && lastSceneX !== null && lastSceneY !== null
+          ? eraseSceneAlong(elements, lastSceneX, lastSceneY, x, y, radius)
+          : eraseSceneAt(elements, x, y, radius);
+      lastSceneX = x;
+      lastSceneY = y;
+      if (!next) return;
+      moved = true;
+      api.updateScene({
+        elements: next as unknown[],
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    };
+
+    const onDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      if (!isEraserCanvasTarget(event.target)) return;
+      erasing = true;
+      moved = false;
+      lastSceneX = null;
+      lastSceneY = null;
+      const canvas = root.querySelector("canvas.excalidraw__canvas");
+      try {
+        (canvas ?? root).setPointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      syncBrush(event);
+      stamp(event, false);
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const onMove = (event: PointerEvent) => {
+      syncBrush(event);
+      if (!erasing) return;
+      stamp(event, true);
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const onUp = (event: PointerEvent) => {
+      if (!erasing) return;
+      erasing = false;
+      lastSceneX = null;
+      lastSceneY = null;
+      const canvas = root.querySelector("canvas.excalidraw__canvas");
+      try {
+        (canvas ?? root).releasePointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      if (moved) {
+        // One undo step for the whole erase stroke.
+        api.updateScene({
+          elements: api.getSceneElements() as unknown[],
+          captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+        });
+      }
+      syncBrush(event);
+      api.setCursor?.(eraserCanvasCursorCss());
+    };
+
+    const onLeave = () => {
+      setEraserBrush((brush) => (brush.visible ? { ...brush, visible: false } : brush));
+    };
+
+    root.addEventListener("pointerdown", onDown, true);
+    root.addEventListener("pointermove", onMove, true);
+    root.addEventListener("pointerup", onUp, true);
+    root.addEventListener("pointercancel", onUp, true);
+    root.addEventListener("pointerleave", onLeave, true);
+    api.setCursor?.(eraserCanvasCursorCss());
+
+    return () => {
+      root.removeEventListener("pointerdown", onDown, true);
+      root.removeEventListener("pointermove", onMove, true);
+      root.removeEventListener("pointerup", onUp, true);
+      root.removeEventListener("pointercancel", onUp, true);
+      root.removeEventListener("pointerleave", onLeave, true);
+      setEraserBrush({ visible: false, x: 0, y: 0, zoom: 1 });
+    };
+  }, [activeTool, clientToScene, interactive, strokeWidth]);
 
   /**
    * Turn skeletons into elements, then stamp the metadata back on — bound
@@ -785,6 +929,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             />
           </div>
         </>
+      )}
+      {interactive && activeTool === "eraser" && (
+        <EraserBrush
+          visible={eraserBrush.visible}
+          x={eraserBrush.x}
+          y={eraserBrush.y}
+          diameter={eraserScreenRadius(strokeWidth, eraserBrush.zoom) * 2}
+        />
       )}
       <Excalidraw
         viewModeEnabled={!interactive}

@@ -392,6 +392,43 @@ input[type="checkbox"] {
   height: 100%;
 }
 
+/* Eraser brush preview: circle + crosshair (pen uses crosshair; Excalidraw uses a fixed circle). */
+.lc-eraser-brush {
+  position: absolute;
+  pointer-events: none;
+  z-index: 4;
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+}
+
+.lc-eraser-brush::before,
+.lc-eraser-brush::after {
+  content: "";
+  position: absolute;
+  background: var(--ink);
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.lc-eraser-brush::before {
+  left: 50%;
+  top: -6px;
+  width: 1px;
+  height: calc(100% + 12px);
+  transform: translateX(-50%);
+}
+
+.lc-eraser-brush::after {
+  top: 50%;
+  left: -6px;
+  height: 1px;
+  width: calc(100% + 12px);
+  transform: translateY(-50%);
+}
+
 /*
  * Hide Excalidraw's own chrome: the app supplies a minimal toolbar instead, so
  * a stylus session never has to hit a menu.
