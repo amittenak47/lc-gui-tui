@@ -1,20 +1,14 @@
 /**
- * Scale problem-statement body + title for the board reading size.
+ * Scale problem-statement **body** text for the board reading size (S/M/L).
  *
- * Scales only:
- *   - `lcregion-constraints-title`
- *   - `lcregion-constraints-body-*`
+ * Scales only `lcregion-constraints-body-*` scene font sizes.
+ * Leaves alone: region labels, problem title, difficulty/tag chips, hints, frames.
  *
- * Leaves alone (fixed chrome / layout):
- *   - region labels ("PROBLEM & CONSTRAINTS", "CODE", "COACH", …)
- *   - region hints
- *   - difficulty / tag chips and their rule
- *   - frames
- *
- * Monaco size is handled separately via {@link codeFontPx}.
+ * Canvas zoom is independent — Excalidraw magnifies everything together.
+ * (Monaco uses separate CSS px via {@link codeFontPx}.)
  */
 
-import { READING_SCALE, type BoardReadingSize } from "./codeFontSize";
+import { BODY_FONT_PX, type BoardReadingSize } from "./codeFontSize";
 
 type ReadingMeta = {
   lcRegion?: string;
@@ -27,6 +21,7 @@ type ReadingMeta = {
   lcHeightBase?: number;
   lcWidthBase?: number;
   lcFixedSize?: boolean;
+  lcLineHeightBase?: number;
 };
 
 export type ReadingElement = {
@@ -37,23 +32,26 @@ export type ReadingElement = {
   width?: number;
   height?: number;
   fontSize?: number;
+  text?: string;
   customData?: ReadingMeta | null;
 };
 
-/** Statement title + body only — not region chrome or tag chips. */
-function isReadingContent(element: ReadingElement): boolean {
+function isBody(element: ReadingElement): boolean {
   if (element.customData?.lcVizId) return false;
   if (element.customData?.lcFixedSize) return false;
   if (element.customData?.lcRegionFrame) return false;
-  const id = element.id;
-  if (id.includes("-label") || id.includes("-hint") || id.includes("-meta")) return false;
-  return id.includes("-title") || id.includes("-body-");
+  return element.id.includes("-body-");
 }
 
 function isFixedChrome(element: ReadingElement): boolean {
   if (element.customData?.lcFixedSize) return true;
   const id = element.id;
-  return id.includes("-label") || id.includes("-hint") || id.includes("-meta");
+  return (
+    id.includes("-label") ||
+    id.includes("-hint") ||
+    id.includes("-meta") ||
+    id.includes("-title")
+  );
 }
 
 function frameOriginY(
@@ -65,28 +63,39 @@ function frameOriginY(
   return frames.get(region)?.y ?? fallbackY;
 }
 
-function ensureBases(element: ReadingElement, captureFrom: BoardReadingSize): ReadingMeta {
+function frameWidth(
+  frames: Map<string, { x: number; y: number; width?: number }>,
+  region: string | undefined,
+): number | null {
+  if (!region) return null;
+  const frame = frames.get(region);
+  return typeof frame?.width === "number" ? frame.width : null;
+}
+
+function ensureBases(element: ReadingElement): ReadingMeta {
   const meta: ReadingMeta = { ...(element.customData ?? {}) };
-  const safe = READING_SCALE[captureFrom] || 1;
 
   if (typeof element.fontSize === "number" && meta.lcFontBase == null) {
-    meta.lcFontBase = element.fontSize / safe;
+    // Prefer template sizes (24 code / 28 prose). Heal compounded bases.
+    const raw = element.fontSize;
+    meta.lcFontBase = raw > 42 ? 28 : raw < 12 ? 28 : raw;
+  }
+  if (typeof meta.lcFontBase === "number" && meta.lcFontBase > 42) {
+    meta.lcFontBase = 28;
   }
   if (typeof meta.lcRegionOy === "number" && meta.lcRegionOyBase == null) {
-    meta.lcRegionOyBase = meta.lcRegionOy / safe;
+    meta.lcRegionOyBase = meta.lcRegionOy;
   }
-  if (typeof element.height === "number" && meta.lcHeightBase == null) {
-    meta.lcHeightBase = element.height / safe;
+  if (meta.lcLineHeightBase == null) {
+    const base = meta.lcFontBase ?? 28;
+    meta.lcLineHeightBase = base < 26 ? 34 / 24 : 40 / 28;
   }
   return meta;
 }
 
-/**
- * Undo accidental scaling of labels / hints / tags from older builds.
- */
 function restoreChrome<T extends ReadingElement>(
   element: T,
-  frames: Map<string, { x: number; y: number }>,
+  frames: Map<string, { x: number; y: number; width?: number }>,
 ): T {
   const meta = { ...(element.customData ?? {}) };
   const patch: Partial<ReadingElement> = {};
@@ -122,101 +131,106 @@ function restoreChrome<T extends ReadingElement>(
   return changed ? ({ ...element, ...patch, customData: meta } as T) : element;
 }
 
+export interface ApplyReadingOpts {
+  captureFrom?: BoardReadingSize;
+  /** Ignored — kept for call-site compatibility. Zoom no longer counter-scales fonts. */
+  zoom?: number;
+}
+
 /**
- * Apply reading size to statement title/body. Returns a new list when anything
+ * Apply reading size to statement body blocks. Returns a new list when anything
  * changed; otherwise the same reference.
  */
 export function applyBoardReadingSize<T extends ReadingElement>(
   elements: readonly T[],
   size: BoardReadingSize,
-  opts?: { captureFrom?: BoardReadingSize },
+  _opts?: ApplyReadingOpts,
 ): T[] {
-  const scale = READING_SCALE[size];
-  const captureFrom = opts?.captureFrom ?? size;
-  const frames = new Map<string, { x: number; y: number }>();
+  const targetFont = BODY_FONT_PX[size];
+
+  const frames = new Map<string, { x: number; y: number; width?: number }>();
   for (const element of elements) {
     const meta = element.customData;
     if (meta?.lcRegionFrame && meta.lcRegion) {
-      frames.set(meta.lcRegion, { x: element.x, y: element.y });
+      frames.set(meta.lcRegion, { x: element.x, y: element.y, width: element.width });
     } else if (element.id.endsWith("-frame")) {
       const match = /^lcregion-([a-z]+)-frame$/i.exec(element.id);
-      if (match) frames.set(match[1], { x: element.x, y: element.y });
+      if (match) frames.set(match[1], { x: element.x, y: element.y, width: element.width });
     }
   }
 
-  // Body stack: keep the first body anchored; scale gaps between body blocks only
-  // so tag chips above stay put.
+  const bodies = elements
+    .map((element, index) => ({ element, index }))
+    .filter(({ element }) => isBody(element));
+
   let bodyAnchor: number | null = null;
-  for (const element of elements) {
-    if (!element.id.includes("-body-")) continue;
-    if (!isReadingContent(element)) continue;
-    const meta = ensureBases(element, captureFrom);
+  for (const { element } of bodies) {
+    const meta = ensureBases(element);
     if (typeof meta.lcRegionOyBase === "number") {
       bodyAnchor =
         bodyAnchor == null ? meta.lcRegionOyBase : Math.min(bodyAnchor, meta.lcRegionOyBase);
     }
   }
+  if (bodyAnchor == null) bodyAnchor = 200;
+
+  const bodyPatch = new Map<
+    number,
+    { element: T; meta: ReadingMeta; patch: Partial<ReadingElement> }
+  >();
+  let cursor = bodyAnchor;
+  const gap = 22;
+  const constraintsW = frameWidth(frames, "constraints");
+  const textWidth =
+    constraintsW != null ? Math.max(200, constraintsW - 72) : null;
+
+  for (const { element, index } of bodies) {
+    const meta = ensureBases(element);
+    const baseFont = meta.lcFontBase ?? 28;
+    // Preserve code vs prose ratio from the template (24 vs 28).
+    const ratio = Math.min(1.05, Math.max(0.8, baseFont / 28));
+    const fontSize = Math.round(targetFont * ratio * 10) / 10;
+    const lhRatio = meta.lcLineHeightBase ?? 40 / 28;
+    const lineH = fontSize * lhRatio;
+    // Approximate soft-wrap: chars per line shrinks as font grows.
+    const wrapWidth = textWidth ?? element.width ?? 800;
+    const avgChar = fontSize * 0.55;
+    const charsPerLine = Math.max(12, Math.floor(wrapWidth / avgChar));
+    const raw = String(element.text ?? "");
+    let wrappedLines = 0;
+    for (const paragraph of raw.split("\n")) {
+      wrappedLines += Math.max(1, Math.ceil(Math.max(1, paragraph.length) / charsPerLine));
+    }
+    const height = Math.round(wrappedLines * lineH * 10) / 10;
+    const originY = frameOriginY(frames, meta.lcRegion, element.y - (meta.lcRegionOy ?? 0));
+    const oy = cursor;
+    const y = originY + oy;
+
+    const patch: Partial<ReadingElement> = {};
+    if (element.fontSize !== fontSize) patch.fontSize = fontSize;
+    if (element.y !== y) patch.y = y;
+    if (element.height !== height) patch.height = height;
+    if (textWidth != null && element.width !== textWidth) patch.width = textWidth;
+    meta.lcRegionOy = oy;
+
+    bodyPatch.set(index, { element, meta, patch });
+    cursor = oy + height + gap;
+  }
 
   let changed = false;
-  const next = elements.map((element) => {
+  const next = elements.map((element, index) => {
     if (isFixedChrome(element)) {
       const restored = restoreChrome(element, frames);
       if (restored !== element) changed = true;
       return restored;
     }
-    if (!isReadingContent(element)) return element;
 
-    const meta = ensureBases(element, captureFrom);
-    const patch: Partial<ReadingElement> = {};
-    let localChanged = false;
-    const isBody = element.id.includes("-body-");
-    const isTitle = element.id.includes("-title");
+    const planned = bodyPatch.get(index);
+    if (!planned) return element;
 
-    if (typeof meta.lcFontBase === "number") {
-      const fontSize = Math.round(meta.lcFontBase * scale * 10) / 10;
-      if (element.fontSize !== fontSize) {
-        patch.fontSize = fontSize;
-        localChanged = true;
-      }
+    const { meta, patch } = planned;
+    if (Object.keys(patch).length === 0 && meta.lcRegionOy === element.customData?.lcRegionOy) {
+      return element;
     }
-
-    // Title: font only — do not move (tags sit below at fixed positions).
-    // Body: scale gaps from the first body so blocks do not overlap when large.
-    if (isBody && typeof meta.lcRegionOyBase === "number" && bodyAnchor != null) {
-      const oy = Math.round((bodyAnchor + (meta.lcRegionOyBase - bodyAnchor) * scale) * 10) / 10;
-      const originY = frameOriginY(frames, meta.lcRegion, element.y - (meta.lcRegionOy ?? 0));
-      const y = originY + oy;
-      if (meta.lcRegionOy !== oy || element.y !== y) {
-        patch.y = y;
-        localChanged = true;
-      }
-      meta.lcRegionOy = oy;
-    }
-
-    if (isBody && typeof meta.lcHeightBase === "number") {
-      const height = Math.round(meta.lcHeightBase * scale * 10) / 10;
-      if (element.height !== height) {
-        patch.height = height;
-        localChanged = true;
-      }
-    }
-
-    // Title height tracks font so the frame content-floor stays honest.
-    if (isTitle && typeof meta.lcHeightBase === "number") {
-      const height = Math.round(meta.lcHeightBase * scale * 10) / 10;
-      if (element.height !== height) {
-        patch.height = height;
-        localChanged = true;
-      }
-    }
-
-    const metaChanged =
-      meta.lcFontBase !== element.customData?.lcFontBase ||
-      meta.lcRegionOyBase !== element.customData?.lcRegionOyBase ||
-      meta.lcHeightBase !== element.customData?.lcHeightBase ||
-      meta.lcRegionOy !== element.customData?.lcRegionOy;
-
-    if (!localChanged && !metaChanged) return element;
     changed = true;
     return { ...element, ...patch, customData: meta } as T;
   });

@@ -125,6 +125,7 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
     // Code keeps the same label/hint chrome as Approach; Monaco docks under it.
     const labelX = region.x + 36;
     const labelY = region.y + 24;
+    const labelFont = region.id === "constraints" ? 24 : 20;
     skeletons.push({
       id: `lcregion-${region.id}-label`,
       type: "text",
@@ -132,12 +133,16 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       y: labelY,
       width: textWidth,
       text: region.label.toUpperCase(),
-      fontSize: region.id === "constraints" ? 24 : 20,
+      fontSize: labelFont,
       fontFamily: FONT_UI,
       strokeColor: ink.hint,
       opacity: 100,
       locked: true,
-      customData: at(region, labelX, labelY),
+      customData: {
+        ...at(region, labelX, labelY),
+        lcFontBase: labelFont,
+        lcFixedSize: true,
+      },
     });
 
     const hint = HINTS[region.id];
@@ -177,7 +182,11 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
     fontFamily: FONT_UI,
     strokeColor: ink.primary,
     locked: true,
-    customData: at(constraints, constraints.x + 36, constraints.y + 64),
+    customData: {
+      ...at(constraints, constraints.x + 36, constraints.y + 64),
+      lcFontBase: 56,
+      lcFixedSize: true,
+    },
   });
 
   const metaParts = [
@@ -239,7 +248,11 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
         fontFamily: FONT_UI,
         strokeColor: ink.hint,
         locked: true,
-        customData: { ...at(constraints, textX, textY), lcFixedSize: true },
+        customData: {
+          ...at(constraints, textX, textY),
+          lcFixedSize: true,
+          lcFontBase: metaFont,
+        },
       });
 
       chipX += boxW + gap;
@@ -286,7 +299,12 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       fontFamily: block.code ? FONT_CODE : FONT_UI,
       strokeColor: block.code ? ink.primary : ink.body,
       locked: true,
-      customData: at(constraints, x, y),
+      customData: {
+        ...at(constraints, x, y),
+        lcFontBase: fontSize,
+        lcLineHeightBase: lineHeight / fontSize,
+        lcRegionOyBase: y - constraints.y,
+      },
     });
     y += block.text.split("\n").length * lineHeight + 22;
   });
