@@ -242,6 +242,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       scrollX?: number;
       scrollY?: number;
       zoom?: { value?: number };
+      width?: number;
+      height?: number;
     };
     const zoom = state.zoom?.value ?? 1;
     const scrollX = state.scrollX ?? 0;
@@ -255,6 +257,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       width: roundPx(Math.max(0, num(frame.width, REGIONS.code.w) * zoom - inset * 2)),
       height: roundPx(Math.max(0, num(frame.height, REGIONS.code.h) * zoom - inset * 2)),
     };
+
+    // Hide the dock when the code frame is fully off-screen — switching to the
+    // fallback absolute slot caused a visible snap while panning past the box.
+    const viewH = typeof state.height === "number" ? state.height : 0;
+    const viewW = typeof state.width === "number" ? state.width : 0;
+    const offscreen =
+      next.top + next.height < -40 ||
+      next.top > viewH + 40 ||
+      next.left + next.width < -40 ||
+      next.left > viewW + 40 ||
+      next.width < 24 ||
+      next.height < 24;
+    if (offscreen) {
+      if (lastCodeSlotRef.current !== null) {
+        lastCodeSlotRef.current = null;
+        notify(null);
+      }
+      return;
+    }
 
     // New object every frame would re-render App → resize Excalidraw → onChange
     // → report again ("Maximum update depth exceeded").
@@ -470,32 +491,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const handleSceneChange = useCallback(() => {
     const api = apiRef.current;
     if (api && !layoutSyncingRef.current) {
-      const applySync = () => {
-        const synced = syncRegionLayout(api.getSceneElements() as LayoutElement[]);
-        if (!synced) return false;
+      const synced = syncRegionLayout(api.getSceneElements() as LayoutElement[]);
+      if (synced) {
+        // Hold the guard through the synchronous onChange that updateScene may
+        // re-enter with; clear on the next frame. Avoid delayed re-sync timers —
+        // those snapped the viewport while panning past the code dock.
         layoutSyncingRef.current = true;
         api.updateScene({
           elements: synced,
           captureUpdate: CaptureUpdateAction.NEVER,
         });
-        return true;
-      };
-      if (applySync()) {
-        // Excalidraw can overwrite mid-resize; re-clamp after it settles.
         requestAnimationFrame(() => {
           layoutSyncingRef.current = false;
-          if (applySync()) {
-            requestAnimationFrame(() => {
-              layoutSyncingRef.current = false;
-            });
-          }
         });
-        window.setTimeout(() => {
-          if (!layoutSyncingRef.current) applySync();
-          requestAnimationFrame(() => {
-            layoutSyncingRef.current = false;
-          });
-        }, 80);
       }
     }
     reportCodeSlot();
