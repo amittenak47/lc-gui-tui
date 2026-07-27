@@ -106,7 +106,12 @@ export const FONT_UI = 2; // Helvetica — prose
 export const FONT_CODE = 3; // Cascadia — code, examples, constraints
 
 /** Default size for the text tool, overridable from the toolbar. */
-export const FONT_SIZES = [16, 20, 28, 36] as const;
+export const FONT_SIZES = [16, 20, 28] as const;
+export const FONT_SIZE_LABELS: Record<(typeof FONT_SIZES)[number], string> = {
+  16: "S",
+  20: "M",
+  28: "L",
+};
 export const DEFAULT_FONT_SIZE = 20;
 
 /** Board background options. Light-first; a stylus session is usually daytime. */

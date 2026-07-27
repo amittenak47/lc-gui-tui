@@ -55,6 +55,11 @@ export interface BoardHandle {
   zoomOut(): void;
   /** Re-center the viewport on the problem template. */
   fitView(): void;
+  /**
+   * Fit after layout has settled (double rAF + short delays). Resolves when
+   * the final fit has been applied — call while the board is still hidden.
+   */
+  settleFitView(): Promise<void>;
   /** Grow/shrink the code frame so Monaco can show this source without scrolling. */
   fitCodeToSource(source: string): void;
   /** Persistable board blob (excludes coach viz). */

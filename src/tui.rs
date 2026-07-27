@@ -1290,7 +1290,7 @@ fn format_browse_row(
         &format!(
             "{:<q_w$} {:<task_w$} {:<diff_w$} {:>cases_w$}  {st}",
             row.question_id.as_deref().unwrap_or(""),
-            trunc(&row.task_id, task_w),
+            trunc(&crate::generator::title_from_slug(&row.task_id), task_w),
             row.difficulty.as_deref().unwrap_or(""),
             row.test_count,
         ),

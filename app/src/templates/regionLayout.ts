@@ -129,7 +129,11 @@ function contentMinHeight(
       typeof element.height === "number" && Number.isFinite(element.height)
         ? element.height
         : element.type === "text"
-          ? 36
+          ? (() => {
+              const font = Number(element.fontSize) || 28;
+              const lines = Math.max(1, String(element.text ?? "").split("\n").length);
+              return Math.round(font * 1.35 * lines);
+            })()
           : 0;
     bottomRel = Math.max(bottomRel, offsetY + height);
   }

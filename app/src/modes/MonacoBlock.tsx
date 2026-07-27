@@ -17,6 +17,8 @@ import { useEffect, useMemo, useRef } from "react";
 import editorWorker from "monaco-editor/editor/editor.worker.js?worker";
 
 import { APP_THEMES } from "../theme/appThemes";
+import type { CodeFontSize } from "./codeFontSize";
+import { codeFontPx } from "./codeFontSize";
 
 /**
  * Point Monaco at the bundled copy.
@@ -33,14 +35,8 @@ self.MonacoEnvironment = {
 
 const definedThemes = new Set<string>();
 
-/** Base editor size at board zoom 1 — matches statement density on the canvas. */
-const BASE_FONT_SIZE = 13;
 const BASE_PADDING_TOP = 8;
 const BASE_SCROLLBAR = 4;
-
-function scaledFontSize(zoom: number): number {
-  return Math.max(6, Math.round(BASE_FONT_SIZE * zoom * 10) / 10);
-}
 
 /** Mix a hex color toward black (darken) or white (lighten) by `amount` 0–1. */
 function mixHex(hex: string, toward: "#000000" | "#ffffff", amount: number): string {
@@ -98,6 +94,8 @@ export interface MonacoBlockProps {
   themeId?: string;
   /** Excalidraw zoom — font/padding track the board. */
   zoom?: number;
+  /** User-chosen S/M/L base size (before zoom). */
+  fontSizePref?: CodeFontSize;
   height?: string;
   onChange: (value: string) => void;
   onReady: () => void;
@@ -108,13 +106,14 @@ export default function MonacoBlock({
   language,
   themeId = "parchment",
   zoom = 1,
+  fontSizePref = "M",
   height = "min(42vh, 360px)",
   onChange,
   onReady,
 }: MonacoBlockProps) {
   const monacoTheme = useMemo(() => ensureMonacoTheme(themeId), [themeId]);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const fontSize = scaledFontSize(zoom);
+  const fontSize = codeFontPx(fontSizePref, zoom);
   const padTop = Math.max(2, Math.round(BASE_PADDING_TOP * zoom));
   const scrollbar = Math.max(2, Math.round(BASE_SCROLLBAR * zoom));
 

@@ -273,14 +273,25 @@ fn upsert(conn: &Connection, p: &Problem, json_path: &str, mtime: i64) -> Result
 
 fn push_text_query_filter(clauses: &mut Vec<String>, params: &mut Vec<String>, query: Option<&str>) {
     if let Some(q) = query {
-        if !q.is_empty() {
-            params.push(format!("%{q}%"));
-            let p = params.len();
-            clauses.push(format!(
-                "(task_id LIKE ?{p} OR question_id LIKE ?{p} OR \
-                 task_id IN (SELECT task_id FROM problem_tags WHERE tag LIKE ?{p}))",
-            ));
+        let trimmed = q.trim();
+        if trimmed.is_empty() {
+            return;
         }
+        // UI shows spaced titles (`Two Sum`); the index stores slugs (`two-sum`).
+        // Collapse runs of spaces/hyphens so either form matches `task_id`.
+        let slug_needle: String = trimmed
+            .split(|c: char| c.is_whitespace() || c == '-')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        params.push(format!("%{trimmed}%"));
+        let p_raw = params.len();
+        params.push(format!("%{slug_needle}%"));
+        let p_slug = params.len();
+        clauses.push(format!(
+            "(task_id LIKE ?{p_slug} OR task_id LIKE ?{p_raw} OR question_id LIKE ?{p_raw} OR \
+             task_id IN (SELECT task_id FROM problem_tags WHERE tag LIKE ?{p_raw}))",
+        ));
     }
 }
 
