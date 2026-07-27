@@ -94,8 +94,8 @@ interface ExcalidrawApi {
   history?: { clear(): void };
 }
 
-const ZOOM_MIN = 0.1;
-const ZOOM_MAX = 3;
+const ZOOM_MIN = 0.15;
+const ZOOM_MAX = 1.75;
 const ZOOM_STEP = 1.15;
 /** Matches Excalidraw's internal wheel-zoom step (not our button ZOOM_STEP). */
 const WHEEL_ZOOM_STEP = 0.1;
@@ -846,7 +846,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const dark = isDarkTheme(themeId);
     const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
     const recolored = recolorTemplateElements(converted, dark) ?? converted;
-    const sized = applyBoardReadingSize(recolored, readingSizeRef.current, { captureFrom: "M" });
+    const sized = applyBoardReadingSize(recolored, readingSizeRef.current, {
+      captureFrom: "M",
+    });
     templateRef.current = sized;
     apiRef.current?.updateScene({
       elements: sized as unknown[],
@@ -884,6 +886,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [applyRegionLayout, reportCodeSlot],
   );
 
+  /** Apply S/M/L to statement body fonts and restack; chrome stays fixed. */
+  const reflowReadingText = useCallback(
+    (opts?: { size?: BoardReadingSize; captureFrom?: BoardReadingSize }) => {
+      const api = apiRef.current;
+      if (!api || layoutSyncingRef.current) return;
+      const size = opts?.size ?? readingSizeRef.current;
+      const current = api.getSceneElements() as SceneElementLike[];
+      const scaled = applyBoardReadingSize(current, size, {
+        captureFrom: opts?.captureFrom ?? size,
+      });
+      if (scaled === current) return;
+      layoutSyncingRef.current = true;
+      api.updateScene({
+        elements: scaled as unknown[],
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+      requestAnimationFrame(() => {
+        layoutSyncingRef.current = false;
+        applyRegionLayout();
+        reportCodeSlot();
+      });
+    },
+    [applyRegionLayout, reportCodeSlot],
+  );
   const setReadingSize = useCallback(
     (next: BoardReadingSize) => {
       const prev = readingSizeRef.current;
@@ -896,30 +922,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       saveBoardReadingSize(next);
       onReadingSizeChange?.(next);
 
-      const api = apiRef.current;
-      if (!api) return;
-
-      const scaled = applyBoardReadingSize(api.getSceneElements() as SceneElementLike[], next, {
-        captureFrom: prev,
-      });
-      layoutSyncingRef.current = true;
-      api.updateScene({
-        elements: scaled as unknown[],
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
-      requestAnimationFrame(() => {
-        layoutSyncingRef.current = false;
-        if (lastCodeSourceRef.current) {
-          codeContentHeightRef.current = codeFrameHeightForSource(
-            lastCodeSourceRef.current,
-            next,
-          );
-        }
-        applyRegionLayout();
-        reportCodeSlot();
-      });
+      reflowReadingText({ size: next, captureFrom: prev });
+      if (lastCodeSourceRef.current) {
+        codeContentHeightRef.current = codeFrameHeightForSource(
+          lastCodeSourceRef.current,
+          next,
+        );
+      }
     },
-    [applyRegionLayout, onReadingSizeChange, reportCodeSlot],
+    [onReadingSizeChange, reflowReadingText],
   );
 
   const handleSceneChange = useCallback(() => {
@@ -939,7 +950,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const dark = isDarkTheme(themeId);
         const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
         const recolored = recolorTemplateElements(converted, dark) ?? converted;
-        const next = applyBoardReadingSize(recolored, readingSizeRef.current, { captureFrom: "M" });
+        const next = applyBoardReadingSize(recolored, readingSizeRef.current, {
+          captureFrom: "M",
+        });
         templateRef.current = next;
         apiRef.current?.updateScene({
           elements: next as unknown[],

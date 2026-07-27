@@ -1,36 +1,35 @@
 /**
  * Board reading size (S / M / L).
  *
- * Statement text uses {@link READING_SCALE}. Monaco uses the same ladder times
- * {@link CODE_SIZE_FACTOR} so code stays smaller than the problem statement.
+ * Statement body uses scene font sizes from {@link BODY_FONT_PX}; canvas zoom
+ * then magnifies the whole board together. Monaco uses {@link CODE_FONT_PX} in
+ * CSS px and ignores zoom.
  */
 
 export type BoardReadingSize = "S" | "M" | "L";
 
 export const BOARD_READING_SIZES: BoardReadingSize[] = ["S", "M", "L"];
 
-/**
- * Reference font sizes for the reading ladder (Medium = statement baseline).
- * Statement Excalidraw text scales by {@link READING_SCALE}.
- */
-export const READING_FONT_PX: Record<BoardReadingSize, number> = {
-  S: 18,
-  M: 22,
+/** Statement body scene font (prose). Code samples in the statement stay ~86%. */
+export const BODY_FONT_PX: Record<BoardReadingSize, number> = {
+  S: 20,
+  M: 24,
   L: 28,
 };
 
-/** Relative to Medium — problem statement / region chrome. */
-export const READING_SCALE: Record<BoardReadingSize, number> = {
-  S: READING_FONT_PX.S / READING_FONT_PX.M,
-  M: 1,
-  L: READING_FONT_PX.L / READING_FONT_PX.M,
+/** Monaco CSS px — independent of board zoom. */
+export const CODE_FONT_PX: Record<BoardReadingSize, number> = {
+  S: 12,
+  M: 14,
+  L: 16,
 };
 
-/**
- * Monaco is this fraction of {@link READING_FONT_PX}.
- * Lower = smaller code relative to the statement.
- */
-export const CODE_SIZE_FACTOR = 0.28;
+/** Relative to Medium — used by tests / legacy helpers. */
+export const READING_SCALE: Record<BoardReadingSize, number> = {
+  S: BODY_FONT_PX.S / BODY_FONT_PX.M,
+  M: 1,
+  L: BODY_FONT_PX.L / BODY_FONT_PX.M,
+};
 
 const STORAGE_KEY = "lc-board-reading-size";
 
@@ -53,29 +52,18 @@ export function saveBoardReadingSize(size: BoardReadingSize): void {
   }
 }
 
-/** Monaco font px before zoom. */
-export function codeBasePx(size: BoardReadingSize): number {
-  return READING_FONT_PX[size] * CODE_SIZE_FACTOR;
+/** Monaco font size in CSS px (ignores board zoom). */
+export function codeFontPx(size: BoardReadingSize, _zoom?: number): number {
+  return CODE_FONT_PX[size];
 }
 
-/**
- * Monaco pixel size at the given board zoom.
- * Tracks board zoom like Excalidraw statement text (no high floor that makes
- * code look huge when the board is zoomed out).
- */
-export function codeFontPx(size: BoardReadingSize, zoom: number): number {
-  const zoomFactor = Math.min(1.6, Math.max(0.25, zoom));
-  return Math.max(8, Math.round(codeBasePx(size) * zoomFactor * 10) / 10);
-}
-
-/** Canvas units per code line — keeps the code frame tall enough for Monaco. */
+/** Canvas units per code line for frame height. */
 export function codeLineCanvas(size: BoardReadingSize): number {
-  return Math.round(codeBasePx(size) * 1.7);
+  return Math.round(CODE_FONT_PX[size] * 1.55);
 }
-
-// --- Back-compat aliases used by Monaco / older imports ---
 
 export type CodeFontSize = BoardReadingSize;
 export const CODE_FONT_SIZES = BOARD_READING_SIZES;
+export const READING_FONT_PX = BODY_FONT_PX;
 export const loadCodeFontSize = loadBoardReadingSize;
 export const saveCodeFontSize = saveBoardReadingSize;

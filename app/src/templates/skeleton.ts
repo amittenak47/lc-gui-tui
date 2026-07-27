@@ -50,6 +50,14 @@ export interface SkeletonMeta {
    */
   lcRegionOx?: number;
   lcRegionOy?: number;
+  /** Authored offset before reading-size reflow; chrome restores to this. */
+  lcRegionOyBase?: number;
+  /** Authored scene font; reading-size scales body from this, chrome restores to it. */
+  lcFontBase?: number;
+  /** lineHeight / fontSize at authoring time. */
+  lcLineHeightBase?: number;
+  lcHeightBase?: number;
+  lcWidthBase?: number;
   /**
    * Keep width/height as authored (chips, badges). Statement body text still
    * stretches to the frame content width.
