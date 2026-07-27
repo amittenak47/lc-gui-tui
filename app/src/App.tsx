@@ -30,7 +30,7 @@ import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
 import { sceneHash, studentElements } from "./canvas/capture";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
 import { buildSnapshot } from "./canvas/snapshot";
-import { AgentSidePanel } from "./modes/AgentSidePanel";
+import { AgentSidePanel, type CoachChatMessage, type CoachSendFlags } from "./modes/AgentSidePanel";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
@@ -38,6 +38,7 @@ import { BridgePanel, RevealDialog } from "./modes/RevealDialog";
 import { ReviewPanel } from "./modes/ReviewPanel";
 import { buildProblemTemplate } from "./templates/problemBoard";
 import { titleFromSlug } from "./util/text";
+import { ensureCodingRoom } from "./util/solutionPad";
 import { applyAppTheme, isDarkTheme, loadThemeId, saveThemeId } from "./theme/appThemes";
 import { Timeline } from "./viz/Timeline";
 import { applyViz, clearAllViz, type SceneApi } from "./viz/apply";
@@ -72,11 +73,15 @@ export function App() {
   const [themeId, setThemeId] = useState(loadThemeId);
   const [coachOpen, setCoachOpen] = useState(false);
   const [codeSlot, setCodeSlot] = useState<ScreenRect | null>(null);
+  const lastCodeSlotRef = useRef<ScreenRect | null>(null);
 
   const onCodeSlot = useCallback((next: ScreenRect | null) => {
     setCodeSlot((prev) => {
       if (prev === next) return prev;
-      if (!prev || !next) return next;
+      if (!prev || !next) {
+        if (next) lastCodeSlotRef.current = next;
+        return next;
+      }
       if (
         prev.left === next.left &&
         prev.top === next.top &&
@@ -85,6 +90,7 @@ export function App() {
       ) {
         return prev;
       }
+      lastCodeSlotRef.current = next;
       return next;
     });
   }, []);
@@ -104,6 +110,7 @@ export function App() {
   const [bridge, setBridge] = useState<BridgeResponse | null>(null);
 
   const [nudges, setNudges] = useState<AmbientEntry[]>([]);
+  const [coachMessages, setCoachMessages] = useState<CoachChatMessage[]>([]);
   const [connected, setConnected] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [ambientProvider, setAmbientProvider] = useState<string | null>(null);
@@ -199,6 +206,7 @@ export function App() {
       setBridge(null);
       setProgram(null);
       setNudges([]);
+      setCoachMessages([]);
       if (bank) setBankFilters(bank);
       if (fromBrowse) setBrowseMotion("busy");
       try {
@@ -213,6 +221,7 @@ export function App() {
         } catch {
           // Fresh load — starter_code is fine.
         }
+        source = ensureCodingRoom(source);
 
         if (fromBrowse) {
           // Ready: keep the spinner, slide the browser away under the blur.
@@ -312,14 +321,6 @@ export function App() {
     };
   }, [problem, session, bankFilters, client]);
 
-  // When the coach panel opens/closes, the canvas width changes — re-fit so
-  // the problem page isn't clipped under the side panel.
-  useEffect(() => {
-    if (!problem) return;
-    const timer = window.setTimeout(() => boardRef.current?.fitView(), 80);
-    return () => window.clearTimeout(timer);
-  }, [coachOpen, problem]);
-
   // Ambient mode's lifecycle.
   useEffect(() => {
     if (mode !== "ambient" || !problem) return;
@@ -335,6 +336,16 @@ export function App() {
         case "nudge":
           setThinking(false);
           setNudges((current) => [{ ...frame, at: Date.now() }, ...current].slice(0, 12));
+          setCoachMessages((current) => [
+            ...current,
+            {
+              id: `nudge-${Date.now()}`,
+              role: "assistant",
+              content: frame.nudge,
+              at: Date.now(),
+            },
+          ]);
+          setCoachOpen(true);
           break;
         case "skipped":
           setThinking(false);
@@ -366,43 +377,77 @@ export function App() {
     };
   }, [mode, problem, pairing, probe, capture]);
 
-  const submitForReview = useCallback(async () => {
+  const pushCoachMessage = useCallback((role: CoachChatMessage["role"], content: string) => {
+    setCoachMessages((current) => [
+      ...current,
+      { id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, role, content, at: Date.now() },
+    ]);
+  }, []);
+
+  const submitForReview = useCallback(async (studentNote?: string, includeBoard = true) => {
     const board = boardRef.current;
     if (!board || !problem) return;
     setBusy("asking the coach…");
     setError(null);
+    setCoachOpen(true);
     try {
       await syncSolution();
-      const snapshot = await buildSnapshot(board, recognizerRef.current, { pseudocode: pseudocodeRef.current });
-      if (snapshot.board.recognized_text.trim().length === 0) {
-        setError(
-          recognizerRef.current.name === "none"
-            ? "nothing legible on the board — handwriting recognition needs the Android build, so type your approach with the text tool for now"
-            : "nothing legible on the board yet",
-        );
-        return;
+      const note = studentNote?.trim() ?? "";
+      let payload;
+      if (includeBoard) {
+        const snapshot = await buildSnapshot(board, recognizerRef.current, {
+          pseudocode: pseudocodeRef.current,
+        });
+        if (note) {
+          snapshot.board.recognized_text = `Student asks:\n${note}\n\n${snapshot.board.recognized_text ?? ""}`;
+        }
+        if (snapshot.board.recognized_text.trim().length === 0 && !pseudocodeRef.current.trim()) {
+          setError(
+            recognizerRef.current.name === "none"
+              ? "nothing legible on the board — handwriting recognition needs the Android build, so type your approach with the text tool for now"
+              : "nothing legible on the board yet",
+          );
+          return;
+        }
+        payload = snapshot.board;
+      } else {
+        if (!note) {
+          setError("type a question, or turn on Review board");
+          return;
+        }
+        payload = {
+          recognized_text: `Student asks:\n${note}`,
+          pseudocode: pseudocodeRef.current.trim() || undefined,
+        };
       }
-      setReview(await client.review(problem.task_id, snapshot.board));
+      const result = await client.review(problem.task_id, payload);
+      setReview(result);
+      pushCoachMessage("assistant", formatReviewMessage(result));
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
       setBusy(null);
     }
-  }, [client, problem, syncSolution]);
+  }, [client, problem, syncSolution, pushCoachMessage]);
 
-  const askForDiagram = useCallback(async () => {
+  const askForDiagram = useCallback(async (ask = "") => {
     const board = boardRef.current;
     if (!board || !problem) return;
     setBusy("drawing…");
     setError(null);
+    setCoachOpen(true);
     try {
-      const snapshot = await buildSnapshot(board, recognizerRef.current, { pseudocode: pseudocodeRef.current });
-      const envelope = await client.viz(problem.task_id, snapshot.board);
+      await syncSolution();
+      const snapshot = await buildSnapshot(board, recognizerRef.current, {
+        pseudocode: pseudocodeRef.current,
+      });
+      const envelope = await client.viz(problem.task_id, snapshot.board, ask);
       const drawable = envelope.programs
         .map(parseVizProgram)
         .find((candidate): candidate is VizProgram => candidate !== null);
       if (drawable) {
         setProgram(drawable);
+        pushCoachMessage("assistant", "Drew a diagram on the board.");
       } else {
         setError(
           envelope.rejected[0] ??
@@ -414,7 +459,29 @@ export function App() {
     } finally {
       setBusy(null);
     }
-  }, [client, problem]);
+  }, [client, problem, syncSolution, pushCoachMessage]);
+
+  const sendCoachChat = useCallback(
+    (text: string, flags: CoachSendFlags) => {
+      const flagBits = [
+        flags.reviewBoard ? "Review board" : null,
+        flags.draw ? "Draw" : null,
+      ].filter(Boolean);
+      const shown = [text, flagBits.length > 0 ? flagBits.join(" · ") : null]
+        .filter(Boolean)
+        .join("\n");
+      pushCoachMessage("user", shown || "Send");
+      void (async () => {
+        if (flags.reviewBoard || text) {
+          await submitForReview(text, flags.reviewBoard);
+        }
+        if (flags.draw) {
+          await askForDiagram(text);
+        }
+      })();
+    },
+    [pushCoachMessage, submitForReview, askForDiagram],
+  );
 
   const runTests = useCallback(async () => {
     if (!problem) return;
@@ -517,7 +584,7 @@ export function App() {
   }, []);
 
   return (
-    <div className="lc-app">
+    <div className={coachOpen && problem ? "lc-app lc-app-coach-open" : "lc-app"}>
       <header className="lc-header">
         <Tip tip="lc whiteboard — your coding workspace">
           <strong className="lc-brand">lc whiteboard</strong>
@@ -685,35 +752,33 @@ export function App() {
               )}
             </div>
           )}
-          {problem && (
-            <div
-              className={
-                codeSlot && codeSlot.width > 24 && codeSlot.height > 24
-                  ? "lc-code-dock"
-                  : "lc-code-dock lc-code-dock-fallback"
-              }
-              style={
-                codeSlot && codeSlot.width > 24 && codeSlot.height > 24
-                  ? {
-                      left: codeSlot.left,
-                      top: codeSlot.top,
-                      width: codeSlot.width,
-                      height: codeSlot.height,
-                    }
-                  : undefined
-              }
-            >
-              <PseudocodeEditor
-                key={problem.task_id}
-                value={pseudocode}
-                onChange={setPseudocode}
-                themeId={themeId}
-                defaultOpen
-                variant="dock"
-              />
-            </div>
-          )}
+          {problem && (() => {
+            const slot = codeSlot ?? lastCodeSlotRef.current;
+            if (!slot || slot.width <= 24 || slot.height <= 24) return null;
+            const visible = Boolean(codeSlot);
+            return (
+              <div
+                className={visible ? "lc-code-dock" : "lc-code-dock lc-code-dock-offscreen"}
+                style={{
+                  left: slot.left,
+                  top: slot.top,
+                  width: slot.width,
+                  height: slot.height,
+                }}
+              >
+                <PseudocodeEditor
+                  key={problem.task_id}
+                  value={pseudocode}
+                  onChange={setPseudocode}
+                  themeId={themeId}
+                  defaultOpen
+                  variant="dock"
+                />
+              </div>
+            );
+          })()}
         </div>
+      </main>
 
         {problem && (
           <AgentSidePanel
@@ -721,8 +786,9 @@ export function App() {
             mode={mode}
             onModeChange={setMode}
             busy={busy !== null}
-            onSubmit={() => void submitForReview()}
-            onDiagram={() => void askForDiagram()}
+            thinking={busy !== null || thinking}
+            messages={coachMessages}
+            onSend={sendCoachChat}
           >
             {mode === "ambient" && (
               <AmbientPanel
@@ -771,7 +837,6 @@ export function App() {
             )}
           </AgentSidePanel>
         )}
-      </main>
 
       {revealOpen && problem && (
         <RevealDialog
@@ -784,6 +849,16 @@ export function App() {
       )}
     </div>
   );
+}
+
+function formatReviewMessage(review: ReviewResponse): string {
+  const parts = [
+    `Verdict: ${review.verdict.replace(/_/g, " ")}`,
+    review.understood_approach ? `I think you're doing: ${review.understood_approach}` : null,
+    review.gaps.length > 0 ? `Gaps:\n${review.gaps.map((g) => `• ${g}`).join("\n")}` : null,
+    review.socratic_question ? `Question: ${review.socratic_question}` : null,
+  ].filter(Boolean);
+  return parts.join("\n\n");
 }
 
 function TestSummary({
