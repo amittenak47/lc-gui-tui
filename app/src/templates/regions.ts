@@ -5,6 +5,9 @@
  * land only in the **agent lane** on the right, so they can never collide with
  * handwriting. Both the templates and the viz renderers read these numbers, so
  * there is one source of truth for where anything goes.
+ *
+ * Exception: `highlight_student_work` overlays sit over student elements (still
+ * coach-tagged via `lcVizId`) so the coach can point without mutating ink.
  */
 
 export type RegionId =

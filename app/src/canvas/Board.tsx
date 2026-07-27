@@ -52,7 +52,7 @@ import { BackgroundPalette } from "../components/BackgroundPalette";
 import { isDarkTheme } from "../theme/appThemes";
 import type { BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
-import { applyMetadata, keepOnClear } from "./scene";
+import { applyMetadata, keepOnClear, isCoachElement } from "./scene";
 import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush } from "./EraserBrush";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
@@ -822,6 +822,35 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       zoomOut,
       fitView,
       fitCodeToSource,
+      saveBoard: () => {
+        const api = apiRef.current;
+        const state = (api?.getAppState() ?? {}) as {
+          scrollX?: number;
+          scrollY?: number;
+          zoom?: { value?: number };
+        };
+        const kept = elements().filter((element) => !isCoachElement(element));
+        return {
+          v: 1 as const,
+          elements: kept as unknown[],
+          appState: {
+            scrollX: state.scrollX ?? 0,
+            scrollY: state.scrollY ?? 0,
+            zoom: state.zoom?.value ?? 1,
+          },
+        };
+      },
+      restoreBoard: (nextElements, appState) => {
+        apiRef.current?.updateScene({
+          elements: nextElements,
+          appState: (appState as Record<string, unknown> | undefined) ?? undefined,
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        requestAnimationFrame(() => {
+          apiRef.current?.history?.clear();
+          scheduleFitView();
+        });
+      },
     }),
     [convert, elements, fitCodeToSource, fitView, resetTemplate, scheduleFitView, setTool, themeId, undoBoard, zoomIn, zoomOut],
   );

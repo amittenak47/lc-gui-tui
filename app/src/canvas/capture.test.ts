@@ -5,6 +5,7 @@ import {
   captureStructure,
   captureTypedText,
   elementIds,
+  resolveCaptureIds,
   sceneHash,
   strokeDelta,
   studentElements,
@@ -42,18 +43,21 @@ describe("studentElements", () => {
 });
 
 describe("captureStructure", () => {
-  it("strips to type, position, size and text", () => {
+  it("strips to id, type, position, size and text", () => {
     const scene = [
-      element({ id: "a", type: "rectangle", x: 10.4, y: 20.6, width: 99.5, height: 50.2 }),
+      element({ id: "abcdefghij", type: "rectangle", x: 10.4, y: 20.6, width: 99.5, height: 50.2 }),
     ];
-    expect(captureStructure(scene)).toEqual([{ type: "rectangle", x: 10, y: 21, w: 100, h: 50 }]);
+    expect(captureStructure(scene)).toEqual([
+      { id: "abcdefgh", type: "rectangle", x: 10, y: 21, w: 100, h: 50 },
+    ]);
   });
 
-  it("includes typed text and the region it sits in", () => {
+  it("keeps short ids intact and includes typed text and the region", () => {
     const scene = [
       element({ id: "t", type: "text", text: "two pointers", customData: { lcRegion: "approach" } }),
     ];
     expect(captureStructure(scene)[0]).toMatchObject({
+      id: "t",
       type: "text",
       text: "two pointers",
       region: "approach",
@@ -63,6 +67,22 @@ describe("captureStructure", () => {
   it("omits empty text rather than sending blank fields", () => {
     const scene = [element({ id: "t", type: "text", text: "   " })];
     expect(captureStructure(scene)[0].text).toBeUndefined();
+  });
+
+  it("ids are stable across a re-capture", () => {
+    const scene = [element({ id: "stable-id-xyz", type: "text", text: "hi" })];
+    expect(captureStructure(scene)[0].id).toBe(captureStructure(scene)[0].id);
+    expect(captureStructure(scene)[0].id).toBe("stable-i");
+  });
+});
+
+describe("resolveCaptureIds", () => {
+  it("matches truncated prefixes back to live elements", () => {
+    const scene = [
+      element({ id: "abcdefghij", type: "text", text: "a" }),
+      element({ id: "other", type: "text", text: "b" }),
+    ];
+    expect(resolveCaptureIds(scene, ["abcdefgh"]).map((el) => el.id)).toEqual(["abcdefghij"]);
   });
 });
 

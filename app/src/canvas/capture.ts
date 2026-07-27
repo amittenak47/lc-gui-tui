@@ -27,8 +27,17 @@ export interface SceneElementLike {
   customData?: { lcRegion?: string; lcVizId?: string } | null;
 }
 
+/** Truncate Excalidraw ids for the coach prompt (STRUCTURE_CLIP budget). */
+export const CAPTURE_ID_LEN = 8;
+
+export function truncateCaptureId(id: string): string {
+  return id.length <= CAPTURE_ID_LEN ? id : id.slice(0, CAPTURE_ID_LEN);
+}
+
 /** One element as the coach sees it. */
 export interface CapturedElement {
+  /** Truncated stable id — the model may cite this in highlight_student_work. */
+  id: string;
   type: string;
   x: number;
   y: number;
@@ -58,6 +67,7 @@ export function studentElements(elements: readonly SceneElementLike[]): SceneEle
 export function captureStructure(elements: readonly SceneElementLike[]): CapturedElement[] {
   return studentElements(elements).map((el) => {
     const captured: CapturedElement = {
+      id: truncateCaptureId(el.id),
       type: el.type,
       x: Math.round(el.x),
       y: Math.round(el.y),
@@ -68,6 +78,23 @@ export function captureStructure(elements: readonly SceneElementLike[]): Capture
     if (el.customData?.lcRegion) captured.region = el.customData.lcRegion;
     return captured;
   });
+}
+
+/** Resolve truncated capture ids back to live scene elements (prefix match). */
+export function resolveCaptureIds(
+  elements: readonly SceneElementLike[],
+  ids: readonly string[],
+): SceneElementLike[] {
+  const live = studentElements(elements);
+  const found: SceneElementLike[] = [];
+  for (const raw of ids) {
+    const prefix = truncateCaptureId(raw);
+    const match = live.find(
+      (el) => el.id === raw || el.id.startsWith(prefix) || truncateCaptureId(el.id) === prefix,
+    );
+    if (match && !found.some((el) => el.id === match.id)) found.push(match);
+  }
+  return found;
 }
 
 /** Typed text, in reading order, so it can be merged with recognized ink. */

@@ -212,6 +212,25 @@ pub fn viz_tools() -> Vec<serde_json::Value> {
                 "required": ["case_index", "why"]
             }),
         ),
+        tool(
+            "highlight_student_work",
+            "Point at specific student board elements without editing them. Use the truncated \
+             `id` values from the canvas layout JSON. Draws a dashed overlay the student can clear.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 6
+                    },
+                    "tone": {"type": "string", "enum": ["question", "warning", "confirm"]},
+                    "note": {"type": "string", "maxLength": 240}
+                },
+                "required": ["ids", "note"]
+            }),
+        ),
     ]
 }
 
@@ -247,7 +266,7 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["draw_structure", "animate_trace", "annotate_region", "cite_test_case"]
+            ["draw_structure", "animate_trace", "annotate_region", "cite_test_case", "highlight_student_work"]
         );
     }
 

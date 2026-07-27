@@ -57,4 +57,8 @@ export interface BoardHandle {
   fitView(): void;
   /** Grow/shrink the code frame so Monaco can show this source without scrolling. */
   fitCodeToSource(source: string): void;
+  /** Persistable board blob (excludes coach viz). */
+  saveBoard(): { v: 1; elements: unknown[]; appState: { scrollX: number; scrollY: number; zoom: number } };
+  /** Restore a saved board without recording undo history. */
+  restoreBoard(elements: unknown[], appState?: unknown): void;
 }

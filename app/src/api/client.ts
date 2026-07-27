@@ -11,6 +11,7 @@ import type {
   AdjacentProblems,
   BoardSnapshot,
   BridgeResponse,
+  CoachCapabilities,
   LoadResponse,
   ProblemDetail,
   ProblemPage,
@@ -127,6 +128,19 @@ export class LcClient {
 
   async putSolution(id: string, source: string): Promise<{ task_id: string; source: string }> {
     return this.request("PUT", `/workspace/${encodeURIComponent(id)}/solution`, { source });
+  }
+
+  async getBoard(id: string): Promise<{ task_id: string; board: unknown | null }> {
+    return this.request("GET", `/workspace/${encodeURIComponent(id)}/board`);
+  }
+
+  async putBoard(id: string, board: unknown): Promise<{ task_id: string; board: unknown | null }> {
+    return this.request("PUT", `/workspace/${encodeURIComponent(id)}/board`, { board });
+  }
+
+  /** Per-mode provider / model / vision flags. */
+  async capabilities(): Promise<CoachCapabilities> {
+    return this.request("GET", "/coach/capabilities");
   }
 
   /** Mode A. The daemon validates any cited counterexample before replying. */

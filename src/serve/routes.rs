@@ -378,6 +378,66 @@ pub async fn put_solution(
     Ok(Json(response))
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BoardBlob {
+    /// Opaque JSON the client owns (`{v, elements, appState}`).
+    pub board: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BoardResponse {
+    pub task_id: String,
+    pub board: Option<serde_json::Value>,
+}
+
+pub async fn get_board(
+    State(state): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<BoardResponse>, AppError> {
+    let cfg = state.cfg.clone();
+    let response = blocking(move || {
+        let dir = runner::locate_workspace(&cfg, Some(&id))?;
+        let meta = runner::read_meta(&dir)?;
+        let path = dir.join("board.json");
+        let board = if path.exists() {
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("cannot read {}", path.display()))?;
+            Some(serde_json::from_str(&text).context("board.json is not valid JSON")?)
+        } else {
+            None
+        };
+        Ok(BoardResponse {
+            task_id: meta.task_id,
+            board,
+        })
+    })
+    .await
+    .map_err(not_found_if_unresolved)?;
+    Ok(Json(response))
+}
+
+pub async fn put_board(
+    State(state): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    Json(update): Json<BoardBlob>,
+) -> Result<Json<BoardResponse>, AppError> {
+    let cfg = state.cfg.clone();
+    let response = blocking(move || {
+        let dir = runner::locate_workspace(&cfg, Some(&id))?;
+        let meta = runner::read_meta(&dir)?;
+        let path = dir.join("board.json");
+        let text = serde_json::to_string_pretty(&update.board).context("cannot encode board")?;
+        std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
+        Ok(BoardResponse {
+            task_id: meta.task_id,
+            board: Some(update.board),
+        })
+    })
+    .await
+    .map_err(not_found_if_unresolved)?;
+    Ok(Json(response))
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------

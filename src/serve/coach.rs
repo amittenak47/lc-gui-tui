@@ -25,6 +25,20 @@ use crate::runner;
 use crate::session::Session;
 
 // ---------------------------------------------------------------------------
+// Capabilities (vision / provider per mode)
+// ---------------------------------------------------------------------------
+
+pub async fn capabilities(State(state): State<Shared>) -> Result<Json<serde_json::Value>, AppError> {
+    let modes = state
+        .cfg
+        .llm
+        .modes
+        .capabilities(&state.cfg.llm)
+        .map_err(AppError::from)?;
+    Ok(Json(serde_json::json!({ "modes": modes })))
+}
+
+// ---------------------------------------------------------------------------
 // Mode A — submit for review
 // ---------------------------------------------------------------------------
 

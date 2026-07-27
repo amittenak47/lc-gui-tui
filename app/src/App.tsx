@@ -41,8 +41,20 @@ import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
 import { applyAppTheme, isDarkTheme, loadThemeId, saveThemeId } from "./theme/appThemes";
 import { Timeline } from "./viz/Timeline";
-import { applyViz, clearAllViz, type SceneApi } from "./viz/apply";
+import {
+  applyAnnotation,
+  applyHighlight,
+  applyViz,
+  clearAllViz,
+  removeViz,
+  type SceneApi,
+} from "./viz/apply";
+import { renderAnnotation } from "./viz/render/annotation";
+import { renderHighlight } from "./viz/render/highlight";
 import { parseVizProgram, type VizProgram } from "./viz/schema";
+import type { CoachCapabilities } from "./api/types";
+
+const MAX_CONCURRENT_PROGRAMS = 4;
 
 type Mode = "review" | "ambient";
 
@@ -105,7 +117,9 @@ export function App() {
 
   const [review, setReview] = useState<ReviewResponse | null>(null);
   const [tests, setTests] = useState<TestResponse | null>(null);
-  const [program, setProgram] = useState<VizProgram | null>(null);
+  const [programs, setPrograms] = useState<VizProgram[]>([]);
+  const [, setFrameByProgram] = useState<Record<string, number>>({});
+  const [capabilities, setCapabilities] = useState<CoachCapabilities | null>(null);
 
   const [revealOpen, setRevealOpen] = useState(false);
   const [revealPending, setRevealPending] = useState(false);
@@ -121,6 +135,9 @@ export function App() {
 
   /** Element ids at the last analysed board, for the stroke-delta check. */
   const lastIdsRef = useRef<Set<string>>(new Set());
+  /** Element ids after the last successful Review board send. */
+  const lastReviewIdsRef = useRef<Set<string>>(new Set());
+  const reviewTurnRef = useRef(0);
   const coachRef = useRef<AmbientCoach | null>(null);
   // The recognizer can be swapped after mount; read it through a ref so the
   // ambient loop doesn't need to restart when it lands.
@@ -196,9 +213,46 @@ export function App() {
     }
   }, [client]);
 
+  // Debounced board persistence — skip when sceneHash is unchanged.
+  const lastSavedHashRef = useRef<number | null>(null);
   useEffect(() => {
-    void refreshSession();
-  }, [refreshSession]);
+    if (!problem) return;
+    const timer = window.setInterval(() => {
+      const board = boardRef.current;
+      if (!board) return;
+      const elements = board.getElements();
+      const hash = sceneHash(elements);
+      if (lastSavedHashRef.current === hash) return;
+      const blob = board.saveBoard();
+      void client.putBoard(problem.task_id, blob).then(() => {
+        lastSavedHashRef.current = hash;
+      }).catch(() => {
+        /* best-effort */
+      });
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [client, problem]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const caps = await client.capabilities();
+        if (!cancelled) setCapabilities(caps);
+      } catch {
+        if (!cancelled) setCapabilities(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, pairing]);
+
+  const modeHasVision = useCallback(
+    (modeName: string) =>
+      capabilities?.modes.find((entry) => entry.mode === modeName)?.vision === true,
+    [capabilities],
+  );
 
   const syncSolution = useCallback(async () => {
     if (!problem) return;
@@ -214,9 +268,12 @@ export function App() {
       setReview(null);
       setTests(null);
       setBridge(null);
-      setProgram(null);
+      setPrograms([]);
+      setFrameByProgram({});
       setNudges([]);
       setCoachMessages([]);
+      lastReviewIdsRef.current = new Set();
+      reviewTurnRef.current = 0;
       if (bank) setBankFilters(bank);
       if (fromBrowse) setBrowseMotion("busy");
       if (switching) setSwitchMotion("busy");
@@ -251,17 +308,31 @@ export function App() {
         setBrowseMotion("idle");
         setSwitchMotion("idle");
         await refreshSession();
-        boardRef.current?.seedTemplate(
-          buildProblemTemplate({
-            taskId: detail.task_id,
-            title: titleFromSlug(detail.task_id),
-            difficulty: detail.difficulty,
-            tags: detail.tags,
-            description: detail.problem_description,
-            caseCount: detail.cases.length,
-            dark: isDarkTheme(themeId),
-          }),
-        );
+
+        let restoredBoard = false;
+        try {
+          const saved = await client.getBoard(taskId);
+          const blob = saved.board as { v?: number; elements?: unknown[]; appState?: unknown } | null;
+          if (blob && blob.v === 1 && Array.isArray(blob.elements) && blob.elements.length > 0) {
+            boardRef.current?.restoreBoard(blob.elements, blob.appState);
+            restoredBoard = true;
+          }
+        } catch {
+          // Missing board.json is fine — seed a fresh template.
+        }
+        if (!restoredBoard) {
+          boardRef.current?.seedTemplate(
+            buildProblemTemplate({
+              taskId: detail.task_id,
+              title: titleFromSlug(detail.task_id),
+              difficulty: detail.difficulty,
+              tags: detail.tags,
+              description: detail.problem_description,
+              caseCount: detail.cases.length,
+              dark: isDarkTheme(themeId),
+            }),
+          );
+        }
         boardRef.current?.fitCodeToSource(source);
         lastIdsRef.current = new Set();
         setEntering(true);
@@ -411,9 +482,13 @@ export function App() {
       await syncSolution();
       const note = studentNote?.trim() ?? "";
       let payload;
+      let capturedIds: Set<string> | null = null;
       if (includeBoard) {
         const snapshot = await buildSnapshot(board, recognizerRef.current, {
           pseudocode: pseudocodeRef.current,
+          previousIds: lastReviewIdsRef.current,
+          turnIndex: reviewTurnRef.current,
+          includePng: modeHasVision("review"),
         });
         if (note) {
           snapshot.board.recognized_text = `Student asks:\n${note}\n\n${snapshot.board.recognized_text ?? ""}`;
@@ -427,6 +502,7 @@ export function App() {
           return;
         }
         payload = snapshot.board;
+        capturedIds = snapshot.ids;
       } else {
         if (!note) {
           setError("type a question, or turn on Review board");
@@ -435,17 +511,23 @@ export function App() {
         payload = {
           recognized_text: `Student asks:\n${note}`,
           pseudocode: pseudocodeRef.current.trim() || undefined,
+          turn_index: reviewTurnRef.current,
         };
       }
       const result = await client.review(problem.task_id, payload);
       setReview(result);
       pushCoachMessage("assistant", formatReviewMessage(result));
+      // Baseline advances only on success — a failed review must not consume it.
+      if (capturedIds) {
+        lastReviewIdsRef.current = capturedIds;
+        reviewTurnRef.current += 1;
+      }
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
       setBusy(null);
     }
-  }, [client, problem, syncSolution, pushCoachMessage]);
+  }, [client, problem, syncSolution, pushCoachMessage, modeHasVision]);
 
   const askForDiagram = useCallback(async (ask = "") => {
     const board = boardRef.current;
@@ -457,26 +539,78 @@ export function App() {
       await syncSolution();
       const snapshot = await buildSnapshot(board, recognizerRef.current, {
         pseudocode: pseudocodeRef.current,
+        includePng: modeHasVision("viz"),
       });
       const envelope = await client.viz(problem.task_id, snapshot.board, ask);
-      const drawable = envelope.programs
+      const drawables = envelope.programs
         .map(parseVizProgram)
-        .find((candidate): candidate is VizProgram => candidate !== null);
-      if (drawable) {
-        setProgram(drawable);
-        pushCoachMessage("assistant", "Drew a diagram on the board.");
-      } else {
-        setError(
-          envelope.rejected[0] ??
-            "the coach didn't produce a diagram — its model may not support tool calling",
+        .filter((candidate): candidate is VizProgram => candidate !== null)
+        .slice(0, MAX_CONCURRENT_PROGRAMS);
+
+      const api = sceneApi();
+      if (api && drawables.length > 0) {
+        for (const drawable of drawables) {
+          applyViz(api, (skeletons) => board.convert(skeletons), drawable, 0);
+        }
+        setPrograms(drawables);
+        setFrameByProgram(Object.fromEntries(drawables.map((program) => [program.id, 0])));
+        pushCoachMessage(
+          "assistant",
+          drawables.length === 1
+            ? "Drew a diagram on the board."
+            : `Drew ${drawables.length} diagrams on the board.`,
         );
+      }
+
+      for (const annotation of envelope.annotations ?? []) {
+        if (!api) break;
+        applyAnnotation(api, (skeletons) => board.convert(skeletons), annotation, renderAnnotation);
+      }
+
+      for (const [index, highlight] of (envelope.highlights ?? []).entries()) {
+        if (!api) break;
+        applyHighlight(
+          api,
+          (skeletons) => board.convert(skeletons),
+          highlight,
+          index,
+          (hl, elements, i) =>
+            renderHighlight(hl, elements as import("./canvas/capture").SceneElementLike[], i),
+        );
+      }
+
+      for (const citation of envelope.citations ?? []) {
+        pushCoachMessage(
+          "assistant",
+          `Case ${citation.case_number}:\n${citation.input.trim()}\n→ ${citation.expected.trim()}\n\n${citation.why}`,
+        );
+      }
+
+      for (const reason of envelope.rejected ?? []) {
+        pushCoachMessage("assistant", reason);
+      }
+
+      if (
+        drawables.length === 0 &&
+        (envelope.annotations?.length ?? 0) === 0 &&
+        (envelope.citations?.length ?? 0) === 0 &&
+        (envelope.highlights?.length ?? 0) === 0
+      ) {
+        if (envelope.message?.trim()) {
+          pushCoachMessage("assistant", envelope.message.trim());
+        } else {
+          setError(
+            envelope.rejected?.[0] ??
+              "the coach didn't produce a diagram — its model may not support tool calling",
+          );
+        }
       }
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
       setBusy(null);
     }
-  }, [client, problem, syncSolution, pushCoachMessage]);
+  }, [client, problem, syncSolution, pushCoachMessage, modeHasVision, sceneApi]);
 
   const sendCoachChat = useCallback(
     (text: string, flags: CoachSendFlags) => {
@@ -572,20 +706,37 @@ export function App() {
   }, [client, problem]);
 
   const showFrame = useCallback(
-    (frameIndex: number) => {
+    (programId: string, frameIndex: number) => {
       const api = sceneApi();
       const board = boardRef.current;
+      const program = programs.find((entry) => entry.id === programId);
       if (!api || !board || !program) return;
       applyViz(api, (skeletons) => board.convert(skeletons), program, frameIndex);
+      setFrameByProgram((current) => ({ ...current, [programId]: frameIndex }));
     },
-    [program, sceneApi],
+    [programs, sceneApi],
   );
 
-  const dismissProgram = useCallback(() => {
-    const api = sceneApi();
-    if (api) clearAllViz(api);
-    setProgram(null);
-  }, [sceneApi]);
+  const dismissProgram = useCallback(
+    (programId?: string) => {
+      const api = sceneApi();
+      if (!api) return;
+      if (programId) {
+        removeViz(api, programId);
+        setPrograms((current) => current.filter((program) => program.id !== programId));
+        setFrameByProgram((current) => {
+          const next = { ...current };
+          delete next[programId];
+          return next;
+        });
+        return;
+      }
+      clearAllViz(api);
+      setPrograms([]);
+      setFrameByProgram({});
+    },
+    [sceneApi],
+  );
 
   const returnToBrowse = useCallback(() => {
     setBrowseMotion("enter");
@@ -593,10 +744,13 @@ export function App() {
     setReview(null);
     setTests(null);
     setBridge(null);
-    setProgram(null);
+    setPrograms([]);
+    setFrameByProgram({});
     setNudges([]);
     setError(null);
     setCodeSlot(null);
+    lastReviewIdsRef.current = new Set();
+    reviewTurnRef.current = 0;
     window.setTimeout(() => setBrowseMotion("idle"), slideDurationMs() || 1);
   }, []);
 
@@ -839,7 +993,30 @@ export function App() {
               />
             )}
 
-            {program && <Timeline program={program} onFrame={showFrame} onDismiss={dismissProgram} />}
+            {programs.map((program) =>
+              program.frames.length > 1 ? (
+                <Timeline
+                  key={program.id}
+                  program={program}
+                  onFrame={(frameIndex) => showFrame(program.id, frameIndex)}
+                  onDismiss={() => dismissProgram(program.id)}
+                />
+              ) : null,
+            )}
+            {programs.length === 1 && programs[0].frames.length === 1 && (
+              <button
+                type="button"
+                className="lc-secondary"
+                onClick={() => dismissProgram(programs[0].id)}
+              >
+                Dismiss diagram
+              </button>
+            )}
+            {programs.length > 1 && (
+              <button type="button" className="lc-secondary" onClick={() => dismissProgram()}>
+                Clear coach diagrams
+              </button>
+            )}
 
             {bridge && <BridgePanel bridge={bridge} onDismiss={() => setBridge(null)} />}
 

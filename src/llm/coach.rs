@@ -36,7 +36,8 @@ pub struct BoardSnapshot {
     /// Handwriting run through ML Kit, plus any typed text elements.
     #[serde(default)]
     pub recognized_text: String,
-    /// Stripped Excalidraw scene: `{type, x, y, w, h, text}` per element.
+    /// Stripped Excalidraw scene: `{id, type, x, y, w, h, text?}` per element.
+    /// Each `id` is a truncated stable handle the model may cite.
     #[serde(default)]
     pub scene_structure: Option<serde_json::Value>,
     /// Base64 PNG. Only sent when the selected model is vision-capable.
@@ -47,6 +48,12 @@ pub struct BoardSnapshot {
     /// should read it that way.
     #[serde(default)]
     pub pseudocode: Option<String>,
+    /// Truncated element ids added since the last successful review this session.
+    #[serde(default)]
+    pub new_since_last: Vec<String>,
+    /// How many successful reviews this session (0 = first look).
+    #[serde(default)]
+    pub turn_index: u32,
 }
 
 impl BoardSnapshot {
@@ -96,11 +103,21 @@ impl BoardSnapshot {
             if rendered.len() > 2 {
                 let _ = writeln!(
                     out,
-                    "\nCanvas layout (shapes and their positions, for reading the diagram):\n\n\
+                    "\nCanvas layout (shapes and their positions; each object has a short stable \
+                     `id` you may cite):\n\n\
                      ```json\n{}\n```",
                     clip(&rendered, MAX_STRUCTURE)
                 );
             }
+        }
+        if self.turn_index > 0 && !self.new_since_last.is_empty() {
+            let _ = writeln!(
+                out,
+                "\n## Since your last look, the student added\n\n\
+                 Element ids (truncated): {}\n\
+                 Focus on what is new; do not repeat a point you already made.",
+                self.new_since_last.join(", ")
+            );
         }
         if let Some(pseudocode) = self.pseudocode.as_deref().map(str::trim).filter(|p| !p.is_empty())
         {
@@ -138,6 +155,8 @@ given cases breaks their approach, set \"counterexample\" to null and say so in 
 and no others. Do not introduce a different, easier, or made-up array to illustrate the point — a \
 trace of some other input is worse than no trace, because the student will run the case you cited \
 and see something different.\n\
+- On a follow-up turn (when \"Since your last look\" is present), respond to what is new; do not \
+repeat a point you already made.\n\
 - Never write the corrected algorithm or working code. End with one Socratic question that leads \
 them to the flaw themselves.\n\
 - Reply with a single JSON object and nothing else — no prose, no markdown fence.";
@@ -492,6 +511,15 @@ pub struct Citation {
     pub why: String,
 }
 
+/// A read-only highlight over student elements (coach-owned overlay).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Highlight {
+    pub ids: Vec<String>,
+    pub tone: String,
+    pub note: String,
+}
+
 /// Resolve a `cite_test_case` call against the real cases, or drop it.
 pub fn validate_citation(raw: &serde_json::Value, cases: &[IoCase]) -> Option<Citation> {
     let case_index = raw.get("case_index")?.as_u64()? as usize;
@@ -507,6 +535,65 @@ pub fn validate_citation(raw: &serde_json::Value, cases: &[IoCase]) -> Option<Ci
             .unwrap_or_default()
             .to_string(),
     })
+}
+
+/// Resolve `highlight_student_work` against truncated ids in `scene_structure`.
+pub fn validate_highlight(raw: &serde_json::Value, board: &BoardSnapshot) -> Option<Highlight> {
+    let requested: Vec<String> = raw
+        .get("ids")?
+        .as_array()?
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .take(6)
+        .collect();
+    if requested.is_empty() {
+        return None;
+    }
+    let known = scene_structure_ids(board);
+    let resolved: Vec<String> = requested
+        .into_iter()
+        .filter(|id| {
+            known.iter().any(|known_id| {
+                known_id == id
+                    || known_id.starts_with(id.as_str())
+                    || id.starts_with(known_id.as_str())
+            })
+        })
+        .collect();
+    if resolved.is_empty() {
+        return None;
+    }
+    let note = raw
+        .get("note")
+        .and_then(|n| n.as_str())
+        .unwrap_or_default()
+        .chars()
+        .take(240)
+        .collect::<String>();
+    if note.trim().is_empty() {
+        return None;
+    }
+    Some(Highlight {
+        ids: resolved,
+        tone: raw
+            .get("tone")
+            .and_then(|t| t.as_str())
+            .unwrap_or("warning")
+            .to_string(),
+        note,
+    })
+}
+
+fn scene_structure_ids(board: &BoardSnapshot) -> Vec<String> {
+    let Some(structure) = &board.scene_structure else {
+        return Vec::new();
+    };
+    let Some(arr) = structure.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|el| el.get("id").and_then(|id| id.as_str()).map(str::to_string))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -831,6 +918,29 @@ mod tests {
         ] {
             assert!(validate_citation(&bad, &cases).is_none(), "{bad} should drop");
         }
+    }
+
+    #[test]
+    fn highlight_keeps_only_ids_present_on_the_board() {
+        let board = BoardSnapshot {
+            scene_structure: Some(serde_json::json!([
+                {"id": "el_44abc", "type": "text", "text": "O(n)"},
+                {"id": "el_55def", "type": "text", "text": "hash"}
+            ])),
+            ..Default::default()
+        };
+        let good = serde_json::json!({
+            "ids": ["el_44abc", "missing", "el_55"],
+            "tone": "warning",
+            "note": "inner loop rescans"
+        });
+        let highlight = validate_highlight(&good, &board).expect("partially valid");
+        assert_eq!(highlight.ids, vec!["el_44abc", "el_55"]);
+        assert!(validate_highlight(
+            &serde_json::json!({"ids": ["nope"], "note": "x"}),
+            &board
+        )
+        .is_none());
     }
 
     #[test]

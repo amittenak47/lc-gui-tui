@@ -9,7 +9,13 @@
 
 import type { BoardSnapshot } from "../api/types";
 import type { BoardHandle } from "./BoardHandle";
-import { captureStructure, captureTypedText, elementIds, sceneHash } from "./capture";
+import {
+  captureStructure,
+  captureTypedText,
+  elementIds,
+  sceneHash,
+  truncateCaptureId,
+} from "./capture";
 import { mergeRecognized, type InkRecognizer } from "./ink";
 
 export interface Snapshot {
@@ -26,6 +32,10 @@ export interface SnapshotOptions {
   includeStructure?: boolean;
   /** Contents of the pseudocode editor, if the student typed any. */
   pseudocode?: string;
+  /** Element ids from the last successful review — for `new_since_last`. */
+  previousIds?: ReadonlySet<string>;
+  /** How many successful reviews this session (0 = first look). */
+  turnIndex?: number;
 }
 
 export async function buildSnapshot(
@@ -44,6 +54,7 @@ export async function buildSnapshot(
     handwriting = "";
   }
 
+  const ids = elementIds(elements);
   const snapshot: BoardSnapshot = {
     recognized_text: mergeRecognized(handwriting, typed),
   };
@@ -57,10 +68,19 @@ export async function buildSnapshot(
     const png = await board.exportPng();
     if (png) snapshot.png = png;
   }
+  if (typeof options.turnIndex === "number") {
+    snapshot.turn_index = options.turnIndex;
+  }
+  if (options.previousIds && options.previousIds.size > 0) {
+    const added = [...ids].filter((id) => !options.previousIds!.has(id));
+    if (added.length > 0) {
+      snapshot.new_since_last = added.map(truncateCaptureId);
+    }
+  }
 
   return {
     board: snapshot,
     sceneHash: sceneHash(elements),
-    ids: elementIds(elements),
+    ids,
   };
 }
