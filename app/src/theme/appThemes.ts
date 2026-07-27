@@ -103,6 +103,10 @@ export function applyAppTheme(id: string): AppTheme {
   root.style.setProperty("--muted", tokens.muted);
   root.style.setProperty("--hint", tokens.hint);
   root.style.setProperty("--line", tokens.line);
+  root.style.setProperty(
+    "--chrome-edge",
+    theme.mode === "dark" ? "#c4c9d4" : "#2a2620",
+  );
   root.style.setProperty("--accent", tokens.accent);
   root.style.setProperty("--ok", tokens.ok);
   root.style.setProperty("--bad", tokens.bad);

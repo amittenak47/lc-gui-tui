@@ -53,4 +53,6 @@ export interface BoardHandle {
   zoomOut(): void;
   /** Re-center the viewport on the problem template. */
   fitView(): void;
+  /** Grow/shrink the code frame so Monaco can show this source without scrolling. */
+  fitCodeToSource(source: string): void;
 }

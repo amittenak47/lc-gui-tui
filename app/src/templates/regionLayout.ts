@@ -139,8 +139,14 @@ function contentMinHeight(
 /**
  * Enforce shared student width, vertical stacking, coach-lane placement, and
  * hard minimum sizes. Returns a new element list when something changed.
+ *
+ * `codeContentHeight` sizes the Monaco code frame to the solution text so the
+ * dock does not need an inner scrollbar.
  */
-export function syncRegionLayout(elements: readonly LayoutElement[]): LayoutElement[] | null {
+export function syncRegionLayout(
+  elements: readonly LayoutElement[],
+  options?: { codeContentHeight?: number },
+): LayoutElement[] | null {
   const byId = new Map(elements.map((element) => [element.id, { ...element }]));
   const frames = regionFramesOf([...byId.values()]);
   const constraints = frames.get("constraints");
@@ -163,7 +169,21 @@ export function syncRegionLayout(elements: readonly LayoutElement[]): LayoutElem
     const requested = num(frame.height, REGIONS[region].h);
     const originY = oldOrigins.get(region)?.y ?? frame.y;
     const contentFloor = contentMinHeight([...byId.values()], region, originY);
-    const height = Math.max(REGION_MIN[region].minH, contentFloor, requested);
+    const codeFloor =
+      region === "code" && options?.codeContentHeight != null
+        ? options.codeContentHeight
+        : null;
+    // Code: fit the solution (allow a taller manual resize). Other regions keep
+    // the previous max(min, content, requested) rule.
+    const height =
+      codeFloor != null
+        ? Math.max(
+            REGION_MIN[region].minH,
+            contentFloor,
+            codeFloor,
+            requested > codeFloor ? requested : codeFloor,
+          )
+        : Math.max(REGION_MIN[region].minH, contentFloor, requested);
     const next = {
       ...frame,
       x: 0,

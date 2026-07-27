@@ -62,10 +62,10 @@ export interface SkeletonMeta {
 export const COACH_INK = "#5b6478";
 export const COACH_ACCENT = "#c2410c";
 export const COACH_FILL = "#f1f5f9";
-export const STUDENT_HINT = "#64748b";
-export const REGION_BORDER = "#94a3b8";
-export const TEXT_PRIMARY = "#1e1e1e";
-export const TEXT_BODY = "#2f3542";
+export const STUDENT_HINT = "#4b5563";
+export const REGION_BORDER = "#1a1612";
+export const TEXT_PRIMARY = "#14110e";
+export const TEXT_BODY = "#1f1a14";
 
 /** Template ink — pick for board brightness so statement text stays readable. */
 export function templatePalette(dark: boolean) {
@@ -74,12 +74,13 @@ export function templatePalette(dark: boolean) {
         primary: "#f3f4f6",
         body: "#e5e7eb",
         hint: "#9ca3af",
-        border: "#6b7280",
+        border: "#9ca3af",
       }
     : {
         primary: TEXT_PRIMARY,
         body: TEXT_BODY,
         hint: STUDENT_HINT,
+        // Dark dashed frames on light boards so regions stay readable on parchment.
         border: REGION_BORDER,
       };
 }

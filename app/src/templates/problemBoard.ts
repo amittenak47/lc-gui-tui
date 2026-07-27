@@ -234,3 +234,53 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
 export function isTemplateElementId(id: string): boolean {
   return id.startsWith("lcregion-");
 }
+
+/**
+ * Recolor scaffold text/frames for the current board brightness without wiping
+ * student strokes. Theme switches call this so light boards never keep dark-mode
+ * ink (and vice versa).
+ */
+export function recolorTemplateElements<
+  T extends {
+    id: string;
+    type: string;
+    strokeColor?: string;
+    fontFamily?: number;
+    opacity?: number;
+    customData?: { lcRegionFrame?: boolean; lcVizId?: string } | null;
+  },
+>(elements: readonly T[], dark: boolean): T[] | null {
+  const ink = templatePalette(dark);
+  let changed = false;
+  const next = elements.map((element) => {
+    if (element.customData?.lcVizId) return element;
+    if (!isTemplateElementId(element.id) && !element.customData?.lcRegionFrame) {
+      return element;
+    }
+
+    const isFrame =
+      element.customData?.lcRegionFrame === true || element.id.endsWith("-frame");
+    let strokeColor = ink.body;
+    if (isFrame) strokeColor = ink.border;
+    else if (element.id.includes("-title")) strokeColor = ink.primary;
+    else if (
+      element.id.includes("-label") ||
+      element.id.includes("-hint") ||
+      element.id.includes("-meta")
+    ) {
+      strokeColor = ink.hint;
+    } else if (element.id.includes("-body-")) {
+      strokeColor = element.fontFamily === FONT_CODE ? ink.primary : ink.body;
+    }
+
+    const opacity = isFrame ? 100 : element.opacity;
+    if (element.strokeColor === strokeColor && element.opacity === opacity) {
+      return element;
+    }
+    changed = true;
+    return { ...element, strokeColor, ...(opacity !== undefined ? { opacity } : {}) };
+  });
+
+  return changed ? next : null;
+}
+

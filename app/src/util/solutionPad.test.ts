@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ensureCodingRoom } from "./solutionPad";
+import { codeFrameHeightForSource, ensureCodingRoom } from "./solutionPad";
 
 describe("ensureCodingRoom", () => {
   it("appends blank lines after a function stub", () => {
@@ -16,5 +16,14 @@ describe("ensureCodingRoom", () => {
   it("trims existing trailing whitespace before padding", () => {
     const padded = ensureCodingRoom("def f():\n    pass\n\n\n", 3);
     expect(padded).toBe("def f():\n    pass\n\n\n\n");
+  });
+});
+
+describe("codeFrameHeightForSource", () => {
+  it("grows with line count above the region floor", () => {
+    const short = codeFrameHeightForSource("def f():\n    pass\n");
+    const long = codeFrameHeightForSource(Array.from({ length: 80 }, () => "x = 1").join("\n"));
+    expect(long).toBeGreaterThan(short);
+    expect(long).toBeGreaterThan(560);
   });
 });
