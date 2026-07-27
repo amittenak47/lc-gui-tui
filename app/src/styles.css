@@ -1727,6 +1727,14 @@ input[type="checkbox"] {
   flex: 1;
 }
 
+/* Something worth saying that did not stop the request — not an error. */
+.lc-notice {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .lc-busy {
   padding: 6px 12px;
   font-size: 13px;

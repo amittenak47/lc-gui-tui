@@ -66,6 +66,19 @@ impl BoardSnapshot {
                 .is_none_or(|s| s.as_array().is_some_and(|a| a.is_empty()))
     }
 
+    /// Whether anything other than transcribed text says the student has been
+    /// working: a non-empty scene layout, or an attached board image.
+    pub fn has_visual_evidence(&self) -> bool {
+        if self.png.is_some() {
+            return true;
+        }
+        match self.scene_structure.as_ref() {
+            Some(serde_json::Value::Array(items)) => !items.is_empty(),
+            Some(serde_json::Value::Null) | None => false,
+            Some(_) => true,
+        }
+    }
+
     /// Images for [`crate::llm::ChatMessage::with_images`]; empty unless a PNG
     /// was captured.
     pub fn images(&self) -> Vec<String> {
@@ -89,7 +102,22 @@ impl BoardSnapshot {
     fn write_into(&self, out: &mut String) {
         let _ = writeln!(out, "\n## What is on the whiteboard right now");
         if self.recognized_text.trim().is_empty() {
-            let _ = writeln!(out, "\n(no recognized handwriting yet)");
+            // "No recognized handwriting" is not "no handwriting": the browser
+            // build ships no ink OCR at all, so ink shows up only in the layout
+            // and the image. Saying so here is what stops the coach opening
+            // with "your board is blank" at a student who just wrote half a
+            // page by hand.
+            if self.has_visual_evidence() {
+                let _ = writeln!(
+                    out,
+                    "\n(No handwriting text: this device does not transcribe ink. The student may \
+                     well have written or drawn by hand. Read the canvas layout below — and the \
+                     attached image, if there is one — and interpret the boxes, arrows and \
+                     positions as their work. Do NOT tell them the board is blank.)"
+                );
+            } else {
+                let _ = writeln!(out, "\n(no recognized handwriting yet)");
+            }
         } else {
             let _ = writeln!(
                 out,
@@ -157,6 +185,17 @@ trace of some other input is worse than no trace, because the student will run t
 and see something different.\n\
 - On a follow-up turn (when \"Since your last look\" is present), respond to what is new; do not \
 repeat a point you already made.\n\
+- Some devices cannot transcribe ink at all. Missing handwriting text is NOT an empty board: read \
+the canvas layout — and the attached image when there is one — and work out what the boxes, \
+arrows and positions mean before you judge anything. Never assert the board is blank when there \
+are objects on it.\n\
+- If the board is sparse or the session is early, you are opening an interview, not grading a \
+failure. Do not say they have done nothing, do not tell them to \"start coding\" or to \"implement \
+a solution\", and do not treat the attempt as failed. Instead put one or two concrete, \
+problem-specific opening hints in \"gaps\": which constraint actually bites, a small input worth \
+walking by hand, a data structure that fits the access pattern, an invariant worth chasing. \
+Specific to THIS problem — no generic encouragement — and use \"unclear\" as the verdict while \
+there is not yet an approach to judge.\n\
 - Never write the corrected algorithm or working code. End with one Socratic question that leads \
 them to the flaw themselves.\n\
 - Reply with a single JSON object and nothing else — no prose, no markdown fence.";
@@ -244,7 +283,7 @@ pub fn build_review_prompt(
          ```json\n\
          {{\n  \
            \"understood_approach\": \"what I think you are doing, in your own words\",\n  \
-           \"verdict\": \"on_track | subtly_wrong | wrong_track\",\n  \
+           \"verdict\": \"on_track | subtly_wrong | wrong_track | unclear\",\n  \
            \"rating\": {{\"correctness\": 0-5, \"complexity\": 0-5, \"clarity\": 0-5}},\n  \
            \"strengths\": [\"...\"],\n  \
            \"gaps\": [\"...\"],\n  \
@@ -888,6 +927,43 @@ mod tests {
         // And an actually-blank board says so rather than inviting a guess.
         let blank = build_trace_prompt(&meta, &BoardSnapshot::default(), &meta.cases[0], 1);
         assert!(blank.contains("nothing legible"));
+    }
+
+    /// A browser build sends no transcribed ink at all, so a board full of
+    /// hand-drawn boxes arrives with an empty `recognized_text`. The prompt has
+    /// to point the coach at the layout instead of letting it announce a blank
+    /// board and demand they go implement something.
+    #[test]
+    fn an_untranscribed_board_is_described_by_its_layout_not_called_blank() {
+        let meta = meta_with_cases(2);
+        let drawn = BoardSnapshot {
+            scene_structure: Some(serde_json::json!([
+                {"id": "aaa", "type": "rectangle", "x": 10, "y": 10, "w": 80, "h": 40},
+                {"id": "bbb", "type": "arrow", "x": 90, "y": 30, "w": 60, "h": 4},
+            ])),
+            ..Default::default()
+        };
+        assert!(drawn.has_visual_evidence());
+        let prompt = build_review_prompt(&meta, None, &drawn);
+        assert!(prompt.contains("does not transcribe ink"));
+        assert!(prompt.contains("Do NOT tell them the board is blank"));
+
+        // Nothing at all still reads as nothing at all.
+        let nothing = BoardSnapshot::default();
+        assert!(!nothing.has_visual_evidence());
+        let prompt = build_review_prompt(&meta, None, &nothing);
+        assert!(prompt.contains("no recognized handwriting yet"));
+        assert!(!prompt.contains("does not transcribe ink"));
+    }
+
+    /// The pain point behind this: an early board got "you haven't done
+    /// anything, go implement a solution" instead of a way in.
+    #[test]
+    fn the_review_prompt_asks_for_opening_hints_on_a_sparse_board() {
+        assert!(REVIEW_SYSTEM_PROMPT.contains("opening hints"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("start coding"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("implement a solution"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("problem-specific"));
     }
 
     #[test]

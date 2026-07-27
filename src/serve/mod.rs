@@ -26,7 +26,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
-use axum::extract::{Request, State};
+use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -141,9 +141,18 @@ pub fn router(state: Shared) -> Router {
         // /health stays unauthenticated so the client can find the daemon
         // before it has been paired.
         .route("/health", get(health))
+        // Axum's default is ~2MB, which a board PNG from a vision model blows
+        // through — the client saw "Failed to buffer the request body: length
+        // limit exceeded" on every Share/Send with vision on. 32MB covers a
+        // downscaled board image plus the saved scene with room to spare.
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
+
+/// Upper bound on a request body: big enough for a board PNG, small enough that
+/// a stray upload cannot exhaust memory.
+pub const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 async fn health(State(state): State<Shared>) -> Json<serde_json::Value> {
     Json(serde_json::json!({

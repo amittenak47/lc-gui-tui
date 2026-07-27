@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { LcClient, type SearchOptions } from "./api/client";
+import { LcApiError, LcClient, type SearchOptions } from "./api/client";
 import { AmbientCoach, type AmbientProbe } from "./api/coachSocket";
 import { loadPairing, parsePairingUrl, savePairing, type Pairing } from "./api/pairing";
 import type {
@@ -29,7 +29,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { Board } from "./canvas/Board";
 import { loadBoardReadingSize, saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
 import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
-import { sceneHash, studentElements } from "./canvas/capture";
+import { sceneHash, studentAuthoredElements, studentElements } from "./canvas/capture";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
 import { buildSnapshot } from "./canvas/snapshot";
 import { AgentSidePanel, type CoachChatMessage, type CoachSendFlags } from "./modes/AgentSidePanel";
@@ -80,6 +80,8 @@ export function App() {
   const [mode, setMode] = useState<Mode>("review");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Something the student should know, but which did not stop the request. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [pseudocode, setPseudocode] = useState("");
   /** Drives the fade between the browser and the board. */
   const [entering, setEntering] = useState(false);
@@ -516,6 +518,7 @@ export function App() {
     if (!board || !problem) return;
     setBusy("asking the coach…");
     setError(null);
+    setNotice(null);
     setCoachOpen(true);
     try {
       await syncSolution();
@@ -532,13 +535,21 @@ export function App() {
         if (note) {
           snapshot.board.recognized_text = `Student asks:\n${note}\n\n${snapshot.board.recognized_text ?? ""}`;
         }
-        if (snapshot.board.recognized_text.trim().length === 0 && !pseudocodeRef.current.trim()) {
-          setError(
-            recognizerRef.current.name === "none"
-              ? "nothing legible on the board — handwriting recognition needs the Android build, so type your approach with the text tool for now"
-              : "nothing legible on the board yet",
-          );
+        // Recognized text is not the only evidence of work: shapes, stamps and
+        // pen ink are all real, and on a browser build none of them are OCR'd.
+        // Send the structure and let the coach read the layout.
+        const drawn =
+          studentAuthoredElements(board.getElements()).length > 0 || board.hasRasterInk();
+        const legible =
+          snapshot.board.recognized_text.trim().length > 0 || pseudocodeRef.current.trim().length > 0;
+        if (!legible && !drawn) {
+          setError("nothing on the board yet — sketch or type an approach, then ask the coach");
           return;
+        }
+        if (!legible && recognizerRef.current.name === "none") {
+          setNotice(
+            "handwriting isn't recognized in the browser build — sending the shapes and layout you drew; type with the text tool if the coach misreads you",
+          );
         }
         payload = snapshot.board;
         capturedIds = snapshot.ids;
@@ -553,7 +564,19 @@ export function App() {
           turn_index: reviewTurnRef.current,
         };
       }
-      const result = await client.review(problem.task_id, payload);
+      let result: ReviewResponse;
+      try {
+        result = await client.review(problem.task_id, payload);
+      } catch (cause) {
+        // The picture is the first thing to give up: a board too big to buffer
+        // must not cost the student the whole review.
+        if (!("png" in payload) || !payload.png || !isBodyLimitError(cause)) throw cause;
+        const { png: _png, ...withoutPng } = payload;
+        result = await client.review(problem.task_id, withoutPng);
+        setNotice(
+          "the board image was too large to send — the coach reviewed your text and layout without it",
+        );
+      }
       setReview(result);
       pushCoachMessage("assistant", formatReviewMessage(result));
       // Baseline advances only on success — a failed review must not consume it.
@@ -1041,6 +1064,14 @@ export function App() {
         <div className="lc-warning lc-banner">
           <span>{error}</span>
           <button type="button" className="lc-link" onClick={() => setError(null)}>
+            dismiss
+          </button>
+        </div>
+      )}
+      {notice && !error && (
+        <div className="lc-banner lc-notice">
+          <span>{notice}</span>
+          <button type="button" className="lc-link" onClick={() => setNotice(null)}>
             dismiss
           </button>
         </div>
@@ -1614,6 +1645,24 @@ function boardFadeMs(): number {
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * Did the daemon refuse the request because the body was too big?
+ *
+ * Axum's own rejection is a plain-text 413 ("Failed to buffer the request body:
+ * length limit exceeded"), and a reverse proxy in front of it may phrase it
+ * differently, so match the status first and the wording second.
+ */
+function isBodyLimitError(cause: unknown): boolean {
+  if (cause instanceof LcApiError && cause.status === 413) return true;
+  const message = messageOf(cause).toLowerCase();
+  return (
+    message.includes("length limit") ||
+    message.includes("payload too large") ||
+    message.includes("body too large") ||
+    message.includes("request entity too large")
+  );
 }
 
 /** Shared spinner → checkmark used by browse pick and ‹ › problem switch. */
