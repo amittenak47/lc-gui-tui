@@ -429,6 +429,75 @@ input[type="checkbox"] {
   transform: translateY(-50%);
 }
 
+.lc-raster-ink {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  touch-action: none;
+  pointer-events: none;
+}
+
+.lc-raster-ink-pen {
+  cursor: crosshair;
+}
+
+.lc-raster-ink-eraser {
+  cursor: none;
+}
+
+.lc-stroke-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.lc-stroke-slider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 2px;
+  min-height: 118px;
+}
+
+.lc-stroke-slider-cap {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--muted);
+  user-select: none;
+}
+
+.lc-stroke-slider-input {
+  width: 28px;
+  height: 88px;
+  margin: 0;
+  padding: 0;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.lc-stroke-slider-value {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ink);
+  min-width: 1.4em;
+  text-align: center;
+}
+
+.lc-pressure-toggle {
+  width: 36px;
+  min-height: 30px;
+}
+
+.lc-pressure-icon {
+  display: block;
+}
+
 /*
  * Hide Excalidraw's own chrome: the app supplies a minimal toolbar instead, so
  * a stylus session never has to hit a menu.
@@ -1310,6 +1379,23 @@ input[type="checkbox"] {
 
 .lc-coach-composer-actions .lc-tip-target {
   display: inline-flex;
+}
+
+/* Composer hugs the side-panel edge — open tooltips inward so overflow:hidden on .lc-side does not clip them */
+.lc-coach-composer-bar .lc-modes .lc-tip-target::after {
+  left: calc(100% + 5px);
+  right: auto;
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+}
+
+.lc-coach-composer-actions .lc-tip-target::after {
+  right: calc(100% + 5px);
+  left: auto;
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
 }
 
 .lc-flag {

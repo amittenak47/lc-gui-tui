@@ -53,14 +53,12 @@ import { isDarkTheme } from "../theme/appThemes";
 import type { BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
 import { applyMetadata, keepOnClear } from "./scene";
-import {
-  eraseSceneAlong,
-  eraseSceneAt,
-  eraserSceneRadius,
-  eraserScreenRadius,
-  type ErasableFreedraw,
-} from "./partialEraser";
+import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush } from "./EraserBrush";
+import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
+import { StrokeSizeSlider } from "./StrokeSizeSlider";
+import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
+import { STROKE_WIDTH_DEFAULT, type ViewportTransform } from "./rasterInk";
 
 /**
  * The slice of Excalidraw's imperative API this file uses, declared locally so a
@@ -130,12 +128,6 @@ function eraserCanvasCursorCss(): string {
   return "none";
 }
 
-function isEraserCanvasTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
-  if (target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock")) return false;
-  return Boolean(target.closest("canvas.excalidraw__canvas"));
-}
-
 function num(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
@@ -178,12 +170,6 @@ export interface BoardProps {
   /** Screen rect of the solution-code region, updated as you pan/zoom/resize. */
   onCodeSlot?: (rect: ScreenRect | null) => void;
 }
-
-const STROKE_WIDTHS = [
-  { value: 1, label: "Thin" },
-  { value: 2, label: "Bold" },
-  { value: 4, label: "Heavy" },
-] as const;
 
 const INK_COLORS_LIGHT = ["#1e1e1e", "#64748b", "#b45309", "#1d4ed8", "#166534", "#b91c1c"] as const;
 const INK_COLORS_DARK = ["#f3f4f6", "#94a3b8", "#fb923c", "#60a5fa", "#4ade80", "#f87171"] as const;
@@ -246,8 +232,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [activeTool, setActiveTool] = useState<ToolName>("hand");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
   const [inkColor, setInkColor] = useState(() => defaultInk(themeId));
-  const [strokeWidth, setStrokeWidthState] = useState(1);
+  const [strokeWidth, setStrokeWidthState] = useState(STROKE_WIDTH_DEFAULT);
+  const [pressureSensitive, setPressureSensitive] = useState(true);
   const [eraserBrush, setEraserBrush] = useState({ visible: false, x: 0, y: 0, zoom: 1 });
+  const rasterInkRef = useRef<RasterInkHandle>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [zoomPct, setZoomPct] = useState(100);
   const templateRef = useRef<unknown[]>([]);
@@ -342,8 +330,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [activeTool]);
 
   const setTool = useCallback((tool: ToolName) => {
-    if (tool === "eraser") {
-      // Custom tool so Excalidraw does not run its whole-element eraser.
+    if (tool === "freedraw") {
+      apiRef.current?.setActiveTool({ type: "custom", customType: "lcInk" });
+      apiRef.current?.resetCursor?.();
+      setEraserBrush({ visible: false, x: 0, y: 0, zoom: 1 });
+    } else if (tool === "eraser") {
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcEraser" });
       apiRef.current?.setCursor?.(eraserCanvasCursorCss());
     } else {
@@ -373,122 +364,86 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
   }, []);
 
-  // Partial spherical eraser: only frees ink under the tip; never deletes
-  // whole strokes, templates, or coach diagrams.
+  const getViewport = useCallback((): ViewportTransform | null => {
+    const state = apiRef.current?.getAppState() as
+      | {
+          zoom?: { value?: number };
+          scrollX?: number;
+          scrollY?: number;
+          offsetLeft?: number;
+          offsetTop?: number;
+          width?: number;
+          height?: number;
+        }
+      | undefined;
+    if (!state || typeof state.width !== "number" || typeof state.height !== "number") {
+      return null;
+    }
+    return {
+      zoom: state.zoom?.value ?? 1,
+      scrollX: state.scrollX ?? 0,
+      scrollY: state.scrollY ?? 0,
+      offsetLeft: state.offsetLeft ?? 0,
+      offsetTop: state.offsetTop ?? 0,
+      width: state.width,
+      height: state.height,
+    };
+  }, []);
+
+  const inkToolActive = activeTool === "freedraw" || activeTool === "eraser";
+
+  // Eraser ring follows the pointer via window listeners so a click-without-move
+  // does not lose the brush (pointerleave on the board fired sporadically).
   useEffect(() => {
     if (!interactive || activeTool !== "eraser") return;
     const root = boardRef.current;
-    const api = apiRef.current;
-    if (!root || !api) return;
+    if (!root) return;
 
-    let erasing = false;
-    let moved = false;
-    let lastSceneX: number | null = null;
-    let lastSceneY: number | null = null;
-
-    const syncBrush = (event: PointerEvent) => {
-      if (!isEraserCanvasTarget(event.target)) {
+    const positionBrush = (event: PointerEvent) => {
+      const hitCanvas =
+        root.querySelector("canvas.lc-raster-ink") ??
+        root.querySelector("canvas.excalidraw__canvas");
+      if (!(hitCanvas instanceof HTMLCanvasElement)) return;
+      const rect = hitCanvas.getBoundingClientRect();
+      const inside =
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom;
+      if (!inside) {
         setEraserBrush((brush) => (brush.visible ? { ...brush, visible: false } : brush));
         return;
       }
-      const rect = root.getBoundingClientRect();
+      const boardRect = root.getBoundingClientRect();
       const { zoom } = clientToScene(event.clientX, event.clientY);
       setEraserBrush({
         visible: true,
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
+        x: event.clientX - boardRect.left,
+        y: event.clientY - boardRect.top,
         zoom,
       });
     };
 
-    const stamp = (event: PointerEvent, along: boolean) => {
-      if (!isEraserCanvasTarget(event.target)) return;
-      const { x, y, zoom } = clientToScene(event.clientX, event.clientY);
-      const radius = eraserSceneRadius(strokeWidth);
-      const elements = api.getSceneElements() as ErasableFreedraw[];
-      const next =
-        along && lastSceneX !== null && lastSceneY !== null
-          ? eraseSceneAlong(elements, lastSceneX, lastSceneY, x, y, radius)
-          : eraseSceneAt(elements, x, y, radius);
-      lastSceneX = x;
-      lastSceneY = y;
-      if (!next) return;
-      moved = true;
-      api.updateScene({
-        elements: next as unknown[],
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
-    };
-
-    const onDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      if (!isEraserCanvasTarget(event.target)) return;
-      erasing = true;
-      moved = false;
-      lastSceneX = null;
-      lastSceneY = null;
-      const canvas = root.querySelector("canvas.excalidraw__canvas");
-      try {
-        (canvas ?? root).setPointerCapture(event.pointerId);
-      } catch {
-        /* ignore */
-      }
-      syncBrush(event);
-      stamp(event, false);
-      event.preventDefault();
-      event.stopPropagation();
-    };
-
-    const onMove = (event: PointerEvent) => {
-      syncBrush(event);
-      if (!erasing) return;
-      stamp(event, true);
-      event.preventDefault();
-      event.stopPropagation();
-    };
-
-    const onUp = (event: PointerEvent) => {
-      if (!erasing) return;
-      erasing = false;
-      lastSceneX = null;
-      lastSceneY = null;
-      const canvas = root.querySelector("canvas.excalidraw__canvas");
-      try {
-        (canvas ?? root).releasePointerCapture(event.pointerId);
-      } catch {
-        /* ignore */
-      }
-      if (moved) {
-        // One undo step for the whole erase stroke.
-        api.updateScene({
-          elements: api.getSceneElements() as unknown[],
-          captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-        });
-      }
-      syncBrush(event);
-      api.setCursor?.(eraserCanvasCursorCss());
-    };
-
-    const onLeave = () => {
-      setEraserBrush((brush) => (brush.visible ? { ...brush, visible: false } : brush));
-    };
-
-    root.addEventListener("pointerdown", onDown, true);
-    root.addEventListener("pointermove", onMove, true);
-    root.addEventListener("pointerup", onUp, true);
-    root.addEventListener("pointercancel", onUp, true);
-    root.addEventListener("pointerleave", onLeave, true);
-    api.setCursor?.(eraserCanvasCursorCss());
+    window.addEventListener("pointermove", positionBrush);
+    window.addEventListener("pointerdown", positionBrush, true);
+    apiRef.current?.setCursor?.(eraserCanvasCursorCss());
 
     return () => {
-      root.removeEventListener("pointerdown", onDown, true);
-      root.removeEventListener("pointermove", onMove, true);
-      root.removeEventListener("pointerup", onUp, true);
-      root.removeEventListener("pointercancel", onUp, true);
-      root.removeEventListener("pointerleave", onLeave, true);
+      window.removeEventListener("pointermove", positionBrush);
+      window.removeEventListener("pointerdown", positionBrush, true);
       setEraserBrush({ visible: false, x: 0, y: 0, zoom: 1 });
     };
-  }, [activeTool, clientToScene, interactive, strokeWidth]);
+  }, [activeTool, clientToScene, interactive]);
+
+  const undoBoard = useCallback(() => {
+    if (rasterInkRef.current?.undo()) return;
+    triggerUndo();
+  }, []);
+
+  const redoBoard = useCallback(() => {
+    if (rasterInkRef.current?.redo()) return;
+    triggerRedo();
+  }, []);
 
   /**
    * Turn skeletons into elements, then stamp the metadata back on — bound
@@ -860,7 +815,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       getStrokes: () => captureStrokes(elements()),
       setTool,
       undo: () => {
-        triggerUndo();
+        undoBoard();
       },
       scrollToContent: () => apiRef.current?.scrollToContent(),
       zoomIn,
@@ -868,7 +823,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       fitView,
       fitCodeToSource,
     }),
-    [convert, elements, fitCodeToSource, fitView, resetTemplate, scheduleFitView, setTool, themeId, zoomIn, zoomOut],
+    [convert, elements, fitCodeToSource, fitView, resetTemplate, scheduleFitView, setTool, themeId, undoBoard, zoomIn, zoomOut],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
@@ -901,21 +856,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             onInk={setInk}
             strokeWidth={strokeWidth}
             onStrokeWidth={setStrokeWidth}
+            pressureSensitive={pressureSensitive}
+            onPressureSensitive={setPressureSensitive}
             fontSize={fontSize}
             onFontSize={setFontSize}
             shapesOpen={shapesOpen}
             onToggleShapes={() => setShapesOpen((open) => !open)}
             onStamp={stamp}
             onStampImported={stampImported}
-            onClear={() =>
+            onClear={() => {
+              rasterInkRef.current?.clear();
               apiRef.current?.updateScene({
                 elements: elements().filter(keepOnClear) as unknown[],
                 captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-              })
-            }
+              });
+            }}
             onReset={resetTemplate}
-            onUndo={triggerUndo}
-            onRedo={triggerRedo}
+            onUndo={undoBoard}
+            onRedo={redoBoard}
           />
           <div className="lc-map-controls">
             {onThemePick && (
@@ -929,6 +887,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             />
           </div>
         </>
+      )}
+      {interactive && (
+        <RasterInkLayer
+          ref={rasterInkRef}
+          enabled={interactive}
+          tool={inkToolActive ? (activeTool === "eraser" ? "eraser" : "pen") : null}
+          strokeWidth={strokeWidth}
+          inkColor={inkColor}
+          pressureSensitive={pressureSensitive}
+          getViewport={getViewport}
+          onChange={onChange}
+        />
       )}
       {interactive && activeTool === "eraser" && (
         <EraserBrush
@@ -948,6 +918,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             apiRef.current.onScrollChange?.((_x, _y, zoom) => {
               const pct = Math.round(zoom.value * 100);
               setZoomPct((current) => (current === pct ? current : pct));
+              rasterInkRef.current?.repaint();
               reportCodeSlot();
             }) ?? null;
           const state = apiRef.current.getAppState() as { zoom?: { value?: number } };
@@ -972,6 +943,8 @@ interface ToolbarProps {
   onInk: (color: string) => void;
   strokeWidth: number;
   onStrokeWidth: (width: number) => void;
+  pressureSensitive: boolean;
+  onPressureSensitive: (enabled: boolean) => void;
   fontSize: number;
   onFontSize: (size: number) => void;
   shapesOpen: boolean;
@@ -992,6 +965,8 @@ function BoardToolbar({
   onInk,
   strokeWidth,
   onStrokeWidth,
+  pressureSensitive,
+  onPressureSensitive,
   fontSize,
   onFontSize,
   shapesOpen,
@@ -1141,26 +1116,18 @@ function BoardToolbar({
       {showStrokeSizes && (
         <>
           {!showInk && <div className="lc-tool-sep" />}
-          <div className="lc-tool-group" role="group" aria-label={active === "eraser" ? "Eraser size" : "Stroke weight"}>
-            {STROKE_WIDTHS.map(({ value, label }) => (
-              <button
-                key={value}
-                type="button"
-                className={
-                  value === strokeWidth
-                    ? "lc-tool lc-tool-mini lc-tool-active lc-tip-target"
-                    : "lc-tool lc-tool-mini lc-tip-target"
-                }
-                data-tip={active === "eraser" ? `${label} eraser` : `${label} stroke`}
-                data-tip-placement="right"
-                title={label}
-                aria-label={label}
-                aria-pressed={value === strokeWidth}
-                onClick={() => onStrokeWidth(value)}
-              >
-                <span className="lc-stroke-preview" style={{ height: Math.min(value + 1, 5) }} />
-              </button>
-            ))}
+          <div className="lc-stroke-controls">
+            <StrokeSizeSlider
+              value={strokeWidth}
+              onChange={onStrokeWidth}
+              label={active === "eraser" ? "Eraser size" : "Stroke weight"}
+            />
+            {active === "freedraw" && (
+              <PressureSensitiveToggle
+                enabled={pressureSensitive}
+                onChange={onPressureSensitive}
+              />
+            )}
           </div>
         </>
       )}

@@ -125,7 +125,7 @@ export function AgentSidePanel({
           />
           <div className="lc-coach-composer-bar">
             <div className="lc-modes" role="group" aria-label="Coach mode">
-              <Tip tip="Coach replies when you ask from the composer" placement="top">
+              <Tip tip="Analyze on send" placement="right">
                 <button
                   type="button"
                   className={mode === "review" ? "lc-mode lc-mode-active" : "lc-mode"}
@@ -136,7 +136,7 @@ export function AgentSidePanel({
                   On ask
                 </button>
               </Tip>
-              <Tip tip="Coach glances every 60s and nudges in this thread" placement="top">
+              <Tip tip="Analyze every 60s" placement="right">
                 <button
                   type="button"
                   className={mode === "ambient" ? "lc-mode lc-mode-active" : "lc-mode"}
@@ -149,7 +149,7 @@ export function AgentSidePanel({
               </Tip>
             </div>
             <div className="lc-coach-composer-actions">
-              <Tip tip="When you Send, ask the coach to draw on the board" placement="top">
+              <Tip tip="Allow coach to draw on the board" placement="left">
                 <button
                   type="button"
                   className={draw ? "lc-flag lc-flag-active" : "lc-flag"}
@@ -160,7 +160,7 @@ export function AgentSidePanel({
                   Draw
                 </button>
               </Tip>
-              <Tip tip="When you Send, attach the board and code dock" placement="top">
+              <Tip tip="Allow coach to review the board" placement="left">
                 <button
                   type="button"
                   className={reviewBoard ? "lc-flag lc-flag-active" : "lc-flag"}
