@@ -49,7 +49,6 @@ import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { BridgePanel, RevealDialog } from "./modes/RevealDialog";
-import { ReviewPanel } from "./modes/ReviewPanel";
 import { buildProblemTemplate } from "./templates/problemBoard";
 import { REGIONS, STUDENT_REGION_ORDER, type RegionId } from "./templates/regions";
 import { isMobileViewport, useIsMobile } from "./util/mobile";
@@ -160,7 +159,6 @@ export function App() {
     saveBoardReadingSize(readingSize);
   }, [mobile, readingSize]);
 
-  const [review, setReview] = useState<ReviewResponse | null>(null);
   const [tests, setTests] = useState<TestResponse | null>(null);
   const [programs, setPrograms] = useState<VizProgram[]>([]);
   const [, setFrameByProgram] = useState<Record<string, number>>({});
@@ -175,6 +173,7 @@ export function App() {
   const [coachMessages, setCoachMessages] = useState<CoachChatMessage[]>([]);
   const [connected, setConnected] = useState(false);
   const [thinking, setThinking] = useState(false);
+  const [coachPhase, setCoachPhase] = useState<string | null>(null);
   const [ambientProvider, setAmbientProvider] = useState<string | null>(null);
   const [lastSkip, setLastSkip] = useState<string | null>(null);
 
@@ -321,7 +320,6 @@ export function App() {
       setActiveRegion("constraints");
       setBusy("loading the workspace…");
       setError(null);
-      setReview(null);
       setTests(null);
       setBridge(null);
       setPrograms([]);
@@ -404,6 +402,9 @@ export function App() {
         boardRef.current?.fitCodeToSource(source);
         lastIdsRef.current = new Set();
 
+        // Wait until every dashed region frame is in the scene before fitting
+        // and revealing — otherwise the loading checkmark races an empty board.
+        await boardRef.current?.waitForTemplate();
         await boardRef.current?.settleFitView();
 
         setBrowseMotion("idle");
@@ -540,23 +541,66 @@ export function App() {
     };
   }, [mode, problem, pairing, probe, capture]);
 
-  const pushCoachMessage = useCallback((role: CoachChatMessage["role"], content: string) => {
-    setCoachMessages((current) => [
-      ...current,
-      { id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, role, content, at: Date.now() },
-    ]);
-  }, []);
+  const pushCoachMessage = useCallback(
+    (
+      role: CoachChatMessage["role"],
+      content: string,
+      extra?: Pick<CoachChatMessage, "review" | "attachments">,
+    ) => {
+      setCoachMessages((current) => [
+        ...current,
+        {
+          id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          role,
+          content,
+          at: Date.now(),
+          ...extra,
+        },
+      ]);
+    },
+    [],
+  );
 
-  const submitForReview = useCallback(async (studentNote?: string, includeBoard = true) => {
+  const submitForReview = useCallback(async (
+    studentNote?: string,
+    includeBoard = true,
+    attachments?: CoachChatMessage["attachments"],
+  ) => {
     const board = boardRef.current;
     if (!board || !problem) return;
     setBusy("asking the coach…");
     setError(null);
     setNotice(null);
     setCoachOpen(true);
+
+    const phaseTimers: number[] = [];
+    const note = studentNote?.trim() ?? "";
+    const topic =
+      note.length > 0
+        ? note.length > 48
+          ? `${note.slice(0, 48)}…`
+          : note
+        : includeBoard
+          ? "your board"
+          : "your question";
+    const phases = includeBoard
+      ? [
+          note ? "Reading your message…" : "Reading the request…",
+          "Loading your layouts…",
+          `Thinking about ${topic}…`,
+          "Preparing response…",
+        ]
+      : ["Reading your message…", `Thinking about ${topic}…`, "Preparing response…"];
+    let delay = 0;
+    for (const label of phases) {
+      const id = window.setTimeout(() => setCoachPhase(label), delay);
+      phaseTimers.push(id);
+      delay += label.startsWith("Thinking") ? 2200 : 900;
+    }
+    setCoachPhase(phases[0]);
+
     try {
       await syncSolution();
-      const note = studentNote?.trim() ?? "";
       let payload;
       let capturedIds: Set<string> | null = null;
       if (includeBoard) {
@@ -618,8 +662,12 @@ export function App() {
             : "the board image was too large to send — the coach reviewed your text and layout without it",
         );
       }
-      setReview(result);
-      pushCoachMessage("assistant", formatReviewMessage(result));
+      // One structured card in the thread — do not also push a prose duplicate.
+      // Attachments show what the coach saw (same layouts as the user turn).
+      pushCoachMessage("assistant", "", {
+        review: result,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      });
       // Baseline advances only on success — a failed review must not consume it.
       if (capturedIds) {
         lastReviewIdsRef.current = capturedIds;
@@ -631,6 +679,8 @@ export function App() {
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
+      for (const id of phaseTimers) window.clearTimeout(id);
+      setCoachPhase(null);
       setBusy(null);
     }
   }, [client, problem, syncSolution, pushCoachMessage, modeHasVision]);
@@ -727,10 +777,26 @@ export function App() {
       const shown = [text, flagBits.length > 0 ? flagBits.join(" · ") : null]
         .filter(Boolean)
         .join("\n");
-      pushCoachMessage("user", shown || "Send");
+
       void (async () => {
+        let attachments: CoachChatMessage["attachments"];
+        if (flags.reviewBoard && boardRef.current) {
+          try {
+            const thumbs = await boardRef.current.exportRegionThumbs();
+            if (thumbs.length > 0) {
+              attachments = thumbs.map((thumb) => ({
+                label: thumb.label,
+                png: thumb.png,
+              }));
+            }
+          } catch {
+            /* thumbnails are best-effort */
+          }
+        }
+        pushCoachMessage("user", shown || "Send", attachments ? { attachments } : undefined);
+
         if (flags.reviewBoard || text) {
-          await submitForReview(text, flags.reviewBoard);
+          await submitForReview(text, flags.reviewBoard, attachments);
         }
         if (flags.draw) {
           await askForDiagram(text);
@@ -919,7 +985,6 @@ export function App() {
     setBoardPreparing(false);
     setHoldBrowseOverlay(false);
     setEntering(false);
-    setReview(null);
     setTests(null);
     setBridge(null);
     setPrograms([]);
@@ -1231,8 +1296,13 @@ export function App() {
             onModeChange={setMode}
             busy={busy !== null}
             thinking={busy !== null || thinking}
+            thinkingPhase={coachPhase}
             messages={coachMessages}
             onSend={sendCoachChat}
+            onRequestBridge={() => {
+              setRevealError(null);
+              setRevealOpen(true);
+            }}
           >
             {mode === "ambient" && (
               <AmbientPanel
@@ -1250,17 +1320,6 @@ export function App() {
                   setNudges([]);
                   lastIdsRef.current = new Set();
                 }}
-              />
-            )}
-
-            {review && (
-              <ReviewPanel
-                review={review}
-                onRequestBridge={() => {
-                  setRevealError(null);
-                  setRevealOpen(true);
-                }}
-                onDismiss={() => setReview(null)}
               />
             )}
 
@@ -1450,16 +1509,6 @@ function RegionPager({
       </button>
     </nav>
   );
-}
-
-function formatReviewMessage(review: ReviewResponse): string {
-  const parts = [
-    `Verdict: ${review.verdict.replace(/_/g, " ")}`,
-    review.understood_approach ? `I think you're doing: ${review.understood_approach}` : null,
-    review.gaps.length > 0 ? `Gaps:\n${review.gaps.map((g) => `• ${g}`).join("\n")}` : null,
-    review.socratic_question ? `Question: ${review.socratic_question}` : null,
-  ].filter(Boolean);
-  return parts.join("\n\n");
 }
 
 function TestSummary({

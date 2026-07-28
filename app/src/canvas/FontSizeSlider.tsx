@@ -29,6 +29,9 @@ export function FontSizeSlider({ value, onChange }: FontSizeSliderProps) {
         aria-valuemin={TEXT_FONT_MIN}
         aria-valuemax={TEXT_FONT_MAX}
         aria-valuenow={clamped}
+        // Keep the Excalidraw text editor focused while dragging the slider.
+        onMouseDown={(event) => event.preventDefault()}
+        onPointerDown={(event) => event.preventDefault()}
         onChange={(event) => onChange(Number(event.target.value))}
       />
       <span className="lc-stroke-slider-cap" aria-hidden>

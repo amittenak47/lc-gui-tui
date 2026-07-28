@@ -29,6 +29,7 @@ export interface LayoutElement {
   y: number;
   width?: number;
   height?: number;
+  angle?: number;
   customData?: {
     lcRegion?: string;
     lcRegionFrame?: boolean;
@@ -195,6 +196,8 @@ export function syncRegionLayout(
       y,
       width: sharedWidth,
       height,
+      // Template boxes stay upright — same rule as "no free move".
+      angle: 0,
       // Ensure metadata survives Excalidraw updates that drop customData.
       customData: {
         ...(frame.customData ?? {}),
@@ -206,7 +209,8 @@ export function syncRegionLayout(
       frame.x !== next.x ||
       frame.y !== next.y ||
       frame.width !== next.width ||
-      frame.height !== next.height
+      frame.height !== next.height ||
+      (typeof frame.angle === "number" && frame.angle !== 0)
     ) {
       changed = true;
     }
@@ -230,6 +234,7 @@ export function syncRegionLayout(
       y: 0,
       width: agentWidth,
       height: agentHeight,
+      angle: 0,
       customData: {
         ...(agent.customData ?? {}),
         lcRegion: "agent" as const,
@@ -240,7 +245,8 @@ export function syncRegionLayout(
       agent.x !== next.x ||
       agent.y !== next.y ||
       agent.width !== next.width ||
-      agent.height !== next.height
+      agent.height !== next.height ||
+      (typeof agent.angle === "number" && agent.angle !== 0)
     ) {
       changed = true;
     }

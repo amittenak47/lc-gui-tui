@@ -72,13 +72,16 @@ export interface BoardHandle {
   fitView(): void;
   /** Fit one template region to the viewport — the mobile "page turn". */
   fitRegion(regionId: RegionId): void;
-  /**
-   * Fit after layout has settled (double rAF + short delays). Resolves when
+  /** Fit after layout has settled (double rAF + short delays). Resolves when
    * the final fit has been applied — call while the board is still hidden.
    */
   settleFitView(): Promise<void>;
+  /** Wait until every seeded region frame is present in the scene. */
+  waitForTemplate(): Promise<void>;
   /** Grow/shrink the code frame so Monaco can show this source without scrolling. */
   fitCodeToSource(source: string): void;
+  /** Small PNGs of student template boxes that have content (for chat attachments). */
+  exportRegionThumbs(): Promise<Array<{ region: RegionId; label: string; png: string }>>;
   /** Persistable board blob (excludes coach viz). */
   saveBoard(): { v: 1; elements: unknown[]; appState: { scrollX: number; scrollY: number; zoom: number } };
   /** Restore a saved board without recording undo history. */

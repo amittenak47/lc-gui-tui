@@ -44,7 +44,7 @@ const AGENT_WIDTH = STUDENT_WIDTH;
 /** Problem statements need real room to breathe at a readable font size. */
 const CONSTRAINTS_H = 1960;
 /** Monaco solution editor sits in this slot under the problem statement. */
-const CODE_H = 784;
+const CODE_H = 2352; // 3× the original 784 — room for Imports + Solution without feeling cramped
 const APPROACH_H = 2380;
 const COMPLEXITY_H = 896;
 const WALKTHROUGH_H = 1960;
@@ -56,7 +56,7 @@ const WALKTHROUGH_H = 1960;
  */
 export const REGION_MIN: Record<RegionId, { minW: number; minH: number }> = {
   constraints: { minW: 1680, minH: 1260 },
-  code: { minW: 1680, minH: 448 },
+  code: { minW: 1680, minH: 1344 },
   approach: { minW: 1680, minH: 980 },
   complexity: { minW: 1680, minH: 448 },
   walkthrough: { minW: 1680, minH: 784 },

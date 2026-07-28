@@ -48,7 +48,7 @@ import { healBoardLayout } from "./healBoardLayout";
 import { regionFrameId, regionFramesOf, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
-import { REGIONS, type RegionId } from "../templates/regions";
+import { REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
 import {
   BOARD_THEMES,
   DEFAULT_FONT_SIZE,
@@ -317,10 +317,10 @@ function inkSwatches(themeId: string): readonly string[] {
 
 const TOOLS: Array<{ tool: ToolName; label: string; hint: string; emoji?: string }> = [
   { tool: "hand", label: "hand", hint: "Pan — drag to move; scroll wheel zooms", emoji: "✋" },
-  { tool: "selection", label: "⬚", hint: "Select — resize region boxes or move your work" },
+  { tool: "selection", label: "⬚", hint: "Select — resize region boxes (they stay locked in place) or move your work" },
   { tool: "freedraw", label: "Pen", hint: "Pen", emoji: "✏️" },
   { tool: "eraser", label: "Eraser", hint: "Eraser — only removes ink under the brush", emoji: "erasersvg" },
-  { tool: "text", label: "T", hint: "Text" },
+  { tool: "text", label: "T", hint: "Text — click to place; corner-drag to resize (Shift keeps wrap width)" },
   { tool: "rectangle", label: "▭", hint: "Rectangle" },
   { tool: "ellipse", label: "◯", hint: "Ellipse" },
   { tool: "arrow", label: "↗", hint: "Arrow" },
@@ -400,6 +400,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   strokeWidthRef.current = strokeWidth;
   /** Zoom at the last brush sample, so a size change can resize the ring. */
   const brushZoomRef = useRef(1);
+  /** Last text element the student was editing — for hand-tool handoff. */
+  const editingTextIdRef = useRef<string | null>(null);
+  /** Shift held → text corner-drag keeps wrap width instead of free resize. */
+  const shiftHeldRef = useRef(false);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Shift") shiftHeldRef.current = event.type === "keydown";
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
+    window.addEventListener("blur", () => {
+      shiftHeldRef.current = false;
+    });
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKey);
+    };
+  }, []);
 
   // Library stamps must stay draggable — older imports may still be locked.
   useEffect(() => {
@@ -533,8 +552,40 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // The brush node unmounts with the tool; hiding it here keeps a stale ring
     // off the canvas for the frame between the click and the unmount.
     if (tool !== "eraser") eraserBrushRef.current?.setVisible(false);
+
+    // Leaving the text tool: drop empty placeholders left from click-around.
+    if (tool !== "text" && activeTool === "text") {
+      const api = apiRef.current;
+      if (api) {
+        const current = api.getSceneElements() as Array<{
+          id: string;
+          type: string;
+          text?: string;
+          originalText?: string;
+          isDeleted?: boolean;
+          customData?: { lcRegion?: string; lcVizId?: string } | null;
+          [key: string]: unknown;
+        }>;
+        let changed = false;
+        const next = current.map((el) => {
+          if (el.isDeleted || el.type !== "text") return el;
+          if (el.customData?.lcRegion || el.customData?.lcVizId) return el;
+          const raw = (el.originalText ?? el.text ?? "").trim();
+          if (raw.length > 0) return el;
+          changed = true;
+          return { ...el, isDeleted: true };
+        });
+        if (changed) {
+          api.updateScene({
+            elements: next,
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+        }
+      }
+    }
+
     setActiveTool(tool);
-  }, []);
+  }, [activeTool]);
 
   /** Scene coords from a pointer event over the Excalidraw viewport. */
   const clientToScene = useCallback((clientX: number, clientY: number) => {
@@ -698,12 +749,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!api) return;
     const appState = api.getAppState() as {
       selectedElementIds?: Record<string, boolean>;
+      editingTextElement?: { id?: string } | null;
     };
     const selected = new Set(
       Object.entries(appState.selectedElementIds ?? {})
         .filter(([, on]) => on)
         .map(([id]) => id),
     );
+    const editingId = appState.editingTextElement?.id;
+    if (editingId) selected.add(editingId);
     const current = api.getSceneElements() as Array<{
       id: string;
       type: string;
@@ -716,11 +770,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       changed = true;
       return { ...el, fontSize: size };
     });
+    // NEVER while editing — IMMEDIATELY remounts history and steals the caret.
     api.updateScene({
       appState: { currentItemFontSize: size },
-      ...(changed
-        ? { elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY }
-        : {}),
+      ...(changed ? { elements: next } : {}),
+      captureUpdate: CaptureUpdateAction.NEVER,
     });
   }, []);
 
@@ -1079,19 +1133,75 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const applyRegionLayout = useCallback(() => {
     const api = apiRef.current;
     if (!api || layoutSyncingRef.current) return;
-    const synced = syncRegionLayout(api.getSceneElements() as LayoutElement[], {
+    const before = api.getSceneElements() as LayoutElement[];
+    const synced = syncRegionLayout(before, {
       codeContentHeight: codeContentHeightRef.current ?? undefined,
     });
     if (!synced) return;
+
+    // Frames may resize; they must not translate. If Excalidraw dragged one,
+    // force the snap through IMMEDIATELY so the move does not linger on screen.
+    let translated = false;
+    for (const el of before) {
+      if (el.type !== "rectangle" || !el.customData?.lcRegionFrame) continue;
+      const next = synced.find((candidate) => candidate.id === el.id);
+      if (next && (next.x !== el.x || next.y !== el.y)) {
+        translated = true;
+        break;
+      }
+    }
+
     layoutSyncingRef.current = true;
     api.updateScene({
       elements: synced,
-      captureUpdate: CaptureUpdateAction.NEVER,
+      captureUpdate: translated
+        ? CaptureUpdateAction.IMMEDIATELY
+        : CaptureUpdateAction.NEVER,
     });
     requestAnimationFrame(() => {
       layoutSyncingRef.current = false;
     });
   }, []);
+
+  /** Resolve once every seeded region frame is in the scene (and fonts are ready). */
+  const waitForTemplate = useCallback((): Promise<void> => {
+    const waitFrame = () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const fontsReady =
+      typeof document !== "undefined" && "fonts" in document
+        ? document.fonts.ready.then(() => undefined).catch(() => undefined)
+        : Promise.resolve();
+
+    return (async () => {
+      await fontsReady;
+      const needed = new Set(
+        Object.keys(REGIONS).map((id) => `lcregion-${id}-frame`),
+      );
+      for (let attempt = 0; attempt < 45; attempt++) {
+        const ids = new Set(
+          (apiRef.current?.getSceneElements() ?? []).map(
+            (el) => (el as { id?: string }).id ?? "",
+          ),
+        );
+        let ready = true;
+        for (const id of needed) {
+          if (!ids.has(id)) {
+            ready = false;
+            break;
+          }
+        }
+        if (ready) {
+          applyRegionLayout();
+          await waitFrame();
+          await waitFrame();
+          return;
+        }
+        await waitFrame();
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+      }
+      applyRegionLayout();
+    })();
+  }, [applyRegionLayout]);
 
   const fitCodeToSource = useCallback(
     (source: string) => {
@@ -1164,34 +1274,92 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
   }, [interactive, mobileRegion, reportCodeSlot, settleFitView]);
 
-  const handleSceneChange = useCallback(() => {
-    applyRegionLayout();
-    reportCodeSlot();
+  const handleSceneChange = useCallback(
+    (
+      _elements?: readonly unknown[],
+      appState?: {
+        editingTextElement?: { id?: string } | null;
+        isResizing?: boolean;
+        resizingElement?: { id?: string; type?: string } | null;
+        newElement?: { type?: string } | null;
+        selectedElementIds?: Record<string, boolean>;
+      },
+    ) => {
+      const api = apiRef.current;
+      if (!api) {
+        onChange?.();
+        return;
+      }
 
-    // Text tool: wrap at a reasonable width unless the student already resized
-    // the box (`autoResize: false` with a custom width).
-    const api = apiRef.current;
-    if (api) {
+      // Frames: pin column position, zero rotation; resize height/width still works.
+      applyRegionLayout();
+      reportCodeSlot();
+
+      const editingId = appState?.editingTextElement?.id ?? null;
+      const prevEditingId = editingTextIdRef.current;
+      const resizing = Boolean(appState?.isResizing || appState?.resizingElement);
       const current = api.getSceneElements() as Array<{
         id: string;
         type: string;
         width?: number;
+        height?: number;
+        angle?: number;
+        text?: string;
+        originalText?: string;
         autoResize?: boolean;
-        customData?: { lcRegion?: string; lcVizId?: string } | null;
+        isDeleted?: boolean;
+        customData?: { lcRegion?: string; lcVizId?: string; lcRegionFrame?: boolean } | null;
         [key: string]: unknown;
       }>;
+
       let changed = false;
       const next = current.map((el) => {
-        if (el.type !== "text") return el;
-        if (el.customData?.lcRegion || el.customData?.lcVizId) return el;
-        if (el.autoResize === false) return el;
-        changed = true;
-        return {
-          ...el,
-          autoResize: false,
-          width: TEXT_WRAP_WIDTH,
-        };
+        if (el.isDeleted) return el;
+
+        // Template boxes never rotate.
+        if (el.customData?.lcRegionFrame && typeof el.angle === "number" && el.angle !== 0) {
+          changed = true;
+          return { ...el, angle: 0 };
+        }
+
+        if (el.type !== "text" || el.customData?.lcRegion || el.customData?.lcVizId) {
+          return el;
+        }
+
+        const raw = (el.originalText ?? el.text ?? "").trim();
+
+        // While the text tool is active, keep empty boxes so click-around can
+        // open a new editor. Cull empties only after leaving the tool (setTool).
+        if (el.id !== editingId && raw.length === 0 && activeTool !== "text") {
+          changed = true;
+          return { ...el, isDeleted: true };
+        }
+
+        // First place: wrap at a default width once editing ends. Forcing this
+        // mid-edit fights Excalidraw's caret and blocks placing another box.
+        if (el.id !== editingId && el.autoResize !== false) {
+          changed = true;
+          return {
+            ...el,
+            autoResize: false,
+            width: TEXT_WRAP_WIDTH,
+          };
+        }
+
+        if (
+          resizing &&
+          shiftHeldRef.current &&
+          (appState?.resizingElement?.id === el.id ||
+            appState?.selectedElementIds?.[el.id]) &&
+          el.width !== TEXT_WRAP_WIDTH
+        ) {
+          changed = true;
+          return { ...el, width: TEXT_WRAP_WIDTH };
+        }
+
+        return el;
       });
+
       if (changed) {
         layoutSyncingRef.current = true;
         api.updateScene({
@@ -1202,10 +1370,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           layoutSyncingRef.current = false;
         });
       }
-    }
 
-    onChange?.();
-  }, [applyRegionLayout, onChange, reportCodeSlot]);
+      // Finished a real text box → drop the text tool and return to pan.
+      if (prevEditingId && !editingId && activeTool === "text") {
+        const finished = current.find((el) => el.id === prevEditingId && !el.isDeleted);
+        const finishedText = (finished?.originalText ?? finished?.text ?? "").trim();
+        if (finishedText.length > 0) {
+          setTool("hand");
+        }
+      }
+      editingTextIdRef.current = editingId;
+
+      onChange?.();
+    },
+    [activeTool, applyRegionLayout, onChange, reportCodeSlot, setTool],
+  );
 
   useImperativeHandle(
     ref,
@@ -1251,6 +1430,77 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // tens of megabytes, which is what the daemon refused to buffer.
         return captureImage(() => exportBoardBlob(api, rasterInkRef.current?.getOps() ?? []));
       },
+      exportRegionThumbs: async () => {
+        const api = apiRef.current;
+        if (!api) return [];
+        const all = api.getSceneElements() as SceneElementLike[];
+        const appState = api.getAppState();
+        const files = api.getFiles();
+        const ops = rasterInkRef.current?.getOps() ?? [];
+        const thumbs: Array<{ region: RegionId; label: string; png: string }> = [];
+
+        for (const region of STUDENT_REGION_ORDER) {
+          if (region === "constraints" || region === "code") continue;
+          const frame = all.find(
+            (el) =>
+              el.type === "rectangle" &&
+              el.customData?.lcRegionFrame &&
+              el.customData?.lcRegion === region,
+          );
+          if (!frame) continue;
+
+          const inBox = all.filter((el) => {
+            if (el.isDeleted) return false;
+            if (el.customData?.lcVizId) return false;
+            if (el.customData?.lcRegion === region) return true;
+            if (!frame) return false;
+            const cx = el.x + el.width / 2;
+            const cy = el.y + el.height / 2;
+            return (
+              cx >= frame.x &&
+              cy >= frame.y &&
+              cx <= frame.x + frame.width &&
+              cy <= frame.y + frame.height
+            );
+          });
+
+          // Skip empty template chrome (frame + label + hint only).
+          const authored = inBox.filter(
+            (el) => !el.customData?.lcRegionFrame && !el.id.includes("-label") && !el.id.includes("-hint"),
+          );
+          const hasInk = ops.some((op) =>
+            op.points.some(
+              (pt) =>
+                pt.x >= frame.x &&
+                pt.y >= frame.y &&
+                pt.x <= frame.x + frame.width &&
+                pt.y <= frame.y + frame.height,
+            ),
+          );
+          if (authored.length === 0 && !hasInk) continue;
+
+          const png = await captureImage(async () => {
+            const blob = await exportToBlob({
+              elements: inBox as never,
+              appState: {
+                ...(appState as object),
+                exportBackground: true,
+                viewBackgroundColor:
+                  (appState as { viewBackgroundColor?: string }).viewBackgroundColor ?? "#fff",
+              } as never,
+              files: files as never,
+              mimeType: "image/png",
+              quality: 0.7,
+              exportPadding: 16,
+            });
+            return blob;
+          }, { maxEdge: 480, maxBase64: 1.5 * 1024 * 1024 });
+          if (png) {
+            thumbs.push({ region, label: REGIONS[region].label, png });
+          }
+        }
+        return thumbs;
+      },
       getStrokes: () => captureStrokes(elements()),
       getInkStrokes: () => inkStrokesFromOps(rasterInkRef.current?.getOps() ?? []),
       getInkOpCount: () => (rasterInkRef.current?.getOps() ?? []).length,
@@ -1264,6 +1514,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       fitView: fitCurrentView,
       fitRegion: (regionId: RegionId) => fitView(regionId),
       settleFitView,
+      waitForTemplate,
       fitCodeToSource,
       hasRasterInk: () => rasterInkRef.current?.hasInk() ?? false,
       saveBoard: () => {
@@ -1310,7 +1561,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
       },
     }),
-    [convert, elements, fitCodeToSource, fitCurrentView, fitView, settleFitView, resetTemplate, scheduleFitView, setTool, themeId, undoBoard, zoomIn, zoomOut],
+    [convert, elements, fitCodeToSource, fitCurrentView, fitView, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, themeId, undoBoard, zoomIn, zoomOut],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
@@ -1325,6 +1576,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // Not the hand-drawn default: typed notes should read like notes.
         currentItemFontFamily: FONT_UI,
         currentItemFontSize: DEFAULT_FONT_SIZE,
+        // Prefer click-to-place text with a wrap width over drag-to-size.
+        currentItemAutoResize: false,
       },
       // We call settleFitView ourselves — Excalidraw's default fits the entire
       // board and lands the problem as a postage stamp in the corner.
@@ -1627,6 +1880,7 @@ function BoardToolbar({
               value={strokeWidth}
               onChange={onStrokeWidth}
               label={active === "eraser" ? "Eraser size" : "Stroke weight"}
+              eraser={active === "eraser"}
             />
             {active === "freedraw" && (
               <PressureSensitiveToggle

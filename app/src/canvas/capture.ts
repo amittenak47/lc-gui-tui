@@ -24,7 +24,7 @@ export interface SceneElementLike {
   isDeleted?: boolean;
   text?: string;
   points?: ReadonlyArray<readonly [number, number]>;
-  customData?: { lcRegion?: string; lcVizId?: string } | null;
+  customData?: { lcRegion?: string; lcVizId?: string; lcRegionFrame?: boolean } | null;
 }
 
 /** Truncate Excalidraw ids for the coach prompt (STRUCTURE_CLIP budget). */

@@ -103,13 +103,12 @@ describe("inkStrokesFromOps", () => {
     ]);
   });
 
-  it("drops points the eraser covered, whenever the erase happened", () => {
-    // paintRasterInk applies every erase after every draw, so a rub-out that
-    // predates a stroke still clears it. Recognition has to agree.
-    const before = inkStrokesFromOps([erase(5, [50, 0]), draw([0, 0], [50, 0])]);
-    const after = inkStrokesFromOps([draw([0, 0], [50, 0]), erase(5, [50, 0])]);
-    expect(before).toEqual(after);
-    expect(before).toEqual([]);
+  it("only later erases remove points from a stroke", () => {
+    // Chronological: erase-then-draw leaves the stroke; draw-then-erase clears it.
+    const redrawn = inkStrokesFromOps([erase(5, [50, 0]), draw([0, 0], [50, 0])]);
+    const rubbed = inkStrokesFromOps([draw([0, 0], [50, 0]), erase(5, [50, 0])]);
+    expect(redrawn).toEqual([{ points: [{ x: 0, y: 0 }, { x: 50, y: 0 }] }]);
+    expect(rubbed).toEqual([]);
   });
 
   it("splits a stroke the eraser cut in half", () => {
@@ -222,10 +221,30 @@ describe("paintInkAtScale", () => {
     ]);
   });
 
-  it("erases after every draw and in the same composite mode as the live layer", () => {
-    const { ctx, erased } = recordingContext();
-    paintInkAtScale(ctx, [erase(4, [110, 60]), draw([110, 60], [130, 60])], { x: 100, y: 50 }, 2);
+  it("applies erase and draw in chronological order", () => {
+    const { ctx, erased, strokes } = recordingContext();
+    // Erase first, then draw — the later stroke must still be painted.
+    paintInkAtScale(
+      ctx,
+      [erase(4, [110, 60]), draw([110, 60], [130, 60])],
+      { x: 100, y: 50 },
+      2,
+    );
     expect(erased).toEqual([{ x: 20, y: 20, r: 8, composite: "destination-out" }]);
+    expect(strokes).toHaveLength(1);
+  });
+
+  it("does not let an earlier erase punch through a later stroke", () => {
+    const { ctx, erased, strokes } = recordingContext();
+    paintInkAtScale(
+      ctx,
+      [draw([110, 60], [130, 60]), erase(4, [110, 60]), draw([110, 60], [150, 60])],
+      { x: 100, y: 50 },
+      2,
+    );
+    // One erase, two draws — in that order.
+    expect(erased).toHaveLength(1);
+    expect(strokes).toHaveLength(2);
   });
 
   it("leaves the context ready for the caller to blit onto", () => {
