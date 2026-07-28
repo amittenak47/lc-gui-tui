@@ -8,8 +8,9 @@
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
-import type { ReviewResponse } from "../api/types";
+import type { BridgeResponse, ReviewResponse } from "../api/types";
 import { Tip } from "../components/Tip";
+import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
 
 export type CoachMode = "review" | "ambient";
@@ -34,6 +35,8 @@ export interface CoachChatMessage {
   at: number;
   /** Structured review — rendered once as a card, not duplicated as prose. */
   review?: ReviewResponse;
+  /** Hold-to-reveal bridge, nested under the review that offered it. */
+  bridge?: BridgeResponse;
   /** Layout thumbnails when Review board was attached. */
   attachments?: CoachAttachment[];
 }
@@ -48,7 +51,8 @@ export interface AgentSidePanelProps {
   thinkingPhase?: string | null;
   messages: CoachChatMessage[];
   onSend: (text: string, flags: CoachSendFlags) => void;
-  onRequestBridge?: () => void;
+  /** Opens the hold-to-reveal dialog for the review on this message. */
+  onRequestBridge?: (messageId: string) => void;
   /** Structured cards (tests, timelines, …) rendered in the thread. */
   children?: ReactNode;
 }
@@ -76,7 +80,7 @@ export function AgentSidePanel({
     const node = listRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
-  }, [messages.length, thinking, thinkingPhase, children, open]);
+  }, [messages, thinking, thinkingPhase, children, open]);
 
   useEffect(() => {
     if (!lightbox) return;
@@ -176,13 +180,17 @@ export function AgentSidePanel({
                 <div className="lc-coach-review-embed">
                   <ReviewPanel
                     review={message.review}
-                    onRequestBridge={() => onRequestBridge?.()}
+                    onRequestBridge={() => onRequestBridge?.(message.id)}
                     onDismiss={() => {
                       /* kept in history — dismiss is a no-op; card stays for the turn */
                     }}
                     compact
+                    bridgeOffered={Boolean(message.bridge)}
                   />
                 </div>
+              )}
+              {message.bridge && (
+                <BridgePanel bridge={message.bridge} compact collapsible defaultOpen />
               )}
             </div>
           ))}

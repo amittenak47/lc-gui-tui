@@ -26,7 +26,6 @@ import {
   type Pairing,
 } from "./api/pairing";
 import type {
-  BridgeResponse,
   ProblemDetail,
   ReviewResponse,
   ServerFrame,
@@ -48,7 +47,7 @@ import { AgentSidePanel, type CoachChatMessage, type CoachSendFlags } from "./mo
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
-import { BridgePanel, RevealDialog } from "./modes/RevealDialog";
+import { RevealDialog } from "./modes/RevealDialog";
 import { buildProblemTemplate } from "./templates/problemBoard";
 import { REGIONS, STUDENT_REGION_ORDER, type RegionId } from "./templates/regions";
 import { isMobileViewport, useIsMobile } from "./util/mobile";
@@ -167,7 +166,8 @@ export function App() {
   const [revealOpen, setRevealOpen] = useState(false);
   const [revealPending, setRevealPending] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
-  const [bridge, setBridge] = useState<BridgeResponse | null>(null);
+  /** Coach message that offered Hint — bridge nests under that turn. */
+  const revealForMessageIdRef = useRef<string | null>(null);
 
   const [nudges, setNudges] = useState<AmbientEntry[]>([]);
   const [coachMessages, setCoachMessages] = useState<CoachChatMessage[]>([]);
@@ -321,11 +321,11 @@ export function App() {
       setBusy("loading the workspace…");
       setError(null);
       setTests(null);
-      setBridge(null);
       setPrograms([]);
       setFrameByProgram({});
       setNudges([]);
       setCoachMessages([]);
+      revealForMessageIdRef.current = null;
       lastReviewIdsRef.current = new Set();
       reviewTurnRef.current = 0;
       lastStructureBaselineRef.current = null;
@@ -930,14 +930,24 @@ export function App() {
         ? await buildSnapshot(board, recognizerRef.current, { pseudocode: pseudocodeRef.current })
         : null;
       // The `true` here is the only place the app asserts consent, and it is
-      // reachable only from this dialog's Reveal button.
+      // reachable only after a full 1s hold on Reveal.
       const result = await client.reveal(
         problem.task_id,
         snapshot?.board ?? { recognized_text: "" },
         true,
       );
-      setBridge(result);
+      const targetId = revealForMessageIdRef.current;
+      setCoachMessages((current) => {
+        const attachTo =
+          (targetId && current.find((message) => message.id === targetId)) ||
+          [...current].reverse().find((message) => message.role === "assistant" && message.review);
+        if (!attachTo) return current;
+        return current.map((message) =>
+          message.id === attachTo.id ? { ...message, bridge: result } : message,
+        );
+      });
       setRevealOpen(false);
+      revealForMessageIdRef.current = null;
     } catch (cause) {
       setRevealError(messageOf(cause));
     } finally {
@@ -986,10 +996,11 @@ export function App() {
     setHoldBrowseOverlay(false);
     setEntering(false);
     setTests(null);
-    setBridge(null);
     setPrograms([]);
     setFrameByProgram({});
     setNudges([]);
+    setCoachMessages([]);
+    revealForMessageIdRef.current = null;
     setError(null);
     setCodeSlot(null);
     lastReviewIdsRef.current = new Set();
@@ -1272,6 +1283,9 @@ export function App() {
                   height: slot.height,
                   ["--lc-code-zoom" as string]: String(slot.zoom ?? 1),
                 }}
+                // Excalidraw listens for keys on document; keep them in the dock.
+                onKeyDown={(event) => event.stopPropagation()}
+                onKeyUp={(event) => event.stopPropagation()}
               >
                 <PseudocodeEditor
                   key={problem.task_id}
@@ -1299,7 +1313,8 @@ export function App() {
             thinkingPhase={coachPhase}
             messages={coachMessages}
             onSend={sendCoachChat}
-            onRequestBridge={() => {
+            onRequestBridge={(messageId) => {
+              revealForMessageIdRef.current = messageId;
               setRevealError(null);
               setRevealOpen(true);
             }}
@@ -1348,8 +1363,6 @@ export function App() {
               </button>
             )}
 
-            {bridge && <BridgePanel bridge={bridge} onDismiss={() => setBridge(null)} />}
-
             {tests && (
               <TestSummary
                 tests={tests}
@@ -1368,7 +1381,11 @@ export function App() {
         <RevealDialog
           taskId={problem.task_id}
           onConfirm={() => void confirmReveal()}
-          onCancel={() => setRevealOpen(false)}
+          onCancel={() => {
+            if (revealPending) return;
+            setRevealOpen(false);
+            revealForMessageIdRef.current = null;
+          }}
           pending={revealPending}
           error={revealError}
         />

@@ -23,6 +23,8 @@ export interface ReviewPanelProps {
   onDismiss: () => void;
   /** Tighter chrome when embedded inside a chat turn. */
   compact?: boolean;
+  /** Hide Hint once a bridge is already attached to this turn. */
+  bridgeOffered?: boolean;
 }
 
 export function ReviewPanel({
@@ -30,6 +32,7 @@ export function ReviewPanel({
   onRequestBridge,
   onDismiss,
   compact = false,
+  bridgeOffered = false,
 }: ReviewPanelProps) {
   return (
     <section
@@ -111,7 +114,7 @@ export function ReviewPanel({
         </div>
       )}
 
-      {review.offer_bridge && (
+      {review.offer_bridge && !bridgeOffered && (
         <footer className="lc-panel-foot">
           <button type="button" className="lc-hint-btn" onClick={onRequestBridge}>
             Hint
