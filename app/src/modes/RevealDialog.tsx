@@ -210,8 +210,10 @@ export function BridgePanel({
   );
 
   if (collapsible) {
+    // `open` is the DOM attribute; React has no `defaultOpen` for `details`,
+    // so the prop was silently dropped and the fold always started shut.
     return (
-      <details className="lc-bridge-fold" defaultOpen={defaultOpen}>
+      <details className="lc-bridge-fold" open={defaultOpen}>
         <summary className="lc-bridge-fold-summary">
           <span>From yours to working</span>
           <span className="lc-bridge-fold-hint">hint path</span>

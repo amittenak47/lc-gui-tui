@@ -15,6 +15,25 @@ import { ReviewPanel } from "./ReviewPanel";
 
 export type CoachMode = "review" | "ambient";
 
+/**
+ * The ambient coach polls the board every 60 seconds. It is off: on a board
+ * that changes slowly it re-asked the same question, and on a local model it
+ * blocked the pen while thinking. `App` never switches into the mode while
+ * this is false, so the socket is never opened.
+ */
+export const AMBIENT_ENABLED = false;
+
+const ROLE_LABEL: Record<CoachChatMessage["role"], string> = {
+  user: "You",
+  assistant: "Coach",
+  system: "System",
+  app: "Tests",
+};
+
+function turnKind(role: CoachChatMessage["role"]): string {
+  return role === "user" || role === "system" || role === "app" ? role : "assistant";
+}
+
 export interface CoachSendFlags {
   /** Ask the coach to draw on the board. */
   draw: boolean;
@@ -30,7 +49,12 @@ export interface CoachAttachment {
 
 export interface CoachChatMessage {
   id: string;
-  role: "user" | "assistant" | "system";
+  /**
+   * `app` is the harness talking, not the student and not the coach — test
+   * results land here. It renders as its own turn and is sent to the model
+   * alongside the next question.
+   */
+  role: "user" | "assistant" | "system" | "app";
   content: string;
   at: number;
   /** Structured review — rendered once as a card, not duplicated as prose. */
@@ -126,13 +150,7 @@ export function AgentSidePanel({
           {messages.map((message) => (
             <div
               key={message.id}
-              className={
-                message.role === "user"
-                  ? "lc-coach-turn lc-coach-turn-user"
-                  : message.role === "system"
-                    ? "lc-coach-turn lc-coach-turn-system"
-                    : "lc-coach-turn lc-coach-turn-assistant"
-              }
+              className={`lc-coach-turn lc-coach-turn-${turnKind(message.role)}`}
             >
               <div
                 className={
@@ -147,7 +165,7 @@ export function AgentSidePanel({
                 }
                 data-tip-placement="right"
               >
-                {message.role === "user" ? "You" : message.role === "system" ? "System" : "Coach"}
+                {ROLE_LABEL[message.role]}
               </div>
               {message.content ? (
                 <div className="lc-coach-turn-body">{message.content}</div>
@@ -221,6 +239,10 @@ export function AgentSidePanel({
             }}
           />
           <div className="lc-coach-composer-bar">
+            {/* Ambient ("Every 60s") is disabled: the polling loop spent
+                tokens on unchanged boards and interrupted more than it helped.
+                The button stays, greyed, so the mode is discoverable if it
+                comes back — `AMBIENT_ENABLED` is the one switch. */}
             <div className="lc-modes" role="group" aria-label="Coach mode">
               <Tip tip="Analyze on send" placement="right">
                 <button
@@ -233,13 +255,14 @@ export function AgentSidePanel({
                   On ask
                 </button>
               </Tip>
-              <Tip tip="Analyze every 60s" placement="right">
+              <Tip tip="Ambient polling is off — the coach answers when you ask" placement="right">
                 <button
                   type="button"
-                  className={mode === "ambient" ? "lc-mode lc-mode-active" : "lc-mode"}
-                  aria-pressed={mode === "ambient"}
-                  disabled={busy}
-                  onClick={() => onModeChange("ambient")}
+                  className="lc-mode"
+                  aria-pressed={false}
+                  aria-disabled
+                  disabled
+                  onClick={() => AMBIENT_ENABLED && onModeChange("ambient")}
                 >
                   Every 60s
                 </button>

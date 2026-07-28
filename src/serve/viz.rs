@@ -21,7 +21,7 @@ use crate::llm::coach::{
     build_viz_prompt, validate_citation, validate_highlight, Annotation, BoardSnapshot, Citation,
     Highlight, VIZ_SYSTEM_PROMPT,
 };
-use crate::llm::tools::{viz_tools, VizProgram};
+use crate::llm::tools::{parse_tool_calls, viz_tools, viz_tools_as_prompt, VizProgram};
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest, ChatReply, ToolCall};
 
 #[derive(Debug, Deserialize)]
@@ -64,9 +64,17 @@ pub async fn viz(
         let provider = make_provider_for_mode(&cfg, "viz")?;
         let mut messages = vec![
             ChatMessage::system(VIZ_SYSTEM_PROMPT),
-            ChatMessage::user(prompt).with_images(request.board.images()),
+            ChatMessage::user(prompt.clone()).with_images(request.board.images()),
         ];
-        let reply = provider.chat_ex(&ChatRequest::new(messages.clone()).with_tools(viz_tools()))?;
+        let reply = match provider.chat_ex(&ChatRequest::new(messages.clone()).with_tools(viz_tools()))
+        {
+            Ok(reply) if !reply.tool_calls.is_empty() => reply,
+            // Either the server refused `tools` outright (vLLM without
+            // `--enable-auto-tool-choice`) or the model ignored them. Ask again
+            // in plain JSON rather than telling the student the coach "produced
+            // nothing drawable" — the model can describe a diagram either way.
+            other => draw_without_tool_calls(&*provider, &prompt, &request.board, other)?,
+        };
 
         let mut envelope = collect_envelope(&meta.task_id, provider.label(), &reply, &meta.cases, &request.board);
 
@@ -114,7 +122,8 @@ pub async fn viz(
             && envelope.message.trim().is_empty()
         {
             return Err(anyhow!(
-                "the {} model produced nothing drawable — it may not support tool calling",
+                "the {} model produced nothing drawable, with or without tool calls — \
+                 try pointing `llm.modes.viz` at a stronger model",
                 provider.label()
             ));
         }
@@ -122,6 +131,57 @@ pub async fn viz(
     })
     .await?;
     Ok(Json(envelope))
+}
+
+/// Re-ask for the diagram as JSON, for a server that will not tool-call.
+///
+/// `first` is what the tools attempt produced — an error, or a reply with no
+/// tool calls in it. Its content (or its error) is what comes back if the
+/// fallback also comes up empty, so a genuine failure is never replaced by a
+/// misleading "the model can't tool-call".
+fn draw_without_tool_calls(
+    provider: &dyn crate::llm::LlmProvider,
+    prompt: &str,
+    board: &BoardSnapshot,
+    first: Result<ChatReply>,
+) -> Result<ChatReply> {
+    let messages = vec![
+        ChatMessage::system(VIZ_SYSTEM_PROMPT),
+        ChatMessage::user(format!("{prompt}\n\n{}", viz_tools_as_prompt()))
+            .with_images(board.images()),
+    ];
+    let retried = provider.chat_ex(&ChatRequest::new(messages).json());
+
+    match retried {
+        Ok(reply) => {
+            let calls = parse_tool_calls(&reply.content);
+            if !calls.is_empty() {
+                return Ok(ChatReply {
+                    // The JSON envelope is the answer, not prose to show.
+                    content: String::new(),
+                    tool_calls: calls,
+                });
+            }
+            // Nothing usable either way: prefer the first attempt's outcome,
+            // which is the one that describes what actually went wrong.
+            first.map(|original| {
+                if original.content.trim().is_empty() {
+                    reply
+                } else {
+                    original
+                }
+            })
+        }
+        Err(fallback_error) => first.map_err(|original| {
+            if crate::llm::is_tool_calling_unsupported(&original) {
+                // The server told us it cannot tool-call, and the plain-JSON
+                // path failed too — that second failure is the informative one.
+                fallback_error
+            } else {
+                original
+            }
+        }),
+    }
 }
 
 fn collect_envelope(

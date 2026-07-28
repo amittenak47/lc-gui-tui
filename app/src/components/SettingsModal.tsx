@@ -6,12 +6,14 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { LcClient } from "../api/client";
-import type { LcConfig, LlmStatus, ProviderConfig } from "../api/types";
+import type { DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
 
-type TabId = "paths" | "llm" | "serve";
+type TabId = "paths" | "datasets" | "tests" | "llm" | "serve";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "paths", label: "Paths" },
+  { id: "datasets", label: "Datasets" },
+  { id: "tests", label: "Tests" },
   { id: "llm", label: "LLM" },
   { id: "serve", label: "Serve" },
 ];
@@ -26,8 +28,10 @@ function emptyProvider(): ProviderConfig {
 function emptyConfig(): LcConfig {
   return {
     data_json_dir: null,
+    dataset_dirs: {},
     workspace_dir: "~/lc-workspace",
     python_executable: "python",
+    stop_on_first_failure: false,
     default_provider: "local",
     local: emptyProvider(),
     ollama: emptyProvider(),
@@ -53,6 +57,7 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [providerFocus, setProviderFocus] = useState<"local" | "ollama" | "openai">("local");
+  const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   /** Host / port / six-digit code to type on a tablet — null until loaded. */
   const [pairInfo, setPairInfo] = useState<{
     code: string | null;
@@ -81,6 +86,13 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
           setBusy(null);
         }
         await refreshLlm();
+        try {
+          const all = await client.datasets();
+          if (!cancelled) setDatasets(all);
+        } catch {
+          // An older daemon has no /datasets — the tab just says so.
+          if (!cancelled) setDatasets([]);
+        }
         try {
           const pair = await client.pairCode();
           if (!cancelled) setPairInfo(pair);
@@ -218,6 +230,94 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                 />
                 <p className="lc-settings-hint">Python used to run tests.</p>
               </label>
+            </div>
+          )}
+
+          {tab === "datasets" && (
+            <div className="lc-settings-fields">
+              <p className="lc-muted">
+                Each problem set is indexed into its own table. By default a corpus lives in{" "}
+                <code>&lt;problems folder&gt;/&lt;dataset&gt;/</code>; override it below when it
+                lives somewhere else.
+              </p>
+              {datasets.length === 0 && (
+                <p className="lc-muted">
+                  This daemon does not report datasets — update <code>lc serve</code>.
+                </p>
+              )}
+              {datasets.map((entry) => (
+                <label key={entry.id}>
+                  <span>
+                    {entry.label}
+                    <span className="lc-settings-badge">
+                      {entry.count.toLocaleString()} indexed
+                    </span>
+                  </span>
+                  <input
+                    value={draft.dataset_dirs[entry.id] ?? ""}
+                    placeholder={entry.corpus_dir ?? `<problems folder>/${entry.id}`}
+                    onChange={(e) =>
+                      setDraft((prev) => {
+                        const dirs = { ...prev.dataset_dirs };
+                        if (e.target.value.trim()) dirs[entry.id] = e.target.value;
+                        else delete dirs[entry.id];
+                        return { ...prev, dataset_dirs: dirs };
+                      })
+                    }
+                  />
+                  <p className="lc-settings-hint">
+                    <code>{entry.source}</code> — index with{" "}
+                    <code>lc index --dataset {entry.id}</code>
+                  </p>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {tab === "tests" && (
+            <div className="lc-settings-fields">
+              <div className="lc-settings-subhead">When a case fails</div>
+              <div className="lc-settings-choice" role="radiogroup" aria-label="Test run mode">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!draft.stop_on_first_failure}
+                  className={
+                    draft.stop_on_first_failure
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() =>
+                    setDraft((prev) => ({ ...prev, stop_on_first_failure: false }))
+                  }
+                >
+                  <strong>Run every case</strong>
+                  <span className="lc-muted">
+                    Keep going after a failure and report the whole picture — “3/12 passed”.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.stop_on_first_failure}
+                  className={
+                    draft.stop_on_first_failure
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setDraft((prev) => ({ ...prev, stop_on_first_failure: true }))}
+                >
+                  <strong>Stop at the first failure</strong>
+                  <span className="lc-muted">
+                    Quit as soon as a case fails. Faster on problems with hundreds of cases.
+                  </span>
+                </button>
+              </div>
+              <p className="lc-settings-hint">
+                Applies to <strong>Run tests</strong>, <strong>Submit</strong>, and{" "}
+                <code>lc test</code>. Running every case is what lets the coach pick a real
+                counterexample, so leave it on unless a run is slow.
+              </p>
             </div>
           )}
 

@@ -74,6 +74,12 @@ pub struct BoardSnapshot {
     /// `code_mode` is `unchanged`.
     #[serde(default)]
     pub pseudocode_delta: Option<String>,
+    /// Messages from the app itself, not from the student — currently the last
+    /// test run. Kept as its own channel because it is *fact*: the coach may
+    /// state these results, while everything else on the board is something a
+    /// student claimed and the coach is meant to question.
+    #[serde(default)]
+    pub app_messages: Vec<String>,
 }
 
 impl BoardSnapshot {
@@ -179,6 +185,18 @@ impl BoardSnapshot {
         }
         if self.png.is_some() {
             let _ = writeln!(out, "\nA PNG of the board is attached to this message.");
+        }
+        if !self.app_messages.is_empty() {
+            let _ = writeln!(
+                out,
+                "\n## From the app (not the student)\n\n\
+                 These are real results produced by running their code. Treat them as fact — you \
+                 may cite them directly, and you should not ask the student to re-run anything \
+                 you can already see here."
+            );
+            for message in &self.app_messages {
+                let _ = writeln!(out, "\n```\n{}\n```", clip(message.trim(), MAX_BOARD));
+            }
         }
     }
 }
@@ -1096,6 +1114,29 @@ mod tests {
         assert!(REVIEW_SYSTEM_PROMPT.contains("start coding"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("implement a solution"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("problem-specific"));
+    }
+
+    /// "Run tests" posts its results into the thread and they ride along with
+    /// the next question, so asking "why did case 3 fail?" needs no
+    /// copy-paste — and the coach must read them as fact, not as a claim.
+    #[test]
+    fn test_results_reach_the_prompt_as_the_apps_own_channel() {
+        let meta = meta_with_cases(3);
+        let board = BoardSnapshot {
+            recognized_text: "two pointers".into(),
+            app_messages: vec![
+                "Run tests — 2/3 passed\n\ncase 3: nums = [2]\n  expected: [2]\n  got: []".into(),
+            ],
+            ..Default::default()
+        };
+        let prompt = build_review_prompt(&meta, None, &board);
+        assert!(prompt.contains("From the app (not the student)"));
+        assert!(prompt.contains("2/3 passed"));
+        assert!(prompt.contains("Treat them as fact"));
+
+        // And a board with no run says nothing about one.
+        let quiet = build_review_prompt(&meta, None, &BoardSnapshot::default());
+        assert!(!quiet.contains("From the app"));
     }
 
     #[test]
