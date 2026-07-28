@@ -6,6 +6,75 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — multiple problem sets
+
+- **Four more corpora**, each in its own SQLite tables rather than merged into
+  one: [`KodCode-V1`](https://huggingface.co/datasets/KodCode/KodCode-V1),
+  [`sft-python-q-problems`](https://huggingface.co/datasets/morganstanley/sft-python-q-problems),
+  [`deepseek-leetcode`](https://huggingface.co/datasets/davidheineman/deepseek-leetcode),
+  and [`leetcode-with-tests`](https://huggingface.co/datasets/kr4t0n/leetcode-with-tests).
+  Separate tables because their ids collide — `two-sum` is in three of them —
+  their difficulty scales are unrelated, and rebuilding one must not touch
+  another. `src/dataset.rs` is the registry; `src/datasets/` holds one adapter
+  per corpus, each documenting its column mapping.
+- **A tab strip over the problem table** switches problem sets. Every table and
+  session control works the same on any tab; filters reset on a switch, because
+  a KodCode tag means nothing in the LeetCode tables. The TUI cycles the same
+  choice with `G`.
+- **Dataset-qualified progress.** `session.json` keys are now
+  `dataset/task_id`, which is what stops a `failed` badge earned in one corpus
+  from appearing on the same slug in another. Older session files are migrated
+  on load rather than silently losing their history.
+- **`lc datasets`**, `--dataset` on `index` / `search` / `random` / `load` /
+  `test`, and `data.datasets.<slug>` config for a corpus that lives elsewhere.
+- **`scripts/fetch_dataset.py`** converts a Hugging Face Parquet corpus to the
+  `.jsonl` the indexer reads. It knows nothing about the schemas on purpose —
+  that lives in `src/datasets/` where it is tested.
+- **Adapters cannot leak a solution.** They build a `Problem` by hand, so
+  serde's redaction guarantee does not cover them; `SOLUTION_FIELDS` lists the
+  columns they must not read and a test feeds every adapter a record stuffed
+  with marker solutions to prove none escapes.
+- **`run_tests.py` runs pytest-style suites** (`test_*` functions, no fixtures),
+  which is how KodCode ships its tests. DeepSeek's suite is rewritten at import
+  time into the `check(candidate)` the runner calls, and read a second time to
+  recover per-case sample I/O.
+
+### Added — test results, and keeping (or dropping) your work
+
+- **Run tests / Submit open a modal** over the board in the Settings panel's
+  shell, instead of a card in the coach thread that the next message pushed out
+  of sight.
+- **Results reach the coach automatically.** The same run is posted into the
+  thread as an `app` turn and attached to the next request on its own
+  `app_messages` channel, which the daemon tells the model to read as fact —
+  unlike everything else on the board, which is a claim the coach should
+  question. Asking *"why did case 3 fail?"* needs no copy-paste.
+- **Settings → Tests** chooses between running every case and stopping at the
+  first failure (`tests.stop_on_first_failure`, off by default: the results
+  panel and the coach's counterexample picking both want the whole picture).
+- **Leaving a problem asks what to keep** — and asks a different question
+  depending on whether it is solved. Unsolved, saving resumes the layout, the
+  code, and the coach thread. Solved, the attempt is a record: it is archived
+  and the next attempt still starts on a fresh board with a fresh session. The
+  coach session is always saved once a problem is solved. Rules and their tests
+  live in `src/attempt.rs`; `GET`/`PUT /workspace/:id/agent` and
+  `POST /workspace/:id/attempt` are the wire.
+
+### Fixed
+
+- **Draw worked on no vLLM server.** A request carrying `tools` is a 400 unless
+  vLLM was started with `--enable-auto-tool-choice` and a `--tool-call-parser`,
+  which is not fixable from inside the app — and diagrams are the one coach mode
+  built entirely on tool calls. `/coach/viz` now falls back to asking for the
+  same calls as JSON, generated from the same schemas. A genuine failure still
+  surfaces as itself rather than as a misleading "can't tool-call".
+- **Ambient mode is off.** The 60-second loop re-asked itself on slowly-changing
+  boards and blocked the pen on local models. The button stays, greyed, behind
+  one flag (`AMBIENT_ENABLED`).
+- `defaultOpen` on `<details>` is not a React prop, so the reveal bridge's fold
+  never actually started open. It is `open`.
+
+
 ### Added — handwriting whiteboard coach
 
 - **`lc` is now a library** (`src/lib.rs`) as well as a binary. `main.rs` swapped

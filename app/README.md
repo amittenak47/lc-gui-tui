@@ -50,11 +50,13 @@ The app defaults to `http://127.0.0.1:7878`, so nothing needs pairing on desktop
 strengths, gaps, a Socratic question, and — when your approach is wrong — a
 counterexample citing one of the problem's real sample cases.
 
-**Ambient** — the coach glances at the board every 15 seconds. It stays silent
-while nothing changes, and escalates rather than repeating itself: light
-question → name the concept → point at the shape of input that breaks it → cite
-a concrete case. Replies land in the side panel, never on the canvas, so they
-can't disrupt writing.
+**Ambient** — *off.* The coach used to glance at the board every 60 seconds,
+escalating rather than repeating itself. In practice it re-asked the same
+question on a board that changes slowly and blocked the pen while a local model
+thought. The button stays in the composer, greyed, behind one flag —
+`AMBIENT_ENABLED` in `src/modes/AgentSidePanel.tsx`. Turning it back on restores
+the socket, the escalation ladder, and the side panel; nothing else was
+removed.
 
 **Draw it** — the coach answers with a diagram instead of prose. Multi-frame
 traces become *one* diagram with a scrubber, not five copies of the same array.
@@ -62,6 +64,50 @@ traces become *one* diagram with a scrubber, not five copies of the same array.
 **Reveal** — an explicit, confirmed opt-in that produces a stepwise path from
 your approach to a working one. It is never a solution dump, and it is logged so
 `lc stats` shows how often you tapped out.
+
+## Problem sets
+
+A tab strip above the problem table switches between the five corpora `lc`
+indexes. Everything under it — search, filters, paging, session Start / Reset /
+Select / Random — works the same on any tab: the dataset is one more parameter
+on the same queries. Filters do reset on a switch, since a tag from one corpus
+matches nothing in another's tables.
+
+A tab whose corpus has not been downloaded still appears, showing `0`, and its
+empty table says which repo to fetch and which `lc index --dataset …` to run.
+Pass/fail badges are per problem set: the daemon keys session progress on
+`dataset/task_id`, so solving `two-sum` in one corpus does not mark the
+identically-named problem in another.
+
+## Test results
+
+**Run tests** and **Submit** open a modal over the board — same shell as
+Settings. The same run also lands in the coach thread as an `app` turn and rides
+along with your next question on its own channel, so the coach can answer *"why
+did case 3 fail?"* without you pasting anything. Closing the modal loses
+nothing.
+
+Settings → **Tests** picks between running every case and stopping at the first
+failure. Running every case is the default: it is what lets the coach choose a
+real counterexample.
+
+## Leaving a problem
+
+Stepping away asks what to keep, and asks a different question depending on
+whether the problem is solved:
+
+| | layout | code | coach session |
+| --- | --- | --- | --- |
+| unsolved, **save** | resumes | resumes | resumes |
+| unsolved, **discard** | cleared | reset to starter | cleared |
+| solved, **save attempt** | archived | kept | archived |
+| solved, **clear attempt** | cleared | reset to starter | archived |
+
+Two rules are not symmetric, and both are deliberate: the coach session is
+always saved once a problem is solved, and re-attempting a solved problem always
+starts from a fresh board and a fresh session — re-solving while looking at the
+answer you already drew is not practice. The daemon owns the rules
+(`src/attempt.rs`); the dialog only asks.
 
 ## Connecting the tablet
 
@@ -254,7 +300,8 @@ them into the PNG when the selected model has vision. Neither Excalidraw's
 | `src/canvas/` | Excalidraw wrapper, capture extractors, ink recognizers |
 | `src/templates/` | Board regions and the pre-seeded problem layout |
 | `src/viz/` | Viz schema, the nine renderers, applier, frame scrubber |
-| `src/modes/` | Review, ambient, reveal, and problem-picker UI |
+| `src/modes/` | Review, reveal, test results, attempt dialog, problem picker |
+| `src/util/datasetKey.ts` | `dataset/task_id` keys — how per-problem state is addressed |
 | `src-tauri/` | Tauri shell, HTTP proxy, ML Kit plugin |
 
 ## Tests
@@ -286,3 +333,14 @@ excluded from capture; otherwise the coach starts agreeing with itself.
 **Cited test cases are verified, not trusted.** The daemon checks the cited
 index against the workspace's real cases and replaces the quoted input/expected
 with the corpus's own text. A fabricated citation is dropped and reported.
+
+**Draw survives a server that cannot tool-call.** vLLM rejects a request
+carrying `tools` unless it was started with `--enable-auto-tool-choice` and a
+`--tool-call-parser`, and diagrams are the one mode built entirely on tool
+calls. The daemon retries in plain JSON using the same schemas, so the feature
+degrades in latency rather than in existence.
+
+**Test results are the app's voice, not the student's.** They travel on their
+own `app_messages` channel and the prompt tells the model to read them as fact.
+Everything else on the board is something the student claimed and the coach is
+meant to question; a real test run is not.
