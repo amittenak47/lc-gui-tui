@@ -962,19 +962,20 @@ export function App() {
   }, [client, bankFilters, pickProblem]);
 
   const startFreshSession = useCallback(
-    async (taskIds: string[] = []) => {
+    async (taskIds: string[], bank: SearchOptions) => {
       try {
+        setBankFilters(bank);
         let next = await client.resetSession();
         for (const id of taskIds) {
-          next = await client.enqueueSession(id, bankFilters.dataset);
+          next = await client.enqueueSession(id, bank.dataset);
         }
         setSession(next);
-        if (taskIds[0]) void pickProblem(taskIds[0], bankFilters);
+        if (taskIds[0]) void pickProblem(taskIds[0], bank);
       } catch (cause) {
         setError(messageOf(cause));
       }
     },
-    [client, pickProblem, bankFilters],
+    [client, pickProblem],
   );
 
   const resetSession = useCallback(async () => {
@@ -1449,7 +1450,7 @@ export function App() {
                   themeId={themeId}
                   onThemePick={setThemeId}
                   session={session}
-                  onStartSession={(ids) => void startFreshSession(ids)}
+                  onStartSession={(ids, bank) => void startFreshSession(ids, bank)}
                   onResetSession={() => void resetSession()}
                   onRandomSession={(filters) => void startRandomSession(filters)}
                 />
