@@ -92,6 +92,63 @@ front-facing camera cannot scan its own PC, which is why the code is the path.
 `--lan` means anyone on your network who has the token can drive your
 workspaces. Prefer loopback when you're at the desk.
 
+## The no-APK path (browser over the LAN, or spacedesk)
+
+Two ways to use a tablet without building an APK.
+
+### Browser over the LAN
+
+Vite already binds every interface on port 1420, and the daemon answers
+cross-origin requests, so the tablet's browser can load the app off the PC and
+talk to the daemon directly. Two terminals:
+
+```bash
+cargo run -- serve --lan    # API on 7878, prints the pairing code
+cd app && npm run dev       # app on 1420, bound to 0.0.0.0
+```
+
+Open `http://<pc-ip>:1420` on the tablet, then enter Host / Port / **Code** in
+the header exactly as the APK build does — the app reaches the daemon on 7878,
+which is a different port from the one you loaded the page from.
+
+For the production bundle instead of the dev server: `npm run build && npm run
+preview -- --host` (preview does not bind externally on its own, and it picks
+its own port — read the one it prints).
+
+> The daemon serves the API only. It has no static file handler, so
+> `http://<pc-ip>:7878` in a browser will not give you the app.
+
+What you give up is the part that needs native code: **ML Kit handwriting
+recognition is Android-only**, so pen strokes reach the coach as the board
+picture rather than as text. Pick a vision-capable review model and the coach
+still reads handwriting — see *Modes* above. If your review model has no vision,
+type the approach with the text tool instead.
+
+### spacedesk
+
+spacedesk is a different trade: it mirrors the PC's screen to the tablet over
+USB or Wi-Fi and sends touch and stylus input back, so the tablet becomes a
+second display driving the *desktop* app. Install the spacedesk driver on the PC
+and the viewer app on the tablet, extend the display, then drag the whiteboard
+window onto it.
+
+That means:
+
+- No pairing, no `--lan`, no token — the daemon stays on loopback, because
+  nothing crosses the network but pixels.
+- Full desktop behaviour, including whatever the PC's browser or Tauri build can
+  do. Still no ML Kit: recognition runs on Android, and here Android is only a
+  screen.
+- Latency is the mirroring link's, not the app's. Pen strokes make a round trip
+  to the PC and back before they are drawn, which is exactly the ink-latency
+  risk `RasterInkLayer` exists to keep small — try a page of handwriting before
+  committing to this path.
+
+Rough guide: **spacedesk** to try the thing today without a build, **browser +
+pairing** for a standalone tablet that keeps working when the PC screen is off,
+and the **APK** when you want the pen to feel native and handwriting to be
+transcribed on-device.
+
 ## Android — sideloading the APK (no Play Store)
 
 Tested target: Android 12 and 14 tablets, installed over USB or by copying the
@@ -101,7 +158,11 @@ APK across. Nothing here needs a Google account or a store listing.
 
 - Android Studio (or the standalone command-line tools) with **SDK Platform 34**
   and the **NDK**; set `ANDROID_HOME` and `NDK_HOME`.
-- **JDK 17 or newer** (`java -version`).
+- **JDK 17** (`java -version`). Newer JDKs build fine, but Gradle then compiles
+  Kotlin and Java against different JVM targets and every `android:apk` run
+  carries a wall of `inconsistent JVM-target compatibility` warnings. Pointing
+  `JAVA_HOME` at a 17 install is the quiet path; there is nothing to fix if you
+  are happy to read past them.
 - The Android Rust targets:
 
   ```bash

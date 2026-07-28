@@ -79,6 +79,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   two. Raster ink is repainted into the exported PNG at export scale (with a
   fallback to the ink-less export if bounds drift). Submit no longer rejects a
   legible pen-only board when a vision model will receive the picture.
+- **`skeleton_hash` could not detect a skeleton edit** — it was the SHA-256 of
+  the whole `solution.py`, taken once at problem load, so it never changed. It
+  is now the hash of the skeleton as it currently stands, and a code delta goes
+  out only while that still matches what the server acknowledged. Editing an
+  import sends the full file, which is what the daemon needs: it refuses a delta
+  it cannot anchor rather than reviewing the code it still holds.
+
+### Added — board deltas and the split code editor
+
+- **Server-side board state** (`src/serve/board_session.rs`) — the daemon keeps
+  an element baseline per task, applies `board_ops` from the client, and
+  reconstructs the full canvas layout before building any prompt. Deltas are a
+  transport optimization; the model is never asked to merge them. A twelve-element
+  board costs 1897 bytes on the first review and 364 on an unchanged second.
+- **`code_mode`** — `unchanged` / `delta` / `full`. An unchanged solution is
+  omitted from the review payload entirely.
+- **Skeleton / Solution tabs** in the code editor. The entry-point signature and
+  everything above it (header, imports, helper classes) is one tab; the method
+  body is the other. Both editable — students add imports — and merged back into
+  one file for disk. A file that does not match the corpus's `class Solution:`
+  shape does not split, and the editor stays a single pane.
+- **No-APK tablet paths** documented in `app/README.md`: the browser over the LAN
+  (Vite on 1420, pairing to the daemon on 7878) and spacedesk screen mirroring,
+  with what each one costs — ML Kit is Android-only, so both fall back to the
+  board picture and a vision model.
 
 ### Added
 
