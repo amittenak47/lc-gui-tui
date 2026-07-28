@@ -106,7 +106,12 @@ interface ExcalidrawApi {
       | typeof CaptureUpdateAction.IMMEDIATELY
       | typeof CaptureUpdateAction.EVENTUALLY;
   }): void;
-  setActiveTool(tool: { type: string; customType?: string }): void;
+  setActiveTool(tool: {
+    type: string;
+    customType?: string;
+    /** Keep the tool after placing — required for click-around text placement. */
+    locked?: boolean;
+  }): void;
   setCursor?(cursor: string): void;
   resetCursor?(): void;
   scrollToContent(target?: unknown, opts?: unknown): void;
@@ -320,7 +325,7 @@ const TOOLS: Array<{ tool: ToolName; label: string; hint: string; emoji?: string
   { tool: "selection", label: "⬚", hint: "Select — resize region boxes (they stay locked in place) or move your work" },
   { tool: "freedraw", label: "Pen", hint: "Pen", emoji: "✏️" },
   { tool: "eraser", label: "Eraser", hint: "Eraser — only removes ink under the brush", emoji: "erasersvg" },
-  { tool: "text", label: "T", hint: "Text — click to place; corner-drag to resize (Shift keeps wrap width)" },
+  { tool: "text", label: "T", hint: "Text — click to place (Enter finishes, Shift+Enter for a new line)" },
   { tool: "rectangle", label: "▭", hint: "Rectangle" },
   { tool: "ellipse", label: "◯", hint: "Ellipse" },
   { tool: "arrow", label: "↗", hint: "Arrow" },
@@ -402,6 +407,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const brushZoomRef = useRef(1);
   /** Last text element the student was editing — for hand-tool handoff. */
   const editingTextIdRef = useRef<string | null>(null);
+  /** Enter (not Shift+Enter) finished the wysiwyg — always leave the text tool. */
+  const textFinishedViaEnterRef = useRef(false);
   /** Shift held → text corner-drag keeps wrap width instead of free resize. */
   const shiftHeldRef = useRef(false);
 
@@ -419,6 +426,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.removeEventListener("keyup", onKey);
     };
   }, []);
+
+  // Enter commits the text box; Shift+Enter inserts a newline (Excalidraw's default).
+  useEffect(() => {
+    if (!interactive) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" || event.shiftKey) return;
+      if (event.isComposing || event.keyCode === 229) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target;
+      if (!(target instanceof HTMLTextAreaElement)) return;
+      if (!target.classList.contains("excalidraw-wysiwyg")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      textFinishedViaEnterRef.current = true;
+      target.blur();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [interactive]);
 
   // Library stamps must stay draggable — older imports may still be locked.
   useEffect(() => {
@@ -540,13 +566,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const setTool = useCallback((tool: ToolName) => {
     if (tool === "freedraw") {
-      apiRef.current?.setActiveTool({ type: "custom", customType: "lcInk" });
+      apiRef.current?.setActiveTool({ type: "custom", customType: "lcInk", locked: false });
       apiRef.current?.resetCursor?.();
     } else if (tool === "eraser") {
-      apiRef.current?.setActiveTool({ type: "custom", customType: "lcEraser" });
+      apiRef.current?.setActiveTool({ type: "custom", customType: "lcEraser", locked: false });
       apiRef.current?.setCursor?.(eraserCanvasCursorCss());
+    } else if (tool === "text") {
+      // Locked keeps Excalidraw on the text tool after a click — otherwise it
+      // flips to selection and the crosshair dies before you can place again.
+      // Do not resetCursor here: setActiveTool already sets the text crosshair.
+      apiRef.current?.setActiveTool({ type: "text", locked: true });
     } else {
-      apiRef.current?.setActiveTool({ type: tool });
+      apiRef.current?.setActiveTool({ type: tool, locked: false });
       apiRef.current?.resetCursor?.();
     }
     // The brush node unmounts with the tool; hiding it here keeps a stale ring
@@ -749,33 +780,67 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!api) return;
     const appState = api.getAppState() as {
       selectedElementIds?: Record<string, boolean>;
-      editingTextElement?: { id?: string } | null;
+      editingTextElement?: { id?: string; fontFamily?: number; lineHeight?: number } | null;
     };
     const selected = new Set(
       Object.entries(appState.selectedElementIds ?? {})
         .filter(([, on]) => on)
         .map(([id]) => id),
     );
-    const editingId = appState.editingTextElement?.id;
+    const editingId = appState.editingTextElement?.id ?? editingTextIdRef.current;
     if (editingId) selected.add(editingId);
+
     const current = api.getSceneElements() as Array<{
       id: string;
       type: string;
       fontSize?: number;
+      fontFamily?: number;
+      lineHeight?: number;
+      version?: number;
+      versionNonce?: number;
       [key: string]: unknown;
     }>;
     let changed = false;
+    let edited: (typeof current)[number] | null = null;
     const next = current.map((el) => {
       if (el.type !== "text" || !selected.has(el.id) || el.fontSize === size) return el;
       changed = true;
-      return { ...el, fontSize: size };
+      const updated = {
+        ...el,
+        fontSize: size,
+        version: (el.version ?? 0) + 1,
+        versionNonce: Math.floor(Math.random() * 2 ** 31),
+      };
+      if (el.id === editingId) edited = updated;
+      return updated;
     });
-    // NEVER while editing — IMMEDIATELY remounts history and steals the caret.
+
     api.updateScene({
       appState: { currentItemFontSize: size },
       ...(changed ? { elements: next } : {}),
       captureUpdate: CaptureUpdateAction.NEVER,
     });
+
+    // Live wysiwyg keeps its own <textarea> styles — push the size there too so
+    // the caret stays put and the glyphs resize while still typing.
+    if (editingId) {
+      const editable = document.querySelector<HTMLTextAreaElement>(
+        "textarea.excalidraw-wysiwyg",
+      );
+      if (editable) {
+        const source =
+          edited ??
+          next.find((el) => el.id === editingId) ??
+          appState.editingTextElement;
+        editable.style.fontSize = `${size}px`;
+        if (source?.lineHeight) {
+          editable.style.lineHeight = String(source.lineHeight);
+        }
+        requestAnimationFrame(() => {
+          editable.focus({ preventScroll: true });
+        });
+      }
+    }
   }, []);
 
   const setInk = useCallback((color: string) => {
@@ -1371,12 +1436,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
       }
 
-      // Finished a real text box → drop the text tool and return to pan.
+      // Text tool handoff:
+      // - Enter (empty or not) → hand
+      // - Typed text then click-away → hand
+      // - Empty click-away → stay on text so another click can place quickly
       if (prevEditingId && !editingId && activeTool === "text") {
         const finished = current.find((el) => el.id === prevEditingId && !el.isDeleted);
         const finishedText = (finished?.originalText ?? finished?.text ?? "").trim();
-        if (finishedText.length > 0) {
+        const viaEnter = textFinishedViaEnterRef.current;
+        textFinishedViaEnterRef.current = false;
+        if (viaEnter || finishedText.length > 0) {
           setTool("hand");
+        } else {
+          api.setActiveTool({ type: "text", locked: true });
         }
       }
       editingTextIdRef.current = editingId;

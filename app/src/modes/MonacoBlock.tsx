@@ -171,6 +171,9 @@ export default function MonacoBlock({
         hideCursorInOverviewRuler: true,
         padding: { top: PAD_TOP },
         folding: true,
+        // Chromium EditContext focuses a div Excalidraw does not treat as
+        // writable, so board shortcuts (H, ?, tools…) fire while coding.
+        editContext: false,
         scrollbar: {
           verticalScrollbarSize: SCROLLBAR,
           horizontalScrollbarSize: SCROLLBAR,
