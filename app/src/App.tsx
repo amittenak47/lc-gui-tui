@@ -52,7 +52,8 @@ import { BridgePanel, RevealDialog } from "./modes/RevealDialog";
 import { ReviewPanel } from "./modes/ReviewPanel";
 import { buildProblemTemplate } from "./templates/problemBoard";
 import { REGIONS, STUDENT_REGION_ORDER, type RegionId } from "./templates/regions";
-import { useIsMobile } from "./util/mobile";
+import { isMobileViewport, useIsMobile } from "./util/mobile";
+import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
 import { applyAppTheme, isDarkTheme, loadThemeId, saveThemeId } from "./theme/appThemes";
@@ -114,7 +115,10 @@ export function App() {
   /** Distinguishes header Run tests vs Submit for the results panel. */
   const [lastRunKind, setLastRunKind] = useState<"run" | "submit">("run");
   const [themeId, setThemeId] = useState(loadThemeId);
-  const [readingSize, setReadingSize] = useState<BoardReadingSize>(() => loadBoardReadingSize());
+  const [readingSize, setReadingSize] = useState<BoardReadingSize>(() =>
+    // Desktop zooms with the wheel — S/M/L only fights statement vs Monaco scale.
+    isMobileViewport() ? loadBoardReadingSize() : "M",
+  );
   const [coachOpen, setCoachOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [codeSlot, setCodeSlot] = useState<ScreenRect | null>(null);
@@ -148,8 +152,13 @@ export function App() {
   }, [themeId]);
 
   useEffect(() => {
+    // Desktop stays flat at Medium; only persist S/M/L on mobile.
+    if (!mobile) {
+      if (readingSize !== "M") setReadingSize("M");
+      return;
+    }
     saveBoardReadingSize(readingSize);
-  }, [readingSize]);
+  }, [mobile, readingSize]);
 
   const [review, setReview] = useState<ReviewResponse | null>(null);
   const [tests, setTests] = useState<TestResponse | null>(null);
@@ -340,14 +349,24 @@ export function App() {
           /* queue write is best-effort when not paired yet */
         }
         const detail = await client.getProblem(taskId);
-        let source = detail.starter_code ?? "";
+        const fresh = ensureCodingRoom(detail.starter_code ?? "");
+        let source = fresh;
         try {
           const disk = await client.getSolution(taskId);
-          if (disk.source.trim().length > 0) source = disk.source;
+          if (disk.source.trim().length > 0) {
+            source = ensureCodingRoom(resolveSolutionSource(fresh, disk.source));
+            // Rewrite disk when we stripped stale ListNode/TreeNode leftovers.
+            if (source.trim() !== disk.source.trim()) {
+              try {
+                await client.putSolution(taskId, source);
+              } catch {
+                /* best-effort — editor still shows the corrected stub */
+              }
+            }
+          }
         } catch {
           // Fresh load — starter_code is fine.
         }
-        source = ensureCodingRoom(source);
 
         if (fromBrowse) {
           // Ready: keep the spinner, slide the browser away under the blur.
@@ -378,20 +397,10 @@ export function App() {
           dark: isDarkTheme(themeId),
         });
 
-        let restoredBoard = false;
-        try {
-          const saved = await client.getBoard(taskId);
-          const blob = saved.board as { v?: number; elements?: unknown[]; appState?: unknown } | null;
-          if (blob && blob.v === 1 && Array.isArray(blob.elements) && blob.elements.length > 0) {
-            boardRef.current?.restoreBoard(blob.elements, blob.appState, { skeletons });
-            restoredBoard = true;
-          }
-        } catch {
-          // Missing board.json is fine — seed a fresh template.
-        }
-        if (!restoredBoard) {
-          boardRef.current?.seedTemplate(skeletons);
-        }
+        // Always seed a fresh template. Persisted boards keep old region
+        // geometry / UI bugs alive after layout fixes.
+        lastSavedHashRef.current = null;
+        boardRef.current?.seedTemplate(skeletons);
         boardRef.current?.fitCodeToSource(source);
         lastIdsRef.current = new Set();
 
@@ -597,13 +606,16 @@ export function App() {
       try {
         result = await client.review(problem.task_id, payload);
       } catch (cause) {
-        // The picture is the first thing to give up: a board too big to buffer
-        // must not cost the student the whole review.
-        if (!("png" in payload) || !payload.png || !isBodyLimitError(cause)) throw cause;
+        // The picture is the first thing to give up: a board too big to buffer,
+        // or a local VLM that hangs on the PNG, must not cost the whole review.
+        const hasPng = "png" in payload && Boolean(payload.png);
+        if (!hasPng || (!isBodyLimitError(cause) && !isLlmTimeoutError(cause))) throw cause;
         const { png: _png, ...withoutPng } = payload;
         result = await client.review(problem.task_id, withoutPng);
         setNotice(
-          "the board image was too large to send — the coach reviewed your text and layout without it",
+          isLlmTimeoutError(cause)
+            ? "the board image timed out at the model — the coach reviewed your text and layout without it"
+            : "the board image was too large to send — the coach reviewed your text and layout without it",
         );
       }
       setReview(result);
@@ -1785,6 +1797,16 @@ function isBodyLimitError(cause: unknown): boolean {
     message.includes("payload too large") ||
     message.includes("body too large") ||
     message.includes("request entity too large")
+  );
+}
+
+/** Local VLMs often hang on a board PNG until the 180s client timeout fires. */
+function isLlmTimeoutError(cause: unknown): boolean {
+  const message = messageOf(cause).toLowerCase();
+  return (
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("operation timed out")
   );
 }
 

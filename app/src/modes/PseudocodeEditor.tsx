@@ -15,7 +15,7 @@ import type { BoardReadingSize } from "./codeFontSize";
 
 const MonacoBlock = lazy(() => import("./MonacoBlock"));
 
-type CodeTab = "solution" | "skeleton";
+type CodeTab = "solution" | "imports";
 
 export interface PseudocodeEditorProps {
   value: string;
@@ -47,16 +47,16 @@ export function PseudocodeEditor({
   const lineCount = value ? value.split("\n").length : 0;
   const dock = variant === "dock";
 
-  // Null for a file this splitter does not recognise — a cleared buffer, or one
-  // the student reshaped past the corpus's `class Solution:` layout. Then the
-  // editor is one undivided pane, exactly as it was before tabs existed.
+  // Null / empty Imports → one undivided pane (nothing useful on the Imports tab).
   const split = splitSolution(value);
-  const active = split && tab === "skeleton" ? split.skeleton : split ? split.body : value;
+  const hasImports = Boolean(split && split.skeleton.trim().length > 0);
+  const active =
+    hasImports && tab === "imports" ? split!.skeleton : hasImports ? split!.body : value;
 
   const editTab = (next: string) => {
-    if (!split) return onChange(next);
+    if (!hasImports || !split) return onChange(next);
     onChange(
-      tab === "skeleton"
+      tab === "imports"
         ? joinSolution(next, split.body)
         : joinSolution(split.skeleton, next),
     );
@@ -67,13 +67,14 @@ export function PseudocodeEditor({
       className="lc-pseudo-fallback"
       value={active}
       spellCheck={false}
-      aria-label={tabLabel(split ? tab : null)}
+      aria-label={tabLabel(hasImports ? tab : null)}
       onChange={(event) => editTab(event.target.value)}
     />
   ) : (
     <ErrorBoundary onError={() => setFailed(true)}>
       <Suspense fallback={<div className="lc-pseudo-loading">loading editor…</div>}>
         <MonacoBlock
+          key={tab}
           value={active}
           language="python"
           themeId={themeId}
@@ -87,9 +88,9 @@ export function PseudocodeEditor({
     </ErrorBoundary>
   );
 
-  const tabs = split && (
+  const tabs = hasImports && (
     <div className="lc-code-tabs" role="tablist" aria-label="Solution code sections">
-      {(["solution", "skeleton"] as const).map((id) => (
+      {(["solution", "imports"] as const).map((id) => (
         <button
           key={id}
           type="button"
@@ -98,7 +99,7 @@ export function PseudocodeEditor({
           className={tab === id ? "lc-code-tab is-active" : "lc-code-tab"}
           onClick={() => setTab(id)}
         >
-          {id === "solution" ? "Solution" : "Skeleton"}
+          {id === "solution" ? "Solution" : "Imports"}
         </button>
       ))}
     </div>
@@ -138,8 +139,8 @@ export function PseudocodeEditor({
 }
 
 function tabLabel(tab: CodeTab | null): string {
-  if (tab === "skeleton") return "Imports and signature";
-  if (tab === "solution") return "Solution body";
+  if (tab === "imports") return "Imports and helpers";
+  if (tab === "solution") return "Solution class";
   return "Solution code";
 }
 

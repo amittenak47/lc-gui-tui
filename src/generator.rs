@@ -89,19 +89,163 @@ pub fn generate(cfg: &Config, problem: &Problem, json_path: &Path, force: bool) 
 
 /// `prompt` usually holds imports/helpers and `starter_code` the class skeleton;
 /// concatenate them, but don't duplicate the skeleton if `prompt` already ends with it.
-fn code_body(problem: &Problem) -> String {
+///
+/// Helper classes in `prompt` that the starter never mentions (common kitchen-sink
+/// preambles with `ListNode` / `TreeNode` on array problems) are dropped.
+pub fn code_body(problem: &Problem) -> String {
     let prompt = problem.prompt.as_deref().unwrap_or("").trim_end();
     let starter = problem.starter_code.as_deref().unwrap_or("").trim();
     if starter.is_empty() {
-        return prompt.to_string();
-    }
-    if prompt.contains(starter) {
-        return prompt.to_string();
+        return filter_unreferenced_helpers(prompt, "");
     }
     if prompt.is_empty() {
         return starter.to_string();
     }
-    format!("{prompt}\n\n\n{starter}")
+    if prompt.contains(starter) {
+        return filter_unreferenced_helpers(prompt, starter);
+    }
+    let helpers = filter_unreferenced_helpers(prompt, starter);
+    if helpers.is_empty() {
+        return starter.to_string();
+    }
+    format!("{helpers}\n\n\n{starter}")
+}
+
+/// Drop top-level `class` / `def` blocks from a Python preamble unless `starter`
+/// (or another kept block) references their name.
+fn filter_unreferenced_helpers(prompt: &str, starter: &str) -> String {
+    if prompt.trim().is_empty() {
+        return String::new();
+    }
+    let blocks = split_python_top_level(prompt);
+    if blocks.iter().all(|b| b.name.is_none()) {
+        return prompt.trim_end().to_string();
+    }
+
+    let mut keep: Vec<bool> = blocks
+        .iter()
+        .map(|b| match &b.name {
+            None => true,
+            // Always keep Solution — it is the problem skeleton.
+            Some(name) if name == "Solution" => true,
+            Some(name) => name_referenced(name, starter),
+        })
+        .collect();
+
+    // Transitive references between helper blocks (e.g. a helper mentioning ListNode).
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..blocks.len() {
+            if keep[i] {
+                continue;
+            }
+            let Some(name) = blocks[i].name.as_deref() else {
+                continue;
+            };
+            let referenced = keep.iter().enumerate().any(|(j, &kept)| {
+                kept && name_referenced(name, &blocks[j].text)
+            });
+            if referenced {
+                keep[i] = true;
+                changed = true;
+            }
+        }
+    }
+
+    let mut out = String::new();
+    for (block, &kept) in blocks.iter().zip(keep.iter()) {
+        if !kept {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(block.text.trim_end());
+    }
+    out
+}
+
+struct PyBlock {
+    /// `Some("ListNode")` for `class ListNode`, `Some("foo")` for top-level `def foo`.
+    name: Option<String>,
+    text: String,
+}
+
+fn split_python_top_level(src: &str) -> Vec<PyBlock> {
+    let mut blocks = Vec::new();
+    let mut cur_name: Option<String> = None;
+    let mut cur = String::new();
+
+    let flush = |blocks: &mut Vec<PyBlock>, name: &mut Option<String>, text: &mut String| {
+        let trimmed = text.trim_end();
+        if trimmed.is_empty() {
+            text.clear();
+            *name = None;
+            return;
+        }
+        blocks.push(PyBlock {
+            name: name.take(),
+            text: trimmed.to_string(),
+        });
+        text.clear();
+    };
+
+    for line in src.lines() {
+        let class_name = line
+            .strip_prefix("class ")
+            .and_then(|rest| rest.split([':', '(']).next())
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        let def_name = if line.starts_with("def ") {
+            line.trim_start_matches("def ")
+                .split('(')
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        } else {
+            None
+        };
+
+        if class_name.is_some() || def_name.is_some() {
+            flush(&mut blocks, &mut cur_name, &mut cur);
+            cur_name = class_name.or(def_name).map(str::to_string);
+            cur.push_str(line);
+            cur.push('\n');
+            continue;
+        }
+
+        cur.push_str(line);
+        cur.push('\n');
+    }
+    flush(&mut blocks, &mut cur_name, &mut cur);
+    blocks
+}
+
+fn name_referenced(name: &str, haystack: &str) -> bool {
+    if haystack.is_empty() {
+        return false;
+    }
+    // Word-boundary style check so `TreeNode` does not match `TreeNodeX`.
+    let bytes = haystack.as_bytes();
+    let needle = name.as_bytes();
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+            let after = i + needle.len();
+            let after_ok = after == bytes.len() || !is_ident_byte(bytes[after]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 pub(crate) fn title_from_slug(slug: &str) -> String {
@@ -174,6 +318,71 @@ mod title_tests {
             title_from_slug("1-bit-and-2-bit-characters"),
             "1 Bit And 2 Bit Characters"
         );
+    }
+}
+
+#[cfg(test)]
+mod code_body_tests {
+    use super::code_body;
+    use crate::problem::Problem;
+
+    fn problem(prompt: &str, starter: &str) -> Problem {
+        Problem {
+            task_id: "demo".into(),
+            question_id: None,
+            difficulty: None,
+            tags: vec![],
+            problem_description: None,
+            prompt: Some(prompt.into()),
+            starter_code: Some(starter.into()),
+            entry_point: None,
+            test: None,
+            input_output: vec![],
+            estimated_date: None,
+        }
+    }
+
+    #[test]
+    fn drops_tree_helpers_on_array_starters() {
+        let prompt = "\
+from typing import List\n\
+\n\
+class ListNode:\n\
+    def __init__(self, val=0, next=None):\n\
+        self.val = val\n\
+        self.next = next\n\
+\n\
+class TreeNode:\n\
+    def __init__(self, val=0, left=None, right=None):\n\
+        self.val = val\n\
+        self.left = left\n\
+        self.right = right\n";
+        let starter = "class Solution:\n    def fourSumCount(self, nums1: List[int], nums2: List[int], nums3: List[int], nums4: List[int]) -> int:\n        pass\n";
+        let body = code_body(&problem(prompt, starter));
+        assert!(body.contains("from typing import List"));
+        assert!(body.contains("class Solution"));
+        assert!(body.contains("fourSumCount"));
+        assert!(!body.contains("class ListNode"));
+        assert!(!body.contains("class TreeNode"));
+    }
+
+    #[test]
+    fn keeps_list_helpers_when_starter_mentions_them() {
+        let prompt = "\
+class ListNode:\n\
+    def __init__(self, val=0, next=None):\n\
+        self.val = val\n\
+        self.next = next\n\
+\n\
+class TreeNode:\n\
+    def __init__(self, val=0):\n\
+        self.val = val\n";
+        let starter =
+            "class Solution:\n    def reverseList(self, head: ListNode) -> ListNode:\n        pass\n";
+        let body = code_body(&problem(prompt, starter));
+        assert!(body.contains("class ListNode"));
+        assert!(body.contains("reverseList"));
+        assert!(!body.contains("class TreeNode"));
     }
 }
 

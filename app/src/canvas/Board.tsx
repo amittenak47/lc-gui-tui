@@ -52,19 +52,22 @@ import { REGIONS, type RegionId } from "../templates/regions";
 import {
   BOARD_THEMES,
   DEFAULT_FONT_SIZE,
-  FONT_SIZE_LABELS,
-  FONT_SIZES,
   FONT_UI,
   type Skeleton,
 } from "../templates/skeleton";
 import { BackgroundPalette } from "../components/BackgroundPalette";
 import { ReadingSizeControl } from "../components/ReadingSizeControl";
+import { FontSizeSlider } from "./FontSizeSlider";
+import { useIsMobile } from "../util/mobile";
 import { isDarkTheme } from "../theme/appThemes";
 import {
   loadBoardReadingSize,
   saveBoardReadingSize,
   type BoardReadingSize,
 } from "../modes/codeFontSize";
+
+/** Default wrap width for the text tool (canvas units). User can resize the box. */
+const TEXT_WRAP_WIDTH = 420;
 import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
 import type { BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
@@ -368,6 +371,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 ) {
   const apiRef = useRef<ExcalidrawApi | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
+  const mobile = useIsMobile();
   const [activeTool, setActiveTool] = useState<ToolName>("hand");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
   const [inkColor, setInkColor] = useState(() => defaultInk(themeId));
@@ -690,7 +694,34 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const setFontSize = useCallback((size: number) => {
     setFontSizeState(size);
-    apiRef.current?.updateScene({ appState: { currentItemFontSize: size } });
+    const api = apiRef.current;
+    if (!api) return;
+    const appState = api.getAppState() as {
+      selectedElementIds?: Record<string, boolean>;
+    };
+    const selected = new Set(
+      Object.entries(appState.selectedElementIds ?? {})
+        .filter(([, on]) => on)
+        .map(([id]) => id),
+    );
+    const current = api.getSceneElements() as Array<{
+      id: string;
+      type: string;
+      fontSize?: number;
+      [key: string]: unknown;
+    }>;
+    let changed = false;
+    const next = current.map((el) => {
+      if (el.type !== "text" || !selected.has(el.id) || el.fontSize === size) return el;
+      changed = true;
+      return { ...el, fontSize: size };
+    });
+    api.updateScene({
+      appState: { currentItemFontSize: size },
+      ...(changed
+        ? { elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY }
+        : {}),
+    });
   }, []);
 
   const setInk = useCallback((color: string) => {
@@ -1136,6 +1167,43 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const handleSceneChange = useCallback(() => {
     applyRegionLayout();
     reportCodeSlot();
+
+    // Text tool: wrap at a reasonable width unless the student already resized
+    // the box (`autoResize: false` with a custom width).
+    const api = apiRef.current;
+    if (api) {
+      const current = api.getSceneElements() as Array<{
+        id: string;
+        type: string;
+        width?: number;
+        autoResize?: boolean;
+        customData?: { lcRegion?: string; lcVizId?: string } | null;
+        [key: string]: unknown;
+      }>;
+      let changed = false;
+      const next = current.map((el) => {
+        if (el.type !== "text") return el;
+        if (el.customData?.lcRegion || el.customData?.lcVizId) return el;
+        if (el.autoResize === false) return el;
+        changed = true;
+        return {
+          ...el,
+          autoResize: false,
+          width: TEXT_WRAP_WIDTH,
+        };
+      });
+      if (changed) {
+        layoutSyncingRef.current = true;
+        api.updateScene({
+          elements: next,
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        requestAnimationFrame(() => {
+          layoutSyncingRef.current = false;
+        });
+      }
+    }
+
     onChange?.();
   }, [applyRegionLayout, onChange, reportCodeSlot]);
 
@@ -1309,7 +1377,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
             )}
             <div className="lc-map-chrome-right">
-              <ReadingSizeControl value={readingSize} onChange={setReadingSize} />
+              {mobile && (
+                <ReadingSizeControl value={readingSize} onChange={setReadingSize} />
+              )}
               <ZoomControls
                 zoomPct={zoomPct}
                 onZoomIn={zoomIn}
@@ -1409,7 +1479,13 @@ function BoardToolbar({
     active === "ellipse" ||
     active === "arrow" ||
     active === "text";
-  const showStrokeSizes = showInk || active === "eraser";
+  // Stroke weight is for pen / shapes / eraser — not the text tool (that has its own slider).
+  const showStrokeSizes =
+    active === "freedraw" ||
+    active === "rectangle" ||
+    active === "ellipse" ||
+    active === "arrow" ||
+    active === "eraser";
   const [configuring, setConfiguring] = useState<ShapeStamp | null>(null);
   const [configuringImport, setConfiguringImport] = useState<ImportedLibraryItem | null>(null);
   const [mods, setMods] = useState<Record<string, ShapeModValue>>({});
@@ -1563,26 +1639,12 @@ function BoardToolbar({
       )}
 
       {active === "text" && (
-        <div className="lc-tool-group" role="group" aria-label="Font size">
-          {FONT_SIZES.map((size) => (
-            <button
-              key={size}
-              type="button"
-              className={
-                size === fontSize
-                  ? "lc-tool lc-tool-mini lc-tool-active lc-tip-target"
-                  : "lc-tool lc-tool-mini lc-tip-target"
-              }
-              data-tip={`Text size ${FONT_SIZE_LABELS[size]} (${size}px)`}
-              data-tip-placement="right"
-              title={`Text size ${FONT_SIZE_LABELS[size]}`}
-              aria-pressed={size === fontSize}
-              onClick={() => onFontSize(size)}
-            >
-              {FONT_SIZE_LABELS[size]}
-            </button>
-          ))}
-        </div>
+        <>
+          <div className="lc-tool-sep" />
+          <div className="lc-stroke-controls">
+            <FontSizeSlider value={fontSize} onChange={onFontSize} />
+          </div>
+        </>
       )}
 
       <div className="lc-tool-sep" />
