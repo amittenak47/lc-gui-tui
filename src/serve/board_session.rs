@@ -149,12 +149,16 @@ pub fn resolve_board_snapshot(
     resolved.board_ops = None;
 
     if !state.review_ids.is_empty() {
-        let added: Vec<String> = state
+        let mut added: Vec<String> = state
             .elements
             .keys()
             .filter(|id| !state.review_ids.contains(*id))
             .cloned()
             .collect();
+        // Sorted because this goes into the prompt: iteration order of the
+        // element map is arbitrary, and the coach should not see the same board
+        // described differently on two runs.
+        added.sort();
         if !added.is_empty() {
             resolved.new_since_last = added;
         }
@@ -215,7 +219,9 @@ fn merge_solution_delta(_baseline: Option<&str>, delta: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::coach::BoardSnapshot;
+    use crate::generator::WorkspaceMeta;
+    use crate::llm::coach::{build_review_prompt, BoardSnapshot};
+    use crate::problem::IoCase;
 
     fn el(id: &str, x: i32) -> CapturedElement {
         CapturedElement {
@@ -293,6 +299,119 @@ mod tests {
             },
         );
         assert_eq!(resolved.new_since_last, vec!["b"]);
+    }
+
+    /// Seed a session the way a first review does, then send `ops` as a second.
+    fn seed_then(seed: Vec<CapturedElement>, ops: Vec<BoardOp>) -> BoardSnapshot {
+        let mut state = BoardSessionState::default();
+        let _ = resolve_board_snapshot(
+            &mut state,
+            BoardSnapshot {
+                scene_structure: Some(serde_json::to_value(&seed).unwrap()),
+                ..Default::default()
+            },
+        );
+        resolve_board_snapshot(
+            &mut state,
+            BoardSnapshot {
+                board_ops: Some(ops.iter().map(|o| serde_json::to_value(o).unwrap()).collect()),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// What the same board looks like when a legacy client dumps it in full.
+    fn full_send(elements: Vec<CapturedElement>) -> BoardSnapshot {
+        let mut state = BoardSessionState::default();
+        resolve_board_snapshot(
+            &mut state,
+            BoardSnapshot {
+                scene_structure: Some(serde_json::to_value(&elements).unwrap()),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn a_delta_reconstructs_exactly_what_a_full_dump_would_have_sent() {
+        // The wire saving is only worth having if the prompt cannot tell the
+        // difference — deltas are transport, never something the model merges.
+        let seeded = vec![el("keep", 1), el("move", 2), el("drop", 3)];
+        let mut moved = el("move", 40);
+        moved.text = Some("binary search on the answer".into());
+
+        let via_delta = seed_then(
+            seeded,
+            vec![
+                BoardOp::Update {
+                    id: "move".into(),
+                    version: 2,
+                    element: moved.clone(),
+                },
+                BoardOp::Delete { id: "drop".into() },
+                BoardOp::Add {
+                    element: el("added", 9),
+                },
+            ],
+        );
+        let via_full = full_send(vec![el("added", 9), el("keep", 1), moved]);
+
+        assert_eq!(via_delta.scene_structure, via_full.scene_structure);
+    }
+
+    #[test]
+    fn a_deleted_element_disappears_from_the_review_prompt() {
+        let resolved = seed_then(
+            vec![
+                CapturedElement {
+                    text: Some("two pointers from both ends".into()),
+                    ..el("keep", 1)
+                },
+                CapturedElement {
+                    text: Some("sort the array first".into()),
+                    ..el("drop", 2)
+                },
+            ],
+            vec![BoardOp::Delete { id: "drop".into() }],
+        );
+
+        let meta = WorkspaceMeta {
+            task_id: "two-sum".into(),
+            question_id: Some("1".into()),
+            difficulty: Some("Easy".into()),
+            tags: vec!["Array".into()],
+            entry_point: Some("twoSum".into()),
+            json_path: "corpus.jsonl".into(),
+            cases: vec![IoCase {
+                input: "nums = [2,7]".into(),
+                output: "[0,1]".into(),
+            }],
+            test: None,
+        };
+        let prompt = build_review_prompt(&meta, None, &resolved);
+
+        assert!(prompt.contains("two pointers from both ends"));
+        // The erased idea must not linger in the prompt, or the coach keeps
+        // arguing with work the student already took off the board.
+        assert!(!prompt.contains("sort the array first"));
+        assert!(!prompt.contains("\"drop\""));
+    }
+
+    #[test]
+    fn new_since_last_is_ordered_so_the_prompt_is_stable() {
+        let mut state = BoardSessionState::default();
+        state.acknowledge_review(["a".into()]);
+        for id in ["z", "a", "m"] {
+            state.elements.insert(id.into(), el(id, 1));
+        }
+        let resolved = resolve_board_snapshot(
+            &mut state,
+            BoardSnapshot {
+                board_ops: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        assert_eq!(resolved.new_since_last, vec!["m", "z"]);
     }
 
     #[test]
