@@ -19,10 +19,16 @@ use crate::llm::coach::{
     parse_trace, BoardSnapshot, BridgeResponse, ReviewResponse, BRIDGE_SYSTEM_PROMPT,
     REVIEW_SYSTEM_PROMPT, TRACE_SYSTEM_PROMPT,
 };
+use crate::dataset::{self, Dataset};
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
 use crate::reveal::{SolutionReveal, UserConsent};
 use crate::runner;
 use crate::session::Session;
+
+/// A request's dataset slug, or a 400 naming the ones that exist.
+pub(crate) fn resolve_dataset(slug: Option<&str>) -> Result<&'static Dataset, AppError> {
+    dataset::resolve(slug).map_err(AppError::bad_request)
+}
 
 // ---------------------------------------------------------------------------
 // Capabilities (vision / provider per mode)
@@ -45,6 +51,9 @@ pub async fn capabilities(State(state): State<Shared>) -> Result<Json<serde_json
 #[derive(Debug, Deserialize)]
 pub struct ReviewRequest {
     pub task_id: String,
+    /// Which corpus `task_id` belongs to. Absent = the default LeetCode one.
+    #[serde(default)]
+    pub dataset: Option<String>,
     #[serde(flatten)]
     pub board: BoardSnapshot,
 }
@@ -61,10 +70,14 @@ pub async fn review(
     State(state): State<Shared>,
     Json(request): Json<ReviewRequest>,
 ) -> Result<Json<ReviewEnvelope>, AppError> {
+    let dataset = resolve_dataset(request.dataset.as_deref())?;
+    // Board baselines are keyed per corpus: `two-sum` is a different board in
+    // each of the three datasets that has one.
+    let board_key = dataset.key(&request.task_id);
     let mut board = request.board.clone();
     {
         let mut store = state.board_sessions.lock().await;
-        let session = store.entry(&request.task_id);
+        let session = store.entry(&board_key);
         board = board_session::resolve_board_snapshot(session, board);
         if let Some(pseudo) = board_session::resolve_pseudocode(session, &board) {
             board.pseudocode = Some(pseudo);
@@ -79,10 +92,9 @@ pub async fn review(
 
     let board_for_prompt = board.clone();
     let task_id_for_llm = request.task_id.clone();
-    let task_id_for_ack = request.task_id.clone();
     let cfg = state.cfg_snapshot();
     let envelope = blocking(move || {
-        let meta = load_meta(&cfg, &task_id_for_llm)?;
+        let meta = load_meta(&cfg, dataset, &task_id_for_llm)?;
         let description = description_for(&meta);
         let prompt = build_review_prompt(&meta, description.as_deref(), &board_for_prompt);
 
@@ -109,7 +121,7 @@ pub async fn review(
     // Advance the server baseline only after a successful review.
     {
         let mut store = state.board_sessions.lock().await;
-        let session = store.entry(&task_id_for_ack);
+        let session = store.entry(&board_key);
         if let Some(structure) = board.scene_structure.as_ref() {
             let ids: Vec<String> = structure
                 .as_array()
@@ -183,6 +195,8 @@ fn retrace_counterexample(
 #[derive(Debug, Deserialize)]
 pub struct RevealRequest {
     pub task_id: String,
+    #[serde(default)]
+    pub dataset: Option<String>,
     /// Must be `true`. The client sets this from a confirmation dialog, and
     /// there is no config, header, or default that can stand in for it.
     #[serde(default)]
@@ -214,9 +228,10 @@ pub async fn reveal(
         )));
     }
 
+    let dataset = resolve_dataset(request.dataset.as_deref())?;
     let cfg = state.cfg_snapshot();
     let envelope = blocking(move || {
-        let meta = load_meta(&cfg, &request.task_id)?;
+        let meta = load_meta(&cfg, dataset, &request.task_id)?;
         let description = description_for(&meta);
 
         // Whatever their code currently fails, so the bridge starts from the
@@ -255,7 +270,7 @@ pub async fn reveal(
 
         // Logged so `lc stats` can show how often they tapped out.
         let mut session = Session::load_or_new()?;
-        let reveal_count = session.mark_revealed(&meta.task_id)?;
+        let reveal_count = session.mark_revealed(&meta.key())?;
 
         Ok(RevealEnvelope {
             task_id: meta.task_id,

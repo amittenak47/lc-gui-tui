@@ -132,6 +132,7 @@ async fn serve(state: Shared, addr: SocketAddr, lan: bool) -> Result<()> {
 pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/problems", get(routes::list_problems))
+        .route("/datasets", get(routes::list_datasets))
         .route("/tags", get(routes::list_tags))
         .route("/random", get(routes::random_problem))
         .route("/session", get(routes::get_session))
@@ -164,6 +165,11 @@ pub fn router(state: Shared) -> Router {
             "/workspace/:id/board",
             get(routes::get_board).put(routes::put_board),
         )
+        .route(
+            "/workspace/:id/agent",
+            get(routes::get_agent_session).put(routes::put_agent_session),
+        )
+        .route("/workspace/:id/attempt", post(routes::finish_attempt))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token))
         // /health and /pair stay unauthenticated so the client can find the
         // daemon, and trade the short code for the token, before it has one.

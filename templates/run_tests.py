@@ -7,6 +7,7 @@ line so the `lc` CLI can render results. Also usable standalone:
     python run_tests.py            # all recorded cases
     python run_tests.py --case 3   # a single case (1-indexed)
     python run_tests.py --full     # the original full assert suite
+    python run_tests.py --stop-on-first-failure   # quit at the first failing case
 
 Exit code: 0 if everything passed, 1 otherwise.
 """
@@ -156,15 +157,32 @@ def run_full_suite(mod, meta):
     try:
         exec(compile(TEST_PREAMBLE + test_src, "<lc-test-suite>", "exec"), namespace)
         check = namespace.get("check")
-        if check is None:
-            raise RuntimeError("the test suite defines no check(candidate) function")
-        candidate = resolve_candidate(mod, meta.get("entry_point"))
         buf = io.StringIO()
-        with redirect_stdout(buf):
-            check(candidate)
+        if check is not None:
+            candidate = resolve_candidate(mod, meta.get("entry_point"))
+            with redirect_stdout(buf):
+                check(candidate)
+            result["actual"] = "all asserts passed"
+        else:
+            # pytest-style suites (KodCode and friends) define `test_*`
+            # functions and import from `solution`, which `load_solution` has
+            # already registered in sys.modules. Run them in declaration order;
+            # there is no pytest here, so no fixtures are supported.
+            tests = [
+                (name, fn)
+                for name, fn in namespace.items()
+                if name.startswith("test_") and callable(fn)
+            ]
+            if not tests:
+                raise RuntimeError(
+                    "the test suite defines neither check(candidate) nor any test_* function"
+                )
+            with redirect_stdout(buf):
+                for _, fn in tests:
+                    fn()
+            result["actual"] = "%d test function(s) passed" % len(tests)
         result["stdout"] = buf.getvalue()[:MAX_STDOUT] or None
         result["pass"] = True
-        result["actual"] = "all asserts passed"
     except Exception:
         result["error"] = traceback.format_exc(limit=8)
     emit(result)
@@ -175,6 +193,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", type=int, default=None, help="run one case (1-indexed)")
     parser.add_argument("--full", action="store_true", help="run the original assert suite")
+    parser.add_argument(
+        "--stop-on-first-failure",
+        action="store_true",
+        help="stop after the first failing case instead of running them all",
+    )
     opts = parser.parse_args()
 
     sys.setrecursionlimit(10000)
@@ -217,6 +240,10 @@ def main():
         res = run_case(mod, meta, idx, case)
         emit(res)
         all_ok = all_ok and res["pass"]
+        # Settings → Tests. The cases already emitted still reach the results
+        # panel; the ones after the failure are simply never run.
+        if not res["pass"] and opts.stop_on_first_failure:
+            break
     sys.exit(0 if all_ok else 1)
 
 

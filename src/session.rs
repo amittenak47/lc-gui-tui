@@ -24,6 +24,13 @@ pub struct ProblemProgress {
     pub updated_at: u64,
 }
 
+/// Practice session state.
+///
+/// Every per-problem key here — `problems`, `queue`, `reveals` — is a
+/// **dataset-qualified** `dataset/task_id`, because the same slug means a
+/// different problem in each corpus and a `failed` badge must not bleed across
+/// the browser's tabs. Session files written before datasets existed hold bare
+/// task ids; [`Session::migrate`] rewrites them on load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub started_at: u64,
@@ -61,7 +68,36 @@ impl Session {
             return Ok(None);
         }
         let raw = fs::read_to_string(&path)?;
-        Ok(serde_json::from_str(&raw).ok())
+        Ok(serde_json::from_str::<Self>(&raw).ok().map(|mut session| {
+            session.migrate();
+            session
+        }))
+    }
+
+    /// Rewrite bare `task_id` keys as `leetcode/task_id`.
+    ///
+    /// A session file written before datasets existed only ever held problems
+    /// from the original corpus, so that is what its keys mean. Without this,
+    /// every one of those problems would silently lose its pass/fail history
+    /// the first time the browser asked for a dataset-qualified key.
+    fn migrate(&mut self) {
+        let qualify = |key: &str| {
+            let (dataset, task_id) = crate::dataset::split_key(key);
+            format!("{dataset}/{task_id}")
+        };
+        self.problems = self
+            .problems
+            .drain()
+            .map(|(key, value)| (qualify(&key), value))
+            .collect();
+        self.reveals = self
+            .reveals
+            .drain()
+            .map(|(key, value)| (qualify(&key), value))
+            .collect();
+        for entry in &mut self.queue {
+            *entry = qualify(entry);
+        }
     }
 
     pub fn load_or_new() -> Result<Self> {
@@ -89,9 +125,10 @@ impl Session {
         self.save()
     }
 
-    pub fn mark_loaded(&mut self, task_id: &str) -> Result<()> {
+    /// `key` is a dataset-qualified `dataset/task_id` — see [`Session`].
+    pub fn mark_loaded(&mut self, key: &str) -> Result<()> {
         self.problems.insert(
-            task_id.to_string(),
+            key.to_string(),
             ProblemProgress {
                 state: ProblemState::Loaded,
                 passed_cases: 0,
@@ -102,14 +139,14 @@ impl Session {
         self.save()
     }
 
-    pub fn mark_tested(&mut self, task_id: &str, passed: u32, total: u32) -> Result<()> {
+    pub fn mark_tested(&mut self, key: &str, passed: u32, total: u32) -> Result<()> {
         let state = if passed == total && total > 0 {
             ProblemState::Passed
         } else {
             ProblemState::Failed
         };
         self.problems.insert(
-            task_id.to_string(),
+            key.to_string(),
             ProblemProgress {
                 state,
                 passed_cases: passed,
@@ -120,22 +157,22 @@ impl Session {
         self.save()
     }
 
-    pub fn progress(&self, task_id: &str) -> Option<&ProblemProgress> {
-        self.problems.get(task_id)
+    pub fn progress(&self, key: &str) -> Option<&ProblemProgress> {
+        self.problems.get(key)
     }
 
     /// Record that the user revealed the reference solution, returning the new
     /// count for this problem.
-    pub fn mark_revealed(&mut self, task_id: &str) -> Result<u32> {
-        let count = self.reveals.entry(task_id.to_string()).or_insert(0);
+    pub fn mark_revealed(&mut self, key: &str) -> Result<u32> {
+        let count = self.reveals.entry(key.to_string()).or_insert(0);
         *count += 1;
         let count = *count;
         self.save()?;
         Ok(count)
     }
 
-    pub fn reveal_count(&self, task_id: &str) -> u32 {
-        self.reveals.get(task_id).copied().unwrap_or(0)
+    pub fn reveal_count(&self, key: &str) -> u32 {
+        self.reveals.get(key).copied().unwrap_or(0)
     }
 
     /// Problems the user tapped out on, and how many times, worst first.
@@ -149,9 +186,9 @@ impl Session {
         out
     }
 
-    pub fn add_to_queue(&mut self, task_id: &str) -> Result<()> {
-        if !self.queue.iter().any(|t| t == task_id) {
-            self.queue.push(task_id.to_string());
+    pub fn add_to_queue(&mut self, key: &str) -> Result<()> {
+        if !self.queue.iter().any(|t| t == key) {
+            self.queue.push(key.to_string());
         }
         self.save()
     }
@@ -162,4 +199,75 @@ fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug this prevents: a pre-datasets `session.json` full of bare task
+    /// ids would read as "nothing attempted", silently wiping a user's history
+    /// the first time they opened the browser after upgrading.
+    #[test]
+    fn a_pre_datasets_session_keeps_its_history() {
+        let raw = r#"{
+            "started_at": 1,
+            "problems": {"two-sum": {"state": "passed", "passed_cases": 3, "total_cases": 3,
+                                     "updated_at": 2}},
+            "queue": ["two-sum", "3sum"],
+            "reveals": {"two-sum": 1}
+        }"#;
+        let mut session: Session = serde_json::from_str(raw).unwrap();
+        session.migrate();
+
+        assert!(session.progress("two-sum").is_none(), "bare keys are rewritten");
+        let progress = session.progress("leetcode/two-sum").expect("history survives");
+        assert_eq!(progress.state, ProblemState::Passed);
+        assert_eq!(session.queue, vec!["leetcode/two-sum", "leetcode/3sum"]);
+        assert_eq!(session.reveal_count("leetcode/two-sum"), 1);
+    }
+
+    #[test]
+    fn already_qualified_keys_are_left_alone_and_stay_per_dataset() {
+        let raw = r#"{
+            "started_at": 1,
+            "problems": {
+                "kodcode/two-sum": {"state": "failed", "passed_cases": 1, "total_cases": 3,
+                                    "updated_at": 2}
+            },
+            "queue": ["kodcode/two-sum"],
+            "reveals": {}
+        }"#;
+        let mut session: Session = serde_json::from_str(raw).unwrap();
+        session.migrate();
+
+        assert_eq!(
+            session.progress("kodcode/two-sum").map(|p| p.state),
+            Some(ProblemState::Failed)
+        );
+        // The same slug in the LeetCode corpus is untouched by that failure.
+        assert!(session.progress("leetcode/two-sum").is_none());
+        assert_eq!(session.queue, vec!["kodcode/two-sum"]);
+    }
+
+    /// Migration must be idempotent — it runs on every load.
+    #[test]
+    fn migrating_twice_changes_nothing() {
+        let mut session = Session::new();
+        session.problems.insert(
+            "two-sum".into(),
+            ProblemProgress {
+                state: ProblemState::Loaded,
+                passed_cases: 0,
+                total_cases: 0,
+                updated_at: 0,
+            },
+        );
+        session.migrate();
+        let once = session.problems.keys().cloned().collect::<Vec<_>>();
+        session.migrate();
+        let twice = session.problems.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(once, twice);
+        assert_eq!(once, vec!["leetcode/two-sum"]);
+    }
 }
