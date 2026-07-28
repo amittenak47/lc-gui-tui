@@ -3134,6 +3134,49 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 13px;
 }
 
+.lc-test-more {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 70%, var(--bg));
+  overflow: hidden;
+}
+
+.lc-test-more > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  user-select: none;
+}
+
+.lc-test-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.lc-test-more > summary::before {
+  content: "▸";
+  margin-right: 6px;
+  font-size: 11px;
+}
+
+.lc-test-more[open] > summary::before {
+  content: "▾";
+}
+
+.lc-test-more-body {
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--line);
+  max-height: min(40vh, 320px);
+  overflow: auto;
+}
+
+.lc-test-more-body .lc-case-fail:first-child {
+  margin-top: 8px;
+}
+
 [data-theme="dark"] .lc-warning.lc-banner {
   background: #3b1f1f;
   border-bottom-color: #5c2a2a;
