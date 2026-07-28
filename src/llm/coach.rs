@@ -147,14 +147,13 @@ impl BoardSnapshot {
             );
         }
         if let Some(structure) = &self.scene_structure {
-            let rendered = serde_json::to_string(structure).unwrap_or_default();
-            if rendered.len() > 2 {
+            let section = render_structure_by_region(structure);
+            if !section.is_empty() {
                 let _ = writeln!(
                     out,
-                    "\nCanvas layout (shapes and their positions; each object has a short stable \
-                     `id` you may cite):\n\n\
-                     ```json\n{}\n```",
-                    clip(&rendered, MAX_STRUCTURE)
+                    "\nCanvas layout by template box (each dashed region is labeled; objects have \
+                     a short stable `id` you may cite):\n\n{}",
+                    clip(&section, MAX_STRUCTURE)
                 );
             }
         }
@@ -182,6 +181,83 @@ impl BoardSnapshot {
             let _ = writeln!(out, "\nA PNG of the board is attached to this message.");
         }
     }
+}
+
+/// Render scene_structure grouped by template `region` so the model reads each
+/// dashed box (Approach, Complexity, …) as its own layout, not one flat list.
+fn render_structure_by_region(structure: &serde_json::Value) -> String {
+    let Some(arr) = structure.as_array() else {
+        let rendered = serde_json::to_string(structure).unwrap_or_default();
+        if rendered.len() <= 2 {
+            return String::new();
+        }
+        return format!("```json\n{rendered}\n```");
+    };
+    if arr.is_empty() {
+        return String::new();
+    }
+
+    let order = [
+        "constraints",
+        "code",
+        "approach",
+        "complexity",
+        "walkthrough",
+        "agent",
+    ];
+    let labels: [(&str, &str); 6] = [
+        ("constraints", "Problem"),
+        ("code", "Code"),
+        ("approach", "Approach"),
+        ("complexity", "Complexity"),
+        ("walkthrough", "Walkthrough"),
+        ("agent", "Coach lane"),
+    ];
+
+    let mut buckets: std::collections::BTreeMap<String, Vec<&serde_json::Value>> =
+        std::collections::BTreeMap::new();
+    let mut other: Vec<&serde_json::Value> = Vec::new();
+    for el in arr {
+        match el.get("region").and_then(|r| r.as_str()) {
+            Some(region) => buckets.entry(region.to_string()).or_default().push(el),
+            None => other.push(el),
+        }
+    }
+
+    let mut out = String::new();
+    for key in order {
+        let Some(items) = buckets.remove(key) else {
+            continue;
+        };
+        let label = labels
+            .iter()
+            .find(|(id, _)| *id == key)
+            .map(|(_, l)| *l)
+            .unwrap_or(key);
+        let _ = writeln!(out, "### {label} (`{key}`)\n");
+        let _ = writeln!(
+            out,
+            "```json\n{}\n```\n",
+            serde_json::to_string(&items).unwrap_or_else(|_| "[]".into())
+        );
+    }
+    for (key, items) in buckets {
+        let _ = writeln!(out, "### `{key}`\n");
+        let _ = writeln!(
+            out,
+            "```json\n{}\n```\n",
+            serde_json::to_string(&items).unwrap_or_else(|_| "[]".into())
+        );
+    }
+    if !other.is_empty() {
+        let _ = writeln!(out, "### Outside a template box\n");
+        let _ = writeln!(
+            out,
+            "```json\n{}\n```\n",
+            serde_json::to_string(&other).unwrap_or_else(|_| "[]".into())
+        );
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +292,15 @@ problem-specific opening hints in \"gaps\": which constraint actually bites, a s
 walking by hand, a data structure that fits the access pattern, an invariant worth chasing. \
 Specific to THIS problem — no generic encouragement — and use \"unclear\" as the verdict while \
 there is not yet an approach to judge.\n\
+- Keep fields distinct: \"understood_approach\" is ONE short sentence naming their intended idea \
+(or that they are still exploring) — do not list missing pieces there. \"gaps\" lists only concrete \
+missing pieces or next building blocks — do not restate understood_approach. \
+\"socratic_question\" is the most specific and actionable field: a direct next move or probe \
+(which cell, which case, which invariant) that is more detailed than understood_approach.\n\
+- Always score \"rating\" with integers 1–5 for correctness, complexity, and clarity. Use 1–2 when \
+the board is sparse or the approach is unclear, 3 when partially formed, 4–5 when solid. Never \
+return all zeros if the student wrote, asked, or sketched anything; reserve 0 only for a truly \
+blank board.\n\
 - Never write the corrected algorithm or working code. End with one Socratic question that leads \
 them to the flaw themselves.\n\
 - Reply with a single JSON object and nothing else — no prose, no markdown fence.";
@@ -236,9 +321,34 @@ pub enum Verdict {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Rating {
+    #[serde(deserialize_with = "deserialize_score")]
     pub correctness: u8,
+    #[serde(deserialize_with = "deserialize_score")]
     pub complexity: u8,
+    #[serde(deserialize_with = "deserialize_score")]
     pub clarity: u8,
+}
+
+/// Local models often emit `2.0` or `"3"` instead of an integer.
+fn deserialize_score<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let n = match value {
+        serde_json::Value::Number(num) => num
+            .as_u64()
+            .or_else(|| num.as_f64().map(|f| f.round() as u64))
+            .unwrap_or(0),
+        serde_json::Value::String(s) => s
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|f| f.round() as u64)
+            .unwrap_or(0),
+        _ => 0,
+    };
+    Ok(n.min(u64::from(u8::MAX)) as u8)
 }
 
 impl Rating {
@@ -302,15 +412,16 @@ pub fn build_review_prompt(
          Return exactly this JSON shape:\n\n\
          ```json\n\
          {{\n  \
-           \"understood_approach\": \"what I think you are doing, in your own words\",\n  \
+           \"understood_approach\": \"one short sentence naming their intended idea\",\n  \
            \"verdict\": \"on_track | subtly_wrong | wrong_track | unclear\",\n  \
-           \"rating\": {{\"correctness\": 0-5, \"complexity\": 0-5, \"clarity\": 0-5}},\n  \
+           \"rating\": {{\"correctness\": 1-5, \"complexity\": 1-5, \"clarity\": 1-5}},\n  \
            \"strengths\": [\"...\"],\n  \
-           \"gaps\": [\"...\"],\n  \
+           \"gaps\": [\"concrete missing pieces only — do not repeat understood_approach\"],\n  \
            \"counterexample\": {{\"case_index\": <0-based index into the numbered cases above>, \
               \"why_your_approach_fails\": \"step through THAT case's own input, using its actual \
 values, and show where their approach diverges from its expected output\"}},\n  \
-           \"socratic_question\": \"one question that makes them find the flaw\",\n  \
+           \"socratic_question\": \"a specific, actionable next step or probe — more detailed than \
+understood_approach\",\n  \
            \"offer_bridge\": true\n\
          }}\n\
          ```\n\n\
@@ -1108,6 +1219,18 @@ mod tests {
             .unwrap();
         assert_eq!(review.verdict, Verdict::Unclear);
         assert_eq!(review.rating.correctness, 5, "ratings are clamped to 0-5");
+    }
+
+    #[test]
+    fn ratings_accept_floats_and_numeric_strings() {
+        let review = parse_review(
+            r#"{"verdict":"unclear","rating":{"correctness":2.0,"complexity":"3","clarity":1}}"#,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(review.rating.correctness, 2);
+        assert_eq!(review.rating.complexity, 3);
+        assert_eq!(review.rating.clarity, 1);
     }
 
     #[test]

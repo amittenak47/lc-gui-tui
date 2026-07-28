@@ -13,6 +13,8 @@ import type { InkStroke } from "./capture";
 
 export const STROKE_WIDTH_MIN = 1;
 export const STROKE_WIDTH_MAX = 32;
+/** Eraser slider goes 3× farther so the brush can clear large areas. */
+export const ERASER_WIDTH_MAX = 96;
 export const STROKE_WIDTH_DEFAULT = 2;
 
 export interface ScenePoint {
@@ -145,9 +147,7 @@ export function paintRasterInk(
 
   for (const op of ops) {
     if (op.kind === "draw") drawStroke(ctx, op);
-  }
-  for (const op of ops) {
-    if (op.kind === "erase") eraseStamps(ctx, op);
+    else eraseStamps(ctx, op);
   }
 
   if (liveOp) {
@@ -221,11 +221,11 @@ export function paintInkAtScale(
   scale: number,
 ): void {
   ctx.setTransform(scale, 0, 0, scale, -origin.x * scale, -origin.y * scale);
+  // Chronological order: a pen stroke drawn *after* an erase must survive.
+  // Applying every erase after every draw punched holes through later ink.
   for (const op of ops) {
     if (op.kind === "draw") drawStroke(ctx, op);
-  }
-  for (const op of ops) {
-    if (op.kind === "erase") eraseStamps(ctx, op);
+    else eraseStamps(ctx, op);
   }
   ctx.globalCompositeOperation = "source-over";
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -288,11 +288,10 @@ const RECOGNITION_MIN_SPACING = 1.5;
  *
  * Erased pixels are dropped, and a stroke the eraser cut through comes back as
  * two strokes — feeding ML Kit ink the student has already rubbed out is how
- * `recognized_text` ends up describing a discarded first attempt. Erases apply
- * across all draws regardless of order, matching {@link paintRasterInk}.
+ * `recognized_text` ends up describing a discarded first attempt. Only erases
+ * that happen *after* a draw remove its points, matching {@link paintRasterInk}.
  */
 export function inkStrokesFromOps(ops: readonly InkOp[]): InkStroke[] {
-  const isErased = eraseLookup(ops);
   const strokes: InkStroke[] = [];
   let run: Array<{ x: number; y: number }> = [];
 
@@ -301,8 +300,10 @@ export function inkStrokesFromOps(ops: readonly InkOp[]): InkStroke[] {
     run = [];
   };
 
-  for (const op of ops) {
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
     if (op.kind !== "draw") continue;
+    const isErased = eraseLookup(ops.slice(i + 1));
     for (const point of op.points) {
       if (isErased(point)) {
         endRun();

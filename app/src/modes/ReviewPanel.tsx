@@ -21,18 +21,30 @@ export interface ReviewPanelProps {
   /** Opens the reveal confirmation. Only rendered when the coach offers it. */
   onRequestBridge: () => void;
   onDismiss: () => void;
+  /** Tighter chrome when embedded inside a chat turn. */
+  compact?: boolean;
 }
 
-export function ReviewPanel({ review, onRequestBridge, onDismiss }: ReviewPanelProps) {
+export function ReviewPanel({
+  review,
+  onRequestBridge,
+  onDismiss,
+  compact = false,
+}: ReviewPanelProps) {
   return (
-    <section className="lc-panel" aria-label="Review">
+    <section
+      className={compact ? "lc-panel lc-panel-compact" : "lc-panel"}
+      aria-label="Review"
+    >
       <header className="lc-panel-head">
         <span className={`lc-verdict lc-verdict-${review.verdict}`}>
           {VERDICT_LABEL[review.verdict] ?? review.verdict}
         </span>
-        <button type="button" className="lc-link" onClick={onDismiss}>
-          close
-        </button>
+        {!compact && (
+          <button type="button" className="lc-link" onClick={onDismiss}>
+            close
+          </button>
+        )}
       </header>
 
       <Ratings rating={review.rating} />
@@ -40,7 +52,7 @@ export function ReviewPanel({ review, onRequestBridge, onDismiss }: ReviewPanelP
       {review.understood_approach && (
         <>
           <h3>What I think you're doing</h3>
-          <p>{review.understood_approach}</p>
+          <p className="lc-review-summary">{review.understood_approach}</p>
         </>
       )}
 
@@ -93,38 +105,56 @@ export function ReviewPanel({ review, onRequestBridge, onDismiss }: ReviewPanelP
       )}
 
       {review.socratic_question && (
-        <blockquote className="lc-question">{review.socratic_question}</blockquote>
+        <div className="lc-review-action">
+          <h3>Try this</h3>
+          <p>{review.socratic_question}</p>
+        </div>
       )}
 
-      <footer className="lc-panel-foot">
-        <span className="lc-muted">{review.provider}</span>
-        {review.offer_bridge && (
-          <button type="button" className="lc-secondary" onClick={onRequestBridge}>
-            Show me the bridge…
+      {review.offer_bridge && (
+        <footer className="lc-panel-foot">
+          <button type="button" className="lc-hint-btn" onClick={onRequestBridge}>
+            Hint
           </button>
-        )}
-      </footer>
+        </footer>
+      )}
     </section>
   );
 }
 
 function Ratings({ rating }: { rating: ReviewResponse["rating"] }) {
   const entries: Array<[string, number]> = [
-    ["correctness", rating.correctness],
-    ["complexity", rating.complexity],
-    ["clarity", rating.clarity],
+    ["correctness", clampScore(rating.correctness)],
+    ["complexity", clampScore(rating.complexity)],
+    ["clarity", clampScore(rating.clarity)],
   ];
+  const scored = entries.some(([, score]) => score > 0);
+
+  if (!scored) {
+    return <p className="lc-ratings-empty lc-muted">Not enough on the board to score yet</p>;
+  }
+
   return (
     <ul className="lc-ratings">
       {entries.map(([label, score]) => (
         <li key={label}>
           <span className="lc-rating-label">{label}</span>
           <span className="lc-rating-score" aria-label={`${score} out of 5`}>
-            {"●".repeat(Math.max(0, score))}
-            {"○".repeat(Math.max(0, 5 - score))}
+            {Array.from({ length: 5 }, (_, i) => (
+              <span
+                key={i}
+                className={i < score ? "lc-rating-pip lc-rating-pip-on" : "lc-rating-pip"}
+                aria-hidden
+              />
+            ))}
           </span>
         </li>
       ))}
     </ul>
   );
+}
+
+function clampScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(5, Math.round(value)));
 }

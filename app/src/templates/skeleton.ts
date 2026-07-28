@@ -35,6 +35,8 @@ export interface Skeleton {
   verticalAlign?: "top" | "middle" | "bottom";
   points?: Array<[number, number]>;
   locked?: boolean;
+  /** Radians — template frames stay at 0. */
+  angle?: number;
   customData?: SkeletonMeta | null;
   label?: { text: string; fontSize?: number; strokeColor?: string };
 }

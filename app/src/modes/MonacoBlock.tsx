@@ -88,24 +88,6 @@ function ensureMonacoTheme(themeId: string): string {
   return name;
 }
 
-/** Fold helper classes (ListNode, TreeNode, …) so the Solution method stays in focus. */
-function foldBoilerplate(editor: monaco.editor.IStandaloneCodeEditor, source: string) {
-  const lines = source.split("\n");
-  const foldStarts: number[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (/^class\s+(?!Solution\b)\w+/.test(lines[i])) {
-      foldStarts.push(i + 1);
-    }
-  }
-  if (foldStarts.length === 0) return;
-  window.setTimeout(() => {
-    for (const line of foldStarts) {
-      editor.setPosition({ lineNumber: line, column: 1 });
-      void editor.getAction("editor.fold")?.run();
-    }
-  }, 80);
-}
-
 export interface MonacoBlockProps {
   value: string;
   language: string;
@@ -131,7 +113,6 @@ export default function MonacoBlock({
 }: MonacoBlockProps) {
   const monacoTheme = useMemo(() => ensureMonacoTheme(themeId), [themeId]);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const foldedForRef = useRef<string | null>(null);
   const fontSize = codeFontPx(fontSizePref, zoom);
 
   useEffect(() => {
@@ -174,10 +155,6 @@ export default function MonacoBlock({
         });
         onReady();
         editor.layout();
-        if (foldedForRef.current !== value) {
-          foldedForRef.current = value;
-          foldBoilerplate(editor, value);
-        }
       }}
       onChange={(next) => onChange(next ?? "")}
       options={{

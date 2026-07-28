@@ -8,7 +8,9 @@
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
+import type { ReviewResponse } from "../api/types";
 import { Tip } from "../components/Tip";
+import { ReviewPanel } from "./ReviewPanel";
 
 export type CoachMode = "review" | "ambient";
 
@@ -19,11 +21,21 @@ export interface CoachSendFlags {
   reviewBoard: boolean;
 }
 
+export interface CoachAttachment {
+  label: string;
+  /** Raw base64 PNG (no data: prefix). */
+  png: string;
+}
+
 export interface CoachChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
   at: number;
+  /** Structured review — rendered once as a card, not duplicated as prose. */
+  review?: ReviewResponse;
+  /** Layout thumbnails when Review board was attached. */
+  attachments?: CoachAttachment[];
 }
 
 export interface AgentSidePanelProps {
@@ -32,9 +44,12 @@ export interface AgentSidePanelProps {
   onModeChange: (mode: CoachMode) => void;
   busy: boolean;
   thinking?: boolean;
+  /** Phased status while the local model works (replaces a bare "Thinking…"). */
+  thinkingPhase?: string | null;
   messages: CoachChatMessage[];
   onSend: (text: string, flags: CoachSendFlags) => void;
-  /** Structured cards (review, tests, …) rendered in the thread. */
+  onRequestBridge?: () => void;
+  /** Structured cards (tests, timelines, …) rendered in the thread. */
   children?: ReactNode;
 }
 
@@ -44,20 +59,33 @@ export function AgentSidePanel({
   onModeChange,
   busy,
   thinking = false,
+  thinkingPhase = null,
   messages,
   onSend,
+  onRequestBridge,
   children,
 }: AgentSidePanelProps) {
   const [draft, setDraft] = useState("");
   const [draw, setDraw] = useState(false);
   const [reviewBoard, setReviewBoard] = useState(false);
+  const [lightbox, setLightbox] = useState<CoachAttachment | null>(null);
+  const [lightboxClosing, setLightboxClosing] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const node = listRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
-  }, [messages.length, thinking, children, open]);
+  }, [messages.length, thinking, thinkingPhase, children, open]);
+
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeLightbox();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox]);
 
   if (!open) return null;
 
@@ -68,6 +96,17 @@ export function AgentSidePanel({
     if (!canSend) return;
     onSend(draft.trim(), { draw, reviewBoard });
     setDraft("");
+  };
+
+  const closeLightbox = () => {
+    if (!lightbox || lightboxClosing) return;
+    setLightboxClosing(true);
+  };
+
+  const onLightboxAnimEnd = () => {
+    if (!lightboxClosing) return;
+    setLightbox(null);
+    setLightboxClosing(false);
   };
 
   return (
@@ -91,10 +130,60 @@ export function AgentSidePanel({
                     : "lc-coach-turn lc-coach-turn-assistant"
               }
             >
-              <div className="lc-coach-turn-role">
+              <div
+                className={
+                  message.role === "assistant" && message.review?.provider
+                    ? "lc-coach-turn-role lc-tip-target"
+                    : "lc-coach-turn-role"
+                }
+                data-tip={
+                  message.role === "assistant" && message.review?.provider
+                    ? message.review.provider
+                    : undefined
+                }
+                data-tip-placement="right"
+              >
                 {message.role === "user" ? "You" : message.role === "system" ? "System" : "Coach"}
               </div>
-              <div className="lc-coach-turn-body">{message.content}</div>
+              {message.content ? (
+                <div className="lc-coach-turn-body">{message.content}</div>
+              ) : null}
+              {message.attachments && message.attachments.length > 0 && (
+                <div className="lc-coach-attachments" aria-label="Attached layouts">
+                  {message.attachments.map((att) => (
+                    <figure key={att.label} className="lc-coach-thumb">
+                      <button
+                        type="button"
+                        className="lc-coach-thumb-btn"
+                        onClick={() => {
+                          setLightboxClosing(false);
+                          setLightbox(att);
+                        }}
+                        aria-label={`Open ${att.label}`}
+                      >
+                        <img
+                          src={`data:image/png;base64,${att.png}`}
+                          alt={att.label}
+                          title={att.label}
+                        />
+                      </button>
+                      <figcaption>{att.label}</figcaption>
+                    </figure>
+                  ))}
+                </div>
+              )}
+              {message.review && (
+                <div className="lc-coach-review-embed">
+                  <ReviewPanel
+                    review={message.review}
+                    onRequestBridge={() => onRequestBridge?.()}
+                    onDismiss={() => {
+                      /* kept in history — dismiss is a no-op; card stays for the turn */
+                    }}
+                    compact
+                  />
+                </div>
+              )}
             </div>
           ))}
           {children}
@@ -103,7 +192,7 @@ export function AgentSidePanel({
               <div className="lc-coach-turn-role">Coach</div>
               <div className="lc-coach-turn-body">
                 <span className="lc-coach-spinner" aria-hidden />
-                Thinking…
+                {thinkingPhase?.trim() || "Thinking…"}
               </div>
             </div>
           )}
@@ -178,6 +267,33 @@ export function AgentSidePanel({
           </div>
         </form>
       </div>
+
+      {lightbox && (
+        <div
+          className={
+            lightboxClosing ? "lc-lightbox lc-lightbox-closing" : "lc-lightbox"
+          }
+          role="dialog"
+          aria-modal="true"
+          aria-label={lightbox.label}
+          onClick={closeLightbox}
+          onAnimationEnd={(event) => {
+            if (event.target !== event.currentTarget) return;
+            onLightboxAnimEnd();
+          }}
+        >
+          <figure
+            className="lc-lightbox-frame"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <img
+              src={`data:image/png;base64,${lightbox.png}`}
+              alt={lightbox.label}
+            />
+            <figcaption>{lightbox.label}</figcaption>
+          </figure>
+        </div>
+      )}
     </aside>
   );
 }

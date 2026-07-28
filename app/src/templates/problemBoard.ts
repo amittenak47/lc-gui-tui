@@ -119,6 +119,7 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       roughness: 0,
       opacity: 100,
       locked: false,
+      angle: 0,
       customData: { lcRegion: region.id, lcRegionFrame: true },
     });
 
