@@ -204,3 +204,55 @@ describe("review wire size", () => {
 function snapshotOps(snapshot: { board: { board_ops?: unknown } }): unknown {
   return snapshot.board.board_ops;
 }
+
+describe("code mode when the skeleton moves", () => {
+  const elements = busyBoard(4);
+  const STARTER_SKELETON = "sha256:starter";
+
+  const review = (parts: {
+    pseudocode: string;
+    skeletonHash: string;
+    lastSkeletonHash?: string;
+    lastPseudocodeHash?: string;
+  }) =>
+    buildSnapshot(board({ elements }), new NoopRecognizer(), {
+      pseudocode: parts.pseudocode,
+      skeletonHash: parts.skeletonHash,
+      lastSkeletonHash: parts.lastSkeletonHash,
+      lastPseudocodeHash: parts.lastPseudocodeHash,
+      turnIndex: 1,
+      structureBaseline: structureBaselineFromBoard(elements),
+    });
+
+  it("sends a delta while the skeleton is the one the server acked", async () => {
+    const snapshot = await review({
+      pseudocode: `${SOLUTION}\n        # one more line`,
+      skeletonHash: STARTER_SKELETON,
+      lastSkeletonHash: STARTER_SKELETON,
+    });
+    expect(snapshot.board.code_mode).toBe("delta");
+  });
+
+  it("falls back to the full file once an import is added", async () => {
+    // The server refuses a delta it cannot anchor, so sending one here would
+    // cost the coach the code entirely.
+    const snapshot = await review({
+      pseudocode: `from collections import defaultdict\n${SOLUTION}`,
+      skeletonHash: "sha256:now-with-defaultdict",
+      lastSkeletonHash: STARTER_SKELETON,
+    });
+    expect(snapshot.board.code_mode).toBe("full");
+    expect(snapshot.board.pseudocode).toContain("defaultdict");
+    expect(snapshot.board.pseudocode_delta).toBeUndefined();
+  });
+
+  it("still reports unchanged when nothing was touched at all", async () => {
+    const snapshot = await review({
+      pseudocode: SOLUTION,
+      skeletonHash: STARTER_SKELETON,
+      lastSkeletonHash: STARTER_SKELETON,
+      lastPseudocodeHash: await sha256Hex(SOLUTION.trim()),
+    });
+    expect(snapshot.board.code_mode).toBe("unchanged");
+  });
+});
