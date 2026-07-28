@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Android 9+ blocks cleartext HTTP by default, and `lc serve --lan` speaks plain
+  Android 9+ blocks cleartext HTTP by default, and `lc serve` in LAN mode speaks plain
   HTTP on the local network. This permits cleartext to private address ranges
   only — the daemon is never on the public internet — while leaving the global
   default (HTTPS required) intact for everything else.

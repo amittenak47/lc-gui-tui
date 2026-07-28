@@ -28,6 +28,11 @@ export interface RasterInkHandle {
   /** True once anything has been painted or erased on this layer. */
   hasInk(): boolean;
   repaint(): void;
+  /**
+   * Committed ops, for the recognizer and the PNG export. The in-progress op is
+   * left out — the pen is still down, so there is no stroke to read yet.
+   */
+  getOps(): InkOp[];
 }
 
 export interface RasterInkLayerProps {
@@ -153,6 +158,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           // An erase-only history still counts as "they drew something": the
           // pixels are gone but the board is not the untouched one we seeded.
           return opsRef.current.length > 0;
+        },
+        getOps() {
+          return [...opsRef.current];
         },
         repaint,
       }),

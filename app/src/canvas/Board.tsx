@@ -10,7 +10,14 @@
  * everything that changes what the pen does lives in one strip beside the pen.
  */
 
-import { CaptureUpdateAction, Excalidraw, convertToExcalidrawElements, exportToBlob } from "@excalidraw/excalidraw";
+import {
+  CaptureUpdateAction,
+  Excalidraw,
+  convertToExcalidrawElements,
+  exportToBlob,
+  exportToCanvas,
+  getCommonBounds,
+} from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import {
   forwardRef,
@@ -67,7 +74,18 @@ import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
-import { STROKE_WIDTH_DEFAULT, type ViewportTransform } from "./rasterInk";
+import {
+  STROKE_WIDTH_DEFAULT,
+  clampExportScale,
+  exportScaleFrom,
+  inkOpsBounds,
+  inkStrokesFromOps,
+  paintInkAtScale,
+  unionSceneBounds,
+  type InkOp,
+  type SceneBounds,
+  type ViewportTransform,
+} from "./rasterInk";
 
 /**
  * The slice of Excalidraw's imperative API this file uses, declared locally so a
@@ -93,6 +111,98 @@ interface ExcalidrawApi {
     callback: (scrollX: number, scrollY: number, zoom: { value: number }) => void,
   ): () => void;
   history?: { clear(): void };
+}
+
+/** Margin around the composite, so ink at the edge isn't flush with it. */
+const EXPORT_PADDING = 10;
+
+/**
+ * Board PNG with the raster pen ink composited in.
+ *
+ * `exportToBlob` only knows about scene elements, so a pen-only board exports
+ * blank. The fix is to repaint the ink at export scale — never to blit the live
+ * overlay, which is viewport-sized and shows only what happens to be on screen.
+ *
+ * Anchoring the two layers needs to know what scene box the exported image
+ * covers. Asking for zero padding pins that to `getCommonBounds` — the same
+ * public helper Excalidraw sizes its own export from — so no assumption about
+ * its default margin is baked in here. Ink drawn outside the elements' box
+ * extends the canvas rather than being cropped.
+ */
+async function exportBoardBlob(api: ExcalidrawApi, ops: readonly InkOp[]): Promise<Blob> {
+  const elements = api.getSceneElements();
+  const appState = api.getAppState();
+  const files = api.getFiles();
+  const plain = () =>
+    exportToBlob({
+      elements: elements as never,
+      appState: appState as never,
+      files: files as never,
+      mimeType: "image/png",
+      quality: 0.8,
+    });
+
+  const inkBounds = inkOpsBounds(ops);
+  if (!inkBounds || elements.length === 0) return plain();
+
+  const board = await exportToCanvas({
+    elements: elements as never,
+    appState: appState as never,
+    files: files as never,
+    exportPadding: 0,
+  });
+  const [minX, minY, maxX, maxY] = getCommonBounds(elements as never);
+  const boardBounds: SceneBounds = { minX, minY, maxX, maxY };
+  // Also the check that the export really did land on those bounds: an
+  // unhonoured padding skews the two axes apart on any non-square board.
+  const scale = exportScaleFrom(board.width, board.height, boardBounds);
+  if (scale === null) return plain();
+
+  const content = unionSceneBounds(boardBounds, inkBounds)!;
+  const bounds: SceneBounds = {
+    minX: content.minX - EXPORT_PADDING,
+    minY: content.minY - EXPORT_PADDING,
+    maxX: content.maxX + EXPORT_PADDING,
+    maxY: content.maxY + EXPORT_PADDING,
+  };
+  const drawScale = clampExportScale(scale, bounds);
+  const width = Math.max(1, Math.round((bounds.maxX - bounds.minX) * drawScale));
+  const height = Math.max(1, Math.round((bounds.maxY - bounds.minY) * drawScale));
+
+  // Ink gets its own canvas: erase ops composite with `destination-out` and
+  // would otherwise cut holes in the board underneath instead of in the ink.
+  const inkCanvas = document.createElement("canvas");
+  inkCanvas.width = width;
+  inkCanvas.height = height;
+  const inkCtx = inkCanvas.getContext("2d");
+  if (!inkCtx) return plain();
+  paintInkAtScale(inkCtx, ops, { x: bounds.minX, y: bounds.minY }, drawScale);
+
+  const out = document.createElement("canvas");
+  out.width = width;
+  out.height = height;
+  const ctx = out.getContext("2d");
+  if (!ctx) return plain();
+  const background = appState.viewBackgroundColor;
+  if (appState.exportBackground !== false && typeof background === "string") {
+    // The board export only covers its own box; anything the ink added around
+    // it would otherwise come out transparent.
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, width, height);
+  }
+  ctx.drawImage(
+    board,
+    (boardBounds.minX - bounds.minX) * drawScale,
+    (boardBounds.minY - bounds.minY) * drawScale,
+    (boardBounds.maxX - boardBounds.minX) * drawScale,
+    (boardBounds.maxY - boardBounds.minY) * drawScale,
+  );
+  ctx.drawImage(inkCanvas, 0, 0);
+
+  const composited = await new Promise<Blob | null>((resolve) =>
+    out.toBlob(resolve, "image/png", 0.8),
+  );
+  return composited ?? (await plain());
 }
 
 const ZOOM_MIN = 0.15;
@@ -1071,17 +1181,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (!api) return "";
         // Downscaled inside captureImage — a full-size export of this board is
         // tens of megabytes, which is what the daemon refused to buffer.
-        return captureImage(async () =>
-          exportToBlob({
-            elements: api.getSceneElements() as never,
-            appState: api.getAppState() as never,
-            files: api.getFiles() as never,
-            mimeType: "image/png",
-            quality: 0.8,
-          }),
-        );
+        return captureImage(() => exportBoardBlob(api, rasterInkRef.current?.getOps() ?? []));
       },
       getStrokes: () => captureStrokes(elements()),
+      getInkStrokes: () => inkStrokesFromOps(rasterInkRef.current?.getOps() ?? []),
       setTool,
       undo: () => {
         undoBoard();

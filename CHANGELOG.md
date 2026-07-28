@@ -72,6 +72,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and the attached image, and a sparse board gets concrete opening hints instead.
 - **Sluggish eraser rendering** — the brush ring updated React state on every
   `pointermove`, re-rendering the board at the pen's sample rate.
+- **Pen ink the coach could not see** — the pen draws on the bitmap ink layer,
+  not Excalidraw `freedraw`, so `captureStrokes` never saw it and a pen-only
+  board submitted as blank. `buildSnapshot` now merges both stroke sources; ink
+  the eraser removed is dropped, and a stroke the eraser cut through is split in
+  two. Raster ink is repainted into the exported PNG at export scale (with a
+  fallback to the ink-less export if bounds drift). Submit no longer rejects a
+  legible pen-only board when a vision model will receive the picture.
 
 ### Added
 

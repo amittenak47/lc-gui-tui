@@ -1,7 +1,15 @@
 /**
  * Scene-space raster ink — draw and erase on a canvas bitmap instead of
  * Excalidraw freedraw vectors. Erasing uses `destination-out` (true pixel erase).
+ *
+ * Because the pen bypasses Excalidraw entirely, neither of the coach's two ways
+ * of reading the board sees it for free: `captureStrokes` only walks `freedraw`
+ * elements and `exportToBlob` only draws scene elements. {@link inkStrokesFromOps}
+ * and {@link paintInkAtScale} are the two bridges back — one to the ink
+ * recognizer, one to the exported PNG.
  */
+
+import type { InkStroke } from "./capture";
 
 export const STROKE_WIDTH_MIN = 1;
 export const STROKE_WIDTH_MAX = 32;
@@ -148,6 +156,208 @@ export function paintRasterInk(
   }
 
   ctx.globalCompositeOperation = "source-over";
+}
+
+/** Axis-aligned box in scene coordinates. */
+export interface SceneBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+export function unionSceneBounds(
+  a: SceneBounds | null,
+  b: SceneBounds | null,
+): SceneBounds | null {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    minX: Math.min(a.minX, b.minX),
+    minY: Math.min(a.minY, b.minY),
+    maxX: Math.max(a.maxX, b.maxX),
+    maxY: Math.max(a.maxY, b.maxY),
+  };
+}
+
+/**
+ * Where the drawn ink sits, padded by the widest line it could have been
+ * stroked with. Null when nothing has been drawn — the caller's cue that the
+ * plain Excalidraw export is already complete.
+ *
+ * Erase ops do not shrink this: a stroke that was drawn and then rubbed out
+ * still costs its area in the exported PNG. That is a few empty pixels, not a
+ * correctness problem, and it keeps this cheap enough to call on every submit.
+ */
+export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
+  let bounds: SceneBounds | null = null;
+  for (const op of ops) {
+    if (op.kind !== "draw") continue;
+    const half = inkLineWidth(op.baseWidth, 1, op.pressureSensitive) / 2;
+    for (const point of op.points) {
+      bounds = unionSceneBounds(bounds, {
+        minX: point.x - half,
+        minY: point.y - half,
+        maxX: point.x + half,
+        maxY: point.y + half,
+      });
+    }
+  }
+  return bounds;
+}
+
+/**
+ * Repaint committed ops for an export of `scale` pixels per scene unit, with
+ * `origin` at the canvas top-left.
+ *
+ * This must run on a canvas of its own: erase ops composite with
+ * `destination-out`, so painting straight onto an exported board image would
+ * punch holes through the board rather than through the ink.
+ */
+export function paintInkAtScale(
+  ctx: CanvasRenderingContext2D,
+  ops: readonly InkOp[],
+  origin: { x: number; y: number },
+  scale: number,
+): void {
+  ctx.setTransform(scale, 0, 0, scale, -origin.x * scale, -origin.y * scale);
+  for (const op of ops) {
+    if (op.kind === "draw") drawStroke(ctx, op);
+  }
+  for (const op of ops) {
+    if (op.kind === "erase") eraseStamps(ctx, op);
+  }
+  ctx.globalCompositeOperation = "source-over";
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+/**
+ * The scale Excalidraw actually rendered an export at, read back from the
+ * canvas it returned rather than assumed from `appState.exportScale`.
+ *
+ * Null when the two axes disagree, which means the export no longer maps onto
+ * `bounds` the way this code expects. Callers fall back to the ink-less export:
+ * a board whose pen strokes landed in the wrong place would mislead the coach
+ * more than a board with no pen strokes at all.
+ */
+export function exportScaleFrom(
+  canvasWidth: number,
+  canvasHeight: number,
+  bounds: SceneBounds,
+): number | null {
+  const width = bounds.maxX - bounds.minX;
+  const height = bounds.maxY - bounds.minY;
+  if (width <= 0 || height <= 0 || canvasWidth <= 0 || canvasHeight <= 0) return null;
+  const scaleX = canvasWidth / width;
+  const scaleY = canvasHeight / height;
+  // Canvas dimensions are whole pixels, so allow a little slack on small boards.
+  if (Math.abs(scaleX - scaleY) > Math.max(scaleX * 0.02, 0.01)) return null;
+  return scaleX;
+}
+
+/** Longest edge, in pixels, of a composited board export. */
+export const MAX_EXPORT_EDGE = 4096;
+
+/**
+ * Shrink an export that a stray far-away stroke would otherwise blow up.
+ *
+ * Ink extends the exported box, and a dot left behind after panning across the
+ * scene can put the two ends thousands of units apart. Browsers refuse very
+ * large canvases outright, and the PNG still has to fit the daemon's body limit.
+ */
+export function clampExportScale(
+  scale: number,
+  bounds: SceneBounds,
+  maxEdge = MAX_EXPORT_EDGE,
+): number {
+  const longEdge = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * scale;
+  return longEdge > maxEdge ? (scale * maxEdge) / longEdge : scale;
+}
+
+/** A run shorter than this is an eraser crumb, not a pen stroke. */
+const RECOGNITION_MIN_POINTS = 2;
+/**
+ * Scene units between recognizer points. Drawing stamps points every fraction
+ * of a line width so the bitmap looks smooth; the recognizer only needs the
+ * path, and a tablet-sized board of raw stamps is a large payload for nothing.
+ */
+const RECOGNITION_MIN_SPACING = 1.5;
+
+/**
+ * Draw ops as recognizer strokes, in the order they were written.
+ *
+ * Erased pixels are dropped, and a stroke the eraser cut through comes back as
+ * two strokes — feeding ML Kit ink the student has already rubbed out is how
+ * `recognized_text` ends up describing a discarded first attempt. Erases apply
+ * across all draws regardless of order, matching {@link paintRasterInk}.
+ */
+export function inkStrokesFromOps(ops: readonly InkOp[]): InkStroke[] {
+  const isErased = eraseLookup(ops);
+  const strokes: InkStroke[] = [];
+  let run: Array<{ x: number; y: number }> = [];
+
+  const endRun = () => {
+    if (run.length >= RECOGNITION_MIN_POINTS) strokes.push({ points: run });
+    run = [];
+  };
+
+  for (const op of ops) {
+    if (op.kind !== "draw") continue;
+    for (const point of op.points) {
+      if (isErased(point)) {
+        endRun();
+        continue;
+      }
+      const last = run[run.length - 1];
+      if (last && Math.hypot(point.x - last.x, point.y - last.y) < RECOGNITION_MIN_SPACING) {
+        continue;
+      }
+      run.push({ x: Math.round(point.x), y: Math.round(point.y) });
+    }
+    endRun();
+  }
+  return strokes;
+}
+
+/**
+ * Point-in-any-erase-stamp test, bucketed by the widest eraser radius so a long
+ * rub-out doesn't turn recognition into a quadratic scan. Cells are that radius
+ * wide, so every stamp that can cover a point lives in one of the nine cells
+ * around it.
+ */
+function eraseLookup(ops: readonly InkOp[]): (point: ScenePoint) => boolean {
+  let cell = 0;
+  for (const op of ops) {
+    if (op.kind === "erase") cell = Math.max(cell, op.radius);
+  }
+  if (cell <= 0) return () => false;
+
+  const buckets = new Map<string, Array<{ x: number; y: number; r: number }>>();
+  for (const op of ops) {
+    if (op.kind !== "erase") continue;
+    for (const point of op.points) {
+      const key = `${Math.floor(point.x / cell)},${Math.floor(point.y / cell)}`;
+      const stamp = { x: point.x, y: point.y, r: op.radius };
+      const bucket = buckets.get(key);
+      if (bucket) bucket.push(stamp);
+      else buckets.set(key, [stamp]);
+    }
+  }
+
+  return (point) => {
+    const cx = Math.floor(point.x / cell);
+    const cy = Math.floor(point.y / cell);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const bucket = buckets.get(`${cx + dx},${cy + dy}`);
+        if (!bucket) continue;
+        for (const stamp of bucket) {
+          if (Math.hypot(point.x - stamp.x, point.y - stamp.y) <= stamp.r) return true;
+        }
+      }
+    }
+    return false;
+  };
 }
 
 /** Pixel position on the ink canvas → scene coordinates. */
