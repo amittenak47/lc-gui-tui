@@ -1453,8 +1453,24 @@ input[type="checkbox"] {
 }
 
 .lc-coach-turn-assistant,
-.lc-coach-turn-system {
+.lc-coach-turn-system,
+.lc-coach-turn-app {
   align-self: stretch;
+}
+
+/*
+ * Test results in the thread. Neither the student's voice nor the coach's, so
+ * neither styling: a monospace, ruled block that reads as machine output.
+ */
+.lc-coach-turn-app {
+  background: color-mix(in srgb, var(--ink) 5%, var(--surface));
+  border-color: color-mix(in srgb, var(--ink) 18%, var(--line));
+  border-left: 3px solid color-mix(in srgb, var(--ink) 32%, transparent);
+}
+
+.lc-coach-turn-app .lc-coach-turn-body {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
 }
 
 .lc-coach-turn-role {
@@ -3611,4 +3627,168 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-pager-dot-active {
   background: var(--accent);
+}
+
+
+/* ---------------------------------------------------------------------------
+ * Problem-set tabs
+ *
+ * Above the table, in the same underline idiom as the Settings tab strip, so
+ * "which corpus" reads as a level above "which filter" rather than as one more
+ * dropdown in the filter row.
+ * ------------------------------------------------------------------------ */
+
+.lc-dataset-tabs {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--chrome-edge, rgb(127 127 127 / 20%));
+}
+
+.lc-dataset-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  margin-bottom: -1px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.lc-dataset-tab:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.lc-dataset-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+/* An un-downloaded corpus is dimmed but still clickable — the empty table it
+ * opens is what explains how to fetch it. */
+.lc-dataset-tab.is-empty:not(.is-active) {
+  opacity: 0.55;
+}
+
+.lc-dataset-tab-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  color: var(--muted);
+}
+
+.lc-dataset-tab.is-active .lc-dataset-tab-count {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--ink);
+}
+
+/* ---------------------------------------------------------------------------
+ * Test results modal — the Settings shell, wider, with room for case dumps.
+ * ------------------------------------------------------------------------ */
+
+.lc-tests-modal {
+  width: min(680px, 100%);
+}
+
+.lc-tests-modal .lc-settings-head h2 {
+  font-variant-numeric: tabular-nums;
+}
+
+.lc-tests-notice {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.lc-tests-cases {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lc-case-error {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.lc-settings-foot .lc-tests-foot-note {
+  margin: 0 auto 0 0;
+  align-self: center;
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Save-or-discard, and the Settings choice rows it shares styling with.
+ * ------------------------------------------------------------------------ */
+
+.lc-attempt-modal {
+  width: min(520px, 100%);
+}
+
+.lc-settings-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lc-settings-choice-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 12px 14px;
+  text-align: left;
+  border: 1px solid var(--border, rgb(127 127 127 / 25%));
+  border-radius: 10px;
+  background: var(--surface, var(--bg));
+  color: var(--fg);
+  font: inherit;
+  transition: border-color 120ms ease-out, background 120ms ease-out;
+}
+
+.lc-settings-choice-option:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border, transparent));
+}
+
+.lc-settings-choice-option.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface, var(--bg)));
+}
+
+.lc-settings-choice-option strong {
+  font-size: 13.5px;
+}
+
+.lc-settings-choice-option span {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lc-settings-badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }

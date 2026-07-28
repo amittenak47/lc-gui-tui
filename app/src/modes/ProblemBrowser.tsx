@@ -3,14 +3,21 @@
  *
  * Same table (q#, slug, difficulty, tags, cases), same 15-per-page paging, same
  * filters, and the same keys — `W`/`S` to move, `A`/`D` to page, `/` to search,
- * `T` tag, `E` difficulty, `O` sort, `R` randomize session, `M` select mode,
- * `Space` add to session picks, `X` reset session, `Enter` to open.
+ * `T` tag, `E` difficulty, `O` sort, `G` dataset, `R` randomize session,
+ * `M` select mode, `Space` add to session picks, `X` reset session, `Enter` to
+ * open.
+ *
+ * The tab strip above the table switches problem sets. Everything below it —
+ * filters, paging, session controls — works the same whichever tab is active;
+ * the dataset is just another parameter on the same queries. Filters do reset
+ * on a tab change, because a KodCode tag means nothing in the LeetCode tables.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { LcClient, SearchOptions } from "../api/client";
-import type { ProblemSummary, SessionSnapshot } from "../api/types";
+import type { DatasetInfo, ProblemSummary, SessionSnapshot } from "../api/types";
+import { DEFAULT_DATASET } from "../api/types";
 import { BackgroundPalette } from "../components/BackgroundPalette";
 import { titleFromSlug } from "../util/text";
 
@@ -58,6 +65,8 @@ export function ProblemBrowser({
   onResetSession,
   onRandomSession,
 }: ProblemBrowserProps) {
+  const [dataset, setDataset] = useState<string>(DEFAULT_DATASET);
+  const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   const [query, setQuery] = useState("");
   const [difficulty, setDifficulty] = useState<string>("");
   const [tag, setTag] = useState<string>("");
@@ -83,7 +92,7 @@ export function ProblemBrowser({
   useEffect(() => {
     let cancelled = false;
     void client
-      .tags()
+      .tags(dataset)
       .then((all) => !cancelled && setTags(all))
       .catch(() => {
         /* The filter is optional; a failure here shouldn't block browsing. */
@@ -91,10 +100,24 @@ export function ProblemBrowser({
     return () => {
       cancelled = true;
     };
+  }, [client, dataset]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client
+      .datasets()
+      .then((all) => !cancelled && setDatasets(all))
+      .catch(() => {
+        // An older daemon has no /datasets — fall back to the single tab.
+        if (!cancelled) setDatasets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [client]);
 
   // Any filter change resets to the first page — as in the TUI.
-  useEffect(() => setPage(0), [query, difficulty, tag, sort]);
+  useEffect(() => setPage(0), [query, difficulty, tag, sort, dataset]);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,6 +127,7 @@ export function ProblemBrowser({
     const timer = setTimeout(() => {
       client
         .searchProblems({
+          dataset,
           q: query || undefined,
           difficulty: difficulty || undefined,
           tag: tag || undefined,
@@ -132,7 +156,7 @@ export function ProblemBrowser({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [client, query, difficulty, tag, sort, page]);
+  }, [client, dataset, query, difficulty, tag, sort, page]);
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -157,12 +181,32 @@ export function ProblemBrowser({
 
   const bankFilters = useMemo(
     (): SearchOptions => ({
+      dataset,
       q: query || undefined,
       difficulty: difficulty || undefined,
       tag: tag || undefined,
       sort: sort || undefined,
     }),
-    [query, difficulty, tag, sort],
+    [dataset, query, difficulty, tag, sort],
+  );
+
+  /**
+   * Switch problem set. Tag and difficulty are corpus-specific, and a stale
+   * tag would silently show an empty table on the new tab, so they clear.
+   */
+  const switchDataset = useCallback(
+    (next: string) => {
+      if (next === dataset) return;
+      setDataset(next);
+      setTag("");
+      setDifficulty("");
+      setTags([]);
+      setPage(0);
+      setSelected(0);
+      setPicked(new Set());
+      setSelectMode(false);
+    },
+    [dataset],
   );
 
   const pick = useCallback(
@@ -250,6 +294,12 @@ export function ProblemBrowser({
         case "o":
           setSort((current) => cycle(SORTS as readonly string[], current));
           break;
+        case "g": {
+          event.preventDefault();
+          const ids = datasets.length > 0 ? datasets.map((d) => d.id) : [DEFAULT_DATASET];
+          switchDataset(cycle(ids, dataset));
+          break;
+        }
         case "r":
           event.preventDefault();
           randomizeSession();
@@ -287,6 +337,9 @@ export function ProblemBrowser({
     togglePick,
     selectMode,
     commitReset,
+    datasets,
+    dataset,
+    switchDataset,
   ]);
 
   // Keep the highlighted row visible when moving with the keyboard.
@@ -312,6 +365,12 @@ export function ProblemBrowser({
           </div>
         ) : (
           <div className="lc-browser-body lc-browser-body-ready">
+            <DatasetTabs
+              datasets={datasets}
+              active={dataset}
+              disabled={busy}
+              onPick={switchDataset}
+            />
             <div className="lc-browser-filters">
               <input
                 ref={searchRef}
@@ -437,13 +496,15 @@ export function ProblemBrowser({
                           </span>
                         )}
                         {titleFromSlug(problem.task_id)}
-                        {session?.problems[problem.task_id] && (
+                        {/* Keyed on `dataset/task_id`, so a fail earned in one
+                            problem set never badges the same slug in another. */}
+                        {session?.problems[problem.key] && (
                           <span
-                            className={`lc-session-badge is-${session.problems[problem.task_id].state}`}
+                            className={`lc-session-badge is-${session.problems[problem.key].state}`}
                           >
-                            {session.problems[problem.task_id].state === "passed"
+                            {session.problems[problem.key].state === "passed"
                               ? "pass"
-                              : session.problems[problem.task_id].state === "failed"
+                              : session.problems[problem.key].state === "failed"
                                 ? "fail"
                                 : "ld"}
                           </span>
@@ -457,11 +518,7 @@ export function ProblemBrowser({
                     </button>
                   );
                 })}
-                {!loading && rows.length === 0 && (
-                  <p className="lc-muted lc-table-empty">
-                    No matches. If the corpus changed, run <code>lc index</code>.
-                  </p>
-                )}
+                {!loading && rows.length === 0 && <EmptyTable dataset={dataset} datasets={datasets} />}
               </div>
 
               <div className="lc-browser-foot">
@@ -558,6 +615,10 @@ export function ProblemBrowser({
                       O sort
                     </span>
                     {" · "}
+                    <span className="lc-tip-target" data-tip="Switch problem set" data-tip-placement="top">
+                      G dataset
+                    </span>
+                    {" · "}
                     <span className="lc-tip-target" data-tip="Randomize session from filters" data-tip-placement="top">
                       R random
                     </span>
@@ -601,6 +662,80 @@ export function ProblemBrowser({
   );
 }
 
+
+/**
+ * The problem-set tab strip.
+ *
+ * Every dataset is shown even when its corpus has not been downloaded, with a
+ * count of 0 — a missing tab would read as "lc doesn't support that one", which
+ * is the opposite of what an empty one says.
+ */
+function DatasetTabs({
+  datasets,
+  active,
+  disabled,
+  onPick,
+}: {
+  datasets: DatasetInfo[];
+  active: string;
+  disabled: boolean;
+  onPick: (id: string) => void;
+}) {
+  // An older daemon returns nothing; one tab is the honest rendering of that.
+  if (datasets.length <= 1) return null;
+  return (
+    <div className="lc-dataset-tabs" role="tablist" aria-label="Problem set">
+      {datasets.map((entry) => (
+        <button
+          key={entry.id}
+          type="button"
+          role="tab"
+          aria-selected={entry.id === active}
+          className={[
+            "lc-dataset-tab",
+            "lc-tip-target",
+            entry.id === active ? "is-active" : "",
+            entry.count === 0 ? "is-empty" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          disabled={disabled}
+          data-tip={`${entry.source} — ${entry.count.toLocaleString()} indexed`}
+          data-tip-placement="bottom"
+          onClick={() => onPick(entry.id)}
+        >
+          {entry.label}
+          <span className="lc-dataset-tab-count">{entry.count.toLocaleString()}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Why the table is empty: no matches, or nothing indexed for this tab yet. */
+function EmptyTable({ dataset, datasets }: { dataset: string; datasets: DatasetInfo[] }) {
+  const info = datasets.find((entry) => entry.id === dataset);
+  if (info && info.count === 0) {
+    return (
+      <p className="lc-muted lc-table-empty">
+        Nothing indexed for <strong>{info.label}</strong> yet. Download{" "}
+        <code>{info.source}</code>
+        {info.corpus_dir ? (
+          <>
+            {" "}
+            into <code>{info.corpus_dir}</code>
+          </>
+        ) : null}
+        , then run <code>lc index --dataset {info.id}</code>.
+      </p>
+    );
+  }
+  return (
+    <p className="lc-muted lc-table-empty">
+      No matches. If the corpus changed, run <code>lc index</code>.
+    </p>
+  );
+}
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);

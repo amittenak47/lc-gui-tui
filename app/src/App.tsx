@@ -1,14 +1,14 @@
 /**
  * The whole loop, wired together.
  *
- * Two modes, per the plan:
+ * The coach answers when asked: draw, tap Submit, get a verdict and a
+ * counterexample. (The ambient every-60s mode exists but is switched off — see
+ * `AMBIENT_ENABLED`.)
  *
- * - **Review** — draw, tap Submit, get a verdict and a counterexample.
- * - **Ambient** — the coach glances at the board every 60 seconds and nudges,
- *   in the side panel only, never on the canvas.
- *
- * Both talk to `lc serve`. Nothing about the corpus, the workspaces, or the
- * Python runner lives on this device.
+ * Everything talks to `lc serve`. Nothing about the corpus, the workspaces, or
+ * the Python runner lives on this device — including which problem set is
+ * open: a problem carries its `dataset` slug, and every request that names a
+ * task id names the dataset too.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -26,12 +26,14 @@ import {
   type Pairing,
 } from "./api/pairing";
 import type {
+  AttemptState,
   ProblemDetail,
   ReviewResponse,
   ServerFrame,
   SessionSnapshot,
   TestResponse,
 } from "./api/types";
+import { DEFAULT_DATASET } from "./api/types";
 import { Tip } from "./components/Tip";
 import { SettingsModal } from "./components/SettingsModal";
 import { Board } from "./canvas/Board";
@@ -43,13 +45,21 @@ import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } f
 import { buildSnapshot, sceneFingerprint, structureBaselineFromBoard } from "./canvas/snapshot";
 import { sha256Hex } from "./util/codeHash";
 import { skeletonOf } from "./util/solutionSplit";
-import { AgentSidePanel, type CoachChatMessage, type CoachSendFlags } from "./modes/AgentSidePanel";
+import {
+  AgentSidePanel,
+  AMBIENT_ENABLED,
+  type CoachChatMessage,
+  type CoachSendFlags,
+} from "./modes/AgentSidePanel";
+import { AttemptDialog } from "./modes/AttemptDialog";
+import { formatTestReport, TestResultsModal } from "./modes/TestResultsModal";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { RevealDialog } from "./modes/RevealDialog";
 import { buildProblemTemplate } from "./templates/problemBoard";
 import { REGIONS, STUDENT_REGION_ORDER, type RegionId } from "./templates/regions";
+import { splitProblemKey } from "./util/datasetKey";
 import { isMobileViewport, useIsMobile } from "./util/mobile";
 import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
@@ -163,6 +173,13 @@ export function App() {
   const [, setFrameByProgram] = useState<Record<string, number>>({});
   const [capabilities, setCapabilities] = useState<CoachCapabilities | null>(null);
 
+  /** Attempt state for the open problem, so the leave dialog asks the right question. */
+  const [attemptState, setAttemptState] = useState<AttemptState | null>(null);
+  /** Pending "you're leaving — save or discard?" choice, with what to do after. */
+  const [leaving, setLeaving] = useState<{ run: () => void } | null>(null);
+  const [leavingPending, setLeavingPending] = useState(false);
+  const [leavingError, setLeavingError] = useState<string | null>(null);
+
   const [revealOpen, setRevealOpen] = useState(false);
   const [revealPending, setRevealPending] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -187,6 +204,34 @@ export function App() {
   const lastPseudocodeHashRef = useRef<string | undefined>(undefined);
   /** Skeleton hash the server acknowledged — what a code delta is anchored to. */
   const lastSkeletonHashRef = useRef<string | undefined>(undefined);
+  /**
+   * The last test run, formatted for the model. Sent with every coach request
+   * so "why did case 3 fail?" needs no copy-paste, and refreshed on every run
+   * so the coach never argues from a stale result.
+   */
+  const lastTestReportRef = useRef<string | null>(null);
+  /** Which problem set the open problem came from — every request carries it. */
+  const datasetRef = useRef<string>(DEFAULT_DATASET);
+  datasetRef.current = problem?.dataset ?? DEFAULT_DATASET;
+  /**
+   * True once the workspace holds work worth asking about keeping: edited
+   * code, a drawn board, a coach exchange, or a test run. An untouched problem
+   * skips the save-or-discard dialog entirely.
+   */
+  const dirtyRef = useRef(false);
+  /** The code as loaded, so an untouched editor does not count as work. */
+  const loadedSourceRef = useRef("");
+  /**
+   * Suspends the board autosave between "discard" and the next problem load.
+   *
+   * `finishAttempt` deletes `board.json` on the daemon, and the 3-second
+   * autosave would otherwise write the still-mounted old scene straight back
+   * over it — the student would discard their work and find it waiting.
+   *
+   * The coach thread has the same hazard and the same guard.
+   */
+  const boardSaveSuspendedRef = useRef(false);
+  const agentSaveSuspendedRef = useRef(false);
   const coachRef = useRef<AmbientCoach | null>(null);
   // The recognizer can be swapped after mount; read it through a ref so the
   // ambient loop doesn't need to restart when it lands.
@@ -201,6 +246,7 @@ export function App() {
   useEffect(() => {
     if (!problem) return;
     boardRef.current?.fitCodeToSource(pseudocode);
+    if (pseudocode !== loadedSourceRef.current) dirtyRef.current = true;
   }, [problem, pseudocode]);
 
   // ML Kit if we're on Android, otherwise typed text and the PNG fallback.
@@ -273,12 +319,13 @@ export function App() {
     if (!problem) return;
     const timer = window.setInterval(() => {
       const board = boardRef.current;
-      if (!board) return;
+      if (!board || boardSaveSuspendedRef.current) return;
       const elements = board.getElements();
       const hash = sceneHash(elements);
       if (lastSavedHashRef.current === hash) return;
       const blob = board.saveBoard();
-      void client.putBoard(problem.task_id, blob).then(() => {
+      dirtyRef.current = true;
+      void client.putBoard(problem.task_id, blob, problem.dataset).then(() => {
         lastSavedHashRef.current = hash;
       }).catch(() => {
         /* best-effort */
@@ -310,11 +357,18 @@ export function App() {
 
   const syncSolution = useCallback(async () => {
     if (!problem) return;
-    await client.putSolution(problem.task_id, pseudocodeRef.current);
+    await client.putSolution(problem.task_id, pseudocodeRef.current, problem.dataset);
   }, [client, problem]);
+
+  /** App-side channel on every coach request: the last test run, as fact. */
+  const appMessages = useCallback(
+    () => (lastTestReportRef.current ? [lastTestReportRef.current] : undefined),
+    [],
+  );
 
   const pickProblem = useCallback(
     async (taskId: string, bank?: SearchOptions) => {
+      const datasetId = bank?.dataset ?? DEFAULT_DATASET;
       const fromBrowse = !problem;
       const switching = Boolean(problem);
       setActiveRegion("constraints");
@@ -331,6 +385,11 @@ export function App() {
       lastStructureBaselineRef.current = null;
       lastPseudocodeHashRef.current = undefined;
       lastSkeletonHashRef.current = undefined;
+      lastTestReportRef.current = null;
+      dirtyRef.current = false;
+      boardSaveSuspendedRef.current = true;
+      agentSaveSuspendedRef.current = true;
+      setAttemptState(null);
       if (bank) setBankFilters(bank);
       if (fromBrowse) {
         setHoldBrowseOverlay(true);
@@ -339,24 +398,26 @@ export function App() {
       if (switching) setSwitchMotion("busy");
       try {
         // Materialize the workspace on the PC, then read back the redacted
-        // statement for the board template.
-        await client.loadProblem(taskId);
+        // statement for the board template. `resume` is whatever the last
+        // visit chose to keep — the daemon already cleared what it did not.
+        const loaded = await client.loadProblem(taskId, datasetId);
+        setAttemptState(loaded.resume.attempt);
         try {
-          await client.enqueueSession(taskId);
+          await client.enqueueSession(taskId, datasetId);
         } catch {
           /* queue write is best-effort when not paired yet */
         }
-        const detail = await client.getProblem(taskId);
+        const detail = await client.getProblem(taskId, datasetId);
         const fresh = ensureCodingRoom(detail.starter_code ?? "");
         let source = fresh;
         try {
-          const disk = await client.getSolution(taskId);
+          const disk = await client.getSolution(taskId, datasetId);
           if (disk.source.trim().length > 0) {
             source = ensureCodingRoom(resolveSolutionSource(fresh, disk.source));
             // Rewrite disk when we stripped stale ListNode/TreeNode leftovers.
             if (source.trim() !== disk.source.trim()) {
               try {
-                await client.putSolution(taskId, source);
+                await client.putSolution(taskId, source, datasetId);
               } catch {
                 /* best-effort — editor still shows the corrected stub */
               }
@@ -365,6 +426,9 @@ export function App() {
         } catch {
           // Fresh load — starter_code is fine.
         }
+        // A saved coach thread comes back with the board it belongs to.
+        const resumedMessages = restoreCoachMessages(loaded.resume.agent_messages);
+        if (resumedMessages.length > 0) setCoachMessages(resumedMessages);
 
         if (fromBrowse) {
           // Ready: keep the spinner, slide the browser away under the blur.
@@ -379,6 +443,7 @@ export function App() {
         }
 
         setPseudocode(source);
+        loadedSourceRef.current = source;
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the viewport does not jump.
         setBoardPreparing(true);
@@ -395,10 +460,18 @@ export function App() {
           dark: isDarkTheme(themeId),
         });
 
-        // Always seed a fresh template. Persisted boards keep old region
-        // geometry / UI bugs alive after layout fixes.
+        // A saved layout is restored over the fresh template; otherwise seed
+        // the template alone. Persisted boards can carry old region geometry,
+        // so `restoreBoard` heals them against the current skeletons.
         lastSavedHashRef.current = null;
-        boardRef.current?.seedTemplate(skeletons);
+        const saved = loaded.resume.board as
+          | { v?: number; elements?: unknown[]; appState?: unknown }
+          | null;
+        if (saved && saved.v === 1 && Array.isArray(saved.elements) && saved.elements.length > 0) {
+          boardRef.current?.restoreBoard(saved.elements, saved.appState, { skeletons });
+        } else {
+          boardRef.current?.seedTemplate(skeletons);
+        }
         boardRef.current?.fitCodeToSource(source);
         lastIdsRef.current = new Set();
 
@@ -411,12 +484,17 @@ export function App() {
         setSwitchMotion("idle");
         setHoldBrowseOverlay(false);
         setBoardPreparing(false);
+        // The new board is mounted and fitted; autosave may write again.
+        boardSaveSuspendedRef.current = false;
+        agentSaveSuspendedRef.current = false;
         setEntering(true);
         window.setTimeout(() => {
           setEntering(false);
         }, boardFadeMs() || 1);
       } catch (cause) {
         setError(messageOf(cause));
+        boardSaveSuspendedRef.current = false;
+        agentSaveSuspendedRef.current = false;
         setHoldBrowseOverlay(false);
         setBoardPreparing(false);
         if (fromBrowse) setBrowseMotion("idle");
@@ -432,17 +510,25 @@ export function App() {
   const stepProblem = useCallback(
     async (delta: number) => {
       if (!problem || busy !== null) return;
+      // Queue entries are `dataset/task_id`, since the same slug can be in
+      // several problem sets at once.
       const queue = session?.queue ?? [];
-      const queueIndex = queue.indexOf(problem.task_id);
+      const queueIndex = queue.indexOf(problem.key);
       if (queue.length > 0 && queueIndex >= 0) {
         const next = queue[queueIndex + delta];
-        if (next) void pickProblem(next);
+        if (next) {
+          const [nextDataset, nextTask] = splitProblemKey(next);
+          void pickProblem(nextTask, { ...bankFilters, dataset: nextDataset });
+        }
         return;
       }
       try {
-        const adjacent = await client.adjacentProblems(problem.task_id, bankFilters);
+        const adjacent = await client.adjacentProblems(problem.task_id, {
+          ...bankFilters,
+          dataset: problem.dataset,
+        });
         const next = delta < 0 ? adjacent.prev : adjacent.next;
-        if (next) void pickProblem(next, bankFilters);
+        if (next) void pickProblem(next, { ...bankFilters, dataset: problem.dataset });
       } catch (cause) {
         setError(messageOf(cause));
       }
@@ -459,7 +545,7 @@ export function App() {
     let cancelled = false;
     void (async () => {
       const queue = session?.queue ?? [];
-      const queueIndex = queue.indexOf(problem.task_id);
+      const queueIndex = queue.indexOf(problem.key);
       if (queue.length > 0 && queueIndex >= 0) {
         if (!cancelled) {
           setCanStepPrev(queueIndex > 0);
@@ -468,7 +554,10 @@ export function App() {
         return;
       }
       try {
-        const adjacent = await client.adjacentProblems(problem.task_id, bankFilters);
+        const adjacent = await client.adjacentProblems(problem.task_id, {
+          ...bankFilters,
+          dataset: problem.dataset,
+        });
         if (!cancelled) {
           setCanStepPrev(Boolean(adjacent.prev));
           setCanStepNext(Boolean(adjacent.next));
@@ -485,9 +574,10 @@ export function App() {
     };
   }, [problem, session, bankFilters, client]);
 
-  // Ambient mode's lifecycle.
+  // Ambient mode's lifecycle. Never entered while `AMBIENT_ENABLED` is false —
+  // the socket is not opened and no polling timer is created.
   useEffect(() => {
-    if (mode !== "ambient" || !problem) return;
+    if (!AMBIENT_ENABLED || mode !== "ambient" || !problem) return;
 
     const onFrame = (frame: ServerFrame) => {
       switch (frame.type) {
@@ -547,6 +637,7 @@ export function App() {
       content: string,
       extra?: Pick<CoachChatMessage, "review" | "attachments">,
     ) => {
+      dirtyRef.current = true;
       setCoachMessages((current) => [
         ...current,
         {
@@ -648,14 +739,22 @@ export function App() {
       }
       let result: ReviewResponse;
       try {
-        result = await client.review(problem.task_id, payload);
+        result = await client.review(
+          problem.task_id,
+          { ...payload, app_messages: appMessages() },
+          problem.dataset,
+        );
       } catch (cause) {
         // The picture is the first thing to give up: a board too big to buffer,
         // or a local VLM that hangs on the PNG, must not cost the whole review.
         const hasPng = "png" in payload && Boolean(payload.png);
         if (!hasPng || (!isBodyLimitError(cause) && !isLlmTimeoutError(cause))) throw cause;
         const { png: _png, ...withoutPng } = payload;
-        result = await client.review(problem.task_id, withoutPng);
+        result = await client.review(
+          problem.task_id,
+          { ...withoutPng, app_messages: appMessages() },
+          problem.dataset,
+        );
         setNotice(
           isLlmTimeoutError(cause)
             ? "the board image timed out at the model — the coach reviewed your text and layout without it"
@@ -683,7 +782,7 @@ export function App() {
       setCoachPhase(null);
       setBusy(null);
     }
-  }, [client, problem, syncSolution, pushCoachMessage, modeHasVision]);
+  }, [client, problem, syncSolution, pushCoachMessage, modeHasVision, appMessages]);
 
   const askForDiagram = useCallback(async (ask = "") => {
     const board = boardRef.current;
@@ -697,7 +796,12 @@ export function App() {
         pseudocode: pseudocodeRef.current,
         includePng: modeHasVision("viz"),
       });
-      const envelope = await client.viz(problem.task_id, snapshot.board, ask);
+      const envelope = await client.viz(
+        problem.task_id,
+        { ...snapshot.board, app_messages: appMessages() },
+        ask,
+        problem.dataset,
+      );
       const drawables = envelope.programs
         .map(parseVizProgram)
         .filter((candidate): candidate is VizProgram => candidate !== null)
@@ -766,7 +870,7 @@ export function App() {
     } finally {
       setBusy(null);
     }
-  }, [client, problem, syncSolution, pushCoachMessage, modeHasVision, sceneApi]);
+  }, [client, problem, syncSolution, pushCoachMessage, modeHasVision, sceneApi, appMessages]);
 
   const sendCoachChat = useCallback(
     (text: string, flags: CoachSendFlags) => {
@@ -806,46 +910,51 @@ export function App() {
     [pushCoachMessage, submitForReview, askForDiagram],
   );
 
-  const runTests = useCallback(async () => {
-    if (!problem) return;
-    setBusy("running the tests…");
-    setError(null);
-    try {
-      await syncSolution();
-      const result = await client.runTests(problem.task_id);
-      setLastRunKind("run");
-      setTests(result);
-      setCoachOpen(true);
-      await refreshSession();
-    } catch (cause) {
-      setError(messageOf(cause));
-    } finally {
-      setBusy(null);
-    }
-  }, [client, problem, syncSolution, refreshSession]);
+  /**
+   * Run the workspace's tests and put the results everywhere they belong:
+   * the modal over the board, the coach thread as an `app` turn, and the next
+   * coach request as its own channel. One run, three destinations — closing
+   * the modal therefore loses nothing.
+   */
+  const runTestsWith = useCallback(
+    async (kind: "run" | "submit") => {
+      if (!problem) return;
+      setBusy(kind === "submit" ? "submitting…" : "running the tests…");
+      setError(null);
+      try {
+        await syncSolution();
+        const result = await client.runTests(problem.task_id, problem.dataset);
+        setLastRunKind(kind);
+        setTests(result);
+        const report = formatTestReport(result, kind);
+        lastTestReportRef.current = report;
+        pushCoachMessage("app", report);
+        dirtyRef.current = true;
+        if (result.all_passed) {
+          setAttemptState((current) => ({
+            solved: true,
+            saved: current?.saved ?? false,
+            archives: current?.archives ?? [],
+            updated_at: Math.floor(Date.now() / 1000),
+          }));
+        }
+        await refreshSession();
+      } catch (cause) {
+        setError(messageOf(cause));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [client, problem, syncSolution, refreshSession, pushCoachMessage],
+  );
 
-  const submitSolution = useCallback(async () => {
-    if (!problem) return;
-    setBusy("submitting…");
-    setError(null);
-    try {
-      await syncSolution();
-      const result = await client.runTests(problem.task_id);
-      setLastRunKind("submit");
-      setTests(result);
-      setCoachOpen(true);
-      await refreshSession();
-    } catch (cause) {
-      setError(messageOf(cause));
-    } finally {
-      setBusy(null);
-    }
-  }, [client, problem, syncSolution, refreshSession]);
+  const runTests = useCallback(() => runTestsWith("run"), [runTestsWith]);
+  const submitSolution = useCallback(() => runTestsWith("submit"), [runTestsWith]);
 
   const pickRandomProblem = useCallback(async () => {
     try {
       const next = await client.randomProblem(bankFilters);
-      if (next) void pickProblem(next.task_id, bankFilters);
+      if (next) void pickProblem(next.task_id, { ...bankFilters, dataset: next.dataset });
       else setError("no problems match the current filters");
     } catch (cause) {
       setError(messageOf(cause));
@@ -857,7 +966,7 @@ export function App() {
       try {
         let next = await client.resetSession();
         for (const id of taskIds) {
-          next = await client.enqueueSession(id);
+          next = await client.enqueueSession(id, bankFilters.dataset);
         }
         setSession(next);
         if (taskIds[0]) void pickProblem(taskIds[0], bankFilters);
@@ -882,6 +991,7 @@ export function App() {
       try {
         setBankFilters(filters);
         const next = await client.randomSession({
+          dataset: filters.dataset,
           count: 5,
           difficulty: filters.difficulty,
           tag: filters.tag,
@@ -889,7 +999,10 @@ export function App() {
         });
         setSession(next);
         const first = next.queue[0];
-        if (first) void pickProblem(first, filters);
+        if (first) {
+          const [firstDataset, firstTask] = splitProblemKey(first);
+          void pickProblem(firstTask, { ...filters, dataset: firstDataset });
+        }
       } catch (cause) {
         setError(messageOf(cause));
       }
@@ -900,25 +1013,47 @@ export function App() {
   const openInIde = useCallback(async () => {
     if (!problem) return;
     try {
-      await client.openWorkspace(problem.task_id, "ide");
+      await client.openWorkspace(problem.task_id, "ide", problem.dataset);
     } catch (cause) {
       setError(messageOf(cause));
     }
   }, [client, problem]);
 
-  // Deep link: ?task=<id> loads that problem once.
+  // Deep link: ?task=<id>[&dataset=<slug>] loads that problem once. The TUI's
+  // "Open in Canvas" builds this URL, and it names the dataset because the
+  // same slug exists in several of them.
   useEffect(() => {
     if (deepLinkHandled.current || problem) return;
     const params = new URLSearchParams(window.location.search);
     const task = params.get("task");
     if (!task) return;
     deepLinkHandled.current = true;
-    void pickProblem(task);
+    void pickProblem(task, { dataset: params.get("dataset") ?? DEFAULT_DATASET });
   }, [pickProblem, problem]);
 
   useEffect(() => {
     void refreshSession();
   }, [refreshSession, pairing]);
+
+  /**
+   * Persist the coach thread beside the workspace, debounced.
+   *
+   * Written on every change rather than only on leave: a crash or a closed lid
+   * should not cost the conversation, and `attempt::finish` is what decides
+   * whether the stored thread survives into the next attempt.
+   */
+  useEffect(() => {
+    if (!problem || coachMessages.length === 0) return;
+    const timer = window.setTimeout(() => {
+      if (agentSaveSuspendedRef.current) return;
+      void client
+        .putAgentSession(problem.task_id, coachMessages, problem.dataset)
+        .catch(() => {
+          /* best-effort — the thread is still on screen */
+        });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [client, problem, coachMessages]);
 
   const confirmReveal = useCallback(async () => {
     const board = boardRef.current;
@@ -935,6 +1070,7 @@ export function App() {
         problem.task_id,
         snapshot?.board ?? { recognized_text: "" },
         true,
+        problem.dataset,
       );
       const targetId = revealForMessageIdRef.current;
       setCoachMessages((current) => {
@@ -988,6 +1124,77 @@ export function App() {
     [sceneApi],
   );
 
+  /** Reset every per-problem piece of state. Shared by leave and switch. */
+  const clearProblemState = useCallback(() => {
+    setTests(null);
+    setPrograms([]);
+    setFrameByProgram({});
+    setNudges([]);
+    setCoachMessages([]);
+    setAttemptState(null);
+    revealForMessageIdRef.current = null;
+    lastReviewIdsRef.current = new Set();
+    reviewTurnRef.current = 0;
+    lastTestReportRef.current = null;
+    dirtyRef.current = false;
+  }, []);
+
+  /**
+   * Ask about saving before leaving, then do `next`.
+   *
+   * Only asked when there is something to keep: an untouched workspace has no
+   * decision worth interrupting for. `AttemptDialog` explains which of the two
+   * questions is being asked.
+   */
+  const leaveProblem = useCallback(
+    (next: () => void) => {
+      if (!problem || !dirtyRef.current) {
+        next();
+        return;
+      }
+      setLeavingError(null);
+      setLeaving({ run: next });
+    },
+    [problem],
+  );
+
+  const resolveLeave = useCallback(
+    async (save: boolean) => {
+      const pending = leaving;
+      if (!problem || !pending) return;
+      setLeavingPending(true);
+      setLeavingError(null);
+      boardSaveSuspendedRef.current = true;
+      agentSaveSuspendedRef.current = true;
+      try {
+        // Flush the thread first, so a "save" keeps the last exchange and an
+        // archive of a solved attempt is complete.
+        if (coachMessages.length > 0) {
+          await client
+            .putAgentSession(problem.task_id, coachMessages, problem.dataset)
+            .catch(() => {
+              /* best-effort */
+            });
+        }
+        await client.finishAttempt(
+          problem.task_id,
+          { solved: attemptState?.solved ?? tests?.all_passed ?? false, save },
+          problem.dataset,
+        );
+        setLeaving(null);
+        pending.run();
+      } catch (cause) {
+        // The workspace is untouched on a failure, so let autosave resume.
+        boardSaveSuspendedRef.current = false;
+        agentSaveSuspendedRef.current = false;
+        setLeavingError(messageOf(cause));
+      } finally {
+        setLeavingPending(false);
+      }
+    },
+    [client, problem, leaving, coachMessages, attemptState, tests],
+  );
+
   const returnToBrowse = useCallback(() => {
     setBrowseMotion("enter");
     setActiveRegion("constraints");
@@ -995,18 +1202,11 @@ export function App() {
     setBoardPreparing(false);
     setHoldBrowseOverlay(false);
     setEntering(false);
-    setTests(null);
-    setPrograms([]);
-    setFrameByProgram({});
-    setNudges([]);
-    setCoachMessages([]);
-    revealForMessageIdRef.current = null;
+    clearProblemState();
     setError(null);
     setCodeSlot(null);
-    lastReviewIdsRef.current = new Set();
-    reviewTurnRef.current = 0;
     window.setTimeout(() => setBrowseMotion("idle"), slideDurationMs() || 1);
-  }, []);
+  }, [clearProblemState]);
 
   return (
     <div
@@ -1032,7 +1232,7 @@ export function App() {
                 data-tip="Return to the problem list"
                 data-tip-placement="bottom"
                 disabled={busy !== null}
-                onClick={returnToBrowse}
+                onClick={() => leaveProblem(returnToBrowse)}
               >
                 ← Problems
               </button>
@@ -1047,7 +1247,7 @@ export function App() {
                   }
                   aria-label="Previous problem"
                   disabled={!canStepPrev || busy !== null}
-                  onClick={() => void stepProblem(-1)}
+                  onClick={() => leaveProblem(() => void stepProblem(-1))}
                 >
                   ‹
                 </button>
@@ -1064,7 +1264,7 @@ export function App() {
                   }
                   aria-label="Next problem"
                   disabled={!canStepNext || busy !== null}
-                  onClick={() => void stepProblem(1)}
+                  onClick={() => leaveProblem(() => void stepProblem(1))}
                 >
                   ›
                 </button>
@@ -1319,7 +1519,7 @@ export function App() {
               setRevealOpen(true);
             }}
           >
-            {mode === "ambient" && (
+            {AMBIENT_ENABLED && mode === "ambient" && (
               <AmbientPanel
                 entries={nudges}
                 connected={connected}
@@ -1363,17 +1563,6 @@ export function App() {
               </button>
             )}
 
-            {tests && (
-              <TestSummary
-                tests={tests}
-                kind={lastRunKind}
-                onDismiss={() => setTests(null)}
-                onNext={() => void stepProblem(1)}
-                onRandom={() => void pickRandomProblem()}
-                onBrowse={returnToBrowse}
-                canNext={canStepNext}
-              />
-            )}
           </AgentSidePanel>
         )}
 
@@ -1388,6 +1577,40 @@ export function App() {
           }}
           pending={revealPending}
           error={revealError}
+        />
+      )}
+
+      <TestResultsModal
+        tests={tests}
+        kind={lastRunKind}
+        onClose={() => setTests(null)}
+        onNext={() => {
+          setTests(null);
+          leaveProblem(() => void stepProblem(1));
+        }}
+        onRandom={() => {
+          setTests(null);
+          leaveProblem(() => void pickRandomProblem());
+        }}
+        onBrowse={() => {
+          setTests(null);
+          leaveProblem(returnToBrowse);
+        }}
+        canNext={canStepNext}
+      />
+
+      {leaving && problem && (
+        <AttemptDialog
+          taskId={problem.task_id}
+          solved={attemptState?.solved ?? tests?.all_passed ?? false}
+          pending={leavingPending}
+          error={leavingError}
+          onChoose={(save) => void resolveLeave(save)}
+          onCancel={() => {
+            if (leavingPending) return;
+            setLeaving(null);
+            setLeavingError(null);
+          }}
         />
       )}
 
@@ -1525,96 +1748,6 @@ function RegionPager({
         ›
       </button>
     </nav>
-  );
-}
-
-function TestSummary({
-  tests,
-  kind,
-  onDismiss,
-  onNext,
-  onRandom,
-  onBrowse,
-  canNext,
-}: {
-  tests: TestResponse;
-  kind: "run" | "submit";
-  onDismiss: () => void;
-  onNext: () => void;
-  onRandom: () => void;
-  onBrowse: () => void;
-  canNext: boolean;
-}) {
-  const failures = tests.results.filter((result) => !result.pass);
-  const celebrate = kind === "submit" && tests.all_passed;
-  return (
-    <section className="lc-panel" aria-label="Test results">
-      <header className="lc-panel-head">
-        <strong className={tests.all_passed ? "lc-pass" : "lc-fail"}>
-          {celebrate
-            ? `All ${tests.total} cases passed`
-            : `${tests.passed}/${tests.total} passed`}
-        </strong>
-        <button type="button" className="lc-link" onClick={onDismiss}>
-          close
-        </button>
-      </header>
-      {celebrate ? (
-        <div className="lc-submit-pass">
-          <p className="lc-muted">Nice work — pick where to go next.</p>
-          <div className="lc-submit-actions">
-            <button type="button" disabled={!canNext} onClick={onNext}>
-              Next problem
-            </button>
-            <button type="button" className="lc-secondary" onClick={onRandom}>
-              Random
-            </button>
-            <button type="button" className="lc-secondary" onClick={onBrowse}>
-              Browse
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          {failures.slice(0, 5).map((result) => (
-            <FailCase key={result.case} result={result} />
-          ))}
-          {failures.length > 5 && (
-            <details className="lc-test-more">
-              <summary>
-                {failures.length - 5} more failed{" "}
-                {failures.length - 5 === 1 ? "case" : "cases"}
-              </summary>
-              <div className="lc-test-more-body">
-                {failures.slice(5).map((result) => (
-                  <FailCase key={result.case} result={result} />
-                ))}
-              </div>
-            </details>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
-
-function FailCase({ result }: { result: TestResponse["results"][number] }) {
-  return (
-    <div className="lc-case-fail">
-      <strong>case {result.case}</strong>
-      <div>
-        <code>{result.input}</code>
-      </div>
-      <div className="lc-muted">
-        expected <code>{result.expected}</code>
-        {result.actual !== null && (
-          <>
-            {" · got "}
-            <code>{result.actual}</code>
-          </>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -1864,6 +1997,21 @@ function boardFadeMs(): number {
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * Rebuild a stored coach thread.
+ *
+ * The daemon stores the transcript opaquely, so anything malformed is dropped
+ * here rather than crashing the panel on a half-written file.
+ */
+function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
+  if (!Array.isArray(stored)) return [];
+  return stored.filter((entry): entry is CoachChatMessage => {
+    if (!entry || typeof entry !== "object") return false;
+    const message = entry as Partial<CoachChatMessage>;
+    return typeof message.id === "string" && typeof message.role === "string";
+  });
 }
 
 /**

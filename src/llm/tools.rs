@@ -241,6 +241,93 @@ fn tool(name: &str, description: &str, parameters: serde_json::Value) -> serde_j
     })
 }
 
+// ---------------------------------------------------------------------------
+// The no-tool-calling fallback
+// ---------------------------------------------------------------------------
+
+/// The tool set, written out as instructions for a server that refuses `tools`.
+///
+/// vLLM rejects a request carrying `tools` unless it was started with
+/// `--enable-auto-tool-choice` and a `--tool-call-parser`, and a plain
+/// llama.cpp or LM Studio build often has no tool support at all. Diagrams are
+/// the one coach mode built entirely on tool calls, so without this **Draw**
+/// simply does not work on those servers.
+///
+/// The schemas here are the same [`viz_tools`] values, so the two cannot drift.
+pub fn viz_tools_as_prompt() -> String {
+    let rendered: Vec<serde_json::Value> = viz_tools()
+        .into_iter()
+        .filter_map(|tool| tool.get("function").cloned())
+        .collect();
+    format!(
+        "Your server does not support tool calls, so emit them as JSON instead.\n\n\
+         The tools available to you:\n\n```json\n{}\n```\n\n\
+         Reply with a single JSON object and nothing else — no prose, no markdown fence:\n\n\
+         ```json\n\
+         {{\"calls\": [{{\"tool\": \"<one of the names above>\", \"arguments\": {{…}}}}]}}\n\
+         ```\n\n\
+         `arguments` must match that tool's `parameters` schema exactly. Emit one entry per \
+         thing you want drawn; an empty `calls` list means you have nothing to draw.",
+        serde_json::to_string_pretty(&rendered).unwrap_or_else(|_| "[]".into())
+    )
+}
+
+/// Read tool calls back out of a JSON reply produced by [`viz_tools_as_prompt`].
+///
+/// Deliberately lenient about shape — a model told to emit `{"calls": [...]}`
+/// will sometimes emit the bare array, or name the field `name` instead of
+/// `tool`. Names that are not real tools are dropped here rather than becoming
+/// "ignored an unknown tool call" noise in the UI.
+pub fn parse_tool_calls(raw: &str) -> Vec<super::ToolCall> {
+    let Some(json) = crate::llm::coach::extract_json(raw) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let calls = match value.get("calls").or_else(|| value.get("tool_calls")) {
+        Some(serde_json::Value::Array(items)) => items.clone(),
+        _ => match value {
+            serde_json::Value::Array(items) => items,
+            // A single call, emitted without the envelope.
+            other if other.get("tool").is_some() || other.get("name").is_some() => vec![other],
+            _ => return Vec::new(),
+        },
+    };
+
+    let known: Vec<String> = viz_tools()
+        .iter()
+        .filter_map(|t| t.pointer("/function/name")?.as_str().map(str::to_string))
+        .collect();
+
+    calls
+        .into_iter()
+        .filter_map(|call| {
+            let name = ["tool", "name", "function"]
+                .iter()
+                .find_map(|key| call.get(*key)?.as_str())?
+                .to_string();
+            if !known.contains(&name) {
+                return None;
+            }
+            let arguments = ["arguments", "args", "parameters", "input"]
+                .iter()
+                .find_map(|key| call.get(*key))
+                .cloned()
+                // Some models inline the arguments beside the name.
+                .unwrap_or_else(|| call.clone());
+            // Arguments may still arrive as a JSON *string*, as in the wire format.
+            let arguments = match arguments {
+                serde_json::Value::String(text) => {
+                    serde_json::from_str(&text).unwrap_or(serde_json::Value::Null)
+                }
+                other => other,
+            };
+            Some(super::ToolCall { name, arguments })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +436,75 @@ mod tests {
         )
         .unwrap();
         assert!(cells_only.rejection().is_none(), "cells alone are enough");
+    }
+
+    /// The failure this exists for, verbatim from vLLM: every Draw request
+    /// died on a 400 because the server was not started with
+    /// `--enable-auto-tool-choice`.
+    #[test]
+    fn a_server_that_refuses_tools_is_recognized_and_a_real_error_is_not() {
+        use crate::llm::is_tool_calling_unsupported;
+        let vllm = anyhow::anyhow!(
+            "LLM request to http://localhost:8000/v1/chat/completions failed (400 Bad Request): \
+             {{\"error\":{{\"message\":\"\\\"auto\\\" tool choice requires \
+             --enable-auto-tool-choice and --tool-call-parser to be set\",\
+             \"type\":\"BadRequestError\",\"param\":null,\"code\":400}}}}"
+        );
+        assert!(is_tool_calling_unsupported(&vllm));
+
+        for real in [
+            "cannot reach the LLM at http://localhost:8000/v1 — start your server first",
+            "LLM request failed (500 Internal Server Error): out of memory",
+        ] {
+            assert!(
+                !is_tool_calling_unsupported(&anyhow::anyhow!("{real}")),
+                "{real} is not a tool-calling problem"
+            );
+        }
+    }
+
+    #[test]
+    fn the_prompt_fallback_carries_the_same_schemas_as_the_tools() {
+        let prompt = viz_tools_as_prompt();
+        for name in [
+            "draw_structure",
+            "animate_trace",
+            "annotate_region",
+            "cite_test_case",
+            "highlight_student_work",
+        ] {
+            assert!(prompt.contains(name), "{name} missing from the fallback prompt");
+        }
+        // The schema detail that keeps hashmaps from drawing empty must survive.
+        assert!(prompt.contains("REQUIRED for hashmap"));
+        assert!(prompt.contains("\"calls\""));
+    }
+
+    #[test]
+    fn json_tool_calls_are_read_back_in_the_shapes_models_actually_emit() {
+        let enveloped = parse_tool_calls(
+            r#"Sure!
+            ```json
+            {"calls": [{"tool": "draw_structure",
+                        "arguments": {"viz": "array", "id": "nums",
+                                      "frames": [{"label": "start", "cells": [2, 7]}]}}]}
+            ```"#,
+        );
+        assert_eq!(enveloped.len(), 1);
+        assert_eq!(enveloped[0].name, "draw_structure");
+        let program: VizProgram = serde_json::from_value(enveloped[0].arguments.clone()).unwrap();
+        assert!(program.rejection().is_none(), "the parsed call is drawable");
+
+        // A bare array, `name` instead of `tool`, and stringified arguments.
+        let loose = parse_tool_calls(
+            r#"[{"name": "cite_test_case", "args": "{\"case_index\": 1, \"why\": \"dupes\"}"}]"#,
+        );
+        assert_eq!(loose.len(), 1);
+        assert_eq!(loose[0].arguments["case_index"], 1);
+
+        // A hallucinated tool is dropped rather than reported as unknown.
+        assert!(parse_tool_calls(r#"{"calls": [{"tool": "teleport", "arguments": {}}]}"#).is_empty());
+        assert!(parse_tool_calls("no json at all").is_empty());
     }
 
     #[test]

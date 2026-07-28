@@ -163,6 +163,34 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
+/// Whether a failure means "this server will not do tool calls at all".
+///
+/// The one that prompted this: vLLM answers a request carrying `tools` with a
+/// 400 unless it was launched with `--enable-auto-tool-choice` and a
+/// `--tool-call-parser`, which is not something the user can fix from inside
+/// the app — and it took out **Draw** completely, since diagrams are the one
+/// mode built on tool calls.
+///
+/// Matching on message text is crude, and deliberately generous: a false
+/// positive costs one extra JSON-mode round trip, and if that also fails the
+/// caller reports the *original* error rather than the fallback's.
+pub fn is_tool_calling_unsupported(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    [
+        "enable-auto-tool-choice",
+        "tool-call-parser",
+        "tool choice",
+        "tool_choice",
+        "does not support tools",
+        "tools are not supported",
+        "tool calling is not supported",
+        "unsupported parameter: 'tools'",
+        "unrecognized request argument supplied: tools",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ChatReply {
     pub content: String,

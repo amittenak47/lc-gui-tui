@@ -7,8 +7,28 @@
  * described here.
  */
 
+/**
+ * One problem set. Datasets live in separate tables on the daemon, so a slug
+ * travels with every id that crosses the wire — `two-sum` exists in three of
+ * them and means something different in each.
+ */
+export interface DatasetInfo {
+  id: string;
+  label: string;
+  /** Hugging Face repo the corpus came from. */
+  source: string;
+  /** Problems indexed. Zero means the corpus has not been downloaded yet. */
+  count: number;
+  corpus_dir: string | null;
+}
+
+export const DEFAULT_DATASET = "leetcode";
+
 export interface ProblemSummary {
+  dataset: string;
   task_id: string;
+  /** `dataset/task_id` — how session progress is keyed. */
+  key: string;
   question_id: string | null;
   difficulty: string | null;
   tags: string[];
@@ -34,6 +54,8 @@ export interface IoCase {
  * reference solution: `Problem` in the daemon cannot even deserialize one.
  */
 export interface ProblemDetail {
+  dataset: string;
+  key: string;
   task_id: string;
   question_id: string | null;
   difficulty: string | null;
@@ -45,6 +67,7 @@ export interface ProblemDetail {
 }
 
 export interface WorkspaceMeta {
+  dataset: string;
   task_id: string;
   question_id: string | null;
   difficulty: string | null;
@@ -67,16 +90,20 @@ export interface CaseResult {
 }
 
 export interface TestResponse {
+  dataset: string;
   task_id: string;
   all_passed: boolean;
   passed: number;
   total: number;
   results: CaseResult[];
+  /** The run stopped at the first failure because Settings → Tests says to. */
+  stopped_early: boolean;
 }
 
 export interface SessionSnapshot {
   started_at: number;
   active_list: string | null;
+  /** `dataset/task_id` keys, not bare task ids. */
   queue: string[];
   problems: Record<
     string,
@@ -105,8 +132,12 @@ export interface ProviderConfig {
 
 export interface LcConfig {
   data_json_dir: string | null;
+  /** Per-dataset corpus folder overrides, keyed by dataset slug. */
+  dataset_dirs: Record<string, string>;
   workspace_dir: string;
   python_executable: string;
+  /** Settings → Tests: stop at the first failing case instead of running all. */
+  stop_on_first_failure: boolean;
   default_provider: string;
   local: ProviderConfig;
   ollama: ProviderConfig;
@@ -137,10 +168,41 @@ export interface AdjacentProblems {
 }
 
 export interface LoadResponse {
+  dataset: string;
   task_id: string;
   workspace_dir: string;
   case_count: number;
   meta: WorkspaceMeta;
+  resume: ResumeState;
+}
+
+/** What a previous visit to this workspace left behind. */
+export interface ResumeState {
+  attempt: AttemptState;
+  /** Saved whiteboard, or null when the next attempt starts fresh. */
+  board: unknown | null;
+  /** Saved coach transcript, empty when the next attempt starts fresh. */
+  agent_messages: unknown[];
+}
+
+export interface AttemptState {
+  /** Every case passed here at least once. */
+  solved: boolean;
+  /** The student kept their work when they last stepped away. */
+  saved: boolean;
+  archives: string[];
+  updated_at: number;
+}
+
+/** What the daemon did with the save-or-discard choice. */
+export interface AttemptOutcome {
+  solved: boolean;
+  saved: boolean;
+  kept_layout: boolean;
+  kept_code: boolean;
+  kept_agent_session: boolean;
+  archived_to: string | null;
+  state: AttemptState;
 }
 
 /** One captured board state, as `POST /coach/review` and the WS expect it. */
@@ -165,6 +227,12 @@ export interface BoardSnapshot {
   code_mode?: "full" | "delta" | "unchanged";
   skeleton_hash?: string;
   pseudocode_delta?: string;
+  /**
+   * Messages from the app, not the student — currently the last test run. Its
+   * own channel because the daemon tells the coach to read these as fact,
+   * unlike anything on the board.
+   */
+  app_messages?: string[];
 }
 
 export type Verdict = "on_track" | "subtly_wrong" | "wrong_track" | "unclear";
