@@ -63,13 +63,23 @@ pub struct ProblemDetail {
 
 impl From<Problem> for ProblemDetail {
     fn from(p: Problem) -> Self {
+        // Full editor stub (filtered helpers + Solution), same as solution.py —
+        // not the corpus `starter_code` field alone, which is often just the class.
+        let starter = {
+            let body = crate::generator::code_body(&p);
+            if body.trim().is_empty() {
+                p.starter_code
+            } else {
+                Some(body)
+            }
+        };
         Self {
             task_id: p.task_id,
             question_id: p.question_id,
             difficulty: p.difficulty,
             tags: p.tags,
             problem_description: p.problem_description,
-            starter_code: p.starter_code,
+            starter_code: starter,
             entry_point: p.entry_point,
             cases: p.input_output,
         }

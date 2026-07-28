@@ -5,7 +5,7 @@
  * Leaves alone: region labels, problem title, difficulty/tag chips, hints, frames.
  *
  * Canvas zoom is independent — Excalidraw magnifies everything together.
- * (Monaco uses separate CSS px via {@link codeFontPx}.)
+ * Monaco scales its CSS px by the same zoom so the dock stays proportional.
  */
 
 import { BODY_FONT_PX, type BoardReadingSize } from "./codeFontSize";

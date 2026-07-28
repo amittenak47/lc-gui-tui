@@ -2,8 +2,8 @@
  * Board reading size (S / M / L).
  *
  * Statement body uses scene font sizes from {@link BODY_FONT_PX}; canvas zoom
- * then magnifies the whole board together. Monaco uses {@link CODE_FONT_PX} in
- * CSS px and ignores zoom.
+ * then magnifies the whole board together. Monaco uses {@link CODE_FONT_PX} ×
+ * zoom so the docked editor stays proportional to the statement.
  */
 
 export type BoardReadingSize = "S" | "M" | "L";
@@ -17,11 +17,11 @@ export const BODY_FONT_PX: Record<BoardReadingSize, number> = {
   L: 28,
 };
 
-/** Monaco CSS px — independent of board zoom. */
+/** Monaco CSS px at zoom 1 — close to statement body so they track together. */
 export const CODE_FONT_PX: Record<BoardReadingSize, number> = {
-  S: 12,
-  M: 14,
-  L: 16,
+  S: 14,
+  M: 16,
+  L: 18,
 };
 
 /** Relative to Medium — used by tests / legacy helpers. */
@@ -52,9 +52,12 @@ export function saveBoardReadingSize(size: BoardReadingSize): void {
   }
 }
 
-/** Monaco font size in CSS px (ignores board zoom). */
-export function codeFontPx(size: BoardReadingSize, _zoom?: number): number {
-  return CODE_FONT_PX[size];
+/** Monaco font size in CSS px — scales with board zoom so code tracks statement text. */
+export function codeFontPx(size: BoardReadingSize, zoom = 1): number {
+  const base = CODE_FONT_PX[size];
+  const z = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+  // Keep it readable when fitView zooms far out; cap so extreme zoom-in stays usable.
+  return Math.max(11, Math.min(36, Math.round(base * z)));
 }
 
 /** Canvas units per code line for frame height. */

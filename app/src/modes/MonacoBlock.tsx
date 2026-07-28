@@ -110,9 +110,9 @@ export interface MonacoBlockProps {
   value: string;
   language: string;
   themeId?: string;
-  /** Ignored for font size — kept so callers need not change. */
+  /** Board zoom — Monaco font scales with this so code tracks statement text. */
   zoom?: number;
-  /** User-chosen S/M/L — absolute CSS px, independent of board zoom. */
+  /** User-chosen S/M/L — base CSS px, multiplied by zoom. */
   fontSizePref?: CodeFontSize;
   height?: string;
   onChange: (value: string) => void;
@@ -123,6 +123,7 @@ export default function MonacoBlock({
   value,
   language,
   themeId = "parchment",
+  zoom = 1,
   fontSizePref = "M",
   height = "min(42vh, 360px)",
   onChange,
@@ -131,7 +132,7 @@ export default function MonacoBlock({
   const monacoTheme = useMemo(() => ensureMonacoTheme(themeId), [themeId]);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const foldedForRef = useRef<string | null>(null);
-  const fontSize = codeFontPx(fontSizePref);
+  const fontSize = codeFontPx(fontSizePref, zoom);
 
   useEffect(() => {
     ensureMonacoTheme(themeId);
