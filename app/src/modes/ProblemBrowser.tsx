@@ -41,8 +41,14 @@ export interface ProblemBrowserProps {
   themeId: string;
   onThemePick: (id: string) => void;
   session?: SessionSnapshot | null;
-  /** Start a session with the given picks (empty = fresh empty queue). */
-  onStartSession?: (taskIds: string[]) => void;
+  /**
+   * Start a session with the given picks (empty = fresh empty queue).
+   *
+   * `bank` carries the active tab, so the queue is enqueued against the
+   * problem set the picks actually came from rather than whichever one the
+   * app last opened a problem in.
+   */
+  onStartSession?: (taskIds: string[], bank: SearchOptions) => void;
   onResetSession?: () => void;
   /** Build a random session queue from current filters (Random button / R). */
   onRandomSession?: (bank: SearchOptions) => void;
@@ -232,10 +238,10 @@ export function ProblemBrowser({
   );
 
   const commitStart = useCallback(() => {
-    onStartSession?.([...picked]);
+    onStartSession?.([...picked], bankFilters);
     setPicked(new Set());
     setSelectMode(false);
-  }, [onStartSession, picked]);
+  }, [onStartSession, picked, bankFilters]);
 
   const commitReset = useCallback(() => {
     onResetSession?.();
