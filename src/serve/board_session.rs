@@ -173,20 +173,24 @@ pub fn resolve_pseudocode(
     state: &mut BoardSessionState,
     incoming: &BoardSnapshot,
 ) -> Option<String> {
-    if let Some(mode) = incoming.code_mode.as_deref() {
-        if mode == "delta" {
-            if let Some(delta) = incoming.pseudocode_delta.as_deref() {
-                if incoming
-                    .skeleton_hash
-                    .as_deref()
-                    .is_some_and(|h| state.skeleton_hash.as_deref() == Some(h))
-                {
-                    let merged = merge_solution_delta(state.pseudocode.as_deref(), delta);
-                    state.pseudocode = Some(merged.clone());
-                    return Some(merged);
-                }
+    if incoming.code_mode.as_deref() == Some("delta") {
+        let anchored = incoming
+            .skeleton_hash
+            .as_deref()
+            .is_some_and(|h| state.skeleton_hash.as_deref() == Some(h));
+        return match incoming.pseudocode_delta.as_deref().filter(|_| anchored) {
+            Some(delta) => {
+                let merged = merge_solution_delta(state.pseudocode.as_deref(), delta);
+                state.pseudocode = Some(merged.clone());
+                Some(merged)
             }
-        }
+            // The delta is anchored to a skeleton this session never acked, so
+            // it cannot be reconstructed. Returning the last text we held would
+            // have the coach critique code the student has since rewritten —
+            // confidently, and about lines that no longer exist. A review with
+            // no code attached is the honest degradation.
+            None => None,
+        };
     }
 
     if let Some(hash) = incoming.skeleton_hash.as_deref() {
@@ -208,10 +212,16 @@ pub fn resolve_pseudocode(
 
 /// Merge a method-body delta into a stored full file.
 ///
-/// Phase 3 sends the *entire current solution* in `pseudocode_delta` when the
-/// skeleton hash still matches — the wire savings come from omitting it when
-/// unchanged (see `code_unchanged`). A true line-range patch can slot in here
-/// later without changing the wire shape.
+/// `pseudocode_delta` carries the *entire current solution*, so this is a
+/// passthrough. Before replacing it with a real line patch, note that it would
+/// save nothing: `submitForReview` calls `syncSolution()` first, which PUTs the
+/// whole file to `/workspace/:id/solution` in the request immediately before
+/// `/coach/review`. The code bytes are already on the wire.
+///
+/// The saving worth having is the opposite direction — the daemon has that file
+/// on disk by the time the review arrives, so the review payload could carry no
+/// code at all and the server could read it. That removes the code from the
+/// wire entirely instead of compressing a duplicate.
 fn merge_solution_delta(_baseline: Option<&str>, delta: &str) -> String {
     delta.to_string()
 }
@@ -412,6 +422,46 @@ mod tests {
             },
         );
         assert_eq!(resolved.new_since_last, vec!["m", "z"]);
+    }
+
+    #[test]
+    fn an_unanchored_delta_yields_no_code_rather_than_stale_code() {
+        // Reachable the moment `skeleton_hash` starts tracking edits to the
+        // skeleton, which is what makes a delta mode worth having at all.
+        let mut state = BoardSessionState::default();
+        state.pseudocode = Some("def solve(): return 1  # the old attempt".into());
+        state.skeleton_hash = Some("sha256:starter".into());
+
+        let incoming = BoardSnapshot {
+            code_mode: Some("delta".into()),
+            skeleton_hash: Some("sha256:they-edited-the-imports".into()),
+            pseudocode_delta: Some("def solve(): return 2".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_pseudocode(&mut state, &incoming), None);
+        // And the baseline must not drift to something never reviewed.
+        assert_eq!(
+            state.pseudocode.as_deref(),
+            Some("def solve(): return 1  # the old attempt")
+        );
+    }
+
+    #[test]
+    fn an_anchored_delta_replaces_the_session_pseudocode() {
+        let mut state = BoardSessionState::default();
+        state.pseudocode = Some("def solve(): return 1".into());
+        state.skeleton_hash = Some("sha256:starter".into());
+
+        let incoming = BoardSnapshot {
+            code_mode: Some("delta".into()),
+            skeleton_hash: Some("sha256:starter".into()),
+            pseudocode_delta: Some("def solve(): return 2".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_pseudocode(&mut state, &incoming).as_deref(),
+            Some("def solve(): return 2")
+        );
     }
 
     #[test]
