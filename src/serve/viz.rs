@@ -14,6 +14,7 @@ use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use super::coach::resolve_dataset;
 use super::routes::{description_for, load_meta};
 use super::{blocking, AppError, Shared};
 use crate::llm::coach::{
@@ -26,6 +27,8 @@ use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest, ChatReply, To
 #[derive(Debug, Deserialize)]
 pub struct VizRequest {
     pub task_id: String,
+    #[serde(default)]
+    pub dataset: Option<String>,
     #[serde(default)]
     pub board: BoardSnapshot,
     /// What to draw. Empty means "pick whatever would help most".
@@ -51,9 +54,10 @@ pub async fn viz(
     State(state): State<Shared>,
     Json(request): Json<VizRequest>,
 ) -> Result<Json<VizEnvelope>, AppError> {
+    let dataset = resolve_dataset(request.dataset.as_deref())?;
     let cfg = state.cfg_snapshot();
     let envelope = blocking(move || {
-        let meta = load_meta(&cfg, &request.task_id)?;
+        let meta = load_meta(&cfg, dataset, &request.task_id)?;
         let description = description_for(&meta);
         let prompt = build_viz_prompt(&meta, description.as_deref(), &request.board, &request.ask);
 

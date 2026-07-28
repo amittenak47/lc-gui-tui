@@ -4,6 +4,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+use crate::dataset::{Dataset, Shape};
+use crate::datasets;
+
 /// A problem as loaded from the JSON corpus.
 ///
 /// Solution-bearing fields (`completion`, `response`, `query`) are deliberately
@@ -85,6 +88,67 @@ pub fn load_all(path: &Path) -> Result<Vec<Problem>> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("cannot read problem file {}", path.display()))?;
     parse_json_corpus(&raw, path)
+}
+
+/// Load every problem from `path`, reading it the way `dataset` is shaped.
+///
+/// The original corpus already uses `lc`'s field names, so it keeps the strict
+/// serde path — including the redaction guarantee that `Problem` cannot even
+/// deserialize `completion`/`response`/`query`. Every other corpus goes through
+/// its adapter in [`crate::datasets`], which maps a raw record onto those same
+/// fields and never reads a solution column.
+pub fn load_all_for(dataset: &Dataset, path: &Path) -> Result<Vec<Problem>> {
+    if dataset.shape == Shape::Canonical {
+        return load_all(path);
+    }
+    Ok(load_values(path)?
+        .iter()
+        .filter_map(|raw| datasets::normalize(dataset, raw))
+        .collect())
+}
+
+/// One problem from `path`, reading it the way `dataset` is shaped.
+pub fn load_task_for(dataset: &Dataset, path: &Path, task_id: &str) -> Result<Problem> {
+    if dataset.shape == Shape::Canonical {
+        return load_task(path, task_id);
+    }
+    load_values(path)?
+        .iter()
+        .filter_map(|raw| datasets::normalize(dataset, raw))
+        .find(|problem| problem.task_id == task_id)
+        .with_context(|| format!("task_id {task_id:?} not found in {}", path.display()))
+}
+
+/// Raw records from a `.json` object, a JSON array, or a `.jsonl` file.
+///
+/// Unparseable lines are skipped rather than fatal: these corpora are hundreds
+/// of thousands of rows, and one malformed record must not cost the import.
+fn load_values(path: &Path) -> Result<Vec<serde_json::Value>> {
+    if is_jsonl(path) {
+        let file = File::open(path)
+            .with_context(|| format!("cannot read problem file {}", path.display()))?;
+        let mut out = Vec::new();
+        for line in BufReader::new(file).lines() {
+            let line = line.with_context(|| format!("cannot read {}", path.display()))?;
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str(line) {
+                out.push(value);
+            }
+        }
+        return Ok(out);
+    }
+
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("cannot read problem file {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("cannot parse problem JSON {}", path.display()))?;
+    Ok(match value {
+        serde_json::Value::Array(items) => items,
+        other => vec![other],
+    })
 }
 
 #[derive(Deserialize)]

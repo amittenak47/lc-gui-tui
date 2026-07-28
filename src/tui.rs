@@ -15,6 +15,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::dataset::{self, Dataset, DATASETS};
 use crate::index::{self, ProblemRow, SearchSort};
 use crate::session::{ProblemState, Session};
 use crate::{generator, lists, llm, loader, problem, runner};
@@ -71,6 +72,9 @@ enum ListPickPurpose {
 
 struct App {
     cfg: Config,
+    /// Which problem set is being browsed. `G` cycles it; the GUI shows the
+    /// same choice as the tab strip over the table.
+    dataset: &'static Dataset,
     session: Session,
     conn: rusqlite::Connection,
     screen: Screen,
@@ -98,9 +102,11 @@ struct App {
 impl App {
     fn new(cfg: Config) -> Result<Self> {
         let conn = index::open_db()?;
-        let all_tags = index::all_tags(&conn)?;
+        let dataset = dataset::default();
+        let all_tags = index::all_tags(&conn, dataset)?;
         Ok(Self {
             cfg,
+            dataset,
             session: Session::load_or_new()?,
             conn,
             screen: Screen::Main,
@@ -142,6 +148,7 @@ impl App {
         } else {
             index::search_count(
                 &self.conn,
+                self.dataset,
                 self.browse.difficulty.as_deref(),
                 tag,
                 self.browse.slug_query.as_deref(),
@@ -157,6 +164,7 @@ impl App {
         } else {
             index::search_page(
                 &self.conn,
+                self.dataset,
                 self.browse.difficulty.as_deref(),
                 tag,
                 self.browse.slug_query.as_deref(),
@@ -204,6 +212,27 @@ impl App {
         self.browse_sel = 0;
         self.reload_browse_page()?;
         self.status = format!("tag filter: {}", self.tag_label());
+        Ok(())
+    }
+
+    /// Step to the next problem set. Filters are corpus-specific — a KodCode
+    /// tag means nothing in the LeetCode tables — so they reset with the tab.
+    fn cycle_dataset(&mut self) -> Result<()> {
+        let index = DATASETS
+            .iter()
+            .position(|d| d.id == self.dataset.id)
+            .unwrap_or(0);
+        self.dataset = &DATASETS[(index + 1) % DATASETS.len()];
+        self.all_tags = index::all_tags(&self.conn, self.dataset)?;
+        self.browse.tag_index = 0;
+        self.browse.list_name = None;
+        self.browse_page = 0;
+        self.browse_sel = 0;
+        self.reload_browse_page()?;
+        self.status = format!(
+            "dataset: {} ({} problems)",
+            self.dataset.label, self.browse_total
+        );
         Ok(())
     }
 
@@ -277,13 +306,14 @@ impl App {
     fn pick_random(&mut self) -> Result<()> {
         let row = index::random_one(
             &self.conn,
+            self.dataset,
             self.browse.difficulty.as_deref(),
             self.current_tag_filter(),
             self.browse.slug_query.as_deref(),
         )?
         .ok_or_else(|| anyhow::anyhow!("no problem matches those filters"))?;
         self.selected_problem = Some(row.clone());
-        let _ = self.session.add_to_queue(&row.task_id);
+        let _ = self.session.add_to_queue(&row.key());
         self.screen = Screen::ProblemActions;
         self.menu_sel = 0;
         self.status = format!("random: {}", row.task_id);
@@ -312,6 +342,7 @@ impl App {
     fn random_add_to_list(&mut self, list_name: &str) -> Result<()> {
         let row = index::random_one(
             &self.conn,
+            self.dataset,
             self.browse.difficulty.as_deref(),
             self.current_tag_filter(),
             self.browse.slug_query.as_deref(),
@@ -355,8 +386,8 @@ impl App {
         if id.is_empty() {
             bail!("enter a problem id");
         }
-        let row = loader::resolve(&self.conn, &id)?;
-        self.session.add_to_queue(&row.task_id)?;
+        let row = loader::resolve_in(&self.conn, self.dataset, &id)?;
+        self.session.add_to_queue(&row.key())?;
         self.selected_problem = Some(row);
         self.input_buf.clear();
         self.screen = Screen::ProblemActions;
@@ -369,10 +400,10 @@ impl App {
     fn open_problem_target(&mut self, target: &str) -> Result<()> {
         let row = self.selected_problem.clone().context("no problem")?;
         let json_path = Path::new(&row.json_path);
-        let prob = problem::load_task(json_path, &row.task_id)?;
-        let dir = generator::generate(&self.cfg, &prob, json_path, false)?;
-        self.session.mark_loaded(&row.task_id)?;
-        let _ = self.session.add_to_queue(&row.task_id);
+        let prob = problem::load_task_for(self.dataset, json_path, &row.task_id)?;
+        let dir = generator::generate(&self.cfg, self.dataset, &prob, json_path, false)?;
+        self.session.mark_loaded(&row.key())?;
+        let _ = self.session.add_to_queue(&row.key());
         self.session = Session::load_or_new()?;
         match target {
             "ide" => {
@@ -381,7 +412,10 @@ impl App {
             }
             "canvas" => {
                 let port = self.cfg.serve.port;
-                let url = format!("http://127.0.0.1:{port}/?task={}", row.task_id);
+                let url = format!(
+                    "http://127.0.0.1:{port}/?task={}&dataset={}",
+                    row.task_id, self.dataset.id
+                );
                 self.status = format!(
                     "canvas: open whiteboard at {url} (run `lc serve` if needed) · {}",
                     dir.display()
@@ -406,12 +440,12 @@ impl App {
 
     fn run_tests(&mut self) -> Result<()> {
         let row = self.selected_problem.clone().context("no problem")?;
-        let dir = self.cfg.workspace_dir().join(&row.task_id);
+        let dir = self.dataset.workspace_dir(&self.cfg, &row.task_id);
         if !dir.join(".lc").join("meta.json").exists() {
             bail!("load workspace first (Work on problem)");
         }
         let all_passed =
-            runner::cmd_test_quiet(&self.cfg, Some(&row.task_id), None, false)?;
+            runner::cmd_test_quiet_in(&self.cfg, self.dataset, Some(&row.task_id), None, false)?;
         self.session = Session::load_or_new()?;
         self.status = if all_passed {
             format!("{} — all tests passed", row.task_id)
@@ -426,7 +460,7 @@ impl App {
 
     fn submit_locally(&mut self) -> Result<()> {
         let row = self.selected_problem.clone().context("no problem")?;
-        let dir = self.cfg.workspace_dir().join(&row.task_id);
+        let dir = self.dataset.workspace_dir(&self.cfg, &row.task_id);
         if !dir.join("solution.py").exists() {
             bail!("no solution yet — use Work on problem first");
         }
@@ -443,6 +477,7 @@ impl App {
         };
         index::record_submission(
             &self.conn,
+            self.dataset,
             &row.task_id,
             &dir.display().to_string(),
             passed,
@@ -459,7 +494,7 @@ impl App {
     fn ai_overview(&mut self) -> Result<()> {
         let row = self.selected_problem.clone().context("no problem")?;
         let json_path = Path::new(&row.json_path);
-        let prob = problem::load_task(json_path, &row.task_id)?;
+        let prob = problem::load_task_for(self.dataset, json_path, &row.task_id)?;
         let desc = prob.problem_description.unwrap_or_default();
         let starter = prob.starter_code.unwrap_or_default();
         let user = format!(
@@ -487,7 +522,10 @@ impl App {
 
     fn view_solution(&mut self) -> Result<()> {
         let row = self.selected_problem.clone().context("no problem")?;
-        let path = self.cfg.workspace_dir().join(&row.task_id).join("solution.py");
+        let path = self
+            .dataset
+            .workspace_dir(&self.cfg, &row.task_id)
+            .join("solution.py");
         let text = if path.exists() {
             std::fs::read_to_string(&path)?
         } else {
@@ -584,6 +622,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Char('t') if app.screen == Screen::Browse => app.cycle_tag()?,
         KeyCode::Char('e') if app.screen == Screen::Browse => app.cycle_difficulty()?,
         KeyCode::Char('o') if app.screen == Screen::Browse => app.cycle_sort()?,
+        KeyCode::Char('g') if app.screen == Screen::Browse => app.cycle_dataset()?,
         KeyCode::Char('/') if app.screen == Screen::Browse => {
             app.browse_search_active = true;
             app.browse_search_buf = app
@@ -1183,7 +1222,8 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &App) {
     let max_page = app.browse_total.saturating_sub(1) / PAGE_SIZE + 1;
     let page = app.browse_page + 1;
     let title = format!(
-        "browse · page {page}/{max_page} · {} total · diff: {} · tag: {} · sort: {}{}",
+        "browse [{}] · page {page}/{max_page} · {} total · diff: {} · tag: {} · sort: {}{}",
+        app.dataset.label,
         app.browse_total,
         app.difficulty_label(),
         app.tag_label(),
@@ -1218,7 +1258,7 @@ fn draw_browse(f: &mut Frame, area: Rect, app: &App) {
     )));
 
     for (i, row) in app.browse_rows.iter().enumerate() {
-        let st = match app.session.progress(&row.task_id) {
+        let st = match app.session.progress(&row.key()) {
             None => "-",
             Some(p) => match p.state {
                 ProblemState::Loaded => "ld",
@@ -1340,7 +1380,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             if app.browse_search_active {
                 "typing search · Enter apply · Esc cancel"
             } else {
-                "W/S select · A/D page · / search · T tag · E diff · O sort · L add list · R random→list · I id"
+                "W/S select · A/D page · / search · G dataset · T tag · E diff · O sort · L add list · R random→list · I id"
             }
         }
         Screen::InputId => "type id · Enter confirm · Esc cancel",
@@ -1360,31 +1400,15 @@ fn show_session_stats(app: &mut App) -> Result<()> {
     let rows = if let Some(name) = &app.session.active_list {
         index::list_problem_rows(&app.conn, name, SearchSort::Question)?
     } else {
-        index::search_page(
-            &app.conn,
-            None,
-            None,
-            None,
-            SearchSort::Question,
-            1,
-            0,
-        )?;
-        // use count only for empty queue display - get full queue scope
+        // Queue entries are `dataset/task_id`, so each is resolved in its own
+        // corpus rather than searched for in whichever tab is open.
         app.session
             .queue
             .iter()
-            .filter_map(|tid| {
-                index::search(
-                    &app.conn,
-                    None,
-                    None,
-                    Some(tid),
-                    1,
-                    false,
-                    SearchSort::TaskId,
-                )
-                .ok()
-                .and_then(|v| v.into_iter().next())
+            .filter_map(|key| {
+                let (dataset_id, task_id) = dataset::split_key(key);
+                let dataset = dataset::get(dataset_id).ok()?;
+                loader::resolve_in(&app.conn, dataset, task_id).ok()
             })
             .collect()
     };

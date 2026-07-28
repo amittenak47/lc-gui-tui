@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use directories::{ProjectDirs, UserDirs};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -9,6 +10,7 @@ pub struct Config {
     pub data: DataConfig,
     pub workspace: WorkspaceConfig,
     pub python: PythonConfig,
+    pub tests: TestsConfig,
     pub llm: LlmConfig,
     pub serve: ServeConfig,
 }
@@ -18,6 +20,25 @@ pub struct Config {
 pub struct DataConfig {
     /// Folder containing the 3000+ problem JSON files.
     pub json_dir: Option<String>,
+    /// Per-dataset corpus folders, keyed by the slugs in [`crate::dataset`].
+    ///
+    /// Empty is the normal case: a dataset without an entry reads
+    /// `<json_dir>/<slug>/`, and the default corpus falls back to `<json_dir>`
+    /// itself so a single-corpus install needs no config at all.
+    pub datasets: BTreeMap<String, String>,
+}
+
+/// How `lc test` and the whiteboard's **Run tests** walk the case list.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TestsConfig {
+    /// Stop at the first failing case instead of running every case.
+    ///
+    /// Off by default: the coach's counterexample picking, and the results
+    /// panel's "3/12 passed", both want the whole picture. Turning it on is
+    /// for corpora with hundreds of cases per problem, where the first failure
+    /// is the only one worth waiting for.
+    pub stop_on_first_failure: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +179,16 @@ impl LlmModes {
 }
 
 pub const LLM_PROVIDERS: [&str; 4] = ["local", "ollama", "openai", "groq"];
+
+/// `lc config set` hands everything over as a string, so booleans arrive in
+/// whichever spelling the caller reached for.
+fn parse_bool(value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Ok(true),
+        "false" | "0" | "no" | "off" => Ok(false),
+        other => bail!("expected true or false, got {other:?}"),
+    }
+}
 
 fn validate_provider(value: &str) -> Result<()> {
     if !LLM_PROVIDERS.contains(&value) {
@@ -434,6 +465,20 @@ impl Config {
             "data-dir" | "data.json_dir" => self.data.json_dir = Some(value.to_string()),
             "workspace" | "workspace.dir" => self.workspace.dir = value.to_string(),
             "python" | "python.executable" => self.python.executable = value.to_string(),
+            "tests.stop_on_first_failure" => {
+                self.tests.stop_on_first_failure = parse_bool(value)?
+            }
+            _ if key.starts_with("data.datasets.") => {
+                let slug = &key["data.datasets.".len()..];
+                crate::dataset::get(slug)?;
+                if value.trim().is_empty() {
+                    self.data.datasets.remove(slug);
+                } else {
+                    self.data
+                        .datasets
+                        .insert(slug.to_string(), value.to_string());
+                }
+            }
             "llm.provider" | "llm.default_provider" => {
                 validate_provider(value)?;
                 self.llm.default_provider = value.to_string();
@@ -467,10 +512,16 @@ impl Config {
             }
             other => bail!(
                 "unknown config key {other:?}; known keys: data-dir, workspace, python, \
+                 data.datasets.<{}>, tests.stop_on_first_failure, \
                  llm.provider, llm.local.{{base_url,model,vision_model}}, \
                  llm.ollama.{{base_url,model,vision_model}}, \
                  llm.openai.{{base_url,model,vision_model}}, \
                  llm.groq.{{base_url,model,vision_model}}, llm.modes.<{}>, serve.port, serve.token",
+                crate::dataset::DATASETS
+                    .iter()
+                    .map(|d| d.id)
+                    .collect::<Vec<_>>()
+                    .join("|"),
                 COACH_MODES.join("|")
             ),
         }
@@ -482,6 +533,12 @@ impl Config {
             "data-dir" | "data.json_dir" => self.data.json_dir.clone().unwrap_or_default(),
             "workspace" | "workspace.dir" => self.workspace.dir.clone(),
             "python" | "python.executable" => self.python.executable.clone(),
+            "tests.stop_on_first_failure" => self.tests.stop_on_first_failure.to_string(),
+            _ if key.starts_with("data.datasets.") => {
+                let slug = &key["data.datasets.".len()..];
+                crate::dataset::get(slug)?;
+                self.data.datasets.get(slug).cloned().unwrap_or_default()
+            }
             "llm.provider" | "llm.default_provider" => self.llm.default_provider.clone(),
             "llm.local.base_url" => self.llm.local.base_url.clone(),
             "llm.local.model" => self.llm.local.model.clone(),
@@ -513,6 +570,16 @@ impl Config {
 
     pub fn workspace_dir(&self) -> PathBuf {
         expand_tilde(&self.workspace.dir)
+    }
+
+    /// Explicit corpus folder for one dataset, if the user set one.
+    /// [`crate::dataset::Dataset::corpus_dir`] owns the fallback rules.
+    pub fn dataset_dir(&self, id: &str) -> Option<String> {
+        self.data
+            .datasets
+            .get(id)
+            .map(|dir| dir.trim().to_string())
+            .filter(|dir| !dir.is_empty())
     }
 
     /// Pairing token for `lc serve --lan`, generated and persisted on first use
@@ -628,6 +695,35 @@ mod tests {
         assert!(cfg.serve.token.is_none());
     }
 
+    #[test]
+    fn the_test_walk_defaults_to_running_every_case() {
+        let mut cfg = Config::default();
+        assert!(!cfg.tests.stop_on_first_failure);
+        for spelling in ["true", "1", "yes", "ON"] {
+            cfg.set("tests.stop_on_first_failure", spelling).unwrap();
+            assert!(cfg.tests.stop_on_first_failure, "{spelling}");
+        }
+        cfg.set("tests.stop_on_first_failure", "no").unwrap();
+        assert_eq!(cfg.get("tests.stop_on_first_failure").unwrap(), "false");
+        assert!(cfg.set("tests.stop_on_first_failure", "maybe").is_err());
+    }
+
+    #[test]
+    fn dataset_dirs_are_per_slug_and_reject_unknown_ones() {
+        let mut cfg = Config::default();
+        assert!(cfg.dataset_dir("kodcode").is_none());
+        cfg.set("data.datasets.kodcode", "~/corpora/kodcode").unwrap();
+        assert_eq!(cfg.dataset_dir("kodcode").as_deref(), Some("~/corpora/kodcode"));
+        assert_eq!(
+            cfg.get("data.datasets.kodcode").unwrap(),
+            "~/corpora/kodcode"
+        );
+        // Clearing removes the entry rather than storing an empty path.
+        cfg.set("data.datasets.kodcode", "  ").unwrap();
+        assert!(cfg.dataset_dir("kodcode").is_none());
+        assert!(cfg.set("data.datasets.nope", "/tmp").is_err());
+    }
+
     /// An existing config predates every new section, so all of them must
     /// default in rather than failing the parse.
     #[test]
@@ -646,5 +742,7 @@ mod tests {
         assert_eq!(cfg.llm.modes.ambient, "local");
         assert_eq!(cfg.serve.port, 7878);
         assert!(cfg.serve.token.is_none());
+        assert!(cfg.data.datasets.is_empty(), "no dataset overrides implied");
+        assert!(!cfg.tests.stop_on_first_failure);
     }
 }

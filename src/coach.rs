@@ -113,6 +113,7 @@ mod tests {
     fn context(cases: usize) -> LeetCodeContext {
         LeetCodeContext::new(
             WorkspaceMeta {
+                dataset: crate::dataset::DEFAULT_DATASET.into(),
                 task_id: "two-sum".into(),
                 question_id: None,
                 difficulty: None,

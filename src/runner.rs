@@ -7,6 +7,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
+use crate::dataset::{self, Dataset};
 use crate::generator::WorkspaceMeta;
 use crate::{index, loader};
 
@@ -58,12 +59,22 @@ pub fn read_meta(dir: &Path) -> Result<WorkspaceMeta> {
     serde_json::from_str(&raw).with_context(|| format!("invalid meta {}", path.display()))
 }
 
-/// Workspace dir for an explicit id, or the current directory if it is one.
+/// Workspace dir for an explicit id in the default corpus, or the current
+/// directory if it is one.
 pub fn locate_workspace(cfg: &Config, id: Option<&str>) -> Result<PathBuf> {
+    locate_workspace_in(cfg, dataset::default(), id)
+}
+
+/// Workspace dir for an explicit id within `dataset`, or the current directory.
+pub fn locate_workspace_in(
+    cfg: &Config,
+    dataset: &'static Dataset,
+    id: Option<&str>,
+) -> Result<PathBuf> {
     if let Some(id) = id {
         let conn = index::open_db()?;
-        let row = loader::resolve(&conn, id)?;
-        let dir = cfg.workspace_dir().join(&row.task_id);
+        let row = loader::resolve_in(&conn, dataset, id)?;
+        let dir = dataset.workspace_dir(cfg, &row.task_id);
         if !dir.join(".lc").join("meta.json").exists() {
             bail!(
                 "no workspace for {} yet — run `lc load {}` first",
@@ -93,7 +104,19 @@ pub fn cmd_test(
     full: bool,
     verbose: bool,
 ) -> Result<bool> {
-    cmd_test_inner(cfg, id, case, full, verbose, false)
+    cmd_test_inner(cfg, dataset::default(), id, case, full, verbose, false)
+}
+
+/// [`cmd_test`] scoped to one dataset.
+pub fn cmd_test_in(
+    cfg: &Config,
+    dataset: &'static Dataset,
+    id: Option<&str>,
+    case: Option<u32>,
+    full: bool,
+    verbose: bool,
+) -> Result<bool> {
+    cmd_test_inner(cfg, dataset, id, case, full, verbose, false)
 }
 
 pub fn cmd_test_quiet(
@@ -102,18 +125,29 @@ pub fn cmd_test_quiet(
     case: Option<u32>,
     full: bool,
 ) -> Result<bool> {
-    cmd_test_inner(cfg, id, case, full, false, true)
+    cmd_test_inner(cfg, dataset::default(), id, case, full, false, true)
+}
+
+pub fn cmd_test_quiet_in(
+    cfg: &Config,
+    dataset: &'static Dataset,
+    id: Option<&str>,
+    case: Option<u32>,
+    full: bool,
+) -> Result<bool> {
+    cmd_test_inner(cfg, dataset, id, case, full, false, true)
 }
 
 fn cmd_test_inner(
     cfg: &Config,
+    dataset: &'static Dataset,
     id: Option<&str>,
     case: Option<u32>,
     full: bool,
     verbose: bool,
     quiet: bool,
 ) -> Result<bool> {
-    let dir = locate_workspace(cfg, id)?;
+    let dir = locate_workspace_in(cfg, dataset, id)?;
     let meta = read_meta(&dir)?;
 
     let mut cmd = Command::new(&cfg.python.executable);
@@ -123,6 +157,11 @@ fn cmd_test_inner(
     }
     if full {
         cmd.arg("--full");
+    }
+    // Settings → Tests. Off by default, so the results panel and the coach's
+    // counterexample picking both see every case.
+    if cfg.tests.stop_on_first_failure {
+        cmd.arg("--stop-on-first-failure");
     }
     let output = cmd.output().with_context(|| {
         format!(
@@ -154,7 +193,9 @@ fn cmd_test_inner(
     save_last_run(&meta.task_id, &dir, &results)?;
     if let Ok(mut session) = crate::session::Session::load_or_new() {
         let passed = results.iter().filter(|r| r.pass).count() as u32;
-        let _ = session.mark_tested(&meta.task_id, passed, results.len() as u32);
+        // Dataset-qualified, so a fail on `kodcode/two-sum` does not badge
+        // `leetcode/two-sum` in the browser.
+        let _ = session.mark_tested(&meta.key(), passed, results.len() as u32);
     }
     Ok(results.iter().all(|r| r.pass))
 }

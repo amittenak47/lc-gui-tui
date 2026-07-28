@@ -5,7 +5,10 @@ use comfy_table::Table;
 use std::path::{Path, PathBuf};
 
 // The CLI and `lc serve` are both shells over the same library crate.
-use lc::{config, generator, index, lists, llm, loader, problem, runner, serve, session, stats, tui};
+use lc::{
+    config, dataset, generator, index, lists, llm, loader, problem, runner, serve, session, stats,
+    tui,
+};
 
 use config::Config;
 use index::{ProblemRow, SearchSort};
@@ -47,9 +50,17 @@ enum Cmd {
         /// Drop everything and re-index from scratch
         #[arg(long)]
         rebuild: bool,
+        /// Index only this problem set (default: every dataset with a corpus folder)
+        #[arg(long)]
+        dataset: Option<String>,
     },
+    /// List the problem sets and how many problems each has indexed
+    Datasets,
     /// Search indexed problems
     Search {
+        /// Problem set to search (default: leetcode)
+        #[arg(long)]
+        dataset: Option<String>,
         /// Filter by difficulty (Easy / Medium / Hard)
         #[arg(long)]
         difficulty: Option<String>,
@@ -67,6 +78,8 @@ enum Cmd {
     },
     /// Pick random problem(s), optionally filtered
     Random {
+        #[arg(long)]
+        dataset: Option<String>,
         #[arg(short = 'n', long = "count", default_value_t = 1)]
         count: u32,
         #[arg(long)]
@@ -78,6 +91,9 @@ enum Cmd {
     Load {
         /// task_id slug, LeetCode question id, or unique slug prefix
         id: String,
+        /// Problem set the id belongs to (default: leetcode)
+        #[arg(long)]
+        dataset: Option<String>,
         /// Open the generated folder in Cursor
         #[arg(long)]
         open: bool,
@@ -89,6 +105,9 @@ enum Cmd {
     Test {
         /// task_id / question id; defaults to the workspace in the current directory
         id: Option<String>,
+        /// Problem set the id belongs to (default: leetcode)
+        #[arg(long)]
+        dataset: Option<String>,
         /// Run a single case (1-indexed)
         #[arg(long)]
         case: Option<u32>,
@@ -220,11 +239,22 @@ fn run_cmd(cmd: Cmd) -> Result<()> {
             }
         },
         Cmd::Config(cmd) => cmd_config(cmd),
-        Cmd::Index { rebuild } => {
+        Cmd::Index { rebuild, dataset } => {
             let cfg = Config::load()?;
-            index::cmd_index(&cfg, rebuild)
+            let only = match dataset.as_deref() {
+                Some(slug) => Some(dataset::get(slug)?),
+                None => None,
+            };
+            index::cmd_index(&cfg, rebuild, only)
+        }
+        Cmd::Datasets => {
+            let cfg = Config::load()?;
+            let conn = index::open_db()?;
+            print_datasets(&index::dataset_infos(&conn, &cfg)?);
+            Ok(())
         }
         Cmd::Search {
+            dataset: dataset_id,
             difficulty,
             tag,
             query,
@@ -235,6 +265,7 @@ fn run_cmd(cmd: Cmd) -> Result<()> {
             let conn = index::open_db()?;
             let rows = index::search(
                 &conn,
+                dataset::resolve(dataset_id.as_deref())?,
                 difficulty.as_deref(),
                 tag.as_deref(),
                 query.as_deref(),
@@ -246,6 +277,7 @@ fn run_cmd(cmd: Cmd) -> Result<()> {
             Ok(())
         }
         Cmd::Random {
+            dataset: dataset_id,
             count,
             difficulty,
             tag,
@@ -253,6 +285,7 @@ fn run_cmd(cmd: Cmd) -> Result<()> {
             let conn = index::open_db()?;
             let rows = index::search(
                 &conn,
+                dataset::resolve(dataset_id.as_deref())?,
                 difficulty.as_deref(),
                 tag.as_deref(),
                 None,
@@ -266,14 +299,20 @@ fn run_cmd(cmd: Cmd) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Load { id, open, force } => {
+        Cmd::Load {
+            id,
+            dataset: dataset_id,
+            open,
+            force,
+        } => {
             let cfg = Config::load()?;
+            let dataset = dataset::resolve(dataset_id.as_deref())?;
             let conn = index::open_db()?;
-            let row = loader::resolve(&conn, &id)?;
+            let row = loader::resolve_in(&conn, dataset, &id)?;
             let json_path = Path::new(&row.json_path);
-            let prob = problem::load_task(json_path, &row.task_id)?;
-            let dir = generator::generate(&cfg, &prob, json_path, force)?;
-            Session::load_or_new()?.mark_loaded(&prob.task_id)?;
+            let prob = problem::load_task_for(dataset, json_path, &row.task_id)?;
+            let dir = generator::generate(&cfg, dataset, &prob, json_path, force)?;
+            Session::load_or_new()?.mark_loaded(&row.key())?;
             println!("Loaded {} → {}", prob.task_id.bold(), dir.display());
             println!(
                 "  README.md · solution.py · run_tests.py ({} test cases)",
@@ -288,12 +327,15 @@ fn run_cmd(cmd: Cmd) -> Result<()> {
         }
         Cmd::Test {
             id,
+            dataset: dataset_id,
             case,
             full,
             verbose,
         } => {
             let cfg = Config::load()?;
-            let all_passed = runner::cmd_test(&cfg, id.as_deref(), case, full, verbose)?;
+            let dataset = dataset::resolve(dataset_id.as_deref())?;
+            let all_passed =
+                runner::cmd_test_in(&cfg, dataset, id.as_deref(), case, full, verbose)?;
             if !all_passed {
                 std::process::exit(1);
             }
@@ -432,6 +474,24 @@ fn cmd_ask(
     let answer = provider.chat(llm::prompt::SYSTEM_PROMPT, &user_prompt)?;
     println!("\n{answer}");
     Ok(())
+}
+
+fn print_datasets(infos: &[lc::dataset::DatasetInfo]) {
+    let mut table = Table::new();
+    table.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED);
+    table.set_header(["dataset", "problems", "source", "corpus dir"]);
+    for info in infos {
+        table.add_row([
+            info.id.clone(),
+            info.count.to_string(),
+            info.source.clone(),
+            info.corpus_dir.clone().unwrap_or_else(|| "(no data-dir set)".into()),
+        ]);
+    }
+    println!("{table}");
+    if infos.iter().all(|info| info.count == 0) {
+        println!("nothing indexed yet — download a corpus into its folder, then `lc index`");
+    }
 }
 
 fn print_problem_rows(rows: &[ProblemRow]) {

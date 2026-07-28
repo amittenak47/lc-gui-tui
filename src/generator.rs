@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
+use crate::dataset::{self, Dataset};
 use crate::problem::{IoCase, Problem};
 
 const README_TMPL: &str = include_str!("../templates/README.md.jinja");
@@ -16,6 +17,11 @@ const RUN_TESTS_PY: &str = include_str!("../templates/run_tests.py");
 /// carry `completion`/`response`, so no solution text can end up here.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WorkspaceMeta {
+    /// Which corpus this workspace came from. Defaults to the original
+    /// LeetCode dataset so `.lc/meta.json` files written before datasets
+    /// existed keep loading.
+    #[serde(default = "default_dataset_id")]
+    pub dataset: String,
     pub task_id: String,
     pub question_id: Option<String>,
     pub difficulty: Option<String>,
@@ -26,8 +32,31 @@ pub struct WorkspaceMeta {
     pub test: Option<String>,
 }
 
-pub fn generate(cfg: &Config, problem: &Problem, json_path: &Path, force: bool) -> Result<PathBuf> {
-    let dir = cfg.workspace_dir().join(&problem.task_id);
+fn default_dataset_id() -> String {
+    dataset::DEFAULT_DATASET.to_string()
+}
+
+impl WorkspaceMeta {
+    /// The dataset this workspace belongs to, falling back to the default
+    /// corpus if the recorded slug is no longer known.
+    pub fn dataset(&self) -> &'static Dataset {
+        dataset::get(&self.dataset).unwrap_or_else(|_| dataset::default())
+    }
+
+    /// `dataset/task_id` — the key `session.json` uses.
+    pub fn key(&self) -> String {
+        self.dataset().key(&self.task_id)
+    }
+}
+
+pub fn generate(
+    cfg: &Config,
+    dataset: &Dataset,
+    problem: &Problem,
+    json_path: &Path,
+    force: bool,
+) -> Result<PathBuf> {
+    let dir = dataset.workspace_dir(cfg, &problem.task_id);
     fs::create_dir_all(dir.join(".lc"))
         .with_context(|| format!("cannot create workspace {}", dir.display()))?;
 
@@ -35,10 +64,6 @@ pub fn generate(cfg: &Config, problem: &Problem, json_path: &Path, force: bool) 
     env.add_template("readme", README_TMPL)?;
     env.add_template("solution", SOLUTION_TMPL)?;
 
-    let entry_point = problem
-        .entry_point
-        .clone()
-        .unwrap_or_else(|| "?".to_string());
     let examples: Vec<&IoCase> = problem.input_output.iter().take(3).collect();
 
     let readme = env.get_template("readme")?.render(context! {
@@ -53,13 +78,7 @@ pub fn generate(cfg: &Config, problem: &Problem, json_path: &Path, force: bool) 
     })?;
     fs::write(dir.join("README.md"), readme)?;
 
-    let solution = env.get_template("solution")?.render(context! {
-        task_id => problem.task_id,
-        question_id => problem.question_id,
-        difficulty => problem.difficulty,
-        entry_point => entry_point,
-        code_body => code_body(problem),
-    })?;
+    let solution = solution_stub(problem);
     let solution_path = dir.join("solution.py");
     if !solution_path.exists() || force {
         fs::write(&solution_path, solution)?;
@@ -70,6 +89,7 @@ pub fn generate(cfg: &Config, problem: &Problem, json_path: &Path, force: bool) 
     fs::write(dir.join("run_tests.py"), RUN_TESTS_PY)?;
 
     let meta = WorkspaceMeta {
+        dataset: dataset.id.to_string(),
         task_id: problem.task_id.clone(),
         question_id: problem.question_id.clone(),
         difficulty: problem.difficulty.clone(),
@@ -85,6 +105,30 @@ pub fn generate(cfg: &Config, problem: &Problem, json_path: &Path, force: bool) 
     )?;
 
     Ok(dir)
+}
+
+/// The `solution.py` a fresh `lc load` writes.
+///
+/// Public because discarding an attempt resets the file to exactly this — see
+/// [`crate::attempt::finish`]. Rendering it again beats remembering it: the
+/// stub is derived from the corpus, and the corpus is what a re-attempt should
+/// start from.
+pub fn solution_stub(problem: &Problem) -> String {
+    let mut env = Environment::new();
+    // The template is embedded at compile time and its context is fixed, so a
+    // render failure here is not something a caller could act on.
+    env.add_template("solution", SOLUTION_TMPL)
+        .expect("embedded solution template parses");
+    env.get_template("solution")
+        .expect("template was just added")
+        .render(context! {
+            task_id => problem.task_id,
+            question_id => problem.question_id,
+            difficulty => problem.difficulty,
+            entry_point => problem.entry_point.clone().unwrap_or_else(|| "?".to_string()),
+            code_body => code_body(problem),
+        })
+        .unwrap_or_else(|_| code_body(problem))
 }
 
 /// `prompt` usually holds imports/helpers and `starter_code` the class skeleton;

@@ -27,12 +27,16 @@ pub enum ClientFrame {
     Hello {
         session_id: String,
         task_id: String,
+        #[serde(default)]
+        dataset: Option<String>,
     },
     /// A board snapshot worth looking at. The client only sends these when its
     /// own scene hash changed and enough new strokes accumulated.
     Snapshot {
         session_id: String,
         task_id: String,
+        #[serde(default)]
+        dataset: Option<String>,
         /// Fingerprint of the scene, from Excalidraw's element version counters.
         scene_hash: u64,
         #[serde(flatten)]
@@ -107,6 +111,7 @@ async fn handle(state: &Shared, frame: ClientFrame) -> ServerFrame {
         ClientFrame::Hello {
             session_id,
             task_id,
+            dataset: _,
         } => {
             let nudges_so_far = {
                 let mut sessions = state.sessions.lock().await;
@@ -133,13 +138,22 @@ async fn handle(state: &Shared, frame: ClientFrame) -> ServerFrame {
         ClientFrame::Snapshot {
             session_id,
             task_id,
+            dataset,
             scene_hash,
             board,
         } => {
+            let dataset = match crate::dataset::resolve(dataset.as_deref()) {
+                Ok(dataset) => dataset,
+                Err(err) => {
+                    return ServerFrame::Error {
+                        message: format!("{err:#}"),
+                    }
+                }
+            };
             let mut board = board;
             {
                 let mut store = state.board_sessions.lock().await;
-                let session = store.entry(&task_id);
+                let session = store.entry(&dataset.key(&task_id));
                 board = board_session::resolve_board_snapshot(session, board);
                 if let Some(pseudo) = board_session::resolve_pseudocode(session, &board) {
                     board.pseudocode = Some(pseudo);
@@ -165,7 +179,7 @@ async fn handle(state: &Shared, frame: ClientFrame) -> ServerFrame {
                 (session.said.clone(), session.nudges_so_far())
             };
 
-            match ambient_nudge(state, &task_id, board, already_said, nudges_so_far).await {
+            match ambient_nudge(state, dataset, &task_id, board, already_said, nudges_so_far).await {
                 Ok(nudge) => {
                     let mut sessions = state.sessions.lock().await;
                     let session = sessions.entry(&session_id, &task_id);
@@ -185,6 +199,7 @@ async fn handle(state: &Shared, frame: ClientFrame) -> ServerFrame {
 
 async fn ambient_nudge(
     state: &Shared,
+    dataset: &'static crate::dataset::Dataset,
     task_id: &str,
     board: BoardSnapshot,
     already_said: Vec<String>,
@@ -193,7 +208,7 @@ async fn ambient_nudge(
     let cfg = state.cfg_snapshot();
     let task_id = task_id.to_string();
     tokio::task::spawn_blocking(move || {
-        let meta = load_meta(&cfg, &task_id)?;
+        let meta = load_meta(&cfg, dataset, &task_id)?;
         let description = description_for(&meta);
         let prompt = build_ambient_prompt(
             &meta,

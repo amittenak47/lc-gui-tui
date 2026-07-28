@@ -97,7 +97,7 @@ fn aggregate_inner(rows: &[ProblemRow], session: Option<&Session>) -> Aggregate 
             continue;
         };
 
-        match session.progress(&row.task_id) {
+        match session.progress(&row.key()) {
             None => agg.untested += 1,
             Some(p) => match p.state {
                 ProblemState::Loaded => agg.loaded += 1,
@@ -146,6 +146,7 @@ fn print_block(title: String, agg: &Aggregate, started_at: u64) {
 fn all_rows(conn: &Connection) -> Result<Vec<ProblemRow>> {
     crate::index::search(
         conn,
+        crate::dataset::default(),
         None,
         None,
         None,
@@ -162,6 +163,7 @@ fn list_rows(conn: &Connection, name: &str) -> Result<Vec<ProblemRow>> {
         |r| r.get(0),
     )?;
 
+    // Named lists belong to the default corpus — see `index::SHARED_SCHEMA`.
     let mut stmt = conn.prepare(
         "SELECT p.task_id, p.question_id, p.difficulty, p.tags, p.json_path, p.test_count \
          FROM list_items li \

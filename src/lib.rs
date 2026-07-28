@@ -12,9 +12,17 @@
 //! workspace, the index, or a tutor prompt through it. [`reveal`] is the one
 //! deliberate exception, reachable only from an explicit user action — see that
 //! module's docs.
+//!
+//! [`datasets`] adds a second front to defend: its adapters build a `Problem`
+//! by hand from a differently-shaped corpus, so serde's protection does not
+//! apply to them. That module lists the solution-bearing columns and tests that
+//! no adapter reads one.
 
+pub mod attempt;
 pub mod coach;
 pub mod config;
+pub mod dataset;
+pub mod datasets;
 pub mod generator;
 pub mod index;
 pub mod lists;

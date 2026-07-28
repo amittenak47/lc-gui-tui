@@ -386,6 +386,7 @@ mod tests {
         );
 
         let meta = WorkspaceMeta {
+            dataset: crate::dataset::DEFAULT_DATASET.into(),
             task_id: "two-sum".into(),
             question_id: Some("1".into()),
             difficulty: Some("Easy".into()),

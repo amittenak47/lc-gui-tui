@@ -962,6 +962,7 @@ mod tests {
 
     fn meta_with_cases(n: usize) -> WorkspaceMeta {
         WorkspaceMeta {
+            dataset: crate::dataset::DEFAULT_DATASET.into(),
             task_id: "two-sum".into(),
             question_id: Some("1".into()),
             difficulty: Some("Easy".into()),
@@ -1277,6 +1278,7 @@ mod tests {
             "input_output": [{"input": "nums = [2,7]", "output": "[0,1]"}]}"#;
         let problem: crate::problem::Problem = serde_json::from_str(record).unwrap();
         let meta = WorkspaceMeta {
+            dataset: crate::dataset::DEFAULT_DATASET.into(),
             task_id: problem.task_id.clone(),
             question_id: problem.question_id.clone(),
             difficulty: problem.difficulty.clone(),
