@@ -174,6 +174,13 @@ export function elementIds(elements: readonly SceneElementLike[]): Set<string> {
   return new Set(studentElements(elements).map((el) => el.id));
 }
 
+/** Truncated id → Excalidraw version, for structure deltas. */
+export function captureVersions(elements: readonly SceneElementLike[]): Map<string, number> {
+  return new Map(
+    studentElements(elements).map((el) => [truncateCaptureId(el.id), el.version]),
+  );
+}
+
 /** Longest edge of the board PNG, in pixels, before it is base64'd. */
 export const CAPTURE_MAX_EDGE = 1600;
 

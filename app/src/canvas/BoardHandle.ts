@@ -61,6 +61,8 @@ export interface BoardHandle {
    * elements — both sources have to reach ML Kit or handwriting goes unread.
    */
   getInkStrokes(): InkStroke[];
+  /** Committed raster ink ops — for ambient/review fingerprints. */
+  getInkOpCount(): number;
   setTool(tool: ToolName): void;
   undo(): void;
   scrollToContent(): void;

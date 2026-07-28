@@ -16,6 +16,7 @@ function board(parts: {
     getElements: () => parts.elements ?? [],
     getStrokes: () => parts.strokes ?? [],
     getInkStrokes: () => parts.inkStrokes ?? [],
+    getInkOpCount: () => (parts.inkStrokes ?? []).length,
     exportPng: async () => parts.png ?? "",
   } as unknown as BoardHandle;
 }
