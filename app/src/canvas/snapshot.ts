@@ -53,8 +53,10 @@ export interface SnapshotOptions {
   turnIndex?: number;
   /** Server-acknowledged structure baseline — enables `board_ops` on the wire. */
   structureBaseline?: StructureBaseline | null;
-  /** SHA-256 hex of the starter skeleton loaded for this problem. */
+  /** SHA-256 hex of the skeleton as it stands now (imports + signature). */
   skeletonHash?: string;
+  /** Skeleton hash the server acknowledged — a delta is anchored to this. */
+  lastSkeletonHash?: string;
   /** Hash of the pseudocode last sent successfully. */
   lastPseudocodeHash?: string;
 }
@@ -108,10 +110,17 @@ export async function buildSnapshot(
     const trimmed = options.pseudocode.trim();
     if (trimmed.length > 0) {
       const hash = await sha256Hex(trimmed);
+      // A delta is anchored to the skeleton the server last acknowledged. Edit
+      // an import or the signature and that anchor is gone, so the file has to
+      // go in full — the server refuses an unanchored delta rather than
+      // reviewing the code it still holds.
+      const anchored =
+        options.lastSkeletonHash === undefined ||
+        options.lastSkeletonHash === options.skeletonHash;
       if (options.lastPseudocodeHash && options.lastPseudocodeHash === hash) {
         snapshot.code_mode = "unchanged";
         if (options.skeletonHash) snapshot.skeleton_hash = options.skeletonHash;
-      } else if (options.skeletonHash && options.structureBaseline) {
+      } else if (options.skeletonHash && options.structureBaseline && anchored) {
         snapshot.code_mode = "delta";
         snapshot.pseudocode_delta = trimmed;
         snapshot.skeleton_hash = options.skeletonHash;

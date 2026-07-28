@@ -43,6 +43,7 @@ import type { StructureBaseline } from "./canvas/boardDelta";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
 import { buildSnapshot, sceneFingerprint, structureBaselineFromBoard } from "./canvas/snapshot";
 import { sha256Hex } from "./util/codeHash";
+import { skeletonOf } from "./util/solutionSplit";
 import { AgentSidePanel, type CoachChatMessage, type CoachSendFlags } from "./modes/AgentSidePanel";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
@@ -176,7 +177,8 @@ export function App() {
   /** Server-ack structure baseline for Phase 3 board_ops. */
   const lastStructureBaselineRef = useRef<StructureBaseline | null>(null);
   const lastPseudocodeHashRef = useRef<string | undefined>(undefined);
-  const skeletonHashRef = useRef<string | undefined>(undefined);
+  /** Skeleton hash the server acknowledged — what a code delta is anchored to. */
+  const lastSkeletonHashRef = useRef<string | undefined>(undefined);
   const coachRef = useRef<AmbientCoach | null>(null);
   // The recognizer can be swapped after mount; read it through a ref so the
   // ambient loop doesn't need to restart when it lands.
@@ -241,7 +243,8 @@ export function App() {
     const snapshot = await buildSnapshot(board, recognizerRef.current, {
       pseudocode: pseudocodeRef.current,
       structureBaseline: lastStructureBaselineRef.current,
-      skeletonHash: skeletonHashRef.current,
+      skeletonHash: await sha256Hex(skeletonOf(pseudocodeRef.current)),
+      lastSkeletonHash: lastSkeletonHashRef.current,
       lastPseudocodeHash: lastPseudocodeHashRef.current,
     });
     lastIdsRef.current = snapshot.ids;
@@ -320,6 +323,7 @@ export function App() {
       reviewTurnRef.current = 0;
       lastStructureBaselineRef.current = null;
       lastPseudocodeHashRef.current = undefined;
+      lastSkeletonHashRef.current = undefined;
       if (bank) setBankFilters(bank);
       if (fromBrowse) {
         setHoldBrowseOverlay(true);
@@ -358,7 +362,6 @@ export function App() {
         }
 
         setPseudocode(source);
-        skeletonHashRef.current = await sha256Hex(source);
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the viewport does not jump.
         setBoardPreparing(true);
@@ -554,7 +557,8 @@ export function App() {
           turnIndex: reviewTurnRef.current,
           includePng: modeHasVision("review"),
           structureBaseline: lastStructureBaselineRef.current,
-          skeletonHash: skeletonHashRef.current,
+          skeletonHash: await sha256Hex(skeletonOf(pseudocodeRef.current)),
+          lastSkeletonHash: lastSkeletonHashRef.current,
           lastPseudocodeHash: lastPseudocodeHashRef.current,
         });
         if (note) {
@@ -610,6 +614,7 @@ export function App() {
         reviewTurnRef.current += 1;
         lastStructureBaselineRef.current = structureBaselineFromBoard(board.getElements());
         lastPseudocodeHashRef.current = await sha256Hex(pseudocodeRef.current);
+        lastSkeletonHashRef.current = await sha256Hex(skeletonOf(pseudocodeRef.current));
       }
     } catch (cause) {
       setError(messageOf(cause));

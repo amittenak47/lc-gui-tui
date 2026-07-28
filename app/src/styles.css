@@ -2408,6 +2408,38 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: hidden;
 }
 
+/* Skeleton / Solution split. Kept to one compact strip: in the dock this sits
+ * inside the code region's own frame, where every pixel is board space. */
+.lc-code-tabs {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+}
+
+.lc-code-tab {
+  min-height: 26px;
+  margin-bottom: -1px;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  transition: color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.lc-code-tab:hover {
+  color: var(--ink);
+}
+
+.lc-code-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
 .lc-home {
   min-height: 28px;
   height: 28px;
