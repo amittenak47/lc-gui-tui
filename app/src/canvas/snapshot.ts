@@ -23,6 +23,13 @@ export interface Snapshot {
   sceneHash: number;
   /** Element ids at capture time, for the next tick's stroke delta. */
   ids: Set<string>;
+  /**
+   * Whether the student wrote anything by hand, regardless of whether the
+   * recognizer could read it. Empty `recognized_text` means "unreadable here",
+   * not "blank board" — off Android there is no recognizer at all, and the
+   * handwriting rides along in the PNG instead.
+   */
+  hasHandwriting: boolean;
 }
 
 export interface SnapshotOptions {
@@ -46,9 +53,13 @@ export async function buildSnapshot(
   const elements = board.getElements();
   const typed = captureTypedText(elements);
 
+  // Both stroke sources, or a pen-only board reads as blank: the pen draws on
+  // the raster layer and never produces a `freedraw` element.
+  const strokes = [...board.getStrokes(), ...board.getInkStrokes()];
+
   let handwriting = "";
   try {
-    handwriting = await recognizer.recognize(board.getStrokes());
+    handwriting = await recognizer.recognize(strokes);
   } catch {
     // A recognizer failure must not block a submit; typed text still goes.
     handwriting = "";
@@ -82,5 +93,6 @@ export async function buildSnapshot(
     board: snapshot,
     sceneHash: sceneHash(elements),
     ids,
+    hasHandwriting: strokes.length > 0,
   };
 }

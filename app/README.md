@@ -179,6 +179,12 @@ Measure ink latency on a scene of ~200 elements early. If it's intolerable, the
 fallback is a raw-canvas ink layer under Excalidraw — `Board.tsx` sits behind
 `BoardHandle`, so that swap stays local to `canvas/`.
 
+The pen already draws on that raw-canvas layer (`RasterInkLayer.tsx`) rather than
+on Excalidraw, so both ways the coach reads a board go through `rasterInk.ts`:
+`getInkStrokes()` feeds the ops to ML Kit on Android, and `exportPng()` repaints
+them into the PNG when the selected model has vision. Neither Excalidraw's
+`freedraw` capture nor its exporter knows the pen exists.
+
 ## Layout
 
 | Path | What |

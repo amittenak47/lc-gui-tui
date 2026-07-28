@@ -45,7 +45,7 @@ export interface BoardHandle {
   clearStudentWork(): void;
   /** Restore the original problem template layout (frames + statement). */
   resetTemplate(): void;
-  /** Base64 PNG of the board, for vision-capable models only. */
+  /** Base64 PNG of the board, raster pen ink included, for vision models only. */
   exportPng(): Promise<string>;
   /**
    * True when the bitmap ink layer holds strokes. Pen ink is pixels, not scene
@@ -55,6 +55,12 @@ export interface BoardHandle {
   hasRasterInk(): boolean;
   /** Freedraw strokes in absolute coordinates, for the ink recognizer. */
   getStrokes(): InkStroke[];
+  /**
+   * Raster pen strokes in scene coordinates, for the ink recognizer. Separate
+   * from {@link getStrokes} because the pen writes pixels, not `freedraw`
+   * elements — both sources have to reach ML Kit or handwriting goes unread.
+   */
+  getInkStrokes(): InkStroke[];
   setTool(tool: ToolName): void;
   undo(): void;
   scrollToContent(): void;

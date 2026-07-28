@@ -544,18 +544,18 @@ export function App() {
         if (note) {
           snapshot.board.recognized_text = `Student asks:\n${note}\n\n${snapshot.board.recognized_text ?? ""}`;
         }
-        // Recognized text is not the only evidence of work: shapes, stamps and
-        // pen ink are all real, and on a browser build none of them are OCR'd.
-        // Send the structure and let the coach read the layout.
+        // Recognized text is not the only evidence of work: shapes, stamps, pen
+        // ink, and (with a vision model) a PNG of the handwriting all count.
         const drawn =
           studentAuthoredElements(board.getElements()).length > 0 || board.hasRasterInk();
         const legible =
           snapshot.board.recognized_text.trim().length > 0 || pseudocodeRef.current.trim().length > 0;
-        if (!legible && !drawn) {
+        const pictured = snapshot.hasHandwriting && Boolean(snapshot.board.png);
+        if (!legible && !drawn && !pictured) {
           setError("nothing on the board yet — sketch or type an approach, then ask the coach");
           return;
         }
-        if (!legible && recognizerRef.current.name === "none") {
+        if (!legible && !pictured && recognizerRef.current.name === "none") {
           setNotice(
             "handwriting isn't recognized in the browser build — sending the shapes and layout you drew; type with the text tool if the coach misreads you",
           );
