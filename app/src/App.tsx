@@ -1577,26 +1577,44 @@ function TestSummary({
       ) : (
         <>
           {failures.slice(0, 5).map((result) => (
-            <div key={result.case} className="lc-case-fail">
-              <strong>case {result.case}</strong>
-              <div>
-                <code>{result.input}</code>
-              </div>
-              <div className="lc-muted">
-                expected <code>{result.expected}</code>
-                {result.actual !== null && (
-                  <>
-                    {" · got "}
-                    <code>{result.actual}</code>
-                  </>
-                )}
-              </div>
-            </div>
+            <FailCase key={result.case} result={result} />
           ))}
-          {failures.length > 5 && <p className="lc-muted">…and {failures.length - 5} more</p>}
+          {failures.length > 5 && (
+            <details className="lc-test-more">
+              <summary>
+                {failures.length - 5} more failed{" "}
+                {failures.length - 5 === 1 ? "case" : "cases"}
+              </summary>
+              <div className="lc-test-more-body">
+                {failures.slice(5).map((result) => (
+                  <FailCase key={result.case} result={result} />
+                ))}
+              </div>
+            </details>
+          )}
         </>
       )}
     </section>
+  );
+}
+
+function FailCase({ result }: { result: TestResponse["results"][number] }) {
+  return (
+    <div className="lc-case-fail">
+      <strong>case {result.case}</strong>
+      <div>
+        <code>{result.input}</code>
+      </div>
+      <div className="lc-muted">
+        expected <code>{result.expected}</code>
+        {result.actual !== null && (
+          <>
+            {" · got "}
+            <code>{result.actual}</code>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
