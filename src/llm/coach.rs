@@ -54,6 +54,26 @@ pub struct BoardSnapshot {
     /// How many successful reviews this session (0 = first look).
     #[serde(default)]
     pub turn_index: u32,
+    /// Client scene fingerprint — used to skip redundant work server-side.
+    #[serde(default)]
+    pub scene_hash: Option<u64>,
+    /// Incremental element changes since the server baseline. When present,
+    /// `scene_structure` may be omitted on the wire.
+    #[serde(default)]
+    pub board_ops: Option<Vec<serde_json::Value>>,
+    /// Raster ink op count — ambient/review gating on the client.
+    #[serde(default)]
+    pub ink_ops_len: Option<usize>,
+    /// `full` | `delta` | `unchanged` — how to read pseudocode fields.
+    #[serde(default)]
+    pub code_mode: Option<String>,
+    /// SHA-256 hex of the starter skeleton the student is editing.
+    #[serde(default)]
+    pub skeleton_hash: Option<String>,
+    /// Current solution text when `code_mode` is `delta`, or omitted when
+    /// `code_mode` is `unchanged`.
+    #[serde(default)]
+    pub pseudocode_delta: Option<String>,
 }
 
 impl BoardSnapshot {

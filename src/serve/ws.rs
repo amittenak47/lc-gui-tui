@@ -15,7 +15,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use super::routes::{description_for, load_meta};
-use super::{AppError, Shared};
+use super::{board_session, AppError, Shared};
 use crate::llm::coach::{build_ambient_prompt, parse_ambient, AmbientNudge, BoardSnapshot};
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest, LlmProvider};
 
@@ -136,6 +136,16 @@ async fn handle(state: &Shared, frame: ClientFrame) -> ServerFrame {
             scene_hash,
             board,
         } => {
+            let mut board = board;
+            {
+                let mut store = state.board_sessions.lock().await;
+                let session = store.entry(&task_id);
+                board = board_session::resolve_board_snapshot(session, board);
+                if let Some(pseudo) = board_session::resolve_pseudocode(session, &board) {
+                    board.pseudocode = Some(pseudo);
+                }
+            }
+
             if board.is_empty() {
                 return ServerFrame::Skipped {
                     reason: "nothing recognized on the board yet".into(),

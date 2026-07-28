@@ -1185,6 +1185,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       },
       getStrokes: () => captureStrokes(elements()),
       getInkStrokes: () => inkStrokesFromOps(rasterInkRef.current?.getOps() ?? []),
+      getInkOpCount: () => (rasterInkRef.current?.getOps() ?? []).length,
       setTool,
       undo: () => {
         undoBoard();

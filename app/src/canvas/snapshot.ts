@@ -10,13 +10,21 @@
 import type { BoardSnapshot } from "../api/types";
 import type { BoardHandle } from "./BoardHandle";
 import {
+  baselineFromStructure,
+  diffStructure,
+  preferDelta,
+  type StructureBaseline,
+} from "./boardDelta";
+import {
   captureStructure,
   captureTypedText,
+  captureVersions,
   elementIds,
   sceneHash,
   truncateCaptureId,
 } from "./capture";
 import { mergeRecognized, type InkRecognizer } from "./ink";
+import { sha256Hex } from "../util/codeHash";
 
 export interface Snapshot {
   board: BoardSnapshot;
@@ -43,6 +51,12 @@ export interface SnapshotOptions {
   previousIds?: ReadonlySet<string>;
   /** How many successful reviews this session (0 = first look). */
   turnIndex?: number;
+  /** Server-acknowledged structure baseline — enables `board_ops` on the wire. */
+  structureBaseline?: StructureBaseline | null;
+  /** SHA-256 hex of the starter skeleton loaded for this problem. */
+  skeletonHash?: string;
+  /** Hash of the pseudocode last sent successfully. */
+  lastPseudocodeHash?: string;
 }
 
 export async function buildSnapshot(
@@ -66,14 +80,47 @@ export async function buildSnapshot(
   }
 
   const ids = elementIds(elements);
+  const structure = captureStructure(elements);
+  const versions = captureVersions(elements);
+  const inkOpsLen = board.getInkOpCount();
+  const hash = sceneFingerprint(elements, inkOpsLen);
+
   const snapshot: BoardSnapshot = {
     recognized_text: mergeRecognized(handwriting, typed),
+    scene_hash: hash,
+    ink_ops_len: inkOpsLen,
   };
+
   if (options.includeStructure !== false) {
-    snapshot.scene_structure = captureStructure(elements);
+    if (options.structureBaseline) {
+      const ops = diffStructure(structure, options.structureBaseline, versions);
+      if (preferDelta(ops, structure)) {
+        snapshot.board_ops = ops;
+      } else {
+        snapshot.scene_structure = structure;
+      }
+    } else {
+      snapshot.scene_structure = structure;
+    }
   }
-  if (options.pseudocode && options.pseudocode.trim().length > 0) {
-    snapshot.pseudocode = options.pseudocode;
+
+  if (options.pseudocode !== undefined) {
+    const trimmed = options.pseudocode.trim();
+    if (trimmed.length > 0) {
+      const hash = await sha256Hex(trimmed);
+      if (options.lastPseudocodeHash && options.lastPseudocodeHash === hash) {
+        snapshot.code_mode = "unchanged";
+        if (options.skeletonHash) snapshot.skeleton_hash = options.skeletonHash;
+      } else if (options.skeletonHash && options.structureBaseline) {
+        snapshot.code_mode = "delta";
+        snapshot.pseudocode_delta = trimmed;
+        snapshot.skeleton_hash = options.skeletonHash;
+      } else {
+        snapshot.code_mode = "full";
+        snapshot.pseudocode = trimmed;
+        if (options.skeletonHash) snapshot.skeleton_hash = options.skeletonHash;
+      }
+    }
   }
   if (options.includePng) {
     const png = await board.exportPng();
@@ -91,8 +138,25 @@ export async function buildSnapshot(
 
   return {
     board: snapshot,
-    sceneHash: sceneHash(elements),
+    sceneHash: hash,
     ids,
     hasHandwriting: strokes.length > 0,
   };
+}
+
+/** Mix element and raster-ink changes into one fingerprint. */
+export function sceneFingerprint(
+  elements: Parameters<typeof sceneHash>[0],
+  inkOpsLen: number,
+): number {
+  const base = sceneHash(elements);
+  if (inkOpsLen === 0) return base;
+  return (base ^ (inkOpsLen * 0x9e3779b1)) >>> 0;
+}
+
+/** Baseline to store after a successful review ack. */
+export function structureBaselineFromBoard(
+  elements: Parameters<typeof captureStructure>[0],
+): StructureBaseline {
+  return baselineFromStructure(captureStructure(elements), captureVersions(elements));
 }

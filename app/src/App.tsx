@@ -39,8 +39,10 @@ import { Board } from "./canvas/Board";
 import { loadBoardReadingSize, saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
 import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
 import { sceneHash, studentAuthoredElements, studentElements } from "./canvas/capture";
+import type { StructureBaseline } from "./canvas/boardDelta";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
-import { buildSnapshot } from "./canvas/snapshot";
+import { buildSnapshot, sceneFingerprint, structureBaselineFromBoard } from "./canvas/snapshot";
+import { sha256Hex } from "./util/codeHash";
 import { AgentSidePanel, type CoachChatMessage, type CoachSendFlags } from "./modes/AgentSidePanel";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
@@ -171,6 +173,10 @@ export function App() {
   /** Element ids after the last successful Review board send. */
   const lastReviewIdsRef = useRef<Set<string>>(new Set());
   const reviewTurnRef = useRef(0);
+  /** Server-ack structure baseline for Phase 3 board_ops. */
+  const lastStructureBaselineRef = useRef<StructureBaseline | null>(null);
+  const lastPseudocodeHashRef = useRef<string | undefined>(undefined);
+  const skeletonHashRef = useRef<string | undefined>(undefined);
   const coachRef = useRef<AmbientCoach | null>(null);
   // The recognizer can be swapped after mount; read it through a ref so the
   // ambient loop doesn't need to restart when it lands.
@@ -216,14 +222,15 @@ export function App() {
     if (!board) return { sceneHash: 0, newElements: 0, hasContent: false };
     const elements = board.getElements();
     const mine = studentElements(elements);
+    const inkOps = board.getInkOpCount();
     let added = 0;
     for (const element of mine) {
       if (!lastIdsRef.current.has(element.id)) added += 1;
     }
     return {
-      sceneHash: sceneHash(elements),
+      sceneHash: sceneFingerprint(elements, inkOps),
       newElements: added,
-      hasContent: mine.length > 0,
+      hasContent: mine.length > 0 || inkOps > 0,
     };
   }, []);
 
@@ -233,6 +240,9 @@ export function App() {
     if (!board) return { recognized_text: "" };
     const snapshot = await buildSnapshot(board, recognizerRef.current, {
       pseudocode: pseudocodeRef.current,
+      structureBaseline: lastStructureBaselineRef.current,
+      skeletonHash: skeletonHashRef.current,
+      lastPseudocodeHash: lastPseudocodeHashRef.current,
     });
     lastIdsRef.current = snapshot.ids;
     return snapshot.board;
@@ -308,6 +318,8 @@ export function App() {
       setCoachMessages([]);
       lastReviewIdsRef.current = new Set();
       reviewTurnRef.current = 0;
+      lastStructureBaselineRef.current = null;
+      lastPseudocodeHashRef.current = undefined;
       if (bank) setBankFilters(bank);
       if (fromBrowse) {
         setHoldBrowseOverlay(true);
@@ -346,6 +358,7 @@ export function App() {
         }
 
         setPseudocode(source);
+        skeletonHashRef.current = await sha256Hex(source);
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the viewport does not jump.
         setBoardPreparing(true);
@@ -540,6 +553,9 @@ export function App() {
           previousIds: lastReviewIdsRef.current,
           turnIndex: reviewTurnRef.current,
           includePng: modeHasVision("review"),
+          structureBaseline: lastStructureBaselineRef.current,
+          skeletonHash: skeletonHashRef.current,
+          lastPseudocodeHash: lastPseudocodeHashRef.current,
         });
         if (note) {
           snapshot.board.recognized_text = `Student asks:\n${note}\n\n${snapshot.board.recognized_text ?? ""}`;
@@ -592,6 +608,8 @@ export function App() {
       if (capturedIds) {
         lastReviewIdsRef.current = capturedIds;
         reviewTurnRef.current += 1;
+        lastStructureBaselineRef.current = structureBaselineFromBoard(board.getElements());
+        lastPseudocodeHashRef.current = await sha256Hex(pseudocodeRef.current);
       }
     } catch (cause) {
       setError(messageOf(cause));

@@ -159,6 +159,12 @@ export interface BoardSnapshot {
   new_since_last?: string[];
   /** Successful review count this session (0 = first look). */
   turn_index?: number;
+  scene_hash?: number;
+  board_ops?: unknown[];
+  ink_ops_len?: number;
+  code_mode?: "full" | "delta" | "unchanged";
+  skeleton_hash?: string;
+  pseudocode_delta?: string;
 }
 
 export type Verdict = "on_track" | "subtly_wrong" | "wrong_track" | "unclear";

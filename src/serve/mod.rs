@@ -18,6 +18,7 @@
 
 pub mod coach;
 pub mod routes;
+pub mod board_session;
 pub mod session;
 pub mod viz;
 pub mod ws;
@@ -58,6 +59,7 @@ pub struct AppState {
     /// Port actually bound, so Settings can show what to type on the tablet.
     pub port: u16,
     pub sessions: tokio::sync::Mutex<SessionStore>,
+    pub board_sessions: tokio::sync::Mutex<board_session::BoardSessionStore>,
     /// `runner` records each run to a single `last_run.json`; serialize test
     /// runs so two clients can't interleave and read each other's results.
     pub test_lock: tokio::sync::Mutex<()>,
@@ -99,6 +101,7 @@ pub fn run(mut cfg: Config, port: Option<u16>, lan: bool) -> Result<()> {
         pair_failures: AtomicU32::new(0),
         port,
         sessions: tokio::sync::Mutex::new(SessionStore::default()),
+        board_sessions: tokio::sync::Mutex::new(board_session::BoardSessionStore::default()),
         test_lock: tokio::sync::Mutex::new(()),
     });
 

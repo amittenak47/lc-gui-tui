@@ -13,7 +13,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use super::routes::{description_for, load_meta};
-use super::{blocking, AppError, Shared};
+use super::{blocking, board_session, AppError, Shared};
 use crate::llm::coach::{
     build_bridge_prompt, build_review_prompt, build_trace_prompt, parse_bridge, parse_review,
     parse_trace, BoardSnapshot, BridgeResponse, ReviewResponse, BRIDGE_SYSTEM_PROMPT,
@@ -61,29 +61,42 @@ pub async fn review(
     State(state): State<Shared>,
     Json(request): Json<ReviewRequest>,
 ) -> Result<Json<ReviewEnvelope>, AppError> {
-    if request.board.is_empty() {
+    let mut board = request.board.clone();
+    {
+        let mut store = state.board_sessions.lock().await;
+        let session = store.entry(&request.task_id);
+        board = board_session::resolve_board_snapshot(session, board);
+        if let Some(pseudo) = board_session::resolve_pseudocode(session, &board) {
+            board.pseudocode = Some(pseudo);
+        }
+    }
+
+    if board.is_empty() {
         return Err(AppError::bad_request(anyhow!(
             "the board is empty — sketch an approach before submitting"
         )));
     }
 
+    let board_for_prompt = board.clone();
+    let task_id_for_llm = request.task_id.clone();
+    let task_id_for_ack = request.task_id.clone();
     let cfg = state.cfg_snapshot();
     let envelope = blocking(move || {
-        let meta = load_meta(&cfg, &request.task_id)?;
+        let meta = load_meta(&cfg, &task_id_for_llm)?;
         let description = description_for(&meta);
-        let prompt = build_review_prompt(&meta, description.as_deref(), &request.board);
+        let prompt = build_review_prompt(&meta, description.as_deref(), &board_for_prompt);
 
         let provider = make_provider_for_mode(&cfg, "review")?;
         let messages = vec![
             ChatMessage::system(REVIEW_SYSTEM_PROMPT),
-            ChatMessage::user(prompt).with_images(request.board.images()),
+            ChatMessage::user(prompt).with_images(board_for_prompt.images()),
         ];
         let reply = provider.chat_ex(&ChatRequest::new(messages).json())?;
 
         // Validation happens here, not in the client: a cited case index must
         // exist in `meta.cases`, and its text is replaced with the corpus's.
         let mut review = parse_review(&reply.content, &meta.cases)?;
-        retrace_counterexample(&*provider, &meta, &request.board, &mut review);
+        retrace_counterexample(&*provider, &meta, &board_for_prompt, &mut review);
 
         Ok(ReviewEnvelope {
             task_id: meta.task_id,
@@ -92,6 +105,27 @@ pub async fn review(
         })
     })
     .await?;
+
+    // Advance the server baseline only after a successful review.
+    {
+        let mut store = state.board_sessions.lock().await;
+        let session = store.entry(&task_id_for_ack);
+        if let Some(structure) = board.scene_structure.as_ref() {
+            let ids: Vec<String> = structure
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.get("id").and_then(|id| id.as_str()).map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            session.acknowledge_review(ids);
+        }
+        if let Some(pseudo) = board.pseudocode.as_deref() {
+            session.acknowledge_pseudocode(pseudo);
+        }
+    }
+
     Ok(Json(envelope))
 }
 

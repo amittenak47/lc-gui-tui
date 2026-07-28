@@ -11,6 +11,7 @@ node_modules/
 /app/src-tauri/gen/
 /app/src-tauri/plugins/*/android/build/
 /app/src-tauri/plugins/*/android/.tauri/
+/app/src-tauri/plugins/*/permissions/
 *.tsbuildinfo
 vite.config.ts.timestamp-*
 
