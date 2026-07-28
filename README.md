@@ -1,6 +1,8 @@
 # lc — LeetCode practice harness
 
-A Rust CLI and terminal UI for practicing LeetCode-style problems from a **local JSON corpus**. Index thousands of problems into SQLite, browse and filter them interactively, generate Python workspaces, run tests, track session progress, and ask an LLM tutor for hints — **without ever loading or sending reference solutions** from the dataset.
+A Rust CLI and terminal UI for practicing LeetCode-style problems from **local JSON corpora**. Index thousands of problems into SQLite, browse and filter them interactively, generate Python workspaces, run tests, track session progress, and ask an LLM tutor for hints — **without ever loading or sending reference solutions** from the dataset.
+
+Five problem sets are supported, each indexed into its own tables and switchable from a tab above the problem table. See [Datasets](#datasets).
 
 Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorrect)**: `lc` handles problem selection, workspaces, and testing; the extension fixes your code as you type in Cursor or VS Code.
 
@@ -56,42 +58,59 @@ Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorre
 
 ---
 
-## Dataset
+## Datasets
 
-`lc` does **not** ship problem data. It indexes JSON files from a folder you provide.
+`lc` does **not** ship problem data. It indexes JSON/JSONL files from folders you provide.
 
-The recommended corpus is **[LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset)** on Hugging Face (~2,869 Python problems). See the upstream [dataset README](https://huggingface.co/datasets/newfacade/LeetCodeDataset/blob/main/README.md) for citation and license details (Apache 2.0).
+Each problem set lives in **its own SQLite tables**, because they are separate corpora: their ids collide (`two-sum` exists in three of them), their difficulty scales are unrelated, and rebuilding one must not touch another. A pass/fail badge is likewise per problem set.
+
+| Slug | Corpus | Notes |
+| --- | --- | --- |
+| `leetcode` *(default)* | [newfacade/LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) | ~2,869 Python problems. Already in `lc`'s field names. |
+| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | 447k synthetic problems. Ships pytest suites, not per-case I/O — `Run tests` runs the suite. |
+| `ms-python-q` | [morganstanley/sft-python-q-problems](https://huggingface.co/datasets/morganstanley/sft-python-q-problems) | LeetCode-style with structured `test_cases`. |
+| `deepseek-leetcode` | [davidheineman/deepseek-leetcode](https://huggingface.co/datasets/davidheineman/deepseek-leetcode) | DeepSeek-Coder's contest benchmark. Cases are extracted from its assert suite. |
+| `leetcode-with-tests` | [kr4t0n/leetcode-with-tests](https://huggingface.co/datasets/kr4t0n/leetcode-with-tests) | Community re-packaging; read through tolerant column-name candidates. |
+
+Adapters that reshape each corpus into `lc`'s field names live in [`src/datasets/`](src/datasets/), one module per dataset, each documenting its column mapping.
+
+### Folder layout
+
+Each dataset reads `<data-dir>/<slug>/`. The default corpus also falls back to `<data-dir>` itself, so an existing single-corpus install keeps working with no changes.
+
+```
+~/lc-data/
+├── train.json                 # leetcode (legacy location, still works)
+├── leetcode/                  # …or here
+├── kodcode/
+├── ms-python-q/
+├── deepseek-leetcode/
+└── leetcode-with-tests/
+```
+
+Override a folder with `lc config set data.datasets.<slug> <path>` (or Settings → Datasets in the whiteboard).
 
 ### Download
 
-**Option A — Hugging Face CLI** (recommended):
+Hugging Face ships most of these as Parquet, which the Rust indexer cannot read, so a helper converts them to `.jsonl` without touching the columns:
 
 ```bash
-pip install -U huggingface_hub
-huggingface-cli download newfacade/LeetCodeDataset \
-  --repo-type dataset \
-  --local-dir ~/lc-data
+pip install -U huggingface_hub pyarrow
+python scripts/fetch_dataset.py kodcode                 # one dataset
+python scripts/fetch_dataset.py --all --data-dir ~/lc-data
 ```
 
-**Option B — clone the dataset repo:**
+Or download by hand into the folder above — `lc` accepts per-file JSON objects, JSON arrays (`train.json` / `test.json`), and `.jsonl`. If both `.json` and `.jsonl` exist for the same split, only the `.json` is indexed.
 
-```bash
-git clone https://huggingface.co/datasets/newfacade/LeetCodeDataset ~/lc-data
-```
-
-**Option C — download individual files** from the [dataset files browser](https://huggingface.co/datasets/newfacade/LeetCodeDataset/tree/main) (`train.json`, `test.json`, etc.) into one folder.
-
-### Point `lc` at the folder
-
-`lc` accepts per-file JSON objects, **JSON arrays** (`train.json` / `test.json`), and `.jsonl` files. If both `.json` and `.jsonl` exist for the same split, only the `.json` is indexed.
+### Index
 
 ```bash
 lc config set data-dir ~/lc-data
-lc index          # incremental — only changed files are re-read
-lc index --rebuild   # full rebuild
+lc index                        # every dataset that has a corpus folder
+lc index --dataset kodcode      # just one
+lc index --rebuild              # full rebuild
+lc datasets                     # what is indexed, and where each corpus lives
 ```
-
-After indexing, `lc search` and the TUI browse view should show your problem count (typically ~2,800+).
 
 ---
 
@@ -115,6 +134,7 @@ Run `lc` with no arguments to open the menu-driven terminal UI.
 | **W / S** | Move selection |
 | **A / D** | Previous / next page (15 problems per page) |
 | **/** | Text search (slug, question #, or tag) — **Enter** to apply |
+| **G** | Switch problem set (dataset) |
 | **T** | Cycle tag filter |
 | **E** | Cycle difficulty (any → Easy → Medium → Hard) |
 | **O** | Cycle sort order |
@@ -145,15 +165,18 @@ Columns resize to fit your terminal width.
 # Search and pick
 lc search --difficulty Medium --tag "Dynamic Programming" --sort question
 lc random -n 3 --tag graph
+lc search --dataset kodcode -q "linked list"
 
 # Materialize a workspace
 lc load two-sum --open        # opens solution.py with cursor -r / code -r
 lc load 1 --open              # by LeetCode question number
+lc load running-max --dataset kodcode
 
 # Test
 lc test two-sum --verbose
 lc test --case 3
 lc test --full                # fallback assert suite from corpus
+lc test running-max --dataset kodcode
 
 # Session stats
 lc stats
@@ -179,11 +202,12 @@ lc list stats grind
 | --- | --- |
 | `lc` / `lc tui` | Interactive practice UI |
 | `lc config set/get/show/path` | Manage `config.toml` |
-| `lc index [--rebuild]` | Build or refresh the SQLite index |
-| `lc search` | Filter problems (`--difficulty`, `--tag`, `-q`, `--sort`) |
-| `lc random` | Random pick (`-n`, `--difficulty`, `--tag`) |
-| `lc load <id> [--open] [--force]` | Generate workspace; id = slug, question #, or prefix |
-| `lc test [id] [--case N] [--full] [-v]` | Run Python tests |
+| `lc index [--rebuild] [--dataset S]` | Build or refresh the SQLite index |
+| `lc datasets` | Problem sets, indexed counts, and corpus folders |
+| `lc search` | Filter problems (`--dataset`, `--difficulty`, `--tag`, `-q`, `--sort`) |
+| `lc random` | Random pick (`-n`, `--dataset`, `--difficulty`, `--tag`) |
+| `lc load <id> [--dataset S] [--open] [--force]` | Generate workspace; id = slug, question #, or prefix |
+| `lc test [id] [--dataset S] [--case N] [--full] [-v]` | Run Python tests |
 | `lc ask [id] [--case N] [--provider local\|groq] [--clipboard]` | LLM debugging help |
 | `lc serve [--port N] [--lan]` | Daemon for the whiteboard coach client |
 | `lc stats [--corpus]` | Session or corpus progress |
@@ -233,7 +257,22 @@ lc ask --case 3 --provider groq
 
 Practice by *sketching* an approach by hand while a coach watches, grills you, and points at the specific test case your approach breaks on. The canvas runs on a tablet; the corpus, workspaces, and Python runner stay on this machine behind `lc serve`.
 
-**Shared with the TUI:** the gear in the whiteboard edits the same `config.toml` (paths, Local/Ollama/OpenAI/Groq, vision model). Session queue / reset / random session use the same `session.json`. Prev/next walks the session queue when non-empty, otherwise the filtered problem bank. Open a problem from the TUI via **Open in Canvas** (deep link `?task=`), **Open in IDE**, or stay in the TUI. Start/stop the local LLM (`ollama serve`) from Settings in either UI.
+**Shared with the TUI:** the gear in the whiteboard edits the same `config.toml` (paths, datasets, test mode, Local/Ollama/OpenAI/Groq, vision model). Session queue / reset / random session use the same `session.json`. Prev/next walks the session queue when non-empty, otherwise the filtered problem bank. Open a problem from the TUI via **Open in Canvas** (deep link `?task=…&dataset=…`), **Open in IDE**, or stay in the TUI. Start/stop the local LLM (`ollama serve`) from Settings in either UI.
+
+**Problem sets** are a tab strip above the table. Every table and session control works the same on any tab; filters reset when you switch, because a KodCode tag means nothing in the LeetCode tables. A tab with nothing indexed still appears, and its empty table tells you how to fetch that corpus.
+
+**Run tests / Submit** open the results in a modal over the board. The same run is also posted into the coach thread as an `app` turn and attached to the next question on its own channel, so *"why did case 3 fail?"* needs no copy-paste — the daemon tells the model to read that channel as fact. Settings → Tests chooses between running every case and stopping at the first failure.
+
+**Leaving a problem** asks what to keep, and asks a different question depending on whether it is solved:
+
+| | layout | code | coach session |
+| --- | --- | --- | --- |
+| unsolved, **save** | resumes | resumes | resumes |
+| unsolved, **discard** | cleared | reset to starter | cleared |
+| solved, **save attempt** | archived | kept | archived |
+| solved, **clear attempt** | cleared | reset to starter | archived |
+
+The coach session is always saved once a problem is solved, and re-attempting a solved problem always starts from a fresh board and a fresh session — the rules live in [`src/attempt.rs`](src/attempt.rs).
 
 Full client docs: **[`app/README.md`](app/README.md)**.
 
@@ -297,7 +336,7 @@ npm run android:dev       # or: npm run android:apk  → sideloadable debug APK
 | Mode | What it does |
 | --- | --- |
 | **Review** | Draw, tap **Submit** → verdict, ratings, gaps, a Socratic question, and a counterexample citing one of the problem's real sample cases |
-| **Ambient** | The coach glances every 15s, stays silent while nothing changes, and escalates rather than repeating itself. Replies land in a side panel, never on the canvas |
+| **Ambient** | *Off.* The 60-second polling loop re-asked itself on slowly-changing boards and blocked the pen on local models. One flag (`AMBIENT_ENABLED` in `app/src/modes/AgentSidePanel.tsx`) brings it back |
 | **Draw it** | The coach answers with a diagram. Multi-frame traces are *one* diagram with a scrubber, not five copies of the same array |
 | **Reveal** | Explicit, confirmed opt-in → a stepwise path from *your* approach to a working one. Never a solution dump; logged so `lc stats` shows how often you tapped out |
 
@@ -319,7 +358,9 @@ All four default to `local`. Values are `local` or `groq`; the underlying URL/mo
 Useful for testing the coach without a tablet:
 
 ```bash
+curl "localhost:7878/datasets"
 curl "localhost:7878/problems?difficulty=Easy&q=two-sum"
+curl "localhost:7878/problems?dataset=kodcode&limit=5"
 curl -X POST localhost:7878/problems/two-sum/load
 curl -X POST localhost:7878/workspace/two-sum/test
 curl -X POST localhost:7878/coach/review -H 'Content-Type: application/json' \
@@ -330,12 +371,15 @@ curl -X POST localhost:7878/coach/review -H 'Content-Type: application/json' \
 | --- | --- |
 | `GET /health` | Unauthenticated, so a client can find the daemon before pairing |
 | `POST /pair` | Unauthenticated: six-digit session code in, serve token out (rate-limited) |
-| `GET /problems?difficulty=&tag=&q=&limit=&sort=` | `index::search` |
-| `GET /problems/:id` | Redacted problem detail |
-| `POST /problems/:id/load` | `generator::generate` |
-| `GET /workspace/:id/meta` | `.lc/meta.json` |
-| `POST /workspace/:id/test` | `runner::cmd_test_quiet` → `CaseResult` JSON |
-| `GET`/`PUT /workspace/:id/solution` | Read/write `solution.py` |
+| `GET /datasets` | Problem sets and indexed counts, for the tab strip |
+| `GET /problems?dataset=&difficulty=&tag=&q=&limit=&sort=` | `index::search` |
+| `GET /problems/:id?dataset=` | Redacted problem detail |
+| `POST /problems/:id/load?dataset=` | `generator::generate`, plus what a previous visit kept |
+| `GET /workspace/:id/meta?dataset=` | `.lc/meta.json` |
+| `POST /workspace/:id/test?dataset=` | `runner::cmd_test_quiet_in` → `CaseResult` JSON |
+| `GET`/`PUT /workspace/:id/solution?dataset=` | Read/write `solution.py` |
+| `GET`/`PUT /workspace/:id/agent?dataset=` | Read/write the coach transcript |
+| `POST /workspace/:id/attempt?dataset=` | Save or discard on leaving — see `src/attempt.rs` |
 | `POST /coach/review` | Mode A |
 | `POST /coach/viz` | Diagram tool calls |
 | `WS /coach/session` | Ambient loop |
@@ -354,15 +398,20 @@ This matters with small local models. Tested against `granite-4.1-8b` (llama.cpp
 ## How it works
 
 ```
-JSON corpus ──lc index──▶ SQLite (problems.db)
-                              │
-                        lc load <id>
+JSON corpora ─lc index──▶ SQLite (problems.db)
+  per dataset                 │  problems, problems_kodcode, … (one table pair each)
+                        lc load <id> --dataset <slug>
                               ▼
-        ~/lc-workspace/<task_id>/
+        ~/lc-workspace/[<dataset>/]<task_id>/
         ├── README.md
         ├── solution.py        ← you edit this
+        ├── board.json         ← the whiteboard, when kept
         ├── run_tests.py
-        └── .lc/meta.json      ← cases, entry_point (no reference solution)
+        └── .lc/
+            ├── meta.json      ← cases, entry_point (no reference solution)
+            ├── agent.json     ← coach transcript, when kept
+            ├── attempt.json   ← solved / saved
+            └── attempts/…     ← archived attempts
                               │
                         lc test ──▶ python run_tests.py ──▶ results table
                               │
@@ -374,6 +423,7 @@ JSON corpus ──lc index──▶ SQLite (problems.db)
 - Templates in [`templates/`](templates/) are embedded at compile time (minijinja).
 - Per-problem test data flows through `.lc/meta.json`; `run_tests.py` is static.
 - Last test run is cached as `last_run.json` in the config dir for `lc ask`.
+- The default corpus keeps `~/lc-workspace/<task_id>` so existing solve folders are found unchanged; other datasets are namespaced.
 
 ---
 
@@ -391,7 +441,10 @@ JSON corpus ──lc index──▶ SQLite (problems.db)
 | Tablet gets `pair first` (401) | Re-pair with the Host/Port/Code from the `lc serve --lan` banner (or Settings → Serve) |
 | `that code doesn't match` | The code rotates every `serve --lan` start — read the current one off the banner |
 | Tablet connects on desktop but not Android | Cleartext HTTP — see `app/src-tauri/android-overlay/network_security_config.xml` |
-| `produced nothing drawable` | The `viz` model can't tool-call; try `lc config set llm.modes.viz groq` |
+| `produced nothing drawable` | Both the tool-call and JSON fallback came back empty; try `lc config set llm.modes.viz groq` |
+| vLLM 400: `"auto" tool choice requires --enable-auto-tool-choice` | Handled — Draw falls back to plain JSON. Start vLLM with `--enable-auto-tool-choice --tool-call-parser <parser>` for the faster path |
+| A dataset tab shows 0 problems | Download its corpus (`python scripts/fetch_dataset.py <slug>`) then `lc index --dataset <slug>` |
+| A pass/fail badge is on the wrong problem | Fixed — progress is keyed `dataset/task_id`; older `session.json` files are migrated on load |
 | Editor opens a new window | Rebuild latest `lc`; `load --open` uses `cursor -r` / `code -r` |
 | TUI keystrokes duplicated | Fixed in recent builds (ignores key-repeat events) |
 | Weird failures on tuple/list answers | `lc test --full` uses the corpus assert suite |
@@ -433,4 +486,4 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes and [`app/README.md`](app/REA
 
 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — free for personal, educational, and other noncommercial use; commercial use needs a separate license. See [LICENSE](LICENSE).
 
-Problem corpus licensing is separate; see the [LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) card (Apache 2.0).
+Problem corpus licensing is separate and differs per dataset — check each card before redistributing. [LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) is Apache 2.0; [KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) is CC BY-NC 4.0 (non-commercial).
