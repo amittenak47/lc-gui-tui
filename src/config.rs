@@ -100,7 +100,7 @@ impl Default for LlmConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LlmModes {
-    /// Cheap, runs on the 15s ambient loop.
+    /// Cheap local model; ambient WebSocket loop (client cadence ~120s).
     pub ambient: String,
     /// Deeper analysis when the user submits the board.
     pub review: String,

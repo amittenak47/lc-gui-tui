@@ -2,8 +2,8 @@
  * The whole loop, wired together.
  *
  * The coach answers when asked: draw, tap Submit, get a verdict and a
- * counterexample. (The ambient every-60s mode exists but is switched off — see
- * `AMBIENT_ENABLED`.)
+ * counterexample. (The ambient every-2m WebSocket mode is wired but off —
+ * see `AMBIENT_ENABLED`.)
  *
  * Everything talks to `lc serve`. Nothing about the corpus, the workspaces, or
  * the Python runner lives on this device — including which problem set is

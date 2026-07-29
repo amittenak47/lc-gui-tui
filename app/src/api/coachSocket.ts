@@ -1,10 +1,11 @@
 /**
  * The ambient coach's client half.
  *
- * The 60-second cadence lives here rather than on the daemon, because the cheap
+ * The cadence lives here rather than on the daemon, because the cheap
  * decision — *has anything changed?* — needs the scene, and the scene is here.
  * An untouched board therefore costs nothing at all: no socket traffic, no
- * tokens, and no ink recognition.
+ * tokens, and no ink recognition. Default is 120s so a slow local model can
+ * finish a nudge before the next tick (overlapping ticks are also gated).
  *
  * Sampling is deliberately two-stage:
  *
@@ -17,7 +18,8 @@
 import { coachSocketUrl, type Pairing } from "./pairing";
 import type { BoardSnapshot, ServerFrame } from "./types";
 
-export const AMBIENT_INTERVAL_MS = 60_000;
+/** Between ambient ticks. Long enough for a local model to answer. */
+export const AMBIENT_INTERVAL_MS = 120_000;
 /**
  * Below this many new elements, wait. One stray dot is not a new idea, and
  * nudging on it makes the coach feel twitchy.
