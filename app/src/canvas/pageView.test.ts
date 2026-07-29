@@ -8,7 +8,7 @@ import {
   regionOfElement,
   type PageableElement,
 } from "./pageView";
-import { REGIONS } from "../templates/regions";
+import { REGIONS, REGION_GUTTER } from "../templates/regions";
 
 /** A dashed region frame, as the template seeds it. */
 function frame(region: string, over?: Partial<PageableElement>): PageableElement {
@@ -80,18 +80,30 @@ describe("page visibility", () => {
     ]);
     expect(regionOfElement(inside, rects)).toBe("code");
 
+    // Half a gutter of padding, so ink just past the frame edge is not lost.
+    const pad = REGION_GUTTER / 2;
     const bounds = pageBounds([...scene, inside], "code");
     expect(bounds).toEqual({
-      minX: moved.x,
-      minY: moved.y,
-      maxX: moved.x! + moved.width!,
-      maxY: moved.y! + moved.height!,
+      minX: moved.x! - pad,
+      minY: moved.y! - pad,
+      maxX: moved.x! + moved.width! + pad,
+      maxY: moved.y! + moved.height! + pad,
     });
   });
 
-  it("leaves work that sits in no region alone", () => {
-    const gutter = drawn("gutter", -900, -900);
-    const paged = applyPageVisibility([...TEMPLATE, gutter], "constraints")!;
-    expect(paged.find((element) => element.id === "gutter")?.opacity).toBeUndefined();
+  it("gives work in the gutter to the page it sits under", () => {
+    // Just below the Problem frame, in the gap before Code: it belongs to one
+    // of them, not to all five.
+    const inGutter = drawn("gutter", 200, REGIONS.constraints.y + REGIONS.constraints.h + 10);
+    const onConstraints = applyPageVisibility([...TEMPLATE, inGutter], "constraints")!;
+    expect(onConstraints.find((element) => element.id === "gutter")?.opacity).toBeUndefined();
+    const onApproach = applyPageVisibility([...TEMPLATE, inGutter], "approach")!;
+    expect(onApproach.find((element) => element.id === "gutter")?.opacity).toBe(0);
+  });
+
+  it("leaves work that sits off the board entirely alone", () => {
+    const stray = drawn("stray", -9000, -9000);
+    const paged = applyPageVisibility([...TEMPLATE, stray], "constraints")!;
+    expect(paged.find((element) => element.id === "stray")?.opacity).toBeUndefined();
   });
 });

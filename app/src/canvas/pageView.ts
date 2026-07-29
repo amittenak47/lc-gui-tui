@@ -18,7 +18,7 @@
  * a region, and a page has to follow the box they can see.
  */
 
-import { REGIONS, type RegionId } from "../templates/regions";
+import { REGIONS, REGION_GUTTER, type RegionId } from "../templates/regions";
 
 /** What an element needs to have for paging to place and hide it. */
 export interface PageableElement {
@@ -77,9 +77,14 @@ function frameRects(elements: readonly PageableElement[]): Map<string, Rect> {
 
 /**
  * The region an element sits in: its tag if it has one, otherwise the frame its
- * centre falls inside. `null` means it belongs to no page and always shows —
- * anything the student dragged into the gutter stays visible rather than
- * vanishing into a page they cannot reach.
+ * centre falls inside — and, for something dropped in the gutter *between*
+ * frames, the nearest one.
+ *
+ * The gutter case matters: a note written just under the Problem box would
+ * otherwise belong to no page and show on all five, which is the one thing a
+ * page turner must not do. Only work outside the board's frames entirely stays
+ * unassigned, and that stays visible rather than disappearing into a page the
+ * student cannot turn to.
  */
 export function regionOfElement(
   element: PageableElement,
@@ -92,13 +97,32 @@ export function regionOfElement(
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   const cx = x + num(element.width, 0) / 2;
   const cy = y + num(element.height, 0) / 2;
+
+  let nearest: string | null = null;
+  let nearestDistance = Infinity;
   for (const [region, rect] of rects) {
     if (cx >= rect.x && cx <= rect.x + rect.w && cy >= rect.y && cy <= rect.y + rect.h) {
       return region;
     }
+    const dx = Math.max(rect.x - cx, 0, cx - (rect.x + rect.w));
+    const dy = Math.max(rect.y - cy, 0, cy - (rect.y + rect.h));
+    const distance = Math.hypot(dx, dy);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = region;
+    }
   }
-  return null;
+  // A gutter is one board gutter wide; anything further out is off the board.
+  return nearestDistance <= GUTTER_REACH ? nearest : null;
 }
+
+/**
+ * How far outside a frame still counts as that frame's page.
+ *
+ * One gutter (`REGION_GUTTER`) is the distance between two stacked frames, so
+ * this claims the whole gap and nothing beyond it.
+ */
+const GUTTER_REACH = REGION_GUTTER;
 
 /**
  * Hide everything that is not on `page`, or reveal everything when `page` is
@@ -178,7 +202,13 @@ function num(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-/** Scene box of the open page, for clipping the raster ink layer to it. */
+/**
+ * Scene box of the open page, for clipping the raster ink layer to it.
+ *
+ * Padded by half a gutter so pen ink follows the same rule as elements: each
+ * gutter is split between its two neighbours, so a stroke that runs just past
+ * the frame edge shows on one page rather than on none.
+ */
 export function pageBounds(
   elements: readonly PageableElement[],
   page: RegionId | null,
@@ -186,5 +216,11 @@ export function pageBounds(
   if (!page) return null;
   const rect = frameRects(elements).get(page);
   if (!rect) return null;
-  return { minX: rect.x, minY: rect.y, maxX: rect.x + rect.w, maxY: rect.y + rect.h };
+  const pad = REGION_GUTTER / 2;
+  return {
+    minX: rect.x - pad,
+    minY: rect.y - pad,
+    maxX: rect.x + rect.w + pad,
+    maxY: rect.y + rect.h + pad,
+  };
 }
