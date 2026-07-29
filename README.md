@@ -67,12 +67,37 @@ Each problem set lives in **its own SQLite tables**, because they are separate c
 | Slug | Corpus | Notes |
 | --- | --- | --- |
 | `leetcode` *(default)* | [newfacade/LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) | ~2,869 Python problems. Already in `lc`'s field names. |
-| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | 447k synthetic problems. Ships pytest suites, not per-case I/O — `Run tests` runs the suite. |
+| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | 447k synthetic problems. See [What KodCode's columns mean](#what-kodcodes-columns-mean) — its tags are not topics. |
 | `ms-python-q` | [morganstanley/sft-python-q-problems](https://huggingface.co/datasets/morganstanley/sft-python-q-problems) | LeetCode-style with structured `test_cases`. |
 | `deepseek-leetcode` | [davidheineman/deepseek-leetcode](https://huggingface.co/datasets/davidheineman/deepseek-leetcode) | DeepSeek-Coder's contest benchmark. Cases are extracted from its assert suite. |
 | `leetcode-with-tests` | [kr4t0n/leetcode-with-tests](https://huggingface.co/datasets/kr4t0n/leetcode-with-tests) | Community re-packaging; read through tolerant column-name candidates. |
 
 Adapters that reshape each corpus into `lc`'s field names live in [`src/datasets/`](src/datasets/), one module per dataset, each documenting its column mapping.
+
+### What KodCode's columns mean
+
+KodCode is *synthetic*: every problem was generated from a seed and kept only if a model could solve it against its own tests. It therefore has no question numbers, no titles and no topic tags, and the two columns standing in for them show up in the tag filter as things like `Algorithm, Complete`:
+
+| Tag | What it is |
+| --- | --- |
+| `Algorithm`, `Data_Structure`, `Leetcode`, `Codeforces`, `Apps`, `Taco`, `Docs`, `Package`, `Filter`, `Prefill`, `Evol` | **`subset`** — which seed the problem was grown from. The closest thing this corpus has to a topic. `Docs` means it was generated from library documentation. |
+| `Instruct` | **`style`** — the question is written as a problem statement. |
+| `Complete` | **`style`** — you are given a function to finish. |
+
+Most seeds appear in both styles, which is why ids come in pairs. `lc` names those rows after the function under test, keeping the seed number and the style letter: `running-max-45219-i` and `running-max-45219-c`. Difficulty comes from the corpus's own `gpt_difficulty` rating, and the sample-case count is read off the pytest suite's literal asserts (`lc test --full` still runs the whole module).
+
+The same tooltip is on the tab itself in the whiteboard.
+
+### When a column in the browser is empty
+
+A blank difficulty or tags column usually means the adapter is reading a name your download does not use — these corpora are re-packaged often, and a nested column converted from Parquet sometimes arrives as a JSON *string* rather than a structure. Ask the corpus what it really contains:
+
+```bash
+lc datasets --inspect                      # every problem set
+lc datasets --inspect --dataset kodcode    # just one
+```
+
+It samples each corpus file and prints the columns the rows actually have, which canonical fields came out `MISSING`, and which columns no adapter reads — a field that is `MISSING` next to an obvious unread column is a one-line mapping to add in [`src/datasets/`](src/datasets/). It never prints field values, because a corpus row may hold a reference solution.
 
 ### Folder layout
 
@@ -110,7 +135,16 @@ lc index                        # every dataset that has a corpus folder
 lc index --dataset kodcode      # just one
 lc index --rebuild              # full rebuild
 lc datasets                     # what is indexed, and where each corpus lives
+lc datasets --inspect           # what each corpus file contains, and what was read from it
 ```
+
+The index stores the browser's columns (q#, name, difficulty, tags, cases), so **a change to an adapter needs a re-index of that dataset** before it shows up:
+
+```bash
+lc index --dataset kodcode --rebuild
+```
+
+A rebuild also re-mints `task_id`s, so workspaces and session progress saved under an old id are orphaned (the files stay on disk; the browser just points elsewhere). Nothing else is touched.
 
 ---
 
@@ -203,7 +237,7 @@ lc list stats grind
 | `lc` / `lc tui` | Interactive practice UI |
 | `lc config set/get/show/path` | Manage `config.toml` |
 | `lc index [--rebuild] [--dataset S]` | Build or refresh the SQLite index |
-| `lc datasets` | Problem sets, indexed counts, and corpus folders |
+| `lc datasets [--inspect] [--dataset S]` | Problem sets and indexed counts; `--inspect` reports each corpus file's real columns and what the adapter read |
 | `lc search` | Filter problems (`--dataset`, `--difficulty`, `--tag`, `-q`, `--sort`) |
 | `lc random` | Random pick (`-n`, `--dataset`, `--difficulty`, `--tag`) |
 | `lc load <id> [--dataset S] [--open] [--force]` | Generate workspace; id = slug, question #, or prefix |

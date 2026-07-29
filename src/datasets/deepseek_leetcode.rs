@@ -28,7 +28,7 @@ use serde_json::Value;
 
 use super::{
     difficulty, entry_point_from_code, nested_text, py_literal, slugify,
-    split_leading_docstring, text,
+    split_leading_docstring, tags, text,
 };
 use crate::problem::{IoCase, Problem};
 
@@ -54,18 +54,38 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         .as_deref()
         .and_then(|src| entry_point.as_deref().map(|entry| as_check_suite(src, entry)));
 
-    let mut tags = Vec::new();
-    if let Some(category) = nested_text(raw, "meta", &["categoryTitle"]) {
-        tags.push(category);
+    // `meta` carries the question number, the difficulty and the category, and
+    // it is the column most likely to have arrived as a JSON *string* rather
+    // than a structure — `nested_text` reads both, which is what put the q#
+    // and tags columns back.
+    let meta = super::container_value(raw, "meta");
+    let mut topics = Vec::new();
+    for key in ["categoryTitle", "category", "topic"] {
+        if let Some(value) = nested_text(raw, "meta", &[key]) {
+            topics.push(value);
+            break;
+        }
+    }
+    if topics.is_empty() {
+        topics = tags(raw, &["tags", "topic_tags", "topics"]);
+    }
+    if topics.is_empty() {
+        if let Some(meta) = meta.as_ref() {
+            topics = tags(meta, &["topicTags", "topic_tags", "tags"]);
+        }
     }
 
     Some(Problem {
         task_id,
-        question_id: nested_text(raw, "meta", &["questionFrontendId", "questionId"])
-            .or_else(|| text(raw, &["question_id"])),
+        question_id: nested_text(
+            raw,
+            "meta",
+            &["questionFrontendId", "questionId", "question_id", "id"],
+        )
+        .or_else(|| text(raw, &["question_id", "questionFrontendId", "frontend_id"])),
         difficulty: difficulty(raw, &["difficulty"])
-            .or_else(|| raw.get("meta").and_then(|m| difficulty(m, &["difficulty"]))),
-        tags,
+            .or_else(|| meta.as_ref().and_then(|m| difficulty(m, &["difficulty"]))),
+        tags: topics,
         problem_description: text(raw, &["prompt_sft", "problem_description", "content"])
             .or(docstring),
         prompt: None,
@@ -254,6 +274,30 @@ pub(super) mod tests {
             !suite.contains("my_solution"),
             "the suite still references an object the runner never creates: {suite}"
         );
+    }
+
+    /// The failure this guards: a parquet conversion that stores `meta` as a
+    /// string leaves the q# and tags columns empty, because `meta.difficulty`
+    /// and friends read as absent.
+    #[test]
+    fn a_meta_column_stored_as_a_json_string_still_reads() {
+        let mut record = sample();
+        let meta = record["meta"].clone();
+        record["meta"] = serde_json::json!(serde_json::to_string(&meta).unwrap());
+        let problem = normalize(&record).expect("imports");
+        assert_eq!(problem.question_id.as_deref(), Some("3014"));
+        assert_eq!(problem.difficulty.as_deref(), Some("Easy"));
+        assert_eq!(problem.tags, vec!["Algorithms"]);
+    }
+
+    /// Some dumps carry the topics as a normal column instead of a category.
+    #[test]
+    fn topic_tags_are_read_when_there_is_no_category() {
+        let mut record = sample();
+        record["meta"] = serde_json::json!({"questionFrontendId": "3014", "difficulty": "Easy"});
+        record["topic_tags"] = serde_json::json!(["Hash Table", "Greedy"]);
+        let problem = normalize(&record).expect("imports");
+        assert_eq!(problem.tags, vec!["Hash Table", "Greedy"]);
     }
 
     #[test]

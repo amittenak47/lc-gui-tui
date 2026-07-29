@@ -1,7 +1,7 @@
 # {{ title }}
 
 - **Task:** `{{ task_id }}`
-{% if question_id %}- **LeetCode question:** #{{ question_id }}
+{% if question_id %}- **Question:** #{{ question_id }}
 {% endif %}{% if difficulty %}- **Difficulty:** {{ difficulty }}
 {% endif %}{% if tags %}- **Tags:** {{ tags | join(", ") }}
 {% endif %}

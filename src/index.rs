@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS {tag_table} (
 CREATE INDEX IF NOT EXISTS idx_{table}_difficulty ON {table}(difficulty);
 CREATE INDEX IF NOT EXISTS idx_{table}_question   ON {table}(question_id);
 CREATE INDEX IF NOT EXISTS idx_{table}_path       ON {table}(json_path);
+-- The tag table's primary key is (tag, task_id), so `DELETE ... WHERE task_id
+-- = ?` — which `upsert` runs once per problem — had no index to use and
+-- scanned the whole table every time. On a 487k-row corpus that is a full
+-- scan of ~1M tag rows per problem, and it is why indexing KodCode took
+-- hours rather than minutes. Created here (not in a migration) so an existing
+-- database picks it up the next time it is opened.
+CREATE INDEX IF NOT EXISTS idx_{tag_table}_task   ON {tag_table}(task_id);
 "#
     )
 }
@@ -328,38 +335,37 @@ fn index_dataset(
             }
         }
 
-        match crate::problem::load_all_for(dataset, path) {
-            Ok(problems) => {
-                for problem in problems {
-                    let was_existing: bool = tx
-                        .query_row(
-                            &format!("SELECT 1 FROM {} WHERE task_id = ?1", dataset.table),
-                            params![problem.task_id],
-                            |_| Ok(()),
-                        )
-                        .optional()?
-                        .is_some();
-                    if let Err(err) = upsert(&tx, dataset, &problem, &path_str, mtime) {
-                        stats.failed += 1;
-                        eprintln!(
-                            "warn: skipping {} ({}) in {}: {err:#}",
-                            problem.task_id,
-                            problem.question_id.as_deref().unwrap_or("?"),
-                            path.display()
-                        );
-                        continue;
-                    }
-                    if was_existing {
-                        stats.updated += 1;
-                    } else {
-                        stats.added += 1;
-                    }
-                }
-            }
-            Err(err) => {
+        // Streamed rather than collected: a 487k-row corpus does not fit in
+        // memory as `Vec<Problem>` (each one carries a statement and a suite).
+        let walk = crate::problem::for_each_for(dataset, path, |problem| {
+            let was_existing: bool = tx
+                .query_row(
+                    &format!("SELECT 1 FROM {} WHERE task_id = ?1", dataset.table),
+                    params![problem.task_id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if let Err(err) = upsert(&tx, dataset, &problem, &path_str, mtime) {
                 stats.failed += 1;
-                eprintln!("warn: skipping {}: {err:#}", path.display());
+                eprintln!(
+                    "warn: skipping {} ({}) in {}: {err:#}",
+                    problem.task_id,
+                    problem.question_id.as_deref().unwrap_or("?"),
+                    path.display()
+                );
+                return Ok(());
             }
+            if was_existing {
+                stats.updated += 1;
+            } else {
+                stats.added += 1;
+            }
+            Ok(())
+        });
+        if let Err(err) = walk {
+            stats.failed += 1;
+            eprintln!("warn: skipping {}: {err:#}", path.display());
         }
     }
     tx.commit()?;
@@ -425,6 +431,7 @@ pub fn dataset_infos(conn: &Connection, cfg: &Config) -> Result<Vec<DatasetInfo>
                 .corpus_dir(cfg)
                 .ok()
                 .map(|dir| dir.display().to_string()),
+            notes: dataset.notes.to_string(),
         });
     }
     Ok(out)

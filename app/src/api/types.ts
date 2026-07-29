@@ -20,6 +20,8 @@ export interface DatasetInfo {
   /** Problems indexed. Zero means the corpus has not been downloaded yet. */
   count: number;
   corpus_dir: string | null;
+  /** What this corpus's columns mean — shown on the tab. Older daemons omit it. */
+  notes?: string;
 }
 
 export const DEFAULT_DATASET = "leetcode";
