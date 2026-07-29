@@ -4,7 +4,7 @@
  * On Android this is **ML Kit Digital Ink Recognition** — on-device, offline,
  * free — reached through the Kotlin plugin in
  * `src-tauri/android/inkrecognition/`. That is what makes a *text-only* local
- * model viable for the 15-second loop: without it, the ambient coach would need
+ * model viable for the ambient loop: without it, the ambient coach would need
  * a local vision model able to read handwriting.
  *
  * On desktop there is no ML Kit, so {@link NoopRecognizer} returns nothing and

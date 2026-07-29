@@ -16,10 +16,11 @@ import { ReviewPanel } from "./ReviewPanel";
 export type CoachMode = "review" | "ambient";
 
 /**
- * The ambient coach polls the board every 60 seconds. It is off: on a board
- * that changes slowly it re-asked the same question, and on a local model it
- * blocked the pen while thinking. `App` never switches into the mode while
- * this is false, so the socket is never opened.
+ * The ambient coach polls the board every 120 seconds. Kept off until the
+ * rest of the app is solid: on a slowly changing board it re-asked the same
+ * question, and on a local model it blocked the pen while thinking. Flip this
+ * to `true` to enable — `App` already wires the socket, probe/capture, and
+ * nudge UI; this flag is the only gate.
  */
 export const AMBIENT_ENABLED = false;
 
@@ -239,10 +240,8 @@ export function AgentSidePanel({
             }}
           />
           <div className="lc-coach-composer-bar">
-            {/* Ambient ("Every 60s") is disabled: the polling loop spent
-                tokens on unchanged boards and interrupted more than it helped.
-                The button stays, greyed, so the mode is discoverable if it
-                comes back — `AMBIENT_ENABLED` is the one switch. */}
+            {/* Ambient stays greyed until AMBIENT_ENABLED is flipped. The
+                socket + 120s loop are already wired in App / coachSocket. */}
             <div className="lc-modes" role="group" aria-label="Coach mode">
               <Tip tip="Analyze on send" placement="right">
                 <button
@@ -255,16 +254,27 @@ export function AgentSidePanel({
                   On ask
                 </button>
               </Tip>
-              <Tip tip="Ambient polling is off — the coach answers when you ask" placement="right">
+              <Tip
+                tip={
+                  AMBIENT_ENABLED
+                    ? "Nudge every ~2 minutes when the board changes"
+                    : "Ambient is off — coach answers when you ask"
+                }
+                placement="right"
+              >
                 <button
                   type="button"
-                  className="lc-mode"
-                  aria-pressed={false}
-                  aria-disabled
-                  disabled
+                  className={
+                    AMBIENT_ENABLED && mode === "ambient"
+                      ? "lc-mode lc-mode-active"
+                      : "lc-mode"
+                  }
+                  aria-pressed={AMBIENT_ENABLED && mode === "ambient"}
+                  aria-disabled={!AMBIENT_ENABLED}
+                  disabled={!AMBIENT_ENABLED || busy}
                   onClick={() => AMBIENT_ENABLED && onModeChange("ambient")}
                 >
-                  Every 60s
+                  Every 2m
                 </button>
               </Tip>
             </div>
