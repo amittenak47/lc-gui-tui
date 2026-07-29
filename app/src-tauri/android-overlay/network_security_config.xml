@@ -1,34 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Android 9+ blocks cleartext HTTP by default, and `lc serve` in LAN mode speaks plain
-  HTTP on the local network. This permits cleartext to private address ranges
-  only — the daemon is never on the public internet — while leaving the global
-  default (HTTPS required) intact for everything else.
+  HTTP on the local network.
 
-  Copy this into the generated Android project after `npm run tauri android init`:
+  NOTE: <domain> entries only match hostnames — CIDR strings like 192.168.0.0/16 are
+  silently ignored. That is why Chrome on the tablet could open /health while the
+  WebView fetch for /pair failed until this was fixed.
 
-      src-tauri/gen/android/app/src/main/res/xml/network_security_config.xml
-
-  and reference it from that project's AndroidManifest.xml `<application>` tag:
-
-      android:networkSecurityConfig="@xml/network_security_config"
-
-  `gen/` is generated, so this file lives here as the copy of record.
-
-  The alternative, if you would rather not relax the WebView's policy at all, is
-  to route requests through the Rust side instead — see `src/lc_client.rs`.
-  `reqwest` is not subject to this configuration.
+  The APK also proxies HTTP through Rust (lc_request) as a second line of defence.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-
-    <domain-config cleartextTrafficPermitted="true">
-        <!-- RFC 1918 private ranges, plus loopback and .local mDNS names. -->
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-        <domain includeSubdomains="true">10.0.0.0/8</domain>
-        <domain includeSubdomains="true">172.16.0.0/12</domain>
-        <domain includeSubdomains="true">192.168.0.0/16</domain>
-        <domain includeSubdomains="true">local</domain>
-    </domain-config>
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
