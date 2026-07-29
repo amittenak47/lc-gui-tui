@@ -90,4 +90,8 @@ export interface BoardHandle {
     appState?: unknown,
     options?: { skeletons?: Skeleton[] },
   ): void;
+  /** Recolor template scaffolding for the current theme (after restore/seed). */
+  applyThemeInk(themeId: string): void;
+  /** Drop all coach viz elements — used before re-applying from chat drawings. */
+  stripCoachViz(): void;
 }

@@ -1881,6 +1881,34 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           scheduleFitView();
         });
       },
+      applyThemeInk: (nextThemeId: string) => {
+        const api = apiRef.current;
+        if (!api) return;
+        const dark = isDarkTheme(nextThemeId);
+        const theme = BOARD_THEMES.find((candidate) => candidate.id === nextThemeId) ?? BOARD_THEMES[0];
+        const ink = defaultInk(nextThemeId);
+        setInkColor(ink);
+        const scene = api.getSceneElements() as SceneElementLike[];
+        const recolored = recolorTemplateElements(scene, dark);
+        api.updateScene({
+          appState: {
+            viewBackgroundColor: theme.background,
+            currentItemStrokeColor: ink,
+          },
+          ...(recolored
+            ? { elements: recolored as unknown[], captureUpdate: CaptureUpdateAction.NEVER }
+            : {}),
+        });
+      },
+      stripCoachViz: () => {
+        const api = apiRef.current;
+        if (!api) return;
+        const scene = api.getSceneElements() as SceneElementLike[];
+        api.updateScene({
+          elements: scene.filter((element) => !isCoachElement(element)) as unknown[],
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+      },
     }),
     [convert, elements, fitCodeToSource, fitCurrentView, fitView, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut],
   );

@@ -5,6 +5,9 @@
  * times": a multi-frame program is *one* diagram on the board, and stepping
  * moves it through time. Each step re-renders the same element ids, so the
  * canvas replaces them in place — see {@link ../viz/apply}.
+ *
+ * Visibility is owned by the chat message's expand/collapse — there is no
+ * dismiss control here.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -15,13 +18,21 @@ export interface TimelineProps {
   program: VizProgram;
   /** Draw the given frame. Called on every step, including the first. */
   onFrame: (frameIndex: number) => void;
-  onDismiss?: () => void;
+  /** Restore scrubber to a saved frame (session resume). */
+  initialFrame?: number;
   /** Milliseconds per frame while playing. */
   playbackMs?: number;
 }
 
-export function Timeline({ program, onFrame, onDismiss, playbackMs = 1200 }: TimelineProps) {
-  const [frame, setFrame] = useState(0);
+export function Timeline({
+  program,
+  onFrame,
+  initialFrame = 0,
+  playbackMs = 1200,
+}: TimelineProps) {
+  const [frame, setFrame] = useState(() =>
+    Math.min(Math.max(initialFrame, 0), Math.max(program.frames.length - 1, 0)),
+  );
   const [playing, setPlaying] = useState(false);
   const total = program.frames.length;
 
@@ -39,12 +50,16 @@ export function Timeline({ program, onFrame, onDismiss, playbackMs = 1200 }: Tim
     [total],
   );
 
-  // Draw frame 0 when the program arrives, and reset if it's replaced.
+  // Draw the saved/initial frame when the program arrives or is replaced.
+  // Depend on program.id only — feeding frameIndex back from the parent would
+  // retrigger this every scrub and loop.
   useEffect(() => {
-    setFrame(0);
+    const start = Math.min(Math.max(initialFrame, 0), Math.max(total - 1, 0));
+    setFrame(start);
     setPlaying(false);
-    onFrameRef.current(0);
-  }, [program]);
+    onFrameRef.current(start);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initialFrame is mount/replace only
+  }, [program.id, total]);
 
   useEffect(() => {
     if (!playing || total < 2) return;
@@ -66,15 +81,6 @@ export function Timeline({ program, onFrame, onDismiss, playbackMs = 1200 }: Tim
 
   return (
     <section className="lc-timeline" aria-label={`Animation: ${program.title || program.id}`}>
-      <header className="lc-timeline-head">
-        <strong>{program.title || program.id}</strong>
-        {onDismiss && (
-          <button type="button" className="lc-link" onClick={onDismiss}>
-            dismiss
-          </button>
-        )}
-      </header>
-
       {total > 1 ? (
         <>
           <div className="lc-timeline-controls">
@@ -107,9 +113,7 @@ export function Timeline({ program, onFrame, onDismiss, playbackMs = 1200 }: Tim
             }}
           />
         </>
-      ) : (
-        <p className="lc-muted">single frame</p>
-      )}
+      ) : null}
 
       {current && (
         <div className="lc-timeline-frame">

@@ -135,6 +135,13 @@ export const AGENT_LANE = REGIONS.agent;
 export const AGENT_PADDING = 40;
 
 /**
+ * Extra top inset so slot 0 clears the agent title + "Coach diagrams land here"
+ * hint. Every slot (including wrap-to-0) shares this origin — without it, Draw
+ * ink overlaps the template chrome.
+ */
+export const AGENT_CONTENT_TOP = 110;
+
+/**
  * Vertical space each injected diagram gets. One constant, because the applier
  * and the slot calculator have to agree — when they drifted apart, a diagram
  * moved every time it was re-rendered.
@@ -145,10 +152,12 @@ export const AGENT_SLOT_HEIGHT = 320;
 export function agentSlotOrigin(
   index: number,
   slotHeight = AGENT_SLOT_HEIGHT,
+  /** Live agent-frame X after layout sync; falls back to the template lane. */
+  laneX = AGENT_LANE.x,
 ): { x: number; y: number } {
   return {
-    x: AGENT_LANE.x + AGENT_PADDING,
-    y: AGENT_LANE.y + AGENT_PADDING + index * slotHeight,
+    x: laneX + AGENT_PADDING,
+    y: AGENT_LANE.y + AGENT_CONTENT_TOP + index * slotHeight,
   };
 }
 

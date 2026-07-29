@@ -37,7 +37,7 @@ export function renderGrid(ctx: RenderContext): Skeleton[] {
     row.forEach((value, c) => {
       const index = flat++;
       out.push(
-        cellBox(
+        ...cellBox(
           ctx,
           `cell-${r}-${c}`,
           origin.x + c * (CELL + CELL_GAP),
@@ -81,14 +81,14 @@ export function renderHashmap(ctx: RenderContext): Skeleton[] {
     const y = top + index * (ROW_H + CELL_GAP);
     const highlighted = isHighlighted(frame, index);
     out.push(
-      cellBox(ctx, `key-${index}`, origin.x, y, key, {
+      ...cellBox(ctx, `key-${index}`, origin.x, y, key, {
         highlighted,
         width: KEY_W,
         height: ROW_H,
       }),
     );
     out.push(
-      cellBox(ctx, `val-${index}`, origin.x + KEY_W + CELL_GAP, y, value, {
+      ...cellBox(ctx, `val-${index}`, origin.x + KEY_W + CELL_GAP, y, value, {
         highlighted,
         width: VAL_W,
         height: ROW_H,

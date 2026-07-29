@@ -30,7 +30,7 @@ export function renderArray(ctx: RenderContext): Skeleton[] {
   frame.cells.forEach((value, index) => {
     const x = origin.x + index * (CELL + CELL_GAP);
     out.push(
-      cellBox(ctx, `cell-${index}`, x, top, cellText(value), {
+      ...cellBox(ctx, `cell-${index}`, x, top, cellText(value), {
         highlighted: isHighlighted(frame, index),
       }),
     );
@@ -61,7 +61,7 @@ export function renderStack(ctx: RenderContext): Skeleton[] {
     // Index 0 is the bottom of the stack, so draw it last down the page.
     const y = baseY + (count - 1 - index) * (CELL + CELL_GAP);
     out.push(
-      cellBox(ctx, `cell-${index}`, origin.x, y, cellText(value), {
+      ...cellBox(ctx, `cell-${index}`, origin.x, y, cellText(value), {
         highlighted: isHighlighted(frame, index),
         width: CELL * 2,
       }),
@@ -87,7 +87,7 @@ export function renderQueue(ctx: RenderContext): Skeleton[] {
   frame.cells.forEach((value, index) => {
     const x = origin.x + index * (CELL + CELL_GAP);
     out.push(
-      cellBox(ctx, `cell-${index}`, x, top, cellText(value), {
+      ...cellBox(ctx, `cell-${index}`, x, top, cellText(value), {
         highlighted: isHighlighted(frame, index),
       }),
     );

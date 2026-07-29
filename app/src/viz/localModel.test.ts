@@ -33,15 +33,15 @@ describe("granite-4.1-8b hashmap output", () => {
 
   it("renders the map's real contents, not an empty box", () => {
     const elements = renderViz(program!, 1, ORIGIN);
-    const labels = elements
-      .map((element) => element.label?.text)
+    const texts = elements
+      .map((element) => element.text)
       .filter((text): text is string => typeof text === "string");
 
     // Frame 1 holds {2: 0, 7: 1}, so both keys and both values must appear.
-    expect(labels).toContain("2");
-    expect(labels).toContain("7");
-    expect(labels).toContain("0");
-    expect(labels).toContain("1");
+    expect(texts).toContain("2");
+    expect(texts).toContain("7");
+    expect(texts).toContain("0");
+    expect(texts).toContain("1");
     expect(elements.some((element) => element.text === "(empty map)")).toBe(false);
   });
 
@@ -50,7 +50,10 @@ describe("granite-4.1-8b hashmap output", () => {
     const second = renderViz(program!, 1, ORIGIN);
 
     const rowsIn = (elements: typeof first) =>
-      elements.filter((element) => element.id?.includes("-key-")).length;
+      elements.filter(
+        (element) =>
+          element.type === "rectangle" && /(?:^|-)key-\d+$/.test(element.id ?? ""),
+      ).length;
     expect(rowsIn(first)).toBe(1);
     expect(rowsIn(second)).toBe(2);
 

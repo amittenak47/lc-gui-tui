@@ -10,6 +10,8 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 
 import type { BridgeResponse, ReviewResponse } from "../api/types";
 import { Tip } from "../components/Tip";
+import type { MessageDrawing } from "../viz/drawingState";
+import { Timeline } from "../viz/Timeline";
 import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
 
@@ -62,8 +64,14 @@ export interface CoachChatMessage {
   review?: ReviewResponse;
   /** Hold-to-reveal bridge, nested under the review that offered it. */
   bridge?: BridgeResponse;
+  /** True while the bridge request is in flight — inline loading in this turn. */
+  bridgePending?: boolean;
+  /** Inline error if the bridge request failed after confirm. */
+  bridgeError?: string | null;
   /** Layout thumbnails when Review board was attached. */
   attachments?: CoachAttachment[];
+  /** Coach diagram — expand/collapse controls board visibility. */
+  drawing?: MessageDrawing;
 }
 
 export interface AgentSidePanelProps {
@@ -78,7 +86,11 @@ export interface AgentSidePanelProps {
   onSend: (text: string, flags: CoachSendFlags) => void;
   /** Opens the hold-to-reveal dialog for the review on this message. */
   onRequestBridge?: (messageId: string) => void;
-  /** Structured cards (tests, timelines, …) rendered in the thread. */
+  /** Expand/collapse a message's drawing section (and sync the board). */
+  onToggleDrawing?: (messageId: string, expanded: boolean) => void;
+  /** Scrub a multi-frame drawing that is currently expanded. */
+  onDrawingFrame?: (programId: string, frameIndex: number) => void;
+  /** Structured cards (tests, ambient, …) rendered in the thread. */
   children?: ReactNode;
 }
 
@@ -92,6 +104,8 @@ export function AgentSidePanel({
   messages,
   onSend,
   onRequestBridge,
+  onToggleDrawing,
+  onDrawingFrame,
   children,
 }: AgentSidePanelProps) {
   const [draft, setDraft] = useState("");
@@ -204,12 +218,33 @@ export function AgentSidePanel({
                       /* kept in history — dismiss is a no-op; card stays for the turn */
                     }}
                     compact
-                    bridgeOffered={Boolean(message.bridge)}
+                    bridgeOffered={Boolean(message.bridge) || Boolean(message.bridgePending)}
                   />
                 </div>
               )}
-              {message.bridge && (
+              {message.bridgePending && (
+                <div className="lc-bridge-pending" role="status">
+                  <span className="lc-reveal-loading-ring" aria-hidden />
+                  <div>
+                    <strong>Building the bridge…</strong>
+                    <p className="lc-muted">Tracing a path from your approach to a working one.</p>
+                  </div>
+                </div>
+              )}
+              {message.bridgeError && !message.bridgePending && (
+                <p className="lc-warning">{message.bridgeError}</p>
+              )}
+              {message.bridge && !message.bridgePending && (
                 <BridgePanel bridge={message.bridge} compact collapsible defaultOpen />
+              )}
+              {message.drawing && (
+                <DrawingSection
+                  drawing={message.drawing}
+                  onToggle={(expanded) => onToggleDrawing?.(message.id, expanded)}
+                  onFrame={(frameIndex) =>
+                    onDrawingFrame?.(message.drawing!.program.id, frameIndex)
+                  }
+                />
               )}
             </div>
           ))}
@@ -336,5 +371,45 @@ export function AgentSidePanel({
         </div>
       )}
     </aside>
+  );
+}
+
+function DrawingSection({
+  drawing,
+  onToggle,
+  onFrame,
+}: {
+  drawing: MessageDrawing;
+  onToggle: (expanded: boolean) => void;
+  onFrame: (frameIndex: number) => void;
+}) {
+  const title = drawing.program.title || drawing.program.id || "Drawing";
+  const expanded = drawing.expanded && !drawing.redacted;
+
+  return (
+    <div className="lc-coach-drawing">
+      <button
+        type="button"
+        className="lc-coach-drawing-toggle"
+        aria-expanded={expanded}
+        onClick={() => onToggle(!drawing.expanded || Boolean(drawing.redacted))}
+      >
+        <span aria-hidden>{expanded ? "▾" : "▸"}</span>
+        <span className="lc-coach-drawing-label">
+          {drawing.redacted && !drawing.expanded ? "[redacted] " : ""}
+          Drawing
+        </span>
+        <span className="lc-muted lc-coach-drawing-title">{title}</span>
+      </button>
+      {expanded && (
+        <div className="lc-coach-drawing-body">
+          <Timeline
+            program={drawing.program}
+            initialFrame={drawing.frameIndex ?? 0}
+            onFrame={onFrame}
+          />
+        </div>
+      )}
+    </div>
   );
 }

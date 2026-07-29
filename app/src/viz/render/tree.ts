@@ -87,7 +87,7 @@ function renderTreeInner(ctx: RenderContext, options: TreeOptions): Skeleton[] {
     if (value === null || value === undefined) return;
     const centre = nodeCentre(index, { x: origin.x, y: top }, width);
     out.push(
-      cellBox(
+      ...cellBox(
         ctx,
         `node-${index}`,
         centre.x - NODE / 2,
@@ -106,7 +106,7 @@ function renderTreeInner(ctx: RenderContext, options: TreeOptions): Skeleton[] {
     frame.cells.forEach((value, index) => {
       const x = origin.x + index * (CELL + CELL_GAP);
       out.push(
-        cellBox(ctx, `arr-${index}`, x, arrayTop, cellText(value), {
+        ...cellBox(ctx, `arr-${index}`, x, arrayTop, cellText(value), {
           highlighted: isHighlighted(frame, index),
           height: 34,
         }),

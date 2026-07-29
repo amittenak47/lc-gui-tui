@@ -5,9 +5,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { AGENT_LANE } from "../../templates/regions";
+import { AGENT_CONTENT_TOP, AGENT_LANE, AGENT_PADDING } from "../../templates/regions";
 import { agentSlotOrigin } from "../../templates/regions";
 import { mergeVizElements, originForProgram, vizGroupIds } from "../apply";
+import { CELL, cellBox, type RenderContext } from "../layout";
 import { parseVizProgram, VIZ_KINDS, type VizKind, type VizProgram } from "../schema";
 import { renderViz, RENDERERS } from "./index";
 
@@ -146,6 +147,16 @@ describe("highlighting", () => {
 });
 
 describe("agent-lane slotting", () => {
+  it("clears the agent title/hint with AGENT_CONTENT_TOP", () => {
+    const origin = agentSlotOrigin(0);
+    expect(origin.y).toBe(AGENT_LANE.y + AGENT_CONTENT_TOP);
+    expect(origin.y).toBeGreaterThan(AGENT_LANE.y + AGENT_PADDING);
+  });
+
+  it("uses a live lane X when provided", () => {
+    expect(agentSlotOrigin(0, undefined, 900).x).toBe(900 + AGENT_PADDING);
+  });
+
   it("keeps a diagram in the slot it already occupies", () => {
     const scene = [{ id: "a", customData: { lcVizId: "first" } }];
     expect(originForProgram(scene, "first")).toEqual(agentSlotOrigin(0));
@@ -169,6 +180,27 @@ describe("agent-lane slotting", () => {
       customData: { lcVizId: `group${i}` },
     }));
     expect(originForProgram(many, "brand-new")).toEqual(agentSlotOrigin(0));
+  });
+});
+
+describe("cellBox value alignment", () => {
+  it("places value text on the same center as the cell box", () => {
+    const ctx: RenderContext = {
+      program: SAMPLES.array,
+      frame: SAMPLES.array.frames[0]!,
+      frameIndex: 0,
+      origin: { x: 0, y: 0 },
+    };
+    const [box, value] = cellBox(ctx, "cell-0", 40, 80, "7");
+    expect(box.type).toBe("rectangle");
+    expect(value.type).toBe("text");
+    expect(value.x).toBe(box.x);
+    expect(value.y).toBe(box.y);
+    expect(value.width).toBe(box.width);
+    expect(value.height).toBe(box.height);
+    expect(value.textAlign).toBe("center");
+    expect(value.verticalAlign).toBe("middle");
+    expect(value.width).toBe(CELL);
   });
 });
 

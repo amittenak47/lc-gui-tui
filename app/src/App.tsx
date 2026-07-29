@@ -66,12 +66,18 @@ import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
 import { applyAppTheme, isDarkTheme, loadThemeId, saveThemeId } from "./theme/appThemes";
-import { Timeline } from "./viz/Timeline";
+import {
+  enforceVisibleDrawingCap,
+  restoreMessageDrawing,
+  setDrawingExpanded,
+  visibleDrawings,
+  withNewDrawing,
+  MAX_VISIBLE_DRAWINGS,
+} from "./viz/drawingState";
 import {
   applyAnnotation,
   applyHighlight,
   applyViz,
-  clearAllViz,
   removeViz,
   type SceneApi,
 } from "./viz/apply";
@@ -79,8 +85,6 @@ import { renderAnnotation } from "./viz/render/annotation";
 import { renderHighlight } from "./viz/render/highlight";
 import { parseVizProgram, type VizProgram } from "./viz/schema";
 import type { CoachCapabilities } from "./api/types";
-
-const MAX_CONCURRENT_PROGRAMS = 4;
 
 type Mode = "review" | "ambient";
 
@@ -170,8 +174,6 @@ export function App() {
   }, [mobile, readingSize]);
 
   const [tests, setTests] = useState<TestResponse | null>(null);
-  const [programs, setPrograms] = useState<VizProgram[]>([]);
-  const [, setFrameByProgram] = useState<Record<string, number>>({});
   const [capabilities, setCapabilities] = useState<CoachCapabilities | null>(null);
 
   /** Attempt state for the open problem, so the leave dialog asks the right question. */
@@ -289,6 +291,35 @@ export function App() {
     };
   }, []);
 
+  /** Paint only expanded drawings onto the coach lane. */
+  const syncDrawingsToBoard = useCallback(
+    (messages: CoachChatMessage[]) => {
+      const board = boardRef.current;
+      const api = sceneApi();
+      if (!board || !api) return;
+      const visible = visibleDrawings(messages);
+      const visibleIds = new Set(visible.map((drawing) => drawing.program.id));
+      for (const id of Array.from(
+        new Set(
+          messages
+            .map((message) => message.drawing?.program.id)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      )) {
+        if (!visibleIds.has(id)) removeViz(api, id);
+      }
+      for (const drawing of visible) {
+        applyViz(
+          api,
+          (skeletons) => board.convert(skeletons),
+          drawing.program,
+          drawing.frameIndex ?? 0,
+        );
+      }
+    },
+    [sceneApi],
+  );
+
   /** Stage 1 of the ambient sampler: cheap, synchronous, runs every tick. */
   const probe = useCallback((): AmbientProbe => {
     const board = boardRef.current;
@@ -392,8 +423,6 @@ export function App() {
       setBusy("loading the workspace…");
       setError(null);
       setTests(null);
-      setPrograms([]);
-      setFrameByProgram({});
       setNudges([]);
       setCoachMessages([]);
       revealForMessageIdRef.current = null;
@@ -443,7 +472,7 @@ export function App() {
         } catch {
           // Fresh load — starter_code is fine.
         }
-        // A saved coach thread comes back with the board it belongs to.
+        // A saved coach thread comes back with drawings attached to turns.
         const resumedMessages = restoreCoachMessages(loaded.resume.agent_messages);
         if (resumedMessages.length > 0) setCoachMessages(resumedMessages);
 
@@ -489,6 +518,11 @@ export function App() {
         } else {
           boardRef.current?.seedTemplate(skeletons);
         }
+        // Restored boards keep ink from whatever theme they were saved under —
+        // recolor to the current Appearance choice. Then drop stale coach viz
+        // and re-apply only expanded drawings from the chat transcript.
+        boardRef.current?.applyThemeInk(themeId);
+        boardRef.current?.stripCoachViz();
         boardRef.current?.fitCodeToSource(source);
         lastIdsRef.current = new Set();
 
@@ -496,6 +530,7 @@ export function App() {
         // and revealing — otherwise the loading checkmark races an empty board.
         await boardRef.current?.waitForTemplate();
         await boardRef.current?.settleFitView();
+        syncDrawingsToBoard(resumedMessages);
 
         setBrowseMotion("idle");
         setSwitchMotion("idle");
@@ -520,7 +555,7 @@ export function App() {
         setBusy(null);
       }
     },
-    [client, themeId, problem, refreshSession],
+    [client, themeId, problem, refreshSession, syncDrawingsToBoard],
   );
 
   /** Session queue when present; otherwise the filtered problem bank. */
@@ -652,19 +687,28 @@ export function App() {
     (
       role: CoachChatMessage["role"],
       content: string,
-      extra?: Pick<CoachChatMessage, "review" | "attachments">,
+      extra?: Pick<
+        CoachChatMessage,
+        "review" | "attachments" | "drawing" | "bridge" | "bridgePending" | "bridgeError"
+      >,
     ) => {
       dirtyRef.current = true;
-      setCoachMessages((current) => [
-        ...current,
-        {
-          id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          role,
-          content,
-          at: Date.now(),
-          ...extra,
-        },
-      ]);
+      setCoachMessages((current) => {
+        let next: CoachChatMessage[] = [
+          ...current,
+          {
+            id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            role,
+            content,
+            at: Date.now(),
+            ...extra,
+          },
+        ];
+        if (extra?.drawing?.expanded) {
+          next = enforceVisibleDrawingCap(next, MAX_VISIBLE_DRAWINGS);
+        }
+        return next;
+      });
     },
     [],
   );
@@ -822,22 +866,32 @@ export function App() {
       const drawables = envelope.programs
         .map(parseVizProgram)
         .filter((candidate): candidate is VizProgram => candidate !== null)
-        .slice(0, MAX_CONCURRENT_PROGRAMS);
+        .slice(0, MAX_VISIBLE_DRAWINGS);
+
+      if (drawables.length > 0) {
+        dirtyRef.current = true;
+        setCoachMessages((current) => {
+          const stamp = Date.now();
+          let next: CoachChatMessage[] = [
+            ...current,
+            ...drawables.map((drawable, index) => ({
+              id: `assistant-${stamp}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+              role: "assistant" as const,
+              content:
+                drawables.length === 1
+                  ? "Drew a diagram on the board."
+                  : `Drew diagram ${index + 1} of ${drawables.length} on the board.`,
+              at: stamp,
+              drawing: withNewDrawing(drawable),
+            })),
+          ];
+          next = enforceVisibleDrawingCap(next, MAX_VISIBLE_DRAWINGS);
+          queueMicrotask(() => syncDrawingsToBoard(next));
+          return next;
+        });
+      }
 
       const api = sceneApi();
-      if (api && drawables.length > 0) {
-        for (const drawable of drawables) {
-          applyViz(api, (skeletons) => board.convert(skeletons), drawable, 0);
-        }
-        setPrograms(drawables);
-        setFrameByProgram(Object.fromEntries(drawables.map((program) => [program.id, 0])));
-        pushCoachMessage(
-          "assistant",
-          drawables.length === 1
-            ? "Drew a diagram on the board."
-            : `Drew ${drawables.length} diagrams on the board.`,
-        );
-      }
 
       for (const annotation of envelope.annotations ?? []) {
         if (!api) break;
@@ -887,7 +941,7 @@ export function App() {
     } finally {
       setBusy(null);
     }
-  }, [client, problem, syncSolution, pushCoachMessage, modeHasVision, sceneApi, appMessages]);
+  }, [client, problem, syncSolution, modeHasVision, sceneApi, appMessages, syncDrawingsToBoard]);
 
   const sendCoachChat = useCallback(
     (text: string, flags: CoachSendFlags) => {
@@ -1081,8 +1135,24 @@ export function App() {
   const confirmReveal = useCallback(async () => {
     const board = boardRef.current;
     if (!problem) return;
-    setRevealPending(true);
+    const targetId = revealForMessageIdRef.current;
+    // Close the confirm modal immediately so the canvas stays usable while
+    // the bridge builds — loading lives inline on the review turn.
+    setRevealOpen(false);
+    setRevealPending(false);
     setRevealError(null);
+    dirtyRef.current = true;
+    setCoachMessages((current) => {
+      const attachTo =
+        (targetId && current.find((message) => message.id === targetId)) ||
+        [...current].reverse().find((message) => message.role === "assistant" && message.review);
+      if (!attachTo) return current;
+      return current.map((message) =>
+        message.id === attachTo.id
+          ? { ...message, bridgePending: true, bridgeError: null }
+          : message,
+      );
+    });
     try {
       const snapshot = board
         ? await buildSnapshot(board, recognizerRef.current, { pseudocode: pseudocodeRef.current })
@@ -1095,63 +1165,77 @@ export function App() {
         true,
         problem.dataset,
       );
-      const targetId = revealForMessageIdRef.current;
       setCoachMessages((current) => {
         const attachTo =
           (targetId && current.find((message) => message.id === targetId)) ||
-          [...current].reverse().find((message) => message.role === "assistant" && message.review);
+          [...current].reverse().find(
+            (message) => message.role === "assistant" && message.review && message.bridgePending,
+          );
         if (!attachTo) return current;
         return current.map((message) =>
-          message.id === attachTo.id ? { ...message, bridge: result } : message,
+          message.id === attachTo.id
+            ? { ...message, bridge: result, bridgePending: false, bridgeError: null }
+            : message,
         );
       });
-      setRevealOpen(false);
       revealForMessageIdRef.current = null;
     } catch (cause) {
-      setRevealError(messageOf(cause));
-    } finally {
-      setRevealPending(false);
+      const message = messageOf(cause);
+      setCoachMessages((current) => {
+        const attachTo =
+          (targetId && current.find((entry) => entry.id === targetId)) ||
+          [...current].reverse().find(
+            (entry) => entry.role === "assistant" && entry.review && entry.bridgePending,
+          );
+        if (!attachTo) return current;
+        return current.map((entry) =>
+          entry.id === attachTo.id
+            ? { ...entry, bridgePending: false, bridgeError: message }
+            : entry,
+        );
+      });
     }
   }, [client, problem]);
 
-  const showFrame = useCallback(
+  const showDrawingFrame = useCallback(
     (programId: string, frameIndex: number) => {
-      const api = sceneApi();
       const board = boardRef.current;
-      const program = programs.find((entry) => entry.id === programId);
-      if (!api || !board || !program) return;
-      applyViz(api, (skeletons) => board.convert(skeletons), program, frameIndex);
-      setFrameByProgram((current) => ({ ...current, [programId]: frameIndex }));
-    },
-    [programs, sceneApi],
-  );
-
-  const dismissProgram = useCallback(
-    (programId?: string) => {
       const api = sceneApi();
-      if (!api) return;
-      if (programId) {
-        removeViz(api, programId);
-        setPrograms((current) => current.filter((program) => program.id !== programId));
-        setFrameByProgram((current) => {
-          const next = { ...current };
-          delete next[programId];
-          return next;
+      if (!board || !api) return;
+      dirtyRef.current = true;
+      setCoachMessages((current) => {
+        const next = current.map((message) => {
+          if (message.drawing?.program.id !== programId) return message;
+          return {
+            ...message,
+            drawing: { ...message.drawing, frameIndex },
+          };
         });
-        return;
-      }
-      clearAllViz(api);
-      setPrograms([]);
-      setFrameByProgram({});
+        const drawing = next.find((message) => message.drawing?.program.id === programId)?.drawing;
+        if (drawing && drawing.expanded && !drawing.redacted) {
+          applyViz(api, (skeletons) => board.convert(skeletons), drawing.program, frameIndex);
+        }
+        return next;
+      });
     },
     [sceneApi],
+  );
+
+  const toggleDrawing = useCallback(
+    (messageId: string, expanded: boolean) => {
+      dirtyRef.current = true;
+      setCoachMessages((current) => {
+        const next = setDrawingExpanded(current, messageId, expanded);
+        queueMicrotask(() => syncDrawingsToBoard(next));
+        return next;
+      });
+    },
+    [syncDrawingsToBoard],
   );
 
   /** Reset every per-problem piece of state. Shared by leave and switch. */
   const clearProblemState = useCallback(() => {
     setTests(null);
-    setPrograms([]);
-    setFrameByProgram({});
     setNudges([]);
     setCoachMessages([]);
     setAttemptState(null);
@@ -1546,6 +1630,8 @@ export function App() {
               setRevealError(null);
               setRevealOpen(true);
             }}
+            onToggleDrawing={toggleDrawing}
+            onDrawingFrame={showDrawingFrame}
           >
             {AMBIENT_ENABLED && mode === "ambient" && (
               <AmbientPanel
@@ -1564,31 +1650,6 @@ export function App() {
                   lastIdsRef.current = new Set();
                 }}
               />
-            )}
-
-            {programs.map((program) =>
-              program.frames.length > 1 ? (
-                <Timeline
-                  key={program.id}
-                  program={program}
-                  onFrame={(frameIndex) => showFrame(program.id, frameIndex)}
-                  onDismiss={() => dismissProgram(program.id)}
-                />
-              ) : null,
-            )}
-            {programs.length === 1 && programs[0].frames.length === 1 && (
-              <button
-                type="button"
-                className="lc-secondary"
-                onClick={() => dismissProgram(programs[0].id)}
-              >
-                Dismiss diagram
-              </button>
-            )}
-            {programs.length > 1 && (
-              <button type="button" className="lc-secondary" onClick={() => dismissProgram()}>
-                Clear coach diagrams
-              </button>
             )}
 
           </AgentSidePanel>
@@ -2057,10 +2118,23 @@ function messageOf(cause: unknown): string {
  */
 function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
   if (!Array.isArray(stored)) return [];
-  return stored.filter((entry): entry is CoachChatMessage => {
-    if (!entry || typeof entry !== "object") return false;
-    const message = entry as Partial<CoachChatMessage>;
-    return typeof message.id === "string" && typeof message.role === "string";
+  return stored.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const message = entry as Partial<CoachChatMessage> & { drawing?: unknown };
+    if (typeof message.id !== "string" || typeof message.role !== "string") return [];
+    const drawing = restoreMessageDrawing(message.drawing);
+    return [
+      {
+        id: message.id,
+        role: message.role as CoachChatMessage["role"],
+        content: typeof message.content === "string" ? message.content : "",
+        at: typeof message.at === "number" ? message.at : Date.now(),
+        review: message.review,
+        bridge: message.bridge,
+        attachments: message.attachments,
+        ...(drawing ? { drawing } : {}),
+      },
+    ];
   });
 }
 

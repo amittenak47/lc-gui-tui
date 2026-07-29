@@ -120,6 +120,15 @@ export default function MonacoBlock({
     monaco.editor.setTheme(monacoThemeName(themeId));
   }, [themeId]);
 
+  // Remount / problem switch can leave Monaco on vs-dark while chrome is light.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      ensureMonacoTheme(themeId);
+      monaco.editor.setTheme(monacoThemeName(themeId));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [themeId, value]);
+
   useEffect(() => {
     editorRef.current?.updateOptions({
       fontSize,
