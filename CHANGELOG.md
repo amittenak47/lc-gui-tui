@@ -6,6 +6,74 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — the problem sets' empty columns
+
+- **KodCode now fills every column in the browser.** Difficulty comes from its
+  own `gpt_difficulty` rating; the name is the function under test rather than
+  the opaque `Algorithm_1_C` id (`running-max-45219-i`), with the id's number
+  reported on its own so `sort: q#` orders the corpus; and the cases column is
+  read off the literal asserts in its pytest suite, so the runner reports case
+  by case instead of pass/fail on the whole module. `lc test --full` still runs
+  the module. What its two tags mean — seed family and phrasing style — is now
+  documented in the README, in `src/datasets/kodcode.rs`, and in the tab's
+  tooltip.
+- **Nested columns stored as JSON strings are read.** A Parquet conversion
+  stores a structure either as an object or as a string holding the same JSON,
+  and only the first spelling was read — which is why DeepSeek LC had no q# or
+  tags and Morgan Stanley had no test cases. Both spellings now work.
+- **A corpus can no longer index as a single problem.** `task_id` is the index's
+  primary key, so rows that slug to the same name silently replaced each other:
+  a dump whose rows carry no id and whose statements all open with the same
+  words collapsed to one entry. Ids are de-duplicated per file (`-2`, `-3`, …),
+  and a row with no title is named after its entry point rather than the first
+  words of a boilerplate preamble.
+- **Indexing KodCode takes minutes, not hours.** `upsert` deletes a problem's
+  old tags by `task_id`, but the tag table's primary key is `(tag, task_id)`, so
+  every one of 487k problems scanned the whole tag table. Added the missing
+  index. Import also streams the corpus instead of materialising 487k `Problem`s
+  in memory, and opening one problem no longer parses the rest of the file.
+- **`lc datasets --inspect`** reports what a downloaded corpus actually
+  contains: the columns its rows have, which canonical fields came out empty,
+  and which columns no adapter reads. It is the answer to "the tags column is
+  blank" — the usual cause is a column nothing is mapped to. Values are never
+  printed, since a row may hold a reference solution.
+- **The workspace header no longer calls every question number a LeetCode
+  one** — `question #45219` rather than `LeetCode #45219` on a synthetic corpus.
+
+### Fixed — the tablet layout, and confirming destructive things
+
+- **Coach is a bottom sheet on a tablet again.** Its sheet rules were behind a
+  900px media query while the mobile class is set for any coarse pointer up to
+  1280px, so an iPad got the class and the desktop panel geometry: the panel
+  covered the canvas from the header down while the board was squeezed into the
+  strip underneath. One height variable now drives the sheet and the room the
+  canvas gives up, and opening it refits the open page.
+- **A page is the only thing on the canvas.** Fitting the viewport to one frame
+  left its neighbours peeking in, and zooming out brought the whole column back.
+  Off-page elements are hidden (`app/src/canvas/pageView.ts`) with their real
+  values parked in `customData`, and everything that reads the board — capture,
+  thumbnails, `board.json` — sees an unpaged scene. Raster pen ink is clipped to
+  the same box.
+- **The fit is no longer half the size it asked for.** Excalidraw quantises
+  `scrollToContent`'s zoom to 0.1 steps; on a ~3900-unit board an honest 0.19
+  floored to 0.1, which is why a page landed as a stamp in the corner.
+- **Appearance, the page turner and the zoom cluster share one row** instead of
+  the pager floating over them.
+- **The text tool places in one tap.** Excalidraw refuses to create a text
+  element while another is being edited, so every box after the first cost two
+  taps; the press is replayed once its own gesture finishes. The font-size
+  slider no longer closes the box on desktop either — a native range input takes
+  focus on mousedown, so it drives its own drag.
+- **Excalidraw's single-key shortcuts are gone.** `handleKeyboardGlobally` made
+  every bare letter live: `1`–`9` and a dozen letters swapped the tool under the
+  pen, and `s` / `g` opened the colour pickers that appeared from nowhere.
+  Unmodified single-character keys no longer reach it, typing is untouched, and
+  a `?` in the toolbar lists what does work.
+- **No more `window.confirm`.** Resetting the session and resetting the board
+  ask in the app's own modal, and every destructive answer — including
+  save-or-discard on leaving — is held for a second like Reveal
+  (`app/src/components/HoldButton.tsx`).
+
 ### Added — multiple problem sets
 
 - **Four more corpora**, each in its own SQLite tables rather than merged into

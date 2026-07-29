@@ -55,7 +55,16 @@ enum Cmd {
         dataset: Option<String>,
     },
     /// List the problem sets and how many problems each has indexed
-    Datasets,
+    Datasets {
+        /// Report what each corpus file really contains and what the adapter
+        /// made of it — the columns, which fields came out empty, and which
+        /// columns nothing reads. Use it when a column in the browser is blank.
+        #[arg(long)]
+        inspect: bool,
+        /// Inspect one problem set instead of all of them
+        #[arg(long)]
+        dataset: Option<String>,
+    },
     /// Search indexed problems
     Search {
         /// Problem set to search (default: leetcode)
@@ -247,8 +256,14 @@ fn run_cmd(cmd: Cmd) -> Result<()> {
             };
             index::cmd_index(&cfg, rebuild, only)
         }
-        Cmd::Datasets => {
+        Cmd::Datasets {
+            inspect,
+            dataset: dataset_id,
+        } => {
             let cfg = Config::load()?;
+            if inspect {
+                return inspect_datasets(&cfg, dataset_id.as_deref());
+            }
             let conn = index::open_db()?;
             print_datasets(&index::dataset_infos(&conn, &cfg)?);
             Ok(())
@@ -473,6 +488,41 @@ fn cmd_ask(
     eprintln!("Asking {}…", provider.label());
     let answer = provider.chat(llm::prompt::SYSTEM_PROMPT, &user_prompt)?;
     println!("\n{answer}");
+    Ok(())
+}
+
+/// `lc datasets --inspect`: the corpus as it is on disk, not as the adapter
+/// hopes it is. See `src/datasets/inspect.rs` for why this exists.
+fn inspect_datasets(cfg: &Config, only: Option<&str>) -> Result<()> {
+    let targets: Vec<&'static lc::dataset::Dataset> = match only {
+        Some(id) => vec![lc::dataset::get(id)?],
+        None => lc::dataset::DATASETS.iter().collect(),
+    };
+    for dataset in targets {
+        let dir = dataset.corpus_dir(cfg).ok();
+        println!(
+            "{} ({})",
+            dataset.id,
+            dir.as_ref()
+                .map(|d| d.display().to_string())
+                .unwrap_or_else(|| "no corpus dir".into())
+        );
+        let reports = lc::datasets::inspect::inspect(cfg, dataset)?;
+        if reports.is_empty() {
+            println!("  no .json / .jsonl files — download it, e.g.");
+            println!("    python scripts/fetch_dataset.py {}", dataset.id);
+            continue;
+        }
+        for report in reports {
+            for line in report.lines() {
+                println!("{line}");
+            }
+        }
+    }
+    println!();
+    println!("MISSING means the adapter produced nothing for that field across the sample.");
+    println!("Check it against \"columns\" and \"not read by any adapter\" above: a field that is");
+    println!("MISSING while an obvious column is unread is a mapping to add in src/datasets/.");
     Ok(())
 }
 

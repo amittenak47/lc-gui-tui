@@ -18,11 +18,21 @@
 //! | `starter_code` | `starter_code`, `python3`, `python`, `code_template`, `prompt`, `template` |
 //! | `entry_point` | `entry_point`, `func_name`, `function_name`, else read off the stub |
 //! | `test` | `test`, `test_code`, `tests` (when a string) |
-//! | `input_output` | `input_output`, `test_cases`, `tests` (when an array), `examples` |
+//! | `input_output` | `input_output`, `test_cases`, `tests` (when an array), `examples`, else the suite's literal asserts |
+//!
+//! ## Names, and why a whole corpus can index as one problem
+//!
+//! `task_id` is the index's primary key, so two rows that slug to the same
+//! name are one row: the second replaces the first. A re-packaging whose rows
+//! carry no id or title, and whose statements all open with the same wrapper
+//! sentence, therefore collapses to a single entry with a nonsense name. Two
+//! things fix that here: the entry point is preferred over the statement when
+//! naming a row, and the importer de-duplicates ids within a file
+//! (`-2`, `-3`, …) rather than letting rows overwrite each other.
 
 use serde_json::Value;
 
-use super::{difficulty, entry_point_from_code, io_cases, slugify, tags, text};
+use super::{cases_from_asserts, difficulty, entry_point_from_code, io_cases, slugify, tags, text};
 use crate::problem::Problem;
 
 pub fn normalize(raw: &Value) -> Option<Problem> {
@@ -39,7 +49,21 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
     );
 
     let name = text(raw, &["task_id", "title_slug", "titleSlug", "slug"])
-        .or_else(|| text(raw, &["title", "name", "question_title"]))
+        .or_else(|| text(raw, &["title", "name", "question_title", "problem_name"]))
+        // The entry point names the problem better than its opening sentence:
+        // re-packagings tend to prefix every statement with the same wrapper
+        // ("Solve the following problem…"), and a slug taken from that is the
+        // same string for every row.
+        .or_else(|| {
+            text(raw, &["entry_point", "func_name", "function_name"]).or_else(|| {
+                text(
+                    raw,
+                    &["starter_code", "python3", "python", "code_template", "template"],
+                )
+                .as_deref()
+                .and_then(entry_point_from_code)
+            })
+        })
         .or_else(|| statement.as_deref().map(|s| super::slug_from_statement(s, 8)))?;
     let task_id = slugify(&name);
     if task_id.is_empty() {
@@ -69,6 +93,14 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         _ => None,
     });
 
+    let mut input_output = io_cases(raw, &["input_output", "test_cases", "tests", "examples"]);
+    if input_output.is_empty() {
+        input_output = test
+            .as_deref()
+            .map(|suite| cases_from_asserts(suite, entry_point.as_deref()))
+            .unwrap_or_default();
+    }
+
     Some(Problem {
         task_id,
         question_id: text(
@@ -88,7 +120,7 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         starter_code,
         entry_point,
         test,
-        input_output: io_cases(raw, &["input_output", "test_cases", "tests", "examples"]),
+        input_output,
         estimated_date: text(raw, &["estimated_date", "date"]),
     })
 }
@@ -146,14 +178,36 @@ pub(super) mod tests {
         assert_eq!(problem.input_output[0].input, "nums = [2, 7], target = 9");
     }
 
-    /// `tests` carries a suite in some dumps and cases in others.
+    /// `tests` carries a suite in some dumps and cases in others. A suite is
+    /// still the suite — but its literal asserts also stand in for the sample
+    /// cases the row does not ship, rather than leaving the column at zero.
     #[test]
     fn a_string_tests_column_is_a_suite_not_a_case_list() {
         let mut record = sample();
         record["tests"] = serde_json::json!("def check(candidate):\n    assert candidate([2,7], 9) == [0,1]\n");
         let problem = normalize(&record).expect("imports");
         assert!(problem.test.as_deref().unwrap().contains("def check(candidate)"));
-        assert!(problem.input_output.is_empty());
+        assert_eq!(problem.input_output.len(), 1);
+        assert_eq!(problem.input_output[0].input, "[2,7], 9");
+        assert_eq!(problem.input_output[0].output, "[0,1]");
+    }
+
+    /// Rows with no id or title used to be named after the first eight words of
+    /// the statement — identical for every row in a dump with a stock preamble,
+    /// so the whole corpus indexed as one problem. The function under test is a
+    /// far better name, and a different one per row.
+    #[test]
+    fn a_row_with_no_title_is_named_after_its_function() {
+        let record = serde_json::json!({
+            "content": "Solve the following problem. You are given an array of integers…",
+            "python3": "class Solution:\n    def maxSubArray(self, nums):\n        pass\n",
+            "test": "def check(candidate):\n    assert candidate([1, -2, 3]) == 3\n"
+        });
+        let problem = normalize(&record).expect("imports");
+        assert_eq!(problem.task_id, "maxsubarray");
+        // …and the suite's asserts stand in for the missing case list.
+        assert_eq!(problem.input_output.len(), 1);
+        assert_eq!(problem.input_output[0].input, "[1, -2, 3]");
     }
 
     #[test]

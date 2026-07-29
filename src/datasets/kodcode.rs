@@ -6,21 +6,48 @@
 //! | --- | --- |
 //! | `question` | `problem_description` |
 //! | `test_info` | `entry_point` and a `starter_code` stub |
-//! | `test_code` | `test` (a pytest module, run by `run_tests.py --full`) |
+//! | `test_code` | `test`, and the sample cases read off its asserts |
+//! | `gpt_difficulty` | `difficulty` |
 //! | `subset`, `style` | `tags` |
-//! | `question_id` / `conversation_id` / `id` | `task_id`, `question_id` |
+//! | `question_id` / `conversation_id` / `id` | `question_id`, and part of `task_id` |
 //!
 //! `solution` is deliberately **not** read — see [`super::SOLUTION_FIELDS`].
 //!
-//! KodCode ships no per-case I/O, so a problem imports with zero sample cases
-//! and its `test_code` is the whole suite. `run_tests.py` already falls back to
-//! the suite when `cases` is empty, and its pytest path binds `solution` in
-//! `sys.modules` first, which is exactly what `from solution import …` at the
-//! top of a KodCode test needs.
+//! ## What its columns mean, since they are not LeetCode's
+//!
+//! KodCode is *synthetic*: every problem was generated from a seed, then kept
+//! only if a model could solve it against its own tests. So it has no question
+//! numbers, no titles and no topic tags, and the two columns it does have in
+//! their place are worth spelling out, because they end up in the tag filter:
+//!
+//! - **`subset`** — which seed the problem was grown from: `Algorithm`,
+//!   `Data_Structure`, `Leetcode`, `Codeforces`, `Apps`, `Taco`, `Docs`
+//!   (library documentation), `Package`, `Filter`, `Prefill`, `Evol`. It is
+//!   the closest thing the corpus has to a topic.
+//! - **`style`** — how the question is phrased. `Instruct` is a natural-language
+//!   problem statement; `Complete` gives you a function to finish. The same
+//!   seed usually appears in both styles, which is why ids come in `…_I` and
+//!   `…_C` pairs.
+//!
+//! Both are exposed as tags (`Algorithm`, `Instruct`), and `gpt_difficulty` —
+//! the corpus's own easy / medium / hard rating — fills the difficulty column
+//! that used to be blank.
+//!
+//! ## Naming
+//!
+//! `question_id` is a compound like `Algorithm_1_C`, which slugged to
+//! `algorithm-1-c` and displayed as "Algorithm 1 C" — a name that says nothing
+//! about the problem. The slug is built from the function under test instead
+//! (`running_max` → `running-max-45219-i`), keeping the id's number and style
+//! letter so the two phrasings of one seed stay two problems. The number is
+//! also reported on its own as the question number, so the q# column sorts.
 
 use serde_json::Value;
 
-use super::{entry_point_from_code, skeleton_from_declaration, slug_from_statement, slugify, text};
+use super::{
+    cases_from_asserts, container_value, difficulty, entry_point_from_code,
+    skeleton_from_declaration, slug_from_statement, slugify, text,
+};
 use crate::problem::Problem;
 
 pub fn normalize(raw: &Value) -> Option<Problem> {
@@ -35,7 +62,8 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
                 .and_then(|info| text(info, &["function_declaration", "declaration"]))
                 .as_deref()
                 .and_then(entry_point_from_code)
-        });
+        })
+        .or_else(|| text(raw, &["test_entry_point", "entry_point"]));
 
     let starter_code = info
         .as_ref()
@@ -52,10 +80,15 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         raw,
         &["question_id", "conversation_id", "id", "problem_id", "uuid"],
     );
-    let task_id = match raw_id.as_deref() {
-        Some(id) => slugify(id),
-        None => slug_from_statement(&question, 8),
-    };
+    let number = raw_id.as_deref().and_then(id_number);
+    let style = text(raw, &["style"]);
+    let task_id = task_id(
+        &question,
+        entry_point.as_deref(),
+        raw_id.as_deref(),
+        number,
+        style.as_deref(),
+    );
     if task_id.is_empty() {
         return None;
     }
@@ -67,29 +100,107 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         }
     }
 
+    let suite = text(raw, &["test_code", "test"]);
+    // KodCode ships no per-case I/O, but its asserts are per-case I/O written
+    // as source. Reading them gives the browser a real `cases` count and the
+    // runner something to report case by case; `--full` still runs the module.
+    let input_output = suite
+        .as_deref()
+        .map(|source| cases_from_asserts(source, entry_point.as_deref()))
+        .unwrap_or_default();
+
     Some(Problem {
         task_id,
-        question_id: raw_id,
-        // KodCode has no difficulty column; its `subset` carries the flavour
-        // and is exposed as a tag instead of being guessed at.
-        difficulty: None,
+        // The number alone, so `sort: q#` (which casts to integer) orders the
+        // corpus instead of collapsing every row to 0.
+        question_id: number.map(|n| n.to_string()).or(raw_id),
+        difficulty: difficulty(raw, &["gpt_difficulty", "difficulty", "4o_difficulty"])
+            .or_else(|| {
+                container_value(raw, "metadata")
+                    .and_then(|meta| difficulty(&meta, &["difficulty", "gpt_difficulty"]))
+            }),
         tags,
         problem_description: Some(question),
         prompt: None,
         starter_code,
         entry_point,
-        test: text(raw, &["test_code", "test"]),
-        input_output: Vec::new(),
+        test: suite,
+        input_output,
         estimated_date: None,
     })
 }
 
+/// A readable, unique slug: what the problem is, then the seed number, then
+/// the style letter that tells the two phrasings of one seed apart.
+///
+/// `running-max-45219-i` rather than `docs-combine-45219-i`. The number and the
+/// letter are both load-bearing: the corpus ships most seeds twice (`…_C` and
+/// `…_I`) and dropping either would make two problems share a primary key.
+fn task_id(
+    question: &str,
+    entry_point: Option<&str>,
+    raw_id: Option<&str>,
+    number: Option<u64>,
+    style: Option<&str>,
+) -> String {
+    let name = entry_point
+        .map(slugify)
+        .filter(|slug| !slug.is_empty())
+        .unwrap_or_else(|| slug_from_statement(question, 8));
+    if name.is_empty() {
+        return raw_id.map(slugify).unwrap_or_default();
+    }
+    let mut slug = match number {
+        Some(number) => format!("{name}-{number}"),
+        // No number to disambiguate with: the importer's de-duplicator adds a
+        // `-2` suffix if two rows land on the same name.
+        None => name,
+    };
+    if let Some(letter) = style_letter(style, raw_id) {
+        slug.push('-');
+        slug.push(letter);
+    }
+    slug
+}
+
+/// `c` for Complete, `i` for Instruct — from the `style` column, or from the
+/// trailing token of ids like `Docs_Combine_45219_I`.
+fn style_letter(style: Option<&str>, raw_id: Option<&str>) -> Option<char> {
+    if let Some(style) = style.map(str::trim).filter(|s| !s.is_empty()) {
+        return style.chars().next().map(|c| c.to_ascii_lowercase());
+    }
+    let tail = raw_id?.rsplit('_').next()?;
+    if tail.len() == 1 && tail.chars().all(|c| c.is_ascii_alphabetic()) {
+        return tail.chars().next().map(|c| c.to_ascii_lowercase());
+    }
+    None
+}
+
+/// The number inside `Algorithm_1_C` / `Docs_Combine_45219_I`.
+fn id_number(raw: &str) -> Option<u64> {
+    let mut best: Option<u64> = None;
+    let mut digits = String::new();
+    for ch in raw.chars().chain(std::iter::once('_')) {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            continue;
+        }
+        if !digits.is_empty() {
+            if let Ok(value) = digits.parse::<u64>() {
+                best = Some(value);
+            }
+            digits.clear();
+        }
+    }
+    best
+}
+
 /// `test_info` is documented as an object, but the released parquet stores it
-/// as a one-element list of objects. Accept both.
+/// as a one-element list of objects — and a JSON string in some conversions.
 fn test_info(raw: &Value) -> Option<Value> {
-    match raw.get("test_info")? {
+    match container_value(raw, "test_info")? {
         Value::Array(items) => items.first().cloned(),
-        object @ Value::Object(_) => Some(object.clone()),
+        object @ Value::Object(_) => Some(object),
         _ => None,
     }
 }
@@ -103,8 +214,9 @@ pub(super) mod tests {
             "question_id": "Docs_Combine_45219_I",
             "subset": "Docs",
             "style": "Instruct",
+            "gpt_difficulty": "medium",
             "question": "Write a function that returns the running maximum of a list.\n\nThe input is a list of integers.",
-            "test_code": "from solution import running_max\n\ndef test_running_max():\n    assert running_max([1, 3, 2]) == [1, 3, 3]\n",
+            "test_code": "from solution import running_max\n\ndef test_running_max():\n    assert running_max([1, 3, 2]) == [1, 3, 3]\n\ndef test_empty():\n    assert running_max([]) == []\n",
             "test_info": [{
                 "function_name": "running_max",
                 "parameter_list": "(values)",
@@ -118,8 +230,6 @@ pub(super) mod tests {
     #[test]
     fn maps_the_documented_columns() {
         let problem = normalize(&sample()).expect("sample imports");
-        assert_eq!(problem.task_id, "docs-combine-45219-i");
-        assert_eq!(problem.question_id.as_deref(), Some("Docs_Combine_45219_I"));
         assert_eq!(problem.entry_point.as_deref(), Some("running_max"));
         assert_eq!(problem.tags, vec!["Docs", "Instruct"]);
         assert!(problem
@@ -127,23 +237,75 @@ pub(super) mod tests {
             .as_deref()
             .unwrap()
             .starts_with("Write a function"));
-        // The pytest module is the whole suite for this corpus.
         assert!(problem.test.as_deref().unwrap().contains("def test_running_max"));
-        assert!(problem.input_output.is_empty(), "KodCode ships no per-case I/O");
-        // And the editor gets something to type into.
         assert_eq!(
             problem.starter_code.as_deref(),
             Some("def running_max(values):\n    pass\n")
         );
     }
 
+    /// The browser's columns: a name that says what the problem is, a question
+    /// number that sorts, and the corpus's own difficulty rating.
     #[test]
-    fn test_info_may_arrive_as_an_object_instead_of_a_list() {
+    fn the_browser_columns_are_filled_in() {
+        let problem = normalize(&sample()).expect("imports");
+        assert_eq!(problem.task_id, "running-max-45219-i");
+        assert_eq!(problem.question_id.as_deref(), Some("45219"));
+        assert_eq!(problem.difficulty.as_deref(), Some("Medium"));
+    }
+
+    /// The two phrasings of one seed are different problems and must not share
+    /// an id — the index is keyed on it.
+    #[test]
+    fn instruct_and_complete_rows_keep_separate_ids() {
+        let mut complete = sample();
+        complete["question_id"] = serde_json::json!("Docs_Combine_45220_C");
+        complete["style"] = serde_json::json!("Complete");
+        let instruct = normalize(&sample()).expect("imports");
+        let complete = normalize(&complete).expect("imports");
+        assert_ne!(instruct.task_id, complete.task_id);
+        assert_eq!(complete.tags, vec!["Docs", "Complete"]);
+    }
+
+    /// The suite *is* the case list; it was just written as source.
+    #[test]
+    fn sample_cases_are_read_off_the_asserts() {
+        let problem = normalize(&sample()).expect("imports");
+        assert_eq!(problem.input_output.len(), 2);
+        assert_eq!(problem.input_output[0].input, "[1, 3, 2]");
+        assert_eq!(problem.input_output[0].output, "[1, 3, 3]");
+        assert_eq!(problem.input_output[1].input, "[]");
+    }
+
+    /// An assert built from a fixture would not survive `ast.literal_eval`, so
+    /// it is left to the full suite rather than shown as a broken sample.
+    #[test]
+    fn only_literal_asserts_become_cases() {
+        let mut record = sample();
+        record["test_code"] = serde_json::json!(
+            "def test_x():\n    data = build()\n    assert running_max(data) == expected\n    assert running_max([2]) == [2]\n"
+        );
+        let problem = normalize(&record).expect("imports");
+        assert_eq!(problem.input_output.len(), 1);
+        assert_eq!(problem.input_output[0].input, "[2]");
+    }
+
+    #[test]
+    fn test_info_may_arrive_as_an_object_or_a_json_string() {
         let mut record = sample();
         let info = record["test_info"][0].clone();
-        record["test_info"] = info;
-        let problem = normalize(&record).expect("object form imports");
-        assert_eq!(problem.entry_point.as_deref(), Some("running_max"));
+        record["test_info"] = info.clone();
+        assert_eq!(
+            normalize(&record).unwrap().entry_point.as_deref(),
+            Some("running_max")
+        );
+
+        let mut stringified = sample();
+        stringified["test_info"] = serde_json::json!(serde_json::to_string(&info).unwrap());
+        assert_eq!(
+            normalize(&stringified).unwrap().entry_point.as_deref(),
+            Some("running_max")
+        );
     }
 
     #[test]

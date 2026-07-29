@@ -20,6 +20,7 @@
 //! it cannot be found anywhere in the result.
 
 pub mod deepseek_leetcode;
+pub mod inspect;
 pub mod kodcode;
 pub mod leetcode_with_tests;
 pub mod ms_python_q;
@@ -75,14 +76,44 @@ pub(crate) fn text(raw: &Value, keys: &[&str]) -> Option<String> {
 
 /// Like [`text`], but reads `meta.<key>` style nested objects too.
 pub(crate) fn nested_text(raw: &Value, container: &str, keys: &[&str]) -> Option<String> {
-    let inner = raw.get(container)?;
-    text(inner, keys)
+    let inner = container_value(raw, container)?;
+    text(&inner, keys)
+}
+
+/// A nested column, whether it arrived as a structure or as a string holding
+/// one.
+///
+/// Parquet is where this bites. A dataset whose `meta` is a struct converts to
+/// a JSON object, but one whose schema could not be pinned down stores the same
+/// content as a *string* — and then `meta.difficulty` reads as absent and the
+/// column silently disappears from the index. Reading both spellings is the
+/// difference between a populated q# / tags column and an empty one.
+pub(crate) fn container_value(raw: &Value, container: &str) -> Option<Value> {
+    match raw.get(container)? {
+        Value::String(s) => serde_json::from_str(s).ok(),
+        other => Some(other.clone()),
+    }
+}
+
+/// A column that should be an array or object, whichever way it was stored.
+fn structured(raw: &Value, key: &str) -> Option<Value> {
+    match raw.get(key)? {
+        Value::String(s) if s.trim_start().starts_with(['[', '{']) => {
+            serde_json::from_str(s).ok()
+        }
+        other @ (Value::Array(_) | Value::Object(_)) => Some(other.clone()),
+        _ => None,
+    }
 }
 
 /// Tags from an array of strings, an array of `{name}` objects, or one string.
+///
+/// An array stored as a JSON string (`"[\"Array\", \"Hash Table\"]"`) counts as
+/// an array — see [`container_value`] for why corpora do that.
 pub(crate) fn tags(raw: &Value, keys: &[&str]) -> Vec<String> {
     for key in keys {
-        match raw.get(key) {
+        let stored = structured(raw, key);
+        match stored.as_ref().or_else(|| raw.get(key)) {
             Some(Value::Array(items)) => {
                 let out: Vec<String> = items
                     .iter()
@@ -230,6 +261,11 @@ pub(crate) fn render_case_output(value: &Value) -> String {
 }
 
 /// Read `input_output` / `test_cases` style arrays with tolerant key names.
+///
+/// Three shapes are accepted, because all three turn up in these downloads:
+/// an array of `{input, output}` objects; the same array stored as a JSON
+/// *string* (see [`container_value`]); and an array of bare `assert f(…) == …`
+/// source lines, which is really a suite pretending to be a case list.
 pub(crate) fn io_cases(raw: &Value, keys: &[&str]) -> Vec<IoCase> {
     const INPUT_KEYS: [&str; 5] = ["input", "inputs", "args", "arguments", "parameters"];
     const OUTPUT_KEYS: [&str; 6] = [
@@ -242,29 +278,177 @@ pub(crate) fn io_cases(raw: &Value, keys: &[&str]) -> Vec<IoCase> {
     ];
 
     for key in keys {
-        let Some(Value::Array(items)) = raw.get(key) else {
-            continue;
+        let stored = structured(raw, key);
+        let items = match stored.as_ref().or_else(|| raw.get(key)) {
+            Some(Value::Array(items)) => items.clone(),
+            _ => continue,
         };
         let mut out = Vec::new();
-        for item in items {
-            let Value::Object(_) = item else { continue };
-            let input = INPUT_KEYS
-                .iter()
-                .find_map(|k| item.get(k))
-                .and_then(render_case_input);
-            let output = OUTPUT_KEYS.iter().find_map(|k| item.get(k));
-            if let (Some(input), Some(output)) = (input, output) {
-                out.push(IoCase {
-                    input,
-                    output: render_case_output(output),
-                });
+        let mut assert_lines = Vec::new();
+        for item in &items {
+            match item {
+                Value::Object(_) => {
+                    let input = INPUT_KEYS
+                        .iter()
+                        .find_map(|k| item.get(k))
+                        .and_then(render_case_input);
+                    let output = OUTPUT_KEYS.iter().find_map(|k| item.get(k));
+                    if let (Some(input), Some(output)) = (input, output) {
+                        out.push(IoCase {
+                            input,
+                            output: render_case_output(output),
+                        });
+                    }
+                }
+                Value::String(line) => assert_lines.push(line.as_str()),
+                _ => {}
             }
+        }
+        if out.is_empty() && !assert_lines.is_empty() {
+            out = cases_from_asserts(&assert_lines.join("\n"), None);
         }
         if !out.is_empty() {
             return out;
         }
     }
     Vec::new()
+}
+
+/// How many sample cases one corpus row is allowed to contribute.
+///
+/// A suite can hold hundreds of asserts; the sample cases exist to be *read*,
+/// on a board, next to the statement. `--full` still runs the whole suite.
+const MAX_EXTRACTED_CASES: usize = 12;
+
+/// Sample cases read off a pytest-style suite: `assert f(args) == expected`.
+///
+/// Corpora that ship a suite but no per-case I/O (KodCode is the big one) show
+/// `0` in the browser's cases column and give the runner nothing to report per
+/// case. The asserts already are the cases; they just need to be in the
+/// `input` / `output` shape `run_tests.py` parses — and its `parse_input`
+/// reads bare positional literals, which is exactly what an assert's arguments
+/// are.
+///
+/// Deliberately conservative: only single-line asserts whose call arguments and
+/// expected value are *literals* are taken. A case built out of a variable, a
+/// helper call or a `pytest.approx` would fail at `ast.literal_eval` and read
+/// as a broken problem rather than a missing sample.
+pub(crate) fn cases_from_asserts(suite: &str, entry_point: Option<&str>) -> Vec<IoCase> {
+    let mut out = Vec::new();
+    for line in suite.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("assert ") else {
+            continue;
+        };
+        let Some((call, expected)) = rest.split_once("==") else {
+            continue;
+        };
+        let expected = expected.trim();
+        if expected.is_empty() || !is_literal_source(expected) {
+            continue;
+        }
+
+        let call = call.trim();
+        let Some(open) = call.find('(') else { continue };
+        let name = call[..open].trim();
+        // `Solution().two_sum(…)` and `sol.two_sum(…)` both count.
+        let called = name.rsplit('.').next().unwrap_or(name).trim();
+        if called.is_empty() || !called.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        // `candidate` is the name the runner binds the entry point to, and the
+        // one a `check(candidate)` suite calls it by.
+        if let Some(entry) = entry_point {
+            if called != entry && called != "candidate" {
+                continue;
+            }
+        }
+        let Some(args) = balanced_call_args(&call[open..]) else {
+            continue;
+        };
+        if args.trim().is_empty() || !is_literal_source(args) {
+            continue;
+        }
+
+        out.push(IoCase {
+            input: args.trim().to_string(),
+            output: expected.to_string(),
+        });
+        if out.len() >= MAX_EXTRACTED_CASES {
+            break;
+        }
+    }
+    out
+}
+
+/// The text inside `(...)`, given a slice that starts at the opening paren, or
+/// `None` when the call is not closed on this line.
+fn balanced_call_args(from_open: &str) -> Option<&str> {
+    let bytes = from_open.as_bytes();
+    let mut depth = 0usize;
+    let mut quote: Option<u8> = None;
+    for (i, &byte) in bytes.iter().enumerate() {
+        if let Some(active) = quote {
+            if byte == b'\\' {
+                continue;
+            }
+            if byte == active {
+                quote = None;
+            }
+            continue;
+        }
+        match byte {
+            b'"' | b'\'' => quote = Some(byte),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&from_open[1..i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// True when every bare word outside a string literal is a number or one of
+/// Python's literal keywords — i.e. `ast.literal_eval` will read this.
+fn is_literal_source(text: &str) -> bool {
+    let mut word = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in text.chars().chain(std::iter::once(' ')) {
+        if let Some(active) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == active {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch.is_alphanumeric() || ch == '_' || ch == '.' {
+            word.push(ch);
+            continue;
+        }
+        if !word.is_empty() {
+            let numeric = word
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_digit() || first == '-');
+            if !numeric && !matches!(word.as_str(), "True" | "False" | "None") {
+                return false;
+            }
+            word.clear();
+        }
+    }
+    quote.is_none()
 }
 
 // ---------------------------------------------------------------------------

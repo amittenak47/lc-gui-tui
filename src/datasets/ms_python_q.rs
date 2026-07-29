@@ -15,11 +15,20 @@
 //! `python_solution` and `q_solution` are deliberately **not** read — they are
 //! complete answers, and this corpus is the one where forgetting that would be
 //! easiest.
+//!
+//! ## Why the cases column was empty
+//!
+//! `test_cases` is a nested column, and a parquet conversion stores those
+//! either as a structure or as a *string* holding the same JSON. Only the first
+//! spelling used to be read, so the corpus imported with zero sample cases even
+//! though it ships them. `io_cases` now reads both, and also accepts a list of
+//! bare `assert f(…) == …` lines, which is the third shape these dumps use.
 
 use serde_json::Value;
 
 use super::{
-    difficulty, entry_point_from_code, io_cases, nested_text, slugify, tags, text,
+    cases_from_asserts, difficulty, entry_point_from_code, io_cases, nested_text, slugify,
+    tags, text,
 };
 use crate::problem::Problem;
 
@@ -36,6 +45,27 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         .or_else(|| text(raw, &["entry_point", "function_name"]))
         .or_else(|| starter_code.as_deref().and_then(entry_point_from_code));
 
+    let test = text(raw, &["test", "test_code", "python_test", "unit_test"]);
+    let mut input_output = io_cases(
+        raw,
+        &[
+            "test_cases",
+            "input_output",
+            "tests",
+            "examples",
+            "python_test_cases",
+            "sample_cases",
+        ],
+    );
+    if input_output.is_empty() {
+        // A suite instead of a case list: its asserts are the cases, written as
+        // source. Same treatment as KodCode.
+        input_output = test
+            .as_deref()
+            .map(|suite| cases_from_asserts(suite, entry_point.as_deref()))
+            .unwrap_or_default();
+    }
+
     Some(Problem {
         task_id,
         question_id: text(raw, &["leetcode_id", "question_id", "problem_id"]),
@@ -48,8 +78,8 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         prompt: None,
         starter_code,
         entry_point,
-        test: text(raw, &["test", "test_code"]),
-        input_output: io_cases(raw, &["test_cases", "input_output", "tests", "examples"]),
+        test,
+        input_output,
         estimated_date: None,
     })
 }
@@ -100,6 +130,33 @@ pub(super) mod tests {
         });
         let problem = normalize(&record).expect("imports");
         assert_eq!(problem.entry_point.as_deref(), Some("twoSum"));
+    }
+
+    /// The reason this corpus imported with an empty cases column: its nested
+    /// column came through as a string, and only the structured spelling was
+    /// being read.
+    #[test]
+    fn test_cases_stored_as_a_json_string_still_import() {
+        let mut record = sample();
+        let cases = record["test_cases"].clone();
+        record["test_cases"] = serde_json::json!(serde_json::to_string(&cases).unwrap());
+        let problem = normalize(&record).expect("imports");
+        assert_eq!(problem.input_output.len(), 2);
+        assert_eq!(problem.input_output[0].input, "nums = [2, 7, 11, 15], target = 9");
+    }
+
+    /// A dump that ships a suite rather than a case list still gets samples.
+    #[test]
+    fn a_suite_without_cases_contributes_its_literal_asserts() {
+        let mut record = sample();
+        record.as_object_mut().unwrap().remove("test_cases");
+        record["test"] = serde_json::json!(
+            "def test_two_sum():\n    assert two_sum([2, 7], 9) == [0, 1]\n    assert two_sum([3, 3], 6) == [0, 1]\n"
+        );
+        let problem = normalize(&record).expect("imports");
+        assert_eq!(problem.input_output.len(), 2);
+        assert_eq!(problem.input_output[0].input, "[2, 7], 9");
+        assert_eq!(problem.input_output[0].output, "[0, 1]");
     }
 
     #[test]

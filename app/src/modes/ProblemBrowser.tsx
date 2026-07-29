@@ -709,7 +709,12 @@ function DatasetTabs({
             .filter(Boolean)
             .join(" ")}
           disabled={disabled}
-          data-tip={`${entry.source} — ${entry.count.toLocaleString()} indexed`}
+          data-tip={[
+            `${entry.source} — ${entry.count.toLocaleString()} indexed`,
+            entry.notes,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
           data-tip-placement="bottom"
           onClick={() => onPick(entry.id)}
         >

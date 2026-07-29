@@ -46,6 +46,12 @@ pub struct Dataset {
     /// Where the corpus came from, for docs and the UI's tooltip.
     pub source: &'static str,
     pub shape: Shape,
+    /// One line on what this corpus's columns mean, for the tab's tooltip.
+    ///
+    /// Worth carrying because these corpora do not agree on what a "tag" is:
+    /// KodCode's are a seed family and a phrasing style, not topics, and
+    /// nothing in the browser would otherwise say so.
+    pub notes: &'static str,
     /// SQLite table holding the indexed rows.
     pub table: &'static str,
     /// SQLite table holding `(tag, task_id)` pairs.
@@ -61,6 +67,7 @@ pub const DATASETS: [Dataset; 5] = [
         shape: Shape::Canonical,
         table: "problems",
         tag_table: "problem_tags",
+        notes: "The original corpus: LeetCode problems with topic tags and sample cases.",
     },
     Dataset {
         id: "kodcode",
@@ -69,6 +76,7 @@ pub const DATASETS: [Dataset; 5] = [
         shape: Shape::KodCode,
         table: "problems_kodcode",
         tag_table: "problem_tags_kodcode",
+        notes: "Synthetic problems. Tags are the seed family (Algorithm, Docs, Leetcode, …) and the phrasing: Instruct = written as a problem, Complete = finish the function. Difficulty is the corpus's own rating; sample cases are read off its pytest suite.",
     },
     Dataset {
         id: "ms-python-q",
@@ -77,6 +85,7 @@ pub const DATASETS: [Dataset; 5] = [
         shape: Shape::MorganStanleyPythonQ,
         table: "problems_ms_python_q",
         tag_table: "problem_tags_ms_python_q",
+        notes: "LeetCode-style problems with structured test cases and topic tags.",
     },
     Dataset {
         id: "deepseek-leetcode",
@@ -85,6 +94,7 @@ pub const DATASETS: [Dataset; 5] = [
         shape: Shape::DeepSeekLeetCode,
         table: "problems_deepseek_leetcode",
         tag_table: "problem_tags_deepseek_leetcode",
+        notes: "DeepSeek-Coder's contest benchmark. Cases are extracted from its assert suite; the tag is LeetCode's category.",
     },
     Dataset {
         id: "leetcode-with-tests",
@@ -93,6 +103,7 @@ pub const DATASETS: [Dataset; 5] = [
         shape: Shape::LeetCodeWithTests,
         table: "problems_leetcode_with_tests",
         tag_table: "problem_tags_leetcode_with_tests",
+        notes: "Community re-packaging of LeetCode with test code. Columns vary between dumps, so fields are read through candidate names.",
     },
 ];
 
@@ -207,6 +218,9 @@ pub struct DatasetInfo {
     pub count: u32,
     /// Where its corpus files are expected, for the "run `lc index`" hint.
     pub corpus_dir: Option<String>,
+    /// What this corpus's columns mean — the tab tooltip.
+    #[serde(default)]
+    pub notes: String,
 }
 
 #[cfg(test)]
