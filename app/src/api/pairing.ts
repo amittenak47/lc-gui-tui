@@ -12,6 +12,8 @@
  * pairing is a once-ever step.
  */
 
+import { lcFetch } from "./nativeHttp";
+
 const STORAGE_KEY = "lc.pairing";
 
 export interface Pairing {
@@ -87,7 +89,7 @@ export async function pairWithCode(
   host: string,
   port: string | number,
   code: string,
-  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+  fetchImpl: typeof fetch = lcFetch,
 ): Promise<Pairing> {
   const baseUrl = pairingBaseUrl(host, port);
   if (!baseUrl) {

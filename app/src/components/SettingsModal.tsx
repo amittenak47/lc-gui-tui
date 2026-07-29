@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { LcClient } from "../api/client";
 import type { DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
+import { useIsMobile } from "../util/mobile";
 
 type TabId = "paths" | "datasets" | "tests" | "llm" | "serve";
 
@@ -20,6 +21,18 @@ const TABS: { id: TabId; label: string }[] = [
 
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
 const MODES = ["ambient", "review", "bridge", "viz"] as const;
+
+function llmServerHint(provider: "local" | "ollama" | "openai" | "groq"): string {
+  switch (provider) {
+    case "local":
+    case "ollama":
+      return "Usually http://localhost:11434/v1 when Ollama runs on the same machine as lc serve.";
+    case "openai":
+      return "OpenAI's cloud API. Requests still leave from the PC running lc serve; the API key lives there too.";
+    case "groq":
+      return "Groq's cloud API. Requests still leave from the PC running lc serve; the API key lives there too.";
+  }
+}
 
 function emptyProvider(): ProviderConfig {
   return { base_url: "", model: "", vision_model: "" };
@@ -51,6 +64,7 @@ export interface SettingsModalProps {
 }
 
 export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalProps) {
+  const mobile = useIsMobile();
   const [tab, setTab] = useState<TabId>("paths");
   const [draft, setDraft] = useState<LcConfig>(emptyConfig);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
@@ -323,6 +337,17 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
 
           {tab === "llm" && (
             <div className="lc-settings-fields">
+              <div className="lc-settings-callout" role="note">
+                <strong>localhost means the server, not this app</strong>
+                <p>
+                  {mobile ? "This tablet" : "The whiteboard"} talks to{" "}
+                  <code>lc serve</code> over the network. The daemon on your PC then calls the LLM
+                  URL below. <code>localhost</code> and <code>127.0.0.1</code> always refer to{" "}
+                  <strong>the machine running lc serve</strong>
+                  {mobile ? ", not the tablet" : ""}. You do not point the tablet at Ollama directly.
+                </p>
+              </div>
+
               <label>
                 <span>Default provider</span>
                 <select
@@ -359,11 +384,17 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
               </div>
 
               <label>
-                <span>Base URL</span>
+                <span>LLM server URL (on the lc serve machine)</span>
                 <input
                   value={provider.base_url}
                   onChange={(e) => patchProvider(providerFocus, { base_url: e.target.value })}
+                  placeholder={
+                    providerFocus === "openai"
+                      ? "https://api.openai.com/v1"
+                      : "http://localhost:11434/v1"
+                  }
                 />
+                <p className="lc-settings-hint">{llmServerHint(providerFocus)}</p>
               </label>
               <label>
                 <span>Chat model</span>
@@ -412,7 +443,11 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                 </label>
               ))}
 
-              <div className="lc-settings-subhead">Local process</div>
+              <div className="lc-settings-subhead">Local LLM process (on the PC)</div>
+              <p className="lc-settings-hint">
+                Starts or stops the bundled local model on the machine running{" "}
+                <code>lc serve</code> — not on {mobile ? "the tablet" : "a remote client"}.
+              </p>
               <p className="lc-muted">
                 {llmStatus?.detail ?? "Status unknown"}
                 {llmStatus?.pid != null ? ` · pid ${llmStatus.pid}` : ""}

@@ -7,6 +7,7 @@
  */
 
 import type { Pairing } from "./pairing";
+import { lcFetch } from "./nativeHttp";
 import type {
   AdjacentProblems,
   AttemptOutcome,
@@ -61,7 +62,7 @@ function datasetSuffix(dataset?: string): string {
 export class LcClient {
   constructor(
     private pairing: Pairing,
-    private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+    private readonly fetchImpl: typeof fetch = lcFetch,
   ) {}
 
   setPairing(pairing: Pairing): void {
