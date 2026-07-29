@@ -27,7 +27,12 @@ export interface SceneApi {
 
 export interface VizSceneElement {
   id: string;
-  customData?: { lcVizId?: string } | null;
+  x?: number;
+  customData?: {
+    lcVizId?: string;
+    lcRegion?: string;
+    lcRegionFrame?: boolean;
+  } | null;
 }
 
 /** `convertToExcalidrawElements`, injected so this module stays testable. */
@@ -57,6 +62,15 @@ export function vizGroupIds(elements: ReadonlyArray<VizSceneElement>): string[] 
   return seen;
 }
 
+/** Live agent-frame X after layout sync, else the template lane. */
+export function liveAgentLaneX(elements: ReadonlyArray<VizSceneElement>): number {
+  const frame = elements.find(
+    (element) =>
+      element.customData?.lcRegion === "agent" && element.customData?.lcRegionFrame === true,
+  );
+  return typeof frame?.x === "number" ? frame.x : AGENT_LANE.x;
+}
+
 /**
  * Where a diagram should sit: its own slot if it is new, or the slot it already
  * occupies so stepping frames doesn't make it jump.
@@ -69,11 +83,14 @@ export function originForProgram(
   const groups = vizGroupIds(elements);
   const existing = groups.indexOf(programId);
   const index = existing >= 0 ? existing : groups.length;
-  const origin = agentSlotOrigin(index, slotHeight);
+  const laneX = liveAgentLaneX(elements);
+  const origin = agentSlotOrigin(index, slotHeight, laneX);
 
   // Past the bottom of the lane, wrap to the top rather than drawing offscreen.
+  // Callers should reclaim (remove) the oldest occupant before applying a new
+  // program when the lane is full — otherwise two groups share slot 0.
   if (!fitsInAgentLane(origin, AGENT_LANE.w - AGENT_PADDING * 2, slotHeight)) {
-    return agentSlotOrigin(0, slotHeight);
+    return agentSlotOrigin(0, slotHeight, laneX);
   }
   return origin;
 }

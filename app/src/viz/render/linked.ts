@@ -30,7 +30,7 @@ export function renderLinkedList(ctx: RenderContext): Skeleton[] {
   frame.cells.forEach((value, index) => {
     const x = origin.x + index * stride;
     out.push(
-      cellBox(ctx, `node-${index}`, x, top, cellText(value), {
+      ...cellBox(ctx, `node-${index}`, x, top, cellText(value), {
         highlighted: isHighlighted(frame, index),
         width: NODE_W,
       }),

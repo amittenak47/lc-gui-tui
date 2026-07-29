@@ -36,7 +36,13 @@ export function slotId(ctx: RenderContext, slot: string): string {
   return vizElementId(ctx.program.id, slot);
 }
 
-/** A boxed cell with its value centred. */
+/**
+ * A boxed cell with its value as a separate centred text element.
+ *
+ * Bound labels (`label: { text }` on a rectangle) drift after
+ * `convertToExcalidrawElements` regenerates ids — values floated beside empty
+ * boxes. Explicit text with `textAlign`/`verticalAlign` stays inside the cell.
+ */
 export function cellBox(
   ctx: RenderContext,
   slot: string,
@@ -44,22 +50,40 @@ export function cellBox(
   y: number,
   text: string,
   options: { highlighted?: boolean; width?: number; height?: number } = {},
-): Skeleton {
+): Skeleton[] {
   const highlighted = options.highlighted ?? false;
-  return {
-    id: slotId(ctx, slot),
-    type: "rectangle",
-    x,
-    y,
-    width: options.width ?? CELL,
-    height: options.height ?? CELL,
-    strokeColor: highlighted ? COACH_ACCENT : COACH_INK,
-    backgroundColor: highlighted ? "#fff7ed" : COACH_FILL,
-    fillStyle: "solid",
-    strokeWidth: highlighted ? 2 : 1,
-    roughness: 0,
-    label: { text, fontSize: 16, strokeColor: highlighted ? COACH_ACCENT : "#1e1e1e" },
-  };
+  const width = options.width ?? CELL;
+  const height = options.height ?? CELL;
+  const ink = highlighted ? COACH_ACCENT : "#1e1e1e";
+  return [
+    {
+      id: slotId(ctx, slot),
+      type: "rectangle",
+      x,
+      y,
+      width,
+      height,
+      strokeColor: highlighted ? COACH_ACCENT : COACH_INK,
+      backgroundColor: highlighted ? "#fff7ed" : COACH_FILL,
+      fillStyle: "solid",
+      strokeWidth: highlighted ? 2 : 1,
+      roughness: 0,
+    },
+    {
+      id: slotId(ctx, `${slot}-val`),
+      type: "text",
+      x,
+      y,
+      width,
+      height,
+      text,
+      fontSize: 16,
+      fontFamily: FONT_CODE,
+      strokeColor: ink,
+      textAlign: "center",
+      verticalAlign: "middle",
+    },
+  ];
 }
 
 /** Small caption text, e.g. an index below a cell or a pointer name above it. */

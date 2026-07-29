@@ -84,7 +84,7 @@ export function renderGraph(ctx: RenderContext): Skeleton[] {
   labels.forEach((label, index) => {
     const point = nodeCentre(index, count, centre, radius);
     out.push(
-      cellBox(ctx, `node-${index}`, point.x - NODE / 2, point.y - NODE / 2, label, {
+      ...cellBox(ctx, `node-${index}`, point.x - NODE / 2, point.y - NODE / 2, label, {
         highlighted: isHighlighted(frame, index),
         width: NODE,
         height: NODE,
