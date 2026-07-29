@@ -231,6 +231,14 @@ function clampZoom(value: number): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
 }
 
+/** Read a `--lc-safe-*` px length from the document root (mobile nav bar, etc.). */
+function safeCssPx(name: "--lc-safe-top" | "--lc-safe-bottom" | "--lc-safe-left" | "--lc-safe-right"): number {
+  if (typeof document === "undefined") return 0;
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
 /** Zoom toward a viewport point so scroll-wheel zoom feels anchored under the cursor. */
 function getStateForZoom(
   {
@@ -1232,20 +1240,36 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // Leave room for the floating toolbar; the bottom inset is larger so the
     // fit prefers the upper viewport rather than centring the stack. A paged
     // fit wants the frame to fill the screen, so its insets are just chrome.
+    const safeTop = mobile ? 0 : safeCssPx("--lc-safe-top");
+    const safeBottom = mobile ? 0 : safeCssPx("--lc-safe-bottom");
+    const safeLeft = mobile ? 0 : safeCssPx("--lc-safe-left");
+    const safeRight = mobile ? 0 : safeCssPx("--lc-safe-right");
     const inset = paged
-      ? { top: 14, left: 56, right: 14, bottom: 62 }
-      : { top: 28, left: 72, right: 28, bottom: 120 };
+      ? mobile
+        ? { top: 34, left: 2, right: 2, bottom: 26 }
+        : {
+            top: 14 + safeTop,
+            left: 56 + safeLeft,
+            right: 14 + safeRight,
+            bottom: 62 + safeBottom,
+          }
+      : {
+          top: 28 + safeTop,
+          left: 72 + safeLeft,
+          right: 28 + safeRight,
+          bottom: 120 + safeBottom,
+        };
     const availWidth = Math.max(80, viewWidth - inset.left - inset.right);
     const availHeight = Math.max(80, viewHeight - inset.top - inset.bottom);
     const boxWidth = Math.max(1, maxX - minX);
     const boxHeight = Math.max(1, maxY - minY);
     const zoom = clampZoom(
-      Math.min(availWidth / boxWidth, availHeight / boxHeight) * (paged ? 1 : 0.98),
+      Math.min(availWidth / boxWidth, availHeight / boxHeight) * (paged ? (mobile ? 1 : 1) : 0.98),
     );
 
     // Centre whatever axis has room to spare; the other one starts at its inset.
     const slackX = Math.max(0, availWidth - boxWidth * zoom);
-    const slackY = paged ? Math.max(0, availHeight - boxHeight * zoom) : 0;
+    const slackY = paged && !mobile ? Math.max(0, availHeight - boxHeight * zoom) : 0;
     // scene → screen: (scene + scroll) * zoom  (see Board.stamp)
     api.updateScene({
       appState: {
@@ -1257,7 +1281,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
     setZoomPct(Math.round(zoom * 100));
     requestAnimationFrame(reportCodeSlot);
-  }, [reportCodeSlot]);
+  }, [mobile, reportCodeSlot]);
 
   /** Run fit after Excalidraw has applied scene + container size. */
   const scheduleFitView = useCallback(() => {
@@ -1973,6 +1997,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             onReset={resetTemplate}
             onUndo={undoBoard}
             onRedo={redoBoard}
+            mobile={mobile}
           />
           <div
             className={
@@ -2058,6 +2083,8 @@ interface ToolbarProps {
   onReset: () => void;
   onUndo: () => void;
   onRedo: () => void;
+  /** Tablet / phone layout — horizontal strip with a fold control. */
+  mobile?: boolean;
 }
 
 function BoardToolbar({
@@ -2080,6 +2107,7 @@ function BoardToolbar({
   onReset,
   onUndo,
   onRedo,
+  mobile = false,
 }: ToolbarProps) {
   const showInk =
     active === "freedraw" ||
@@ -2104,6 +2132,7 @@ function BoardToolbar({
   /** Reset asks first, in our own modal — never a browser confirm box. */
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [folded, setFolded] = useState(mobile);
   const importRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -2182,7 +2211,29 @@ function BoardToolbar({
   };
 
   return (
-    <div className="lc-toolbar" role="toolbar" aria-label="Drawing tools">
+    <div
+      className={[
+        "lc-toolbar",
+        mobile ? "lc-toolbar-mobile" : "",
+        mobile && folded ? "lc-toolbar-folded" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      role="toolbar"
+      aria-label="Drawing tools"
+    >
+      {mobile && (
+        <button
+          type="button"
+          className="lc-tool lc-tool-fold"
+          title={folded ? "Show more tools" : "Fold tools"}
+          aria-label={folded ? "Show more tools" : "Fold tools"}
+          aria-expanded={!folded}
+          onClick={() => setFolded((open) => !open)}
+        >
+          {folded ? "▸" : "▾"}
+        </button>
+      )}
       {TOOLS.map(({ tool, label, hint, emoji }) => (
         <button
           key={tool}
@@ -2205,6 +2256,18 @@ function BoardToolbar({
         </button>
       ))}
 
+      <button
+        type="button"
+        className={shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
+        title="Shapes — data structures and system design"
+        aria-label="Shapes"
+        aria-expanded={shapesOpen}
+        onClick={onToggleShapes}
+      >
+        ⬡
+      </button>
+
+      <div className="lc-toolbar-expandable">
       {showInk && (
         <>
           <div className="lc-tool-sep" />
@@ -2259,19 +2322,6 @@ function BoardToolbar({
         </>
       )}
 
-      <div className="lc-tool-sep" />
-
-      <button
-        type="button"
-        className={shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
-        title="Shapes — data structures and system design"
-        aria-label="Shapes"
-        aria-expanded={shapesOpen}
-        onClick={onToggleShapes}
-      >
-        ⬡
-      </button>
-
       <button type="button" className="lc-tool lc-tool-labeled" title="Undo" aria-label="Undo" onClick={onUndo}>
         <UndoIcon />
         <span className="lc-tool-caption">Undo</span>
@@ -2281,8 +2331,6 @@ function BoardToolbar({
         <span className="lc-tool-caption">Redo</span>
       </button>
 
-      {/* Clear lives with the drawing tools, not in the header — it changes the
-          canvas, so it belongs beside the things that change the canvas. */}
       <button
         type="button"
         className="lc-tool lc-tool-danger lc-tool-labeled"
@@ -2303,6 +2351,7 @@ function BoardToolbar({
         <ResetIcon />
         <span className="lc-tool-caption">Reset</span>
       </button>
+      </div>
 
       {shapesOpen && (
         <div
@@ -2491,8 +2540,9 @@ function BoardToolbar({
         </div>
       )}
 
-      <div className="lc-tool-sep" />
+      <div className="lc-tool-sep lc-desktop-only" />
 
+      {!mobile && (
       <button
         type="button"
         className={helpOpen ? "lc-tool lc-tool-active" : "lc-tool"}
@@ -2503,8 +2553,9 @@ function BoardToolbar({
       >
         ?
       </button>
+      )}
 
-      {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
+      {!mobile && helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
 
       {confirmingReset && (
         <ConfirmDialog

@@ -36,6 +36,7 @@ const HINTS: Record<RegionId, string> = {
   approach: "What are you scanning, and what invariant holds at each step?",
   complexity: "time / space — and why",
   walkthrough: "Trace one example by hand.",
+  scratch: "Scratch work — still included when the coach reads your board.",
   agent: "Coach diagrams land here.",
 };
 
