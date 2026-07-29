@@ -1144,11 +1144,13 @@ input[type="checkbox"] {
 .lc-bg-palette-swatches {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
 }
 
 .lc-bg-palette-label {
   font-size: 12px;
+  line-height: 1;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -1159,12 +1161,20 @@ input[type="checkbox"] {
   margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid var(--line);
+  align-items: center;
 }
 
 .lc-bg-palette .lc-swatch {
   width: 20px;
   height: 20px;
+  min-width: 20px;
   min-height: 20px;
+  box-sizing: border-box;
+  padding: 0;
+  flex-shrink: 0;
+  align-self: center;
+  /* Beat global `button { min-height: var(--touch) }` so chips stay square. */
+  min-height: 20px !important;
 }
 
 .lc-swatch-dark {
@@ -2570,10 +2580,31 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-browser-foot-nav {
-  display: flex;
+  display: grid;
+  grid-template-columns: 4.5rem minmax(11rem, auto) 4.5rem;
   align-items: center;
+  justify-items: center;
   gap: 8px;
   margin-left: auto;
+  flex-shrink: 0;
+}
+
+.lc-browser-foot-nav > button:first-child {
+  justify-self: end;
+}
+
+.lc-browser-foot-nav > button:last-child {
+  justify-self: start;
+}
+
+.lc-browser-page-label {
+  min-width: 11rem;
+  max-width: 18rem;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 .lc-browser-foot-keys {
@@ -3631,7 +3662,8 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-header {
-  grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);
+  /* Equal side columns so the host in the center is screen-centered. */
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   column-gap: 4px;
   padding: calc(2px + var(--lc-safe-top)) calc(4px + var(--lc-safe-right)) 3px
     calc(4px + var(--lc-safe-left));
@@ -3641,6 +3673,19 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-header-left,
 .lc-mobile .lc-header-right {
   gap: 4px;
+  min-width: 0;
+}
+
+.lc-mobile .lc-header-left {
+  justify-self: start;
+}
+
+.lc-mobile .lc-header-right {
+  justify-self: end;
+}
+
+.lc-mobile .lc-header-center {
+  justify-self: center;
 }
 
 .lc-mobile .lc-brand {
@@ -3665,16 +3710,19 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-header button,
 .lc-mobile .lc-header-center .lc-actions button {
-  min-height: 28px;
-  height: 28px;
-  padding: 0 7px;
-  font-size: 12px;
+  min-height: 24px;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
 }
 
 .lc-mobile .lc-header .lc-icon {
-  width: 28px;
-  min-width: 28px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
   padding: 0;
+  font-size: 13px;
 }
 
 .lc-mobile .lc-problem-nav {
@@ -3682,14 +3730,8 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-home {
-  padding: 0 5px;
-  font-size: 0;
-}
-
-/* Keep the affordance, drop the word — the arrow is the whole message. */
-.lc-mobile .lc-home::before {
-  content: "←";
-  font-size: 14px;
+  padding: 0 6px;
+  min-width: 24px;
 }
 
 .lc-mobile .lc-current {
@@ -3711,10 +3753,10 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-coach-toggle {
-  min-height: 28px;
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
+  min-height: 24px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
 }
 
 .lc-overflow {
@@ -3756,42 +3798,57 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-toolbar {
   top: 4px;
   left: 4px;
-  right: 4px;
+  right: auto;
   bottom: auto;
   flex-direction: row;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  align-content: flex-start;
   gap: 2px;
   padding: 3px 4px;
   border-radius: 10px;
   max-width: calc(100% - 8px);
   max-height: none;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;
   scrollbar-width: none;
-}
-
-.lc-mobile .lc-toolbar-mobile {
-  /* Horizontal strip under the header actions, still over the canvas. */
-}
-
-.lc-mobile .lc-toolbar-folded .lc-toolbar-expandable {
-  display: none;
 }
 
 .lc-mobile .lc-toolbar-expandable {
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 2px;
+  min-width: 0;
+  max-width: min(92vw, 720px);
+  opacity: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  transition:
+    max-width 220ms ease,
+    opacity 180ms ease,
+    margin 180ms ease,
+    padding 180ms ease;
+}
+
+.lc-mobile .lc-toolbar-expandable::-webkit-scrollbar {
+  display: none;
+}
+
+.lc-mobile .lc-toolbar-folded .lc-toolbar-expandable {
+  max-width: 0;
+  opacity: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .lc-mobile .lc-toolbar .lc-tool-sep {
   width: 1px;
-  height: 22px;
+  height: 20px;
   margin: 0 2px;
+  flex-shrink: 0;
 }
 
 .lc-mobile .lc-toolbar .lc-ink-colors {
@@ -3823,9 +3880,9 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-tool {
-  width: 30px;
-  min-height: 30px;
-  font-size: 14px;
+  width: 28px;
+  min-height: 28px;
+  font-size: 13px;
   flex-shrink: 0;
 }
 
@@ -3872,22 +3929,34 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 12px;
 }
 
-.lc-mobile .lc-palette-trigger-map {
+/* Appearance is a labeled chip, not a square zoom button — don't inherit 24px width. */
+.lc-mobile .lc-palette-trigger-map.lc-map-btn {
+  width: auto;
+  min-width: 0;
   min-height: 24px;
-  height: 24px;
-  padding: 0 7px;
+  height: auto;
+  padding: 0 8px;
   font-size: 11px;
+  border-left: none;
+}
+
+.lc-mobile .lc-palette-map {
+  display: inline-flex;
+  align-items: center;
+  overflow: visible;
 }
 
 .lc-mobile .lc-palette-map-label {
   gap: 5px;
   font-size: 11px;
+  line-height: 1;
 }
 
 .lc-mobile .lc-palette-chip {
   width: 11px;
   height: 11px;
   margin: 0;
+  flex-shrink: 0;
 }
 
 .lc-mobile .lc-pager {
@@ -3926,10 +3995,22 @@ button.lc-row-selected:hover:not(:disabled) {
 @media (min-width: 601px) {
   .lc-mobile .lc-header button,
   .lc-mobile .lc-header-center .lc-actions button {
-    min-height: 30px;
-    height: 30px;
-    padding: 0 9px;
-    font-size: 13px;
+    min-height: 26px;
+    height: 26px;
+    padding: 0 7px;
+    font-size: 12px;
+  }
+
+  .lc-mobile .lc-header .lc-icon {
+    width: 26px;
+    min-width: 26px;
+    height: 26px;
+    min-height: 26px;
+  }
+
+  .lc-mobile .lc-coach-toggle {
+    min-height: 26px;
+    height: 26px;
   }
 
   .lc-mobile .lc-current {
@@ -3938,20 +4019,310 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 
   .lc-mobile .lc-pairing {
-    max-width: 34vw;
-    font-size: 10px;
+    max-width: none;
+    font-size: 11px;
   }
 
   .lc-mobile .lc-tool {
-    width: 32px;
-    min-height: 32px;
-    font-size: 15px;
+    width: 30px;
+    min-height: 30px;
+    font-size: 14px;
   }
 
   .lc-mobile .lc-map-btn {
     width: 26px;
     min-height: 26px;
     font-size: 13px;
+  }
+
+  .lc-mobile .lc-palette-trigger-map.lc-map-btn {
+    width: auto;
+    min-height: 26px;
+  }
+}
+
+/* --- problem browser (browse overlay) on phone / tablet / app --- */
+
+.lc-mobile .lc-overlay {
+  padding: 8px 10px 6px;
+}
+
+.lc-mobile .lc-browser {
+  gap: 6px;
+  width: 100%;
+}
+
+.lc-mobile .lc-browser-body {
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+}
+
+.lc-mobile .lc-dataset-tabs {
+  gap: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-wrap: nowrap;
+}
+
+.lc-mobile .lc-dataset-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.lc-mobile .lc-dataset-tab {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.lc-mobile .lc-dataset-tab-count {
+  font-size: 10px;
+}
+
+/* Filters: one compact row; scroll horizontally on the narrowest phones. */
+.lc-mobile .lc-browser-filters {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 1px;
+}
+
+.lc-mobile .lc-browser-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.lc-mobile .lc-browser-filters input[type="search"],
+.lc-mobile .lc-browser-filters select,
+.lc-mobile .lc-browser-filters button {
+  min-height: 26px;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 11px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.lc-mobile .lc-browser-filters input[type="search"] {
+  flex: 1 1 96px;
+  min-width: 72px;
+  max-width: none;
+}
+
+.lc-mobile .lc-browser-filters select {
+  max-width: 7.5rem;
+}
+
+.lc-mobile .lc-browser-results {
+  gap: 6px;
+}
+
+/* Phone: keep q# / name / difficulty; drop tags + cases so rows aren't clipped. */
+.lc-mobile .lc-table-head,
+.lc-mobile .lc-row {
+  grid-template-columns: 44px minmax(0, 1fr) 64px;
+  gap: 6px;
+}
+
+.lc-mobile .lc-col-tags,
+.lc-mobile .lc-col-cases,
+.lc-mobile .lc-table-head .lc-col-tags,
+.lc-mobile .lc-table-head .lc-col-cases {
+  display: none;
+}
+
+.lc-mobile .lc-table-head {
+  padding: 0 8px 6px;
+  font-size: 10px;
+}
+
+.lc-mobile .lc-table {
+  padding: 4px;
+}
+
+.lc-mobile .lc-row {
+  min-height: 34px;
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.lc-mobile .lc-col-q {
+  font-size: 11px;
+}
+
+.lc-mobile .lc-col-diff {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Session + pagination on one compact row. */
+.lc-mobile .lc-browser-foot {
+  gap: 4px;
+  padding-top: 6px;
+}
+
+.lc-mobile .lc-browser-foot-session {
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  align-items: center;
+}
+
+.lc-mobile .lc-browser-foot-session::-webkit-scrollbar {
+  display: none;
+}
+
+.lc-mobile .lc-browser-foot-label {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.lc-mobile .lc-browser-foot-nav {
+  margin-left: auto;
+  gap: 4px;
+  flex-shrink: 0;
+  grid-template-columns: 2rem minmax(7rem, 28vw) 2rem;
+}
+
+.lc-mobile .lc-browser-page-label {
+  font-size: 10px;
+  min-width: 0;
+  max-width: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lc-mobile .lc-browser-foot button {
+  min-height: 26px;
+  height: 26px;
+  padding: 0 7px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.lc-mobile .lc-browser-foot-keys {
+  justify-content: flex-end;
+  gap: 0;
+}
+
+.lc-mobile .lc-browser-foot-stats {
+  margin-left: 0;
+  font-size: 11px;
+  width: 100%;
+  text-align: right;
+}
+
+/* Appearance row under the browser card. */
+.lc-mobile .lc-bg-palette-inline {
+  padding-top: 6px;
+  gap: 6px;
+}
+
+.lc-mobile .lc-bg-palette-label {
+  font-size: 11px;
+}
+
+.lc-mobile .lc-bg-palette .lc-swatch {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px !important;
+  border-radius: 3px;
+}
+
+.lc-mobile .lc-bg-palette-swatches {
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.lc-mobile .lc-pairing {
+  max-width: none;
+  font-size: 10px;
+}
+
+.lc-mobile .lc-browse-hint {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Tablet / landscape Magic Note Pad: room for tags + fuller chrome, still one row. */
+@media (min-width: 601px) {
+  .lc-mobile .lc-browser-filters input[type="search"],
+  .lc-mobile .lc-browser-filters select,
+  .lc-mobile .lc-browser-filters button {
+    min-height: 28px;
+    height: 28px;
+    font-size: 12px;
+    padding: 0 8px;
+  }
+
+  .lc-mobile .lc-browser-filters select {
+    max-width: 9rem;
+  }
+
+  .lc-mobile .lc-table-head,
+  .lc-mobile .lc-row {
+    grid-template-columns: 52px minmax(0, 1.2fr) 72px minmax(0, 1fr) 48px;
+    gap: 8px;
+  }
+
+  .lc-mobile .lc-col-tags,
+  .lc-mobile .lc-col-cases,
+  .lc-mobile .lc-table-head .lc-col-tags,
+  .lc-mobile .lc-table-head .lc-col-cases {
+    display: unset;
+  }
+
+  .lc-mobile .lc-browser-foot button {
+    min-height: 28px;
+    height: 28px;
+    font-size: 12px;
+    padding: 0 8px;
+  }
+
+  .lc-mobile .lc-browser-page-label {
+    max-width: none;
+    font-size: 11px;
+  }
+
+  .lc-mobile .lc-bg-palette .lc-swatch {
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    min-height: 18px !important;
+  }
+}
+
+/* Very narrow (iPhone SE / Galaxy portrait): tighter still. */
+@media (max-width: 400px) {
+  .lc-mobile .lc-browser-foot-label {
+    display: none;
+  }
+
+  .lc-mobile .lc-browser-filters select {
+    max-width: 5.75rem;
+  }
+
+  .lc-mobile .lc-browser-page-label {
+    max-width: 36vw;
+  }
+
+  .lc-mobile .lc-overlay {
+    padding: 6px 6px 4px;
+  }
+
+  .lc-mobile .lc-browser-body {
+    padding: 6px;
   }
 }
 

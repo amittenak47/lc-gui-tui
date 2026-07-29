@@ -384,20 +384,14 @@ export function ProblemBrowser({
               <input
                 ref={searchRef}
                 type="search"
-                className="lc-tip-target"
                 value={query}
                 placeholder="/  name, question number, or tag"
                 aria-label="Search problems"
-                data-tip="Search by name, question number, or tag — press / to focus"
-                data-tip-placement="bottom"
                 onChange={(event) => setQuery(event.target.value)}
               />
               <select
-                className="lc-tip-target"
                 value={difficulty}
                 aria-label="Difficulty"
-                data-tip="Filter by difficulty — press E to cycle"
-                data-tip-placement="bottom"
                 onChange={(event) => setDifficulty(event.target.value)}
               >
                 {DIFFICULTIES.map((value) => (
@@ -407,11 +401,8 @@ export function ProblemBrowser({
                 ))}
               </select>
               <select
-                className="lc-tip-target"
                 value={tag}
                 aria-label="Tag"
-                data-tip="Filter by topic tag — press T to cycle"
-                data-tip-placement="bottom"
                 onChange={(event) => setTag(event.target.value)}
               >
                 <option value="">any tag</option>
@@ -422,11 +413,8 @@ export function ProblemBrowser({
                 ))}
               </select>
               <select
-                className="lc-tip-target"
                 value={sort}
                 aria-label="Sort"
-                data-tip="Sort column — press O to cycle"
-                data-tip-placement="bottom"
                 onChange={(event) => setSort(event.target.value)}
               >
                 {SORTS.map((value) => (
@@ -437,9 +425,7 @@ export function ProblemBrowser({
               </select>
               <button
                 type="button"
-                className="lc-secondary lc-tip-target"
-                data-tip="Random session from filters — R"
-                data-tip-placement="bottom"
+                className="lc-secondary"
                 disabled={busy || !onRandomSession}
                 onClick={randomizeSession}
               >
@@ -451,21 +437,11 @@ export function ProblemBrowser({
 
             <div className={loading ? "lc-browser-results lc-browser-results-pending" : "lc-browser-results"}>
               <div className="lc-table-head" aria-hidden="true">
-                <span className="lc-col-q lc-tip-target" data-tip="LeetCode question number" data-tip-placement="bottom">
-                  q#
-                </span>
-                <span className="lc-col-name lc-tip-target" data-tip="Problem name" data-tip-placement="bottom">
-                  name
-                </span>
-                <span className="lc-col-diff lc-tip-target" data-tip="Easy, Medium, or Hard" data-tip-placement="bottom">
-                  difficulty
-                </span>
-                <span className="lc-col-tags lc-tip-target" data-tip="Topic tags from the corpus" data-tip-placement="bottom">
-                  tags
-                </span>
-                <span className="lc-col-cases lc-tip-target" data-tip="Number of test cases" data-tip-placement="bottom">
-                  cases
-                </span>
+                <span className="lc-col-q">q#</span>
+                <span className="lc-col-name">name</span>
+                <span className="lc-col-diff">difficulty</span>
+                <span className="lc-col-tags">tags</span>
+                <span className="lc-col-cases">cases</span>
               </div>
 
               <div
@@ -504,7 +480,7 @@ export function ProblemBrowser({
                             {isPicked ? "✓" : "○"}
                           </span>
                         )}
-                        {titleFromSlug(problem.task_id)}
+                        {titleFromSlug(problem.task_id, problem.question_id)}
                         {/* Keyed on `dataset/task_id`, so a fail earned in one
                             problem set never badges the same slug in another. */}
                         {session?.problems[problem.key] && (
@@ -535,38 +511,24 @@ export function ProblemBrowser({
                   <span className="lc-browser-foot-label">Session</span>
                   <button
                     type="button"
-                    className="lc-secondary lc-tip-target"
+                    className="lc-secondary"
                     disabled={busy || !onStartSession}
-                    data-tip={
-                      picked.size > 0
-                        ? `Start session with ${picked.size} selected`
-                        : "Start a fresh empty session"
-                    }
-                    data-tip-placement="top"
                     onClick={commitStart}
                   >
                     Start
                   </button>
                   <button
                     type="button"
-                    className="lc-secondary lc-tip-target"
+                    className="lc-secondary"
                     disabled={busy || !onResetSession}
-                    data-tip="Clear session queue and progress — press X"
-                    data-tip-placement="top"
                     onClick={commitReset}
                   >
                     Reset
                   </button>
                   <button
                     type="button"
-                    className={
-                      selectMode
-                        ? "lc-secondary lc-tip-target is-active"
-                        : "lc-secondary lc-tip-target"
-                    }
+                    className={selectMode ? "lc-secondary is-active" : "lc-secondary"}
                     disabled={busy}
-                    data-tip="Toggle select mode — click rows or press Space to add — press M"
-                    data-tip-placement="top"
                     aria-pressed={selectMode}
                     onClick={() => setSelectMode((on) => !on)}
                   >
@@ -575,82 +537,31 @@ export function ProblemBrowser({
                   <div className="lc-browser-foot-nav">
                     <button
                       type="button"
-                      className="lc-secondary lc-tip-target"
+                      className="lc-secondary"
                       disabled={page === 0 || loading}
-                      data-tip="Previous page — press A"
-                      data-tip-placement="top"
                       onClick={() => turnPage(-1)}
                     >
-                      ‹ prev
+                      <span className="lc-label-long">‹ prev</span>
+                      <span className="lc-label-short">‹</span>
                     </button>
-                    <span className="lc-muted lc-tip-target" data-tip="Current page within filtered results" data-tip-placement="top">
+                    <span className="lc-muted lc-browser-page-label">
                       {rangeLabel} · page {page + 1}/{pageCount}
                     </span>
                     <button
                       type="button"
-                      className="lc-secondary lc-tip-target"
+                      className="lc-secondary"
                       disabled={page >= pageCount - 1 || loading}
-                      data-tip="Next page — press D"
-                      data-tip-placement="top"
                       onClick={() => turnPage(1)}
                     >
-                      next ›
+                      <span className="lc-label-long">next ›</span>
+                      <span className="lc-label-short">›</span>
                     </button>
                   </div>
                 </div>
                 <div className="lc-browser-foot-keys">
-                  <span className="lc-keys lc-muted">
-                    <span className="lc-tip-target" data-tip="Move highlight up or down" data-tip-placement="top">
-                      W/S move
-                    </span>
-                    {" · "}
-                    <span className="lc-tip-target" data-tip="Previous / next page" data-tip-placement="top">
-                      A/D page
-                    </span>
-                    {" · "}
-                    <span className="lc-tip-target" data-tip="Focus the search box" data-tip-placement="top">
-                      / search
-                    </span>
-                    {" · "}
-                    <span className="lc-tip-target" data-tip="Cycle topic tag filter" data-tip-placement="top">
-                      T tag
-                    </span>
-                    {" · "}
-                    <span className="lc-tip-target" data-tip="Cycle difficulty filter" data-tip-placement="top">
-                      E diff
-                    </span>
-                    {" · "}
-                    <span className="lc-tip-target" data-tip="Cycle sort column" data-tip-placement="top">
-                      O sort
-                    </span>
-                    {" · "}
-                    <span className="lc-tip-target" data-tip="Switch problem set" data-tip-placement="top">
-                      G dataset
-                    </span>
-                    {" · "}
-                    <span className="lc-tip-target" data-tip="Randomize session from filters" data-tip-placement="top">
-                      R random
-                    </span>
-                    {" · "}
-                    <span className="lc-tip-target" data-tip="Toggle select mode" data-tip-placement="top">
-                      M select
-                    </span>
-                    {" · "}
-                    <span className="lc-tip-target" data-tip="Add/remove highlighted problem from session picks" data-tip-placement="top">
-                      Space add
-                    </span>
-                    {" · "}
-                    <span className="lc-tip-target" data-tip="Reset session" data-tip-placement="top">
-                      X reset
-                    </span>
-                    {" · "}
-                    <span
-                      className="lc-tip-target"
-                      data-tip="Open the highlighted problem"
-                      data-tip-placement="top"
-                    >
-                      Enter open
-                    </span>
+                  <span className="lc-keys lc-muted lc-desktop-only">
+                    W/S move · A/D page · / search · T tag · E diff · O sort · G dataset · R
+                    random · M select · Space add · X reset · Enter open
                   </span>
                   <span className="lc-browser-foot-stats lc-muted">
                     {picked.size > 0
@@ -702,20 +613,13 @@ function DatasetTabs({
           aria-selected={entry.id === active}
           className={[
             "lc-dataset-tab",
-            "lc-tip-target",
             entry.id === active ? "is-active" : "",
             entry.count === 0 ? "is-empty" : "",
           ]
             .filter(Boolean)
             .join(" ")}
           disabled={disabled}
-          data-tip={[
-            `${entry.source} — ${entry.count.toLocaleString()} indexed`,
-            entry.notes,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-          data-tip-placement="bottom"
+          title={entry.source}
           onClick={() => onPick(entry.id)}
         >
           {entry.label}

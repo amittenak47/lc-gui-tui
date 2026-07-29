@@ -76,7 +76,7 @@ pub const DATASETS: [Dataset; 5] = [
         shape: Shape::KodCode,
         table: "problems_kodcode",
         tag_table: "problem_tags_kodcode",
-        notes: "Synthetic problems. Tags are the seed family (Algorithm, Docs, Leetcode, …) and the phrasing: Instruct = written as a problem, Complete = finish the function. Difficulty is the corpus's own rating; sample cases are read off its pytest suite.",
+        notes: "Synthetic problems. Only Complete (finish-the-function) rows are indexed — Instruct duplicates are skipped. Tags are the seed family (Algorithm, Docs, Leetcode, …). Difficulty is the corpus's own rating; sample cases are read off its pytest suite.",
     },
     Dataset {
         id: "ms-python-q",

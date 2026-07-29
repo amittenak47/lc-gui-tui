@@ -26,11 +26,12 @@
 //!   the closest thing the corpus has to a topic.
 //! - **`style`** — how the question is phrased. `Instruct` is a natural-language
 //!   problem statement; `Complete` gives you a function to finish. The same
-//!   seed usually appears in both styles, which is why ids come in `…_I` and
-//!   `…_C` pairs.
+//!   seed usually appears in both styles (`…_I` / `…_C`). **Only `Complete`
+//!   is indexed** — Instruct duplicates the same seed as prose and roughly
+//!   doubles the set without adding new work.
 //!
-//! Both are exposed as tags (`Algorithm`, `Instruct`), and `gpt_difficulty` —
-//! the corpus's own easy / medium / hard rating — fills the difficulty column
+//! `subset` is exposed as a tag (`Algorithm`, `Docs`, …), and `gpt_difficulty`
+//! — the corpus's own easy / medium / hard rating — fills the difficulty column
 //! that used to be blank.
 //!
 //! ## Naming
@@ -82,6 +83,10 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
     );
     let number = raw_id.as_deref().and_then(id_number);
     let style = text(raw, &["style"]);
+    // Instruct and Complete are the same seed twice — keep Complete only.
+    if style_letter(style.as_deref(), raw_id.as_deref()) == Some('i') {
+        return None;
+    }
     let task_id = task_id(
         &question,
         entry_point.as_deref(),
@@ -211,9 +216,9 @@ pub(super) mod tests {
 
     pub fn sample() -> Value {
         serde_json::json!({
-            "question_id": "Docs_Combine_45219_I",
+            "question_id": "Docs_Combine_45219_C",
             "subset": "Docs",
-            "style": "Instruct",
+            "style": "Complete",
             "gpt_difficulty": "medium",
             "question": "Write a function that returns the running maximum of a list.\n\nThe input is a list of integers.",
             "test_code": "from solution import running_max\n\ndef test_running_max():\n    assert running_max([1, 3, 2]) == [1, 3, 3]\n\ndef test_empty():\n    assert running_max([]) == []\n",
@@ -231,7 +236,7 @@ pub(super) mod tests {
     fn maps_the_documented_columns() {
         let problem = normalize(&sample()).expect("sample imports");
         assert_eq!(problem.entry_point.as_deref(), Some("running_max"));
-        assert_eq!(problem.tags, vec!["Docs", "Instruct"]);
+        assert_eq!(problem.tags, vec!["Docs", "Complete"]);
         assert!(problem
             .problem_description
             .as_deref()
@@ -249,22 +254,19 @@ pub(super) mod tests {
     #[test]
     fn the_browser_columns_are_filled_in() {
         let problem = normalize(&sample()).expect("imports");
-        assert_eq!(problem.task_id, "running-max-45219-i");
+        assert_eq!(problem.task_id, "running-max-45219-c");
         assert_eq!(problem.question_id.as_deref(), Some("45219"));
         assert_eq!(problem.difficulty.as_deref(), Some("Medium"));
     }
 
-    /// The two phrasings of one seed are different problems and must not share
-    /// an id — the index is keyed on it.
+    /// Instruct is the same seed as prose — skip it so the index stays half the size.
     #[test]
-    fn instruct_and_complete_rows_keep_separate_ids() {
-        let mut complete = sample();
-        complete["question_id"] = serde_json::json!("Docs_Combine_45220_C");
-        complete["style"] = serde_json::json!("Complete");
-        let instruct = normalize(&sample()).expect("imports");
-        let complete = normalize(&complete).expect("imports");
-        assert_ne!(instruct.task_id, complete.task_id);
-        assert_eq!(complete.tags, vec!["Docs", "Complete"]);
+    fn instruct_rows_are_skipped() {
+        let mut instruct = sample();
+        instruct["question_id"] = serde_json::json!("Docs_Combine_45219_I");
+        instruct["style"] = serde_json::json!("Instruct");
+        assert!(normalize(&instruct).is_none());
+        assert!(normalize(&sample()).is_some());
     }
 
     /// The suite *is* the case list; it was just written as source.
