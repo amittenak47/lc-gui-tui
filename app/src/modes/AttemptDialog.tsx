@@ -13,9 +13,15 @@
  *   looking at your own answer is not practice.
  *
  * The daemon owns those rules (`src/attempt.rs`); this dialog only asks.
+ *
+ * Both answers are held rather than clicked. Discarding is destructive and
+ * saving is what the *next* attempt inherits, so neither should be reachable by
+ * a stray tap on a tablet — the same water-fill gesture as Reveal.
  */
 
 import { useEffect } from "react";
+
+import { HoldButton } from "../components/HoldButton";
 
 export interface AttemptDialogProps {
   taskId: string;
@@ -65,12 +71,14 @@ export function AttemptDialog({
 
         <div className="lc-settings-body">
           {error && <div className="lc-warning">{error}</div>}
+          <p className="lc-muted lc-reveal-hold-hint">Hold either answer for 1 second.</p>
           <div className="lc-settings-choice">
-            <button
-              type="button"
-              className="lc-settings-choice-option"
+            <HoldButton
+              label={solved ? "Save attempt" : "Save progress"}
+              className="lc-hold-choice"
               disabled={pending}
-              onClick={() => onChoose(true)}
+              onConfirm={() => onChoose(true)}
+              resetKey={error}
             >
               <strong>{solved ? "Save attempt" : "Save progress"}</strong>
               <span className="lc-muted">
@@ -78,12 +86,13 @@ export function AttemptDialog({
                   ? "Archive the board and keep your solution. The next attempt still starts on a fresh board."
                   : "Keep the layout, the code, and the coach thread. They all come back next time."}
               </span>
-            </button>
-            <button
-              type="button"
-              className="lc-settings-choice-option"
+            </HoldButton>
+            <HoldButton
+              label={solved ? "Clear attempt" : "Discard"}
+              className="lc-hold-choice lc-hold-danger"
               disabled={pending}
-              onClick={() => onChoose(false)}
+              onConfirm={() => onChoose(false)}
+              resetKey={error}
             >
               <strong>{solved ? "Clear attempt" : "Discard"}</strong>
               <span className="lc-muted">
@@ -91,7 +100,7 @@ export function AttemptDialog({
                   ? "Reset the code to the starter stub. The coach thread is archived either way."
                   : "Clear the board, reset the code, and start the coach fresh next time."}
               </span>
-            </button>
+            </HoldButton>
           </div>
           {solved && (
             <p className="lc-settings-hint">

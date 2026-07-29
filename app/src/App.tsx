@@ -35,6 +35,7 @@ import type {
 } from "./api/types";
 import { DEFAULT_DATASET } from "./api/types";
 import { Tip } from "./components/Tip";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { SettingsModal } from "./components/SettingsModal";
 import { Board } from "./canvas/Board";
 import { loadBoardReadingSize, saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
@@ -180,6 +181,11 @@ export function App() {
   const [leavingPending, setLeavingPending] = useState(false);
   const [leavingError, setLeavingError] = useState<string | null>(null);
 
+  /** "Reset the practice session?" — our own modal, held to confirm. */
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetPending, setResetPending] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+
   const [revealOpen, setRevealOpen] = useState(false);
   const [revealPending, setRevealPending] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -241,6 +247,17 @@ export function App() {
   // pseudocode editor would tear down and restart the ambient loop.
   const pseudocodeRef = useRef(pseudocode);
   pseudocodeRef.current = pseudocode;
+
+  /**
+   * The mobile coach is a bottom sheet, so opening it takes ~46vh away from the
+   * canvas. Excalidraw resizes itself, but the fit is ours — without this the
+   * page you were reading stays scrolled where it was and half of it is behind
+   * the sheet.
+   */
+  useEffect(() => {
+    if (!mobile || !problem) return;
+    void boardRef.current?.settleFitView();
+  }, [coachOpen, mobile, problem]);
 
   // Keep the dashed code frame tall enough for the Monaco solution.
   useEffect(() => {
@@ -978,12 +995,17 @@ export function App() {
     [client, pickProblem],
   );
 
+  /** Confirmed by a 1s hold in `ConfirmDialog`, never by `window.confirm`. */
   const resetSession = useCallback(async () => {
-    if (!window.confirm("Reset the practice session? Queue and progress will be cleared.")) return;
+    setResetPending(true);
+    setResetError(null);
     try {
       setSession(await client.resetSession());
+      setResetOpen(false);
     } catch (cause) {
-      setError(messageOf(cause));
+      setResetError(messageOf(cause));
+    } finally {
+      setResetPending(false);
     }
   }, [client]);
 
@@ -1419,14 +1441,16 @@ export function App() {
             interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
             onCodeSlot={onCodeSlot}
             mobileRegion={mobile && problem ? activeRegion : null}
+            bottomCenter={
+              problem && mobile ? (
+                <RegionPager
+                  active={activeRegion}
+                  onPick={setActiveRegion}
+                  disabled={busy !== null || boardPreparing}
+                />
+              ) : null
+            }
           />
-          {problem && mobile && (
-            <RegionPager
-              active={activeRegion}
-              onPick={setActiveRegion}
-              disabled={busy !== null || boardPreparing}
-            />
-          )}
           {(!problem || holdBrowseOverlay) && (
             <div
               className={[
@@ -1451,7 +1475,10 @@ export function App() {
                   onThemePick={setThemeId}
                   session={session}
                   onStartSession={(ids, bank) => void startFreshSession(ids, bank)}
-                  onResetSession={() => void resetSession()}
+                  onResetSession={() => {
+                    setResetError(null);
+                    setResetOpen(true);
+                  }}
                   onRandomSession={(filters) => void startRandomSession(filters)}
                 />
               </div>
@@ -1566,6 +1593,28 @@ export function App() {
 
           </AgentSidePanel>
         )}
+
+      {resetOpen && (
+        <ConfirmDialog
+          title="Reset the practice session?"
+          message="The session queue and its pass / fail progress are cleared. Your saved workspaces and solutions are not touched."
+          detail={
+            (session?.queue?.length ?? 0) > 0
+              ? `${session?.queue.length} problem${session?.queue.length === 1 ? "" : "s"} queued · ${session?.stats?.passed ?? 0} passed · ${session?.stats?.failed ?? 0} failed`
+              : undefined
+          }
+          confirmLabel="Reset"
+          cancelLabel="Keep session"
+          pending={resetPending}
+          error={resetError}
+          onConfirm={() => void resetSession()}
+          onCancel={() => {
+            if (resetPending) return;
+            setResetOpen(false);
+            setResetError(null);
+          }}
+        />
+      )}
 
       {revealOpen && problem && (
         <RevealDialog
