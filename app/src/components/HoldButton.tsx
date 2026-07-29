@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
-export const DEFAULT_HOLD_MS = 1000;
+export const DEFAULT_HOLD_MS = 666;
 
 export interface HoldButtonProps {
   /** Text on the button, and what the aria label says you are confirming. */

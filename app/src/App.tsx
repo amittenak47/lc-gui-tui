@@ -130,6 +130,11 @@ export function App() {
   const [bankFilters, setBankFilters] = useState<SearchOptions>({});
   /** Disk practice session from `lc serve` (queue + progress). */
   const [session, setSession] = useState<SessionSnapshot | null>(null);
+  /**
+   * Header ‹ › walks the session queue only after Start / Random. A plain table
+   * click is just a cursor — prev/next then walk the filtered problem bank.
+   */
+  const [navigateBySession, setNavigateBySession] = useState(false);
   const [canStepPrev, setCanStepPrev] = useState(false);
   const [canStepNext, setCanStepNext] = useState(false);
   /** Distinguishes header Run tests vs Submit for the results panel. */
@@ -422,7 +427,7 @@ export function App() {
   );
 
   const pickProblem = useCallback(
-    async (taskId: string, bank?: SearchOptions) => {
+    async (taskId: string, bank?: SearchOptions, opts?: { keepSessionNav?: boolean }) => {
       const datasetId = bank?.dataset ?? DEFAULT_DATASET;
       const fromBrowse = !problem;
       const switching = Boolean(problem);
@@ -444,6 +449,9 @@ export function App() {
       agentSaveSuspendedRef.current = true;
       setAttemptState(null);
       if (bank) setBankFilters(bank);
+      // A plain table click is a cursor, not a session — only Start / Random
+      // keep queue-based ‹ › navigation.
+      if (!opts?.keepSessionNav) setNavigateBySession(false);
       if (fromBrowse) {
         setHoldBrowseOverlay(true);
         setBrowseMotion("busy");
@@ -455,11 +463,6 @@ export function App() {
         // visit chose to keep — the daemon already cleared what it did not.
         const loaded = await client.loadProblem(taskId, datasetId);
         setAttemptState(loaded.resume.attempt);
-        try {
-          await client.enqueueSession(taskId, datasetId);
-        } catch {
-          /* queue write is best-effort when not paired yet */
-        }
         const detail = await client.getProblem(taskId, datasetId);
         const fresh = ensureCodingRoom(detail.starter_code ?? "");
         let source = fresh;
@@ -565,7 +568,7 @@ export function App() {
     [client, themeId, problem, refreshSession, syncDrawingsToBoard],
   );
 
-  /** Session queue when present; otherwise the filtered problem bank. */
+  /** Session queue after Start / Random; otherwise the filtered problem bank. */
   const stepProblem = useCallback(
     async (delta: number) => {
       if (!problem || busy !== null) return;
@@ -573,11 +576,11 @@ export function App() {
       // several problem sets at once.
       const queue = session?.queue ?? [];
       const queueIndex = queue.indexOf(problem.key);
-      if (queue.length > 0 && queueIndex >= 0) {
+      if (navigateBySession && queue.length > 0 && queueIndex >= 0) {
         const next = queue[queueIndex + delta];
         if (next) {
           const [nextDataset, nextTask] = splitProblemKey(next);
-          void pickProblem(nextTask, { ...bankFilters, dataset: nextDataset });
+          void pickProblem(nextTask, { ...bankFilters, dataset: nextDataset }, { keepSessionNav: true });
         }
         return;
       }
@@ -592,7 +595,7 @@ export function App() {
         setError(messageOf(cause));
       }
     },
-    [problem, busy, session, client, bankFilters, pickProblem],
+    [problem, busy, session, navigateBySession, client, bankFilters, pickProblem],
   );
 
   useEffect(() => {
@@ -605,7 +608,7 @@ export function App() {
     void (async () => {
       const queue = session?.queue ?? [];
       const queueIndex = queue.indexOf(problem.key);
-      if (queue.length > 0 && queueIndex >= 0) {
+      if (navigateBySession && queue.length > 0 && queueIndex >= 0) {
         if (!cancelled) {
           setCanStepPrev(queueIndex > 0);
           setCanStepNext(queueIndex < queue.length - 1);
@@ -631,7 +634,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [problem, session, bankFilters, client]);
+  }, [problem, session, navigateBySession, bankFilters, client]);
 
   // Ambient mode's lifecycle. Never entered while `AMBIENT_ENABLED` is false —
   // the socket is not opened and no polling timer is created.
@@ -1048,7 +1051,8 @@ export function App() {
           next = await client.enqueueSession(id, bank.dataset);
         }
         setSession(next);
-        if (taskIds[0]) void pickProblem(taskIds[0], bank);
+        setNavigateBySession(true);
+        if (taskIds[0]) void pickProblem(taskIds[0], bank, { keepSessionNav: true });
       } catch (cause) {
         setError(messageOf(cause));
       }
@@ -1056,12 +1060,13 @@ export function App() {
     [client, pickProblem],
   );
 
-  /** Confirmed by a 1s hold in `ConfirmDialog`, never by `window.confirm`. */
+  /** Confirmed by a short hold in `ConfirmDialog`, never by `window.confirm`. */
   const resetSession = useCallback(async () => {
     setResetPending(true);
     setResetError(null);
     try {
       setSession(await client.resetSession());
+      setNavigateBySession(false);
       setResetOpen(false);
     } catch (cause) {
       setResetError(messageOf(cause));
@@ -1082,10 +1087,11 @@ export function App() {
           q: filters.q,
         });
         setSession(next);
+        setNavigateBySession(true);
         const first = next.queue[0];
         if (first) {
           const [firstDataset, firstTask] = splitProblemKey(first);
-          void pickProblem(firstTask, { ...filters, dataset: firstDataset });
+          void pickProblem(firstTask, { ...filters, dataset: firstDataset }, { keepSessionNav: true });
         }
       } catch (cause) {
         setError(messageOf(cause));
@@ -1165,7 +1171,7 @@ export function App() {
         ? await buildSnapshot(board, recognizerRef.current, { pseudocode: pseudocodeRef.current })
         : null;
       // The `true` here is the only place the app asserts consent, and it is
-      // reachable only after a full 1s hold on Reveal.
+      // reachable only after a hold on Reveal.
       const result = await client.reveal(
         problem.task_id,
         snapshot?.board ?? { recognized_text: "" },
@@ -1356,7 +1362,7 @@ export function App() {
                   type="button"
                   className="lc-icon"
                   title={
-                    (session?.queue?.length ?? 0) > 0
+                    navigateBySession && (session?.queue?.length ?? 0) > 0
                       ? "Previous in session queue"
                       : "Previous in problem bank"
                   }
@@ -1373,7 +1379,7 @@ export function App() {
                   type="button"
                   className="lc-icon"
                   title={
-                    (session?.queue?.length ?? 0) > 0
+                    navigateBySession && (session?.queue?.length ?? 0) > 0
                       ? "Next in session queue"
                       : "Next in problem bank"
                   }

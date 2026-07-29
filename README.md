@@ -83,9 +83,9 @@ KodCode is *synthetic*: every problem was generated from a seed and kept only if
 | `Algorithm`, `Data_Structure`, `Leetcode`, `Codeforces`, `Apps`, `Taco`, `Docs`, `Package`, `Filter`, `Prefill`, `Evol` | **`subset`** — which seed the problem was grown from. The closest thing this corpus has to a topic. `Docs` means it was generated from library documentation. |
 | `Complete` | **`style`** — you are given a function to finish. |
 
-The corpus also ships an `Instruct` phrasing (same seed as a prose problem statement). `lc` **skips Instruct** at index time — Complete is enough, and that roughly halves the set. Difficulty comes from the corpus's own `gpt_difficulty` rating, and the sample-case count is read off the pytest suite's literal asserts (`lc test --full` still runs the whole module).
+The corpus also ships an `Instruct` phrasing (same seed as prose) and an `online_judge` phrasing (stdin/stdout I/O fixtures). `lc` **skips both at index time** — Complete is enough, Instruct would roughly double the set, and online_judge tests do not fit the pytest harness. Difficulty comes from the corpus's own `gpt_difficulty` rating, and the sample-case count is read off the pytest suite's literal asserts (`lc test --full` still runs the whole module).
 
-If you indexed KodCode before this filter, rebuild so Instruct rows leave the table:
+If you indexed KodCode before this filter, rebuild so Instruct / online_judge rows leave the table:
 
 ```bash
 lc index --dataset kodcode --rebuild

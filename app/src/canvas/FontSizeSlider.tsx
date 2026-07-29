@@ -1,5 +1,9 @@
 /**
- * Vertical slider for the text tool's font size (canvas units / px).
+ * Slider for the text tool's font size (canvas units / px).
+ *
+ * Desktop uses a vertical track; mobile's horizontal toolbar flips it via CSS
+ * (`.lc-mobile .lc-toolbar .lc-stroke-slider-input`). Drag math follows the
+ * laid-out aspect ratio so one component covers both.
  *
  * It drives its own drag instead of letting the browser do it, for one reason:
  * a native range input takes focus on `mousedown`, and taking focus off an open
@@ -30,14 +34,20 @@ export function FontSizeSlider({ value, onChange }: FontSizeSliderProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const draggingRef = useRef(false);
 
-  /** Track runs bottom (min) to top (max) — `writing-mode: vertical-lr`. */
-  const valueAt = useCallback((clientY: number): number => {
+  /**
+   * Desktop toolbar: vertical track (min at bottom). Mobile horizontal toolbar:
+   * horizontal track (min at left). Orientation is inferred from the laid-out
+   * input so CSS alone can flip the track.
+   */
+  const valueAt = useCallback((clientX: number, clientY: number): number => {
     const node = inputRef.current;
     if (!node) return clamped;
     const rect = node.getBoundingClientRect();
-    if (rect.height <= 0) return clamped;
-    const fromTop = Math.min(Math.max(clientY - rect.top, 0), rect.height);
-    const ratio = 1 - fromTop / rect.height;
+    if (rect.width <= 0 || rect.height <= 0) return clamped;
+    const horizontal = rect.width >= rect.height;
+    const ratio = horizontal
+      ? Math.min(Math.max(clientX - rect.left, 0), rect.width) / rect.width
+      : 1 - Math.min(Math.max(clientY - rect.top, 0), rect.height) / rect.height;
     const raw = TEXT_FONT_MIN + ratio * (TEXT_FONT_MAX - TEXT_FONT_MIN);
     return clamp(Math.round(raw / TEXT_FONT_STEP) * TEXT_FONT_STEP);
   }, [clamped]);
@@ -67,13 +77,13 @@ export function FontSizeSlider({ value, onChange }: FontSizeSliderProps) {
           event.stopPropagation();
           draggingRef.current = true;
           event.currentTarget.setPointerCapture(event.pointerId);
-          const next = valueAt(event.clientY);
+          const next = valueAt(event.clientX, event.clientY);
           if (next !== clamped) onChange(next);
         }}
         onPointerMove={(event) => {
           if (!draggingRef.current) return;
           event.preventDefault();
-          const next = valueAt(event.clientY);
+          const next = valueAt(event.clientX, event.clientY);
           if (next !== clamped) onChange(next);
         }}
         onPointerUp={(event) => {

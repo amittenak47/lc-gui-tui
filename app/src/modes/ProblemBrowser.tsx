@@ -19,9 +19,12 @@ import type { LcClient, SearchOptions } from "../api/client";
 import type { DatasetInfo, ProblemSummary, SessionSnapshot } from "../api/types";
 import { DEFAULT_DATASET } from "../api/types";
 import { BackgroundPalette } from "../components/BackgroundPalette";
+import { useIsMobile } from "../util/mobile";
 import { titleFromSlug } from "../util/text";
 
 export const PAGE_SIZE = 15;
+/** Smallest page the phone browser will request — still usable on iPhone SE. */
+const MOBILE_PAGE_SIZE_MIN = 6;
 
 const DIFFICULTIES = ["", "Easy", "Medium", "Hard"] as const;
 const SORTS = ["task_id", "question", "difficulty", "cases", "tags"] as const;
@@ -71,6 +74,7 @@ export function ProblemBrowser({
   onResetSession,
   onRandomSession,
 }: ProblemBrowserProps) {
+  const mobile = useIsMobile();
   const [dataset, setDataset] = useState<string>(DEFAULT_DATASET);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   const [query, setQuery] = useState("");
@@ -94,6 +98,50 @@ export function ProblemBrowser({
 
   const searchRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+
+  // On phone, size the page to the rows that fit under the filters — no table scroll.
+  useEffect(() => {
+    if (!mobile || !tableReady) {
+      if (!mobile) setPageSize(PAGE_SIZE);
+      return;
+    }
+    const measure = () => {
+      const body = bodyRef.current;
+      if (!body) return;
+      const viewportH = window.innerHeight;
+      const top = body.getBoundingClientRect().top;
+      const palette = body
+        .closest(".lc-browser")
+        ?.querySelector(".lc-bg-palette-inline");
+      const paletteH = palette?.getBoundingClientRect().height ?? 28;
+      const foot = body.querySelector(".lc-browser-foot");
+      const footH = foot?.getBoundingClientRect().height ?? 64;
+      const filters = body.querySelector(".lc-browser-filters");
+      const tabs = body.querySelector(".lc-dataset-tabs");
+      const head = body.querySelector(".lc-table-head");
+      const filtersH = filters?.getBoundingClientRect().height ?? 26;
+      const tabsH = tabs?.getBoundingClientRect().height ?? 0;
+      const headH = head?.getBoundingClientRect().height ?? 20;
+      const gaps = 24;
+      const tableChrome = 12;
+      const avail = viewportH - top - paletteH - footH - gaps;
+      const rowSlot = 30;
+      const count = Math.floor((avail - filtersH - tabsH - headH - tableChrome) / rowSlot);
+      setPageSize(Math.max(MOBILE_PAGE_SIZE_MIN, Math.min(PAGE_SIZE, count)));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (bodyRef.current) ro.observe(bodyRef.current);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [mobile, tableReady]);
+
+  useEffect(() => setPage(0), [pageSize]);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,8 +186,8 @@ export function ProblemBrowser({
           difficulty: difficulty || undefined,
           tag: tag || undefined,
           sort,
-          limit: PAGE_SIZE,
-          offset: page * PAGE_SIZE,
+          limit: pageSize,
+          offset: page * pageSize,
         })
         .then((result) => {
           if (cancelled) return;
@@ -162,9 +210,9 @@ export function ProblemBrowser({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [client, dataset, query, difficulty, tag, sort, page]);
+  }, [client, dataset, query, difficulty, tag, sort, page, pageSize]);
 
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
   const move = useCallback(
     (delta: number) => {
@@ -351,19 +399,20 @@ export function ProblemBrowser({
     switchDataset,
   ]);
 
-  // Keep the highlighted row visible when moving with the keyboard.
+  // Keep the highlighted row visible when moving with the keyboard (desktop only).
   useEffect(() => {
+    if (mobile) return;
     listRef.current
       ?.querySelector<HTMLElement>(`[data-row="${selected}"]`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [selected]);
+  }, [selected, mobile]);
 
   const rangeLabel = useMemo(() => {
     if (total === 0) return "no matches";
-    const first = page * PAGE_SIZE + 1;
-    const last = Math.min(total, (page + 1) * PAGE_SIZE);
+    const first = page * pageSize + 1;
+    const last = Math.min(total, (page + 1) * pageSize);
     return `${first}–${last} of ${total}`;
-  }, [page, total]);
+  }, [page, total, pageSize]);
 
   return (
     <section className="lc-browser" aria-label="Browse problems">
@@ -373,7 +422,7 @@ export function ProblemBrowser({
             <div className="lc-spinner" aria-hidden="true" />
           </div>
         ) : (
-          <div className="lc-browser-body lc-browser-body-ready">
+          <div className="lc-browser-body lc-browser-body-ready" ref={bodyRef}>
             <DatasetTabs
               datasets={datasets}
               active={dataset}
@@ -385,27 +434,29 @@ export function ProblemBrowser({
                 ref={searchRef}
                 type="search"
                 value={query}
-                placeholder="/  name, question number, or tag"
+                placeholder={mobile ? "/ search" : "/  name, question number, or tag"}
                 aria-label="Search problems"
                 onChange={(event) => setQuery(event.target.value)}
               />
               <select
+                className="lc-filter-diff"
                 value={difficulty}
                 aria-label="Difficulty"
                 onChange={(event) => setDifficulty(event.target.value)}
               >
                 {DIFFICULTIES.map((value) => (
                   <option key={value || "any"} value={value}>
-                    {value || "any difficulty"}
+                    {value || (mobile ? "diff" : "difficulty")}
                   </option>
                 ))}
               </select>
               <select
+                className="lc-filter-tag"
                 value={tag}
                 aria-label="Tag"
                 onChange={(event) => setTag(event.target.value)}
               >
-                <option value="">any tag</option>
+                <option value="">tag</option>
                 {tags.map((value) => (
                   <option key={value} value={value}>
                     {value}
@@ -413,13 +464,14 @@ export function ProblemBrowser({
                 ))}
               </select>
               <select
+                className="lc-filter-sort"
                 value={sort}
                 aria-label="Sort"
                 onChange={(event) => setSort(event.target.value)}
               >
                 {SORTS.map((value) => (
                   <option key={value} value={value}>
-                    sort: {SORT_LABEL[value]}
+                    {SORT_LABEL[value]}
                   </option>
                 ))}
               </select>
@@ -508,32 +560,34 @@ export function ProblemBrowser({
 
               <div className="lc-browser-foot">
                 <div className="lc-browser-foot-session">
-                  <span className="lc-browser-foot-label">Session</span>
-                  <button
-                    type="button"
-                    className="lc-secondary"
-                    disabled={busy || !onStartSession}
-                    onClick={commitStart}
-                  >
-                    Start
-                  </button>
-                  <button
-                    type="button"
-                    className="lc-secondary"
-                    disabled={busy || !onResetSession}
-                    onClick={commitReset}
-                  >
-                    Reset
-                  </button>
-                  <button
-                    type="button"
-                    className={selectMode ? "lc-secondary is-active" : "lc-secondary"}
-                    disabled={busy}
-                    aria-pressed={selectMode}
-                    onClick={() => setSelectMode((on) => !on)}
-                  >
-                    Select{picked.size > 0 ? ` (${picked.size})` : ""}
-                  </button>
+                  <div className="lc-browser-foot-actions">
+                    <span className="lc-browser-foot-label">Session</span>
+                    <button
+                      type="button"
+                      className="lc-secondary"
+                      disabled={busy || !onStartSession}
+                      onClick={commitStart}
+                    >
+                      Start
+                    </button>
+                    <button
+                      type="button"
+                      className="lc-secondary"
+                      disabled={busy || !onResetSession}
+                      onClick={commitReset}
+                    >
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      className={selectMode ? "lc-secondary is-active" : "lc-secondary"}
+                      disabled={busy}
+                      aria-pressed={selectMode}
+                      onClick={() => setSelectMode((on) => !on)}
+                    >
+                      Select{picked.size > 0 ? ` (${picked.size})` : ""}
+                    </button>
+                  </div>
                   <div className="lc-browser-foot-nav">
                     <button
                       type="button"
@@ -545,7 +599,10 @@ export function ProblemBrowser({
                       <span className="lc-label-short">‹</span>
                     </button>
                     <span className="lc-muted lc-browser-page-label">
-                      {rangeLabel} · page {page + 1}/{pageCount}
+                      <span className="lc-browser-page-range">{rangeLabel}</span>
+                      <span className="lc-browser-page-pages">
+                        page {page + 1}/{pageCount}
+                      </span>
                     </span>
                     <button
                       type="button"

@@ -6,7 +6,7 @@
  * inside the message list as assistant turns.
  */
 
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent, type ReactNode } from "react";
 
 import type { BridgeResponse, ReviewResponse } from "../api/types";
 import { Tip } from "../components/Tip";
@@ -14,6 +14,8 @@ import type { MessageDrawing } from "../viz/drawingState";
 import { Timeline } from "../viz/Timeline";
 import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
+
+const LONG_PRESS_MS = 400;
 
 export type CoachMode = "review" | "ambient";
 
@@ -35,6 +37,47 @@ const ROLE_LABEL: Record<CoachChatMessage["role"], string> = {
 
 function turnKind(role: CoachChatMessage["role"]): string {
   return role === "user" || role === "system" || role === "app" ? role : "assistant";
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest("button, a, input, textarea, select, [role='button']"));
+}
+
+function formatMessageQuote(message: CoachChatMessage): string {
+  const body = message.content.trim();
+  if (!body) return "";
+  const label = ROLE_LABEL[message.role];
+  const quoted = body.split("\n").map((line) => `> ${line}`).join("\n");
+  return `> **${label}:**\n${quoted}\n\n`;
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  try {
+    await navigator.clipboard.writeText(trimmed);
+    return true;
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = trimmed;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.left = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    try {
+      return document.execCommand("copy");
+    } finally {
+      document.body.removeChild(area);
+    }
+  }
+}
+
+interface MessageMenuState {
+  messageId: string;
+  top: number;
+  left: number;
 }
 
 export interface CoachSendFlags {
@@ -113,7 +156,88 @@ export function AgentSidePanel({
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lightbox, setLightbox] = useState<CoachAttachment | null>(null);
   const [lightboxClosing, setLightboxClosing] = useState(false);
+  const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
+  const [copyFlash, setCopyFlash] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const longPressRef = useRef<{
+    timer: ReturnType<typeof setTimeout> | null;
+    messageId: string | null;
+    startX: number;
+    startY: number;
+    moved: boolean;
+  }>({ timer: null, messageId: null, startX: 0, startY: 0, moved: false });
+
+  const clearLongPress = useCallback(() => {
+    const state = longPressRef.current;
+    if (state.timer != null) clearTimeout(state.timer);
+    state.timer = null;
+    state.messageId = null;
+    state.moved = false;
+  }, []);
+
+  const trackLongPressMove = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const state = longPressRef.current;
+      if (state.timer == null || state.moved) return;
+      const dx = event.clientX - state.startX;
+      const dy = event.clientY - state.startY;
+      if (dx * dx + dy * dy > 100) {
+        state.moved = true;
+        clearLongPress();
+      }
+    },
+    [clearLongPress],
+  );
+
+  const openMessageMenu = useCallback(
+    (messageId: string, anchor: HTMLElement) => {
+      const rect = anchor.getBoundingClientRect();
+      const menuWidth = 168;
+      const pad = 8;
+      const left = Math.min(
+        Math.max(rect.left + rect.width / 2, pad + menuWidth / 2),
+        window.innerWidth - pad - menuWidth / 2,
+      );
+      const top = Math.max(rect.top - 6, pad + 44);
+      setMessageMenu({ messageId, top, left });
+      setCopyFlash(false);
+    },
+    [],
+  );
+
+  const closeMessageMenu = useCallback(() => {
+    setMessageMenu(null);
+    setCopyFlash(false);
+    clearLongPress();
+  }, [clearLongPress]);
+
+  const quoteMessage = useCallback(
+    (message: CoachChatMessage) => {
+      const text = formatMessageQuote(message);
+      if (!text) return;
+      setDraft((current) => (current.trim() ? `${current.trimEnd()}\n\n${text}` : text));
+      closeMessageMenu();
+      requestAnimationFrame(() => {
+        const el = composerRef.current;
+        if (!el) return;
+        el.focus();
+        const end = el.value.length;
+        el.setSelectionRange(end, end);
+      });
+    },
+    [closeMessageMenu],
+  );
+
+  const copyMessage = useCallback(
+    async (message: CoachChatMessage) => {
+      const ok = await copyToClipboard(message.content);
+      if (!ok) return;
+      setCopyFlash(true);
+      window.setTimeout(() => setCopyFlash(false), 1200);
+    },
+    [],
+  );
 
   useEffect(() => {
     const node = listRef.current;
@@ -130,15 +254,43 @@ export function AgentSidePanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [lightbox]);
 
+  useEffect(() => {
+    if (!messageMenu) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMessageMenu();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [messageMenu, closeMessageMenu]);
+
   if (!open) return null;
 
   const canSend = !busy && (draft.trim().length > 0 || draw || reviewBoard);
+  const menuMessage = messageMenu
+    ? messages.find((message) => message.id === messageMenu.messageId)
+    : undefined;
+  const menuHasText = Boolean(menuMessage?.content.trim());
+
+  const beginLongPress = (messageId: string, event: PointerEvent<HTMLDivElement>) => {
+    if (isInteractiveTarget(event.target)) return;
+    clearLongPress();
+    const node = event.currentTarget;
+    longPressRef.current.messageId = messageId;
+    longPressRef.current.startX = event.clientX;
+    longPressRef.current.startY = event.clientY;
+    longPressRef.current.moved = false;
+    longPressRef.current.timer = window.setTimeout(() => {
+      if (longPressRef.current.moved) return;
+      openMessageMenu(messageId, node);
+    }, LONG_PRESS_MS);
+  };
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!canSend) return;
     onSend(draft.trim(), { draw, reviewBoard });
     setDraft("");
+    closeMessageMenu();
   };
 
   const closeLightbox = () => {
@@ -165,7 +317,19 @@ export function AgentSidePanel({
           {messages.map((message) => (
             <div
               key={message.id}
-              className={`lc-coach-turn lc-coach-turn-${turnKind(message.role)}`}
+              className={`lc-coach-turn lc-coach-turn-selectable lc-coach-turn-${turnKind(message.role)}${
+                messageMenu?.messageId === message.id ? " lc-coach-turn-selected" : ""
+              }`}
+              onContextMenu={(event) => {
+                if (isInteractiveTarget(event.target)) return;
+                event.preventDefault();
+                openMessageMenu(message.id, event.currentTarget);
+              }}
+              onPointerDown={(event) => beginLongPress(message.id, event)}
+              onPointerMove={trackLongPressMove}
+              onPointerUp={clearLongPress}
+              onPointerCancel={clearLongPress}
+              onPointerLeave={clearLongPress}
             >
               <div
                 className={
@@ -262,6 +426,7 @@ export function AgentSidePanel({
 
         <form className="lc-coach-composer" onSubmit={submit}>
           <textarea
+            ref={composerRef}
             value={draft}
             rows={3}
             placeholder="Ask the coach about your board or code…"
@@ -343,6 +508,40 @@ export function AgentSidePanel({
           </div>
         </form>
       </div>
+
+      {messageMenu && menuMessage && (
+        <>
+          <button
+            type="button"
+            className="lc-coach-message-menu-backdrop"
+            aria-label="Dismiss message actions"
+            onClick={closeMessageMenu}
+          />
+          <div
+            className="lc-coach-message-menu"
+            role="menu"
+            style={{ top: messageMenu.top, left: messageMenu.left }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!menuHasText}
+              onClick={() => void copyMessage(menuMessage)}
+            >
+              {copyFlash ? "Copied" : "Copy"}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!menuHasText}
+              onClick={() => quoteMessage(menuMessage)}
+            >
+              Quote
+            </button>
+          </div>
+        </>
+      )}
 
       {lightbox && (
         <div

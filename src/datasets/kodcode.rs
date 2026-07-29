@@ -4,9 +4,9 @@
 //!
 //! | Column | Becomes |
 //! | --- | --- |
-//! | `question` | `problem_description` |
+//! | `question` | `problem_description` (Complete: docstring extracted) |
 //! | `test_info` | `entry_point` and a `starter_code` stub |
-//! | `test_code` | `test`, and the sample cases read off its asserts |
+//! | `test` / `test_code` | `test`, and the sample cases read off its asserts |
 //! | `gpt_difficulty` | `difficulty` |
 //! | `subset`, `style` | `tags` |
 //! | `question_id` / `conversation_id` / `id` | `question_id`, and part of `task_id` |
@@ -24,11 +24,11 @@
 //!   `Data_Structure`, `Leetcode`, `Codeforces`, `Apps`, `Taco`, `Docs`
 //!   (library documentation), `Package`, `Filter`, `Prefill`, `Evol`. It is
 //!   the closest thing the corpus has to a topic.
-//! - **`style`** — how the question is phrased. `Instruct` is a natural-language
-//!   problem statement; `Complete` gives you a function to finish. The same
-//!   seed usually appears in both styles (`…_I` / `…_C`). **Only `Complete`
-//!   is indexed** — Instruct duplicates the same seed as prose and roughly
-//!   doubles the set without adding new work.
+//! - **`style`** — how the question is phrased:
+//!   - `Complete` — a function signature + docstring to finish (**indexed**).
+//!   - `Instruct` — the same seed as prose (skipped — duplicate work).
+//!   - `online_judge` — stdin/stdout I/O problems whose tests are not pytest
+//!     asserts (skipped — they do not fit `run_tests.py`).
 //!
 //! `subset` is exposed as a tag (`Algorithm`, `Docs`, …), and `gpt_difficulty`
 //! — the corpus's own easy / medium / hard rating — fills the difficulty column
@@ -39,20 +39,46 @@
 //! `question_id` is a compound like `Algorithm_1_C`, which slugged to
 //! `algorithm-1-c` and displayed as "Algorithm 1 C" — a name that says nothing
 //! about the problem. The slug is built from the function under test instead
-//! (`running_max` → `running-max-45219-i`), keeping the id's number and style
-//! letter so the two phrasings of one seed stay two problems. The number is
-//! also reported on its own as the question number, so the q# column sorts.
+//! (`running_max` → `running-max-45219-c`), keeping the id's number and style
+//! letter so seeds stay unique. The number is also reported on its own as the
+//! question number, so the q# column sorts.
 
 use serde_json::Value;
 
 use super::{
-    cases_from_asserts, container_value, difficulty, entry_point_from_code,
-    skeleton_from_declaration, slug_from_statement, slugify, text,
+    as_markdown, cases_from_asserts, container_value, difficulty, docstring_inside_def,
+    entry_point_from_code, skeleton_from_declaration, slug_from_statement, slugify,
+    strip_markdown_fences, text,
 };
 use crate::problem::Problem;
 
 pub fn normalize(raw: &Value) -> Option<Problem> {
     let question = text(raw, &["question", "problem", "prompt"])?;
+
+    let style = text(raw, &["style"]);
+    let style_l = style.as_deref().map(str::trim).map(|s| s.to_ascii_lowercase());
+    // Instruct duplicates Complete as prose. online_judge ships stdin/stdout
+    // tests the runner cannot execute — drop both.
+    if matches!(
+        style_l.as_deref(),
+        Some("instruct") | Some("online_judge") | Some("online-judge")
+    ) {
+        return None;
+    }
+    // Also catch ids like `Apps_10003_OJ` when style is missing/odd.
+    let raw_id_early = text(
+        raw,
+        &["question_id", "conversation_id", "id", "problem_id", "uuid"],
+    );
+    if style_letter(style.as_deref(), raw_id_early.as_deref()) == Some('i') {
+        return None;
+    }
+    if raw_id_early
+        .as_deref()
+        .is_some_and(|id| id.rsplit('_').next() == Some("OJ"))
+    {
+        return None;
+    }
 
     let info = test_info(raw);
     let entry_point = info
@@ -66,7 +92,7 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         })
         .or_else(|| text(raw, &["test_entry_point", "entry_point"]));
 
-    let starter_code = info
+    let starter_raw = info
         .as_ref()
         .and_then(|info| text(info, &["function_declaration", "declaration", "signature"]))
         .as_deref()
@@ -76,17 +102,16 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
                 .as_deref()
                 .map(|name| format!("def {name}():\n    pass\n"))
         });
+    // Keep a module-level `def` — KodCode's pytest suites do
+    // `from solution import foo`, not `Solution().foo`.
+    let prompt = starter_raw
+        .as_deref()
+        .and_then(super::typing_imports_for)
+        .or_else(|| super::typing_imports_for(&question));
+    let starter_code = starter_raw;
 
-    let raw_id = text(
-        raw,
-        &["question_id", "conversation_id", "id", "problem_id", "uuid"],
-    );
+    let raw_id = raw_id_early;
     let number = raw_id.as_deref().and_then(id_number);
-    let style = text(raw, &["style"]);
-    // Instruct and Complete are the same seed twice — keep Complete only.
-    if style_letter(style.as_deref(), raw_id.as_deref()) == Some('i') {
-        return None;
-    }
     let task_id = task_id(
         &question,
         entry_point.as_deref(),
@@ -106,18 +131,26 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
     }
 
     let suite = text(raw, &["test_code", "test"]);
-    // KodCode ships no per-case I/O, but its asserts are per-case I/O written
-    // as source. Reading them gives the browser a real `cases` count and the
-    // runner something to report case by case; `--full` still runs the module.
+    // Skip stdin/stdout suites if any slip through (online_judge shape).
+    let suite = suite.filter(|s| {
+        let t = s.trim_start();
+        !(t.starts_with('{') && t.contains("stdin"))
+    });
     let input_output = suite
         .as_deref()
         .map(|source| cases_from_asserts(source, entry_point.as_deref()))
         .unwrap_or_default();
 
+    // Complete rows put the statement in the function docstring; Instruct (skipped)
+    // is prose; anything else may already be markdown with fences.
+    let description = if let Some(doc) = docstring_inside_def(&question) {
+        as_markdown(&strip_doctest_arrows(&doc))
+    } else {
+        as_markdown(&strip_markdown_fences(&question))
+    };
+
     Some(Problem {
         task_id,
-        // The number alone, so `sort: q#` (which casts to integer) orders the
-        // corpus instead of collapsing every row to 0.
         question_id: number.map(|n| n.to_string()).or(raw_id),
         difficulty: difficulty(raw, &["gpt_difficulty", "difficulty", "4o_difficulty"])
             .or_else(|| {
@@ -125,14 +158,45 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
                     .and_then(|meta| difficulty(&meta, &["difficulty", "gpt_difficulty"]))
             }),
         tags,
-        problem_description: Some(question),
-        prompt: None,
+        problem_description: Some(description),
+        prompt,
         starter_code,
         entry_point,
         test: suite,
         input_output,
         estimated_date: None,
     })
+}
+
+/// Turn doctest `>>> expr` lines into markdown code fences for readability.
+fn strip_doctest_arrows(doc: &str) -> String {
+    let mut out = String::new();
+    let mut in_examples = false;
+    for line in doc.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix(">>> ") {
+            if !in_examples {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str("```python\n");
+                in_examples = true;
+            }
+            out.push_str(rest);
+            out.push('\n');
+            continue;
+        }
+        if in_examples {
+            out.push_str("```\n\n");
+            in_examples = false;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if in_examples {
+        out.push_str("```\n");
+    }
+    out.trim().to_string()
 }
 
 /// A readable, unique slug: what the problem is, then the seed number, then
@@ -267,6 +331,33 @@ pub(super) mod tests {
         instruct["style"] = serde_json::json!("Instruct");
         assert!(normalize(&instruct).is_none());
         assert!(normalize(&sample()).is_some());
+    }
+
+    /// online_judge rows use stdin/stdout fixtures the runner cannot execute.
+    #[test]
+    fn online_judge_rows_are_skipped() {
+        let mut oj = sample();
+        oj["style"] = serde_json::json!("online_judge");
+        oj["question_id"] = serde_json::json!("Apps_10003_OJ");
+        oj["test"] = serde_json::json!({"stdin": ["1"], "stdout": ["True"]});
+        assert!(normalize(&oj).is_none());
+    }
+
+    #[test]
+    fn complete_docstring_becomes_the_markdown_description() {
+        let mut complete = sample();
+        complete["question"] = serde_json::json!(
+            "def running_max(values: List[int]) -> List[int]:\n    \"\"\"Return the running maximum of a list.\n\n    >>> running_max([1, 3, 2]) == [1, 3, 3]\n    \"\"\"\n"
+        );
+        let problem = normalize(&complete).expect("imports");
+        let desc = problem.problem_description.as_deref().unwrap();
+        assert!(desc.contains("running maximum"), "{desc}");
+        assert!(!desc.trim_start().starts_with("def "), "{desc}");
+        assert!(desc.contains("```python"), "{desc}");
+        assert_eq!(
+            problem.starter_code.as_deref(),
+            Some("def running_max(values):\n    pass\n")
+        );
     }
 
     /// The suite *is* the case list; it was just written as source.
