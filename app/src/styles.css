@@ -1513,6 +1513,64 @@ input[type="checkbox"] {
   word-break: break-word;
 }
 
+.lc-coach-turn-selectable {
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+
+.lc-coach-turn-selected {
+  outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  outline-offset: 1px;
+}
+
+.lc-coach-message-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.lc-coach-message-menu {
+  position: fixed;
+  z-index: 221;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--overlay-bg);
+  border: 1px solid var(--chrome-edge);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
+  transform: translate(-50%, -100%);
+}
+
+.lc-coach-message-menu button {
+  min-height: 36px;
+  min-width: 72px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.lc-coach-message-menu button:hover:not(:disabled),
+.lc-coach-message-menu button:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.lc-coach-message-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .lc-coach-drawing {
   margin-top: 8px;
   border-top: 1px solid var(--chrome-edge);
@@ -2581,30 +2639,41 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-browser-foot-nav {
   display: grid;
-  grid-template-columns: 4.5rem minmax(11rem, auto) 4.5rem;
+  grid-template-columns: 2.75rem minmax(10rem, 14rem) 2.75rem;
   align-items: center;
   justify-items: center;
-  gap: 8px;
+  column-gap: 6px;
   margin-left: auto;
   flex-shrink: 0;
 }
 
 .lc-browser-foot-nav > button:first-child {
-  justify-self: end;
+  justify-self: stretch;
+  width: 100%;
+  padding: 0;
 }
 
 .lc-browser-foot-nav > button:last-child {
-  justify-self: start;
+  justify-self: stretch;
+  width: 100%;
+  padding: 0;
 }
 
 .lc-browser-page-label {
-  min-width: 11rem;
-  max-width: 18rem;
+  min-width: 0;
+  width: 100%;
+  max-width: 14rem;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.lc-browser-page-pages::before {
+  content: " · ";
 }
 
 .lc-browser-foot-keys {
@@ -2618,7 +2687,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-browser-foot-stats {
   margin-left: auto;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .lc-browser-foot button {
@@ -3698,9 +3767,31 @@ button.lc-row-selected:hover:not(:disabled) {
   flex-wrap: nowrap;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 4px;
   max-width: none;
   min-width: 0;
+}
+
+/* On a problem, the board already shows the title — drop the duplicate in the
+   header so Run / Submit / Coach aren't crushed into the pairing URL. */
+.lc-mobile.lc-app-problem .lc-current {
+  display: none;
+}
+
+.lc-mobile.lc-app-problem .lc-pairing {
+  display: none;
+}
+
+.lc-mobile.lc-app-problem .lc-header {
+  grid-template-columns: auto 1fr auto;
+}
+
+.lc-mobile.lc-app-problem .lc-header-center {
+  justify-self: center;
+}
+
+.lc-mobile.lc-app-problem .lc-header-left {
+  max-width: 40vw;
 }
 
 .lc-mobile .lc-header-center .lc-actions {
@@ -3859,6 +3950,38 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-toolbar .lc-stroke-controls {
   flex-direction: row;
   align-items: center;
+  gap: 4px;
+}
+
+/* Horizontal strip: track runs left→right with the toolbar, not up the page. */
+.lc-mobile .lc-toolbar .lc-stroke-slider {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 0 2px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.lc-mobile .lc-toolbar .lc-stroke-slider-cap:first-of-type {
+  order: 3; /* max on the right */
+}
+
+.lc-mobile .lc-toolbar .lc-stroke-slider-input {
+  order: 2;
+  width: 72px;
+  height: 22px;
+  writing-mode: horizontal-tb;
+  direction: ltr;
+}
+
+.lc-mobile .lc-toolbar .lc-stroke-slider-cap:nth-of-type(2) {
+  order: 1; /* min on the left */
+}
+
+.lc-mobile .lc-toolbar .lc-stroke-slider-value {
+  order: 4;
+  min-width: 1.6em;
 }
 
 .lc-mobile .lc-toolbar .lc-shapes {
@@ -3960,22 +4083,31 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-pager {
-  padding: 2px 3px;
+  padding: 2px 4px;
+  gap: 2px;
 }
 
 .lc-mobile .lc-pager-step {
-  width: 24px;
-  min-height: 24px;
-  font-size: 15px;
+  width: 22px;
+  min-height: 22px;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.lc-mobile .lc-pager-body {
+  min-width: 0;
+  max-width: 42vw;
+  gap: 3px;
 }
 
 .lc-mobile .lc-pager-label {
   font-size: 10px;
-  max-width: 26vw;
+  max-width: 100%;
 }
 
 .lc-mobile .lc-pager-dots {
   gap: 4px;
+  justify-content: center;
 }
 
 .lc-mobile .lc-pager-dot {
@@ -4041,6 +4173,10 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 }
 
+.lc-browser-foot-actions {
+  display: contents;
+}
+
 /* --- problem browser (browse overlay) on phone / tablet / app --- */
 
 .lc-mobile .lc-overlay {
@@ -4050,12 +4186,25 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-browser {
   gap: 6px;
   width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.lc-mobile .lc-browser-center {
+  flex: 1;
+  min-height: 0;
+  justify-content: flex-start;
 }
 
 .lc-mobile .lc-browser-body {
   gap: 6px;
   padding: 8px;
   border-radius: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .lc-mobile .lc-dataset-tabs {
@@ -4097,26 +4246,36 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-browser-filters input[type="search"],
 .lc-mobile .lc-browser-filters select,
 .lc-mobile .lc-browser-filters button {
-  min-height: 26px;
-  height: 26px;
-  padding: 0 6px;
-  font-size: 11px;
+  min-height: 24px;
+  height: 24px;
+  padding: 0 4px;
+  font-size: 10px;
   border-radius: 6px;
   flex-shrink: 0;
 }
 
 .lc-mobile .lc-browser-filters input[type="search"] {
-  flex: 1 1 96px;
-  min-width: 72px;
+  flex: 1 1 56px;
+  min-width: 52px;
   max-width: none;
 }
 
 .lc-mobile .lc-browser-filters select {
-  max-width: 7.5rem;
+  width: 3.4rem;
+  max-width: 3.4rem;
+  min-width: 0;
+  padding-right: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .lc-mobile .lc-browser-results {
-  gap: 6px;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Phone: keep q# / name / difficulty; drop tags + cases so rows aren't clipped. */
@@ -4140,13 +4299,19 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-table {
   padding: 4px;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  gap: 0;
 }
 
 .lc-mobile .lc-row {
-  min-height: 34px;
-  padding: 5px 8px;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
+  padding: 2px 8px;
   font-size: 12px;
-  border-radius: 6px;
+  border-radius: 4px;
 }
 
 .lc-mobile .lc-col-q {
@@ -4160,22 +4325,26 @@ button.lc-row-selected:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-/* Session + pagination on one compact row. */
+/* Session buttons, then pagination on its own row — nothing clips off-screen. */
 .lc-mobile .lc-browser-foot {
-  gap: 4px;
+  gap: 3px;
   padding-top: 6px;
+  flex-shrink: 0;
 }
 
 .lc-mobile .lc-browser-foot-session {
-  flex-wrap: nowrap;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 4px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  align-items: center;
+  overflow: visible;
 }
 
-.lc-mobile .lc-browser-foot-session::-webkit-scrollbar {
-  display: none;
+.lc-mobile .lc-browser-foot-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 
 .lc-mobile .lc-browser-foot-label {
@@ -4184,19 +4353,37 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-browser-foot-nav {
-  margin-left: auto;
-  gap: 4px;
+  margin-left: 0;
+  width: 100%;
   flex-shrink: 0;
-  grid-template-columns: 2rem minmax(7rem, 28vw) 2rem;
+  grid-template-columns: 1.65rem minmax(0, 1fr) 1.65rem;
+  column-gap: 3px;
 }
 
 .lc-mobile .lc-browser-page-label {
-  font-size: 10px;
-  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  font-size: 9px;
+  line-height: 1.15;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
   max-width: none;
-  white-space: nowrap;
+}
+
+.lc-mobile .lc-browser-page-pages::before {
+  content: none;
+}
+
+.lc-mobile .lc-browser-page-range,
+.lc-mobile .lc-browser-page-pages {
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lc-mobile .lc-browser-foot button {
@@ -4214,9 +4401,13 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-browser-foot-stats {
   margin-left: 0;
-  font-size: 11px;
+  font-size: 9px;
   width: 100%;
-  text-align: right;
+  text-align: center;
+  opacity: 0.85;
+  line-height: 1.2;
+  overflow: visible;
+  white-space: normal;
 }
 
 /* Appearance row under the browser card. */
@@ -4310,11 +4501,16 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 
   .lc-mobile .lc-browser-filters select {
-    max-width: 5.75rem;
+    width: 3rem;
+    max-width: 3rem;
+  }
+
+  .lc-mobile .lc-browser-foot-nav {
+    grid-template-columns: 1.5rem minmax(0, 1fr) 1.5rem;
   }
 
   .lc-mobile .lc-browser-page-label {
-    max-width: 36vw;
+    font-size: 8px;
   }
 
   .lc-mobile .lc-overlay {

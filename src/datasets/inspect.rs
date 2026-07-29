@@ -268,7 +268,7 @@ mod tests {
         // A difficulty nothing reads, under a name nothing reads.
         std::fs::write(
             &path,
-            "{\"question\": \"Do a thing.\", \"question_id\": \"Algorithm_7_I\", \"hardness\": \"medium\", \"test_info\": [{\"function_name\": \"do_thing\"}]}\n",
+            "{\"question\": \"Do a thing.\", \"question_id\": \"Algorithm_7_C\", \"style\": \"Complete\", \"hardness\": \"medium\", \"test_info\": [{\"function_name\": \"do_thing\", \"function_declaration\": \"def do_thing():\"}]}\n",
         )
         .unwrap();
 
@@ -276,7 +276,7 @@ mod tests {
         let report = inspect_file(dataset, &path).expect("inspects");
         assert_eq!(report.rows_sampled, 1);
         assert_eq!(report.imported, 1);
-        assert_eq!(report.example_task_id.as_deref(), Some("do-thing-7-i"));
+        assert_eq!(report.example_task_id.as_deref(), Some("do-thing-7-c"));
         assert_eq!(report.filled.get("difficulty").copied().unwrap_or(0), 0);
         assert!(report.unread_columns.contains("hardness"));
         // …and a column that *is* read is not reported as unread.

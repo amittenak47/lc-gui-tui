@@ -3,7 +3,7 @@
  *
  * The daemon refuses to read the reference solution unless the request carries
  * `confirm_reveal: true`, and this dialog is the only thing in the app that sets
- * it. Consent is a 1s hold on Reveal (water-fill), not a checkbox — the gesture
+ * it. Consent is a short hold on Reveal (water-fill), not a checkbox — the gesture
  * itself lives in {@link HoldButton}, which every other irreversible choice in
  * the app now shares.
  */
@@ -51,7 +51,7 @@ export function RevealDialog({
                 {previousReveals === 1 ? "time" : "times"}.
               </p>
             )}
-            <p className="lc-muted lc-reveal-hold-hint">Hold Reveal for 1 second to confirm.</p>
+            <p className="lc-muted lc-reveal-hold-hint">Hold Reveal briefly to confirm.</p>
 
             {error && <p className="lc-warning">{error}</p>}
 
@@ -61,7 +61,7 @@ export function RevealDialog({
               </button>
               <HoldButton
                 label="Reveal"
-                ariaLabel="Hold to reveal for one second"
+                ariaLabel="Hold to reveal"
                 disabled={pending}
                 onConfirm={onConfirm}
                 resetKey={error}

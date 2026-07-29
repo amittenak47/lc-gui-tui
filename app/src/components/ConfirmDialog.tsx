@@ -59,7 +59,7 @@ export function ConfirmDialog({
         <p>{message}</p>
         {detail && <p className="lc-muted">{detail}</p>}
         <p className="lc-muted lc-reveal-hold-hint">
-          Hold {confirmLabel} for 1 second to confirm.
+          Hold {confirmLabel} briefly to confirm.
         </p>
         {error && <p className="lc-warning">{error}</p>}
         <div className="lc-modal-actions">

@@ -27,8 +27,9 @@
 use serde_json::Value;
 
 use super::{
-    difficulty, entry_point_from_code, nested_text, py_literal, slugify,
-    split_leading_docstring, tags, text,
+    as_markdown, difficulty, entry_point_from_code, nested_text, py_literal, slugify,
+    split_leading_docstring, strip_markdown_fences, tags, text, typing_imports_for,
+    with_imports_and_solution,
 };
 use crate::problem::{IoCase, Problem};
 
@@ -40,10 +41,10 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         return None;
     }
 
-    let prompt = text(raw, &["prompt"]).unwrap_or_default();
-    let (docstring, code) = split_leading_docstring(&prompt);
-    let starter_code = (!code.trim().is_empty()).then(|| code.trim_end().to_string());
-    let entry_point = starter_code.as_deref().and_then(entry_point_from_code);
+    let prompt_col = text(raw, &["prompt"]).unwrap_or_default();
+    let (docstring, code) = split_leading_docstring(&prompt_col);
+    let starter_raw = (!code.trim().is_empty()).then(|| code.trim_end().to_string());
+    let entry_point = starter_raw.as_deref().and_then(entry_point_from_code);
 
     let suite = text(raw, &["test", "test_code"]);
     let input_output = suite
@@ -54,14 +55,10 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         .as_deref()
         .and_then(|src| entry_point.as_deref().map(|entry| as_check_suite(src, entry)));
 
-    // `meta` carries the question number, the difficulty and the category, and
-    // it is the column most likely to have arrived as a JSON *string* rather
-    // than a structure — `nested_text` reads both, which is what put the q#
-    // and tags columns back.
     let meta = super::container_value(raw, "meta");
     let mut topics = Vec::new();
     for key in ["categoryTitle", "category", "topic"] {
-        if let Some(value) = nested_text(raw, "meta", &[key]) {
+        if let Some(value) = nested_text(raw, "meta", &[key]).or_else(|| text(raw, &[key])) {
             topics.push(value);
             break;
         }
@@ -75,6 +72,33 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         }
     }
 
+    // Prefer the SFT statement, then the docstring; always strip a trailing
+    // ```python stub that duplicates starter_code.
+    let description = text(raw, &["prompt_sft", "problem_description", "content"])
+        .or(docstring)
+        .map(|d| as_markdown(&strip_markdown_fences(&d)));
+
+    let (mut prompt, starter_code) = match starter_raw {
+        Some(s) => {
+            let (p, body) = with_imports_and_solution(&s);
+            (p, Some(body))
+        }
+        None => (None, None),
+    };
+    // If starter already had imports, with_imports may return None; also merge
+    // typing imports detected on the original annotations.
+    if prompt.is_none() {
+        prompt = starter_code
+            .as_deref()
+            .and_then(typing_imports_for)
+            .filter(|imp| {
+                starter_code
+                    .as_deref()
+                    .map(|s| !s.contains(imp.as_str()))
+                    .unwrap_or(true)
+            });
+    }
+
     Some(Problem {
         task_id,
         question_id: nested_text(
@@ -82,13 +106,22 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
             "meta",
             &["questionFrontendId", "questionId", "question_id", "id"],
         )
-        .or_else(|| text(raw, &["question_id", "questionFrontendId", "frontend_id"])),
+        .or_else(|| {
+            text(
+                raw,
+                &[
+                    "questionFrontendId",
+                    "question_id",
+                    "questionId",
+                    "frontend_id",
+                ],
+            )
+        }),
         difficulty: difficulty(raw, &["difficulty"])
             .or_else(|| meta.as_ref().and_then(|m| difficulty(m, &["difficulty"]))),
         tags: topics,
-        problem_description: text(raw, &["prompt_sft", "problem_description", "content"])
-            .or(docstring),
-        prompt: None,
+        problem_description: description,
+        prompt,
         starter_code,
         entry_point,
         test,
@@ -222,7 +255,7 @@ pub(super) mod tests {
                 "categoryTitle": "Algorithms"
             },
             "prompt": "\"\"\"\nYou are given a string word containing distinct lowercase English letters.\nReturn the minimum number of pushes.\n\"\"\"\nclass Solution:\n    def minimumPushes(self, word: str) -> int:\n        ",
-            "prompt_sft": "You are given a string word containing distinct lowercase English letters.",
+            "prompt_sft": "You are given a string word containing distinct lowercase English letters.\n\nPlease complete the code below to solve above problem:\n```python\nclass Solution:\n    def minimumPushes(self, word: str) -> int:\n        \n```",
             "test": "\nmy_solution = Solution()\n\ntest_input = { \"word\": \"abcde\" }\nassert my_solution.minimumPushes(**test_input) == 5\n\ntest_input = { \"word\": \"xycdefghij\" }\nassert my_solution.minimumPushes(**test_input) == 12\n",
             "start_time": 1705804200
         })
@@ -248,6 +281,14 @@ pub(super) mod tests {
             .as_deref()
             .unwrap()
             .contains("distinct lowercase English letters"));
+        assert!(
+            !problem
+                .problem_description
+                .as_deref()
+                .unwrap()
+                .contains("```"),
+            "trailing starter fence must leave the description"
+        );
     }
 
     #[test]

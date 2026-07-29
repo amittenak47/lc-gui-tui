@@ -31,7 +31,7 @@ use crate::dataset::{Dataset, Shape};
 use crate::problem::{IoCase, Problem};
 
 /// Corpus columns that carry a worked solution. No adapter may read these.
-pub const SOLUTION_FIELDS: [&str; 8] = [
+pub const SOLUTION_FIELDS: [&str; 9] = [
     "solution",
     "completion",
     "response",
@@ -40,6 +40,7 @@ pub const SOLUTION_FIELDS: [&str; 8] = [
     "q_solution",
     "canonical_solution",
     "reference_solution",
+    "code",
 ];
 
 /// Turn one raw corpus record into a [`Problem`], or drop it.
@@ -512,6 +513,304 @@ pub(crate) fn split_leading_docstring(source: &str) -> (Option<String>, String) 
     (None, source.to_string())
 }
 
+/// First markdown code fence in `text`, plus the prose around it.
+///
+/// Corpora like DeepSeek and MS Python/Q paste a ```python stub at the end of
+/// the statement even when the same stub already lives in `starter_code`.
+/// LC+Tests stores the solution fence first and an explanation after.
+pub(crate) fn split_markdown_fence(text: &str) -> Option<(String, String, String)> {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] != b"```" {
+            i += 1;
+            continue;
+        }
+        let after_ticks = i + 3;
+        let line_end = text[after_ticks..]
+            .find('\n')
+            .map(|n| after_ticks + n + 1)
+            .unwrap_or(text.len());
+        let lang = text[after_ticks..line_end].trim();
+        // Prefer python fences; accept bare ``` when that is all the corpus has.
+        if !(lang.is_empty()
+            || lang.eq_ignore_ascii_case("python")
+            || lang.eq_ignore_ascii_case("py")
+            || lang.eq_ignore_ascii_case("python3"))
+        {
+            i = after_ticks;
+            continue;
+        }
+        let body_start = line_end;
+        let Some(rel_close) = text[body_start..].find("```") else {
+            return None;
+        };
+        let body_end = body_start + rel_close;
+        let before = text[..i].trim().to_string();
+        let code = text[body_start..body_end].trim().to_string();
+        let after = text[body_end + 3..].trim().to_string();
+        return Some((before, code, after));
+    }
+    None
+}
+
+/// Drop every ``` / ```python fence from a statement, keeping surrounding prose.
+pub(crate) fn strip_markdown_fences(text: &str) -> String {
+    let mut remaining = text.to_string();
+    let mut parts = Vec::new();
+    while let Some((before, _code, after)) = split_markdown_fence(&remaining) {
+        if !before.is_empty() {
+            parts.push(before);
+        }
+        remaining = after;
+    }
+    if !remaining.trim().is_empty() {
+        parts.push(remaining.trim().to_string());
+    }
+    parts.join("\n\n").trim().to_string()
+}
+
+/// Light-touch markdown cleanup so statements render as MD on the board.
+///
+/// Most corpora already ship markdown (bold, fences, headings). This normalises
+/// newlines and drops trailing "please complete the code" boilerplate that
+/// only exists to wrap a duplicate starter fence.
+pub(crate) fn as_markdown(text: &str) -> String {
+    let mut s = text.replace("\r\n", "\n").replace('\r', "\n");
+    for marker in [
+        "\nPlease complete the code below to solve above prblem:",
+        "\nPlease complete the code below to solve above problem:",
+        "\nYou will use the following starter code to write the solution to the problem and enclose your code within delimiters.",
+    ] {
+        if let Some(idx) = s.find(marker) {
+            s.truncate(idx);
+        }
+    }
+    // MS Python/Q appends a Q-language note after the Python stub — drop it.
+    if let Some(idx) = s.find("\nNOTE: This problem is described for Python") {
+        s.truncate(idx);
+    }
+    s.trim().to_string()
+}
+
+/// `from typing import …` lines implied by annotations in `code`.
+pub(crate) fn typing_imports_for(code: &str) -> Option<String> {
+    const NAMES: &[&str] = &[
+        "List", "Dict", "Set", "Tuple", "Optional", "Any", "Callable", "Iterable",
+        "Iterator", "Sequence", "Mapping", "Union", "DefaultDict", "Deque", "FrozenSet",
+    ];
+    let mut found = Vec::new();
+    for name in NAMES {
+        let needle = format!("{name}[");
+        if code.contains(&needle)
+            && !(code.contains(&format!("import {name}")) || code.contains("import *"))
+        {
+            found.push(*name);
+        }
+    }
+    if found.is_empty() {
+        return None;
+    }
+    Some(format!("from typing import {}", found.join(", ")))
+}
+
+/// Build Imports (`prompt`) + Solution (`starter_code`) halves like LeetCode.
+///
+/// Bare `def foo(...):` stubs become `class Solution` methods so the editor's
+/// Imports / Solution tabs split. Existing `class Solution` / other classes are
+/// left alone; typing imports go above.
+pub(crate) fn with_imports_and_solution(starter: &str) -> (Option<String>, String) {
+    let trimmed = starter.trim();
+    if trimmed.is_empty() {
+        return (None, String::new());
+    }
+    let imports = typing_imports_for(trimmed);
+    let body = if trimmed.starts_with("def ") {
+        wrap_def_as_solution_method(trimmed).unwrap_or_else(|| ensure_pass_bodies(trimmed))
+    } else {
+        ensure_pass_bodies(trimmed)
+    };
+    let prompt = imports.filter(|imp| !body.contains(imp.as_str()));
+    (prompt, body)
+}
+
+fn wrap_def_as_solution_method(declaration: &str) -> Option<String> {
+    let sig = def_signature_only(declaration)?;
+    let sig = sig.trim().trim_end_matches(':').trim_end();
+    let rest = sig.strip_prefix("def ")?;
+    let (name, args_and_ret) = rest.split_once('(')?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let close = args_and_ret.rfind(')')?;
+    let args = args_and_ret[..close].trim();
+    let ret = args_and_ret[close + 1..].trim(); // e.g. `-> List[int]`
+    let ret = if ret.is_empty() {
+        String::new()
+    } else if ret.starts_with("->") {
+        format!(" {ret}")
+    } else {
+        format!(" {ret}")
+    };
+    let params = if args.is_empty() {
+        "self".to_string()
+    } else if args.starts_with("self") {
+        args.to_string()
+    } else {
+        format!("self, {args}")
+    };
+    Some(format!(
+        "class Solution:\n    def {name}({params}){ret}:\n        pass\n"
+    ))
+}
+
+/// The `def …` signature only — drop an existing body (`pass`, docstring, …).
+fn def_signature_only(source: &str) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("def "))?;
+    let mut depth = 0i32;
+    let mut out = Vec::new();
+    for &line in &lines[start..] {
+        out.push(line);
+        let mut quote: Option<char> = None;
+        for ch in line.chars() {
+            if let Some(q) = quote {
+                if ch == q {
+                    quote = None;
+                }
+                continue;
+            }
+            if ch == '"' || ch == '\'' {
+                quote = Some(ch);
+                continue;
+            }
+            match ch {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                _ => {}
+            }
+        }
+        if depth <= 0 && (line.contains("->") || line.trim_end().ends_with(':')) {
+            break;
+        }
+    }
+    Some(out.join("\n"))
+}
+
+/// Ensure every `def` line in a multi-def class stub has a `pass` body.
+pub(crate) fn ensure_pass_bodies(source: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    if lines.is_empty() {
+        return source.to_string();
+    }
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        out.push_str(line);
+        out.push('\n');
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("def ") {
+            continue;
+        }
+        // Signature may wrap; only treat as closed when this line ends with `:`.
+        if !trimmed.trim_end().ends_with(':') && !line.trim_end().ends_with(':') {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        let next = lines.get(i + 1).map(|l| l.trim()).unwrap_or("");
+        let next_indent = lines
+            .get(i + 1)
+            .map(|l| l.len() - l.trim_start().len())
+            .unwrap_or(0);
+        if next.is_empty() || next_indent <= indent || next.starts_with("def ") || next.starts_with("class ")
+        {
+            out.push_str(&" ".repeat(indent + 4));
+            out.push_str("pass\n");
+        }
+    }
+    out
+}
+
+/// Rewrite `assert foo(...)` lines into a `check(candidate)` suite.
+pub(crate) fn asserts_as_check_suite(suite: &str, entry_point: &str) -> String {
+    let mut body = String::from("def check(candidate):\n");
+    let mut wrote = false;
+    for line in suite.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut rewritten = trimmed.to_string();
+        for prefix in [
+            format!("{entry_point}("),
+            format!("Solution().{entry_point}("),
+            format!("sol.{entry_point}("),
+        ] {
+            if let Some(rest) = rewritten.strip_prefix(&format!("assert {prefix}")) {
+                rewritten = format!("assert candidate({rest}");
+                break;
+            }
+            if rewritten.contains(&prefix) {
+                rewritten = rewritten.replace(&prefix, "candidate(");
+            }
+        }
+        if !rewritten.starts_with("assert ") {
+            continue;
+        }
+        body.push_str("    ");
+        body.push_str(&rewritten);
+        body.push('\n');
+        wrote = true;
+    }
+    if !wrote {
+        body.push_str("    pass\n");
+    }
+    body
+}
+
+/// Docstring sitting under a `def` / method in a Complete-style KodCode prompt.
+pub(crate) fn docstring_inside_def(source: &str) -> Option<String> {
+    let trimmed = source.trim_start();
+    if !(trimmed.starts_with("def ") || trimmed.starts_with("class ")) {
+        return None;
+    }
+    for quote in ["\"\"\"", "'''"] {
+        let Some(start) = trimmed.find(quote) else {
+            continue;
+        };
+        let rest = &trimmed[start + quote.len()..];
+        let Some(end) = rest.find(quote) else {
+            continue;
+        };
+        let doc = rest[..end].trim();
+        if !doc.is_empty() {
+            return Some(doc.to_string());
+        }
+    }
+    None
+}
+
+/// Clean an entry point that arrived as `Solution().isValid` / `sol.foo`.
+pub(crate) fn clean_entry_point(raw: &str) -> String {
+    let s = raw.trim();
+    if let Some(rest) = s.strip_prefix("Solution().") {
+        return rest.trim().to_string();
+    }
+    if let Some((_, method)) = s.rsplit_once('.') {
+        let method = method.trim();
+        if !method.is_empty()
+            && method
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return method.to_string();
+        }
+    }
+    s.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,6 +893,43 @@ mod tests {
         let (doc, code) = split_leading_docstring("class Solution:\n    pass\n");
         assert!(doc.is_none());
         assert_eq!(code, "class Solution:\n    pass\n");
+    }
+
+    #[test]
+    fn markdown_fences_split_and_strip() {
+        let text = "Intro.\n\n```python\ndef foo():\n    pass\n```\n\nOutro.";
+        let (before, code, after) = split_markdown_fence(text).unwrap();
+        assert_eq!(before, "Intro.");
+        assert!(code.contains("def foo"));
+        assert_eq!(after, "Outro.");
+        assert_eq!(strip_markdown_fences(text), "Intro.\n\nOutro.");
+    }
+
+    #[test]
+    fn bare_defs_become_solution_methods_with_typing_imports() {
+        let (prompt, body) =
+            with_imports_and_solution("def max_beauty(items: List[int], queries: List[int]) -> List[int]");
+        assert!(prompt.unwrap().contains("List"));
+        assert!(body.contains("class Solution:"));
+        assert!(body.contains("def max_beauty(self, items: List[int], queries: List[int]) -> List[int]:"));
+        assert!(body.contains("pass"));
+        assert!(!body.contains("pass:"));
+    }
+
+    #[test]
+    fn wrapping_a_def_that_already_has_pass_does_not_corrupt_the_signature() {
+        let (_, body) = with_imports_and_solution(
+            "def max_beauty(items: List[Tuple[int, int]], queries: List[int]) -> List[int]:\n    pass\n",
+        );
+        assert!(body.contains("def max_beauty(self, items: List[Tuple[int, int]], queries: List[int]) -> List[int]:"));
+        assert!(!body.contains("pass:"));
+        assert_eq!(body.matches("pass").count(), 1);
+    }
+
+    #[test]
+    fn entry_points_like_solution_dot_method_clean_up() {
+        assert_eq!(clean_entry_point("Solution().isValid"), "isValid");
+        assert_eq!(clean_entry_point("twoSum"), "twoSum");
     }
 
     /// The invariant an adapter could break by hand, since it constructs
