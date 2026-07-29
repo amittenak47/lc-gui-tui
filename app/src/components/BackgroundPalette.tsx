@@ -69,7 +69,11 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
               ? "lc-map-btn lc-palette-trigger lc-palette-trigger-map lc-tip-target"
               : "lc-map-btn lc-palette-trigger lc-tip-target"
         }
-        style={variant === "header" ? undefined : { background: current.background }}
+        style={
+          variant === "header" || variant === "map"
+            ? undefined
+            : { background: current.background }
+        }
         data-tip="Board and UI appearance"
         data-tip-placement={tipPlacement}
         aria-label="Appearance"

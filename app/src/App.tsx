@@ -505,7 +505,7 @@ export function App() {
 
         const skeletons = buildProblemTemplate({
           taskId: detail.task_id,
-          title: titleFromSlug(detail.task_id),
+          title: titleFromSlug(detail.task_id, detail.question_id),
           difficulty: detail.difficulty,
           tags: detail.tags,
           description: detail.problem_description,
@@ -1348,7 +1348,8 @@ export function App() {
                 disabled={busy !== null}
                 onClick={() => leaveProblem(returnToBrowse)}
               >
-                ← Problems
+                <span className="lc-label-long">← Problems</span>
+                <span className="lc-label-short">←</span>
               </button>
               <div className="lc-problem-nav" role="group" aria-label="Problem">
                 <button
@@ -1366,7 +1367,7 @@ export function App() {
                   ‹
                 </button>
                 <span className="lc-current" title={problem.task_id}>
-                  {titleFromSlug(problem.task_id)}
+                  {titleFromSlug(problem.task_id, problem.question_id)}
                 </span>
                 <button
                   type="button"
@@ -1385,7 +1386,10 @@ export function App() {
               </div>
             </>
           ) : (
-            <span className="lc-muted">pick a problem to start</span>
+            <span className="lc-muted lc-browse-hint">
+              <span className="lc-label-long">pick a problem to start</span>
+              <span className="lc-label-short">Problems</span>
+            </span>
           )}
           {/* On mobile the gear moves into the ⋯ menu — see HeaderOverflow. */}
           <button
@@ -1461,16 +1465,6 @@ export function App() {
           {mobile && (
             <HeaderOverflow
               items={[
-                ...(problem
-                  ? [
-                      {
-                        id: "ide",
-                        label: "Open in IDE",
-                        disabled: busy !== null,
-                        run: () => void openInIde(),
-                      },
-                    ]
-                  : []),
                 { id: "settings", label: "Settings", disabled: false, run: () => setSettingsOpen(true) },
               ]}
             />

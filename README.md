@@ -76,17 +76,20 @@ Adapters that reshape each corpus into `lc`'s field names live in [`src/datasets
 
 ### What KodCode's columns mean
 
-KodCode is *synthetic*: every problem was generated from a seed and kept only if a model could solve it against its own tests. It therefore has no question numbers, no titles and no topic tags, and the two columns standing in for them show up in the tag filter as things like `Algorithm, Complete`:
+KodCode is *synthetic*: every problem was generated from a seed and kept only if a model could solve it against its own tests. It therefore has no question numbers, no titles and no topic tags. The seed family shows up in the tag filter as things like `Algorithm, Complete`:
 
 | Tag | What it is |
 | --- | --- |
 | `Algorithm`, `Data_Structure`, `Leetcode`, `Codeforces`, `Apps`, `Taco`, `Docs`, `Package`, `Filter`, `Prefill`, `Evol` | **`subset`** — which seed the problem was grown from. The closest thing this corpus has to a topic. `Docs` means it was generated from library documentation. |
-| `Instruct` | **`style`** — the question is written as a problem statement. |
 | `Complete` | **`style`** — you are given a function to finish. |
 
-Most seeds appear in both styles, which is why ids come in pairs. `lc` names those rows after the function under test, keeping the seed number and the style letter: `running-max-45219-i` and `running-max-45219-c`. Difficulty comes from the corpus's own `gpt_difficulty` rating, and the sample-case count is read off the pytest suite's literal asserts (`lc test --full` still runs the whole module).
+The corpus also ships an `Instruct` phrasing (same seed as a prose problem statement). `lc` **skips Instruct** at index time — Complete is enough, and that roughly halves the set. Difficulty comes from the corpus's own `gpt_difficulty` rating, and the sample-case count is read off the pytest suite's literal asserts (`lc test --full` still runs the whole module).
 
-The same tooltip is on the tab itself in the whiteboard.
+If you indexed KodCode before this filter, rebuild so Instruct rows leave the table:
+
+```bash
+lc index --dataset kodcode --rebuild
+```
 
 ### When a column in the browser is empty
 

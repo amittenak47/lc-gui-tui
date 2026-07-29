@@ -227,8 +227,8 @@ const ZOOM_STEP = 1.15;
 /** Matches Excalidraw's internal wheel-zoom step (not our button ZOOM_STEP). */
 const WHEEL_ZOOM_STEP = 0.1;
 
-function clampZoom(value: number): number {
-  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+function clampZoom(value: number, min = ZOOM_MIN): number {
+  return Math.min(ZOOM_MAX, Math.max(min, value));
 }
 
 /** Read a `--lc-safe-*` px length from the document root (mobile nav bar, etc.). */
@@ -237,6 +237,60 @@ function safeCssPx(name: "--lc-safe-top" | "--lc-safe-bottom" | "--lc-safe-left"
   const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const n = parseFloat(raw);
   return Number.isFinite(n) ? n : 0;
+}
+
+/** Viewport chrome around the fitted template page (toolbar top, map controls bottom). */
+function mobilePageInsets(toolbarH: number): {
+  top: number;
+  left: number;
+  right: number;
+  bottom: number;
+} {
+  return {
+    top: Math.max(34, Math.round(toolbarH) + 6),
+    left: 4,
+    right: 4,
+    bottom: 36,
+  };
+}
+
+/**
+ * Keep the viewport inside the open template page on mobile.
+ * Zoomed in: pan freely within the box. At fit zoom: locked (no empty gutter).
+ */
+function clampScrollToBounds(
+  scrollX: number,
+  scrollY: number,
+  zoom: number,
+  viewWidth: number,
+  viewHeight: number,
+  bounds: SceneBounds,
+  inset: { top: number; left: number; right: number; bottom: number },
+): { scrollX: number; scrollY: number } {
+  const availW = Math.max(1, viewWidth - inset.left - inset.right);
+  const availH = Math.max(1, viewHeight - inset.top - inset.bottom);
+  const contentW = Math.max(1, bounds.maxX - bounds.minX);
+  const contentH = Math.max(1, bounds.maxY - bounds.minY);
+  const visW = availW / zoom;
+  const visH = availH / zoom;
+
+  let nextX: number;
+  let nextY: number;
+  if (contentW <= visW + 0.5) {
+    nextX = inset.left / zoom - bounds.minX + (visW - contentW) / 2;
+  } else {
+    const maxX = inset.left / zoom - bounds.minX;
+    const minX = (viewWidth - inset.right) / zoom - bounds.maxX;
+    nextX = Math.min(maxX, Math.max(minX, scrollX));
+  }
+  if (contentH <= visH + 0.5) {
+    nextY = inset.top / zoom - bounds.minY + (visH - contentH) / 2;
+  } else {
+    const maxY = inset.top / zoom - bounds.minY;
+    const minY = (viewHeight - inset.bottom) / zoom - bounds.maxY;
+    nextY = Math.min(maxY, Math.max(minY, scrollY));
+  }
+  return { scrollX: nextX, scrollY: nextY };
 }
 
 /** Zoom toward a viewport point so scroll-wheel zoom feels anchored under the cursor. */
@@ -418,6 +472,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [zoomPct, setZoomPct] = useState(100);
   /** Scene box of the open mobile page — clips the raster ink layer to it. */
   const [inkClip, setInkClip] = useState<SceneBounds | null>(null);
+  /** Floor zoom for the open mobile page (fit-to-chrome); null on desktop. */
+  const fitZoomMinRef = useRef<number | null>(null);
+  /** Live page bounds for scroll clamping (same box as inkClip). */
+  const pageBoundsRef = useRef<SceneBounds | null>(null);
+  /** Measured toolbar height so fitView lands the template under it. */
+  const [toolbarHeight, setToolbarHeight] = useState(36);
+  const toolbarHeightRef = useRef(toolbarHeight);
+  toolbarHeightRef.current = toolbarHeight;
+  const clampingScrollRef = useRef(false);
   const [readingSizeLocal, setReadingSizeLocal] = useState<BoardReadingSize>(() => loadBoardReadingSize());
   const readingSize = readingSizeProp ?? readingSizeLocal;
   const readingSizeRef = useRef(readingSize);
@@ -668,6 +731,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const page = mobileRegionRef.current;
 
     const bounds = pageBounds(live, page);
+    pageBoundsRef.current = bounds;
     setInkClip((current) => (sameBounds(current, bounds) ? current : bounds));
 
     const next = applyPageVisibility(live, page);
@@ -1080,12 +1144,39 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const setZoom = useCallback(
     (next: number) => {
-      const clamped = clampZoom(next);
-      apiRef.current?.updateScene({ appState: { zoom: { value: clamped } } });
+      const floor = mobile && fitZoomMinRef.current != null ? fitZoomMinRef.current : ZOOM_MIN;
+      const clamped = clampZoom(next, floor);
+      const api = apiRef.current;
+      if (!api) return;
+      const state = api.getAppState() as {
+        scrollX?: number;
+        scrollY?: number;
+        width?: number;
+        height?: number;
+      };
+      const bounds = pageBoundsRef.current;
+      let appState: Record<string, unknown> = { zoom: { value: clamped } };
+      if (mobile && bounds && typeof state.width === "number" && typeof state.height === "number") {
+        const inset = mobilePageInsets(toolbarHeightRef.current);
+        const clampedScroll = clampScrollToBounds(
+          state.scrollX ?? 0,
+          state.scrollY ?? 0,
+          clamped,
+          state.width,
+          state.height,
+          bounds,
+          inset,
+        );
+        appState = { ...appState, ...clampedScroll };
+      }
+      api.updateScene({
+        appState,
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
       setZoomPct(Math.round(clamped * 100));
       requestAnimationFrame(reportCodeSlot);
     },
-    [reportCodeSlot],
+    [mobile, reportCodeSlot],
   );
 
   const zoomIn = useCallback(() => setZoom(readZoom() * ZOOM_STEP), [readZoom, setZoom]);
@@ -1151,18 +1242,41 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       let next = zoom - delta / 100;
       next +=
         Math.log10(Math.max(1, zoom)) * -sign * Math.min(1, absDelta / 20);
-      const nextZoom = clampZoom(next);
+      const floor = mobile && fitZoomMinRef.current != null ? fitZoomMinRef.current : ZOOM_MIN;
+      const nextZoom = clampZoom(next, floor);
       if (nextZoom === zoom) return;
 
+      let appState = getStateForZoom(
+        {
+          viewportX: event.clientX,
+          viewportY: event.clientY,
+          nextZoom,
+        },
+        state,
+      );
+      const bounds = pageBoundsRef.current;
+      const full = api.getAppState() as { width?: number; height?: number };
+      if (
+        mobile &&
+        bounds &&
+        typeof full.width === "number" &&
+        typeof full.height === "number"
+      ) {
+        const inset = mobilePageInsets(toolbarHeightRef.current);
+        const clampedScroll = clampScrollToBounds(
+          appState.scrollX,
+          appState.scrollY,
+          nextZoom,
+          full.width,
+          full.height,
+          bounds,
+          inset,
+        );
+        appState = { ...appState, ...clampedScroll };
+      }
+
       api.updateScene({
-        appState: getStateForZoom(
-          {
-            viewportX: event.clientX,
-            viewportY: event.clientY,
-            nextZoom,
-          },
-          state,
-        ),
+        appState,
         captureUpdate: CaptureUpdateAction.NEVER,
       });
       setZoomPct(Math.round(nextZoom * 100));
@@ -1171,7 +1285,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     root.addEventListener("wheel", onWheel, { capture: true, passive: false });
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
-  }, [interactive, reportCodeSlot]);
+  }, [interactive, mobile, reportCodeSlot]);
 
   const fitView = useCallback((regionId?: RegionId | null) => {
     const api = apiRef.current;
@@ -1246,7 +1360,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const safeRight = mobile ? 0 : safeCssPx("--lc-safe-right");
     const inset = paged
       ? mobile
-        ? { top: 34, left: 2, right: 2, bottom: 26 }
+        ? mobilePageInsets(toolbarHeightRef.current)
         : {
             top: 14 + safeTop,
             left: 56 + safeLeft,
@@ -1264,10 +1378,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const boxWidth = Math.max(1, maxX - minX);
     const boxHeight = Math.max(1, maxY - minY);
     const zoom = clampZoom(
-      Math.min(availWidth / boxWidth, availHeight / boxHeight) * (paged ? (mobile ? 1 : 1) : 0.98),
+      Math.min(availWidth / boxWidth, availHeight / boxHeight) * (paged ? 1 : 0.98),
     );
+    if (mobile && paged) {
+      fitZoomMinRef.current = zoom;
+      pageBoundsRef.current = { minX, minY, maxX, maxY };
+    } else if (!mobile) {
+      fitZoomMinRef.current = null;
+    }
 
     // Centre whatever axis has room to spare; the other one starts at its inset.
+    // Mobile pages top-align under the toolbar so the template fills the canvas.
     const slackX = Math.max(0, availWidth - boxWidth * zoom);
     const slackY = paged && !mobile ? Math.max(0, availHeight - boxHeight * zoom) : 0;
     // scene → screen: (scene + scroll) * zoom  (see Board.stamp)
@@ -1294,6 +1415,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       });
     });
   }, [fitView]);
+
+  /** Keep the template tucked under the toolbar when its strip grows or folds. */
+  useEffect(() => {
+    if (!mobile || !interactive || mobileRegionRef.current === null) return;
+    const handle = window.setTimeout(() => fitView(), 80);
+    return () => window.clearTimeout(handle);
+  }, [toolbarHeight, mobile, interactive, fitView]);
 
   /** Fit the current page, or the landing pair on desktop. Event-handler safe. */
   const fitCurrentView = useCallback(() => {
@@ -1998,6 +2126,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             onUndo={undoBoard}
             onRedo={redoBoard}
             mobile={mobile}
+            onHeightChange={setToolbarHeight}
           />
           <div
             className={
@@ -2043,11 +2172,42 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           apiRef.current = api as ExcalidrawApi;
           scrollUnsubRef.current?.();
           scrollUnsubRef.current =
-            apiRef.current.onScrollChange?.((_x, _y, zoom) => {
+            apiRef.current.onScrollChange?.((scrollX, scrollY, zoom) => {
               const pct = Math.round(zoom.value * 100);
               setZoomPct((current) => (current === pct ? current : pct));
               rasterInkRef.current?.repaint();
               reportCodeSlot();
+
+              if (!mobile || clampingScrollRef.current) return;
+              const bounds = pageBoundsRef.current;
+              const api = apiRef.current;
+              if (!bounds || !api) return;
+              const state = api.getAppState() as { width?: number; height?: number };
+              if (typeof state.width !== "number" || typeof state.height !== "number") return;
+              const inset = mobilePageInsets(toolbarHeightRef.current);
+              const next = clampScrollToBounds(
+                scrollX,
+                scrollY,
+                zoom.value,
+                state.width,
+                state.height,
+                bounds,
+                inset,
+              );
+              if (
+                Math.abs(next.scrollX - scrollX) < 0.05 &&
+                Math.abs(next.scrollY - scrollY) < 0.05
+              ) {
+                return;
+              }
+              clampingScrollRef.current = true;
+              api.updateScene({
+                appState: next,
+                captureUpdate: CaptureUpdateAction.NEVER,
+              });
+              requestAnimationFrame(() => {
+                clampingScrollRef.current = false;
+              });
             }) ?? null;
           const state = apiRef.current.getAppState() as { zoom?: { value?: number } };
           const pct = Math.round((state.zoom?.value ?? 1) * 100);
@@ -2085,6 +2245,8 @@ interface ToolbarProps {
   onRedo: () => void;
   /** Tablet / phone layout — horizontal strip with a fold control. */
   mobile?: boolean;
+  /** Reports strip height so fitView can place the template under it. */
+  onHeightChange?: (height: number) => void;
 }
 
 function BoardToolbar({
@@ -2108,6 +2270,7 @@ function BoardToolbar({
   onUndo,
   onRedo,
   mobile = false,
+  onHeightChange,
 }: ToolbarProps) {
   const showInk =
     active === "freedraw" ||
@@ -2134,6 +2297,17 @@ function BoardToolbar({
   const [helpOpen, setHelpOpen] = useState(false);
   const [folded, setFolded] = useState(mobile);
   const importRef = useRef<HTMLInputElement | null>(null);
+  const toolbarRootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const node = toolbarRootRef.current;
+    if (!node || !onHeightChange) return;
+    const publish = () => onHeightChange(Math.ceil(node.getBoundingClientRect().height));
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [onHeightChange, folded, shapesOpen]);
 
   useEffect(() => {
     if (!shapesOpen) {
@@ -2210,64 +2384,32 @@ function BoardToolbar({
     onPick(tool);
   };
 
-  return (
-    <div
-      className={[
-        "lc-toolbar",
-        mobile ? "lc-toolbar-mobile" : "",
-        mobile && folded ? "lc-toolbar-folded" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-      role="toolbar"
-      aria-label="Drawing tools"
+  const renderToolButton = (tool: ToolName, label: string, hint: string, emoji?: string) => (
+    <button
+      key={tool}
+      type="button"
+      className={tool === active && !shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
+      title={hint}
+      aria-label={hint}
+      aria-pressed={tool === active && !shapesOpen}
+      onClick={() => pickTool(tool)}
     >
-      {mobile && (
-        <button
-          type="button"
-          className="lc-tool lc-tool-fold"
-          title={folded ? "Show more tools" : "Fold tools"}
-          aria-label={folded ? "Show more tools" : "Fold tools"}
-          aria-expanded={!folded}
-          onClick={() => setFolded((open) => !open)}
-        >
-          {folded ? "▸" : "▾"}
-        </button>
+      {emoji === "erasersvg" ? (
+        <PinkEraserIcon />
+      ) : emoji ? (
+        <span className="lc-tool-emoji" aria-hidden>
+          {emoji}
+        </span>
+      ) : (
+        label
       )}
-      {TOOLS.map(({ tool, label, hint, emoji }) => (
-        <button
-          key={tool}
-          type="button"
-          className={tool === active && !shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
-          title={hint}
-          aria-label={hint}
-          aria-pressed={tool === active && !shapesOpen}
-          onClick={() => pickTool(tool)}
-        >
-          {emoji === "erasersvg" ? (
-            <PinkEraserIcon />
-          ) : emoji ? (
-            <span className="lc-tool-emoji" aria-hidden>
-              {emoji}
-            </span>
-          ) : (
-            label
-          )}
-        </button>
-      ))}
+    </button>
+  );
 
-      <button
-        type="button"
-        className={shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
-        title="Shapes — data structures and system design"
-        aria-label="Shapes"
-        aria-expanded={shapesOpen}
-        onClick={onToggleShapes}
-      >
-        ⬡
-      </button>
+  const activeToolMeta = TOOLS.find((entry) => entry.tool === active);
 
-      <div className="lc-toolbar-expandable">
+  const toolExtras = (
+    <>
       {showInk && (
         <>
           <div className="lc-tool-sep" />
@@ -2351,7 +2493,79 @@ function BoardToolbar({
         <ResetIcon />
         <span className="lc-tool-caption">Reset</span>
       </button>
-      </div>
+    </>
+  );
+
+  const shapesButton = (
+    <button
+      type="button"
+      className={shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
+      title="Shapes — data structures and system design"
+      aria-label="Shapes"
+      aria-expanded={shapesOpen}
+      onClick={onToggleShapes}
+    >
+      ⬡
+    </button>
+  );
+
+  return (
+    <div
+      ref={toolbarRootRef}
+      className={[
+        "lc-toolbar",
+        mobile ? "lc-toolbar-mobile" : "",
+        mobile && folded ? "lc-toolbar-folded" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      role="toolbar"
+      aria-label="Drawing tools"
+    >
+      {mobile && (
+        <button
+          type="button"
+          className="lc-tool lc-tool-fold"
+          title={folded ? "Show tools" : "Fold tools"}
+          aria-label={folded ? "Show tools" : "Fold tools"}
+          aria-expanded={!folded}
+          onClick={() => {
+            setFolded((wasFolded) => {
+              if (!wasFolded && shapesOpen) onToggleShapes();
+              return !wasFolded;
+            });
+          }}
+        >
+          {folded ? "▸" : "▾"}
+        </button>
+      )}
+
+      {/* Folded mobile: only the active tool stays visible next to the chevron. */}
+      {mobile && folded && activeToolMeta &&
+        renderToolButton(
+          activeToolMeta.tool,
+          activeToolMeta.label,
+          activeToolMeta.hint,
+          activeToolMeta.emoji,
+        )}
+
+      {mobile ? (
+        <div className="lc-toolbar-expandable">
+          {TOOLS.map(({ tool, label, hint, emoji }) =>
+            renderToolButton(tool, label, hint, emoji),
+          )}
+          {shapesButton}
+          {toolExtras}
+        </div>
+      ) : (
+        <>
+          {TOOLS.map(({ tool, label, hint, emoji }) =>
+            renderToolButton(tool, label, hint, emoji),
+          )}
+          {shapesButton}
+          {toolExtras}
+        </>
+      )}
 
       {shapesOpen && (
         <div
