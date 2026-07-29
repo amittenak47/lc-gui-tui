@@ -27,6 +27,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 
 import {
@@ -56,6 +57,7 @@ import {
   type Skeleton,
 } from "../templates/skeleton";
 import { BackgroundPalette } from "../components/BackgroundPalette";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ReadingSizeControl } from "../components/ReadingSizeControl";
 import { FontSizeSlider } from "./FontSizeSlider";
 import { useIsMobile } from "../util/mobile";
@@ -72,6 +74,12 @@ import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
 import type { BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
 import { applyMetadata, keepOnClear, isCoachElement } from "./scene";
+import {
+  applyPageVisibility,
+  clearPageVisibility,
+  pageBounds,
+  type PageableElement,
+} from "./pageView";
 import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
@@ -307,6 +315,13 @@ export interface BoardProps {
    * at and whether the code dock is reported.
    */
   mobileRegion?: RegionId | null;
+  /**
+   * Chrome that belongs in the middle of the board's bottom row — the mobile
+   * page turner. It lives in the same flex row as Appearance and the zoom
+   * cluster rather than floating over them, which is the only way the three
+   * can share a baseline and never overlap.
+   */
+  bottomCenter?: ReactNode;
 }
 
 const INK_COLORS_LIGHT = ["#1e1e1e", "#64748b", "#b45309", "#1d4ed8", "#166534", "#b91c1c"] as const;
@@ -349,6 +364,12 @@ function roundPx(value: number): number {
   return Math.round(value);
 }
 
+function sameBounds(a: SceneBounds | null, b: SceneBounds | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.minX === b.minX && a.minY === b.minY && a.maxX === b.maxX && a.maxY === b.maxY;
+}
+
 function sameCodeSlot(a: ScreenRect | null, b: ScreenRect | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -371,6 +392,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     readingSize: readingSizeProp,
     onReadingSizeChange,
     mobileRegion = null,
+    bottomCenter = null,
   },
   ref,
 ) {
@@ -386,6 +408,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const rasterInkRef = useRef<RasterInkHandle>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [zoomPct, setZoomPct] = useState(100);
+  /** Scene box of the open mobile page — clips the raster ink layer to it. */
+  const [inkClip, setInkClip] = useState<SceneBounds | null>(null);
   const [readingSizeLocal, setReadingSizeLocal] = useState<BoardReadingSize>(() => loadBoardReadingSize());
   const readingSize = readingSizeProp ?? readingSizeLocal;
   const readingSizeRef = useRef(readingSize);
@@ -411,6 +435,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const textFinishedViaEnterRef = useRef(false);
   /** Shift held → text corner-drag keeps wrap width instead of free resize. */
   const shiftHeldRef = useRef(false);
+  /** Read by the pointer listeners, which must not re-bind on every tool change. */
+  const activeToolRef = useRef<ToolName>(activeTool);
+  activeToolRef.current = activeTool;
+  /** True while a text tap is being replayed, so it isn't intercepted again. */
+  const replayingTextTapRef = useRef(false);
+  /** Where a press landed while an empty text box was open, pending its replay. */
+  const pendingTextTapRef = useRef<{
+    clientX: number;
+    clientY: number;
+    pointerType: string;
+  } | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -426,6 +461,135 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.removeEventListener("keyup", onKey);
     };
   }, []);
+
+  /**
+   * Excalidraw's single-key shortcuts belong to a UI this app hides.
+   *
+   * `handleKeyboardGlobally` puts its key handler on `document`, so every bare
+   * letter and digit is live: `1`–`9` and `v r d o a l p t e h k f` swap the
+   * tool out from under the pen, and `s` / `g` pop open the stroke and
+   * background colour pickers — the palette that appears "from nowhere". None
+   * of them are reachable from our toolbar, so none of them should be reachable
+   * from the keyboard either.
+   *
+   * The rule is deliberately blunt: an unmodified key that produces a single
+   * character never reaches Excalidraw. Everything editing needs — Ctrl/⌘
+   * combos, Escape, Delete, Tab, arrows, and Space for pan-drag — is allowed
+   * through, and typing is untouched because a focused text box, Monaco, or any
+   * input is exempt. The `?` button in the toolbar lists what survives.
+   */
+  useEffect(() => {
+    if (!interactive) return;
+    const guard = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key.length !== 1 || event.key === " ") return;
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        if (
+          target.isContentEditable ||
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement ||
+          target.closest(".lc-code-dock, .monaco-editor")
+        ) {
+          return;
+        }
+      }
+      // Capture phase: Excalidraw's document listener never sees it.
+      event.stopPropagation();
+    };
+    window.addEventListener("keydown", guard, true);
+    window.addEventListener("keypress", guard, true);
+    window.addEventListener("keyup", guard, true);
+    return () => {
+      window.removeEventListener("keydown", guard, true);
+      window.removeEventListener("keypress", guard, true);
+      window.removeEventListener("keyup", guard, true);
+    };
+  }, [interactive]);
+
+  /**
+   * Placing the next text box in one tap.
+   *
+   * Excalidraw refuses to create a text element while another is being edited —
+   * `handleTextOnPointerDown` returns early with "clicking outside should only
+   * finalize it, not create another". With a locked text tool that costs two
+   * taps for every box after the first: one to throw the empty box away, one to
+   * place the new one. On a tablet that reads as the tool not working.
+   *
+   * So the press is intercepted while an *empty* box is open: commit it, then
+   * replay the same press at the same point once Excalidraw has cleared its
+   * editing state. A box with text in it is left alone — that gesture already
+   * commits and hands back to the hand tool, which is what it should do.
+   */
+  useEffect(() => {
+    if (!interactive) return;
+    const root = boardRef.current;
+    if (!root) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      pendingTextTapRef.current = null;
+      if (replayingTextTapRef.current) return;
+      if (activeToolRef.current !== "text") return;
+      const editable = document.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
+      if (!editable || event.target === editable) return;
+      if (editable.value.trim().length > 0) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (!target.closest(".excalidraw")) return;
+      if (target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager")) return;
+
+      // The press itself is left alone — it is what commits (and, being empty,
+      // deletes) the open box. Only the placement Excalidraw refuses to do is
+      // added, once its own gesture has finished.
+      pendingTextTapRef.current = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        pointerType: event.pointerType || "mouse",
+      };
+    };
+
+    const onPointerUp = () => {
+      const tap = pendingTextTapRef.current;
+      pendingTextTapRef.current = null;
+      if (!tap || activeToolRef.current !== "text") return;
+
+      const replay = () => {
+        replayingTextTapRef.current = false;
+        // Excalidraw commits the empty box on this pointerup; if something kept
+        // it open, replaying would only be refused again.
+        if (document.querySelector("textarea.excalidraw-wysiwyg")) return;
+        const canvas =
+          root.querySelector("canvas.excalidraw__canvas.interactive") ??
+          root.querySelector("canvas.excalidraw__canvas");
+        if (!(canvas instanceof Element)) return;
+        const init: PointerEventInit = {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX: tap.clientX,
+          clientY: tap.clientY,
+          pointerId: 1,
+          pointerType: tap.pointerType,
+          isPrimary: true,
+          button: 0,
+        };
+        canvas.dispatchEvent(new PointerEvent("pointerdown", { ...init, buttons: 1 }));
+        canvas.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
+      };
+
+      replayingTextTapRef.current = true;
+      // Two frames: Excalidraw's submit runs through React state first.
+      window.requestAnimationFrame(() => window.requestAnimationFrame(replay));
+    };
+
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointerup", onPointerUp, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+    };
+  }, [interactive]);
 
   // Enter commits the text box; Shift+Enter inserts a newline (Excalidraw's default).
   useEffect(() => {
@@ -471,8 +635,39 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
   }, [interactive]);
 
+  /**
+   * The board as everything above it sees it: paging undone.
+   *
+   * Capture, the coach's thumbnails, autosave and `board.json` all come through
+   * here, so a hidden page is a rendering state and nothing else — the file on
+   * disk is identical whether it was written from a tablet or a desktop.
+   */
   const elements = useCallback((): SceneElementLike[] => {
-    return (apiRef.current?.getSceneElements() ?? []) as SceneElementLike[];
+    const live = (apiRef.current?.getSceneElements() ?? []) as SceneElementLike[];
+    if (mobileRegionRef.current === null) return live;
+    return clearPageVisibility(live as unknown as PageableElement[]) as unknown as SceneElementLike[];
+  }, []);
+
+  /**
+   * Re-hide whatever the open page is not, after the scene changed, and keep
+   * the ink clip on the same box. Both are derived from the live frames, so
+   * resizing a region moves the page and its ink together.
+   */
+  const syncPageVisibility = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const live = api.getSceneElements() as unknown as PageableElement[];
+    const page = mobileRegionRef.current;
+
+    const bounds = pageBounds(live, page);
+    setInkClip((current) => (sameBounds(current, bounds) ? current : bounds));
+
+    const next = applyPageVisibility(live, page);
+    if (!next) return;
+    api.updateScene({
+      elements: next as unknown[],
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
   }, []);
 
   const reportCodeSlot = useCallback(() => {
@@ -1004,47 +1199,65 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     const focus = target.length > 0 ? target : live;
 
-    // Leave room for the floating toolbar; bottom inset is larger so fit prefers
-    // the upper viewport instead of vertically centering the stack. A paged fit
-    // wants the frame to fill the screen, so its insets are just the chrome.
-    api.scrollToContent(focus, {
-      fitToViewport: true,
-      viewportZoomFactor: paged ? 0.98 : 0.92,
-      animate: false,
-      canvasOffsets: paged
-        ? { top: 12, left: 56, right: 12, bottom: 56 }
-        : { top: 28, left: 72, right: 28, bottom: 120 },
-    });
-
-    // scrollToContent still centers within the inset — pin the focus block near
-    // the top-left so load matches the composed problem layout.
+    /*
+     * The zoom is computed here rather than by `scrollToContent`.
+     *
+     * Excalidraw's fit quantises the zoom to 0.1 steps and caps it at 1. This
+     * board is ~3900 units wide, so a tablet's honest fit is around 0.19 — and
+     * 0.19 floored to a 0.1 step is 0.1, half the size it asked for. That is
+     * why a page landed as a stamp in the corner with the whole column visible
+     * around it. Fitting by hand costs one `updateScene` and lands exactly.
+     */
     const state = api.getAppState() as {
-      scrollX?: number;
-      scrollY?: number;
-      zoom?: { value?: number };
+      width?: number;
+      height?: number;
     };
-    const zoom = state.zoom?.value ?? 1;
+    const viewWidth = num(state.width, 0);
+    const viewHeight = num(state.height, 0);
+    if (viewWidth < 1 || viewHeight < 1) return;
+
     let minX = Infinity;
     let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
     for (const element of focus) {
-      if (typeof element.x === "number") minX = Math.min(minX, element.x);
-      if (typeof element.y === "number") minY = Math.min(minY, element.y);
+      if (typeof element.x !== "number" || typeof element.y !== "number") continue;
+      minX = Math.min(minX, element.x);
+      minY = Math.min(minY, element.y);
+      maxX = Math.max(maxX, element.x + num(element.width, 0));
+      maxY = Math.max(maxY, element.y + num(element.height, 0));
     }
-    if (Number.isFinite(minX) && Number.isFinite(minY)) {
-      const topMargin = paged ? 14 : 36;
-      const leftMargin = paged ? 56 : 88;
-      // scene → screen: (scene + scroll) * zoom  (see Board.stamp)
-      api.updateScene({
-        appState: {
-          scrollX: leftMargin / zoom - minX,
-          scrollY: topMargin / zoom - minY,
-        },
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
-    }
-    setZoomPct(Math.round(readZoom() * 100));
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+
+    // Leave room for the floating toolbar; the bottom inset is larger so the
+    // fit prefers the upper viewport rather than centring the stack. A paged
+    // fit wants the frame to fill the screen, so its insets are just chrome.
+    const inset = paged
+      ? { top: 14, left: 56, right: 14, bottom: 62 }
+      : { top: 28, left: 72, right: 28, bottom: 120 };
+    const availWidth = Math.max(80, viewWidth - inset.left - inset.right);
+    const availHeight = Math.max(80, viewHeight - inset.top - inset.bottom);
+    const boxWidth = Math.max(1, maxX - minX);
+    const boxHeight = Math.max(1, maxY - minY);
+    const zoom = clampZoom(
+      Math.min(availWidth / boxWidth, availHeight / boxHeight) * (paged ? 1 : 0.98),
+    );
+
+    // Centre whatever axis has room to spare; the other one starts at its inset.
+    const slackX = Math.max(0, availWidth - boxWidth * zoom);
+    const slackY = paged ? Math.max(0, availHeight - boxHeight * zoom) : 0;
+    // scene → screen: (scene + scroll) * zoom  (see Board.stamp)
+    api.updateScene({
+      appState: {
+        zoom: { value: zoom },
+        scrollX: (inset.left + slackX / 2) / zoom - minX,
+        scrollY: (inset.top + slackY / 2) / zoom - minY,
+      },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    setZoomPct(Math.round(zoom * 100));
     requestAnimationFrame(reportCodeSlot);
-  }, [readZoom, reportCodeSlot]);
+  }, [reportCodeSlot]);
 
   /** Run fit after Excalidraw has applied scene + container size. */
   const scheduleFitView = useCallback(() => {
@@ -1333,11 +1546,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const previous = mobileRegionRef.current;
     mobileRegionRef.current = next;
     if (!interactive || previous === next) return;
+    // Hide the other pages *before* fitting: a page is the only thing on the
+    // canvas, so zooming out on a tablet shows one frame, not the whole column.
+    syncPageVisibility();
     reportCodeSlot();
     void settleFitView().then(() => {
       reportCodeSlot();
     });
-  }, [interactive, mobileRegion, reportCodeSlot, settleFitView]);
+  }, [interactive, mobileRegion, reportCodeSlot, settleFitView, syncPageVisibility]);
 
   const handleSceneChange = useCallback(
     (
@@ -1448,21 +1664,46 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (viaEnter || finishedText.length > 0) {
           setTool("hand");
         } else {
-          api.setActiveTool({ type: "text", locked: true });
+          // Do NOT re-set the tool here. Clicking away from an empty box *is*
+          // the click that places the next one, and re-entering the text tool
+          // mid-gesture threw away the element Excalidraw had just started —
+          // which is why placing used to cost two clicks. The tool is locked,
+          // so it stays on text by itself; this only recovers the case where
+          // Excalidraw dropped it, checked a frame later when the gesture is
+          // over.
+          window.requestAnimationFrame(() => {
+            const state = apiRef.current?.getAppState() as
+              | { activeTool?: { type?: string; locked?: boolean } }
+              | undefined;
+            if (state?.activeTool?.type === "text") return;
+            apiRef.current?.setActiveTool({ type: "text", locked: true });
+          });
         }
       }
       editingTextIdRef.current = editingId;
 
+      // Anything drawn, pasted or restored since the last change joins the page
+      // it landed on; everything else goes back under.
+      syncPageVisibility();
+
       onChange?.();
     },
-    [activeTool, applyRegionLayout, onChange, reportCodeSlot, setTool],
+    [activeTool, applyRegionLayout, onChange, reportCodeSlot, setTool, syncPageVisibility],
   );
 
   useImperativeHandle(
     ref,
     (): BoardHandle => ({
       getElements: elements,
-      setElements: (next) => apiRef.current?.updateScene({ elements: next }),
+      // Callers hand back what `getElements` gave them — unpaged — so the open
+      // page has to be re-applied on the way in.
+      setElements: (next) => {
+        const paged = applyPageVisibility(
+          next as PageableElement[],
+          mobileRegionRef.current,
+        );
+        apiRef.current?.updateScene({ elements: (paged ?? next) as unknown[] });
+      },
       convert,
       seedTemplate: (skeletons: Skeleton[]) => {
         seedSkeletonsRef.current = skeletons;
@@ -1481,6 +1722,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // empty board from before the problem loaded.
         requestAnimationFrame(() => {
           apiRef.current?.history?.clear();
+          syncPageVisibility();
           scheduleFitView();
         });
       },
@@ -1611,10 +1853,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (options?.skeletons?.length) {
           seedSkeletonsRef.current = options.skeletons;
         }
-        const healed = healBoardLayout(nextElements as SceneElementLike[], {
-          readingSize: readingSizeRef.current,
-          codeContentHeight: codeContentHeightRef.current ?? undefined,
-        });
+        // A board written on a tablet mid-page can only ever hold real values
+        // (`getElements` unpages), but clear it anyway: an older file, or one
+        // hand-edited, must not restore an invisible page.
+        const healed = healBoardLayout(
+          clearPageVisibility(nextElements as PageableElement[]) as unknown as SceneElementLike[],
+          {
+            readingSize: readingSizeRef.current,
+            codeContentHeight: codeContentHeightRef.current ?? undefined,
+          },
+        );
         // Keep a fit target so landing zooms to problem+code, not the full board.
         templateRef.current = healed as unknown[];
         // Drop saved zoom/pan — never pass zoom: undefined (Excalidraw crashes).
@@ -1629,11 +1877,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
         requestAnimationFrame(() => {
           apiRef.current?.history?.clear();
+          syncPageVisibility();
           scheduleFitView();
         });
       },
     }),
-    [convert, elements, fitCodeToSource, fitCurrentView, fitView, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, themeId, undoBoard, zoomIn, zoomOut],
+    [convert, elements, fitCodeToSource, fitCurrentView, fitView, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
@@ -1697,10 +1946,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             onUndo={undoBoard}
             onRedo={redoBoard}
           />
-          <div className="lc-map-controls">
+          <div
+            className={
+              bottomCenter ? "lc-map-controls lc-map-controls-paged" : "lc-map-controls"
+            }
+          >
             {onThemePick && (
               <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
             )}
+            {bottomCenter}
             <div className="lc-map-chrome-right">
               {mobile && (
                 <ReadingSizeControl value={readingSize} onChange={setReadingSize} />
@@ -1724,6 +1978,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           inkColor={inkColor}
           pressureSensitive={pressureSensitive}
           getViewport={getViewport}
+          clip={inkClip}
           onChange={onChange}
         />
       )}
@@ -1818,6 +2073,9 @@ function BoardToolbar({
   const [shapePhase, setShapePhase] = useState<"list" | "fade" | "mod">("list");
   const [imported, setImported] = useState<ImportedLibraryItem[]>(() => loadImportedLibrary());
   const [importError, setImportError] = useState<string | null>(null);
+  /** Reset asks first, in our own modal — never a browser confirm box. */
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const importRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -2012,15 +2270,7 @@ function BoardToolbar({
         className="lc-tool lc-tool-labeled"
         title="Reset to the original problem layout"
         aria-label="Reset board"
-        onClick={() => {
-          if (
-            window.confirm(
-              "Reset the board to the original problem layout? Drawings on the canvas will be cleared.",
-            )
-          ) {
-            onReset();
-          }
-        }}
+        onClick={() => setConfirmingReset(true)}
       >
         <ResetIcon />
         <span className="lc-tool-caption">Reset</span>
@@ -2212,9 +2462,93 @@ function BoardToolbar({
           )}
         </div>
       )}
+
+      <div className="lc-tool-sep" />
+
+      <button
+        type="button"
+        className={helpOpen ? "lc-tool lc-tool-active" : "lc-tool"}
+        title="Keyboard shortcuts"
+        aria-label="Keyboard shortcuts"
+        aria-expanded={helpOpen}
+        onClick={() => setHelpOpen((open) => !open)}
+      >
+        ?
+      </button>
+
+      {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
+
+      {confirmingReset && (
+        <ConfirmDialog
+          title="Reset the board?"
+          message="The board goes back to the original problem layout. Everything you drew, typed, or stamped on the canvas is cleared."
+          detail="Your solution code and the coach thread are not touched."
+          confirmLabel="Reset board"
+          cancelLabel="Keep my work"
+          onConfirm={() => {
+            setConfirmingReset(false);
+            onReset();
+          }}
+          onCancel={() => setConfirmingReset(false)}
+        />
+      )}
     </div>
   );
 }
+
+/**
+ * What the keyboard actually does on this board.
+ *
+ * Excalidraw's own single-key shortcuts are suppressed by the key guard in
+ * `Board`, because they belong to a UI this app hides: pressing `s` or `g` on a
+ * selected shape used to open a colour palette nobody asked for, and `1`–`9`
+ * silently swapped tools out from under the pen. What is left is this list, and
+ * this button is where you can read it.
+ */
+function ShortcutsHelp({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  return (
+    <div className="lc-shortcuts" role="dialog" aria-label="Keyboard shortcuts">
+      <header className="lc-shortcuts-head">
+        <strong>Keyboard</strong>
+        <button type="button" className="lc-link" onClick={onClose}>
+          close
+        </button>
+      </header>
+      <dl className="lc-shortcuts-list">
+        {BOARD_SHORTCUTS.map(([keys, what]) => (
+          <div key={keys} className="lc-shortcut">
+            <dt>{keys}</dt>
+            <dd>{what}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="lc-muted lc-shortcuts-note">
+        Tools are the strip on the left — no single-key shortcuts, so nothing changes under
+        your pen by accident.
+      </p>
+    </div>
+  );
+}
+
+const BOARD_SHORTCUTS: Array<[string, string]> = [
+  ["Ctrl / ⌘ + Z", "Undo"],
+  ["Ctrl / ⌘ + Shift + Z", "Redo"],
+  ["Scroll", "Zoom toward the pointer"],
+  ["Shift + scroll", "Pan sideways"],
+  ["Space + drag", "Pan"],
+  ["Delete / Backspace", "Delete the selection"],
+  ["Escape", "Deselect / close a popover"],
+  ["Enter", "Finish a text box (Shift + Enter for a new line)"],
+  ["Arrow keys", "Nudge the selection"],
+];
 
 function PinkEraserIcon() {
   return (

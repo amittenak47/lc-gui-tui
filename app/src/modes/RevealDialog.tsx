@@ -3,14 +3,13 @@
  *
  * The daemon refuses to read the reference solution unless the request carries
  * `confirm_reveal: true`, and this dialog is the only thing in the app that sets
- * it. Consent is a 1s hold on Reveal (water-fill), not a checkbox.
+ * it. Consent is a 1s hold on Reveal (water-fill), not a checkbox — the gesture
+ * itself lives in {@link HoldButton}, which every other irreversible choice in
+ * the app now shares.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-
 import type { BridgeResponse } from "../api/types";
-
-const HOLD_MS = 1000;
+import { HoldButton } from "../components/HoldButton";
 
 export interface RevealDialogProps {
   taskId: string;
@@ -30,57 +29,6 @@ export function RevealDialog({
   pending,
   error,
 }: RevealDialogProps) {
-  const [holdProgress, setHoldProgress] = useState(0);
-  const holdingRef = useRef(false);
-  const rafRef = useRef<number | null>(null);
-  const startRef = useRef(0);
-  const confirmedRef = useRef(false);
-
-  const stopHold = useCallback((reset: boolean) => {
-    holdingRef.current = false;
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-    if (reset && !confirmedRef.current) setHoldProgress(0);
-  }, []);
-
-  const tick = useCallback(() => {
-    if (!holdingRef.current) return;
-    const elapsed = performance.now() - startRef.current;
-    const next = Math.min(1, elapsed / HOLD_MS);
-    setHoldProgress(next);
-    if (next >= 1) {
-      holdingRef.current = false;
-      confirmedRef.current = true;
-      setHoldProgress(1);
-      onConfirm();
-      return;
-    }
-    rafRef.current = requestAnimationFrame(tick);
-  }, [onConfirm]);
-
-  const startHold = useCallback(() => {
-    if (pending || confirmedRef.current) return;
-    holdingRef.current = true;
-    startRef.current = performance.now();
-    setHoldProgress(0);
-    rafRef.current = requestAnimationFrame(tick);
-  }, [pending, tick]);
-
-  useEffect(() => () => stopHold(false), [stopHold]);
-
-  useEffect(() => {
-    if (!pending && error) {
-      confirmedRef.current = false;
-      setHoldProgress(0);
-    }
-  }, [pending, error]);
-
-  useEffect(() => {
-    if (pending) stopHold(false);
-  }, [pending, stopHold]);
-
   return (
     <div className="lc-modal-backdrop" role="dialog" aria-modal="true" aria-label="Reveal reference">
       <div className={`lc-modal${pending ? " lc-modal-pending" : ""}`}>
@@ -111,37 +59,13 @@ export function RevealDialog({
               <button type="button" className="lc-secondary" onClick={onCancel}>
                 Keep trying
               </button>
-              <button
-                type="button"
-                className="lc-hold-reveal"
-                style={{ ["--lc-hold" as string]: String(holdProgress) }}
-                aria-label="Hold to reveal for one second"
-                onPointerDown={(event) => {
-                  event.preventDefault();
-                  (event.currentTarget as HTMLButtonElement).setPointerCapture(event.pointerId);
-                  startHold();
-                }}
-                onPointerUp={() => stopHold(true)}
-                onPointerCancel={() => stopHold(true)}
-                onPointerLeave={() => {
-                  if (holdingRef.current) stopHold(true);
-                }}
-                onContextMenu={(event) => event.preventDefault()}
-                onKeyDown={(event) => {
-                  if (event.repeat) return;
-                  if (event.key === " " || event.key === "Enter") {
-                    event.preventDefault();
-                    if (!holdingRef.current) startHold();
-                  }
-                }}
-                onKeyUp={(event) => {
-                  if (event.key === " " || event.key === "Enter") stopHold(true);
-                }}
-                onBlur={() => stopHold(true)}
-              >
-                <span className="lc-hold-reveal-fill" aria-hidden />
-                <span className="lc-hold-reveal-label">Reveal</span>
-              </button>
+              <HoldButton
+                label="Reveal"
+                ariaLabel="Hold to reveal for one second"
+                disabled={pending}
+                onConfirm={onConfirm}
+                resetKey={error}
+              />
             </div>
           </>
         )}

@@ -3017,6 +3017,79 @@ button.lc-row-selected:hover:not(:disabled) {
   cursor: default;
 }
 
+/* Destructive holds (discard, reset session, reset board) fill red, not accent. */
+.lc-hold-danger {
+  background: color-mix(in srgb, var(--bad) 24%, transparent);
+}
+
+.lc-hold-danger .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bad) 78%, #fff 12%) 0%,
+    var(--bad) 55%,
+    color-mix(in srgb, var(--bad) 82%, #000 18%) 100%
+  );
+}
+
+/*
+ * The same gesture as a full-width choice row — save-or-discard asks two
+ * questions at once, and each answer has to be held rather than tapped.
+ */
+.lc-hold-choice {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border, rgb(127 127 127 / 25%));
+  border-radius: 10px;
+  background: var(--surface, var(--bg));
+  color: var(--ink);
+  font-weight: 400;
+  text-align: left;
+  transition: border-color 120ms ease-out;
+}
+
+.lc-hold-choice:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border, transparent));
+}
+
+.lc-hold-danger.lc-hold-choice:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--bad) 50%, var(--border, transparent));
+}
+
+.lc-hold-choice .lc-hold-reveal-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.lc-hold-choice strong {
+  font-size: 13.5px;
+}
+
+.lc-hold-choice .lc-muted {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Softer fill than the pill buttons: the row's own text stays readable on top. */
+.lc-hold-choice .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 20%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 34%, transparent) 100%
+  );
+}
+
+.lc-hold-danger.lc-hold-choice .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bad) 18%, transparent) 0%,
+    color-mix(in srgb, var(--bad) 32%, transparent) 100%
+  );
+}
+
 .lc-modal-pending {
   min-height: 160px;
   display: grid;
@@ -3322,53 +3395,80 @@ button.lc-row-selected:hover:not(:disabled) {
   position: relative;
 }
 
-@media (max-width: 900px) {
-  .lc-app-coach-open .lc-main {
-    margin-right: 0;
-    margin-bottom: 45vh;
-  }
+/* ---------------------------------------------------------------------------
+ * Coach as a bottom sheet.
+ *
+ * Keyed on `.lc-mobile` rather than a media query, because the two disagreed:
+ * the class is set for a coarse pointer up to 1280px, so an iPad in landscape
+ * got the *phone* class and the *desktop* panel rules. The result was a
+ * full-width panel still obeying `.lc-app-problem .lc-side { top: header }` —
+ * it covered the canvas from the header down while the board was pushed into
+ * the strip underneath it.
+ *
+ * One height variable drives both the sheet and the room the canvas gives up,
+ * so they can never drift apart again.
+ * ------------------------------------------------------------------------ */
 
-  .lc-app-coach-open .lc-header {
-    border-bottom-color: var(--chrome-edge);
-  }
+.lc-mobile {
+  --lc-coach-sheet: min(46vh, 460px);
+}
 
-  .lc-app-coach-open .lc-header::after {
-    display: none;
-  }
+.lc-mobile.lc-app-coach-open .lc-main {
+  margin-right: 0;
+  margin-bottom: var(--lc-coach-sheet);
+}
 
-  .lc-side {
-    top: auto;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    width: auto;
-    max-height: 45vh;
-    border-left: none;
-    border-top: 1px solid var(--chrome-edge);
-    box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
-  }
+.lc-mobile.lc-app-coach-open .lc-header {
+  border-bottom-color: var(--chrome-edge);
+}
 
-  .lc-app-coach-open .lc-side {
-    box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
-  }
+/* The desktop rule stops the header rule short of the side panel; a sheet at
+   the bottom of the screen never interrupts it. */
+.lc-mobile.lc-app-coach-open .lc-header::after {
+  display: none;
+}
 
-  .lc-coach-toggle-open {
-    border-radius: 6px;
-    border-color: var(--accent);
-    background: var(--accent);
-    color: #fff;
-  }
+.lc-mobile .lc-side,
+.lc-mobile.lc-app-problem .lc-side {
+  top: auto;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  height: var(--lc-coach-sheet);
+  max-height: none;
+  border-left: none;
+  border-top: 1px solid var(--chrome-edge);
+  box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
+}
 
-  .lc-side-tab-wrap {
-    top: auto;
-    bottom: 12px;
-    right: 12px;
-  }
+.lc-mobile.lc-app-coach-open .lc-side {
+  border-top: 1px solid var(--chrome-edge);
+  box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
+}
 
-  .lc-side-tab {
-    border-radius: 8px;
-    border-right: 1px solid var(--line);
-  }
+.lc-mobile .lc-coach-toggle-open {
+  border-radius: 6px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.lc-mobile .lc-side-tab-wrap {
+  top: auto;
+  bottom: 12px;
+  right: 12px;
+}
+
+.lc-mobile .lc-side-tab {
+  border-radius: 8px;
+  border-right: 1px solid var(--line);
+}
+
+/* The composer is the reason to open the sheet — keep it compact so the thread
+   above it is still worth reading on a tablet. */
+.lc-mobile .lc-coach-composer textarea {
+  min-height: 54px;
 }
 
 /* ------------------------------------------------------------ mobile UI --- */
@@ -3556,14 +3656,107 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 12px;
 }
 
+/* ---------------------------------------------------------------------------
+ * Keyboard help — the `?` in the toolbar.
+ *
+ * Only what the board actually honours: Excalidraw's own single-key shortcuts
+ * are blocked, so this list is the whole truth rather than a subset of theirs.
+ * ------------------------------------------------------------------------ */
+
+.lc-shortcuts {
+  position: absolute;
+  left: calc(100% + 8px);
+  bottom: 0;
+  z-index: 30;
+  width: min(340px, 74vw);
+  padding: 10px 12px 12px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
+}
+
+.lc-shortcuts-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.lc-shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+}
+
+.lc-shortcut {
+  display: grid;
+  grid-template-columns: minmax(0, 150px) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.lc-shortcut dt {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+.lc-shortcut dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lc-shortcuts-note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.lc-mobile .lc-shortcuts {
+  left: calc(100% + 6px);
+  bottom: 6px;
+  width: min(300px, 68vw);
+}
+
 /* --- region pager --- */
 
+/*
+ * Appearance · page turner · zoom share one row.
+ *
+ * The pager used to float over the row on its own `left: 50%`, which put it a
+ * few pixels off the others' baseline and, on a narrow tablet, straight on top
+ * of the Appearance button. As a grid child it is centred against the board
+ * rather than against whatever the side clusters happen to be — the columns are
+ * assigned explicitly so a missing cluster cannot shift it.
+ */
+.lc-map-controls-paged {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+.lc-map-controls-paged .lc-palette-compact {
+  grid-column: 1;
+  justify-self: start;
+}
+
+.lc-map-controls-paged .lc-pager {
+  grid-column: 2;
+  justify-self: center;
+}
+
+.lc-map-controls-paged .lc-map-chrome-right {
+  grid-column: 3;
+  justify-self: end;
+}
+
 .lc-pager {
-  position: absolute;
+  position: relative;
   z-index: 16;
-  left: 50%;
-  bottom: 8px;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 2px;
@@ -3572,7 +3765,8 @@ button.lc-row-selected:hover:not(:disabled) {
   border-radius: 999px;
   background: var(--surface);
   box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
-  max-width: calc(100% - 92px);
+  max-width: 100%;
+  min-width: 0;
 }
 
 .lc-pager-step {

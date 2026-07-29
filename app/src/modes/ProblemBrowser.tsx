@@ -259,6 +259,9 @@ export function ProblemBrowser({
   // behaves the way it does in the terminal.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // A modal owns the keyboard while it is up — otherwise holding Space on
+      // "Reset session" also adds the highlighted row to the picks.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       const target = event.target as HTMLElement | null;
       const typing =
         target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT";

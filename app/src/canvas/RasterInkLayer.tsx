@@ -17,6 +17,7 @@ import {
   scenePointFromPointer,
   stampAlongSegment,
   type InkOp,
+  type SceneBounds,
   type ViewportTransform,
 } from "./rasterInk";
 
@@ -42,12 +43,17 @@ export interface RasterInkLayerProps {
   inkColor: string;
   pressureSensitive: boolean;
   getViewport: () => ViewportTransform | null;
+  /**
+   * Scene box the ink is allowed to show inside — the open page on a tablet,
+   * `null` on the desktop's single stacked canvas.
+   */
+  clip?: SceneBounds | null;
   onChange?: () => void;
 }
 
 export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
   function RasterInkLayer(
-    { enabled, tool, strokeWidth, inkColor, pressureSensitive, getViewport, onChange },
+    { enabled, tool, strokeWidth, inkColor, pressureSensitive, getViewport, clip = null, onChange },
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -57,6 +63,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const liveRef = useRef<InkOp | null>(null);
     const drawingRef = useRef(false);
     const lastPointRef = useRef<ReturnType<typeof scenePointFromPointer> | null>(null);
+    // Read through a ref so a page turn doesn't rebuild `repaint` and with it
+    // every pointer listener on the layer.
+    const clipRef = useRef<SceneBounds | null>(clip);
+    clipRef.current = clip;
 
     const alignToExcalidraw = useCallback((canvas: HTMLCanvasElement) => {
       const board = canvas.parentElement;
@@ -88,7 +98,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         canvas.style.width = `${cssW}px`;
         canvas.style.height = `${cssH}px`;
       }
-      paintRasterInk(ctx, viewport, opsRef.current, liveRef.current, dpr);
+      paintRasterInk(ctx, viewport, opsRef.current, liveRef.current, dpr, clipRef.current);
     }, [alignToExcalidraw, getViewport]);
 
     const commitLive = useCallback(() => {
@@ -169,7 +179,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
     useEffect(() => {
       repaint();
-    }, [enabled, strokeWidth, inkColor, pressureSensitive, repaint]);
+    }, [enabled, strokeWidth, inkColor, pressureSensitive, clip, repaint]);
 
     useEffect(() => {
       if (!enabled) return;

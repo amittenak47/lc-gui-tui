@@ -129,6 +129,12 @@ export function paintRasterInk(
   ops: readonly InkOp[],
   liveOp: InkOp | null,
   dpr: number,
+  /**
+   * Scene box to paint inside, or `null` for the whole canvas. Pen ink is
+   * pixels rather than scene elements, so hiding an off-page element is not
+   * enough — the tablet's one-page view clips the ink layer to the same box.
+   */
+  clip: SceneBounds | null = null,
 ): void {
   const { zoom, scrollX, scrollY, width, height } = viewport;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -145,6 +151,13 @@ export function paintRasterInk(
     scrollY * zoom * dpr,
   );
 
+  if (clip) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+    ctx.clip();
+  }
+
   for (const op of ops) {
     if (op.kind === "draw") drawStroke(ctx, op);
     else eraseStamps(ctx, op);
@@ -156,6 +169,7 @@ export function paintRasterInk(
   }
 
   ctx.globalCompositeOperation = "source-over";
+  if (clip) ctx.restore();
 }
 
 /** Axis-aligned box in scene coordinates. */
