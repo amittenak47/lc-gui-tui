@@ -62,6 +62,7 @@ import { buildProblemTemplate } from "./templates/problemBoard";
 import { REGIONS, STUDENT_REGION_ORDER, type RegionId } from "./templates/regions";
 import { splitProblemKey } from "./util/datasetKey";
 import { isMobileViewport, useIsMobile } from "./util/mobile";
+import { installSafeAreaInsets } from "./util/safeArea";
 import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
@@ -90,6 +91,12 @@ type Mode = "review" | "ambient";
 
 export function App() {
   const mobile = useIsMobile();
+
+  useEffect(() => {
+    if (!mobile) return;
+    return installSafeAreaInsets();
+  }, [mobile]);
+
   /**
    * Mobile paging. Desktop keeps the one wide stacked canvas; on a tablet each
    * dashed template frame gets the viewport to itself, in the order a session

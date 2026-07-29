@@ -16,6 +16,7 @@ export type RegionId =
   | "approach"
   | "complexity"
   | "walkthrough"
+  | "scratch"
   | "agent";
 
 export interface Region {
@@ -60,6 +61,7 @@ export const REGION_MIN: Record<RegionId, { minW: number; minH: number }> = {
   approach: { minW: 1680, minH: 980 },
   complexity: { minW: 1680, minH: 448 },
   walkthrough: { minW: 1680, minH: 784 },
+  scratch: { minW: 1680, minH: 784 },
   agent: { minW: AGENT_WIDTH, minH: 1260 },
 };
 
@@ -67,7 +69,9 @@ const CODE_Y = CONSTRAINTS_H + GUTTER;
 const APPROACH_Y = CODE_Y + CODE_H + GUTTER;
 const COMPLEXITY_Y = APPROACH_Y + APPROACH_H + GUTTER;
 const WALKTHROUGH_Y = COMPLEXITY_Y + COMPLEXITY_H + GUTTER;
-const TOTAL_H = WALKTHROUGH_Y + WALKTHROUGH_H;
+const SCRATCH_Y = WALKTHROUGH_Y + WALKTHROUGH_H + GUTTER;
+const SCRATCH_H = 1960;
+const TOTAL_H = SCRATCH_Y + SCRATCH_H;
 
 /** Student columns, top to bottom — used when reflowing resizable frames. */
 export const STUDENT_REGION_ORDER: RegionId[] = [
@@ -76,6 +80,7 @@ export const STUDENT_REGION_ORDER: RegionId[] = [
   "approach",
   "complexity",
   "walkthrough",
+  "scratch",
 ];
 
 export const REGIONS: Record<RegionId, Region> = {
@@ -118,6 +123,14 @@ export const REGIONS: Record<RegionId, Region> = {
     y: WALKTHROUGH_Y,
     w: STUDENT_WIDTH,
     h: WALKTHROUGH_H,
+  },
+  scratch: {
+    id: "scratch",
+    label: "Scratch",
+    x: 0,
+    y: SCRATCH_Y,
+    w: STUDENT_WIDTH,
+    h: SCRATCH_H,
   },
   agent: {
     id: "agent",
