@@ -65,8 +65,9 @@ pub fn load_task(path: &Path, task_id: &str) -> Result<Problem> {
             path.display()
         );
     } else {
-        let problem: Problem = serde_json::from_str(&raw)
+        let mut problem: Problem = serde_json::from_str(&raw)
             .with_context(|| format!("cannot parse problem JSON {}", path.display()))?;
+        datasets::sanitize_entry_point(&mut problem);
         if problem.task_id != task_id {
             bail!(
                 "problem file {} contains {:?}, not {:?}",
@@ -245,8 +246,16 @@ fn parse_json_corpus(raw: &str, path: &Path) -> Result<Vec<Problem>> {
     let corpus: JsonCorpus = serde_json::from_str(raw)
         .with_context(|| format!("cannot parse problem JSON {}", path.display()))?;
     Ok(match corpus {
-        JsonCorpus::One(problem) => vec![problem],
-        JsonCorpus::Many(problems) => problems,
+        JsonCorpus::One(mut problem) => {
+            datasets::sanitize_entry_point(&mut problem);
+            vec![problem]
+        }
+        JsonCorpus::Many(mut problems) => {
+            for problem in &mut problems {
+                datasets::sanitize_entry_point(problem);
+            }
+            problems
+        }
     })
 }
 
@@ -266,13 +275,14 @@ fn load_all_jsonl(path: &Path) -> Result<Vec<Problem>> {
         if line.is_empty() {
             continue;
         }
-        let problem: Problem = serde_json::from_str(line).with_context(|| {
+        let mut problem: Problem = serde_json::from_str(line).with_context(|| {
             format!(
                 "cannot parse problem JSON {} (line {})",
                 path.display(),
                 line_no + 1
             )
         })?;
+        datasets::sanitize_entry_point(&mut problem);
         out.push(problem);
     }
     Ok(out)
@@ -287,13 +297,14 @@ fn load_task_jsonl(path: &Path, task_id: &str) -> Result<Problem> {
         if line.is_empty() {
             continue;
         }
-        let problem: Problem = serde_json::from_str(line).with_context(|| {
+        let mut problem: Problem = serde_json::from_str(line).with_context(|| {
             format!(
                 "cannot parse problem JSON {} (line {})",
                 path.display(),
                 line_no + 1
             )
         })?;
+        datasets::sanitize_entry_point(&mut problem);
         if problem.task_id == task_id {
             return Ok(problem);
         }

@@ -412,6 +412,11 @@ pub struct ReviewResponse {
     /// Set by the daemon when the model cited a case index that does not exist
     /// and the citation was dropped. Never set by the model.
     pub counterexample_rejected: Option<String>,
+    /// Present when layout and code were reviewed in separate LLM passes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_verdict: Option<Verdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_verdict: Option<Verdict>,
 }
 
 pub fn build_review_prompt(
@@ -865,6 +870,251 @@ pub fn build_bridge_prompt(
 
 pub fn parse_bridge(raw: &str) -> Result<BridgeResponse> {
     parse_reply(raw, "bridge")
+}
+
+// ---------------------------------------------------------------------------
+// Lazy fill — write the parts of solution.py the student already earned
+// ---------------------------------------------------------------------------
+
+pub const LAZY_FILL_SYSTEM_PROMPT: &str = "The student sketched an approach on a whiteboard. \
+Your job is to write ONLY the parts of the Python solution that their board already justifies — \
+the \"lazy\" fill. Do not invent the hard remainder.\n\
+\n\
+Rules:\n\
+- Read the board / recognized text as the source of truth for what they figured out.\n\
+- Emit a complete `solution.py` (or class Solution body) that implements those parts.\n\
+- Leave unfinished work as `pass`, `raise NotImplementedError`, or a clear `# TODO:`.\n\
+- Do NOT dump a full working reference solution.\n\
+- Reply with a single JSON object and nothing else.";
+
+pub const LAZY_HINT_SYSTEM_PROMPT: &str = "The student confirmed a Lazy hint. You may look at the \
+reference solution, but you must still only write the parts that match what they already have \
+on the board. Fill in the easy / already-correct pieces; leave the missing idea as TODO/pass.\n\
+\n\
+Rules:\n\
+- Use the reference to get syntax and naming right for the parts they earned.\n\
+- Do not paste the full reference.\n\
+- Reply with a single JSON object and nothing else.";
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LazyFillResponse {
+    /// Full `solution.py` text to write into the workspace.
+    pub filled_code: String,
+    /// Short note of what was filled vs left for the student.
+    pub note: String,
+}
+
+/// Lazy fill without a reference (composer Lazy flag).
+pub fn build_lazy_fill_prompt(
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+) -> String {
+    let mut out = String::new();
+    write_problem_header(&mut out, meta, description);
+    board.write_into(&mut out);
+    let _ = writeln!(
+        out,
+        "\n## Your reply\n\n\
+         ```json\n\
+         {{\"filled_code\": \"# full solution.py text\\n...\", \
+         \"note\": \"one or two sentences: what you filled vs left as TODO\"}}\n\
+         ```"
+    );
+    out
+}
+
+/// Lazy fill after Hint confirm — reference is allowed for the earned parts only.
+pub fn build_lazy_hint_prompt(
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+    reference: &str,
+) -> String {
+    let mut out = String::new();
+    write_problem_header(&mut out, meta, description);
+    board.write_into(&mut out);
+    let _ = writeln!(
+        out,
+        "\n## Reference solution (use only to flesh out what they already earned)\n\n\
+         ```python\n{}\n```",
+        clip(reference.trim(), MAX_REFERENCE)
+    );
+    let _ = writeln!(
+        out,
+        "\n## Your reply\n\n\
+         ```json\n\
+         {{\"filled_code\": \"# full solution.py text\\n...\", \
+         \"note\": \"what you filled vs left for them\"}}\n\
+         ```"
+    );
+    out
+}
+
+pub fn parse_lazy_fill(raw: &str) -> Result<LazyFillResponse> {
+    let mut parsed: LazyFillResponse = parse_reply(raw, "lazy fill")?;
+    parsed.filled_code = parsed.filled_code.trim().to_string();
+    if parsed.filled_code.is_empty() {
+        anyhow::bail!("lazy fill returned empty filled_code");
+    }
+    Ok(parsed)
+}
+
+/// Prompt that scores only the sketched layout (no code dock).
+pub fn build_layout_review_prompt(
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+) -> String {
+    let mut layout_only = board.clone();
+    layout_only.pseudocode = None;
+    layout_only.pseudocode_delta = None;
+    layout_only.code_mode = None;
+    let mut out = String::new();
+    write_problem_header(&mut out, meta, description);
+    write_cases(&mut out, &meta.cases);
+    layout_only.write_into(&mut out);
+    let _ = writeln!(
+        out,
+        "\n## Focus\n\nAssess ONLY the whiteboard layout / ink / typed notes on the board. \
+         Ignore any solution.py — it is reviewed separately.\n\n\
+         ## Your reply\n\n\
+         Return exactly this JSON shape:\n\n\
+         ```json\n\
+         {{\n  \
+           \"understood_approach\": \"one short sentence from the board alone\",\n  \
+           \"verdict\": \"on_track | subtly_wrong | wrong_track | unclear\",\n  \
+           \"rating\": {{\"correctness\": 1-5, \"complexity\": 1-5, \"clarity\": 1-5}},\n  \
+           \"strengths\": [\"board strengths\"],\n  \
+           \"gaps\": [\"board gaps\"],\n  \
+           \"counterexample\": null,\n  \
+           \"socratic_question\": \"a board-focused next step\",\n  \
+           \"offer_bridge\": false\n\
+         }}\n\
+         ```"
+    );
+    out
+}
+
+/// Prompt that scores only solution.py / the code dock.
+pub fn build_code_review_prompt(
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+) -> String {
+    let mut out = String::new();
+    write_problem_header(&mut out, meta, description);
+    write_cases(&mut out, &meta.cases);
+    if !board.app_messages.is_empty() {
+        let _ = writeln!(out, "\n## App messages (test facts)");
+        for msg in &board.app_messages {
+            let _ = writeln!(out, "\n{}", clip(msg, MAX_BOARD));
+        }
+    }
+    let code = board.pseudocode.as_deref().unwrap_or("").trim();
+    let _ = writeln!(
+        out,
+        "\n## Code dock (solution.py)\n\n```python\n{}\n```",
+        clip(if code.is_empty() { "(empty)" } else { code }, MAX_BOARD)
+    );
+    let _ = writeln!(
+        out,
+        "\n## Focus\n\nAssess ONLY this code. The whiteboard was reviewed separately — \
+         do not assume the board is wrong or right based on the code alone.\n\n\
+         ## Your reply\n\n\
+         Return exactly this JSON shape:\n\n\
+         ```json\n\
+         {{\n  \
+           \"understood_approach\": \"one short sentence from the code alone\",\n  \
+           \"verdict\": \"on_track | subtly_wrong | wrong_track | unclear\",\n  \
+           \"rating\": {{\"correctness\": 1-5, \"complexity\": 1-5, \"clarity\": 1-5}},\n  \
+           \"strengths\": [\"code strengths\"],\n  \
+           \"gaps\": [\"code gaps\"],\n  \
+           \"counterexample\": {{\"case_index\": <0-based or null>, \
+              \"why_your_approach_fails\": \"...\"}},\n  \
+           \"socratic_question\": \"a code-focused next step\",\n  \
+           \"offer_bridge\": true\n\
+         }}\n\
+         ```"
+    );
+    out
+}
+
+/// Merge separate layout and code reviews into one card for the client.
+pub fn merge_layout_and_code_reviews(
+    layout: ReviewResponse,
+    code: ReviewResponse,
+) -> ReviewResponse {
+    let mut merged = ReviewResponse::default();
+    merged.understood_approach = if !layout.understood_approach.trim().is_empty() {
+        format!(
+            "Board: {} | Code: {}",
+            layout.understood_approach.trim(),
+            if code.understood_approach.trim().is_empty() {
+                "(empty)"
+            } else {
+                code.understood_approach.trim()
+            }
+        )
+    } else {
+        code.understood_approach.clone()
+    };
+    merged.verdict = worse_verdict(layout.verdict, code.verdict);
+    merged.rating = Rating {
+        correctness: ((layout.rating.correctness + code.rating.correctness) as f32 / 2.0).round()
+            as u8,
+        complexity: ((layout.rating.complexity + code.rating.complexity) as f32 / 2.0).round() as u8,
+        clarity: ((layout.rating.clarity + code.rating.clarity) as f32 / 2.0).round() as u8,
+    };
+    merged.rating.clamp();
+    merged.strengths = [
+        prefix_notes("layout", &layout.strengths),
+        prefix_notes("code", &code.strengths),
+    ]
+    .concat();
+    merged.gaps = [prefix_notes("layout", &layout.gaps), prefix_notes("code", &code.gaps)].concat();
+    merged.counterexample = code.counterexample.or(layout.counterexample);
+    merged.counterexample_rejected = code
+        .counterexample_rejected
+        .or(layout.counterexample_rejected);
+    merged.socratic_question = {
+        let mut parts = Vec::new();
+        if !layout.socratic_question.trim().is_empty() {
+            parts.push(format!("Board: {}", layout.socratic_question.trim()));
+        }
+        if !code.socratic_question.trim().is_empty() {
+            parts.push(format!("Code: {}", code.socratic_question.trim()));
+        }
+        parts.join("\n")
+    };
+    merged.offer_bridge = layout.offer_bridge || code.offer_bridge;
+    merged.layout_verdict = Some(layout.verdict);
+    merged.code_verdict = Some(code.verdict);
+    merged
+}
+
+fn prefix_notes(tag: &str, notes: &[String]) -> Vec<String> {
+    notes
+        .iter()
+        .filter(|n| !n.trim().is_empty())
+        .map(|n| format!("[{tag}] {n}"))
+        .collect()
+}
+
+fn worse_verdict(a: Verdict, b: Verdict) -> Verdict {
+    use Verdict::*;
+    let rank = |v: Verdict| match v {
+        Unclear => 0,
+        OnTrack => 1,
+        SubtlyWrong => 2,
+        WrongTrack => 3,
+    };
+    if rank(a) >= rank(b) {
+        a
+    } else {
+        b
+    }
 }
 
 // ---------------------------------------------------------------------------

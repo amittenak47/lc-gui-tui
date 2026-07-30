@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef } from "react";
 import editorWorker from "monaco-editor/editor/editor.worker.js?worker";
 
 import { APP_THEMES } from "../theme/appThemes";
+import { useIsMobile } from "../util/mobile";
 import type { CodeFontSize } from "./codeFontSize";
 import { codeFontPx } from "./codeFontSize";
 
@@ -88,6 +89,48 @@ function ensureMonacoTheme(themeId: string): string {
   return name;
 }
 
+/**
+ * Soft keyboards only autocorrect when the underlying textarea opts in.
+ * Monaco never sets these; on tablets we ask the OS keyboard to help, knowing
+ * it will still be spotty (Monaco is not a normal contenteditable field).
+ */
+function enableTabletKeyboardHelpers(editor: monaco.editor.IStandaloneCodeEditor): void {
+  const root = editor.getDomNode();
+  if (!root) return;
+  for (const node of root.querySelectorAll("textarea")) {
+    node.setAttribute("autocorrect", "on");
+    node.setAttribute("autocapitalize", "sentences");
+    node.setAttribute("autocomplete", "on");
+    node.setAttribute("spellcheck", "true");
+  }
+}
+
+function tabletSuggestOptions(mobile: boolean): monaco.editor.IStandaloneEditorConstructionOptions {
+  if (!mobile) {
+    return {
+      quickSuggestions: false,
+      suggestOnTriggerCharacters: false,
+      wordBasedSuggestions: "off",
+      acceptSuggestionOnEnter: "off",
+      tabCompletion: "off",
+    };
+  }
+  return {
+    // Completions from words already in solution.py — the practical stand-in
+    // for autocorrect when typing on a tablet keyboard.
+    quickSuggestions: { other: true, comments: false, strings: false },
+    suggestOnTriggerCharacters: true,
+    wordBasedSuggestions: "currentDocument",
+    acceptSuggestionOnEnter: "on",
+    tabCompletion: "on",
+    suggest: {
+      showWords: true,
+      preview: true,
+      selectionMode: "always",
+    },
+  };
+}
+
 export interface MonacoBlockProps {
   value: string;
   language: string;
@@ -111,6 +154,7 @@ export default function MonacoBlock({
   onChange,
   onReady,
 }: MonacoBlockProps) {
+  const mobile = useIsMobile();
   const monacoTheme = useMemo(() => ensureMonacoTheme(themeId), [themeId]);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const fontSize = codeFontPx(fontSizePref, zoom);
@@ -140,6 +184,13 @@ export default function MonacoBlock({
     });
   }, [fontSize]);
 
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.updateOptions(tabletSuggestOptions(mobile));
+    if (mobile) enableTabletKeyboardHelpers(editor);
+  }, [mobile]);
+
   return (
     <Editor
       height={height}
@@ -161,7 +212,9 @@ export default function MonacoBlock({
             verticalHasArrows: false,
             horizontalHasArrows: false,
           },
+          ...tabletSuggestOptions(mobile),
         });
+        if (mobile) enableTabletKeyboardHelpers(editor);
         onReady();
         editor.layout();
       }}
@@ -191,8 +244,7 @@ export default function MonacoBlock({
           verticalHasArrows: false,
           horizontalHasArrows: false,
         },
-        quickSuggestions: false,
-        suggestOnTriggerCharacters: false,
+        ...tabletSuggestOptions(false),
         automaticLayout: true,
       }}
     />

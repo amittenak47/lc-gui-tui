@@ -70,6 +70,14 @@ export function ReviewPanel({
         </>
       )}
 
+      {(review.layout_verdict || review.code_verdict) && (
+        <p className="lc-muted">
+          Assessed separately
+          {review.layout_verdict ? ` · board: ${review.layout_verdict}` : ""}
+          {review.code_verdict ? ` · code: ${review.code_verdict}` : ""}
+        </p>
+      )}
+
       {review.gaps.length > 0 && (
         <>
           <h3>Gaps</h3>

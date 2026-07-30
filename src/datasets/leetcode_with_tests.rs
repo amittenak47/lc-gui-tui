@@ -20,7 +20,8 @@
 use serde_json::Value;
 
 use super::{
-    as_markdown, asserts_as_check_suite, cases_from_asserts, difficulty, entry_point_from_code,
+    as_markdown, asserts_as_check_suite, cases_from_asserts, clean_entry_point, difficulty,
+    entry_point_from_code,
     slugify, split_markdown_fence, tags, text, with_imports_and_solution,
 };
 use crate::problem::Problem;
@@ -59,6 +60,7 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         })?;
 
     let entry_point = text(raw, &["entry_point", "func_name", "function_name"])
+        .map(|e| clean_entry_point(&e))
         .or_else(|| entry_point_from_code(&declaration))
         .or_else(|| fence_code.as_deref().and_then(entry_point_from_code))?;
 

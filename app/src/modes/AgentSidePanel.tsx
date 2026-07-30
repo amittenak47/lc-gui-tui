@@ -85,6 +85,11 @@ export interface CoachSendFlags {
   draw: boolean;
   /** Attach the current board (and code dock) to the request. */
   reviewBoard: boolean;
+  /**
+   * Fill the parts of solution.py the board already justifies (no reference
+   * dump). Works with Draw / Review board / a plain question.
+   */
+  lazy: boolean;
 }
 
 export interface CoachAttachment {
@@ -154,6 +159,7 @@ export function AgentSidePanel({
   const [draft, setDraft] = useState("");
   const [draw, setDraw] = useState(false);
   const [reviewBoard, setReviewBoard] = useState(false);
+  const [lazy, setLazy] = useState(false);
   const [lightbox, setLightbox] = useState<CoachAttachment | null>(null);
   const [lightboxClosing, setLightboxClosing] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
@@ -265,7 +271,7 @@ export function AgentSidePanel({
 
   if (!open) return null;
 
-  const canSend = !busy && (draft.trim().length > 0 || draw || reviewBoard);
+  const canSend = !busy && (draft.trim().length > 0 || draw || reviewBoard || lazy);
   const menuMessage = messageMenu
     ? messages.find((message) => message.id === messageMenu.messageId)
     : undefined;
@@ -288,7 +294,7 @@ export function AgentSidePanel({
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!canSend) return;
-    onSend(draft.trim(), { draw, reviewBoard });
+    onSend(draft.trim(), { draw, reviewBoard, lazy });
     setDraft("");
     closeMessageMenu();
   };
@@ -499,6 +505,20 @@ export function AgentSidePanel({
                   onClick={() => setReviewBoard((current) => !current)}
                 >
                   Review board
+                </button>
+              </Tip>
+              <Tip
+                tip="Fill solution.py for the parts your board already justifies (leave TODOs for the rest)"
+                placement="left"
+              >
+                <button
+                  type="button"
+                  className={lazy ? "lc-flag lc-flag-active" : "lc-flag"}
+                  aria-pressed={lazy}
+                  disabled={busy}
+                  onClick={() => setLazy((current) => !current)}
+                >
+                  Lazy
                 </button>
               </Tip>
               <button type="submit" disabled={!canSend}>

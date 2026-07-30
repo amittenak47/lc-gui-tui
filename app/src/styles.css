@@ -514,6 +514,35 @@ input[type="checkbox"] {
   height: 100%;
 }
 
+/* Quick pen ↔ eraser swap above each ink layout (toolbar sizes stay in effect). */
+.lc-ink-swap {
+  position: absolute;
+  z-index: 12;
+  width: var(--touch);
+  height: var(--touch);
+  min-height: var(--touch);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
+  touch-action: manipulation;
+}
+
+.lc-ink-swap:active {
+  transform: scale(0.96);
+}
+
+.lc-mobile .lc-ink-swap {
+  width: calc(var(--touch) + 4px);
+  height: calc(var(--touch) + 4px);
+  min-height: calc(var(--touch) + 4px);
+}
+
 /* Eraser brush preview: circle + crosshair (pen uses crosshair; Excalidraw uses a fixed circle). */
 /*
  * Position comes from an inline `transform` written by Board's pointer handler

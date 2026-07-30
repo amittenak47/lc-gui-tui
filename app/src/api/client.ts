@@ -305,11 +305,26 @@ export class LcClient {
     board: BoardSnapshot,
     confirmReveal: boolean,
     dataset?: string,
+    mode: "bridge" | "lazy" = "bridge",
   ): Promise<BridgeResponse> {
     return this.request("POST", "/coach/reveal", {
       task_id: taskId,
       dataset,
       confirm_reveal: confirmReveal,
+      mode,
+      board,
+    });
+  }
+
+  /** Fill earned solution.py parts from the board only (no reference). */
+  async lazyFill(
+    taskId: string,
+    board: BoardSnapshot,
+    dataset?: string,
+  ): Promise<import("./types").LazyFillResponse> {
+    return this.request("POST", "/coach/lazy", {
+      task_id: taskId,
+      dataset,
       board,
     });
   }
