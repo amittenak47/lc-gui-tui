@@ -1,242 +1,144 @@
-# lc - stylus whiteboard for LeetCode practice
+<p align="center">
+  <img src="docs/icons/icon-512.png" alt="lc" width="128">
+</p>
 
-**Work on problems in your terminal or IDE. Sketch an approach by hand using a stylus, touch, or mouse cursor. Run real tests curated from datasets to see why your approach fails. Ask an AI model for insights, without getting a reference solution for you to mindlessly copy and paste.**
+# lc
 
-A stylus-first practice app for **Android tablets**, **desktop**, and the **browser**, backed by a Rust daemon that indexes local problem corpora, generates Python workspaces, and runs tests. The coach sees *your* board (and optional region screenshots) plus *your* code - never the dataset's reference solutions.
+A Rust CLI and terminal UI for practicing LeetCode-style problems from **local JSON corpora**. Index thousands of problems into SQLite, browse and filter them interactively, generate Python workspaces, run tests, and ask an LLM tutor for hints — **without ever loading or sending reference solutions** from the dataset.
 
-A terminal UI and CLI are still there for keyboard-first days. Pairs with **[LLM Autocorrect](https://github.com/amittenak47/llm-autocorrect)** when you finish `solution.py` in Cursor or VS Code.
+There is a second way to practise: sketch the approach by hand on a tablet while a coach watches, grills you, and points at the specific test case your approach breaks on.
 
-<!-- Drop a short demo under docs/demo/ and uncomment:
-![lc demo](docs/demo/lc-demo.gif)
-or embed an MP4: <video src="docs/demo/lc-demo.mp4" controls width="720"></video>
--->
-
----
-
-## Features
-
-| Feature | Summary |
-| --- | --- |
-| **Whiteboard coach** | Excalidraw-style board on Android, desktop, or browser. Sketch Approach / Complexity / Walkthrough; the coach reviews, cites real sample cases, and can draw diagrams. |
-| **Vision LLM** | Built for multimodal coaches that can read the board PNG - not text-only stubs. |
-| **Five problem sets** | Tab strip across LeetCode, KodCode, MS Python-Q, DeepSeek LC, LC-with-tests. Separate SQLite tables and pass/fail badges per corpus. |
-| **Local LLM (today)** | OpenAI-compatible endpoint - vLLM, llama.cpp, Ollama, LM Studio - or Groq. |
-| **Remote LLM** | *will add shortly (too expensive for me)* - point the coach at a hosted OpenAI-compatible API without running a GPU at home. |
-| **Session queue** | Start / Random builds a practice queue; hold-to-confirm when leaving so you don't wipe a board by accident. |
-| **Tablet pairing** | `lc serve --lan` prints Host / Port / Code once; the app keeps a token after that. |
-| **CLI + TUI** | *TUI is lagging behind GUI (in the process of refining)* - `lc load` / `lc test` / `lc ask` and an optional terminal browser when you're not on the pen. |
+`5 problem sets` · `local or Groq` · `tablet or desktop` · `PolyForm Noncommercial`
 
 ---
 
-## My setup (what this README assumes)
+## Browse the corpus, then work the problem
 
-This is my current configuration. You can play on your computer, phone/tablet, or browser and can use anything from a single smaller model (optionally vision-capable) or any combination of powerful frontier models.
-
-| Piece | What I run |
-| --- | --- |
-| **PC** | Windows 11, Rust + Node, corpus under `~/lc-data` (WSL) |
-| **Coach model** | [Qwen3-VL-8B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8) - vision-language, served as `qwen3-vl-8b` |
-| **Serving** | **vLLM** in WSL2 with **CUDA 12.8** (`CUDA_HOME=/usr/local/cuda-12.8`) |
-| **Client** | Android stylus tablet (XPPen Magic Note Pad) APK, or browser / desktop Tauri, paired to `lc serve --lan` |
-| **Editor** | Cursor + [LLM Autocorrect](https://github.com/amittenak47/llm-autocorrect) for finishing code off the board |
-
-```
-+-------------------------------+            +----------------------------------+
-| Drawing device                |  <-- LAN   | Windows PC                       |
-| Android / browser / desktop   |  ------->  | lc serve                         |
-| Whiteboard + coach chat       |            | SQLite, workspaces, pytest       |
-| Pair once: Host / Port / Code |            | -> WSL: vLLM (Qwen3-VL-8B FP8)   |
-+-------------------------------+            +----------------------------------+
-```
-
-### vLLM (coach)
+**W/S** selects, **A/D** pages, **/** searches, **G** switches problem set, **T** and **E** cycle tag and difficulty. Enter opens the actions: generate a workspace, open it in Cursor, run the tests, or send it to the whiteboard.
 
 ```bash
-vllm serve /mnt/c/Users/Amit/models/Qwen3-VL-8B-Instruct-FP8 \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --limit-mm-per-prompt.video 0 \
-  --served-model-name qwen3-vl-8b \
-  --max-model-len 32768 \
-  --gpu-memory-utilization 0.90
+lc                                  # the TUI
+lc search --difficulty Medium --tag graph
+lc load two-sum --open
+lc test two-sum --verbose
 ```
 
-Weights: [Qwen/Qwen3-VL-8B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8) (or a local checkout under `/mnt/c/Users/.../models/`).
+## Or sketch it, and let the coach find the case you break on
 
-Point `lc` at it (Settings in the app, or CLI):
+Draw, tap **Submit**, and the coach returns a verdict, ratings, strengths, gaps, a Socratic question and — when your approach is wrong — a counterexample citing one of the problem's real sample cases. **Draw it** answers with a diagram instead of prose. **Reveal** is an explicit, confirmed opt-in that produces a stepwise path from your approach to a working one; it is never a solution dump, and it is logged so `lc stats` shows how often you tapped out.
+
+**Lazy** turns a justified board into `solution.py`: it implements what you already earned and leaves the rest as stubs. Pair a tablet with `lc serve --lan`, or run the canvas on desktop / in the browser.
+
+```bash
+cargo run -- serve --lan            # daemon for the whiteboard…
+cd app && npm install && npm run tauri dev    # …and the canvas
+# Android: cd app && npm run android:apk
+```
+
+---
+
+## Four decisions the rest of it hangs off
+
+**Reference solutions never load.** The `Problem` struct in [`src/problem.rs`](src/problem.rs) has no fields for the corpus's `completion`, `response` and `query`, so serde drops them at parse time. They never reach the index, the workspace or a prompt, and `cargo test` asserts it.
+
+**Cited test cases are verified, not trusted.** When the coach cites a sample case the daemon checks the index exists and overwrites the quoted input/expected with the corpus's own text, so a model that cites a real case but misquotes it cannot show you a fabricated one. A citation to a case that doesn't exist is dropped and reported.
+
+**The model never emits coordinates.** LLMs are unreliable at coordinate geometry and reliable at structured semantic state, so the coach emits a *viz program* — full state per frame — and `viz/render/<kind>.ts` lays it out deterministically into a reserved agent lane on the right of the board.
+
+**The coach never reads its own output back.** Injected diagrams are tagged and excluded from capture; otherwise the coach starts agreeing with itself. Test results travel on their own `app_messages` channel and the prompt tells the model to read them as fact — a real run is not something the student claimed.
+
+---
+
+## Try it
+
+```bash
+cargo install --path .
+python scripts/fetch_dataset.py leetcode --data-dir ~/lc-data
+lc config set data-dir ~/lc-data && lc index
+lc                                  # the TUI
+
+lc serve --lan                      # the whiteboard: daemon…
+cd app && npm install && npm run tauri dev    # …and the canvas
+```
+
+Needs **Rust** (1.75+), **Python 3.10+**, and for the whiteboard client **Node 20+**.
+
+Client internals and Android / cleartext-HTTP notes → [`app/README.md`](app/README.md).
+
+### Local vision coach (optional)
+
+Point `lc` at any OpenAI-compatible endpoint (vLLM, llama.cpp, Ollama, LM Studio) or Groq:
 
 ```bash
 lc config set llm.provider local
 lc config set llm.local.base_url http://127.0.0.1:8000/v1
 lc config set llm.local.model qwen3-vl-8b
-# optional: same id for vision captures
 lc config set llm.local.vision_model qwen3-vl-8b
 ```
 
-From the tablet, use the PC's LAN IP in `base_url` if the daemon proxies differently - usually the app talks to `lc serve`, and the PC reaches vLLM on localhost.
-
-Older system `nvcc` (CUDA 10.x on PATH) breaks FlashInfer JIT. Put CUDA 12.8 first in WSL `~/.bashrc`:
-
-```bash
-export CUDA_HOME=/usr/local/cuda-12.8
-export PATH="$CUDA_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
-```
+API keys stay in the environment (`GROQ_API_KEY`, optional `LC_LOCAL_API_KEY`) — not in the TOML. Config path: `lc config path`.
 
 ---
 
-## Quick start
+## How it works
 
-### 1. Install the daemon
-
-```bash
-git clone https://github.com/amittenak47/leetcode-tui.git
-cd leetcode-tui
-cargo install --path .
+```
+JSON corpora ─lc index──▶ SQLite (problems.db)
+  per dataset                 │  problems, problems_kodcode, … (one table pair each)
+                        lc load <id> --dataset <slug>
+                              ▼
+        ~/lc-workspace/[<dataset>/]<task_id>/
+        ├── solution.py        ← you edit this
+        ├── board.json         ← the whiteboard, when kept
+        ├── run_tests.py
+        └── .lc/meta.json      ← cases, entry_point (no reference solution)
+                              │
+                        lc test ──▶ python run_tests.py ──▶ results table
+                        lc ask  ──▶ redacted prompt ──▶ LLM tutor
+                        lc serve ──▶ HTTP + WS ──▶ whiteboard canvas (app/)
 ```
 
-Needs **Rust** (1.75+), **Python 3.10+**, and for the whiteboard client: **Node 20+**.
+### Coach review (staged)
 
-### 2. Download problem data
+Board review is split so the stage that says “this is enough” is never asked to invent gaps:
 
-`lc` does **not** ship problems. Fetch Hugging Face corpora to JSONL:
+1. **Perceive** — describe the board (vision only; skipped for text-only builds).
+2. **Claim** — name the approach, the steps it justifies, and whether that claim already decides the answer.
+3. **Verdict** — runs only when the claim is insufficient. On-track cards are synthesized from the frozen claim.
 
-```bash
-pip install -U huggingface_hub pyarrow
-python scripts/fetch_dataset.py --all --data-dir ~/lc-data
-# or one set:  python scripts/fetch_dataset.py kodcode --data-dir ~/lc-data
-```
-
-### 3. Index and configure
-
-```bash
-lc config set data-dir ~/lc-data
-lc config set workspace ~/lc-workspace
-lc index
-lc datasets          # confirm counts per tab
-```
-
-### 4. Practice on a drawing device
-
-Start the coach model (see [vLLM](#vllm-coach) above), then:
-
-```bash
-# terminal 1 - daemon (use --lan for a tablet / phone on Wi-Fi)
-lc serve --lan
-
-# terminal 2 - desktop window (mouse check)
-cd app && npm install && npm run tauri dev
-
-# or build / sideload the Android APK
-cd app && npm run android:apk
-```
-
-Type the printed **Host / Port / Code** into the app header once. Full Android / cleartext-HTTP notes: [`app/README.md`](app/README.md).
-
-**Optional - terminal UI** (no pen):
-
-```bash
-lc
-```
+Falls back to a single-call review if a stage returns nothing usable.
 
 ---
 
-## Datasets
+## Commands
 
-Each corpus lives under `<data-dir>/<slug>/` and gets its **own** SQLite tables (ids collide across sets).
+| Command | Purpose |
+| --- | --- |
+| `lc` / `lc tui` | Interactive practice UI |
+| `lc index [--rebuild] [--dataset S]` | Build or refresh the SQLite index |
+| `lc datasets [--inspect]` | Problem sets and indexed counts; `--inspect` reports each corpus file's real columns |
+| `lc search` / `lc random` | Filter or pick (`--dataset`, `--difficulty`, `--tag`, `-q`, `--sort`) |
+| `lc load <id> [--open] [--force]` | Generate a workspace; id = slug, question #, or prefix |
+| `lc test [id] [--case N] [--full] [-v]` | Run the Python tests — exits `0` when every case passes |
+| `lc ask [id] [--case N] [--provider local\|groq]` | LLM debugging help |
+| `lc serve [--port N] [--lan]` | Daemon for the whiteboard client |
+| `lc stats` · `lc session reset` · `lc list …` | Progress, session, named lists |
+| `lc config set/get/show/path` | Manage `config.toml` |
+
+### Datasets
 
 | Slug | Hugging Face | What you get |
 | --- | --- | --- |
 | `leetcode` *(default)* | [newfacade/LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) | ~2.9k Python LeetCode problems |
-| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | Large synthetic set - `lc` indexes **Complete** style only (~168k after skipping Instruct / online_judge) |
+| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | Large synthetic set — `lc` indexes **Complete** style only |
 | `ms-python-q` | [morganstanley/sft-python-q-problems](https://huggingface.co/datasets/morganstanley/sft-python-q-problems) | Structured `test_cases` |
-| `deepseek-leetcode` | [davidheineman/deepseek-leetcode](https://huggingface.co/datasets/davidheineman/deepseek-leetcode) | DeepSeek contest benchmark; asserts -> cases |
+| `deepseek-leetcode` | [davidheineman/deepseek-leetcode](https://huggingface.co/datasets/davidheineman/deepseek-leetcode) | DeepSeek contest benchmark |
 | `leetcode-with-tests` | [kr4t0n/leetcode-with-tests](https://huggingface.co/datasets/kr4t0n/leetcode-with-tests) | Community pack with pytest-style checks |
 
-Adapters: [`src/datasets/`](src/datasets/). Inspect what a download actually contains:
-
-```bash
-lc datasets --inspect
-lc index --dataset kodcode --rebuild   # after adapter changes
-```
-
-**KodCode note:** tags like `Algorithm, Complete` are seed family + style, not LeetCode topics. `Instruct` and `online_judge` rows are skipped at index time so the harness stays pytest-shaped.
-
-Corpus licenses differ (e.g. LeetCodeDataset Apache-2.0, KodCode-V1 CC BY-NC 4.0). Check each card before redistributing.
+Adapters: [`src/datasets/`](src/datasets/). After adapter changes: `lc index --dataset <slug> --rebuild`.
 
 ---
 
-## Whiteboard coach (short)
+Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorrect)**: `lc` handles problem selection, workspaces and testing; the extension fixes your code as you type in Cursor or VS Code.
 
-| Mode | What it does |
-| --- | --- |
-| **On ask** | You send a message; optionally attach **Review board** (region thumbnails + structure) or **Draw** (ask for a diagram). |
-| **Copy / Quote** | Long-press or right-click a coach message -> copy the bubble or quote it into the composer. |
-| **Reveal** | Hold-to-confirm bridge from *your* approach toward a working one - never a silent solution dump. |
-| **Ambient** | Off by default (`AMBIENT_ENABLED` in the client). |
-
----
-
-## CLI cheatsheet
-
-```bash
-lc search --difficulty Medium --tag graph
-lc random -n 3 --tag "Dynamic Programming"
-lc load two-sum --open          # workspace + Cursor/VS Code
-lc test two-sum --verbose
-lc ask --case 3 --provider local
-lc stats
-lc serve --lan                  # drawing-device daemon
-```
-
-| Command | Purpose |
-| --- | --- |
-| `lc serve [--lan] [--port N]` | Whiteboard daemon (the main path) |
-| `lc` / `lc tui` | Optional terminal practice UI |
-| `lc index [--dataset S] [--rebuild]` | Build SQLite index |
-| `lc datasets [--inspect]` | Counts + corpus column report |
-| `lc load <id> [--dataset S] [--open]` | Generate workspace |
-| `lc test [id] [-v] [--full]` | Run `run_tests.py` |
-| `lc ask` | LLM help on a failing case |
-
-Config path: `lc config path`  
-(Windows: `%APPDATA%\lc\config\config.toml` / Linux/macOS: `~/.config/lc/config.toml`)
-
-API keys stay in the environment (`GROQ_API_KEY`, optional `LC_LOCAL_API_KEY`) - not in the TOML.
-
-**What the LLM sees:** problem statement, tags, difficulty, *your* `solution.py` / board PNGs, failing I/O.  
-**What it never sees:** corpus `completion` / `response` / reference solutions - dropped at parse time in [`src/problem.rs`](src/problem.rs).
-
----
-
-## Troubleshooting
-
-| Problem | Try |
-| --- | --- |
-| `problem data dir not configured` | `lc config set data-dir <path>` then `lc index` |
-| Dataset tab shows 0 | `python scripts/fetch_dataset.py <slug>` then `lc index --dataset <slug>` |
-| `cannot reach the local LLM` | Confirm vLLM is up on `:8000`; check `llm.local.base_url` and `model` = `qwen3-vl-8b` |
-| FlashInfer / `nvcc` errors in WSL | Put CUDA 12.x first - see [My setup](#my-setup-what-this-readme-assumes) |
-| Tablet `pair first` / 401 | Re-enter Host/Port/Code from the current `lc serve --lan` banner |
-| Android connects on desktop but not device | Cleartext HTTP - see `app/src-tauri/android-overlay/` |
-| Board review ignores the image | Confirm a **vision** model (Qwen3-VL) and that Review board is on |
-
----
-
-## Development
-
-```bash
-cargo build --release
-cargo test
-cd app && npm install && npm test && npm run build
-```
-
-See [CHANGELOG.md](CHANGELOG.md) and [`app/README.md`](app/README.md).
-
----
-
-## License
-
-[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — free for personal, educational, and other noncommercial use; commercial use needs a separate license. See [LICENSE](LICENSE).
-
-Problem corpus licensing is separate per dataset - see the Hugging Face cards linked above.
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — free for personal, educational, and other noncommercial use; commercial use needs a separate license. See [LICENSE](LICENSE). Problem corpus licensing is separate and differs per dataset: [LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) is Apache 2.0; [KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) is CC BY-NC 4.0 (non-commercial). Release notes: [CHANGELOG.md](CHANGELOG.md).

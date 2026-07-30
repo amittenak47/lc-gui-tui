@@ -1,5 +1,8 @@
 use anyhow::{bail, Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseEventKind,
+};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -8,7 +11,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Frame, Terminal};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -18,17 +21,14 @@ use crate::attempt;
 use crate::config::Config;
 use crate::dataset::{self, Dataset, DATASETS};
 use crate::index::{self, ProblemRow, SearchSort};
-use crate::llm::{ChatMessage, ChatRequest};
+use crate::llm::coach::{format_review_card, review_submission, BoardSnapshot};
+use crate::llm::make_provider_for_mode;
 use crate::session::{ProblemState, Session};
-use crate::{generator, lists, llm, loader, problem, runner};
+use crate::{generator, lists, loader, problem, runner};
 
 type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
 const PAGE_SIZE: u32 = 15;
-
-const COACH_SYSTEM: &str = "You are a concise LeetCode tutor in a terminal coach chat. \
-Hint and teach; never dump a full working solution the student can paste. \
-When a Tests message appears in the thread, treat it as ground truth about the last run.";
 
 const LC_BANNER: &str = r#"
  ██╗      ██████╗
@@ -549,7 +549,7 @@ impl App {
         self.coach_scroll = 0;
         self.input_buf.clear();
         self.screen = Screen::CoachChat;
-        self.status = "coach: type a question · Enter send · Esc back · w/s scroll".into();
+        self.status = "coach: ask / submit for review · Enter send · Esc back · ↑↓/wheel scroll".into();
         Ok(())
     }
 
@@ -591,33 +591,60 @@ impl App {
     }
 
     fn ask_coach(&self, row: &ProblemRow, dir: &Path) -> Result<String> {
+        let meta = runner::read_meta(dir)?;
         let json_path = Path::new(&row.json_path);
-        let prob = problem::load_task_for(self.dataset, json_path, &row.task_id)?;
-        let desc = prob.problem_description.unwrap_or_default();
+        let description = problem::load_task_for(self.dataset, json_path, &row.task_id)
+            .ok()
+            .and_then(|p| p.problem_description);
         let solution = std::fs::read_to_string(dir.join("solution.py")).unwrap_or_default();
-        let mut messages = vec![ChatMessage::system(COACH_SYSTEM)];
-        let context = format!(
-            "task_id: {}\ndataset: {}\ndifficulty: {}\ntags: {}\n\n--- problem ---\n{desc}\n\n--- solution.py ---\n{solution}",
-            row.task_id,
-            self.dataset.id,
-            row.difficulty.as_deref().unwrap_or("?"),
-            row.tags.join(", "),
-        );
-        for msg in &self.coach_messages {
-            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
-            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
-            match role {
-                "user" => messages.push(ChatMessage::user(content.to_string())),
-                "assistant" => messages.push(ChatMessage::assistant(content.to_string())),
-                "app" => messages.push(ChatMessage::user(format!("[Tests]\n{content}"))),
-                _ => {}
-            }
-        }
-        // Workspace snapshot as the first user turn after system.
-        messages.insert(1, ChatMessage::user(context));
-        let provider = llm::make_provider(&self.cfg, None)?;
-        let reply = provider.chat_ex(&ChatRequest::new(messages))?;
-        Ok(reply.content)
+
+        let question = self
+            .coach_messages
+            .iter()
+            .rev()
+            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            .and_then(|m| m.get("content").and_then(|c| c.as_str()))
+            .unwrap_or("")
+            .trim();
+
+        let app_messages: Vec<String> = self
+            .coach_messages
+            .iter()
+            .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("app"))
+            .filter_map(|m| {
+                m.get("content")
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+
+        // Text-only board: no PNG, no scene layout, no lazy / layout_only flags.
+        // The typed question seeds the claim path; solution.py is the code dock.
+        let board = BoardSnapshot {
+            recognized_text: if question.is_empty() {
+                String::new()
+            } else {
+                format!("Student question (terminal):\n{question}")
+            },
+            pseudocode: Some(solution),
+            app_messages,
+            turn_index: self
+                .coach_messages
+                .iter()
+                .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("assistant"))
+                .count() as u32,
+            ..Default::default()
+        };
+
+        let provider = make_provider_for_mode(&self.cfg, "review")?;
+        let outcome = review_submission(
+            &*provider,
+            &meta,
+            description.as_deref(),
+            &board,
+            /* include_code */ true,
+        )?;
+        Ok(format_review_card(&outcome.review))
     }
 
     fn workspace_needs_leave_prompt(&self) -> bool {
@@ -684,10 +711,31 @@ fn run_app(terminal: &mut TuiTerminal, cfg: &Config) -> Result<()> {
     loop {
         terminal.draw(|f| draw(f, &mut app))?;
         if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if handle_key(&mut app, terminal, key)? {
-                    break;
+            match event::read()? {
+                Event::Key(key) => {
+                    if handle_key(&mut app, terminal, key)? {
+                        break;
+                    }
                 }
+                Event::Mouse(mouse) if app.screen == Screen::CoachChat => match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        app.coach_scroll = app.coach_scroll.saturating_sub(3);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        app.coach_scroll = app.coach_scroll.saturating_add(3);
+                    }
+                    _ => {}
+                },
+                Event::Mouse(mouse) if app.screen == Screen::Message => match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        app.message_scroll = app.message_scroll.saturating_sub(3);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        app.message_scroll = app.message_scroll.saturating_add(3);
+                    }
+                    _ => {}
+                },
+                _ => {}
             }
         }
     }
@@ -926,6 +974,9 @@ fn handle_coach_chat(
             app.screen = Screen::ProblemActions;
             app.menu_sel = 0;
             app.input_buf.clear();
+            // Coach chat can leave wrap/mouse-scroll ghosts on the alternate
+            // screen; wipe before the problem menu draws.
+            hard_refresh(terminal)?;
         }
         KeyCode::Enter => {
             if let Err(e) = app.send_coach_message(terminal) {
@@ -936,17 +987,25 @@ fn handle_coach_chat(
         KeyCode::Backspace => {
             app.input_buf.pop();
         }
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.coach_scroll = app.coach_scroll.saturating_sub(1);
-        }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.coach_scroll = app.coach_scroll.saturating_add(1);
-        }
+        // Avoid Ctrl+W / Ctrl+S — terminals often bind those (close tab / freeze).
         KeyCode::Up => {
             app.coach_scroll = app.coach_scroll.saturating_sub(1);
         }
         KeyCode::Down => {
             app.coach_scroll = app.coach_scroll.saturating_add(1);
+        }
+        KeyCode::PageUp => {
+            app.coach_scroll = app.coach_scroll.saturating_sub(10);
+        }
+        KeyCode::PageDown => {
+            app.coach_scroll = app.coach_scroll.saturating_add(10);
+        }
+        KeyCode::Home => {
+            app.coach_scroll = 0;
+        }
+        KeyCode::End => {
+            // draw_coach_chat clamps to the real max on the next frame.
+            app.coach_scroll = usize::MAX / 4;
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.input_buf.push(c);
@@ -1620,36 +1679,50 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App, title: &str, prompt: &str) {
     f.render_widget(block, area);
 }
 
-fn draw_message(f: &mut Frame, area: Rect, app: &App) {
+fn draw_message(f: &mut Frame, area: Rect, app: &mut App) {
+    let height = area.height.saturating_sub(2) as usize;
+    let max_scroll = app.message_lines.len().saturating_sub(height.max(1));
+    if app.message_scroll > max_scroll {
+        app.message_scroll = max_scroll;
+    }
     let visible: Vec<Line> = app
         .message_lines
         .iter()
         .skip(app.message_scroll)
-        .take(area.height.saturating_sub(2) as usize)
+        .take(height.max(1))
         .map(|l| Line::from(l.as_str()))
         .collect();
-    let block = Paragraph::new(visible)
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("output (w/s scroll · Enter/Esc back)"),
-        );
+    let block = Paragraph::new(visible).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("output (w/s scroll · Enter/Esc back)"),
+    );
     f.render_widget(block, area);
 }
 
-fn draw_coach_chat(f: &mut Frame, area: Rect, app: &App) {
+fn draw_coach_chat(f: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(4), Constraint::Length(3)])
         .split(area);
 
+    let inner_w = chunks[0].width.saturating_sub(2) as usize;
+    let height = chunks[0].height.saturating_sub(2) as usize;
+
+    // Pre-wrap to the pane width and scroll by *visual* rows. Feeding long
+    // lines into Paragraph::wrap after a height-limited skip overflows the
+    // box and leaves ghost glyphs on the next screen.
     let mut lines: Vec<Line> = Vec::new();
     if app.coach_messages.is_empty() {
-        lines.push(Line::from(Span::styled(
+        for part in wrap_to_width(
             "(empty thread - ask about the problem, your solution, or a failing test)",
-            Style::default().fg(Color::DarkGray),
-        )));
+            inner_w,
+        ) {
+            lines.push(Line::from(Span::styled(
+                part,
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
     }
     for msg in &app.coach_messages {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
@@ -1662,23 +1735,25 @@ fn draw_coach_chat(f: &mut Frame, area: Rect, app: &App) {
         };
         lines.push(Line::from(Span::styled(label, style)));
         for line in content.lines() {
-            lines.push(Line::from(format!("  {line}")));
+            for part in wrap_to_width(&format!("  {line}"), inner_w) {
+                lines.push(Line::from(part));
+            }
         }
         lines.push(Line::from(""));
     }
 
-    let height = chunks[0].height.saturating_sub(2) as usize;
     let max_scroll = lines.len().saturating_sub(height.max(1));
-    let scroll = app.coach_scroll.min(max_scroll);
+    if app.coach_scroll > max_scroll {
+        app.coach_scroll = max_scroll;
+    }
+    let scroll = app.coach_scroll;
     let visible: Vec<Line> = lines.into_iter().skip(scroll).take(height.max(1)).collect();
 
-    let thread = Paragraph::new(visible)
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("coach chat (Up/Down scroll · Esc back)"),
-        );
+    let thread = Paragraph::new(visible).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("coach chat (↑↓/PgUp/PgDn/wheel · Esc back)"),
+    );
     f.render_widget(thread, chunks[0]);
 
     let composer = Paragraph::new(format!("> {}_", app.input_buf)).block(
@@ -1687,6 +1762,26 @@ fn draw_coach_chat(f: &mut Frame, area: Rect, app: &App) {
             .title("message · Enter send"),
     );
     f.render_widget(composer, chunks[1]);
+}
+
+/// Hard-wrap `text` to `width` columns (char count). Empty input yields one blank.
+fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut cols = 0usize;
+    for ch in text.chars() {
+        if cols >= width && !current.is_empty() {
+            out.push(std::mem::take(&mut current));
+            cols = 0;
+        }
+        current.push(ch);
+        cols += 1;
+    }
+    out.push(current);
+    out
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
@@ -1701,7 +1796,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Screen::InputId => "type id · Enter confirm · Esc cancel",
         Screen::InputListName => "type list name · Enter confirm · Esc cancel",
         Screen::Message => "W/S scroll · Enter/Esc back",
-        Screen::CoachChat => "type · Enter send · Up/Down scroll · Esc back",
+        Screen::CoachChat => "type · Enter send · ↑↓ / PgUp/PgDn / wheel scroll · Esc back",
         Screen::LeaveConfirm => "W/S choose · Enter confirm · Esc cancel",
         Screen::Main => "W/S move · Enter select · Q quit",
         _ => "W/S move · Enter select · Esc back",
@@ -1757,7 +1852,12 @@ fn trunc(s: &str, max: usize) -> String {
 fn setup_terminal() -> Result<TuiTerminal> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, crossterm::cursor::Hide)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        crossterm::cursor::Hide
+    )?;
     Ok(Terminal::new(CrosstermBackend::new(stdout))?)
 }
 
@@ -1765,6 +1865,7 @@ fn restore_terminal(terminal: &mut TuiTerminal) -> Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
+        DisableMouseCapture,
         LeaveAlternateScreen,
         crossterm::cursor::Show,
         crossterm::terminal::Clear(ClearType::All)
@@ -1781,6 +1882,7 @@ fn with_suspended_tui<T>(
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
+        DisableMouseCapture,
         LeaveAlternateScreen,
         crossterm::cursor::Show
     )?;
@@ -1792,6 +1894,7 @@ fn with_suspended_tui<T>(
     execute!(
         terminal.backend_mut(),
         EnterAlternateScreen,
+        EnableMouseCapture,
         crossterm::cursor::Hide
     )?;
     hard_refresh(terminal)?;

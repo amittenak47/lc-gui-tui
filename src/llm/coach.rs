@@ -3,8 +3,11 @@
 //! Review (Mode A) is staged rather than one-shot: [`build_perceive_prompt`]
 //! describes the board, [`build_claim_prompt`] names what it claims and whether
 //! that claim decides the answer, and [`build_verdict_prompt`] runs only when it
-//! does not. The gate between them lives in [`crate::serve::coach`] — a
-//! [`Claim`] is data the daemon inspects, not a step a model talks itself past.
+//! does not. The gate is [`Claim::decides_the_answer`] inside [`staged_board_review`]
+//! — a [`Claim`] is data Rust inspects, not a step a model talks itself past.
+//! Callers (HTTP `/coach/review`, TUI coach chat) build a [`BoardSnapshot`] and
+//! run [`review_submission`]; GUI-only fields (PNG, scene layout, lazy flags)
+//! are simply left unset on text-only paths.
 //!
 //! Mirrors the section-heading style of [`crate::llm::prompt`] and reuses its
 //! [`clip`] helper. Every prompt here is assembled from [`WorkspaceMeta`], the
@@ -20,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::generator::WorkspaceMeta;
 use crate::llm::prompt::clip;
+use crate::llm::{ChatMessage, ChatRequest, LlmProvider};
 use crate::problem::IoCase;
 use crate::runner::CaseResult;
 
@@ -869,6 +873,231 @@ early\"],\n  \
          ```"
     );
     out
+}
+
+/// Result of [`review_submission`]: the card to show, plus the frozen claim
+/// when the staged path ran (Lazy / follow-ups can reuse it).
+#[derive(Debug, Clone)]
+pub struct ReviewOutcome {
+    pub review: ReviewResponse,
+    pub claim: Option<Claim>,
+}
+
+/// Run Mode A against a board snapshot.
+///
+/// - With layout/ink/question text: perceive (if PNG) → claim → verdict only
+///   when the claim is insufficient; optional code pass when `include_code`.
+/// - Otherwise: single-call [`REVIEW_SYSTEM_PROMPT`] fallback.
+///
+/// GUI callers attach PNG / scene structure on `board`; TUI leaves those unset
+/// and puts the typed question in `recognized_text` plus `solution.py` in
+/// `pseudocode`.
+pub fn review_submission(
+    provider: &dyn LlmProvider,
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+    include_code: bool,
+) -> Result<ReviewOutcome> {
+    let has_layout =
+        board.has_visual_evidence() || !board.recognized_text.trim().is_empty();
+    let has_code = include_code
+        && board
+            .pseudocode
+            .as_deref()
+            .is_some_and(|p| p.trim().len() > 8);
+
+    let staged = if has_layout {
+        staged_board_review(provider, meta, description, board).ok()
+    } else {
+        None
+    };
+
+    let (mut review, claim) = match staged {
+        Some((claim, board_review)) => {
+            let review = if has_code {
+                let code_prompt =
+                    build_claim_code_review_prompt(meta, description, board, &claim);
+                let code_reply = provider.chat_ex(
+                    &ChatRequest::new(vec![
+                        ChatMessage::system(CLAIM_CODE_SYSTEM_PROMPT),
+                        ChatMessage::user(code_prompt),
+                    ])
+                    .json(),
+                )?;
+                let code = parse_review(&code_reply.content, &meta.cases)?;
+                merge_layout_and_code_reviews(board_review, code)
+            } else {
+                board_review
+            };
+            (review, Some(claim))
+        }
+        None => {
+            let prompt = build_review_prompt(meta, description, board);
+            let reply = provider.chat_ex(
+                &ChatRequest::new(vec![
+                    ChatMessage::system(REVIEW_SYSTEM_PROMPT),
+                    ChatMessage::user(prompt).with_images(board.images()),
+                ])
+                .json(),
+            )?;
+            (parse_review(&reply.content, &meta.cases)?, None)
+        }
+    };
+
+    retrace_counterexample(provider, meta, board, &mut review);
+    Ok(ReviewOutcome { review, claim })
+}
+
+/// Stages 1–3: describe the board, name its claim, and judge only when the
+/// claim does not already decide the answer.
+pub fn staged_board_review(
+    provider: &dyn LlmProvider,
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+) -> Result<(Claim, ReviewResponse)> {
+    let (claim, _) = perceive_and_claim(provider, meta, description, board)?;
+
+    if claim.decides_the_answer() {
+        return Ok((claim.clone(), on_track_review_from_claim(&claim)));
+    }
+
+    let prompt = build_verdict_prompt(meta, description, board, &claim);
+    let reply = provider.chat_ex(
+        &ChatRequest::new(vec![
+            ChatMessage::system(VERDICT_SYSTEM_PROMPT),
+            ChatMessage::user(prompt).with_images(board.images()),
+        ])
+        .json(),
+    )?;
+    let mut review = parse_review(&reply.content, &meta.cases)?;
+    review.understood_approach = claim.understood_approach.clone();
+    Ok((claim, review))
+}
+
+/// Stages 1 and 2. Stage 1 runs only when there is a PNG; text-only boards go
+/// straight to the claim.
+pub fn perceive_and_claim(
+    provider: &dyn LlmProvider,
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+) -> Result<(Claim, Option<Perception>)> {
+    let perception = if board.png.is_some() {
+        let prompt = build_perceive_prompt(meta, board);
+        provider
+            .chat_ex(
+                &ChatRequest::new(vec![
+                    ChatMessage::system(PERCEIVE_SYSTEM_PROMPT),
+                    ChatMessage::user(prompt).with_images(board.images()),
+                ])
+                .json()
+                .with_temperature(0.0),
+            )
+            .and_then(|reply| parse_perception(&reply.content))
+            .ok()
+    } else {
+        None
+    };
+
+    let prompt = build_claim_prompt(meta, description, board, perception.as_ref());
+    let mut message = ChatMessage::user(prompt);
+    if perception.is_none() {
+        message = message.with_images(board.images());
+    }
+    let reply = provider.chat_ex(
+        &ChatRequest::new(vec![ChatMessage::system(CLAIM_SYSTEM_PROMPT), message]).json(),
+    )?;
+    let claim = parse_claim(&reply.content)?;
+    Ok((claim, perception))
+}
+
+/// Re-derive `why_your_approach_fails` from a prompt that shows only the cited case.
+pub fn retrace_counterexample(
+    provider: &dyn LlmProvider,
+    meta: &WorkspaceMeta,
+    board: &BoardSnapshot,
+    review: &mut ReviewResponse,
+) {
+    let Some(cited) = review.counterexample.as_ref() else {
+        return;
+    };
+    let Some(case) = meta.cases.get(cited.case_index) else {
+        return;
+    };
+
+    let prompt = build_trace_prompt(meta, board, case, cited.case_number);
+    let request = ChatRequest::new(vec![
+        ChatMessage::system(TRACE_SYSTEM_PROMPT),
+        ChatMessage::user(prompt),
+    ])
+    .json()
+    .with_temperature(0.0)
+    .with_max_tokens(400);
+
+    if let Ok(trace) = provider
+        .chat_ex(&request)
+        .and_then(|reply| parse_trace(&reply.content))
+    {
+        if let Some(cited) = review.counterexample.as_mut() {
+            cited.why_your_approach_fails = trace;
+        }
+    }
+}
+
+/// Render a review card as plain text for the TUI (no JSON, no GUI chrome).
+pub fn format_review_card(review: &ReviewResponse) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Verdict: {}\nApproach: {}",
+        verdict_label(review.verdict),
+        review.understood_approach.trim()
+    );
+    let _ = writeln!(
+        out,
+        "Rating: correctness {}/5 · complexity {}/5 · clarity {}/5",
+        review.rating.correctness, review.rating.complexity, review.rating.clarity
+    );
+    if !review.strengths.is_empty() {
+        let _ = writeln!(out, "\nStrengths:");
+        for s in &review.strengths {
+            let _ = writeln!(out, "  - {s}");
+        }
+    }
+    if !review.gaps.is_empty() {
+        let _ = writeln!(out, "\nGaps:");
+        for g in &review.gaps {
+            let _ = writeln!(out, "  - {g}");
+        }
+    }
+    if let Some(ce) = &review.counterexample {
+        let _ = writeln!(
+            out,
+            "\nCounterexample (case {}):\n  input: {}\n  expected: {}\n  why: {}",
+            ce.case_number,
+            ce.input.trim(),
+            ce.expected.trim(),
+            ce.why_your_approach_fails.trim()
+        );
+    }
+    if let Some(rej) = &review.counterexample_rejected {
+        let _ = writeln!(out, "\n(Counterexample dropped: {rej})");
+    }
+    if !review.socratic_question.trim().is_empty() {
+        let _ = writeln!(out, "\nNext: {}", review.socratic_question.trim());
+    }
+    out.trim_end().to_string()
+}
+
+fn verdict_label(v: Verdict) -> &'static str {
+    match v {
+        Verdict::OnTrack => "on track",
+        Verdict::SubtlyWrong => "subtly wrong",
+        Verdict::WrongTrack => "wrong track",
+        Verdict::Unclear => "unclear",
+    }
 }
 
 /// The board as the staged path reads it: ink, layout, and canvas notes, with
@@ -1890,6 +2119,16 @@ mod tests {
             ..claim
         });
         assert!(quiet.socratic_question.contains("trailing zeros"));
+    }
+
+    #[test]
+    fn format_review_card_is_plain_text_without_json() {
+        let review = on_track_review_from_claim(&sufficient_claim());
+        let text = format_review_card(&review);
+        assert!(text.contains("Verdict: on track"));
+        assert!(text.contains("Approach:"));
+        assert!(text.contains("Next:"));
+        assert!(!text.contains('{'), "no raw JSON for the TUI");
     }
 
     /// Stage 1 describes; it is given nothing to have an opinion about. No
