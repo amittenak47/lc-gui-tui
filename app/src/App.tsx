@@ -953,11 +953,31 @@ export function App() {
     }
   }, [client, problem, syncSolution, modeHasVision, sceneApi, appMessages, syncDrawingsToBoard]);
 
+  const applyFilledCode = useCallback(
+    async (filled: string, note: string) => {
+      if (!problem) return;
+      const next = filled.trim();
+      if (!next) return;
+      setPseudocode(next);
+      pseudocodeRef.current = next;
+      dirtyRef.current = true;
+      try {
+        await client.putSolution(problem.task_id, next, problem.dataset);
+        setNotice(note.trim() || "Lazy fill applied to solution.py");
+        pushCoachMessage("assistant", note.trim() || "Filled the parts your board already justified.");
+      } catch (cause) {
+        setError(messageOf(cause));
+      }
+    },
+    [client, problem, pushCoachMessage],
+  );
+
   const sendCoachChat = useCallback(
     (text: string, flags: CoachSendFlags) => {
       const flagBits = [
         flags.reviewBoard ? "Review board" : null,
         flags.draw ? "Draw" : null,
+        flags.lazy ? "Lazy" : null,
       ].filter(Boolean);
       const shown = [text, flagBits.length > 0 ? flagBits.join(" · ") : null]
         .filter(Boolean)
@@ -965,7 +985,7 @@ export function App() {
 
       void (async () => {
         let attachments: CoachChatMessage["attachments"];
-        if (flags.reviewBoard && boardRef.current) {
+        if ((flags.reviewBoard || flags.lazy) && boardRef.current) {
           try {
             const thumbs = await boardRef.current.exportRegionThumbs();
             if (thumbs.length > 0) {
@@ -986,9 +1006,44 @@ export function App() {
         if (flags.draw) {
           await askForDiagram(text);
         }
+        if (flags.lazy && problem) {
+          setBusy("lazy fill…");
+          try {
+            await syncSolution();
+            const board = boardRef.current;
+            const snapshot = board
+              ? await buildSnapshot(board, recognizerRef.current, {
+                  pseudocode: pseudocodeRef.current,
+                  includePng: modeHasVision("review"),
+                })
+              : null;
+            const fill = await client.lazyFill(
+              problem.task_id,
+              snapshot?.board ?? {
+                recognized_text: text || "Lazy fill from board",
+                pseudocode: pseudocodeRef.current.trim() || undefined,
+              },
+              problem.dataset,
+            );
+            await applyFilledCode(fill.filled_code, fill.note);
+          } catch (cause) {
+            setError(messageOf(cause));
+          } finally {
+            setBusy(null);
+          }
+        }
       })();
     },
-    [pushCoachMessage, submitForReview, askForDiagram],
+    [
+      pushCoachMessage,
+      submitForReview,
+      askForDiagram,
+      problem,
+      client,
+      syncSolution,
+      modeHasVision,
+      applyFilledCode,
+    ],
   );
 
   /**
@@ -1145,12 +1200,10 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [client, problem, coachMessages]);
 
-  const confirmReveal = useCallback(async () => {
+  const confirmReveal = useCallback(async (mode: "bridge" | "lazy" = "bridge") => {
     const board = boardRef.current;
     if (!problem) return;
     const targetId = revealForMessageIdRef.current;
-    // Close the confirm modal immediately so the canvas stays usable while
-    // the bridge builds — loading lives inline on the review turn.
     setRevealOpen(false);
     setRevealPending(false);
     setRevealError(null);
@@ -1170,14 +1223,19 @@ export function App() {
       const snapshot = board
         ? await buildSnapshot(board, recognizerRef.current, { pseudocode: pseudocodeRef.current })
         : null;
-      // The `true` here is the only place the app asserts consent, and it is
-      // reachable only after a hold on Reveal.
       const result = await client.reveal(
         problem.task_id,
         snapshot?.board ?? { recognized_text: "" },
         true,
         problem.dataset,
+        mode,
       );
+      if (mode === "lazy" && result.filled_code) {
+        await applyFilledCode(
+          result.filled_code,
+          result.lazy_note ?? "Lazy fill applied from the hint.",
+        );
+      }
       setCoachMessages((current) => {
         const attachTo =
           (targetId && current.find((message) => message.id === targetId)) ||
@@ -1208,7 +1266,7 @@ export function App() {
         );
       });
     }
-  }, [client, problem]);
+  }, [client, problem, applyFilledCode]);
 
   const showDrawingFrame = useCallback(
     (programId: string, frameIndex: number) => {
@@ -1687,7 +1745,8 @@ export function App() {
       {revealOpen && problem && (
         <RevealDialog
           taskId={problem.task_id}
-          onConfirm={() => void confirmReveal()}
+          onConfirm={() => void confirmReveal("bridge")}
+          onConfirmLazy={() => void confirmReveal("lazy")}
           onCancel={() => {
             if (revealPending) return;
             setRevealOpen(false);

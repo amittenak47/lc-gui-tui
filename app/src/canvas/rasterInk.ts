@@ -122,6 +122,55 @@ function eraseStamps(ctx: CanvasRenderingContext2D, op: InkEraseOp): void {
   }
 }
 
+/** Apply one committed or live op in scene space (caller sets the transform). */
+export function applyInkOp(ctx: CanvasRenderingContext2D, op: InkOp): void {
+  if (op.kind === "draw") drawStroke(ctx, op);
+  else eraseStamps(ctx, op);
+  ctx.globalCompositeOperation = "source-over";
+}
+
+/** Scene-space transform used by the live ink overlay and the bake buffer. */
+export function setInkSceneTransform(
+  ctx: CanvasRenderingContext2D,
+  viewport: ViewportTransform,
+  dpr: number,
+): void {
+  const { zoom, scrollX, scrollY } = viewport;
+  ctx.setTransform(
+    zoom * dpr,
+    0,
+    0,
+    zoom * dpr,
+    scrollX * zoom * dpr,
+    scrollY * zoom * dpr,
+  );
+}
+
+/**
+ * Key for whether a baked ink bitmap still matches the current view.
+ * Scroll/zoom/size changes require a rebuild from ops.
+ */
+export function inkBakeKey(
+  viewport: ViewportTransform,
+  dpr: number,
+  cssW: number,
+  cssH: number,
+  clip: SceneBounds | null,
+): string {
+  const clipPart = clip
+    ? `${clip.minX},${clip.minY},${clip.maxX},${clip.maxY}`
+    : "-";
+  return [
+    cssW,
+    cssH,
+    dpr,
+    viewport.zoom,
+    viewport.scrollX,
+    viewport.scrollY,
+    clipPart,
+  ].join("|");
+}
+
 /** Repaint the full ink bitmap from committed ops + an in-progress op. */
 export function paintRasterInk(
   ctx: CanvasRenderingContext2D,
@@ -136,20 +185,13 @@ export function paintRasterInk(
    */
   clip: SceneBounds | null = null,
 ): void {
-  const { zoom, scrollX, scrollY, width, height } = viewport;
+  const { width, height } = viewport;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
   // Canvas element origin = top-left of the overlay. Only scroll + zoom apply here;
   // offsetLeft/offsetTop are viewport coords and must NOT be added again.
-  ctx.setTransform(
-    zoom * dpr,
-    0,
-    0,
-    zoom * dpr,
-    scrollX * zoom * dpr,
-    scrollY * zoom * dpr,
-  );
+  setInkSceneTransform(ctx, viewport, dpr);
 
   if (clip) {
     ctx.save();
@@ -159,13 +201,11 @@ export function paintRasterInk(
   }
 
   for (const op of ops) {
-    if (op.kind === "draw") drawStroke(ctx, op);
-    else eraseStamps(ctx, op);
+    applyInkOp(ctx, op);
   }
 
   if (liveOp) {
-    if (liveOp.kind === "draw") drawStroke(ctx, liveOp);
-    else eraseStamps(ctx, liveOp);
+    applyInkOp(ctx, liveOp);
   }
 
   ctx.globalCompositeOperation = "source-over";

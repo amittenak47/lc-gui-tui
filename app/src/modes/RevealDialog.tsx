@@ -3,9 +3,13 @@
  *
  * The daemon refuses to read the reference solution unless the request carries
  * `confirm_reveal: true`, and this dialog is the only thing in the app that sets
- * it. Consent is a short hold on Reveal (water-fill), not a checkbox — the gesture
+ * it. Consent is a short hold (water-fill), not a checkbox — the gesture
  * itself lives in {@link HoldButton}, which every other irreversible choice in
  * the app now shares.
+ *
+ * **Reveal** = stepwise path from your approach.
+ * **Lazy** = fill the parts of solution.py your board already earned (still
+ * gated; uses the reference only for those parts).
  */
 
 import type { BridgeResponse } from "../api/types";
@@ -16,6 +20,8 @@ export interface RevealDialogProps {
   /** How many times this problem has already been revealed, if known. */
   previousReveals?: number;
   onConfirm: () => void;
+  /** Lazy fill — still requires the same consent hold. */
+  onConfirmLazy: () => void;
   onCancel: () => void;
   pending: boolean;
   error: string | null;
@@ -25,6 +31,7 @@ export function RevealDialog({
   taskId,
   previousReveals,
   onConfirm,
+  onConfirmLazy,
   onCancel,
   pending,
   error,
@@ -45,13 +52,17 @@ export function RevealDialog({
               You'll get a stepwise path from <em>your</em> approach to a working one — not a
               solution dump. But you can't un-see it for <code>{taskId}</code>.
             </p>
+            <p className="lc-muted">
+              <strong>Lazy</strong> instead fills only the parts of <code>solution.py</code> your
+              board already justifies, and leaves the rest as TODOs.
+            </p>
             {previousReveals !== undefined && previousReveals > 0 && (
               <p className="lc-muted">
                 You've already revealed this one {previousReveals}{" "}
                 {previousReveals === 1 ? "time" : "times"}.
               </p>
             )}
-            <p className="lc-muted lc-reveal-hold-hint">Hold Reveal briefly to confirm.</p>
+            <p className="lc-muted lc-reveal-hold-hint">Hold Reveal or Lazy briefly to confirm.</p>
 
             {error && <p className="lc-warning">{error}</p>}
 
@@ -59,6 +70,14 @@ export function RevealDialog({
               <button type="button" className="lc-secondary" onClick={onCancel}>
                 Keep trying
               </button>
+              <HoldButton
+                label="Lazy"
+                ariaLabel="Hold to lazy-fill solution code"
+                className="lc-hold-choice"
+                disabled={pending}
+                onConfirm={onConfirmLazy}
+                resetKey={error}
+              />
               <HoldButton
                 label="Reveal"
                 ariaLabel="Hold to reveal"
@@ -91,6 +110,13 @@ export function BridgePanel({
 }) {
   const body = (
     <>
+      {bridge.lazy_note && (
+        <>
+          <h3>Lazy fill</h3>
+          <p>{bridge.lazy_note}</p>
+        </>
+      )}
+
       {bridge.already_yours && (
         <>
           <h3>Already yours</h3>
@@ -134,8 +160,6 @@ export function BridgePanel({
   );
 
   if (collapsible) {
-    // `open` is the DOM attribute; React has no `defaultOpen` for `details`,
-    // so the prop was silently dropped and the fold always started shut.
     return (
       <details className="lc-bridge-fold" open={defaultOpen}>
         <summary className="lc-bridge-fold-summary">

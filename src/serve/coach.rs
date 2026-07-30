@@ -15,9 +15,11 @@ use serde::{Deserialize, Serialize};
 use super::routes::{description_for, load_meta};
 use super::{blocking, board_session, AppError, Shared};
 use crate::llm::coach::{
-    build_bridge_prompt, build_review_prompt, build_trace_prompt, parse_bridge, parse_review,
-    parse_trace, BoardSnapshot, BridgeResponse, ReviewResponse, BRIDGE_SYSTEM_PROMPT,
-    REVIEW_SYSTEM_PROMPT, TRACE_SYSTEM_PROMPT,
+    build_bridge_prompt, build_code_review_prompt, build_layout_review_prompt, build_lazy_fill_prompt,
+    build_lazy_hint_prompt, build_review_prompt, build_trace_prompt, merge_layout_and_code_reviews,
+    parse_bridge, parse_lazy_fill, parse_review, parse_trace, BoardSnapshot, BridgeResponse,
+    LazyFillResponse, ReviewResponse, BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
+    LAZY_HINT_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT, TRACE_SYSTEM_PROMPT,
 };
 use crate::dataset::{self, Dataset};
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
@@ -96,18 +98,46 @@ pub async fn review(
     let envelope = blocking(move || {
         let meta = load_meta(&cfg, dataset, &task_id_for_llm)?;
         let description = description_for(&meta);
-        let prompt = build_review_prompt(&meta, description.as_deref(), &board_for_prompt);
-
         let provider = make_provider_for_mode(&cfg, "review")?;
-        let messages = vec![
-            ChatMessage::system(REVIEW_SYSTEM_PROMPT),
-            ChatMessage::user(prompt).with_images(board_for_prompt.images()),
-        ];
-        let reply = provider.chat_ex(&ChatRequest::new(messages).json())?;
 
-        // Validation happens here, not in the client: a cited case index must
-        // exist in `meta.cases`, and its text is replaced with the corpus's.
-        let mut review = parse_review(&reply.content, &meta.cases)?;
+        let has_layout = board_for_prompt.has_visual_evidence()
+            || !board_for_prompt.recognized_text.trim().is_empty();
+        let has_code = board_for_prompt
+            .pseudocode
+            .as_deref()
+            .is_some_and(|p| p.trim().len() > 8);
+
+        let mut review = if has_layout && has_code {
+            // Two passes so a sparse code dock does not dominate a strong board
+            // (or vice versa) — then merge into one card for the client.
+            let layout_prompt =
+                build_layout_review_prompt(&meta, description.as_deref(), &board_for_prompt);
+            let layout_reply = provider.chat_ex(&ChatRequest::new(vec![
+                ChatMessage::system(REVIEW_SYSTEM_PROMPT),
+                ChatMessage::user(layout_prompt).with_images(board_for_prompt.images()),
+            ]).json())?;
+            let layout = parse_review(&layout_reply.content, &meta.cases)?;
+
+            let code_prompt =
+                build_code_review_prompt(&meta, description.as_deref(), &board_for_prompt);
+            let code_reply = provider.chat_ex(
+                &ChatRequest::new(vec![
+                    ChatMessage::system(REVIEW_SYSTEM_PROMPT),
+                    ChatMessage::user(code_prompt),
+                ])
+                .json(),
+            )?;
+            let code = parse_review(&code_reply.content, &meta.cases)?;
+            merge_layout_and_code_reviews(layout, code)
+        } else {
+            let prompt = build_review_prompt(&meta, description.as_deref(), &board_for_prompt);
+            let reply = provider.chat_ex(&ChatRequest::new(vec![
+                ChatMessage::system(REVIEW_SYSTEM_PROMPT),
+                ChatMessage::user(prompt).with_images(board_for_prompt.images()),
+            ]).json())?;
+            parse_review(&reply.content, &meta.cases)?
+        };
+
         retrace_counterexample(&*provider, &meta, &board_for_prompt, &mut review);
 
         Ok(ReviewEnvelope {
@@ -201,6 +231,9 @@ pub struct RevealRequest {
     /// there is no config, header, or default that can stand in for it.
     #[serde(default)]
     pub confirm_reveal: bool,
+    /// `bridge` (default) = stepwise path; `lazy` = fill earned solution code.
+    #[serde(default)]
+    pub mode: Option<String>,
     #[serde(default)]
     pub board: BoardSnapshot,
 }
@@ -213,6 +246,11 @@ pub struct RevealEnvelope {
     pub reveal_count: u32,
     #[serde(flatten)]
     pub bridge: BridgeResponse,
+    /// Present when `mode` was `lazy` — full solution.py text to write back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filled_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lazy_note: Option<String>,
 }
 
 /// The only caller of [`UserConsent::from_explicit_user_action`] in the whole
@@ -229,13 +267,15 @@ pub async fn reveal(
     }
 
     let dataset = resolve_dataset(request.dataset.as_deref())?;
+    let lazy_mode = request
+        .mode
+        .as_deref()
+        .is_some_and(|m| m.eq_ignore_ascii_case("lazy"));
     let cfg = state.cfg_snapshot();
     let envelope = blocking(move || {
         let meta = load_meta(&cfg, dataset, &request.task_id)?;
         let description = description_for(&meta);
 
-        // Whatever their code currently fails, so the bridge starts from the
-        // real gap rather than a hypothetical one.
         let failing = runner::load_last_run()?
             .filter(|run| run.task_id == meta.task_id)
             .map(|run| {
@@ -253,22 +293,50 @@ pub async fn reveal(
         )
         .with_context(|| format!("cannot reveal the reference for {}", meta.task_id))?;
 
-        let prompt = build_bridge_prompt(
-            &meta,
-            description.as_deref(),
-            &request.board,
-            reference.text(),
-            &failing,
-        );
         let provider = make_provider_for_mode(&cfg, "bridge")?;
-        let messages = vec![
-            ChatMessage::system(BRIDGE_SYSTEM_PROMPT),
-            ChatMessage::user(prompt),
-        ];
-        let reply = provider.chat_ex(&ChatRequest::new(messages).json())?;
-        let bridge = parse_bridge(&reply.content)?;
+        let (bridge, filled_code, lazy_note) = if lazy_mode {
+            let prompt = build_lazy_hint_prompt(
+                &meta,
+                description.as_deref(),
+                &request.board,
+                reference.text(),
+            );
+            let reply = provider.chat_ex(
+                &ChatRequest::new(vec![
+                    ChatMessage::system(LAZY_HINT_SYSTEM_PROMPT),
+                    ChatMessage::user(prompt),
+                ])
+                .json(),
+            )?;
+            let fill = parse_lazy_fill(&reply.content)?;
+            (
+                BridgeResponse {
+                    already_yours: fill.note.clone(),
+                    missing_piece: "Lazy fill wrote the parts your board already justified — finish the TODOs yourself.".into(),
+                    steps: vec![],
+                    smallest_edit: "Run the tests on the filled stubs, then tackle the TODOs.".into(),
+                },
+                Some(fill.filled_code),
+                Some(fill.note),
+            )
+        } else {
+            let prompt = build_bridge_prompt(
+                &meta,
+                description.as_deref(),
+                &request.board,
+                reference.text(),
+                &failing,
+            );
+            let reply = provider.chat_ex(
+                &ChatRequest::new(vec![
+                    ChatMessage::system(BRIDGE_SYSTEM_PROMPT),
+                    ChatMessage::user(prompt),
+                ])
+                .json(),
+            )?;
+            (parse_bridge(&reply.content)?, None, None)
+        };
 
-        // Logged so `lc stats` can show how often they tapped out.
         let mut session = Session::load_or_new()?;
         let reveal_count = session.mark_revealed(&meta.key())?;
 
@@ -277,6 +345,72 @@ pub async fn reveal(
             provider: provider.label(),
             reveal_count,
             bridge,
+            filled_code,
+            lazy_note,
+        })
+    })
+    .await?;
+    Ok(Json(envelope))
+}
+
+/// Composer Lazy flag — fill earned code from the board only (no reference).
+#[derive(Debug, Deserialize)]
+pub struct LazyRequest {
+    pub task_id: String,
+    #[serde(default)]
+    pub dataset: Option<String>,
+    #[serde(default)]
+    pub board: BoardSnapshot,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LazyEnvelope {
+    pub task_id: String,
+    pub provider: String,
+    #[serde(flatten)]
+    pub fill: LazyFillResponse,
+}
+
+pub async fn lazy_fill(
+    State(state): State<Shared>,
+    Json(request): Json<LazyRequest>,
+) -> Result<Json<LazyEnvelope>, AppError> {
+    let dataset = resolve_dataset(request.dataset.as_deref())?;
+    let mut board = request.board.clone();
+    let board_key = dataset.key(&request.task_id);
+    {
+        let mut store = state.board_sessions.lock().await;
+        let session = store.entry(&board_key);
+        board = board_session::resolve_board_snapshot(session, board);
+        if let Some(pseudo) = board_session::resolve_pseudocode(session, &board) {
+            board.pseudocode = Some(pseudo);
+        }
+    }
+    if board.is_empty() {
+        return Err(AppError::bad_request(anyhow!(
+            "the board is empty — sketch an approach before asking for a lazy fill"
+        )));
+    }
+
+    let cfg = state.cfg_snapshot();
+    let task_id = request.task_id.clone();
+    let envelope = blocking(move || {
+        let meta = load_meta(&cfg, dataset, &task_id)?;
+        let description = description_for(&meta);
+        let provider = make_provider_for_mode(&cfg, "review")?;
+        let prompt = build_lazy_fill_prompt(&meta, description.as_deref(), &board);
+        let reply = provider.chat_ex(
+            &ChatRequest::new(vec![
+                ChatMessage::system(LAZY_FILL_SYSTEM_PROMPT),
+                ChatMessage::user(prompt).with_images(board.images()),
+            ])
+            .json(),
+        )?;
+        let fill = parse_lazy_fill(&reply.content)?;
+        Ok(LazyEnvelope {
+            task_id: meta.task_id,
+            provider: provider.label(),
+            fill,
         })
     })
     .await?;
@@ -287,10 +421,6 @@ pub async fn reveal(
 mod tests {
     /// Verification step 7: no code path from `/coach/review` or
     /// `WS /coach/session` can construct a `SolutionReveal`.
-    ///
-    /// Consent is a private-field type, so the compiler already guarantees that
-    /// the *only* way to get one is `UserConsent::from_explicit_user_action`.
-    /// This pins down where that call is allowed to appear.
     #[test]
     fn only_the_reveal_handler_can_consent() {
         let reveal_handler = include_str!("coach.rs");
@@ -298,8 +428,6 @@ mod tests {
         let corpus_routes = include_str!("routes.rs");
         let viz_handler = include_str!("viz.rs");
 
-        // Split so this test's own source doesn't match itself, and require
-        // the call parens so the doc-comment reference doesn't either.
         let consent_call = concat!("UserConsent::from_explicit_user_action", "()");
         assert_eq!(
             reveal_handler.matches(consent_call).count(),
@@ -317,8 +445,6 @@ mod tests {
             );
         }
 
-        // The review handler shares this file with the reveal handler, so
-        // check its body specifically.
         let review_start = reveal_handler.find("pub async fn review(").expect("review handler");
         let review_end = reveal_handler[review_start..]
             .find("// Phase 5")
@@ -328,6 +454,14 @@ mod tests {
         assert!(
             !review_body.contains("Reveal") && !review_body.contains("Consent"),
             "the review handler must not touch the reveal path"
+        );
+
+        let lazy_start = reveal_handler
+            .find("pub async fn lazy_fill(")
+            .expect("lazy_fill handler");
+        assert!(
+            !reveal_handler[lazy_start..].contains(consent_call),
+            "lazy_fill must not grant reveal consent"
         );
     }
 }

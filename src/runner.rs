@@ -122,6 +122,32 @@ pub fn read_meta(dir: &Path) -> Result<WorkspaceMeta> {
     serde_json::from_str(&raw).with_context(|| format!("invalid meta {}", path.display()))
 }
 
+/// Keep `run_tests.py` on the embedded template so older workspaces pick up
+/// entry-point cleaning without a full `lc load`.
+fn refresh_runner_script(dir: &Path) -> Result<()> {
+    std::fs::write(dir.join("run_tests.py"), crate::generator::RUN_TESTS_PY)
+        .with_context(|| format!("cannot refresh run_tests.py in {}", dir.display()))
+}
+
+/// Rewrite `meta.json` when the corpus stored `Solution().foo` as the entry point.
+fn sanitize_workspace_meta(dir: &Path, meta: &mut WorkspaceMeta) -> Result<()> {
+    let Some(raw) = meta.entry_point.clone() else {
+        return Ok(());
+    };
+    let cleaned = crate::datasets::clean_entry_point(&raw);
+    if cleaned == raw {
+        return Ok(());
+    }
+    meta.entry_point = if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    };
+    let path = dir.join(".lc").join("meta.json");
+    std::fs::write(&path, serde_json::to_string_pretty(meta)?)
+        .with_context(|| format!("cannot update {}", path.display()))
+}
+
 /// Workspace dir for an explicit id in the default corpus, or the current
 /// directory if it is one.
 pub fn locate_workspace(cfg: &Config, id: Option<&str>) -> Result<PathBuf> {
@@ -211,7 +237,10 @@ fn cmd_test_inner(
     quiet: bool,
 ) -> Result<bool> {
     let dir = locate_workspace_in(cfg, dataset, id)?;
-    let meta = read_meta(&dir)?;
+    let mut meta = read_meta(&dir)?;
+    // Workspaces may predate entry-point cleaning / runner fixes — refresh both.
+    refresh_runner_script(&dir)?;
+    sanitize_workspace_meta(&dir, &mut meta)?;
 
     let mut cmd = Command::new(&cfg.python.executable);
     cmd.arg("run_tests.py").current_dir(&dir);

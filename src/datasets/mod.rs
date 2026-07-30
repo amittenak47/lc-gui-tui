@@ -49,11 +49,27 @@ pub const SOLUTION_FIELDS: [&str; 9] = [
 /// statement or no id, and one bad row must not fail a 400k-record import.
 pub fn normalize(dataset: &Dataset, raw: &Value) -> Option<Problem> {
     match dataset.shape {
-        Shape::Canonical => serde_json::from_value(raw.clone()).ok(),
+        Shape::Canonical => {
+            let mut problem: Problem = serde_json::from_value(raw.clone()).ok()?;
+            sanitize_entry_point(&mut problem);
+            Some(problem)
+        }
         Shape::KodCode => kodcode::normalize(raw),
         Shape::MorganStanleyPythonQ => ms_python_q::normalize(raw),
         Shape::DeepSeekLeetCode => deepseek_leetcode::normalize(raw),
         Shape::LeetCodeWithTests => leetcode_with_tests::normalize(raw),
+    }
+}
+
+/// Strip `Solution().foo()` down to the bare method the runner looks up.
+pub(crate) fn sanitize_entry_point(problem: &mut Problem) {
+    if let Some(raw) = problem.entry_point.take() {
+        let cleaned = clean_entry_point(&raw);
+        problem.entry_point = if cleaned.is_empty() {
+            None
+        } else {
+            Some(cleaned)
+        };
     }
 }
 
@@ -792,20 +808,42 @@ pub(crate) fn docstring_inside_def(source: &str) -> Option<String> {
     None
 }
 
-/// Clean an entry point that arrived as `Solution().isValid` / `sol.foo`.
+/// Clean an entry point that arrived as `Solution().isValid` / `sol.foo()` /
+/// `isValid()`.
+///
+/// The default LeetCode corpus stores receivers and call parens; the runner
+/// looks up a bare method name on `class Solution`.
 pub(crate) fn clean_entry_point(raw: &str) -> String {
     let s = raw.trim();
-    if let Some(rest) = s.strip_prefix("Solution().") {
-        return rest.trim().to_string();
-    }
-    if let Some((_, method)) = s.rsplit_once('.') {
+    let s = if let Some(rest) = s.strip_prefix("Solution().") {
+        rest.trim()
+    } else if let Some(rest) = s.strip_prefix("Solution.") {
+        rest.trim()
+    } else if let Some((_, method)) = s.rsplit_once('.') {
         let method = method.trim();
-        if !method.is_empty()
-            && method
+        // Allow trailing `()` here — stripped below.
+        let name = method.split_once('(').map(|(n, _)| n).unwrap_or(method).trim();
+        if !name.is_empty()
+            && name
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_')
         {
-            return method.to_string();
+            name
+        } else {
+            s
+        }
+    } else {
+        s
+    };
+
+    if let Some((name, _)) = s.split_once('(') {
+        let name = name.trim();
+        if !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return name.to_string();
         }
     }
     s.to_string()
@@ -929,6 +967,9 @@ mod tests {
     #[test]
     fn entry_points_like_solution_dot_method_clean_up() {
         assert_eq!(clean_entry_point("Solution().isValid"), "isValid");
+        assert_eq!(clean_entry_point("Solution().isSameAfterReversals()"), "isSameAfterReversals");
+        assert_eq!(clean_entry_point("sol.isValid()"), "isValid");
+        assert_eq!(clean_entry_point("isValid()"), "isValid");
         assert_eq!(clean_entry_point("twoSum"), "twoSum");
     }
 

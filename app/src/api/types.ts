@@ -265,6 +265,9 @@ export interface ReviewResponse {
    * the citation rather than showing a fabricated case.
    */
   counterexample_rejected: string | null;
+  /** Present when layout and code were scored in separate LLM passes. */
+  layout_verdict?: Verdict | null;
+  code_verdict?: Verdict | null;
 }
 
 export interface BridgeStep {
@@ -280,6 +283,16 @@ export interface BridgeResponse {
   missing_piece: string;
   steps: BridgeStep[];
   smallest_edit: string;
+  /** Lazy hint mode — full solution.py to write into the editor. */
+  filled_code?: string | null;
+  lazy_note?: string | null;
+}
+
+export interface LazyFillResponse {
+  task_id: string;
+  provider: string;
+  filled_code: string;
+  note: string;
 }
 
 export interface Annotation {

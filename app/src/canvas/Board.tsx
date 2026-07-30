@@ -221,6 +221,109 @@ async function exportBoardBlob(api: ExcalidrawApi, ops: readonly InkOp[]): Promi
   return composited ?? (await plain());
 }
 
+/**
+ * Region PNG with raster ink painted in — chat thumbs used to call exportToBlob
+ * alone, so pen work looked like a sparse "delta" of shapes only.
+ */
+async function exportRegionBlob(
+  api: ExcalidrawApi,
+  ops: readonly InkOp[],
+  elements: readonly SceneElementLike[],
+  frame: { x: number; y: number; width: number; height: number },
+): Promise<Blob> {
+  const appState = api.getAppState();
+  const files = api.getFiles();
+  const frameBounds: SceneBounds = {
+    minX: frame.x,
+    minY: frame.y,
+    maxX: frame.x + frame.width,
+    maxY: frame.y + frame.height,
+  };
+  const regionOps = ops.filter((op) =>
+    op.points.some(
+      (pt) =>
+        pt.x >= frameBounds.minX &&
+        pt.y >= frameBounds.minY &&
+        pt.x <= frameBounds.maxX &&
+        pt.y <= frameBounds.maxY,
+    ),
+  );
+
+  const plain = () =>
+    exportToBlob({
+      elements: elements as never,
+      appState: {
+        ...(appState as object),
+        exportBackground: true,
+        viewBackgroundColor:
+          (appState as { viewBackgroundColor?: string }).viewBackgroundColor ?? "#fff",
+      } as never,
+      files: files as never,
+      mimeType: "image/png",
+      quality: 0.7,
+      exportPadding: 16,
+    });
+
+  if (elements.length === 0) return plain();
+
+  const board = await exportToCanvas({
+    elements: elements as never,
+    appState: {
+      ...(appState as object),
+      exportBackground: true,
+      viewBackgroundColor:
+        (appState as { viewBackgroundColor?: string }).viewBackgroundColor ?? "#fff",
+    } as never,
+    files: files as never,
+    exportPadding: 0,
+  });
+  const [minX, minY, maxX, maxY] = getCommonBounds(elements as never);
+  const boardBounds: SceneBounds = { minX, minY, maxX, maxY };
+  const scale = exportScaleFrom(board.width, board.height, boardBounds);
+  if (scale === null || regionOps.length === 0) return plain();
+
+  const content = unionSceneBounds(boardBounds, inkOpsBounds(regionOps) ?? boardBounds)!;
+  const bounds: SceneBounds = {
+    minX: content.minX - EXPORT_PADDING,
+    minY: content.minY - EXPORT_PADDING,
+    maxX: content.maxX + EXPORT_PADDING,
+    maxY: content.maxY + EXPORT_PADDING,
+  };
+  const drawScale = clampExportScale(scale, bounds);
+  const width = Math.max(1, Math.round((bounds.maxX - bounds.minX) * drawScale));
+  const height = Math.max(1, Math.round((bounds.maxY - bounds.minY) * drawScale));
+
+  const inkCanvas = document.createElement("canvas");
+  inkCanvas.width = width;
+  inkCanvas.height = height;
+  const inkCtx = inkCanvas.getContext("2d");
+  if (!inkCtx) return plain();
+  paintInkAtScale(inkCtx, regionOps, { x: bounds.minX, y: bounds.minY }, drawScale);
+
+  const out = document.createElement("canvas");
+  out.width = width;
+  out.height = height;
+  const ctx = out.getContext("2d");
+  if (!ctx) return plain();
+  const background =
+    (appState as { viewBackgroundColor?: string }).viewBackgroundColor ?? "#fff";
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(
+    board,
+    (boardBounds.minX - bounds.minX) * drawScale,
+    (boardBounds.minY - bounds.minY) * drawScale,
+    (boardBounds.maxX - boardBounds.minX) * drawScale,
+    (boardBounds.maxY - boardBounds.minY) * drawScale,
+  );
+  ctx.drawImage(inkCanvas, 0, 0);
+
+  const composited = await new Promise<Blob | null>((resolve) =>
+    out.toBlob(resolve, "image/png", 0.75),
+  );
+  return composited ?? (await plain());
+}
+
 const ZOOM_MIN = 0.15;
 const ZOOM_MAX = 1.75;
 const ZOOM_STEP = 1.15;
@@ -408,6 +511,20 @@ const TOOLS: Array<{ tool: ToolName; label: string; hint: string; emoji?: string
   { tool: "arrow", label: "↗", hint: "Arrow" },
 ];
 
+/** Layouts where you ink — floating pen/eraser swap sits above each of these. */
+const INK_SWAP_REGIONS: readonly RegionId[] = [
+  "approach",
+  "complexity",
+  "walkthrough",
+  "scratch",
+];
+
+interface InkSwapAnchor {
+  region: RegionId;
+  left: number;
+  top: number;
+}
+
 /** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
 const UI_OPTIONS = {
   canvasActions: {
@@ -464,7 +581,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [activeTool, setActiveTool] = useState<ToolName>("hand");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
   const [inkColor, setInkColor] = useState(() => defaultInk(themeId));
-  const [strokeWidth, setStrokeWidthState] = useState(STROKE_WIDTH_DEFAULT);
+  const [penStrokeWidth, setPenStrokeWidth] = useState(STROKE_WIDTH_DEFAULT);
+  const [eraserStrokeWidth, setEraserStrokeWidth] = useState(STROKE_WIDTH_DEFAULT);
+  const strokeWidth = activeTool === "eraser" ? eraserStrokeWidth : penStrokeWidth;
+  const [inkSwapAnchors, setInkSwapAnchors] = useState<InkSwapAnchor[]>([]);
   const [pressureSensitive, setPressureSensitive] = useState(true);
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
@@ -608,7 +728,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const target = event.target;
       if (!(target instanceof Element)) return;
       if (!target.closest(".excalidraw")) return;
-      if (target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager")) return;
+      if (
+        target.closest(
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-ink-swap",
+        )
+      ) {
+        return;
+      }
 
       // The press itself is left alone — it is what commits (and, being empty,
       // deletes) the open box. Only the placement Excalidraw refuses to do is
@@ -823,9 +949,79 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     notify(next);
   }, []);
 
+  /**
+   * Screen anchors for the pen/eraser swap chip above each ink layout.
+   * Same coordinate space as the code dock (board-local, not page offsets).
+   */
+  const reportInkSwapAnchors = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) {
+      setInkSwapAnchors((current) => (current.length === 0 ? current : []));
+      return;
+    }
+
+    const state = api.getAppState() as {
+      scrollX?: number;
+      scrollY?: number;
+      zoom?: { value?: number };
+      width?: number;
+      height?: number;
+    };
+    const zoom = state.zoom?.value ?? 1;
+    const scrollX = state.scrollX ?? 0;
+    const scrollY = state.scrollY ?? 0;
+    const viewH = typeof state.height === "number" ? state.height : 0;
+    const viewW = typeof state.width === "number" ? state.width : 0;
+    const page = mobileRegionRef.current;
+    const chip = 40;
+
+    const frames = api.getSceneElements() as LayoutElement[];
+    const next: InkSwapAnchor[] = [];
+    for (const region of INK_SWAP_REGIONS) {
+      if (page !== null && page !== region) continue;
+      const frame = frames.find(
+        (el) =>
+          el.type === "rectangle" &&
+          el.customData?.lcRegionFrame &&
+          el.customData?.lcRegion === region,
+      );
+      if (!frame) continue;
+
+      const frameLeft = (frame.x + scrollX) * zoom;
+      const frameTop = (frame.y + scrollY) * zoom;
+      const frameWidth = num(frame.width, REGIONS[region].w) * zoom;
+      // Top-right of the layout chrome — above the ink area, clear of the label.
+      const left = roundPx(frameLeft + frameWidth - chip - 8);
+      const top = roundPx(frameTop + 8);
+      if (top + chip < -8 || top > viewH + 8 || left + chip < -8 || left > viewW + 8) {
+        continue;
+      }
+      next.push({ region, left, top });
+    }
+
+    setInkSwapAnchors((current) => {
+      if (
+        current.length === next.length &&
+        current.every(
+          (anchor, i) =>
+            anchor.region === next[i]?.region &&
+            anchor.left === next[i]?.left &&
+            anchor.top === next[i]?.top,
+        )
+      ) {
+        return current;
+      }
+      return next;
+    });
+  }, []);
+
   const setStrokeWidth = useCallback((width: number) => {
-    setStrokeWidthState(width);
-    apiRef.current?.updateScene({ appState: { currentItemStrokeWidth: width } });
+    if (activeTool === "eraser") {
+      setEraserStrokeWidth(width);
+    } else {
+      setPenStrokeWidth(width);
+      apiRef.current?.updateScene({ appState: { currentItemStrokeWidth: width } });
+    }
     if (activeTool === "eraser") {
       apiRef.current?.setCursor?.(eraserCanvasCursorCss());
     }
@@ -1195,7 +1391,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!(target instanceof Element)) return;
       if (
         target.closest(
-          ".lc-code-dock, .lc-toolbar, .lc-map-controls, .monaco-editor, textarea, input, [contenteditable='true']",
+          ".lc-code-dock, .lc-toolbar, .lc-map-controls, .lc-ink-swap, .monaco-editor, textarea, input, [contenteditable='true']",
         )
       ) {
         return;
@@ -1663,9 +1859,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         layoutSyncingRef.current = false;
         applyRegionLayout();
         reportCodeSlot();
+        reportInkSwapAnchors();
       });
     },
-    [applyRegionLayout, reportCodeSlot],
+    [applyRegionLayout, reportCodeSlot, reportInkSwapAnchors],
   );
   const setReadingSize = useCallback(
     (next: BoardReadingSize) => {
@@ -1702,10 +1899,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // canvas, so zooming out on a tablet shows one frame, not the whole column.
     syncPageVisibility();
     reportCodeSlot();
+    reportInkSwapAnchors();
     void settleFitView().then(() => {
       reportCodeSlot();
+      reportInkSwapAnchors();
     });
-  }, [interactive, mobileRegion, reportCodeSlot, settleFitView, syncPageVisibility]);
+  }, [
+    interactive,
+    mobileRegion,
+    reportCodeSlot,
+    reportInkSwapAnchors,
+    settleFitView,
+    syncPageVisibility,
+  ]);
 
   const handleSceneChange = useCallback(
     (
@@ -1727,6 +1933,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // Frames: pin column position, zero rotation; resize height/width still works.
       applyRegionLayout();
       reportCodeSlot();
+      reportInkSwapAnchors();
 
       const editingId = appState?.editingTextElement?.id ?? null;
       const prevEditingId = editingTextIdRef.current;
@@ -1840,7 +2047,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       onChange?.();
     },
-    [activeTool, applyRegionLayout, onChange, reportCodeSlot, setTool, syncPageVisibility],
+    [activeTool, applyRegionLayout, onChange, reportCodeSlot, reportInkSwapAnchors, setTool, syncPageVisibility],
   );
 
   useImperativeHandle(
@@ -1900,8 +2107,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const api = apiRef.current;
         if (!api) return [];
         const all = api.getSceneElements() as SceneElementLike[];
-        const appState = api.getAppState();
-        const files = api.getFiles();
         const ops = rasterInkRef.current?.getOps() ?? [];
         const thumbs: Array<{ region: RegionId; label: string; png: string }> = [];
 
@@ -1945,25 +2150,34 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           );
           if (authored.length === 0 && !hasInk) continue;
 
-          const png = await captureImage(async () => {
-            const blob = await exportToBlob({
-              elements: inBox as never,
-              appState: {
-                ...(appState as object),
-                exportBackground: true,
-                viewBackgroundColor:
-                  (appState as { viewBackgroundColor?: string }).viewBackgroundColor ?? "#fff",
-              } as never,
-              files: files as never,
-              mimeType: "image/png",
-              quality: 0.7,
-              exportPadding: 16,
-            });
-            return blob;
-          }, { maxEdge: 480, maxBase64: 1.5 * 1024 * 1024 });
+          const png = await captureImage(
+            () =>
+              exportRegionBlob(
+                api,
+                ops,
+                inBox as SceneElementLike[],
+                {
+                  x: frame.x,
+                  y: frame.y,
+                  width: frame.width,
+                  height: frame.height,
+                },
+              ),
+            { maxEdge: 640, maxBase64: 2 * 1024 * 1024 },
+          );
           if (png) {
             thumbs.push({ region, label: REGIONS[region].label, png });
           }
+        }
+
+        // Full reconstructed board (shapes + ink) so the chat isn't only
+        // region crops of "what changed".
+        const fullPng = await captureImage(
+          () => exportBoardBlob(api, ops),
+          { maxEdge: 900, maxBase64: 3 * 1024 * 1024 },
+        );
+        if (fullPng && (thumbs.length > 0 || ops.length > 0)) {
+          thumbs.unshift({ region: "approach", label: "Board", png: fullPng });
         }
         return thumbs;
       },
@@ -2177,6 +2391,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               setZoomPct((current) => (current === pct ? current : pct));
               rasterInkRef.current?.repaint();
               reportCodeSlot();
+              reportInkSwapAnchors();
 
               if (!mobile || clampingScrollRef.current) return;
               const bounds = pageBoundsRef.current;
@@ -2214,11 +2429,33 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           setZoomPct((current) => (current === pct ? current : pct));
           apiRef.current.setActiveTool({ type: "hand" });
           reportCodeSlot();
+          reportInkSwapAnchors();
         }}
         onChange={handleSceneChange}
         initialData={initialData}
         UIOptions={UI_OPTIONS}
       />
+      {interactive &&
+        inkSwapAnchors.map((anchor) => {
+          const toEraser = activeTool !== "eraser";
+          return (
+            <button
+              key={anchor.region}
+              type="button"
+              className="lc-ink-swap"
+              style={{ left: anchor.left, top: anchor.top }}
+              title={toEraser ? "Switch to eraser" : "Switch to pen"}
+              aria-label={toEraser ? "Switch to eraser" : "Switch to pen"}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => {
+                if (shapesOpen) setShapesOpen(false);
+                setTool(toEraser ? "eraser" : "freedraw");
+              }}
+            >
+              {toEraser ? <PinkEraserIcon /> : <PenIcon />}
+            </button>
+          );
+        })}
     </div>
   );
 });
@@ -2851,6 +3088,28 @@ function PinkEraserIcon() {
         <rect x="4.5" y="7" width="15" height="3.8" rx="1.2" fill="#fb7185" />
         <rect x="4.5" y="15.2" width="15" height="2.8" fill="#fff1f2" opacity="0.95" />
       </g>
+    </svg>
+  );
+}
+
+function PenIcon() {
+  return (
+    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M14.5 4.5 19.5 9.5 9 20H4v-5Z"
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        d="m12.5 6.5 5 5"
+      />
     </svg>
   );
 }

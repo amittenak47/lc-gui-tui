@@ -49,7 +49,31 @@ def load_solution():
     return mod
 
 
+def clean_entry_point(raw):
+    """Strip `Solution().foo()` / `sol.foo()` down to the bare method name."""
+    if not raw:
+        return raw
+    s = raw.strip()
+    stripped = False
+    for prefix in ("Solution().", "Solution.", "sol."):
+        if s.startswith(prefix):
+            s = s[len(prefix) :].strip()
+            stripped = True
+            break
+    if not stripped and "." in s:
+        method = s.rsplit(".", 1)[-1].strip()
+        name = method.split("(", 1)[0].strip()
+        if name and all(c.isalnum() or c == "_" for c in name):
+            s = name
+    if "(" in s:
+        name = s.split("(", 1)[0].strip()
+        if name and all(c.isalnum() or c == "_" for c in name):
+            s = name
+    return s
+
+
 def resolve_candidate(mod, entry_point):
+    entry_point = clean_entry_point(entry_point)
     if entry_point:
         sol_cls = getattr(mod, "Solution", None)
         if sol_cls is not None and hasattr(sol_cls, entry_point):

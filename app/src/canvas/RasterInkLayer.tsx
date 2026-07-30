@@ -1,5 +1,10 @@
 /**
  * Bitmap ink layer over Excalidraw — pen draws pixels; eraser clears them.
+ *
+ * Committed ink is baked into an offscreen canvas. Live strokes paint on top of
+ * that bake. Without baking, every pointer move replayed every erase stamp from
+ * history (dense destination-out arcs), so a one-character erase made later
+ * pen strokes feel like a leak.
  */
 
 import {
@@ -11,10 +16,13 @@ import {
 } from "react";
 
 import {
+  applyInkOp,
   eraserSceneRadius,
+  inkBakeKey,
   inkLineWidth,
   paintRasterInk,
   scenePointFromPointer,
+  setInkSceneTransform,
   stampAlongSegment,
   type InkOp,
   type SceneBounds,
@@ -51,12 +59,18 @@ export interface RasterInkLayerProps {
   onChange?: () => void;
 }
 
+function cloneOps(ops: readonly InkOp[]): InkOp[] {
+  return ops.map((op) => ({ ...op, points: [...op.points] }));
+}
+
 export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
   function RasterInkLayer(
     { enabled, tool, strokeWidth, inkColor, pressureSensitive, getViewport, clip = null, onChange },
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const bakeRef = useRef<HTMLCanvasElement | null>(null);
+    const bakeKeyRef = useRef<string>("");
     const opsRef = useRef<InkOp[]>([]);
     const undoRef = useRef<InkOp[][]>([]);
     const redoRef = useRef<InkOp[][]>([]);
@@ -82,6 +96,89 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       return excalRect;
     }, []);
 
+    const rebuildBake = useCallback(
+      (
+        viewport: ViewportTransform,
+        dpr: number,
+        cssW: number,
+        cssH: number,
+        key: string,
+      ) => {
+        let bake = bakeRef.current;
+        if (!bake) {
+          bake = document.createElement("canvas");
+          bakeRef.current = bake;
+        }
+        const pixelW = Math.max(1, Math.round(cssW * dpr));
+        const pixelH = Math.max(1, Math.round(cssH * dpr));
+        if (bake.width !== pixelW || bake.height !== pixelH) {
+          bake.width = pixelW;
+          bake.height = pixelH;
+        }
+        const bakeCtx = bake.getContext("2d");
+        if (!bakeCtx) return null;
+        // paintRasterInk uses viewport.width/height for the clear — keep those
+        // aligned with the CSS box we sized the bake to.
+        const bakeViewport: ViewportTransform = {
+          ...viewport,
+          width: cssW,
+          height: cssH,
+        };
+        paintRasterInk(bakeCtx, bakeViewport, opsRef.current, null, dpr, clipRef.current);
+        bakeKeyRef.current = key;
+        return bake;
+      },
+      [],
+    );
+
+    const ensureBake = useCallback(
+      (viewport: ViewportTransform, dpr: number, cssW: number, cssH: number) => {
+        const key = inkBakeKey(viewport, dpr, cssW, cssH, clipRef.current);
+        if (bakeRef.current && bakeKeyRef.current === key) {
+          return bakeRef.current;
+        }
+        return rebuildBake(viewport, dpr, cssW, cssH, key);
+      },
+      [rebuildBake],
+    );
+
+    /** Append a just-committed op onto the bake without replaying history. */
+    const stampOntoBake = useCallback(
+      (op: InkOp, viewport: ViewportTransform, dpr: number, cssW: number, cssH: number) => {
+        const key = inkBakeKey(viewport, dpr, cssW, cssH, clipRef.current);
+        // Bake already rebuilt from ops that include this op — do not stamp again.
+        if (!bakeRef.current || bakeKeyRef.current !== key) {
+          rebuildBake(viewport, dpr, cssW, cssH, key);
+          return;
+        }
+        const bake = bakeRef.current;
+        const bakeCtx = bake.getContext("2d");
+        if (!bakeCtx) return;
+        setInkSceneTransform(bakeCtx, viewport, dpr);
+        const clipBox = clipRef.current;
+        if (clipBox) {
+          bakeCtx.save();
+          bakeCtx.beginPath();
+          bakeCtx.rect(
+            clipBox.minX,
+            clipBox.minY,
+            clipBox.maxX - clipBox.minX,
+            clipBox.maxY - clipBox.minY,
+          );
+          bakeCtx.clip();
+          applyInkOp(bakeCtx, op);
+          bakeCtx.restore();
+        } else {
+          applyInkOp(bakeCtx, op);
+        }
+      },
+      [rebuildBake],
+    );
+
+    const invalidateBake = useCallback(() => {
+      bakeKeyRef.current = "";
+    }, []);
+
     const repaint = useCallback(() => {
       const canvas = canvasRef.current;
       const viewport = getViewport();
@@ -92,71 +189,103 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const dpr = window.devicePixelRatio || 1;
       const cssW = excalRect?.width ?? viewport.width;
       const cssH = excalRect?.height ?? viewport.height;
-      if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
-        canvas.width = Math.round(cssW * dpr);
-        canvas.height = Math.round(cssH * dpr);
+      const pixelW = Math.round(cssW * dpr);
+      const pixelH = Math.round(cssH * dpr);
+      if (canvas.width !== pixelW || canvas.height !== pixelH) {
+        canvas.width = pixelW;
+        canvas.height = pixelH;
         canvas.style.width = `${cssW}px`;
         canvas.style.height = `${cssH}px`;
       }
-      paintRasterInk(ctx, viewport, opsRef.current, liveRef.current, dpr, clipRef.current);
-    }, [alignToExcalidraw, getViewport]);
+
+      const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
+      const bake = ensureBake(view, dpr, cssW, cssH);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (bake) {
+        ctx.drawImage(bake, 0, 0);
+      }
+
+      const live = liveRef.current;
+      if (live) {
+        setInkSceneTransform(ctx, view, dpr);
+        const clipBox = clipRef.current;
+        if (clipBox) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(
+            clipBox.minX,
+            clipBox.minY,
+            clipBox.maxX - clipBox.minX,
+            clipBox.maxY - clipBox.minY,
+          );
+          ctx.clip();
+          applyInkOp(ctx, live);
+          ctx.restore();
+        } else {
+          applyInkOp(ctx, live);
+        }
+      }
+    }, [alignToExcalidraw, ensureBake, getViewport]);
 
     const commitLive = useCallback(() => {
       const live = liveRef.current;
       if (!live) return;
-      undoRef.current.push(
-        opsRef.current.map((op) =>
-          op.kind === "draw"
-            ? { ...op, points: [...op.points] }
-            : { ...op, points: [...op.points] },
-        ),
-      );
+      undoRef.current.push(cloneOps(opsRef.current));
+      // Cap undo depth — each snapshot clones every point, and erase stamps are dense.
+      if (undoRef.current.length > 40) {
+        undoRef.current.splice(0, undoRef.current.length - 40);
+      }
       redoRef.current = [];
       opsRef.current = [...opsRef.current, live];
       liveRef.current = null;
       lastPointRef.current = null;
+
+      const canvas = canvasRef.current;
+      const viewport = getViewport();
+      if (canvas && viewport) {
+        const excalRect = alignToExcalidraw(canvas);
+        const dpr = window.devicePixelRatio || 1;
+        const cssW = excalRect?.width ?? viewport.width;
+        const cssH = excalRect?.height ?? viewport.height;
+        const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
+        stampOntoBake(live, view, dpr, cssW, cssH);
+      } else {
+        invalidateBake();
+      }
       repaint();
       onChange?.();
-    }, [onChange, repaint]);
+    }, [alignToExcalidraw, getViewport, invalidateBake, onChange, repaint, stampOntoBake]);
 
     useImperativeHandle(
       ref,
       () => ({
         clear() {
           if (opsRef.current.length === 0) return;
-          undoRef.current.push(
-        opsRef.current.map((op) =>
-          op.kind === "draw"
-            ? { ...op, points: [...op.points] }
-            : { ...op, points: [...op.points] },
-        ),
-      );
+          undoRef.current.push(cloneOps(opsRef.current));
           redoRef.current = [];
           opsRef.current = [];
           liveRef.current = null;
+          invalidateBake();
           repaint();
           onChange?.();
         },
         undo() {
           if (undoRef.current.length === 0) return false;
-          redoRef.current.push(opsRef.current.map((op) => ({ ...op, points: [...op.points] })));
+          redoRef.current.push(cloneOps(opsRef.current));
           opsRef.current = undoRef.current.pop() ?? [];
           liveRef.current = null;
+          invalidateBake();
           repaint();
           onChange?.();
           return true;
         },
         redo() {
           if (redoRef.current.length === 0) return false;
-          undoRef.current.push(
-        opsRef.current.map((op) =>
-          op.kind === "draw"
-            ? { ...op, points: [...op.points] }
-            : { ...op, points: [...op.points] },
-        ),
-      );
+          undoRef.current.push(cloneOps(opsRef.current));
           opsRef.current = redoRef.current.pop() ?? [];
           liveRef.current = null;
+          invalidateBake();
           repaint();
           onChange?.();
           return true;
@@ -174,19 +303,23 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         },
         repaint,
       }),
-      [onChange, repaint],
+      [invalidateBake, onChange, repaint],
     );
 
     useEffect(() => {
+      invalidateBake();
       repaint();
-    }, [enabled, strokeWidth, inkColor, pressureSensitive, clip, repaint]);
+    }, [enabled, clip, invalidateBake, repaint]);
 
     useEffect(() => {
       if (!enabled) return;
-      const onResize = () => repaint();
+      const onResize = () => {
+        invalidateBake();
+        repaint();
+      };
       window.addEventListener("resize", onResize);
       return () => window.removeEventListener("resize", onResize);
-    }, [enabled, repaint]);
+    }, [enabled, invalidateBake, repaint]);
 
     useEffect(() => {
       if (!enabled || !tool) return;
