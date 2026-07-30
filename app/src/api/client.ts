@@ -278,8 +278,18 @@ export class LcClient {
   }
 
   /** Mode A. The daemon validates any cited counterexample before replying. */
-  async review(taskId: string, board: BoardSnapshot, dataset?: string): Promise<ReviewResponse> {
-    return this.request("POST", "/coach/review", { task_id: taskId, dataset, ...board });
+  async review(
+    taskId: string,
+    board: BoardSnapshot,
+    dataset?: string,
+    opts?: { layoutOnly?: boolean },
+  ): Promise<ReviewResponse> {
+    return this.request("POST", "/coach/review", {
+      task_id: taskId,
+      dataset,
+      layout_only: opts?.layoutOnly === true,
+      ...board,
+    });
   }
 
   /**
@@ -322,11 +332,21 @@ export class LcClient {
     board: BoardSnapshot,
     dataset?: string,
   ): Promise<import("./types").LazyFillResponse> {
-    return this.request("POST", "/coach/lazy", {
-      task_id: taskId,
-      dataset,
-      board,
-    });
+    try {
+      return await this.request("POST", "/coach/lazy", {
+        task_id: taskId,
+        dataset,
+        board,
+      });
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 404) {
+        throw new LcApiError(
+          "Lazy fill needs a daemon that serves POST /coach/lazy — rebuild and restart `lc serve` (cargo install --path . if you use an installed binary)",
+          404,
+        );
+      }
+      throw cause;
+    }
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

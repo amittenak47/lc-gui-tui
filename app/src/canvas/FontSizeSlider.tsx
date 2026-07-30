@@ -60,13 +60,11 @@ export function FontSizeSlider({ value, onChange }: FontSizeSliderProps) {
       <input
         ref={inputRef}
         type="range"
-        className="lc-stroke-slider-input lc-tip-target"
+        className="lc-stroke-slider-input"
         min={TEXT_FONT_MIN}
         max={TEXT_FONT_MAX}
         step={TEXT_FONT_STEP}
         value={clamped}
-        data-tip={`Font size ${clamped}px`}
-        data-tip-placement="right"
         aria-label="Font size"
         aria-valuemin={TEXT_FONT_MIN}
         aria-valuemax={TEXT_FONT_MAX}

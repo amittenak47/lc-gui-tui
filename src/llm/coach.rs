@@ -282,45 +282,40 @@ fn render_structure_by_region(structure: &serde_json::Value) -> String {
 // Mode A — submit for review
 // ---------------------------------------------------------------------------
 
-pub const REVIEW_SYSTEM_PROMPT: &str = "You are a sharp, demanding whiteboard interviewer for \
-competitive programming. The student has sketched an approach by hand — you are reading their \
-handwriting, not their code. Your job is to work out what they intend, judge whether it actually \
-works, and if it does not, find the specific sample test case that breaks it.\n\
+pub const REVIEW_SYSTEM_PROMPT: &str = "You are a whiteboard coach for competitive programming. \
+The student sketches by hand (and may type code later on a tablet). Your job is to work out what \
+they intend and judge whether that ALGORITHM is correct — fairly, not adversarially.\n\
 \n\
 Rules:\n\
 - Infer the approach charitably: handwriting recognition is noisy and notation is abbreviated.\n\
-- Judge the ALGORITHM, not the penmanship or the missing syntax.\n\
-- If the approach is wrong or incomplete, you MUST cite a counterexample by its index into the \
-numbered sample cases you are given. Never invent a case, an input, or an index — if none of the \
-given cases breaks their approach, set \"counterexample\" to null and say so in \"gaps\".\n\
-- Your explanation of the counterexample must trace THE CITED CASE. Use that case's actual values \
-and no others. Do not introduce a different, easier, or made-up array to illustrate the point — a \
-trace of some other input is worse than no trace, because the student will run the case you cited \
-and see something different.\n\
+- Judge the ALGORITHM / insight, not penmanship, missing syntax, or incomplete code stubs.\n\
+- Do NOT hunt for criticism. If their approach solves the problem, say so: verdict \"on_track\", \
+list real strengths, and leave \"gaps\" empty or with only optional polish — never invent flaws \
+to fill the field.\n\
+- An elegant insight that skips an unnecessary loop (e.g. \"trailing zeros break double-reversal\") \
+IS a complete approach. Do not demand they \"implement the actual reversal\" when the insight \
+already decides the answer.\n\
+- Only mark subtly_wrong / wrong_track when you can show a real failure. Cite a counterexample by \
+index into the numbered sample cases. Never invent a case, input, or index — if none of the given \
+cases breaks their approach, set \"counterexample\" to null.\n\
+- Your explanation of a counterexample must trace THE CITED CASE's actual values only.\n\
 - On a follow-up turn (when \"Since your last look\" is present), respond to what is new; do not \
 repeat a point you already made.\n\
-- Some devices cannot transcribe ink at all. Missing handwriting text is NOT an empty board: read \
-the canvas layout — and the attached image when there is one — and work out what the boxes, \
-arrows and positions mean before you judge anything. Never assert the board is blank when there \
-are objects on it.\n\
-- If the board is sparse or the session is early, you are opening an interview, not grading a \
-failure. Do not say they have done nothing, do not tell them to \"start coding\" or to \"implement \
-a solution\", and do not treat the attempt as failed. Instead put one or two concrete, \
-problem-specific opening hints in \"gaps\": which constraint actually bites, a small input worth \
-walking by hand, a data structure that fits the access pattern, an invariant worth chasing. \
-Specific to THIS problem — no generic encouragement — and use \"unclear\" as the verdict while \
-there is not yet an approach to judge.\n\
-- Keep fields distinct: \"understood_approach\" is ONE short sentence naming their intended idea \
-(or that they are still exploring) — do not list missing pieces there. \"gaps\" lists only concrete \
-missing pieces or next building blocks — do not restate understood_approach. \
-\"socratic_question\" is the most specific and actionable field: a direct next move or probe \
-(which cell, which case, which invariant) that is more detailed than understood_approach.\n\
-- Always score \"rating\" with integers 1–5 for correctness, complexity, and clarity. Use 1–2 when \
-the board is sparse or the approach is unclear, 3 when partially formed, 4–5 when solid. Never \
-return all zeros if the student wrote, asked, or sketched anything; reserve 0 only for a truly \
-blank board.\n\
-- Never write the corrected algorithm or working code. End with one Socratic question that leads \
-them to the flaw themselves.\n\
+- Some devices cannot transcribe ink. Missing handwriting text is NOT an empty board: read the \
+canvas layout — and the attached image when there is one — before judging. Never assert the board \
+is blank when there are objects on it.\n\
+- Prefer the whiteboard layout over the code dock. Tablet typing is hard; a sparse or stubby \
+solution.py must not override a clear correct board. Incomplete code is not evidence the \
+approach is wrong.\n\
+- If the board is sparse or the session is early, open the interview: put one or two concrete, \
+problem-specific hints in \"gaps\", use verdict \"unclear\", and do not tell them to \"start coding\".\n\
+- Keep fields distinct: \"understood_approach\" is ONE short sentence naming their idea. \"gaps\" \
+lists only concrete missing pieces — do not restate understood_approach. \"socratic_question\" is \
+the most specific next move.\n\
+- Always score \"rating\" with integers 1–5. Use 4–5 when the approach is solid, even if code is \
+thin. Never return all zeros if they wrote, asked, or sketched anything.\n\
+- Never write the corrected algorithm or working code in the review JSON. End with one Socratic \
+question (or a confirming question if they are on track).\n\
 - Reply with a single JSON object and nothing else — no prose, no markdown fence.";
 
 /// Verdicts the model may return. Anything unrecognized degrades to
@@ -876,24 +871,29 @@ pub fn parse_bridge(raw: &str) -> Result<BridgeResponse> {
 // Lazy fill — write the parts of solution.py the student already earned
 // ---------------------------------------------------------------------------
 
-pub const LAZY_FILL_SYSTEM_PROMPT: &str = "The student sketched an approach on a whiteboard. \
-Your job is to write ONLY the parts of the Python solution that their board already justifies — \
-the \"lazy\" fill. Do not invent the hard remainder.\n\
+pub const LAZY_FILL_SYSTEM_PROMPT: &str = "The student is drawing on a tablet and turned on Lazy \
+fill. Treat the whiteboard as the only source of truth — ignore a sparse or empty code dock.\n\
+\n\
+Your job: interpret what they drew / wrote on the board, then write the Python that correctly \
+implements the parts their board already justifies.\n\
 \n\
 Rules:\n\
-- Read the board / recognized text as the source of truth for what they figured out.\n\
-- Emit a complete `solution.py` (or class Solution body) that implements those parts.\n\
-- Leave unfinished work as `pass`, `raise NotImplementedError`, or a clear `# TODO:`.\n\
-- Do NOT dump a full working reference solution.\n\
+- Read ink, layout, and recognized text charitably; tablet handwriting is noisy.\n\
+- If the board shows a correct insight (even without full code), implement that insight fully in \
+`filled_code` — do not leave the earned part as TODO.\n\
+- Only leave `pass` / `# TODO:` for ideas the board has not earned yet.\n\
+- Prefer a short correct solution that matches their insight over a longer textbook dump.\n\
+- Do NOT invent an unrelated full reference solution that contradicts their approach.\n\
 - Reply with a single JSON object and nothing else.";
 
-pub const LAZY_HINT_SYSTEM_PROMPT: &str = "The student confirmed a Lazy hint. You may look at the \
-reference solution, but you must still only write the parts that match what they already have \
-on the board. Fill in the easy / already-correct pieces; leave the missing idea as TODO/pass.\n\
+pub const LAZY_HINT_SYSTEM_PROMPT: &str = "The student confirmed a Lazy hint after drawing. The \
+board is primary. You may look at the reference only to flesh out syntax for parts they already \
+earned on the board.\n\
 \n\
 Rules:\n\
-- Use the reference to get syntax and naming right for the parts they earned.\n\
-- Do not paste the full reference.\n\
+- Interpret the drawing first; fill the correct earned pieces into solution.py.\n\
+- Leave only the unearned idea as TODO/pass.\n\
+- Do not paste the full reference when their board only earned part of it.\n\
 - Reply with a single JSON object and nothing else.";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -913,13 +913,22 @@ pub fn build_lazy_fill_prompt(
 ) -> String {
     let mut out = String::new();
     write_problem_header(&mut out, meta, description);
-    board.write_into(&mut out);
+    write_cases(&mut out, &meta.cases);
+    // Board only — ignore whatever is in the code dock.
+    let mut board_only = board.clone();
+    board_only.pseudocode = None;
+    board_only.pseudocode_delta = None;
+    board_only.code_mode = None;
+    board_only.write_into(&mut out);
     let _ = writeln!(
         out,
-        "\n## Your reply\n\n\
+        "\n## Task\n\nInterpret the drawing. Write `filled_code` that correctly implements \
+         what the board already justifies (full working code for those parts). Leave only \
+         unearned ideas as TODO/pass.\n\n\
+         ## Your reply\n\n\
          ```json\n\
          {{\"filled_code\": \"# full solution.py text\\n...\", \
-         \"note\": \"one or two sentences: what you filled vs left as TODO\"}}\n\
+         \"note\": \"one or two sentences: what you filled from the board vs left as TODO\"}}\n\
          ```"
     );
     out
@@ -978,7 +987,9 @@ pub fn build_layout_review_prompt(
     let _ = writeln!(
         out,
         "\n## Focus\n\nAssess ONLY the whiteboard layout / ink / typed notes on the board. \
-         Ignore any solution.py — it is reviewed separately.\n\n\
+         Ignore any solution.py — it is reviewed separately (and may be empty on a tablet).\n\
+         Judge the insight charitably. If the board's approach is correct, use verdict \
+         \"on_track\" and do not invent gaps.\n\n\
          ## Your reply\n\n\
          Return exactly this JSON shape:\n\n\
          ```json\n\
@@ -987,9 +998,9 @@ pub fn build_layout_review_prompt(
            \"verdict\": \"on_track | subtly_wrong | wrong_track | unclear\",\n  \
            \"rating\": {{\"correctness\": 1-5, \"complexity\": 1-5, \"clarity\": 1-5}},\n  \
            \"strengths\": [\"board strengths\"],\n  \
-           \"gaps\": [\"board gaps\"],\n  \
+           \"gaps\": [\"board gaps only — empty array if on track\"],\n  \
            \"counterexample\": null,\n  \
-           \"socratic_question\": \"a board-focused next step\",\n  \
+           \"socratic_question\": \"a board-focused next step (or a confirming question if on track)\",\n  \
            \"offer_bridge\": false\n\
          }}\n\
          ```"
@@ -1020,8 +1031,10 @@ pub fn build_code_review_prompt(
     );
     let _ = writeln!(
         out,
-        "\n## Focus\n\nAssess ONLY this code. The whiteboard was reviewed separately — \
-         do not assume the board is wrong or right based on the code alone.\n\n\
+        "\n## Focus\n\nAssess ONLY this code. The whiteboard was reviewed separately.\n\
+         Incomplete or stubby code on a tablet is normal — do not invent algorithmic gaps \
+         that the board may already have answered. Only mark wrong when the code itself \
+         clearly fails a sample case.\n\n\
          ## Your reply\n\n\
          Return exactly this JSON shape:\n\n\
          ```json\n\
@@ -1030,7 +1043,7 @@ pub fn build_code_review_prompt(
            \"verdict\": \"on_track | subtly_wrong | wrong_track | unclear\",\n  \
            \"rating\": {{\"correctness\": 1-5, \"complexity\": 1-5, \"clarity\": 1-5}},\n  \
            \"strengths\": [\"code strengths\"],\n  \
-           \"gaps\": [\"code gaps\"],\n  \
+           \"gaps\": [\"code gaps — empty if the code is fine or just thin\"],\n  \
            \"counterexample\": {{\"case_index\": <0-based or null>, \
               \"why_your_approach_fails\": \"...\"}},\n  \
            \"socratic_question\": \"a code-focused next step\",\n  \
@@ -1042,30 +1055,37 @@ pub fn build_code_review_prompt(
 }
 
 /// Merge separate layout and code reviews into one card for the client.
+///
+/// The board wins: tablet typing is hard, so a correct layout must not be
+/// downgraded by a sparse code dock, and code-only nitpicks stay secondary.
 pub fn merge_layout_and_code_reviews(
     layout: ReviewResponse,
     code: ReviewResponse,
 ) -> ReviewResponse {
     let mut merged = ReviewResponse::default();
     merged.understood_approach = if !layout.understood_approach.trim().is_empty() {
-        format!(
-            "Board: {} | Code: {}",
-            layout.understood_approach.trim(),
-            if code.understood_approach.trim().is_empty() {
-                "(empty)"
-            } else {
+        if code.understood_approach.trim().is_empty()
+            || code.understood_approach.trim() == layout.understood_approach.trim()
+        {
+            layout.understood_approach.clone()
+        } else {
+            format!(
+                "Board: {} | Code: {}",
+                layout.understood_approach.trim(),
                 code.understood_approach.trim()
-            }
-        )
+            )
+        }
     } else {
         code.understood_approach.clone()
     };
-    merged.verdict = worse_verdict(layout.verdict, code.verdict);
+    merged.verdict = prefer_layout_verdict(layout.verdict, code.verdict);
+    // Weight the board more heavily when scoring.
     merged.rating = Rating {
-        correctness: ((layout.rating.correctness + code.rating.correctness) as f32 / 2.0).round()
+        correctness: ((layout.rating.correctness * 2 + code.rating.correctness) as f32 / 3.0)
+            .round() as u8,
+        complexity: ((layout.rating.complexity * 2 + code.rating.complexity) as f32 / 3.0).round()
             as u8,
-        complexity: ((layout.rating.complexity + code.rating.complexity) as f32 / 2.0).round() as u8,
-        clarity: ((layout.rating.clarity + code.rating.clarity) as f32 / 2.0).round() as u8,
+        clarity: ((layout.rating.clarity * 2 + code.rating.clarity) as f32 / 3.0).round() as u8,
     };
     merged.rating.clamp();
     merged.strengths = [
@@ -1073,22 +1093,41 @@ pub fn merge_layout_and_code_reviews(
         prefix_notes("code", &code.strengths),
     ]
     .concat();
-    merged.gaps = [prefix_notes("layout", &layout.gaps), prefix_notes("code", &code.gaps)].concat();
-    merged.counterexample = code.counterexample.or(layout.counterexample);
-    merged.counterexample_rejected = code
-        .counterexample_rejected
-        .or(layout.counterexample_rejected);
-    merged.socratic_question = {
-        let mut parts = Vec::new();
-        if !layout.socratic_question.trim().is_empty() {
-            parts.push(format!("Board: {}", layout.socratic_question.trim()));
-        }
-        if !code.socratic_question.trim().is_empty() {
-            parts.push(format!("Code: {}", code.socratic_question.trim()));
-        }
-        parts.join("\n")
+    // When the board is on track, drop code gaps — they are usually "you didn't
+    // type the full solution" noise on a tablet.
+    merged.gaps = if layout.verdict == Verdict::OnTrack {
+        prefix_notes("layout", &layout.gaps)
+    } else {
+        [prefix_notes("layout", &layout.gaps), prefix_notes("code", &code.gaps)].concat()
     };
-    merged.offer_bridge = layout.offer_bridge || code.offer_bridge;
+    // Prefer a board counterexample; only use code's if the board had none and
+    // the board was not already judged on track.
+    merged.counterexample = if layout.verdict == Verdict::OnTrack {
+        None
+    } else {
+        layout.counterexample.or(code.counterexample)
+    };
+    merged.counterexample_rejected = layout
+        .counterexample_rejected
+        .or(code.counterexample_rejected);
+    merged.socratic_question = if !layout.socratic_question.trim().is_empty() {
+        if layout.verdict == Verdict::OnTrack || code.socratic_question.trim().is_empty() {
+            layout.socratic_question.clone()
+        } else {
+            format!(
+                "Board: {}\nCode: {}",
+                layout.socratic_question.trim(),
+                code.socratic_question.trim()
+            )
+        }
+    } else {
+        code.socratic_question.clone()
+    };
+    merged.offer_bridge = if layout.verdict == Verdict::OnTrack {
+        false
+    } else {
+        layout.offer_bridge || code.offer_bridge
+    };
     merged.layout_verdict = Some(layout.verdict);
     merged.code_verdict = Some(code.verdict);
     merged
@@ -1102,18 +1141,14 @@ fn prefix_notes(tag: &str, notes: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn worse_verdict(a: Verdict, b: Verdict) -> Verdict {
+/// Board-first merge: a correct layout is not dragged down by thin code.
+fn prefer_layout_verdict(layout: Verdict, code: Verdict) -> Verdict {
     use Verdict::*;
-    let rank = |v: Verdict| match v {
-        Unclear => 0,
-        OnTrack => 1,
-        SubtlyWrong => 2,
-        WrongTrack => 3,
-    };
-    if rank(a) >= rank(b) {
-        a
-    } else {
-        b
+    match layout {
+        OnTrack => OnTrack,
+        Unclear => code,
+        // Keep the board's criticism; incomplete code shouldn't soften a wrong board.
+        SubtlyWrong | WrongTrack => layout,
     }
 }
 
@@ -1356,14 +1391,38 @@ mod tests {
         assert!(!prompt.contains("does not transcribe ink"));
     }
 
-    /// The pain point behind this: an early board got "you haven't done
-    /// anything, go implement a solution" instead of a way in.
+    /// A sparse early board should get interview opening help, not a failure grade.
     #[test]
     fn the_review_prompt_asks_for_opening_hints_on_a_sparse_board() {
-        assert!(REVIEW_SYSTEM_PROMPT.contains("opening hints"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("sparse"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("start coding"));
-        assert!(REVIEW_SYSTEM_PROMPT.contains("implement a solution"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("problem-specific"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("Do NOT hunt for criticism"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("Prefer the whiteboard layout"));
+    }
+
+    #[test]
+    fn merge_prefers_on_track_board_over_thin_code() {
+        let layout = ReviewResponse {
+            understood_approach: "trailing zeros break double reversal".into(),
+            verdict: Verdict::OnTrack,
+            strengths: vec!["key insight".into()],
+            gaps: vec![],
+            ..Default::default()
+        };
+        let code = ReviewResponse {
+            understood_approach: "stub".into(),
+            verdict: Verdict::SubtlyWrong,
+            gaps: vec!["does not implement the actual reversal logic".into()],
+            offer_bridge: true,
+            ..Default::default()
+        };
+        let merged = merge_layout_and_code_reviews(layout, code);
+        assert_eq!(merged.verdict, Verdict::OnTrack);
+        assert!(merged.gaps.iter().all(|g| !g.contains("reversal logic")));
+        assert!(!merged.offer_bridge);
+        assert_eq!(merged.layout_verdict, Some(Verdict::OnTrack));
+        assert_eq!(merged.code_verdict, Some(Verdict::SubtlyWrong));
     }
 
     /// "Run tests" posts its results into the thread and they ride along with

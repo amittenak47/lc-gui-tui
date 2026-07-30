@@ -56,6 +56,9 @@ pub struct ReviewRequest {
     /// Which corpus `task_id` belongs to. Absent = the default LeetCode one.
     #[serde(default)]
     pub dataset: Option<String>,
+    /// Composer Lazy: the student is drawing — ignore the code dock for review.
+    #[serde(default)]
+    pub layout_only: bool,
     #[serde(flatten)]
     pub board: BoardSnapshot,
 }
@@ -93,6 +96,7 @@ pub async fn review(
     }
 
     let board_for_prompt = board.clone();
+    let layout_only = request.layout_only;
     let task_id_for_llm = request.task_id.clone();
     let cfg = state.cfg_snapshot();
     let envelope = blocking(move || {
@@ -102,14 +106,24 @@ pub async fn review(
 
         let has_layout = board_for_prompt.has_visual_evidence()
             || !board_for_prompt.recognized_text.trim().is_empty();
-        let has_code = board_for_prompt
-            .pseudocode
-            .as_deref()
-            .is_some_and(|p| p.trim().len() > 8);
+        let has_code = !layout_only
+            && board_for_prompt
+                .pseudocode
+                .as_deref()
+                .is_some_and(|p| p.trim().len() > 8);
 
-        let mut review = if has_layout && has_code {
-            // Two passes so a sparse code dock does not dominate a strong board
-            // (or vice versa) — then merge into one card for the client.
+        let mut review = if layout_only && has_layout {
+            // Lazy / draw-first: score the board only, then the client fills code.
+            let layout_prompt =
+                build_layout_review_prompt(&meta, description.as_deref(), &board_for_prompt);
+            let layout_reply = provider.chat_ex(&ChatRequest::new(vec![
+                ChatMessage::system(REVIEW_SYSTEM_PROMPT),
+                ChatMessage::user(layout_prompt).with_images(board_for_prompt.images()),
+            ]).json())?;
+            parse_review(&layout_reply.content, &meta.cases)?
+        } else if has_layout && has_code {
+            // Two passes — merge prefers the board so thin tablet code cannot
+            // override a strong layout.
             let layout_prompt =
                 build_layout_review_prompt(&meta, description.as_deref(), &board_for_prompt);
             let layout_reply = provider.chat_ex(&ChatRequest::new(vec![

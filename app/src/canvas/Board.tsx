@@ -730,7 +730,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!target.closest(".excalidraw")) return;
       if (
         target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-ink-swap",
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-ink-chrome",
         )
       ) {
         return;
@@ -974,6 +974,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const viewW = typeof state.width === "number" ? state.width : 0;
     const page = mobileRegionRef.current;
     const chip = 40;
+    const gap = 4;
+    // undo + redo + pen/eraser swap
+    const clusterW = chip * 3 + gap * 2;
 
     const frames = api.getSceneElements() as LayoutElement[];
     const next: InkSwapAnchor[] = [];
@@ -991,9 +994,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const frameTop = (frame.y + scrollY) * zoom;
       const frameWidth = num(frame.width, REGIONS[region].w) * zoom;
       // Top-right of the layout chrome — above the ink area, clear of the label.
-      const left = roundPx(frameLeft + frameWidth - chip - 8);
+      const left = roundPx(frameLeft + frameWidth - clusterW - 8);
       const top = roundPx(frameTop + 8);
-      if (top + chip < -8 || top > viewH + 8 || left + chip < -8 || left > viewW + 8) {
+      if (top + chip < -8 || top > viewH + 8 || left + clusterW < -8 || left > viewW + 8) {
         continue;
       }
       next.push({ region, left, top });
@@ -1391,7 +1394,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!(target instanceof Element)) return;
       if (
         target.closest(
-          ".lc-code-dock, .lc-toolbar, .lc-map-controls, .lc-ink-swap, .monaco-editor, textarea, input, [contenteditable='true']",
+          ".lc-code-dock, .lc-toolbar, .lc-map-controls, .lc-ink-chrome, .monaco-editor, textarea, input, [contenteditable='true']",
         )
       ) {
         return;
@@ -2170,15 +2173,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           }
         }
 
-        // Full reconstructed board (shapes + ink) so the chat isn't only
-        // region crops of "what changed".
-        const fullPng = await captureImage(
-          () => exportBoardBlob(api, ops),
-          { maxEdge: 900, maxBase64: 3 * 1024 * 1024 },
-        );
-        if (fullPng && (thumbs.length > 0 || ops.length > 0)) {
-          thumbs.unshift({ region: "approach", label: "Board", png: fullPng });
-        }
+        // Region crops only (with ink). A full-board thumb was huge in chat and
+        // duplicated whatever the student already attached as Approach/etc.
         return thumbs;
       },
       getStrokes: () => captureStrokes(elements()),
@@ -2439,21 +2435,40 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         inkSwapAnchors.map((anchor) => {
           const toEraser = activeTool !== "eraser";
           return (
-            <button
+            <div
               key={anchor.region}
-              type="button"
-              className="lc-ink-swap"
+              className="lc-ink-chrome"
               style={{ left: anchor.left, top: anchor.top }}
-              title={toEraser ? "Switch to eraser" : "Switch to pen"}
-              aria-label={toEraser ? "Switch to eraser" : "Switch to pen"}
               onPointerDown={(event) => event.stopPropagation()}
-              onClick={() => {
-                if (shapesOpen) setShapesOpen(false);
-                setTool(toEraser ? "eraser" : "freedraw");
-              }}
             >
-              {toEraser ? <PinkEraserIcon /> : <PenIcon />}
-            </button>
+              <button
+                type="button"
+                className="lc-ink-chrome-btn"
+                aria-label="Undo"
+                onClick={() => undoBoard()}
+              >
+                <UndoIcon />
+              </button>
+              <button
+                type="button"
+                className="lc-ink-chrome-btn"
+                aria-label="Redo"
+                onClick={() => redoBoard()}
+              >
+                <RedoIcon />
+              </button>
+              <button
+                type="button"
+                className="lc-ink-chrome-btn"
+                aria-label={toEraser ? "Switch to eraser" : "Switch to pen"}
+                onClick={() => {
+                  if (shapesOpen) setShapesOpen(false);
+                  setTool(toEraser ? "eraser" : "freedraw");
+                }}
+              >
+                {toEraser ? <PinkEraserIcon /> : <PenIcon />}
+              </button>
+            </div>
           );
         })}
     </div>
@@ -2626,7 +2641,6 @@ function BoardToolbar({
       key={tool}
       type="button"
       className={tool === active && !shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
-      title={hint}
       aria-label={hint}
       aria-pressed={tool === active && !shapesOpen}
       onClick={() => pickTool(tool)}
@@ -2656,13 +2670,9 @@ function BoardToolbar({
                 key={color}
                 type="button"
                 className={
-                  color === inkColor
-                    ? "lc-ink-swatch lc-ink-swatch-active lc-tip-target"
-                    : "lc-ink-swatch lc-tip-target"
+                  color === inkColor ? "lc-ink-swatch lc-ink-swatch-active" : "lc-ink-swatch"
                 }
                 style={{ background: color }}
-                data-tip="Ink colour"
-                data-tip-placement="right"
                 aria-label={`Ink ${color}`}
                 aria-pressed={color === inkColor}
                 onClick={() => onInk(color)}
@@ -2701,11 +2711,11 @@ function BoardToolbar({
         </>
       )}
 
-      <button type="button" className="lc-tool lc-tool-labeled" title="Undo" aria-label="Undo" onClick={onUndo}>
+      <button type="button" className="lc-tool lc-tool-labeled" aria-label="Undo" onClick={onUndo}>
         <UndoIcon />
         <span className="lc-tool-caption">Undo</span>
       </button>
-      <button type="button" className="lc-tool lc-tool-labeled" title="Redo" aria-label="Redo" onClick={onRedo}>
+      <button type="button" className="lc-tool lc-tool-labeled" aria-label="Redo" onClick={onRedo}>
         <RedoIcon />
         <span className="lc-tool-caption">Redo</span>
       </button>
@@ -2713,7 +2723,6 @@ function BoardToolbar({
       <button
         type="button"
         className="lc-tool lc-tool-danger lc-tool-labeled"
-        title="Clear your work (keeps the problem and the coach's diagrams)"
         aria-label="Clear your work"
         onClick={onClear}
       >
@@ -2723,7 +2732,6 @@ function BoardToolbar({
       <button
         type="button"
         className="lc-tool lc-tool-labeled"
-        title="Reset to the original problem layout"
         aria-label="Reset board"
         onClick={() => setConfirmingReset(true)}
       >
@@ -2737,7 +2745,6 @@ function BoardToolbar({
     <button
       type="button"
       className={shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
-      title="Shapes — data structures and system design"
       aria-label="Shapes"
       aria-expanded={shapesOpen}
       onClick={onToggleShapes}
@@ -2763,7 +2770,6 @@ function BoardToolbar({
         <button
           type="button"
           className="lc-tool lc-tool-fold"
-          title={folded ? "Show tools" : "Fold tools"}
           aria-label={folded ? "Show tools" : "Fold tools"}
           aria-expanded={!folded}
           onClick={() => {

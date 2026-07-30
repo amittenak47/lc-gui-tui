@@ -514,10 +514,21 @@ input[type="checkbox"] {
   height: 100%;
 }
 
-/* Quick pen ↔ eraser swap above each ink layout (toolbar sizes stay in effect). */
-.lc-ink-swap {
+/* Quick undo / redo / pen↔eraser above each ink layout. */
+.lc-ink-chrome {
   position: absolute;
   z-index: 12;
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
+  touch-action: manipulation;
+}
+
+.lc-ink-chrome-btn {
   width: var(--touch);
   height: var(--touch);
   min-height: var(--touch);
@@ -525,19 +536,18 @@ input[type="checkbox"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--chrome-edge);
-  border-radius: 12px;
-  background: var(--surface);
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
   color: var(--ink);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
-  touch-action: manipulation;
 }
 
-.lc-ink-swap:active {
+.lc-ink-chrome-btn:active {
   transform: scale(0.96);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
-.lc-mobile .lc-ink-swap {
+.lc-mobile .lc-ink-chrome-btn {
   width: calc(var(--touch) + 4px);
   height: calc(var(--touch) + 4px);
   min-height: calc(var(--touch) + 4px);
@@ -707,6 +717,12 @@ input[type="checkbox"] {
   border-radius: 12px;
   background: var(--surface);
   box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
+}
+
+/* Hover tips on the drawing strip block the board. */
+.lc-toolbar .lc-tip-target::after {
+  content: none !important;
+  display: none !important;
 }
 
 .lc-tool {
