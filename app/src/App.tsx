@@ -727,6 +727,8 @@ export function App() {
     studentNote?: string,
     includeBoard = true,
     attachments?: CoachChatMessage["attachments"],
+    /** Lazy composer: review the board only — code dock is filled separately. */
+    layoutOnly = false,
   ) => {
     const board = boardRef.current;
     if (!board || !problem) return;
@@ -814,6 +816,7 @@ export function App() {
           problem.task_id,
           { ...payload, app_messages: appMessages() },
           problem.dataset,
+          { layoutOnly },
         );
       } catch (cause) {
         // The picture is the first thing to give up: a board too big to buffer,
@@ -825,6 +828,7 @@ export function App() {
           problem.task_id,
           { ...withoutPng, app_messages: appMessages() },
           problem.dataset,
+          { layoutOnly },
         );
         setNotice(
           isLlmTimeoutError(cause)
@@ -1001,7 +1005,7 @@ export function App() {
         pushCoachMessage("user", shown || "Send", attachments ? { attachments } : undefined);
 
         if (flags.reviewBoard || text) {
-          await submitForReview(text, flags.reviewBoard, attachments);
+          await submitForReview(text, flags.reviewBoard, attachments, flags.lazy);
         }
         if (flags.draw) {
           await askForDiagram(text);
@@ -1011,9 +1015,11 @@ export function App() {
           try {
             await syncSolution();
             const board = boardRef.current;
+            // Lazy assumes drawing: send the board (and ink) without relying on
+            // the code dock as the source of truth.
             const snapshot = board
               ? await buildSnapshot(board, recognizerRef.current, {
-                  pseudocode: pseudocodeRef.current,
+                  pseudocode: undefined,
                   includePng: modeHasVision("review"),
                 })
               : null;

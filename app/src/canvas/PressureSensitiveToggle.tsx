@@ -10,12 +10,9 @@ export function PressureSensitiveToggle({ enabled, onChange }: PressureSensitive
       type="button"
       className={
         enabled
-          ? "lc-tool lc-tool-mini lc-tool-active lc-pressure-toggle lc-tip-target"
-          : "lc-tool lc-tool-mini lc-pressure-toggle lc-tip-target"
+          ? "lc-tool lc-tool-mini lc-tool-active lc-pressure-toggle"
+          : "lc-tool lc-tool-mini lc-pressure-toggle"
       }
-      data-tip="Pressure sensitive pen"
-      data-tip-placement="right"
-      title="Pressure sensitive pen"
       aria-label="Pressure sensitive pen"
       aria-pressed={enabled}
       onClick={() => onChange(!enabled)}

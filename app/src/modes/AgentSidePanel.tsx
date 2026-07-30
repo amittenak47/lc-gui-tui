@@ -508,7 +508,7 @@ export function AgentSidePanel({
                 </button>
               </Tip>
               <Tip
-                tip="Fill solution.py for the parts your board already justifies (leave TODOs for the rest)"
+                tip="Drawing-first: interpret the board and fill the correct earned parts of solution.py"
                 placement="left"
               >
                 <button

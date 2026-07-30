@@ -18,13 +18,11 @@ export function StrokeSizeSlider({ value, onChange, label, eraser = false }: Str
       </span>
       <input
         type="range"
-        className="lc-stroke-slider-input lc-tip-target"
+        className="lc-stroke-slider-input"
         min={STROKE_WIDTH_MIN}
         max={max}
         step={0.5}
         value={clamped}
-        data-tip={label}
-        data-tip-placement="right"
         aria-label={label}
         aria-valuemin={STROKE_WIDTH_MIN}
         aria-valuemax={max}
