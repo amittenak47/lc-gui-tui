@@ -1,5 +1,11 @@
 //! Prompt builders and response types for the whiteboard coach.
 //!
+//! Review (Mode A) is staged rather than one-shot: [`build_perceive_prompt`]
+//! describes the board, [`build_claim_prompt`] names what it claims and whether
+//! that claim decides the answer, and [`build_verdict_prompt`] runs only when it
+//! does not. The gate between them lives in [`crate::serve::coach`] — a
+//! [`Claim`] is data the daemon inspects, not a step a model talks itself past.
+//!
 //! Mirrors the section-heading style of [`crate::llm::prompt`] and reuses its
 //! [`clip`] helper. Every prompt here is assembled from [`WorkspaceMeta`], the
 //! problem statement, and what the user wrote on the board — the same redacted
@@ -486,6 +492,454 @@ pub fn validate_counterexample(review: &mut ReviewResponse, cases: &[IoCase]) {
 }
 
 // ---------------------------------------------------------------------------
+// Mode A, staged — perceive, then claim, then judge only if needed
+// ---------------------------------------------------------------------------
+//
+// Why this exists: one call that perceives, names, judges, and cites all at
+// once gives a small VLM every reason to invent a flaw — the schema has a
+// `gaps` array in it, so it fills the array. Splitting the work means the stage
+// that decides "is this enough?" is never the stage that was asked to find
+// something wrong, and the daemon — not the model — owns the gate between them.
+//
+// Stage 1 describes the board. Stage 2 names the claim and says whether it
+// decides the answer. Stage 3 runs *only* when stage 2 said no.
+
+pub const PERCEIVE_SYSTEM_PROMPT: &str = "You are looking at a photo of a student's whiteboard. \
+You describe what is on it. You do not judge it.\n\
+\n\
+Rules:\n\
+- List what you can actually see: boxes, arrows, tables, indices, labels, written invariants, \
+small worked examples.\n\
+- Transcribe short written text as text. Where a region is unreadable, say that instead of \
+guessing what it probably said.\n\
+- Do NOT say whether anything is right, wrong, missing, or incomplete. No verdict, no gaps, no \
+advice — a later stage does that.\n\
+- Do NOT name an algorithm that is not written on the board.\n\
+- Reply with a single JSON object and nothing else — no prose, no markdown fence.";
+
+pub const CLAIM_SYSTEM_PROMPT: &str = "You restate the approach a student's whiteboard claims, and \
+say whether that claim already decides the answer.\n\
+\n\
+Rules:\n\
+- Read the board charitably. Handwriting recognition is noisy, notation is abbreviated, and a \
+sketch is not a submission.\n\
+- \"claim_sufficient\" is true when following the claim literally gives the right answer for every \
+input the problem allows. An insight that removes work counts: if the reasoning itself settles the \
+answer, the student does not owe you the loop it replaced.\n\
+- \"claim_sufficient\" is false only when you can name what the claim leaves undecided — an input \
+it says nothing about, or a step that does not follow from the one before it. Name it in \
+\"why_sufficient_or_not\".\n\
+- Absent code, absent complexity analysis, and untidy notation are NOT reasons to answer false. \
+Judge the idea.\n\
+- \"unresolved\" lists only parts of the problem the board has not decided yet. It must be empty \
+when \"claim_sufficient\" is true.\n\
+- Do not grade, coach, or hunt for a counterexample here. The claim and whether it is enough — \
+that is all.\n\
+- Reply with a single JSON object and nothing else — no prose, no markdown fence.";
+
+pub const VERDICT_SYSTEM_PROMPT: &str = "An earlier stage read the student's whiteboard, wrote down \
+the claim it makes, and recorded why that claim does not yet decide the answer. Turn that into one \
+review.\n\
+\n\
+Rules:\n\
+- The claim is fixed. Do not re-read the board into a different approach, and do not rename their \
+idea — carry \"understood_approach\" through as you were given it.\n\
+- Every gap must be something the claim genuinely leaves open. Never list a step the claim already \
+contains, and never pad the list to fill it — a short \"gaps\" is a good answer.\n\
+- When the claim needs more detail rather than a different idea, the verdict is \"unclear\" and the \
+gaps are the questions you would ask about it.\n\
+- Use \"subtly_wrong\" or \"wrong_track\" only when you can show a real failure, cited by index \
+into the numbered sample cases. Never invent a case, an input, or an index — if no listed case \
+breaks the claim, \"counterexample\" must be null.\n\
+- A counterexample explanation traces THE CITED CASE's own values and nothing else.\n\
+- If you decide the claim does settle the answer after all, say \"on_track\" with empty gaps rather \
+than arguing yourself into a flaw.\n\
+- Never write the corrected algorithm or working code. End with one Socratic question.\n\
+- Reply with a single JSON object and nothing else — no prose, no markdown fence.";
+
+pub const CLAIM_CODE_SYSTEM_PROMPT: &str = "You check one thing: whether the Python in front of you \
+implements the claim the student's whiteboard already made. The board was judged separately and \
+that judgement stands.\n\
+\n\
+Rules:\n\
+- The claim is the specification. Judge the code against it — not against a textbook solution, and \
+not against the approach you would have picked.\n\
+- Tablet code is typed slowly and is usually a stub. Absent scaffolding, unfinished helpers, and \
+edge cases the claim never promised are not gaps.\n\
+- Say \"on_track\" when the code follows the claim as far as it goes.\n\
+- Mark it wrong only when the code contradicts the claim or demonstrably fails one of the numbered \
+cases — cite that case by index, or set \"counterexample\" to null.\n\
+- Do not restate the algorithm and do not write the fix.\n\
+- Reply with a single JSON object and nothing else — no prose, no markdown fence.";
+
+/// How many items any staged list keeps, and how long each may be. Local models
+/// will happily return thirty observations; the next prompt has to fit beside a
+/// board and a problem statement in 8k.
+const MAX_STAGE_ITEMS: usize = 8;
+const MAX_STAGE_ITEM: usize = 240;
+const MAX_CLAIM_FIELD: usize = 600;
+
+/// Stage 1 — what is on the board, with no opinion attached.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Perception {
+    /// Structures seen: boxes, arrows, tables, worked examples.
+    pub observations: Vec<String>,
+    /// Text legible enough to quote back.
+    pub transcribed_notes: Vec<String>,
+    /// Regions the model could not read — said out loud rather than guessed at.
+    pub illegible: Vec<String>,
+}
+
+impl Perception {
+    pub fn is_blank(&self) -> bool {
+        self.observations.is_empty() && self.transcribed_notes.is_empty()
+    }
+
+    fn tidy(&mut self) {
+        for list in [
+            &mut self.observations,
+            &mut self.transcribed_notes,
+            &mut self.illegible,
+        ] {
+            tidy_list(list);
+        }
+    }
+}
+
+/// Stage 2 — the student's approach as the coach understands it, plus the one
+/// decision the whole pipeline turns on: does this claim already decide the
+/// answer?
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Claim {
+    /// One sentence naming their idea. This is the value that flows into
+    /// whichever review the daemon emits, so the card's approach line always
+    /// comes from the stage that was not asked to find fault.
+    pub understood_approach: String,
+    /// The steps the board actually justifies, in order. Read by the Lazy fill
+    /// as the specification to implement.
+    pub key_steps: Vec<String>,
+    /// Whether following the claim literally answers the problem.
+    pub claim_sufficient: bool,
+    pub why_sufficient_or_not: String,
+    /// What the board has not decided yet. Forced empty when the claim is
+    /// sufficient — a claim that decides the answer leaves nothing open, and a
+    /// model that says both is contradicting itself.
+    pub unresolved: Vec<String>,
+    /// A question that would confirm or stress-test the claim. Used verbatim as
+    /// the Socratic question on the on-track path, so that path needs no second
+    /// call to ask something specific.
+    pub confirming_question: String,
+}
+
+impl Claim {
+    /// The gate. `claim_sufficient` alone is not enough to trust: a model that
+    /// answers `{"claim_sufficient": true, "understood_approach": "yes"}` has
+    /// not read a board, and must not short-circuit a student into "on track".
+    /// Two words and eight characters is the floor — enough to let a genuinely
+    /// terse claim ("two pointers") through, enough to stop a bare "ok".
+    pub fn decides_the_answer(&self) -> bool {
+        let named = self.understood_approach.trim();
+        self.claim_sufficient
+            && named.chars().count() >= 8
+            && named.split_whitespace().count() >= 2
+    }
+
+    fn tidy(&mut self) {
+        self.understood_approach = clip(self.understood_approach.trim(), MAX_CLAIM_FIELD);
+        self.why_sufficient_or_not = clip(self.why_sufficient_or_not.trim(), MAX_CLAIM_FIELD);
+        self.confirming_question = clip(self.confirming_question.trim(), MAX_CLAIM_FIELD);
+        tidy_list(&mut self.key_steps);
+        tidy_list(&mut self.unresolved);
+        if self.claim_sufficient {
+            self.unresolved.clear();
+        }
+    }
+}
+
+fn tidy_list(list: &mut Vec<String>) {
+    list.retain(|item| !item.trim().is_empty());
+    for item in list.iter_mut() {
+        *item = clip(item.trim(), MAX_STAGE_ITEM);
+    }
+    list.truncate(MAX_STAGE_ITEMS);
+}
+
+/// Stage 1 prompt. Deliberately narrow: no statement, no sample cases, no code
+/// dock. Nothing to reason from means nothing to have an opinion about, and it
+/// leaves the context budget for the board itself.
+pub fn build_perceive_prompt(meta: &WorkspaceMeta, board: &BoardSnapshot) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "# Board for problem: {}", meta.task_id);
+    board_without_code(board).write_into(&mut out);
+    let _ = writeln!(
+        out,
+        "\n## Your reply\n\n\
+         ```json\n\
+         {{\"observations\": [\"one short clause per thing you can see on the board\"], \
+         \"transcribed_notes\": [\"pieces of text you can read\"], \
+         \"illegible\": [\"regions you cannot read — leave empty if none\"]}}\n\
+         ```"
+    );
+    out
+}
+
+pub fn parse_perception(raw: &str) -> Result<Perception> {
+    let mut perception: Perception = parse_reply(raw, "perception")?;
+    perception.tidy();
+    if perception.is_blank() {
+        anyhow::bail!("the coach described nothing on the board");
+    }
+    Ok(perception)
+}
+
+/// Stage 2 prompt. Takes the stage-1 description when there was one; on a
+/// text-only build the caller passes `None` and this same call reads the layout
+/// and the recognized ink directly.
+pub fn build_claim_prompt(
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+    perception: Option<&Perception>,
+) -> String {
+    let mut out = String::new();
+    write_problem_header(&mut out, meta, description);
+    write_cases(&mut out, &meta.cases);
+    board_without_code(board).write_into(&mut out);
+    write_perception(&mut out, perception);
+    let _ = writeln!(
+        out,
+        "\n## Your reply\n\n\
+         Return exactly this JSON shape:\n\n\
+         ```json\n\
+         {{\n  \
+           \"understood_approach\": \"one short sentence naming their idea\",\n  \
+           \"key_steps\": [\"the steps the board justifies, in order\"],\n  \
+           \"claim_sufficient\": true or false,\n  \
+           \"why_sufficient_or_not\": \"one or two sentences — if false, name exactly what the \
+claim leaves undecided\",\n  \
+           \"unresolved\": [\"parts of the problem the board has not decided — empty when \
+claim_sufficient is true\"],\n  \
+           \"confirming_question\": \"one question that would confirm or stress-test this claim\"\n\
+         }}\n\
+         ```"
+    );
+    out
+}
+
+pub fn parse_claim(raw: &str) -> Result<Claim> {
+    let mut claim: Claim = parse_reply(raw, "claim")?;
+    claim.tidy();
+    if claim.understood_approach.is_empty() {
+        anyhow::bail!("the coach did not name an approach");
+    }
+    Ok(claim)
+}
+
+/// Stage 3a prompt — reached only when the claim did not decide the answer.
+pub fn build_verdict_prompt(
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+    claim: &Claim,
+) -> String {
+    let mut out = String::new();
+    write_problem_header(&mut out, meta, description);
+    write_cases(&mut out, &meta.cases);
+    board_without_code(board).write_into(&mut out);
+    write_claim(&mut out, claim);
+    let _ = writeln!(
+        out,
+        "\n## Your reply\n\n\
+         Return exactly this JSON shape:\n\n\
+         ```json\n\
+         {{\n  \
+           \"understood_approach\": \"the claim above, carried through unchanged\",\n  \
+           \"verdict\": \"on_track | subtly_wrong | wrong_track | unclear\",\n  \
+           \"rating\": {{\"correctness\": 1-5, \"complexity\": 1-5, \"clarity\": 1-5}},\n  \
+           \"strengths\": [\"what the claim already gets right\"],\n  \
+           \"gaps\": [\"only what the claim leaves open — do not restate the claim itself\"],\n  \
+           \"counterexample\": {{\"case_index\": <0-based index into the numbered cases above>, \
+              \"why_your_approach_fails\": \"step through THAT case's own input, using its actual \
+values, and show where the claim diverges from its expected output\"}},\n  \
+           \"socratic_question\": \"the most specific next move you can name\",\n  \
+           \"offer_bridge\": true\n\
+         }}\n\
+         ```\n\n\
+         `counterexample` must be null if no listed case breaks the claim. Do not restate the input \
+         or expected output as fields — they are looked up from the corpus for you."
+    );
+    out
+}
+
+/// Stage 3b — the on-track card, built by the daemon from the frozen claim.
+///
+/// No second call. The model already said the claim decides the answer; asking
+/// it again with a `gaps` array in front of it is exactly how a correct board
+/// used to come back holding invented flaws. Everything here is either copied
+/// from the claim or a fixed value, and nothing is a fresh judgement.
+pub fn on_track_review_from_claim(claim: &Claim) -> ReviewResponse {
+    let mut strengths = Vec::new();
+    if !claim.why_sufficient_or_not.is_empty() {
+        strengths.push(claim.why_sufficient_or_not.clone());
+    }
+    strengths.extend(claim.key_steps.iter().cloned());
+    if strengths.is_empty() {
+        strengths.push(claim.understood_approach.clone());
+    }
+
+    let socratic_question = if claim.confirming_question.is_empty() {
+        format!(
+            "You have it: {}. Which input would you run first to convince yourself that holds?",
+            claim.understood_approach.trim_end_matches('.')
+        )
+    } else {
+        claim.confirming_question.clone()
+    };
+
+    ReviewResponse {
+        understood_approach: claim.understood_approach.clone(),
+        verdict: Verdict::OnTrack,
+        // Synthesized, not scored by a model: the approach is correct, so
+        // correctness is full marks, and how much detail the board carries
+        // stands in for clarity.
+        rating: Rating {
+            correctness: 5,
+            complexity: 4,
+            clarity: if claim.key_steps.len() >= 2 { 4 } else { 3 },
+        },
+        strengths,
+        gaps: Vec::new(),
+        counterexample: None,
+        socratic_question,
+        offer_bridge: false,
+        counterexample_rejected: None,
+        layout_verdict: Some(Verdict::OnTrack),
+        code_verdict: None,
+    }
+}
+
+/// The code pass, conditioned on the frozen claim. Asks "does this code match
+/// the claim?" — never "what approach does this stub suggest?", which is how a
+/// half-typed file used to talk the coach out of a correct board.
+pub fn build_claim_code_review_prompt(
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+    claim: &Claim,
+) -> String {
+    let mut out = String::new();
+    write_problem_header(&mut out, meta, description);
+    write_cases(&mut out, &meta.cases);
+    write_claim(&mut out, claim);
+    if !board.app_messages.is_empty() {
+        let _ = writeln!(
+            out,
+            "\n## From the app (not the student)\n\n\
+             Real results from running their code — treat them as fact."
+        );
+        for message in &board.app_messages {
+            let _ = writeln!(out, "\n```\n{}\n```", clip(message.trim(), MAX_BOARD));
+        }
+    }
+    let code = board.pseudocode.as_deref().unwrap_or("").trim();
+    let _ = writeln!(
+        out,
+        "\n## The code dock (solution.py)\n\n```python\n{}\n```",
+        clip(if code.is_empty() { "(empty)" } else { code }, MAX_BOARD)
+    );
+    let _ = writeln!(
+        out,
+        "\n## Your reply\n\n\
+         Does this code implement the claim above? Return exactly this JSON shape:\n\n\
+         ```json\n\
+         {{\n  \
+           \"understood_approach\": \"one short sentence: what the code does\",\n  \
+           \"verdict\": \"on_track | subtly_wrong | wrong_track | unclear\",\n  \
+           \"rating\": {{\"correctness\": 1-5, \"complexity\": 1-5, \"clarity\": 1-5}},\n  \
+           \"strengths\": [\"where the code follows the claim\"],\n  \
+           \"gaps\": [\"only where the code contradicts the claim — empty if it just stops \
+early\"],\n  \
+           \"counterexample\": {{\"case_index\": <0-based index, or null>, \
+              \"why_your_approach_fails\": \"...\"}},\n  \
+           \"socratic_question\": \"a code-focused next step\",\n  \
+           \"offer_bridge\": true\n\
+         }}\n\
+         ```"
+    );
+    out
+}
+
+/// The board as the staged path reads it: ink, layout, and canvas notes, with
+/// the code dock stripped. Every stage before the code pass gets this, so a
+/// stubby `solution.py` cannot seed the claim it is later judged against.
+fn board_without_code(board: &BoardSnapshot) -> BoardSnapshot {
+    let mut stripped = board.clone();
+    stripped.pseudocode = None;
+    stripped.pseudocode_delta = None;
+    stripped.code_mode = None;
+    stripped
+}
+
+fn write_perception(out: &mut String, perception: Option<&Perception>) {
+    let Some(perception) = perception else {
+        return;
+    };
+    let _ = writeln!(
+        out,
+        "\n## What was seen on the board (an earlier pass looked at the image)"
+    );
+    for item in &perception.observations {
+        let _ = writeln!(out, "- {item}");
+    }
+    if !perception.transcribed_notes.is_empty() {
+        let _ = writeln!(out, "\nText read off the board:");
+        for note in &perception.transcribed_notes {
+            let _ = writeln!(out, "- {note}");
+        }
+    }
+    if !perception.illegible.is_empty() {
+        let _ = writeln!(
+            out,
+            "\nCould not be read (do not assume these are empty or wrong):"
+        );
+        for region in &perception.illegible {
+            let _ = writeln!(out, "- {region}");
+        }
+    }
+}
+
+/// The frozen claim, as every later stage sees it.
+fn write_claim(out: &mut String, claim: &Claim) {
+    let _ = writeln!(
+        out,
+        "\n## The claim the board makes (frozen — read it as given, do not replace it)"
+    );
+    let _ = writeln!(out, "\n- approach: {}", claim.understood_approach);
+    if !claim.key_steps.is_empty() {
+        let _ = writeln!(out, "- steps the board justifies:");
+        for (i, step) in claim.key_steps.iter().enumerate() {
+            let _ = writeln!(out, "  {}. {step}", i + 1);
+        }
+    }
+    let _ = writeln!(
+        out,
+        "- does this already decide the answer? {}",
+        if claim.claim_sufficient { "yes" } else { "no" }
+    );
+    if !claim.why_sufficient_or_not.is_empty() {
+        let _ = writeln!(out, "- because: {}", claim.why_sufficient_or_not);
+    }
+    if !claim.unresolved.is_empty() {
+        let _ = writeln!(out, "- not decided by the board yet:");
+        for item in &claim.unresolved {
+            let _ = writeln!(out, "  - {item}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mode B — ambient nudges
 // ---------------------------------------------------------------------------
 
@@ -874,14 +1328,16 @@ pub fn parse_bridge(raw: &str) -> Result<BridgeResponse> {
 pub const LAZY_FILL_SYSTEM_PROMPT: &str = "The student is drawing on a tablet and turned on Lazy \
 fill. Treat the whiteboard as the only source of truth — ignore a sparse or empty code dock.\n\
 \n\
-Your job: interpret what they drew / wrote on the board, then write the Python that correctly \
-implements the parts their board already justifies.\n\
+Your job: write the Python that implements the claim their board makes. When a claim is given to \
+you, it is the specification — an earlier stage already read the board to produce it, so implement \
+that, not an approach of your own.\n\
 \n\
 Rules:\n\
 - Read ink, layout, and recognized text charitably; tablet handwriting is noisy.\n\
 - If the board shows a correct insight (even without full code), implement that insight fully in \
 `filled_code` — do not leave the earned part as TODO.\n\
-- Only leave `pass` / `# TODO:` for ideas the board has not earned yet.\n\
+- Only leave `pass` / `# TODO:` for ideas the board has not earned yet. When the claim lists what it \
+has not decided, those items are the only TODOs allowed.\n\
 - Prefer a short correct solution that matches their insight over a longer textbook dump.\n\
 - Do NOT invent an unrelated full reference solution that contradicts their approach.\n\
 - Reply with a single JSON object and nothing else.";
@@ -906,30 +1362,43 @@ pub struct LazyFillResponse {
 }
 
 /// Lazy fill without a reference (composer Lazy flag).
+///
+/// `claim` is the claim the staged review already froze for this board. Passing
+/// it is what makes Lazy fill *implement the drawing* rather than re-interpret
+/// it: the same understanding the student just saw on their review card is the
+/// thing that gets written into `solution.py`. `None` means no review has been
+/// run for this board yet, and the model reads the board directly.
 pub fn build_lazy_fill_prompt(
     meta: &WorkspaceMeta,
     description: Option<&str>,
     board: &BoardSnapshot,
+    claim: Option<&Claim>,
 ) -> String {
     let mut out = String::new();
     write_problem_header(&mut out, meta, description);
     write_cases(&mut out, &meta.cases);
     // Board only — ignore whatever is in the code dock.
-    let mut board_only = board.clone();
-    board_only.pseudocode = None;
-    board_only.pseudocode_delta = None;
-    board_only.code_mode = None;
-    board_only.write_into(&mut out);
+    board_without_code(board).write_into(&mut out);
+    if let Some(claim) = claim {
+        write_claim(&mut out, claim);
+    }
     let _ = writeln!(
         out,
-        "\n## Task\n\nInterpret the drawing. Write `filled_code` that correctly implements \
-         what the board already justifies (full working code for those parts). Leave only \
-         unearned ideas as TODO/pass.\n\n\
+        "\n## Task\n\n{}\n\n\
          ## Your reply\n\n\
          ```json\n\
          {{\"filled_code\": \"# full solution.py text\\n...\", \
          \"note\": \"one or two sentences: what you filled from the board vs left as TODO\"}}\n\
-         ```"
+         ```",
+        if claim.is_some() {
+            "Write `filled_code`: full working Python for the claim above. Every step the claim \
+             justifies must be implemented, not left as a TODO — only what the claim says it has \
+             not decided may stay `pass` / `# TODO:`."
+        } else {
+            "Interpret the drawing. Write `filled_code` that correctly implements what the board \
+             already justifies (full working code for those parts). Leave only unearned ideas as \
+             TODO/pass."
+        }
     );
     out
 }
@@ -968,90 +1437,6 @@ pub fn parse_lazy_fill(raw: &str) -> Result<LazyFillResponse> {
         anyhow::bail!("lazy fill returned empty filled_code");
     }
     Ok(parsed)
-}
-
-/// Prompt that scores only the sketched layout (no code dock).
-pub fn build_layout_review_prompt(
-    meta: &WorkspaceMeta,
-    description: Option<&str>,
-    board: &BoardSnapshot,
-) -> String {
-    let mut layout_only = board.clone();
-    layout_only.pseudocode = None;
-    layout_only.pseudocode_delta = None;
-    layout_only.code_mode = None;
-    let mut out = String::new();
-    write_problem_header(&mut out, meta, description);
-    write_cases(&mut out, &meta.cases);
-    layout_only.write_into(&mut out);
-    let _ = writeln!(
-        out,
-        "\n## Focus\n\nAssess ONLY the whiteboard layout / ink / typed notes on the board. \
-         Ignore any solution.py — it is reviewed separately (and may be empty on a tablet).\n\
-         Judge the insight charitably. If the board's approach is correct, use verdict \
-         \"on_track\" and do not invent gaps.\n\n\
-         ## Your reply\n\n\
-         Return exactly this JSON shape:\n\n\
-         ```json\n\
-         {{\n  \
-           \"understood_approach\": \"one short sentence from the board alone\",\n  \
-           \"verdict\": \"on_track | subtly_wrong | wrong_track | unclear\",\n  \
-           \"rating\": {{\"correctness\": 1-5, \"complexity\": 1-5, \"clarity\": 1-5}},\n  \
-           \"strengths\": [\"board strengths\"],\n  \
-           \"gaps\": [\"board gaps only — empty array if on track\"],\n  \
-           \"counterexample\": null,\n  \
-           \"socratic_question\": \"a board-focused next step (or a confirming question if on track)\",\n  \
-           \"offer_bridge\": false\n\
-         }}\n\
-         ```"
-    );
-    out
-}
-
-/// Prompt that scores only solution.py / the code dock.
-pub fn build_code_review_prompt(
-    meta: &WorkspaceMeta,
-    description: Option<&str>,
-    board: &BoardSnapshot,
-) -> String {
-    let mut out = String::new();
-    write_problem_header(&mut out, meta, description);
-    write_cases(&mut out, &meta.cases);
-    if !board.app_messages.is_empty() {
-        let _ = writeln!(out, "\n## App messages (test facts)");
-        for msg in &board.app_messages {
-            let _ = writeln!(out, "\n{}", clip(msg, MAX_BOARD));
-        }
-    }
-    let code = board.pseudocode.as_deref().unwrap_or("").trim();
-    let _ = writeln!(
-        out,
-        "\n## Code dock (solution.py)\n\n```python\n{}\n```",
-        clip(if code.is_empty() { "(empty)" } else { code }, MAX_BOARD)
-    );
-    let _ = writeln!(
-        out,
-        "\n## Focus\n\nAssess ONLY this code. The whiteboard was reviewed separately.\n\
-         Incomplete or stubby code on a tablet is normal — do not invent algorithmic gaps \
-         that the board may already have answered. Only mark wrong when the code itself \
-         clearly fails a sample case.\n\n\
-         ## Your reply\n\n\
-         Return exactly this JSON shape:\n\n\
-         ```json\n\
-         {{\n  \
-           \"understood_approach\": \"one short sentence from the code alone\",\n  \
-           \"verdict\": \"on_track | subtly_wrong | wrong_track | unclear\",\n  \
-           \"rating\": {{\"correctness\": 1-5, \"complexity\": 1-5, \"clarity\": 1-5}},\n  \
-           \"strengths\": [\"code strengths\"],\n  \
-           \"gaps\": [\"code gaps — empty if the code is fine or just thin\"],\n  \
-           \"counterexample\": {{\"case_index\": <0-based or null>, \
-              \"why_your_approach_fails\": \"...\"}},\n  \
-           \"socratic_question\": \"a code-focused next step\",\n  \
-           \"offer_bridge\": true\n\
-         }}\n\
-         ```"
-    );
-    out
 }
 
 /// Merge separate layout and code reviews into one card for the client.
@@ -1399,6 +1784,248 @@ mod tests {
         assert!(REVIEW_SYSTEM_PROMPT.contains("problem-specific"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("Do NOT hunt for criticism"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("Prefer the whiteboard layout"));
+    }
+
+    fn sufficient_claim() -> Claim {
+        Claim {
+            understood_approach: "trailing zeros mean the double reversal cannot round-trip".into(),
+            key_steps: vec![
+                "reverse the digits once".into(),
+                "note that a trailing zero is lost and cannot come back".into(),
+            ],
+            claim_sufficient: true,
+            why_sufficient_or_not: "The zero-loss argument settles every input the problem allows."
+                .into(),
+            unresolved: vec![],
+            confirming_question: "Which input would you run to see the zero disappear?".into(),
+        }
+    }
+
+    /// The gate the whole redesign turns on. A claim that decides the answer must
+    /// clear it; a model that answers the field without reading a board must not.
+    #[test]
+    fn the_sufficiency_gate_needs_a_real_named_approach() {
+        assert!(sufficient_claim().decides_the_answer());
+
+        // Terse but real: two words is a legitimate approach name.
+        assert!(Claim {
+            understood_approach: "two pointers".into(),
+            claim_sufficient: true,
+            ..Default::default()
+        }
+        .decides_the_answer());
+
+        for junk in ["yes", "ok", "sort", "   "] {
+            assert!(
+                !Claim {
+                    understood_approach: junk.into(),
+                    claim_sufficient: true,
+                    ..Default::default()
+                }
+                .decides_the_answer(),
+                "{junk:?} is not a claim that can short-circuit a student to on_track"
+            );
+        }
+
+        // And saying so is not optional: an unsufficient claim never gates out.
+        assert!(!Claim {
+            claim_sufficient: false,
+            ..sufficient_claim()
+        }
+        .decides_the_answer());
+    }
+
+    /// A model that answers "this is enough" *and* lists what is missing is
+    /// contradicting itself; the parser keeps the answer and drops the list.
+    #[test]
+    fn a_sufficient_claim_cannot_also_carry_unresolved_items() {
+        let raw = r#"{"understood_approach": "count trailing zeros",
+                      "key_steps": ["  reverse once  ", "", "spot the lost zero"],
+                      "claim_sufficient": true,
+                      "why_sufficient_or_not": "the argument decides it",
+                      "unresolved": ["they have not written the reversal loop"],
+                      "confirming_question": "which case shows it?"}"#;
+        let claim = parse_claim(raw).unwrap();
+        assert!(claim.unresolved.is_empty(), "sufficient means nothing is left open");
+        assert_eq!(claim.key_steps, vec!["reverse once", "spot the lost zero"]);
+        assert!(claim.decides_the_answer());
+
+        // When it says no, the list survives — that is what stage 3 reads.
+        let insufficient = parse_claim(
+            r#"{"understood_approach": "reverse the digits", "claim_sufficient": false,
+                "unresolved": ["nothing decides what happens on overflow"]}"#,
+        )
+        .unwrap();
+        assert_eq!(insufficient.unresolved.len(), 1);
+
+        // A reply that names no approach is not a claim at all.
+        assert!(parse_claim(r#"{"claim_sufficient": true}"#).is_err());
+    }
+
+    /// Acceptance criterion 1: the correct insight-only board. It reaches the
+    /// student as `on_track` with no gaps, and nothing in the card is a fresh
+    /// judgement — every line is copied from the claim.
+    #[test]
+    fn the_on_track_card_is_built_from_the_claim_and_invents_nothing() {
+        let claim = sufficient_claim();
+        let review = on_track_review_from_claim(&claim);
+
+        assert_eq!(review.verdict, Verdict::OnTrack);
+        assert!(review.gaps.is_empty(), "an on-track board has no gaps to list");
+        assert!(review.counterexample.is_none(), "and nothing to cite against it");
+        assert!(!review.offer_bridge, "nor a reason to offer the reference");
+        assert_eq!(review.understood_approach, claim.understood_approach);
+        assert_eq!(review.socratic_question, claim.confirming_question);
+        assert_eq!(review.rating.correctness, 5);
+        assert_eq!(review.layout_verdict, Some(Verdict::OnTrack));
+        // The reason it is sufficient, then the steps, read back as strengths.
+        assert_eq!(review.strengths[0], claim.why_sufficient_or_not);
+        assert!(review.strengths.contains(&claim.key_steps[1]));
+
+        // With no question offered, the card still asks something specific.
+        let quiet = on_track_review_from_claim(&Claim {
+            confirming_question: String::new(),
+            ..claim
+        });
+        assert!(quiet.socratic_question.contains("trailing zeros"));
+    }
+
+    /// Stage 1 describes; it is given nothing to have an opinion about. No
+    /// statement, no sample cases, no code dock — and a system prompt that says
+    /// so out loud.
+    #[test]
+    fn the_perceive_stage_sees_the_board_and_nothing_to_judge_it_against() {
+        let meta = meta_with_cases(3);
+        let board = BoardSnapshot {
+            recognized_text: "reverse digits, zeros vanish".into(),
+            pseudocode: Some("def solve(): pass  # HALF TYPED".into()),
+            png: Some("base64".into()),
+            ..Default::default()
+        };
+        let prompt = build_perceive_prompt(&meta, &board);
+
+        assert!(prompt.contains("reverse digits, zeros vanish"));
+        assert!(!prompt.contains("HALF TYPED"), "the code dock is not board evidence");
+        assert!(!prompt.contains("- [0] input:"), "no cases to reason from");
+        assert!(!prompt.contains("## Statement"));
+        assert!(PERCEIVE_SYSTEM_PROMPT.contains("You do not judge it"));
+        assert!(PERCEIVE_SYSTEM_PROMPT.contains("No verdict, no gaps"));
+
+        assert!(parse_perception(r#"{"observations": [], "transcribed_notes": []}"#).is_err());
+        let seen = parse_perception(
+            r#"{"observations": ["  a box labelled n  ", ""], "illegible": ["bottom right"]}"#,
+        )
+        .unwrap();
+        assert_eq!(seen.observations, vec!["a box labelled n"]);
+        assert!(!seen.is_blank());
+    }
+
+    /// Stage 2 gets the problem, the cases, and stage 1's description — but still
+    /// not the code dock, so a stubby `solution.py` cannot seed the claim it is
+    /// later judged against.
+    #[test]
+    fn the_claim_stage_reads_the_board_and_the_perception_but_not_the_code() {
+        let meta = meta_with_cases(3);
+        let board = BoardSnapshot {
+            recognized_text: "reverse digits".into(),
+            pseudocode: Some("def solve(): pass  # HALF TYPED".into()),
+            ..Default::default()
+        };
+        let perception = Perception {
+            observations: vec!["two boxes joined by an arrow".into()],
+            transcribed_notes: vec!["120 -> 021".into()],
+            illegible: vec!["a smudge under the arrow".into()],
+        };
+
+        let prompt = build_claim_prompt(&meta, Some("Reverse an integer."), &board, Some(&perception));
+        assert!(prompt.contains("Reverse an integer."));
+        assert!(prompt.contains("- [0] input:"), "stage 2 may cite from the cases later");
+        assert!(prompt.contains("two boxes joined by an arrow"));
+        assert!(prompt.contains("120 -> 021"));
+        assert!(prompt.contains("do not assume these are empty or wrong"));
+        assert!(!prompt.contains("HALF TYPED"));
+        assert!(prompt.contains("\"claim_sufficient\""));
+
+        // On a text-only build there is no perception section at all.
+        let text_only = build_claim_prompt(&meta, None, &board, None);
+        assert!(!text_only.contains("an earlier pass looked at the image"));
+        assert!(text_only.contains("reverse digits"));
+
+        assert!(CLAIM_SYSTEM_PROMPT.contains("An insight that removes work counts"));
+        assert!(CLAIM_SYSTEM_PROMPT.contains("are NOT reasons to answer false"));
+    }
+
+    /// Stage 3a is the only stage allowed to look for what is missing, and it is
+    /// handed the claim rather than the board's raw ink to re-interpret.
+    #[test]
+    fn the_verdict_stage_is_handed_a_frozen_claim() {
+        let meta = meta_with_cases(3);
+        let claim = Claim {
+            claim_sufficient: false,
+            why_sufficient_or_not: "nothing says what happens when the input is negative".into(),
+            unresolved: vec!["negative inputs".into()],
+            ..sufficient_claim()
+        };
+        let prompt = build_verdict_prompt(&meta, None, &BoardSnapshot::default(), &claim);
+
+        assert!(prompt.contains("frozen — read it as given"));
+        assert!(prompt.contains("trailing zeros mean the double reversal cannot round-trip"));
+        assert!(prompt.contains("does this already decide the answer? no"));
+        assert!(prompt.contains("- not decided by the board yet:"));
+        assert!(prompt.contains("negative inputs"));
+        assert!(prompt.contains("- [2] input:"), "a counterexample needs real indices");
+
+        assert!(VERDICT_SYSTEM_PROMPT.contains("The claim is fixed"));
+        assert!(VERDICT_SYSTEM_PROMPT.contains("never pad the list"));
+        assert!(VERDICT_SYSTEM_PROMPT.contains("must be null"));
+    }
+
+    /// The code pass asks whether the code matches the claim. It is never asked
+    /// what approach the stub suggests — that question is how half-typed tablet
+    /// code used to talk the coach out of a correct board.
+    #[test]
+    fn the_code_pass_is_conditioned_on_the_claim() {
+        let meta = meta_with_cases(2);
+        let board = BoardSnapshot {
+            pseudocode: Some("def solve(n):\n    pass".into()),
+            app_messages: vec!["Run tests — 1/2 passed".into()],
+            ..Default::default()
+        };
+        let prompt =
+            build_claim_code_review_prompt(&meta, None, &board, &sufficient_claim());
+
+        assert!(prompt.contains("Does this code implement the claim above?"));
+        assert!(prompt.contains("The claim the board makes"));
+        assert!(prompt.contains("def solve(n):"));
+        assert!(prompt.contains("1/2 passed"), "test results are facts the pass may cite");
+        assert!(CLAIM_CODE_SYSTEM_PROMPT.contains("The claim is the specification"));
+        assert!(CLAIM_CODE_SYSTEM_PROMPT.contains("are not gaps"));
+    }
+
+    /// Acceptance criterion 2: Lazy implements the claim, and the code dock is
+    /// not the source of truth.
+    #[test]
+    fn lazy_fill_implements_the_frozen_claim() {
+        let meta = meta_with_cases(2);
+        let board = BoardSnapshot {
+            recognized_text: "zeros vanish".into(),
+            pseudocode: Some("# WRONG OLD ATTEMPT".into()),
+            ..Default::default()
+        };
+        let claim = sufficient_claim();
+
+        let with_claim = build_lazy_fill_prompt(&meta, None, &board, Some(&claim));
+        assert!(with_claim.contains("full working Python for the claim above"));
+        assert!(with_claim.contains("reverse the digits once"));
+        assert!(!with_claim.contains("WRONG OLD ATTEMPT"), "the dock is not the truth here");
+
+        // No review yet for this board: fall back to reading the drawing.
+        let without = build_lazy_fill_prompt(&meta, None, &board, None);
+        assert!(without.contains("Interpret the drawing"));
+        assert!(!without.contains("The claim the board makes"));
+        assert!(!without.contains("WRONG OLD ATTEMPT"));
+
+        assert!(LAZY_FILL_SYSTEM_PROMPT.contains("it is the specification"));
     }
 
     #[test]
