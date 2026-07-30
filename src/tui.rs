@@ -11,18 +11,24 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use std::io;
-use std::path::Path;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::attempt;
 use crate::config::Config;
 use crate::dataset::{self, Dataset, DATASETS};
 use crate::index::{self, ProblemRow, SearchSort};
+use crate::llm::{ChatMessage, ChatRequest};
 use crate::session::{ProblemState, Session};
 use crate::{generator, lists, llm, loader, problem, runner};
 
 type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
 const PAGE_SIZE: u32 = 15;
+
+const COACH_SYSTEM: &str = "You are a concise LeetCode tutor in a terminal coach chat. \
+Hint and teach; never dump a full working solution the student can paste. \
+When a Tests message appears in the thread, treat it as ground truth about the last run.";
 
 const LC_BANNER: &str = r#"
  ██╗      ██████╗
@@ -49,6 +55,8 @@ enum Screen {
     ListPick,
     Browse,
     ProblemActions,
+    CoachChat,
+    LeaveConfirm,
     InputId,
     InputListName,
     Settings,
@@ -97,6 +105,11 @@ struct App {
     browse_search_active: bool,
     browse_search_buf: String,
     list_pick_purpose: ListPickPurpose,
+    /// TUI coach thread (mirrors `.lc/agent.tui.json`).
+    coach_messages: Vec<serde_json::Value>,
+    coach_scroll: usize,
+    /// Cached solved flag for the leave-confirm labels.
+    leave_solved: bool,
 }
 
 impl App {
@@ -134,6 +147,9 @@ impl App {
             browse_search_active: false,
             browse_search_buf: String::new(),
             list_pick_purpose: ListPickPurpose::LoadSession,
+            coach_messages: Vec::new(),
+            coach_scroll: 0,
+            leave_solved: false,
         })
     }
 
@@ -438,20 +454,26 @@ impl App {
         Ok(())
     }
 
-    fn run_tests(&mut self) -> Result<()> {
+    fn run_tests(&mut self, kind: &str) -> Result<()> {
         let row = self.selected_problem.clone().context("no problem")?;
-        let dir = self.dataset.workspace_dir(&self.cfg, &row.task_id);
-        if !dir.join(".lc").join("meta.json").exists() {
-            bail!("load workspace first (Work on problem)");
-        }
+        let dir = self.ensure_workspace()?;
         let all_passed =
             runner::cmd_test_quiet_in(&self.cfg, self.dataset, Some(&row.task_id), None, false)?;
         self.session = Session::load_or_new()?;
+        if let Some(run) = runner::load_last_run()? {
+            if run.task_id == row.task_id {
+                let report = runner::format_test_report(&run.results, kind);
+                self.push_coach_app_message(&dir, report)?;
+            }
+        }
+        if all_passed {
+            let _ = attempt::mark_solved(&dir);
+        }
         self.status = if all_passed {
-            format!("{} — all tests passed", row.task_id)
+            format!("{} - all tests passed", row.task_id)
         } else if let Some(run) = runner::load_last_run()? {
             let p = run.results.iter().filter(|r| r.pass).count();
-            format!("{} — {p}/{} passed", row.task_id, run.results.len())
+            format!("{} - {p}/{} passed", row.task_id, run.results.len())
         } else {
             "tests finished".into()
         };
@@ -460,10 +482,9 @@ impl App {
 
     fn submit_locally(&mut self) -> Result<()> {
         let row = self.selected_problem.clone().context("no problem")?;
-        let dir = self.dataset.workspace_dir(&self.cfg, &row.task_id);
-        if !dir.join("solution.py").exists() {
-            bail!("no solution yet — use Work on problem first");
-        }
+        let dir = self.ensure_workspace()?;
+        // Match GUI: submit also runs tests and posts into the coach thread.
+        self.run_tests("submit")?;
         let (passed, total, all_passed) = if let Some(run) = runner::load_last_run()? {
             if run.task_id == row.task_id {
                 let p = run.results.iter().filter(|r| r.pass).count() as u32;
@@ -491,54 +512,169 @@ impl App {
         Ok(())
     }
 
-    fn ai_overview(&mut self) -> Result<()> {
+    fn workspace_dir(&self) -> Result<PathBuf> {
+        let row = self.selected_problem.as_ref().context("no problem")?;
+        Ok(self.dataset.workspace_dir(&self.cfg, &row.task_id))
+    }
+
+    fn ensure_workspace(&mut self) -> Result<PathBuf> {
         let row = self.selected_problem.clone().context("no problem")?;
         let json_path = Path::new(&row.json_path);
         let prob = problem::load_task_for(self.dataset, json_path, &row.task_id)?;
-        let desc = prob.problem_description.unwrap_or_default();
-        let starter = prob.starter_code.unwrap_or_default();
-        let user = format!(
-            "Give a concise tutoring overview of this LeetCode problem (approach hints, \
-             key patterns, pitfalls). Do NOT write a full solution.\n\n\
-             task_id: {}\n\
-             difficulty: {}\n\
-             tags: {}\n\n\
-             ---\n{desc}\n\n---\nStarter:\n{starter}",
-            row.task_id,
-            row.difficulty.as_deref().unwrap_or("?"),
-            row.tags.join(", ")
-        );
-        let provider = llm::make_provider(&self.cfg, None)?;
-        self.status = format!("asking {}…", provider.label());
-        let answer = provider.chat(
-            "You are a concise LeetCode tutor. Hint and teach; never dump a full solution.",
-            &user,
-        )?;
-        self.message_lines = answer.lines().map(|l| l.to_string()).collect();
-        self.message_scroll = 0;
-        self.screen = Screen::Message;
+        let dir = generator::generate(&self.cfg, self.dataset, &prob, json_path, false)?;
+        self.session.mark_loaded(&row.key())?;
+        let _ = self.session.add_to_queue(&row.key());
+        self.session = Session::load_or_new()?;
+        Ok(dir)
+    }
+
+    fn edit_solution(&mut self, terminal: &mut TuiTerminal) -> Result<()> {
+        let dir = self.ensure_workspace()?;
+        let path = dir.join("solution.py");
+        with_suspended_tui(terminal, || generator::open_in_terminal_editor(&path))?;
+        self.status = format!("edited {}", path.display());
         Ok(())
     }
 
-    fn view_solution(&mut self) -> Result<()> {
-        let row = self.selected_problem.clone().context("no problem")?;
-        let path = self
-            .dataset
-            .workspace_dir(&self.cfg, &row.task_id)
-            .join("solution.py");
-        let text = if path.exists() {
-            std::fs::read_to_string(&path)?
-        } else {
-            format!(
-                "(no solution.py yet — choose Work on problem for {})\n",
-                row.task_id
-            )
-        };
-        self.message_lines = text.lines().map(|l| l.to_string()).collect();
-        self.message_scroll = 0;
-        self.screen = Screen::Message;
+    fn open_workspace_folder(&mut self) -> Result<()> {
+        let dir = self.ensure_workspace()?;
+        generator::open_workspace_folder(&dir);
+        self.status = format!("opened folder {}", dir.display());
         Ok(())
     }
+
+    fn open_coach_chat(&mut self) -> Result<()> {
+        let dir = self.ensure_workspace()?;
+        self.coach_messages = attempt::read_tui_agent(&dir)?.messages;
+        self.coach_scroll = 0;
+        self.input_buf.clear();
+        self.screen = Screen::CoachChat;
+        self.status = "coach: type a question · Enter send · Esc back · w/s scroll".into();
+        Ok(())
+    }
+
+    fn persist_coach(&self, dir: &Path) -> Result<()> {
+        attempt::write_tui_agent(dir, self.coach_messages.clone())?;
+        Ok(())
+    }
+
+    fn push_coach_app_message(&mut self, dir: &Path, content: String) -> Result<()> {
+        self.coach_messages = attempt::read_tui_agent(dir)?.messages;
+        self.coach_messages.push(coach_message("app", content));
+        self.persist_coach(dir)?;
+        Ok(())
+    }
+
+    fn send_coach_message(&mut self, terminal: &mut TuiTerminal) -> Result<()> {
+        let text = self.input_buf.trim().to_string();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let row = self.selected_problem.clone().context("no problem")?;
+        let dir = self.ensure_workspace()?;
+        self.coach_messages.push(coach_message("user", text.clone()));
+        self.input_buf.clear();
+        self.persist_coach(&dir)?;
+
+        self.status = "asking the coach…".into();
+        terminal.draw(|f| draw(f, self))?;
+
+        let reply = match self.ask_coach(&row, &dir) {
+            Ok(answer) => answer,
+            Err(err) => format!("(coach error)\n{err:#}"),
+        };
+        self.coach_messages.push(coach_message("assistant", reply));
+        self.persist_coach(&dir)?;
+        self.status = "coach replied · Esc back".into();
+        hard_refresh(terminal)?;
+        Ok(())
+    }
+
+    fn ask_coach(&self, row: &ProblemRow, dir: &Path) -> Result<String> {
+        let json_path = Path::new(&row.json_path);
+        let prob = problem::load_task_for(self.dataset, json_path, &row.task_id)?;
+        let desc = prob.problem_description.unwrap_or_default();
+        let solution = std::fs::read_to_string(dir.join("solution.py")).unwrap_or_default();
+        let mut messages = vec![ChatMessage::system(COACH_SYSTEM)];
+        let context = format!(
+            "task_id: {}\ndataset: {}\ndifficulty: {}\ntags: {}\n\n--- problem ---\n{desc}\n\n--- solution.py ---\n{solution}",
+            row.task_id,
+            self.dataset.id,
+            row.difficulty.as_deref().unwrap_or("?"),
+            row.tags.join(", "),
+        );
+        for msg in &self.coach_messages {
+            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            match role {
+                "user" => messages.push(ChatMessage::user(content.to_string())),
+                "assistant" => messages.push(ChatMessage::assistant(content.to_string())),
+                "app" => messages.push(ChatMessage::user(format!("[Tests]\n{content}"))),
+                _ => {}
+            }
+        }
+        // Workspace snapshot as the first user turn after system.
+        messages.insert(1, ChatMessage::user(context));
+        let provider = llm::make_provider(&self.cfg, None)?;
+        let reply = provider.chat_ex(&ChatRequest::new(messages))?;
+        Ok(reply.content)
+    }
+
+    fn workspace_needs_leave_prompt(&self) -> bool {
+        let Ok(dir) = self.workspace_dir() else {
+            return false;
+        };
+        dir.join(".lc").exists()
+    }
+
+    fn begin_leave_confirm(&mut self) -> Result<()> {
+        let dir = self.workspace_dir()?;
+        let state = attempt::read_state(&dir).unwrap_or_default();
+        self.leave_solved = state.solved;
+        self.screen = Screen::LeaveConfirm;
+        self.menu_sel = 0;
+        self.status = if self.leave_solved {
+            "this attempt is solved - choose save or clear".into()
+        } else {
+            "save progress or discard before leaving".into()
+        };
+        Ok(())
+    }
+
+    fn confirm_leave(&mut self, save: bool) -> Result<()> {
+        let row = self.selected_problem.clone().context("no problem")?;
+        let dir = self.workspace_dir()?;
+        let json_path = Path::new(&row.json_path);
+        let prob = problem::load_task_for(self.dataset, json_path, &row.task_id)?;
+        let starter = generator::code_body(&prob);
+        let state = attempt::read_state(&dir).unwrap_or_default();
+        let solved = state.solved;
+        // Flush TUI coach before finish archives/clears it.
+        let _ = self.persist_coach(&dir);
+        attempt::finish(&dir, solved, save, Some(&starter))?;
+        self.coach_messages.clear();
+        self.screen = Screen::Browse;
+        self.menu_sel = 0;
+        self.status = if save {
+            "saved - back to browse".into()
+        } else {
+            "discarded - back to browse".into()
+        };
+        Ok(())
+    }
+}
+
+fn coach_message(role: &str, content: String) -> serde_json::Value {
+    let at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    serde_json::json!({
+        "id": format!("tui-{at}-{}", rand::random::<u32>()),
+        "role": role,
+        "content": content,
+        "at": at,
+    })
 }
 
 fn run_app(terminal: &mut TuiTerminal, cfg: &Config) -> Result<()> {
@@ -549,7 +685,7 @@ fn run_app(terminal: &mut TuiTerminal, cfg: &Config) -> Result<()> {
         terminal.draw(|f| draw(f, &mut app))?;
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if handle_key(&mut app, key)? {
+                if handle_key(&mut app, terminal, key)? {
                     break;
                 }
             }
@@ -558,7 +694,7 @@ fn run_app(terminal: &mut TuiTerminal, cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+fn handle_key(app: &mut App, terminal: &mut TuiTerminal, key: KeyEvent) -> Result<bool> {
     if key.kind != KeyEventKind::Press {
         return Ok(false);
     }
@@ -575,6 +711,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
     if app.screen == Screen::Message {
         return handle_message(app, key);
     }
+    if app.screen == Screen::CoachChat {
+        return handle_coach_chat(app, terminal, key);
+    }
     if app.screen == Screen::Browse && app.browse_search_active {
         return handle_browse_search(app, key);
     }
@@ -582,25 +721,44 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
     match key.code {
         KeyCode::Char('q') if app.screen == Screen::Main => return Ok(true),
         KeyCode::Esc => {
-            app.screen = match app.screen {
+            match app.screen {
                 Screen::Main => return Ok(true),
-                Screen::StartSession => Screen::Main,
-                Screen::ChooseProblems | Screen::DifficultyPick | Screen::ListPick => {
-                    Screen::StartSession
+                Screen::ProblemActions => {
+                    if app.workspace_needs_leave_prompt() {
+                        if let Err(e) = app.begin_leave_confirm() {
+                            app.status = format!("{e:#}");
+                        }
+                    } else {
+                        app.screen = Screen::Browse;
+                        app.menu_sel = 0;
+                    }
                 }
-                Screen::Browse => app.back_screen,
-                Screen::ProblemActions => Screen::Browse,
-                Screen::Settings | Screen::Help => Screen::Main,
-                Screen::InputId => app.back_screen,
-                Screen::InputListName => Screen::ListPick,
-                Screen::Message => app.back_screen,
-            };
-            app.menu_sel = 0;
+                Screen::LeaveConfirm => {
+                    app.screen = Screen::ProblemActions;
+                    app.menu_sel = 0;
+                }
+                Screen::CoachChat => {
+                    app.screen = Screen::ProblemActions;
+                    app.menu_sel = 0;
+                }
+                Screen::StartSession => app.screen = Screen::Main,
+                Screen::ChooseProblems | Screen::DifficultyPick | Screen::ListPick => {
+                    app.screen = Screen::StartSession;
+                }
+                Screen::Browse => app.screen = app.back_screen,
+                Screen::Settings | Screen::Help => app.screen = Screen::Main,
+                Screen::InputId => app.screen = app.back_screen,
+                Screen::InputListName => app.screen = Screen::ListPick,
+                Screen::Message => app.screen = app.back_screen,
+            }
+            if app.screen != Screen::LeaveConfirm {
+                app.menu_sel = 0;
+            }
         }
         KeyCode::Char('w') | KeyCode::Up => menu_up(app),
         KeyCode::Char('s') | KeyCode::Down => menu_down(app),
         KeyCode::Enter => {
-            if activate(app)? {
+            if activate(app, terminal)? {
                 return Ok(true);
             }
         }
@@ -752,6 +910,52 @@ fn handle_message(app: &mut App, key: KeyEvent) -> Result<bool> {
     Ok(false)
 }
 
+fn handle_coach_chat(
+    app: &mut App,
+    terminal: &mut TuiTerminal,
+    key: KeyEvent,
+) -> Result<bool> {
+    if key.kind != KeyEventKind::Press {
+        return Ok(false);
+    }
+    match key.code {
+        KeyCode::Esc => {
+            if let Ok(dir) = app.workspace_dir() {
+                let _ = app.persist_coach(&dir);
+            }
+            app.screen = Screen::ProblemActions;
+            app.menu_sel = 0;
+            app.input_buf.clear();
+        }
+        KeyCode::Enter => {
+            if let Err(e) = app.send_coach_message(terminal) {
+                app.status = format!("{e:#}");
+                let _ = hard_refresh(terminal);
+            }
+        }
+        KeyCode::Backspace => {
+            app.input_buf.pop();
+        }
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.coach_scroll = app.coach_scroll.saturating_sub(1);
+        }
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.coach_scroll = app.coach_scroll.saturating_add(1);
+        }
+        KeyCode::Up => {
+            app.coach_scroll = app.coach_scroll.saturating_sub(1);
+        }
+        KeyCode::Down => {
+            app.coach_scroll = app.coach_scroll.saturating_add(1);
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.input_buf.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
 fn menu_up(app: &mut App) {
     if app.screen == Screen::Browse {
         if app.browse_sel > 0 {
@@ -785,14 +989,15 @@ fn menu_len(app: &App) -> usize {
         Screen::DifficultyPick => 4,
         Screen::ListPick => app.list_names.len() + 2,
         Screen::Browse => app.browse_rows.len(),
-        Screen::ProblemActions => 9,
+        Screen::ProblemActions => 10,
+        Screen::LeaveConfirm => 3,
         Screen::Settings => 7,
         Screen::Help => 1,
-        Screen::InputId | Screen::InputListName | Screen::Message => 0,
+        Screen::InputId | Screen::InputListName | Screen::Message | Screen::CoachChat => 0,
     }
 }
 
-fn activate(app: &mut App) -> Result<bool> {
+fn activate(app: &mut App, terminal: &mut TuiTerminal) -> Result<bool> {
     match app.screen {
         Screen::Main => match app.menu_sel {
             0 => {
@@ -972,31 +1177,51 @@ fn activate(app: &mut App) -> Result<bool> {
                 }
             }
             2 => {
-                if let Err(e) = app.open_problem_target("tui") {
+                if let Err(e) = app.edit_solution(terminal) {
                     app.status = format!("{e:#}");
                 }
             }
             3 => {
-                if let Err(e) = app.run_tests() {
+                if let Err(e) = app.open_workspace_folder() {
                     app.status = format!("{e:#}");
                 }
             }
             4 => {
-                if let Err(e) = app.ai_overview() {
+                if let Err(e) = app.open_problem_target("tui") {
                     app.status = format!("{e:#}");
                 }
             }
             5 => {
-                if let Err(e) = app.view_solution() {
+                if let Err(e) = app.run_tests("run") {
                     app.status = format!("{e:#}");
+                }
+                let _ = hard_refresh(terminal);
+                if app.coach_messages.iter().any(|m| {
+                    m.get("role").and_then(|v| v.as_str()) == Some("app")
+                }) {
+                    // Reload thread and show coach so the Tests bubble is visible.
+                    if let Ok(dir) = app.workspace_dir() {
+                        app.coach_messages = attempt::read_tui_agent(&dir)
+                            .map(|s| s.messages)
+                            .unwrap_or_default();
+                    }
+                    app.screen = Screen::CoachChat;
+                    app.input_buf.clear();
+                    app.coach_scroll = 0;
                 }
             }
             6 => {
-                if let Err(e) = app.submit_locally() {
+                if let Err(e) = app.open_coach_chat() {
                     app.status = format!("{e:#}");
                 }
             }
             7 => {
+                if let Err(e) = app.submit_locally() {
+                    app.status = format!("{e:#}");
+                }
+                let _ = hard_refresh(terminal);
+            }
+            8 => {
                 if let Some(row) = app.selected_problem.clone() {
                     app.open_list_pick(
                         ListPickPurpose::AddTask {
@@ -1007,7 +1232,29 @@ fn activate(app: &mut App) -> Result<bool> {
                 }
             }
             _ => {
-                app.screen = Screen::Browse;
+                if app.workspace_needs_leave_prompt() {
+                    if let Err(e) = app.begin_leave_confirm() {
+                        app.status = format!("{e:#}");
+                    }
+                } else {
+                    app.screen = Screen::Browse;
+                    app.menu_sel = 0;
+                }
+            }
+        },
+        Screen::LeaveConfirm => match app.menu_sel {
+            0 => {
+                if let Err(e) = app.confirm_leave(true) {
+                    app.status = format!("{e:#}");
+                }
+            }
+            1 => {
+                if let Err(e) = app.confirm_leave(false) {
+                    app.status = format!("{e:#}");
+                }
+            }
+            _ => {
+                app.screen = Screen::ProblemActions;
                 app.menu_sel = 0;
             }
         },
@@ -1050,7 +1297,7 @@ fn activate(app: &mut App) -> Result<bool> {
             app.screen = Screen::Main;
             app.menu_sel = 0;
         }
-        Screen::InputId | Screen::InputListName | Screen::Message => {}
+        Screen::InputId | Screen::InputListName | Screen::Message | Screen::CoachChat => {}
     }
     Ok(false)
 }
@@ -1069,6 +1316,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     match app.screen {
         Screen::Browse => draw_browse(f, chunks[1], app),
         Screen::Message => draw_message(f, chunks[1], app),
+        Screen::CoachChat => draw_coach_chat(f, chunks[1], app),
         Screen::InputId => draw_input(f, chunks[1], app, "add by id", "Enter problem id / slug / question #:"),
         Screen::InputListName => {
             draw_input(f, chunks[1], app, "new list", "Enter list name:")
@@ -1180,22 +1428,38 @@ fn menu_items(app: &App) -> (&'static str, Vec<String>) {
             "problem",
             vec![
                 format!(
-                    "Open in Canvas — {}",
+                    "Open in Canvas - {}",
                     app.selected_problem
                         .as_ref()
                         .map(|r| r.task_id.as_str())
                         .unwrap_or("?")
                 ),
                 "Open in IDE".into(),
+                "Edit solution (vim / $EDITOR)".into(),
+                "Open workspace folder".into(),
                 "Load workspace (stay in TUI)".into(),
                 "Run tests".into(),
-                "AI overview".into(),
-                "View my solution".into(),
+                "Coach chat".into(),
                 "Submit locally (save)".into(),
                 "Add to list".into(),
                 "Back".into(),
             ],
         ),
+        Screen::LeaveConfirm => {
+            let (save, discard) = if app.leave_solved {
+                ("Save attempt", "Clear attempt")
+            } else {
+                ("Save progress", "Discard")
+            };
+            (
+                if app.leave_solved {
+                    "save this attempt?"
+                } else {
+                    "save your progress?"
+                },
+                vec![save.into(), discard.into(), "Cancel".into()],
+            )
+        },
         Screen::Settings => (
             "settings",
             vec![
@@ -1374,6 +1638,57 @@ fn draw_message(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(block, area);
 }
 
+fn draw_coach_chat(f: &mut Frame, area: Rect, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(3)])
+        .split(area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    if app.coach_messages.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "(empty thread - ask about the problem, your solution, or a failing test)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    for msg in &app.coach_messages {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        let (label, style) = match role {
+            "user" => ("You", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            "assistant" => ("Coach", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            "app" => ("Tests", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            _ => ("?", Style::default().fg(Color::DarkGray)),
+        };
+        lines.push(Line::from(Span::styled(label, style)));
+        for line in content.lines() {
+            lines.push(Line::from(format!("  {line}")));
+        }
+        lines.push(Line::from(""));
+    }
+
+    let height = chunks[0].height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(height.max(1));
+    let scroll = app.coach_scroll.min(max_scroll);
+    let visible: Vec<Line> = lines.into_iter().skip(scroll).take(height.max(1)).collect();
+
+    let thread = Paragraph::new(visible)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("coach chat (Up/Down scroll · Esc back)"),
+        );
+    f.render_widget(thread, chunks[0]);
+
+    let composer = Paragraph::new(format!("> {}_", app.input_buf)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("message · Enter send"),
+    );
+    f.render_widget(composer, chunks[1]);
+}
+
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let keys = match app.screen {
         Screen::Browse => {
@@ -1386,6 +1701,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Screen::InputId => "type id · Enter confirm · Esc cancel",
         Screen::InputListName => "type list name · Enter confirm · Esc cancel",
         Screen::Message => "W/S scroll · Enter/Esc back",
+        Screen::CoachChat => "type · Enter send · Up/Down scroll · Esc back",
+        Screen::LeaveConfirm => "W/S choose · Enter confirm · Esc cancel",
         Screen::Main => "W/S move · Enter select · Q quit",
         _ => "W/S move · Enter select · Esc back",
     };
@@ -1454,4 +1771,43 @@ fn restore_terminal(terminal: &mut TuiTerminal) -> Result<()> {
     )?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+/// Leave the alternate screen, run `f`, then restore and hard-refresh.
+fn with_suspended_tui<T>(
+    terminal: &mut TuiTerminal,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    )?;
+    terminal.show_cursor()?;
+
+    let result = f();
+
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        crossterm::cursor::Hide
+    )?;
+    hard_refresh(terminal)?;
+    drain_pending_keys();
+    result
+}
+
+fn hard_refresh(terminal: &mut TuiTerminal) -> Result<()> {
+    let size = terminal.size()?;
+    let _ = terminal.resize(Rect::new(0, 0, size.width, size.height));
+    terminal.clear()?;
+    Ok(())
+}
+
+fn drain_pending_keys() {
+    while event::poll(Duration::from_millis(0)).unwrap_or(false) {
+        let _ = event::read();
+    }
 }
