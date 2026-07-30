@@ -59,7 +59,7 @@ import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { RevealDialog } from "./modes/RevealDialog";
 import { buildProblemTemplate } from "./templates/problemBoard";
-import { REGIONS, STUDENT_REGION_ORDER, type RegionId } from "./templates/regions";
+import { MOBILE_REGION_ORDER, REGIONS, type RegionId } from "./templates/regions";
 import { splitProblemKey } from "./util/datasetKey";
 import { isMobileViewport, useIsMobile } from "./util/mobile";
 import { installSafeAreaInsets } from "./util/safeArea";
@@ -884,6 +884,9 @@ export function App() {
 
       if (drawables.length > 0) {
         dirtyRef.current = true;
+        // Coach ink lives on the agent page — jump there on mobile so drawings
+        // aren't parked invisible on Walkthrough / Scratch.
+        if (mobile) setActiveRegion("agent");
         setCoachMessages((current) => {
           const stamp = Date.now();
           let next: CoachChatMessage[] = [
@@ -955,7 +958,7 @@ export function App() {
     } finally {
       setBusy(null);
     }
-  }, [client, problem, syncSolution, modeHasVision, sceneApi, appMessages, syncDrawingsToBoard]);
+  }, [client, problem, syncSolution, modeHasVision, sceneApi, appMessages, syncDrawingsToBoard, mobile]);
 
   const applyFilledCode = useCallback(
     async (filled: string, note: string) => {
@@ -1280,6 +1283,7 @@ export function App() {
       const api = sceneApi();
       if (!board || !api) return;
       dirtyRef.current = true;
+      if (mobile) setActiveRegion("agent");
       setCoachMessages((current) => {
         const next = current.map((message) => {
           if (message.drawing?.program.id !== programId) return message;
@@ -1295,19 +1299,20 @@ export function App() {
         return next;
       });
     },
-    [sceneApi],
+    [sceneApi, mobile],
   );
 
   const toggleDrawing = useCallback(
     (messageId: string, expanded: boolean) => {
       dirtyRef.current = true;
+      if (expanded && mobile) setActiveRegion("agent");
       setCoachMessages((current) => {
         const next = setDrawingExpanded(current, messageId, expanded);
         queueMicrotask(() => syncDrawingsToBoard(next));
         return next;
       });
     },
-    [syncDrawingsToBoard],
+    [syncDrawingsToBoard, mobile],
   );
 
   /** Reset every per-problem piece of state. Shared by leave and switch. */
@@ -1889,9 +1894,9 @@ function RegionPager({
   onPick: (region: RegionId) => void;
   disabled: boolean;
 }) {
-  const index = Math.max(0, STUDENT_REGION_ORDER.indexOf(active));
-  const previous = STUDENT_REGION_ORDER[index - 1];
-  const next = STUDENT_REGION_ORDER[index + 1];
+  const index = Math.max(0, MOBILE_REGION_ORDER.indexOf(active));
+  const previous = MOBILE_REGION_ORDER[index - 1];
+  const next = MOBILE_REGION_ORDER[index + 1];
   return (
     <nav className="lc-pager" aria-label="Board pages">
       <button
@@ -1906,7 +1911,7 @@ function RegionPager({
       <div className="lc-pager-body">
         <span className="lc-pager-label">{REGIONS[active].label}</span>
         <div className="lc-pager-dots" role="tablist" aria-label="Board pages">
-          {STUDENT_REGION_ORDER.map((region) => (
+          {MOBILE_REGION_ORDER.map((region) => (
             <button
               key={region}
               type="button"

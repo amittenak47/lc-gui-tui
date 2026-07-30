@@ -106,4 +106,25 @@ describe("page visibility", () => {
     const paged = applyPageVisibility([...TEMPLATE, stray], "constraints")!;
     expect(paged.find((element) => element.id === "stray")?.opacity).toBeUndefined();
   });
+
+  it("shows coach diagrams on the Coach page, not Walkthrough", () => {
+    const board = [
+      frame("walkthrough"),
+      frame("agent"),
+      {
+        id: "lcviz-demo-cell-0",
+        type: "rectangle",
+        x: REGIONS.agent.x + 40,
+        y: REGIONS.agent.y + 120,
+        width: 48,
+        height: 48,
+        customData: { lcVizId: "demo", lcRegion: "agent" },
+      } satisfies PageableElement,
+    ];
+    const onWalkthrough = applyPageVisibility(board, "walkthrough")!;
+    expect(onWalkthrough.find((el) => el.id === "lcviz-demo-cell-0")?.opacity).toBe(0);
+
+    const onCoach = applyPageVisibility(onWalkthrough, "agent")!;
+    expect(onCoach.find((el) => el.id === "lcviz-demo-cell-0")?.opacity).toBe(100);
+  });
 });

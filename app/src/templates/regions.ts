@@ -83,6 +83,12 @@ export const STUDENT_REGION_ORDER: RegionId[] = [
   "scratch",
 ];
 
+/**
+ * Mobile page turner order. Coach diagrams live in the agent lane (not
+ * Walkthrough); without this page they render but stay opacity-0 forever.
+ */
+export const MOBILE_REGION_ORDER: RegionId[] = [...STUDENT_REGION_ORDER, "agent"];
+
 export const REGIONS: Record<RegionId, Region> = {
   constraints: {
     id: "constraints",

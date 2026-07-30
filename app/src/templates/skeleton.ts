@@ -153,7 +153,13 @@ export function tagViz(skeletons: Skeleton[], vizId: string): Skeleton[] {
     // Injected diagrams are locked: a stray palm shouldn't drag the coach's
     // annotation across the student's work.
     locked: skeleton.locked ?? true,
-    customData: { ...skeleton.customData, lcVizId: vizId },
+    customData: {
+      ...skeleton.customData,
+      lcVizId: vizId,
+      // Mobile paging keys off lcRegion; without this, a centre that falls near
+      // a student frame can park the diagram on a page the student never opens.
+      lcRegion: skeleton.customData?.lcRegion ?? "agent",
+    },
   }));
 }
 

@@ -648,6 +648,8 @@ board and you must not guess coordinates — the client lays your structures out
 Rules:\n\
 - One diagram per idea. To show change over time call `animate_trace` once with many frames; do \
 NOT call `draw_structure` repeatedly to show the same structure at different moments.\n\
+- For algorithm / pointer traces prefer about three frames (start → key middle → end); add more \
+only when a step would be unclear without it.\n\
 - Every frame carries the FULL state at that step, not a diff.\n\
 - Reuse the same `id` when you mean the same structure, so it is updated rather than duplicated.\n\
 - `cite_test_case` only accepts indices into the sample cases you were shown.\n\
@@ -1508,6 +1510,7 @@ mod tests {
         assert!(prompt.contains("show the scan"));
         assert!(prompt.contains("- [0] input:"));
         assert!(VIZ_SYSTEM_PROMPT.contains("must not guess coordinates"));
+        assert!(VIZ_SYSTEM_PROMPT.contains("about three frames"));
     }
 
     /// Observed from granite-4.1-8b: it emitted `why_your_approach_fails`
