@@ -28,6 +28,7 @@ const SAMPLES: Record<VizKind, VizProgram> = {
   array: program("array", [
     { label: "i=0, j=3", cells: [2, 7, 11, 15], pointers: { i: 0, j: 3 }, highlight: [0, 3], note: "sum = 17 > 9 → move j left" },
     { label: "i=0, j=2", cells: [2, 7, 11, 15], pointers: { i: 0, j: 2 }, highlight: [0, 2] },
+    { label: "i=1, j=2", cells: [2, 7, 11, 15], pointers: { i: 1, j: 2 }, highlight: [1, 2], note: "sum = 18" },
   ]),
   grid: program("grid", [
     { cells: [[1, 0], [0, 1]], highlight: [0, 3] },
@@ -78,6 +79,7 @@ describe.each(VIZ_KINDS)("render %s", (kind) => {
     expect(elements.length).toBeGreaterThan(0);
     for (const element of elements) {
       expect(element.customData?.lcVizId).toBe(sample.id);
+      expect(element.customData?.lcRegion).toBe("agent");
       expect(element.id).toBeTruthy();
       expect(element.locked).toBe(true);
     }
@@ -130,6 +132,26 @@ describe.each(VIZ_KINDS)("render %s", (kind) => {
       renderViz(sample, sample.frames.length - 1, ORIGIN),
     );
     expect(renderViz(sample, -5, ORIGIN)).toEqual(renderViz(sample, 0, ORIGIN));
+  });
+});
+
+describe("three-step array animation", () => {
+  it("keeps stable cell ids across a start → middle → end scrub", () => {
+    const frames = [0, 1, 2].map((index) => renderViz(SAMPLES.array, index, ORIGIN));
+    expect(SAMPLES.array.frames).toHaveLength(3);
+
+    const cellIds = (elements: ReturnType<typeof renderViz>) =>
+      elements.filter((el) => el.id?.includes("cell-")).map((el) => el.id).sort();
+
+    // Structure stays put; only pointers / highlights change.
+    expect(cellIds(frames[0]!)).toEqual(cellIds(frames[1]!));
+    expect(cellIds(frames[1]!)).toEqual(cellIds(frames[2]!));
+
+    let scene = mergeVizElements([], frames[0]!, SAMPLES.array.id) as Array<{ id: string }>;
+    for (const frame of frames.slice(1)) {
+      scene = mergeVizElements(scene, frame!, SAMPLES.array.id) as Array<{ id: string }>;
+      expect(scene.length).toBe(frame!.length);
+    }
   });
 });
 
