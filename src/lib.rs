@@ -19,6 +19,7 @@
 //! no adapter reads one.
 
 pub mod attempt;
+pub mod ascii_morph;
 pub mod coach;
 pub mod config;
 pub mod dataset;

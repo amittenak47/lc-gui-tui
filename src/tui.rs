@@ -17,6 +17,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::ascii_morph::{self, AsciiPlayer};
 use crate::attempt;
 use crate::config::Config;
 use crate::dataset::{self, Dataset, DATASETS};
@@ -56,6 +57,7 @@ enum Screen {
     Browse,
     ProblemActions,
     CoachChat,
+    AsciiAnim,
     LeaveConfirm,
     InputId,
     InputListName,
@@ -108,6 +110,8 @@ struct App {
     /// TUI coach thread (mirrors `.lc/agent.tui.json`).
     coach_messages: Vec<serde_json::Value>,
     coach_scroll: usize,
+    /// Live ASCII morph demo / future coach viz playback.
+    ascii_player: Option<AsciiPlayer>,
     /// Cached solved flag for the leave-confirm labels.
     leave_solved: bool,
 }
@@ -149,6 +153,7 @@ impl App {
             list_pick_purpose: ListPickPurpose::LoadSession,
             coach_messages: Vec::new(),
             coach_scroll: 0,
+            ascii_player: None,
             leave_solved: false,
         })
     }
@@ -709,8 +714,20 @@ fn run_app(terminal: &mut TuiTerminal, cfg: &Config) -> Result<()> {
     app.status = "WASD navigate · Enter select · Esc back · q quit".into();
 
     loop {
+        // Drive morph playback even when no key is pressed.
+        if app.screen == Screen::AsciiAnim {
+            if let Some(player) = app.ascii_player.as_mut() {
+                player.tick();
+            }
+        }
         terminal.draw(|f| draw(f, &mut app))?;
-        if event::poll(Duration::from_millis(50))? {
+        // ~30 FPS while animating; idle menus can poll longer.
+        let wait = if app.screen == Screen::AsciiAnim {
+            Duration::from_millis(33)
+        } else {
+            Duration::from_millis(50)
+        };
+        if event::poll(wait)? {
             match event::read()? {
                 Event::Key(key) => {
                     if handle_key(&mut app, terminal, key)? {
@@ -762,6 +779,9 @@ fn handle_key(app: &mut App, terminal: &mut TuiTerminal, key: KeyEvent) -> Resul
     if app.screen == Screen::CoachChat {
         return handle_coach_chat(app, terminal, key);
     }
+    if app.screen == Screen::AsciiAnim {
+        return handle_ascii_anim(app, key);
+    }
     if app.screen == Screen::Browse && app.browse_search_active {
         return handle_browse_search(app, key);
     }
@@ -787,6 +807,11 @@ fn handle_key(app: &mut App, terminal: &mut TuiTerminal, key: KeyEvent) -> Resul
                 }
                 Screen::CoachChat => {
                     app.screen = Screen::ProblemActions;
+                    app.menu_sel = 0;
+                }
+                Screen::AsciiAnim => {
+                    app.ascii_player = None;
+                    app.screen = Screen::Main;
                     app.menu_sel = 0;
                 }
                 Screen::StartSession => app.screen = Screen::Main,
@@ -1015,6 +1040,28 @@ fn handle_coach_chat(
     Ok(false)
 }
 
+fn handle_ascii_anim(app: &mut App, key: KeyEvent) -> Result<bool> {
+    if key.kind != KeyEventKind::Press {
+        return Ok(false);
+    }
+    match key.code {
+        KeyCode::Esc => {
+            app.ascii_player = None;
+            app.screen = Screen::Main;
+            app.menu_sel = 0;
+            app.status = "WASD navigate · Enter select · Esc back · q quit".into();
+        }
+        KeyCode::Char(' ') | KeyCode::Char('r') => {
+            if let Some(player) = app.ascii_player.as_mut() {
+                player.restart();
+            }
+            app.status = "restarted · Space/r again · Esc back".into();
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
 fn menu_up(app: &mut App) {
     if app.screen == Screen::Browse {
         if app.browse_sel > 0 {
@@ -1042,7 +1089,7 @@ fn menu_down(app: &mut App) {
 
 fn menu_len(app: &App) -> usize {
     match app.screen {
-        Screen::Main => 5,
+        Screen::Main => 6,
         Screen::StartSession => 6,
         Screen::ChooseProblems => 3,
         Screen::DifficultyPick => 4,
@@ -1052,7 +1099,7 @@ fn menu_len(app: &App) -> usize {
         Screen::LeaveConfirm => 3,
         Screen::Settings => 7,
         Screen::Help => 1,
-        Screen::InputId | Screen::InputListName | Screen::Message | Screen::CoachChat => 0,
+        Screen::InputId | Screen::InputListName | Screen::Message | Screen::CoachChat | Screen::AsciiAnim => 0,
     }
 }
 
@@ -1084,7 +1131,12 @@ fn activate(app: &mut App, terminal: &mut TuiTerminal) -> Result<bool> {
                 app.screen = Screen::Help;
                 app.menu_sel = 0;
             }
-            4 => return Ok(true),
+            4 => {
+                app.ascii_player = Some(AsciiPlayer::new(ascii_morph::bubble_sort_demo()));
+                app.screen = Screen::AsciiAnim;
+                app.status = "ASCII morph demo · Space restart · Esc back".into();
+            }
+            5 => return Ok(true),
             _ => return Ok(false),
         },
         Screen::StartSession => match app.menu_sel {
@@ -1356,7 +1408,7 @@ fn activate(app: &mut App, terminal: &mut TuiTerminal) -> Result<bool> {
             app.screen = Screen::Main;
             app.menu_sel = 0;
         }
-        Screen::InputId | Screen::InputListName | Screen::Message | Screen::CoachChat => {}
+        Screen::InputId | Screen::InputListName | Screen::Message | Screen::CoachChat | Screen::AsciiAnim => {}
     }
     Ok(false)
 }
@@ -1376,6 +1428,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         Screen::Browse => draw_browse(f, chunks[1], app),
         Screen::Message => draw_message(f, chunks[1], app),
         Screen::CoachChat => draw_coach_chat(f, chunks[1], app),
+        Screen::AsciiAnim => draw_ascii_anim(f, chunks[1], app),
         Screen::InputId => draw_input(f, chunks[1], app, "add by id", "Enter problem id / slug / question #:"),
         Screen::InputListName => {
             draw_input(f, chunks[1], app, "new list", "Enter list name:")
@@ -1440,6 +1493,7 @@ fn menu_items(app: &App) -> (&'static str, Vec<String>) {
                 "Browse problems".into(),
                 "Settings".into(),
                 "Help".into(),
+                "ASCII morph demo".into(),
                 "Quit".into(),
             ],
         ),
@@ -1764,6 +1818,60 @@ fn draw_coach_chat(f: &mut Frame, area: Rect, app: &mut App) {
     f.render_widget(composer, chunks[1]);
 }
 
+fn draw_ascii_anim(f: &mut Frame, area: Rect, app: &App) {
+    let Some(player) = app.ascii_player.as_ref() else {
+        f.render_widget(
+            Paragraph::new("(no animation loaded)").block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("ascii morph"),
+            ),
+            area,
+        );
+        return;
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        player.program.title.clone(),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    for row in player.current_lines() {
+        lines.push(Line::from(Span::styled(
+            row,
+            Style::default().fg(Color::Green),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        player.current_label().to_string(),
+        Style::default().fg(Color::Yellow),
+    )));
+    lines.push(Line::from(Span::styled(
+        player.progress_hint(),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "This is the ascii-morph idea in Rust: dissolve between keyframes.",
+    ));
+    lines.push(Line::from(
+        "A coach would emit array steps; we morph the ASCII between them.",
+    ));
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("ascii morph · Space restart · Esc back"),
+        ),
+        area,
+    );
+}
+
 /// Hard-wrap `text` to `width` columns (char count). Empty input yields one blank.
 fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
@@ -1797,6 +1905,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Screen::InputListName => "type list name · Enter confirm · Esc cancel",
         Screen::Message => "W/S scroll · Enter/Esc back",
         Screen::CoachChat => "type · Enter send · ↑↓ / PgUp/PgDn / wheel scroll · Esc back",
+        Screen::AsciiAnim => "Space/r restart · Esc back",
         Screen::LeaveConfirm => "W/S choose · Enter confirm · Esc cancel",
         Screen::Main => "W/S move · Enter select · Q quit",
         _ => "W/S move · Enter select · Esc back",
