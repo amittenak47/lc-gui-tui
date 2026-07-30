@@ -2,10 +2,9 @@
 //! `POST /coach/reveal` (Phase 5).
 //!
 //! Neither handler builds a prompt itself — that is
-//! [`crate::llm::coach`]'s job. What lives here is the plumbing, the staged
-//! review pipeline's gates (`staged_board_review`), and, in `reveal`, the
-//! consent gate. Both kinds of gate are the same idea: the decision is Rust
-//! reading a parsed value, never a rule a prompt asks a model to respect.
+//! [`crate::llm::coach`]'s job. What lives here is the HTTP plumbing and, in
+//! `reveal`, the consent gate. Review staging gates live in
+//! [`crate::llm::coach::review_submission`].
 
 use std::path::Path;
 
@@ -17,17 +16,13 @@ use serde::{Deserialize, Serialize};
 use super::routes::{description_for, load_meta};
 use super::{blocking, board_session, AppError, Shared};
 use crate::llm::coach::{
-    build_bridge_prompt, build_claim_code_review_prompt, build_claim_prompt, build_lazy_fill_prompt,
-    build_lazy_hint_prompt, build_perceive_prompt, build_review_prompt, build_trace_prompt,
-    build_verdict_prompt, merge_layout_and_code_reviews, on_track_review_from_claim, parse_bridge,
-    parse_claim, parse_lazy_fill, parse_perception, parse_review, parse_trace, BoardSnapshot,
-    BridgeResponse, Claim, LazyFillResponse, Perception, ReviewResponse, BRIDGE_SYSTEM_PROMPT,
-    CLAIM_CODE_SYSTEM_PROMPT, CLAIM_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT, LAZY_HINT_SYSTEM_PROMPT,
-    PERCEIVE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT, TRACE_SYSTEM_PROMPT, VERDICT_SYSTEM_PROMPT,
+    build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt, parse_bridge,
+    parse_lazy_fill, perceive_and_claim, review_submission, BoardSnapshot, BridgeResponse, Claim,
+    LazyFillResponse, ReviewResponse, BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
+    LAZY_HINT_SYSTEM_PROMPT,
 };
 use crate::dataset::{self, Dataset};
-use crate::generator::WorkspaceMeta;
-use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest, LlmProvider};
+use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
 use crate::reveal::{SolutionReveal, UserConsent};
 use crate::runner;
 use crate::session::Session;
@@ -109,80 +104,25 @@ pub async fn review(
         let description = description_for(&meta);
         let provider = make_provider_for_mode(&cfg, "review")?;
 
-        let has_layout = board_for_prompt.has_visual_evidence()
-            || !board_for_prompt.recognized_text.trim().is_empty();
-        let has_code = !layout_only
-            && board_for_prompt
-                .pseudocode
-                .as_deref()
-                .is_some_and(|p| p.trim().len() > 8);
+        let outcome = review_submission(
+            &*provider,
+            &meta,
+            description.as_deref(),
+            &board_for_prompt,
+            /* include_code */ !layout_only,
+        )?;
 
-        let staged = if has_layout {
-            // The gated path: perceive, claim, and judge only what the claim
-            // leaves open. Falls back below if a stage returns nothing usable —
-            // a broken pipeline should cost the student a plainer review, not
-            // their whole submission.
-            staged_board_review(&*provider, &meta, description.as_deref(), &board_for_prompt).ok()
-        } else {
-            // Nothing drawn — there is no board to perceive and no claim to
-            // freeze, so the single-call review is the honest shape here.
-            None
-        };
-
-        let (mut review, claim) = match staged {
-            Some((claim, board_review)) => {
-                let review = if has_code {
-                    // Board-first merge: the code pass answers "does this match
-                    // the claim?", and cannot talk an on-track board down.
-                    let code_prompt = build_claim_code_review_prompt(
-                        &meta,
-                        description.as_deref(),
-                        &board_for_prompt,
-                        &claim,
-                    );
-                    let code_reply = provider.chat_ex(
-                        &ChatRequest::new(vec![
-                            ChatMessage::system(CLAIM_CODE_SYSTEM_PROMPT),
-                            ChatMessage::user(code_prompt),
-                        ])
-                        .json(),
-                    )?;
-                    let code = parse_review(&code_reply.content, &meta.cases)?;
-                    merge_layout_and_code_reviews(board_review, code)
-                } else {
-                    board_review
-                };
-                (review, Some(claim))
-            }
-            None => {
-                let prompt = build_review_prompt(&meta, description.as_deref(), &board_for_prompt);
-                let reply = provider.chat_ex(
-                    &ChatRequest::new(vec![
-                        ChatMessage::system(REVIEW_SYSTEM_PROMPT),
-                        ChatMessage::user(prompt).with_images(board_for_prompt.images()),
-                    ])
-                    .json(),
-                )?;
-                (parse_review(&reply.content, &meta.cases)?, None)
-            }
-        };
-
-        // Only reached when a counterexample survived the gated verdict stage:
-        // the on-track path emits none, so a correct board never pays for this
-        // call.
-        retrace_counterexample(&*provider, &meta, &board_for_prompt, &mut review);
-
-        Ok(ReviewOutcome {
+        Ok(ReviewHttpOutcome {
             envelope: ReviewEnvelope {
                 task_id: meta.task_id,
                 provider: provider.label(),
-                review,
+                review: outcome.review,
             },
-            claim,
+            claim: outcome.claim,
         })
     })
     .await?;
-    let ReviewOutcome { envelope, claim } = outcome;
+    let ReviewHttpOutcome { envelope, claim } = outcome;
 
     // Advance the server baseline only after a successful review.
     {
@@ -214,137 +154,9 @@ pub async fn review(
 }
 
 /// A review, plus the claim it froze (when the staged path ran).
-struct ReviewOutcome {
+struct ReviewHttpOutcome {
     envelope: ReviewEnvelope,
     claim: Option<Claim>,
-}
-
-/// Stages 1–3: describe the board, name its claim, and judge only when the
-/// claim does not already decide the answer.
-///
-/// The gate is [`Claim::decides_the_answer`], evaluated here rather than in a
-/// prompt. That is the whole point of the split — the model that said "this is
-/// enough" is never handed a `gaps` array to fill afterwards, so a correct
-/// insight-only board cannot be argued into having missed something.
-fn staged_board_review(
-    provider: &dyn LlmProvider,
-    meta: &WorkspaceMeta,
-    description: Option<&str>,
-    board: &BoardSnapshot,
-) -> Result<(Claim, ReviewResponse)> {
-    let (claim, _) = perceive_and_claim(provider, meta, description, board)?;
-
-    if claim.decides_the_answer() {
-        // Stage 3b — synthesized by the daemon, no second call.
-        return Ok((claim.clone(), on_track_review_from_claim(&claim)));
-    }
-
-    // Stage 3a — and only now is anything asked to look for what is missing.
-    let prompt = build_verdict_prompt(meta, description, board, &claim);
-    let reply = provider.chat_ex(
-        &ChatRequest::new(vec![
-            ChatMessage::system(VERDICT_SYSTEM_PROMPT),
-            ChatMessage::user(prompt).with_images(board.images()),
-        ])
-        .json(),
-    )?;
-    let mut review = parse_review(&reply.content, &meta.cases)?;
-    // The claim is frozen: the verdict stage may say where it breaks, but it does
-    // not get to rename their idea into something they never wrote.
-    review.understood_approach = claim.understood_approach.clone();
-    Ok((claim, review))
-}
-
-/// Stages 1 and 2, which the Lazy path needs on its own.
-///
-/// Stage 1 runs only when there is an image to look at. On a text-only build the
-/// canvas layout and the recognized ink *are already text* — a describe pass
-/// would spend a whole call paraphrasing what stage 2 can read directly — so the
-/// two stages collapse into one call and the board goes straight to the claim.
-fn perceive_and_claim(
-    provider: &dyn LlmProvider,
-    meta: &WorkspaceMeta,
-    description: Option<&str>,
-    board: &BoardSnapshot,
-) -> Result<(Claim, Option<Perception>)> {
-    let perception = if board.png.is_some() {
-        let prompt = build_perceive_prompt(meta, board);
-        // Best-effort: describing a board is not worth failing a review over,
-        // and stage 2 can still read the layout if this comes back malformed.
-        provider
-            .chat_ex(
-                &ChatRequest::new(vec![
-                    ChatMessage::system(PERCEIVE_SYSTEM_PROMPT),
-                    ChatMessage::user(prompt).with_images(board.images()),
-                ])
-                .json()
-                .with_temperature(0.0),
-            )
-            .and_then(|reply| parse_perception(&reply.content))
-            .ok()
-    } else {
-        None
-    };
-
-    let prompt = build_claim_prompt(meta, description, board, perception.as_ref());
-    let mut message = ChatMessage::user(prompt);
-    if perception.is_none() {
-        // Either there was no image, or stage 1 failed — attach the board so
-        // this call is the one that looks at it.
-        message = message.with_images(board.images());
-    }
-    let reply = provider.chat_ex(
-        &ChatRequest::new(vec![ChatMessage::system(CLAIM_SYSTEM_PROMPT), message]).json(),
-    )?;
-    let claim = parse_claim(&reply.content)?;
-    Ok((claim, perception))
-}
-
-/// Re-derive `why_your_approach_fails` from a prompt that shows only the cited
-/// case.
-///
-/// A small local model reliably picks a real case index and then illustrates its
-/// point with an input it invented — the student runs the cited case and sees
-/// something else. Asking again with a single case in front of it removes the
-/// wandering room. Best-effort: on any failure the model's original wording is
-/// kept, because a wordy review beats no review.
-fn retrace_counterexample(
-    provider: &dyn crate::llm::LlmProvider,
-    meta: &crate::generator::WorkspaceMeta,
-    board: &BoardSnapshot,
-    review: &mut ReviewResponse,
-) {
-    let Some(cited) = review.counterexample.as_ref() else {
-        return;
-    };
-    let Some(case) = meta.cases.get(cited.case_index) else {
-        return;
-    };
-
-    let prompt = build_trace_prompt(meta, board, case, cited.case_number);
-    let messages = vec![
-        ChatMessage::system(TRACE_SYSTEM_PROMPT),
-        ChatMessage::user(prompt),
-    ];
-    let request = ChatRequest::new(messages)
-        .json()
-        // Low temperature and a tight cap: this is transcription, not invention.
-        .with_temperature(0.0)
-        .with_max_tokens(400);
-
-    match provider
-        .chat_ex(&request)
-        .and_then(|reply| parse_trace(&reply.content))
-    {
-        Ok(trace) => {
-            if let Some(cited) = review.counterexample.as_mut() {
-                cited.why_your_approach_fails = trace;
-            }
-        }
-        Err(_) => {
-            // Keep the first-pass wording; it is still attached to a real case.
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -561,8 +373,13 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::llm::coach::{Rating, Verdict};
-    use crate::llm::{ChatReply, ChatRequest};
+    use crate::generator::WorkspaceMeta;
+    use crate::llm::coach::{
+        merge_layout_and_code_reviews, retrace_counterexample, staged_board_review, Rating,
+        ReviewResponse, Verdict, CLAIM_CODE_SYSTEM_PROMPT, CLAIM_SYSTEM_PROMPT,
+        PERCEIVE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT, TRACE_SYSTEM_PROMPT, VERDICT_SYSTEM_PROMPT,
+    };
+    use crate::llm::{ChatReply, ChatRequest, LlmProvider};
     use crate::problem::IoCase;
 
     /// A provider that hands back canned replies in order and remembers every
