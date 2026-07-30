@@ -17,7 +17,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::ascii_morph::{self, AsciiPlayer};
+use crate::ascii_morph::{self, AsciiAnimProgram, AsciiPlayer};
 use crate::attempt;
 use crate::config::Config;
 use crate::dataset::{self, Dataset, DATASETS};
@@ -112,6 +112,11 @@ struct App {
     coach_scroll: usize,
     /// Live ASCII morph demo / future coach viz playback.
     ascii_player: Option<AsciiPlayer>,
+    /// Message `id` whose bubble currently owns the live player.
+    ascii_msg_id: Option<String>,
+    /// When true, coach chat also asks the viz model to `animate_trace` and
+    /// morphs the result inline under that reply.
+    coach_draw: bool,
     /// Cached solved flag for the leave-confirm labels.
     leave_solved: bool,
 }
@@ -154,6 +159,8 @@ impl App {
             coach_messages: Vec::new(),
             coach_scroll: 0,
             ascii_player: None,
+            ascii_msg_id: None,
+            coach_draw: false,
             leave_solved: false,
         })
     }
@@ -554,8 +561,36 @@ impl App {
         self.coach_scroll = 0;
         self.input_buf.clear();
         self.screen = Screen::CoachChat;
-        self.status = "coach: ask / submit for review · Enter send · Esc back · ↑↓/wheel scroll".into();
+        // Resume an animation saved on the latest coach turn, if any.
+        self.bind_ascii_from_latest_message();
+        self.status = format!(
+            "coach: Enter send · d draw={} · Esc back · ↑↓/wheel scroll",
+            if self.coach_draw { "on" } else { "off" }
+        );
         Ok(())
+    }
+
+    fn bind_ascii_from_latest_message(&mut self) {
+        self.ascii_player = None;
+        self.ascii_msg_id = None;
+        for msg in self.coach_messages.iter().rev() {
+            if let Some(anim) = msg
+                .get("ascii_anim")
+                .and_then(|v| serde_json::from_value::<AsciiAnimProgram>(v.clone()).ok())
+            {
+                if anim.frames.is_empty() {
+                    continue;
+                }
+                let id = msg
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.ascii_msg_id = Some(id);
+                self.ascii_player = Some(AsciiPlayer::new(anim));
+                break;
+            }
+        }
     }
 
     fn persist_coach(&self, dir: &Path) -> Result<()> {
@@ -581,21 +616,41 @@ impl App {
         self.input_buf.clear();
         self.persist_coach(&dir)?;
 
-        self.status = "asking the coach…".into();
+        self.status = if self.coach_draw {
+            "asking the coach (+ draw)…".into()
+        } else {
+            "asking the coach…".into()
+        };
         terminal.draw(|f| draw(f, self))?;
 
-        let reply = match self.ask_coach(&row, &dir) {
-            Ok(answer) => answer,
-            Err(err) => format!("(coach error)\n{err:#}"),
+        let (reply, anim) = match self.ask_coach(&row, &dir) {
+            Ok(pair) => pair,
+            Err(err) => (format!("(coach error)\n{err:#}"), None),
         };
-        self.coach_messages.push(coach_message("assistant", reply));
+        let msg = coach_message_with_anim("assistant", reply, anim.as_ref());
+        let msg_id = msg
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        self.coach_messages.push(msg);
+        if let Some(program) = anim {
+            self.ascii_msg_id = Some(msg_id);
+            self.ascii_player = Some(AsciiPlayer::new(program));
+            // Jump to the bottom so the live bubble is visible.
+            self.coach_scroll = usize::MAX / 4;
+        }
         self.persist_coach(&dir)?;
-        self.status = "coach replied · Esc back".into();
+        self.status = if self.coach_draw {
+            "coach replied · animation morphs in-thread · Esc back".into()
+        } else {
+            "coach replied · Esc back".into()
+        };
         hard_refresh(terminal)?;
         Ok(())
     }
 
-    fn ask_coach(&self, row: &ProblemRow, dir: &Path) -> Result<String> {
+    fn ask_coach(&self, row: &ProblemRow, dir: &Path) -> Result<(String, Option<AsciiAnimProgram>)> {
         let meta = runner::read_meta(dir)?;
         let json_path = Path::new(&row.json_path);
         let description = problem::load_task_for(self.dataset, json_path, &row.task_id)
@@ -623,8 +678,6 @@ impl App {
             })
             .collect();
 
-        // Text-only board: no PNG, no scene layout, no lazy / layout_only flags.
-        // The typed question seeds the claim path; solution.py is the code dock.
         let board = BoardSnapshot {
             recognized_text: if question.is_empty() {
                 String::new()
@@ -649,7 +702,100 @@ impl App {
             &board,
             /* include_code */ true,
         )?;
-        Ok(format_review_card(&outcome.review))
+        let mut card = format_review_card(&outcome.review);
+
+        let anim = if self.coach_draw {
+            match self.ask_ascii_viz(&meta, description.as_deref(), &board, question) {
+                Ok(Some(program)) => Some(program),
+                Ok(None) => {
+                    card.push_str(
+                        "\n\n(draw on — model returned no array/stack/queue frames to morph)",
+                    );
+                    None
+                }
+                Err(err) => {
+                    card.push_str(&format!("\n\n(draw failed: {err:#})"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        Ok((card, anim))
+    }
+
+    /// Same tool loop as `/coach/viz`, then render linear programs as ASCII.
+    fn ask_ascii_viz(
+        &self,
+        meta: &crate::generator::WorkspaceMeta,
+        description: Option<&str>,
+        board: &BoardSnapshot,
+        ask: &str,
+    ) -> Result<Option<AsciiAnimProgram>> {
+        use crate::llm::coach::{build_viz_prompt, VIZ_SYSTEM_PROMPT};
+        use crate::llm::tools::{parse_tool_calls, viz_tools, viz_tools_as_prompt, VizProgram};
+        use crate::llm::{ChatMessage, ChatRequest};
+
+        let prompt = build_viz_prompt(meta, description, board, ask);
+        let provider = make_provider_for_mode(&self.cfg, "viz")?;
+        let messages = vec![
+            ChatMessage::system(VIZ_SYSTEM_PROMPT),
+            ChatMessage::user(format!(
+                "{prompt}\n\nPrefer `animate_trace` with an array (or stack/queue) so the \
+                 terminal can morph the steps. Keep the prose to one short sentence."
+            )),
+        ];
+
+        let reply = match provider.chat_ex(&ChatRequest::new(messages).with_tools(viz_tools())) {
+            Ok(reply) if !reply.tool_calls.is_empty() => reply,
+            other => {
+                // Plain-JSON fallback when the server won't tool-call (same as serve::viz).
+                let fallback = provider.chat_ex(
+                    &ChatRequest::new(vec![
+                        ChatMessage::system(VIZ_SYSTEM_PROMPT),
+                        ChatMessage::user(format!("{prompt}\n\n{}", viz_tools_as_prompt())),
+                    ])
+                    .json(),
+                );
+                match fallback {
+                    Ok(reply) => {
+                        let calls = parse_tool_calls(&reply.content);
+                        if calls.is_empty() {
+                            other?;
+                            return Ok(None);
+                        }
+                        crate::llm::ChatReply {
+                            content: String::new(),
+                            tool_calls: calls,
+                        }
+                    }
+                    Err(_) => {
+                        other?;
+                        return Ok(None);
+                    }
+                }
+            }
+        };
+
+        let mut programs = Vec::new();
+        for call in &reply.tool_calls {
+            if matches!(call.name.as_str(), "draw_structure" | "animate_trace") {
+                if let Ok(program) = serde_json::from_value::<VizProgram>(call.arguments.clone()) {
+                    if program.rejection().is_none() {
+                        programs.push(program);
+                    }
+                }
+            }
+        }
+
+        // Prefer a multi-frame animate_trace; otherwise any convertible program.
+        let anim = programs
+            .iter()
+            .filter(|p| p.frames.len() >= 2)
+            .find_map(ascii_morph::from_viz_program)
+            .or_else(|| programs.iter().find_map(ascii_morph::from_viz_program));
+        Ok(anim)
     }
 
     fn workspace_needs_leave_prompt(&self) -> bool {
@@ -685,6 +831,8 @@ impl App {
         let _ = self.persist_coach(&dir);
         attempt::finish(&dir, solved, save, Some(&starter))?;
         self.coach_messages.clear();
+        self.ascii_player = None;
+        self.ascii_msg_id = None;
         self.screen = Screen::Browse;
         self.menu_sel = 0;
         self.status = if save {
@@ -697,16 +845,30 @@ impl App {
 }
 
 fn coach_message(role: &str, content: String) -> serde_json::Value {
+    coach_message_with_anim(role, content, None)
+}
+
+fn coach_message_with_anim(
+    role: &str,
+    content: String,
+    anim: Option<&AsciiAnimProgram>,
+) -> serde_json::Value {
     let at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    serde_json::json!({
+    let mut msg = serde_json::json!({
         "id": format!("tui-{at}-{}", rand::random::<u32>()),
         "role": role,
         "content": content,
         "at": at,
-    })
+    });
+    if let Some(anim) = anim {
+        if let Ok(value) = serde_json::to_value(anim) {
+            msg["ascii_anim"] = value;
+        }
+    }
+    msg
 }
 
 fn run_app(terminal: &mut TuiTerminal, cfg: &Config) -> Result<()> {
@@ -715,14 +877,18 @@ fn run_app(terminal: &mut TuiTerminal, cfg: &Config) -> Result<()> {
 
     loop {
         // Drive morph playback even when no key is pressed.
-        if app.screen == Screen::AsciiAnim {
+        if matches!(app.screen, Screen::AsciiAnim | Screen::CoachChat) {
             if let Some(player) = app.ascii_player.as_mut() {
                 player.tick();
             }
         }
         terminal.draw(|f| draw(f, &mut app))?;
         // ~30 FPS while animating; idle menus can poll longer.
-        let wait = if app.screen == Screen::AsciiAnim {
+        let wait = if matches!(app.screen, Screen::AsciiAnim | Screen::CoachChat)
+            && app.ascii_player.is_some()
+        {
+            Duration::from_millis(33)
+        } else if app.screen == Screen::AsciiAnim {
             Duration::from_millis(33)
         } else {
             Duration::from_millis(50)
@@ -996,12 +1162,30 @@ fn handle_coach_chat(
             if let Ok(dir) = app.workspace_dir() {
                 let _ = app.persist_coach(&dir);
             }
+            app.ascii_player = None;
+            app.ascii_msg_id = None;
             app.screen = Screen::ProblemActions;
             app.menu_sel = 0;
             app.input_buf.clear();
             // Coach chat can leave wrap/mouse-scroll ghosts on the alternate
             // screen; wipe before the problem menu draws.
             hard_refresh(terminal)?;
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.coach_draw = !app.coach_draw;
+            app.status = format!(
+                "draw {} — next reply will {} ASCII morph",
+                if app.coach_draw { "ON" } else { "OFF" },
+                if app.coach_draw { "include" } else { "skip" }
+            );
+        }
+        KeyCode::Char(' ') | KeyCode::Char('r')
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            if let Some(player) = app.ascii_player.as_mut() {
+                player.restart();
+                app.status = "animation restarted".into();
+            }
         }
         KeyCode::Enter => {
             if let Err(e) = app.send_coach_message(terminal) {
@@ -1763,13 +1947,20 @@ fn draw_coach_chat(f: &mut Frame, area: Rect, app: &mut App) {
     let inner_w = chunks[0].width.saturating_sub(2) as usize;
     let height = chunks[0].height.saturating_sub(2) as usize;
 
-    // Pre-wrap to the pane width and scroll by *visual* rows. Feeding long
-    // lines into Paragraph::wrap after a height-limited skip overflows the
-    // box and leaves ghost glyphs on the next screen.
+    let active_id = app.ascii_msg_id.clone();
+    let live_lines = app.ascii_player.as_ref().map(|p| {
+        (
+            p.program.title.clone(),
+            p.current_lines(),
+            p.current_label().to_string(),
+            p.progress_hint(),
+        )
+    });
+
     let mut lines: Vec<Line> = Vec::new();
     if app.coach_messages.is_empty() {
         for part in wrap_to_width(
-            "(empty thread - ask about the problem, your solution, or a failing test)",
+            "(empty thread — ask about the problem, or Ctrl+D then ask to get an ASCII morph)",
             inner_w,
         ) {
             lines.push(Line::from(Span::styled(
@@ -1781,6 +1972,7 @@ fn draw_coach_chat(f: &mut Frame, area: Rect, app: &mut App) {
     for msg in &app.coach_messages {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
         let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        let id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let (label, style) = match role {
             "user" => ("You", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             "assistant" => ("Coach", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
@@ -1793,6 +1985,57 @@ fn draw_coach_chat(f: &mut Frame, area: Rect, app: &mut App) {
                 lines.push(Line::from(part));
             }
         }
+
+        let is_live = active_id.as_deref() == Some(id) && live_lines.is_some();
+        if is_live {
+            if let Some((title, frame, step, hint)) = live_lines.as_ref() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("  ▸ {title}"),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for row in frame {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {row}"),
+                        Style::default().fg(Color::Green),
+                    )));
+                }
+                lines.push(Line::from(Span::styled(
+                    format!("  {step}"),
+                    Style::default().fg(Color::Yellow),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!("  {hint}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        } else if let Some(anim) = msg
+            .get("ascii_anim")
+            .and_then(|v| serde_json::from_value::<AsciiAnimProgram>(v.clone()).ok())
+        {
+            // Frozen last frame for older turns.
+            if let Some(last) = anim.frames.last() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("  ▸ {}", anim.title),
+                    Style::default().fg(Color::DarkGray),
+                )));
+                for row in &last.lines {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {row}"),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                if !last.label.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", last.label),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+        }
         lines.push(Line::from(""));
     }
 
@@ -1803,10 +2046,11 @@ fn draw_coach_chat(f: &mut Frame, area: Rect, app: &mut App) {
     let scroll = app.coach_scroll;
     let visible: Vec<Line> = lines.into_iter().skip(scroll).take(height.max(1)).collect();
 
+    let draw_tag = if app.coach_draw { " · draw ON" } else { "" };
     let thread = Paragraph::new(visible).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("coach chat (↑↓/PgUp/PgDn/wheel · Esc back)"),
+            .title(format!("coach chat{draw_tag} (Ctrl+D toggle draw · Esc back)")),
     );
     f.render_widget(thread, chunks[0]);
 
@@ -1904,7 +2148,13 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Screen::InputId => "type id · Enter confirm · Esc cancel",
         Screen::InputListName => "type list name · Enter confirm · Esc cancel",
         Screen::Message => "W/S scroll · Enter/Esc back",
-        Screen::CoachChat => "type · Enter send · ↑↓ / PgUp/PgDn / wheel scroll · Esc back",
+        Screen::CoachChat => {
+            if app.coach_draw {
+                "type · Enter send · Ctrl+D draw ON · ↑↓ scroll · Esc back"
+            } else {
+                "type · Enter send · Ctrl+D draw off · ↑↓ scroll · Esc back"
+            }
+        },
         Screen::AsciiAnim => "Space/r restart · Esc back",
         Screen::LeaveConfirm => "W/S choose · Enter confirm · Esc cancel",
         Screen::Main => "W/S move · Enter select · Q quit",

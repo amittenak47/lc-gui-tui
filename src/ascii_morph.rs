@@ -215,11 +215,20 @@ fn pad_grid(lines: &[String], rows: usize, cols: usize) -> Vec<Vec<char>> {
 }
 
 /// Render one array state as a fixed-width ASCII picture.
+///
+/// Values and `^` markers are **centered** in each cell so the caret sits
+/// under the middle of the slot (not left-biased against a right-aligned number).
 pub fn render_array(values: &[i32], highlight: &[usize], label: &str) -> AsciiKeyframe {
-    let n = values.len();
-    let cell_w = values
+    let labels: Vec<String> = values.iter().map(|v| v.to_string()).collect();
+    render_cells(&labels, highlight, label)
+}
+
+/// Same layout as [`render_array`], for string cell labels (viz tool output).
+pub fn render_cells(labels: &[String], highlight: &[usize], label: &str) -> AsciiKeyframe {
+    let n = labels.len();
+    let cell_w = labels
         .iter()
-        .map(|v| v.to_string().len())
+        .map(|v| v.chars().count())
         .max()
         .unwrap_or(1)
         .max(2);
@@ -229,10 +238,10 @@ pub fn render_array(values: &[i32], highlight: &[usize], label: &str) -> AsciiKe
     let mut mark_row = String::from("     ");
 
     for i in 0..n {
-        let num = format!("{:>width$}", values[i], width = cell_w);
-        let idx = format!("{:>width$}", i, width = cell_w);
+        let num = center_in(labels.get(i).map(|s| s.as_str()).unwrap_or(""), cell_w);
+        let idx = center_in(&i.to_string(), cell_w);
         let mark = if highlight.contains(&i) {
-            format!("{:^width$}", "^", width = cell_w)
+            center_in("^", cell_w)
         } else {
             " ".repeat(cell_w)
         };
@@ -254,6 +263,69 @@ pub fn render_array(values: &[i32], highlight: &[usize], label: &str) -> AsciiKe
     AsciiKeyframe {
         label: label.into(),
         lines: vec![index_row, value_row, mark_row],
+    }
+}
+
+fn center_in(text: &str, width: usize) -> String {
+    let len = text.chars().count();
+    if len >= width {
+        return text.chars().take(width).collect();
+    }
+    let pad = width - len;
+    let left = pad / 2;
+    let right = pad - left;
+    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
+}
+
+/// Turn a viz tool program into ASCII keyframes the TUI can morph.
+///
+/// Supports linear cell-based kinds (`array`, `stack`, `queue`, `linkedlist`,
+/// `heap`). Hashmap / graph / tree layouts stay on the canvas viz path for now.
+pub fn from_viz_program(program: &crate::llm::tools::VizProgram) -> Option<AsciiAnimProgram> {
+    let kind = program.kind.as_str();
+    if !matches!(
+        kind,
+        "array" | "stack" | "queue" | "linkedlist" | "heap"
+    ) {
+        return None;
+    }
+
+    let mut frames = Vec::new();
+    for frame in &program.frames {
+        let labels: Vec<String> = frame.cells.iter().map(value_as_label).collect();
+        if labels.is_empty() || labels.iter().all(|s| s.is_empty()) {
+            continue;
+        }
+        let label = if frame.label.trim().is_empty() {
+            frame.note.trim()
+        } else if frame.note.trim().is_empty() {
+            frame.label.trim()
+        } else {
+            // Keep one line under the picture.
+            frame.label.trim()
+        };
+        frames.push(render_cells(&labels, &frame.highlight, label));
+    }
+    if frames.is_empty() {
+        return None;
+    }
+    Some(AsciiAnimProgram {
+        title: if program.title.trim().is_empty() {
+            format!("{kind} trace")
+        } else {
+            program.title.clone()
+        },
+        frames,
+    })
+}
+
+fn value_as_label(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "·".into(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
     }
 }
 
@@ -329,11 +401,48 @@ mod tests {
     }
 
     #[test]
-    fn array_render_marks_highlights() {
+    fn array_render_centers_caret_in_cell() {
         let frame = render_array(&[3, 1, 2], &[1], "probe");
         assert_eq!(frame.label, "probe");
-        assert!(frame.lines[1].contains('1'));
-        assert!(frame.lines[2].contains('^'));
+        let mark = &frame.lines[2];
+        let val = &frame.lines[1];
+        assert!(mark.contains('^'));
+        // cell_w >= 2; caret is centered, so for width 2 it is "^ " (left half of center).
+        // Values are also centered — caret column lines up with the value slot.
+        let caret = mark.find('^').unwrap();
+        let one = val.find('1').unwrap();
+        assert_eq!(
+            caret, one,
+            "caret should sit under the highlighted value\n{val}\n{mark}"
+        );
+    }
+
+    #[test]
+    fn from_viz_program_builds_array_keyframes() {
+        use crate::llm::tools::{VizFrame, VizProgram};
+        let program = VizProgram {
+            kind: "array".into(),
+            id: "demo".into(),
+            title: "two sum scan".into(),
+            frames: vec![
+                VizFrame {
+                    label: "start".into(),
+                    cells: vec![serde_json::json!(2), serde_json::json!(7), serde_json::json!(11)],
+                    highlight: vec![0],
+                    ..Default::default()
+                },
+                VizFrame {
+                    label: "advance".into(),
+                    cells: vec![serde_json::json!(2), serde_json::json!(7), serde_json::json!(11)],
+                    highlight: vec![1],
+                    ..Default::default()
+                },
+            ],
+        };
+        let anim = from_viz_program(&program).expect("array converts");
+        assert_eq!(anim.title, "two sum scan");
+        assert_eq!(anim.frames.len(), 2);
+        assert!(anim.frames[0].lines[1].contains('2'));
     }
 
     #[test]
