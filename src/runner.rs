@@ -48,8 +48,71 @@ pub fn load_last_run() -> Result<Option<LastRun>> {
     if !path.exists() {
         return Ok(None);
     }
-    let raw = std::fs::read_to_string(&path)?;
-    Ok(serde_json::from_str(&raw).ok())
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    Ok(Some(serde_json::from_str(&raw)?))
+}
+
+/// Plain-text report for the coach thread (TUI / daemon), mirroring the GUI
+/// `formatTestReport` helper.
+pub fn format_test_report(results: &[CaseResult], kind: &str) -> String {
+    const MAX_REPORTED_FAILURES: usize = 5;
+    let passed = results.iter().filter(|r| r.pass).count();
+    let total = results.len();
+    let header = format!(
+        "{} - {passed}/{total} passed",
+        if kind == "submit" {
+            "Submit"
+        } else {
+            "Run tests"
+        }
+    );
+    if total > 0 && passed == total {
+        return format!("{header}\nAll cases passed.");
+    }
+
+    let failures: Vec<&CaseResult> = results.iter().filter(|r| !r.pass).collect();
+    let shown: Vec<String> = failures
+        .iter()
+        .take(MAX_REPORTED_FAILURES)
+        .map(|result| {
+            let mut lines = vec![
+                format!(
+                    "{}: {}",
+                    if result.suite {
+                        "suite".to_string()
+                    } else {
+                        format!("case {}", result.case)
+                    },
+                    result.input
+                ),
+                format!("  expected: {}", result.expected),
+            ];
+            if let Some(actual) = &result.actual {
+                lines.push(format!("  got:      {actual}"));
+            }
+            if let Some(error) = &result.error {
+                let last = error
+                    .trim_end()
+                    .lines()
+                    .last()
+                    .unwrap_or("")
+                    .trim();
+                lines.push(format!("  error:    {last}"));
+            }
+            lines.join("\n")
+        })
+        .collect();
+
+    let mut parts = vec![header];
+    parts.push(shown.join("\n\n"));
+    if failures.len() > shown.len() {
+        parts.push(format!(
+            "...and {} more failing cases.",
+            failures.len() - shown.len()
+        ));
+    }
+    parts.join("\n\n")
 }
 
 pub fn read_meta(dir: &Path) -> Result<WorkspaceMeta> {

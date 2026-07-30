@@ -1,8 +1,8 @@
-# lc — stylus whiteboard for LeetCode practice
+# lc - stylus whiteboard for LeetCode practice
 
-**Sketch an approach by hand. Run real tests. Ask a vision coach — without ever sending a reference solution.**
+**Work on problems in your terminal or IDE. Sketch an approach by hand using a stylus, touch, or mouse cursor. Run real tests curated from datasets to see why your approach fails. Ask an AI model for insights, without getting a reference solution for you to mindlessly copy and paste.**
 
-A stylus-first practice app for **Android tablets**, **desktop**, and the **browser**, backed by a Rust daemon that indexes local problem corpora, generates Python workspaces, and runs tests. The coach sees *your* board (and optional region screenshots) plus *your* code — never the dataset’s reference solutions.
+A stylus-first practice app for **Android tablets**, **desktop**, and the **browser**, backed by a Rust daemon that indexes local problem corpora, generates Python workspaces, and runs tests. The coach sees *your* board (and optional region screenshots) plus *your* code - never the dataset's reference solutions.
 
 A terminal UI and CLI are still there for keyboard-first days. Pairs with **[LLM Autocorrect](https://github.com/amittenak47/llm-autocorrect)** when you finish `solution.py` in Cursor or VS Code.
 
@@ -18,34 +18,35 @@ or embed an MP4: <video src="docs/demo/lc-demo.mp4" controls width="720"></video
 | Feature | Summary |
 | --- | --- |
 | **Whiteboard coach** | Excalidraw-style board on Android, desktop, or browser. Sketch Approach / Complexity / Walkthrough; the coach reviews, cites real sample cases, and can draw diagrams. |
-| **Vision LLM** | Built for multimodal coaches that can read the board PNG — not text-only stubs. |
+| **Vision LLM** | Built for multimodal coaches that can read the board PNG - not text-only stubs. |
 | **Five problem sets** | Tab strip across LeetCode, KodCode, MS Python-Q, DeepSeek LC, LC-with-tests. Separate SQLite tables and pass/fail badges per corpus. |
-| **Local LLM (today)** | OpenAI-compatible endpoint — vLLM, llama.cpp, Ollama, LM Studio — or Groq. |
-| **Remote LLM** | *Coming soon* — point the coach at a hosted OpenAI-compatible API without running a GPU at home. |
-| **Session queue** | Start / Random builds a practice queue; hold-to-confirm when leaving so you don’t wipe a board by accident. |
+| **Local LLM (today)** | OpenAI-compatible endpoint - vLLM, llama.cpp, Ollama, LM Studio - or Groq. |
+| **Remote LLM** | *will add shortly (too expensive for me)* - point the coach at a hosted OpenAI-compatible API without running a GPU at home. |
+| **Session queue** | Start / Random builds a practice queue; hold-to-confirm when leaving so you don't wipe a board by accident. |
 | **Tablet pairing** | `lc serve --lan` prints Host / Port / Code once; the app keeps a token after that. |
-| **CLI + TUI** | `lc load` / `lc test` / `lc ask` and an optional terminal browser when you’re not on the pen. |
+| **CLI + TUI** | *TUI is lagging behind GUI (in the process of refining)* - `lc load` / `lc test` / `lc ask` and an optional terminal browser when you're not on the pen. |
 
 ---
 
 ## My setup (what this README assumes)
 
-This is the loop I actually use. Yours can be simpler (desktop-only + a smaller model).
+This is my current configuration. You can play on your computer, phone/tablet, or browser and can use anything from a single smaller model (optionally vision-capable) or any combination of powerful frontier models.
 
 | Piece | What I run |
 | --- | --- |
 | **PC** | Windows 11, Rust + Node, corpus under `~/lc-data` (WSL) |
-| **Coach model** | [Qwen3-VL-8B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8) — vision-language, served as `qwen3-vl-8b` |
+| **Coach model** | [Qwen3-VL-8B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8) - vision-language, served as `qwen3-vl-8b` |
 | **Serving** | **vLLM** in WSL2 with **CUDA 12.8** (`CUDA_HOME=/usr/local/cuda-12.8`) |
 | **Client** | Android stylus tablet (XPPen Magic Note Pad) APK, or browser / desktop Tauri, paired to `lc serve --lan` |
 | **Editor** | Cursor + [LLM Autocorrect](https://github.com/amittenak47/llm-autocorrect) for finishing code off the board |
 
 ```
-┌─ Drawing device ─────────────────┐          ┌─ Windows PC ──────────────────────┐
-│  Android / browser / desktop      │◄── LAN ──►│  lc serve                         │
-│  Whiteboard + coach chat          │          │  SQLite · workspaces · pytest     │
-│  Pair once: Host / Port / Code    │          │  → WSL: vLLM (Qwen3-VL-8B FP8)    │
-└───────────────────────────────────┘          └───────────────────────────────────┘
++-------------------------------+            +----------------------------------+
+| Drawing device                |  <-- LAN   | Windows PC                       |
+| Android / browser / desktop   |  ------->  | lc serve                         |
+| Whiteboard + coach chat       |            | SQLite, workspaces, pytest       |
+| Pair once: Host / Port / Code |            | -> WSL: vLLM (Qwen3-VL-8B FP8)   |
++-------------------------------+            +----------------------------------+
 ```
 
 ### vLLM (coach)
@@ -60,7 +61,7 @@ vllm serve /mnt/c/Users/Amit/models/Qwen3-VL-8B-Instruct-FP8 \
   --gpu-memory-utilization 0.90
 ```
 
-Weights: [Qwen/Qwen3-VL-8B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8) (or a local checkout under `/mnt/c/Users/…/models/`).
+Weights: [Qwen/Qwen3-VL-8B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8) (or a local checkout under `/mnt/c/Users/.../models/`).
 
 Point `lc` at it (Settings in the app, or CLI):
 
@@ -72,7 +73,7 @@ lc config set llm.local.model qwen3-vl-8b
 lc config set llm.local.vision_model qwen3-vl-8b
 ```
 
-From the tablet, use the PC’s LAN IP in `base_url` if the daemon proxies differently — usually the app talks to `lc serve`, and the PC reaches vLLM on localhost.
+From the tablet, use the PC's LAN IP in `base_url` if the daemon proxies differently - usually the app talks to `lc serve`, and the PC reaches vLLM on localhost.
 
 Older system `nvcc` (CUDA 10.x on PATH) breaks FlashInfer JIT. Put CUDA 12.8 first in WSL `~/.bashrc`:
 
@@ -120,10 +121,10 @@ lc datasets          # confirm counts per tab
 Start the coach model (see [vLLM](#vllm-coach) above), then:
 
 ```bash
-# terminal 1 — daemon (use --lan for a tablet / phone on Wi‑Fi)
+# terminal 1 - daemon (use --lan for a tablet / phone on Wi-Fi)
 lc serve --lan
 
-# terminal 2 — desktop window (mouse check)
+# terminal 2 - desktop window (mouse check)
 cd app && npm install && npm run tauri dev
 
 # or build / sideload the Android APK
@@ -132,7 +133,7 @@ cd app && npm run android:apk
 
 Type the printed **Host / Port / Code** into the app header once. Full Android / cleartext-HTTP notes: [`app/README.md`](app/README.md).
 
-**Optional — terminal UI** (no pen):
+**Optional - terminal UI** (no pen):
 
 ```bash
 lc
@@ -147,9 +148,9 @@ Each corpus lives under `<data-dir>/<slug>/` and gets its **own** SQLite tables 
 | Slug | Hugging Face | What you get |
 | --- | --- | --- |
 | `leetcode` *(default)* | [newfacade/LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) | ~2.9k Python LeetCode problems |
-| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | Large synthetic set — `lc` indexes **Complete** style only (~168k after skipping Instruct / online_judge) |
+| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | Large synthetic set - `lc` indexes **Complete** style only (~168k after skipping Instruct / online_judge) |
 | `ms-python-q` | [morganstanley/sft-python-q-problems](https://huggingface.co/datasets/morganstanley/sft-python-q-problems) | Structured `test_cases` |
-| `deepseek-leetcode` | [davidheineman/deepseek-leetcode](https://huggingface.co/datasets/davidheineman/deepseek-leetcode) | DeepSeek contest benchmark; asserts → cases |
+| `deepseek-leetcode` | [davidheineman/deepseek-leetcode](https://huggingface.co/datasets/davidheineman/deepseek-leetcode) | DeepSeek contest benchmark; asserts -> cases |
 | `leetcode-with-tests` | [kr4t0n/leetcode-with-tests](https://huggingface.co/datasets/kr4t0n/leetcode-with-tests) | Community pack with pytest-style checks |
 
 Adapters: [`src/datasets/`](src/datasets/). Inspect what a download actually contains:
@@ -170,8 +171,8 @@ Corpus licenses differ (e.g. LeetCodeDataset Apache-2.0, KodCode-V1 CC BY-NC 4.0
 | Mode | What it does |
 | --- | --- |
 | **On ask** | You send a message; optionally attach **Review board** (region thumbnails + structure) or **Draw** (ask for a diagram). |
-| **Copy / Quote** | Long-press or right-click a coach message → copy the bubble or quote it into the composer. |
-| **Reveal** | Hold-to-confirm bridge from *your* approach toward a working one — never a silent solution dump. |
+| **Copy / Quote** | Long-press or right-click a coach message -> copy the bubble or quote it into the composer. |
+| **Reveal** | Hold-to-confirm bridge from *your* approach toward a working one - never a silent solution dump. |
 | **Ambient** | Off by default (`AMBIENT_ENABLED` in the client). |
 
 ---
@@ -199,12 +200,12 @@ lc serve --lan                  # drawing-device daemon
 | `lc ask` | LLM help on a failing case |
 
 Config path: `lc config path`  
-(Windows: `%APPDATA%\lc\config\config.toml` · Linux/macOS: `~/.config/lc/config.toml`)
+(Windows: `%APPDATA%\lc\config\config.toml` / Linux/macOS: `~/.config/lc/config.toml`)
 
-API keys stay in the environment (`GROQ_API_KEY`, optional `LC_LOCAL_API_KEY`) — not in the TOML.
+API keys stay in the environment (`GROQ_API_KEY`, optional `LC_LOCAL_API_KEY`) - not in the TOML.
 
 **What the LLM sees:** problem statement, tags, difficulty, *your* `solution.py` / board PNGs, failing I/O.  
-**What it never sees:** corpus `completion` / `response` / reference solutions — dropped at parse time in [`src/problem.rs`](src/problem.rs).
+**What it never sees:** corpus `completion` / `response` / reference solutions - dropped at parse time in [`src/problem.rs`](src/problem.rs).
 
 ---
 
@@ -215,9 +216,9 @@ API keys stay in the environment (`GROQ_API_KEY`, optional `LC_LOCAL_API_KEY`) �
 | `problem data dir not configured` | `lc config set data-dir <path>` then `lc index` |
 | Dataset tab shows 0 | `python scripts/fetch_dataset.py <slug>` then `lc index --dataset <slug>` |
 | `cannot reach the local LLM` | Confirm vLLM is up on `:8000`; check `llm.local.base_url` and `model` = `qwen3-vl-8b` |
-| FlashInfer / `nvcc` errors in WSL | Put CUDA 12.x first — see [My setup](#my-setup-what-this-readme-assumes) |
+| FlashInfer / `nvcc` errors in WSL | Put CUDA 12.x first - see [My setup](#my-setup-what-this-readme-assumes) |
 | Tablet `pair first` / 401 | Re-enter Host/Port/Code from the current `lc serve --lan` banner |
-| Android connects on desktop but not device | Cleartext HTTP — see `app/src-tauri/android-overlay/` |
+| Android connects on desktop but not device | Cleartext HTTP - see `app/src-tauri/android-overlay/` |
 | Board review ignores the image | Confirm a **vision** model (Qwen3-VL) and that Review board is on |
 
 ---
@@ -238,4 +239,4 @@ See [CHANGELOG.md](CHANGELOG.md) and [`app/README.md`](app/README.md).
 
 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — free for personal, educational, and other noncommercial use; commercial use needs a separate license. See [LICENSE](LICENSE).
 
-Problem corpus licensing is separate per dataset — see the Hugging Face cards linked above.
+Problem corpus licensing is separate per dataset - see the Hugging Face cards linked above.

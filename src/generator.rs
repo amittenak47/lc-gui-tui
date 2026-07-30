@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use minijinja::{context, Environment};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -476,4 +476,67 @@ fn launch_editor(editor: &str, path: &str) -> bool {
         std::process::Command::new(editor).args(["-r", path]).status()
     };
     matches!(status, Ok(s) if s.success())
+}
+
+/// Open a file in a blocking terminal editor (`$VISUAL` / `$EDITOR`, then nvim/vim/vi).
+///
+/// Callers that own a ratatui session must suspend the alternate screen first so
+/// the child inherits a normal tty; see `tui::with_suspended_tui`.
+pub fn open_in_terminal_editor(path: &Path) -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    let path_str = path.display().to_string();
+    let mut candidates: Vec<String> = Vec::new();
+    for key in ["VISUAL", "EDITOR"] {
+        if let Ok(value) = std::env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                candidates.push(trimmed.to_string());
+            }
+        }
+    }
+    for editor in ["nvim", "vim", "vi"] {
+        candidates.push(editor.to_string());
+    }
+    #[cfg(windows)]
+    candidates.push("notepad".to_string());
+
+    let mut last_err = None;
+    for editor in &candidates {
+        // `$EDITOR` is usually a single binary; ignore args for simplicity.
+        let bin = editor.split_whitespace().next().unwrap_or(editor);
+        let mut cmd = Command::new(bin);
+        cmd.arg(&path_str)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        match cmd.status() {
+            Ok(_) => return Ok(()),
+            Err(err) => last_err = Some(format!("{bin}: {err}")),
+        }
+    }
+    bail!(
+        "no terminal editor found (set $EDITOR or install vim/nvim){}",
+        last_err
+            .map(|e| format!(" — last error: {e}"))
+            .unwrap_or_default()
+    );
+}
+
+/// Open the workspace folder in the OS file manager (non-blocking).
+pub fn open_workspace_folder(dir: &Path) {
+    let _ = {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("explorer").arg(dir).spawn()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open").arg(dir).spawn()
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            std::process::Command::new("xdg-open").arg(dir).spawn()
+        }
+    };
 }
