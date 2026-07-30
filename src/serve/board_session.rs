@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::llm::coach::BoardSnapshot;
+use crate::llm::coach::{BoardSnapshot, Claim};
 
 /// One element as captured off the canvas (`{id, type, x, y, w, h, text?}`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +58,11 @@ pub struct BoardSessionState {
     pseudocode: Option<String>,
     /// SHA-256 hex of the starter skeleton the client claims to be editing.
     skeleton_hash: Option<String>,
+    /// The claim the last staged review froze, with the fingerprint of the board
+    /// it was read off. Lazy fill runs as a second HTTP request moments after
+    /// the review, and this is how the same understanding reaches it instead of
+    /// the model interpreting the drawing twice and disagreeing with itself.
+    claim: Option<(u64, Claim)>,
 }
 
 #[derive(Debug, Default)]
@@ -85,6 +90,52 @@ impl BoardSessionState {
     pub fn acknowledge_pseudocode(&mut self, text: impl Into<String>) {
         self.pseudocode = Some(text.into());
     }
+
+    /// Hold the claim a review just froze, keyed to the board it describes.
+    pub fn remember_claim(&mut self, fingerprint: u64, claim: Claim) {
+        self.claim = Some((fingerprint, claim));
+    }
+
+    /// The stored claim, but only if it was read off *this* board. A claim about
+    /// a drawing the student has since changed is worse than no claim: Lazy fill
+    /// would write code for something no longer on the canvas.
+    pub fn claim_for(&self, fingerprint: u64) -> Option<Claim> {
+        self.claim
+            .as_ref()
+            .filter(|(stored, _)| *stored == fingerprint)
+            .map(|(_, claim)| claim.clone())
+    }
+}
+
+/// Fingerprint of the *drawn* board — recognized ink plus the identity and text
+/// of every canvas element.
+///
+/// The code dock is deliberately excluded: Lazy fill sends the same drawing with
+/// `pseudocode` omitted, and typing in the editor does not change what the board
+/// claims. Positions are excluded for the same reason — nudging a box is not a
+/// new approach.
+pub fn drawn_board_fingerprint(board: &BoardSnapshot) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    board.recognized_text.trim().hash(&mut hasher);
+    if let Some(Value::Array(items)) = board.scene_structure.as_ref() {
+        let mut rows: Vec<String> = items
+            .iter()
+            .map(|el| {
+                format!(
+                    "{}|{}|{}",
+                    el.get("id").and_then(Value::as_str).unwrap_or_default(),
+                    el.get("type").and_then(Value::as_str).unwrap_or_default(),
+                    el.get("text").and_then(Value::as_str).unwrap_or_default(),
+                )
+            })
+            .collect();
+        // Sorted so two sends of one board hash alike whatever order they arrive in.
+        rows.sort();
+        rows.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Apply one op to the element map.
@@ -463,6 +514,64 @@ mod tests {
             resolve_pseudocode(&mut state, &incoming).as_deref(),
             Some("def solve(): return 2")
         );
+    }
+
+    /// A stored claim is scoped to the drawing it was read off. Typing in the
+    /// code dock must not throw it away — Lazy fill sends the same board with the
+    /// dock omitted — but redrawing must, or Lazy would write code for an idea
+    /// that is no longer on the canvas.
+    #[test]
+    fn a_stored_claim_follows_the_drawing_and_ignores_the_code_dock() {
+        let drawn = BoardSnapshot {
+            recognized_text: "reverse twice".into(),
+            scene_structure: Some(serde_json::json!([
+                {"id": "a", "type": "text", "x": 0, "y": 0, "w": 10, "h": 10, "text": "120"}
+            ])),
+            ..Default::default()
+        };
+        let claim = Claim {
+            understood_approach: "a trailing zero cannot survive the round trip".into(),
+            claim_sufficient: true,
+            ..Default::default()
+        };
+
+        let mut state = BoardSessionState::default();
+        state.remember_claim(drawn_board_fingerprint(&drawn), claim.clone());
+
+        // Same drawing, code dock typed into and then dropped for the Lazy send.
+        let typed = BoardSnapshot {
+            pseudocode: Some("def reverse(x): pass".into()),
+            ..drawn.clone()
+        };
+        assert!(state.claim_for(drawn_board_fingerprint(&typed)).is_some());
+        assert!(state.claim_for(drawn_board_fingerprint(&drawn)).is_some());
+
+        // Moved a box: the same claim, just nudged.
+        let nudged = BoardSnapshot {
+            scene_structure: Some(serde_json::json!([
+                {"id": "a", "type": "text", "x": 400, "y": 90, "w": 10, "h": 10, "text": "120"}
+            ])),
+            ..drawn.clone()
+        };
+        assert!(state.claim_for(drawn_board_fingerprint(&nudged)).is_some());
+
+        // Rewrote what the box says: a different board, so no claim.
+        let redrawn = BoardSnapshot {
+            scene_structure: Some(serde_json::json!([
+                {"id": "a", "type": "text", "x": 0, "y": 0, "w": 10, "h": 10, "text": "sort it"}
+            ])),
+            ..drawn.clone()
+        };
+        assert!(
+            state.claim_for(drawn_board_fingerprint(&redrawn)).is_none(),
+            "a claim about erased work is worse than no claim"
+        );
+        assert!(state
+            .claim_for(drawn_board_fingerprint(&BoardSnapshot {
+                recognized_text: "sort then scan".into(),
+                ..drawn
+            }))
+            .is_none());
     }
 
     #[test]
