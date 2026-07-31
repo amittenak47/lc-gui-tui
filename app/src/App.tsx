@@ -59,6 +59,11 @@ import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { RevealDialog } from "./modes/RevealDialog";
 import { buildProblemTemplate } from "./templates/problemBoard";
+import {
+  buildScratchpadTemplate,
+  SCRATCHPAD_DATASET,
+  SCRATCHPAD_TASK_ID,
+} from "./templates/scratchpad";
 import { MOBILE_REGION_ORDER, REGIONS, type RegionId } from "./templates/regions";
 import { splitProblemKey } from "./util/datasetKey";
 import { isMobileViewport, useIsMobile } from "./util/mobile";
@@ -88,6 +93,26 @@ import { parseVizProgram, type VizProgram } from "./viz/schema";
 import type { CoachCapabilities } from "./api/types";
 
 type Mode = "review" | "ambient";
+
+const SCRATCHPAD_PROBLEM: ProblemDetail = {
+  dataset: SCRATCHPAD_DATASET,
+  key: `${SCRATCHPAD_DATASET}/${SCRATCHPAD_TASK_ID}`,
+  task_id: SCRATCHPAD_TASK_ID,
+  question_id: null,
+  difficulty: null,
+  tags: ["scratchpad"],
+  problem_description: "Freeform scratchpad — no problem set.",
+  starter_code: null,
+  entry_point: null,
+  cases: [],
+};
+
+const SCRATCHPAD_BOARD_KEY = "lc.scratchpad.board.v1";
+const SCRATCHPAD_AGENT_KEY = "lc.scratchpad.agent.v1";
+
+function isScratchpad(problem: ProblemDetail | null | undefined): boolean {
+  return problem?.task_id === SCRATCHPAD_TASK_ID;
+}
 
 export function App() {
   const mobile = useIsMobile();
@@ -385,6 +410,15 @@ export function App() {
       if (lastSavedHashRef.current === hash) return;
       const blob = board.saveBoard();
       dirtyRef.current = true;
+      if (isScratchpad(problem)) {
+        try {
+          localStorage.setItem(SCRATCHPAD_BOARD_KEY, JSON.stringify(blob));
+          lastSavedHashRef.current = hash;
+        } catch {
+          /* quota */
+        }
+        return;
+      }
       void client.putBoard(problem.task_id, blob, problem.dataset).then(() => {
         lastSavedHashRef.current = hash;
       }).catch(() => {
@@ -506,6 +540,28 @@ export function App() {
         setProblem(detail);
         await refreshSession();
 
+        const saved = loaded.resume.board as
+          | { v?: number; elements?: unknown[]; appState?: unknown }
+          | null;
+        const hasSavedBoard =
+          saved && saved.v === 1 && Array.isArray(saved.elements) && saved.elements.length > 0;
+
+        let scaffolding:
+          | { approach?: string; complexity?: string; walkthrough?: string }
+          | undefined;
+        if (!hasSavedBoard) {
+          try {
+            const scaffold = await client.scaffoldBoard(detail.task_id, datasetId);
+            scaffolding = {
+              approach: scaffold.approach || undefined,
+              complexity: scaffold.complexity || undefined,
+              walkthrough: scaffold.walkthrough || undefined,
+            };
+          } catch {
+            // LLM optional — fall back to generic HINTS.
+          }
+        }
+
         const skeletons = buildProblemTemplate({
           taskId: detail.task_id,
           title: titleFromSlug(detail.task_id, detail.question_id),
@@ -514,16 +570,14 @@ export function App() {
           description: detail.problem_description,
           caseCount: detail.cases.length,
           dark: isDarkTheme(themeId),
+          scaffolding,
         });
 
         // A saved layout is restored over the fresh template; otherwise seed
         // the template alone. Persisted boards can carry old region geometry,
         // so `restoreBoard` heals them against the current skeletons.
         lastSavedHashRef.current = null;
-        const saved = loaded.resume.board as
-          | { v?: number; elements?: unknown[]; appState?: unknown }
-          | null;
-        if (saved && saved.v === 1 && Array.isArray(saved.elements) && saved.elements.length > 0) {
+        if (hasSavedBoard && saved?.elements) {
           boardRef.current?.restoreBoard(saved.elements, saved.appState, { skeletons });
         } else {
           boardRef.current?.seedTemplate(skeletons);
@@ -567,6 +621,78 @@ export function App() {
     },
     [client, themeId, problem, refreshSession, syncDrawingsToBoard],
   );
+
+  const openScratchpad = useCallback(async () => {
+    if (busy !== null) return;
+    setBusy("opening scratchpad…");
+    setError(null);
+    setTests(null);
+    setNudges([]);
+    setCoachMessages([]);
+    setActiveRegion("constraints");
+    boardSaveSuspendedRef.current = true;
+    agentSaveSuspendedRef.current = true;
+    try {
+      setBoardPreparing(true);
+      setProblem(SCRATCHPAD_PROBLEM);
+      setPseudocode("");
+      loadedSourceRef.current = "";
+
+      const skeletons = buildScratchpadTemplate(isDarkTheme(themeId));
+      lastSavedHashRef.current = null;
+
+      let restored = false;
+      try {
+        const raw = localStorage.getItem(SCRATCHPAD_BOARD_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw) as {
+            v?: number;
+            elements?: unknown[];
+            appState?: unknown;
+          };
+          if (saved.v === 1 && Array.isArray(saved.elements) && saved.elements.length > 0) {
+            boardRef.current?.restoreBoard(saved.elements, saved.appState, { skeletons });
+            restored = true;
+          }
+        }
+      } catch {
+        /* ignore corrupt local cache */
+      }
+      if (!restored) {
+        boardRef.current?.seedTemplate(skeletons);
+      }
+
+      try {
+        const agentRaw = localStorage.getItem(SCRATCHPAD_AGENT_KEY);
+        if (agentRaw) {
+          const messages = restoreCoachMessages(JSON.parse(agentRaw));
+          if (messages.length > 0) setCoachMessages(messages);
+        }
+      } catch {
+        /* ignore */
+      }
+
+      boardRef.current?.applyThemeInk(themeId);
+      boardRef.current?.stripCoachViz();
+      lastIdsRef.current = new Set();
+      await boardRef.current?.waitForTemplate();
+      await boardRef.current?.settleFitView();
+
+      setBoardPreparing(false);
+      boardSaveSuspendedRef.current = false;
+      agentSaveSuspendedRef.current = false;
+      setEntering(true);
+      window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
+      setCoachOpen(true);
+    } catch (cause) {
+      setError(messageOf(cause));
+      boardSaveSuspendedRef.current = false;
+      agentSaveSuspendedRef.current = false;
+      setBoardPreparing(false);
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, themeId]);
 
   /** Session queue after Start / Random; otherwise the filtered problem bank. */
   const stepProblem = useCallback(
@@ -1200,6 +1326,14 @@ export function App() {
     if (!problem || coachMessages.length === 0) return;
     const timer = window.setTimeout(() => {
       if (agentSaveSuspendedRef.current) return;
+      if (isScratchpad(problem)) {
+        try {
+          localStorage.setItem(SCRATCHPAD_AGENT_KEY, JSON.stringify(coachMessages));
+        } catch {
+          /* quota */
+        }
+        return;
+      }
       void client
         .putAgentSession(problem.task_id, coachMessages, problem.dataset)
         .catch(() => {
@@ -1356,6 +1490,21 @@ export function App() {
       boardSaveSuspendedRef.current = true;
       agentSaveSuspendedRef.current = true;
       try {
+        if (isScratchpad(problem)) {
+          if (save) {
+            const blob = boardRef.current?.saveBoard();
+            if (blob) localStorage.setItem(SCRATCHPAD_BOARD_KEY, JSON.stringify(blob));
+            if (coachMessages.length > 0) {
+              localStorage.setItem(SCRATCHPAD_AGENT_KEY, JSON.stringify(coachMessages));
+            }
+          } else {
+            localStorage.removeItem(SCRATCHPAD_BOARD_KEY);
+            localStorage.removeItem(SCRATCHPAD_AGENT_KEY);
+          }
+          setLeaving(null);
+          pending.run();
+          return;
+        }
         // Flush the thread first, so a "save" keeps the last exchange and an
         // archive of a solved attempt is complete.
         if (coachMessages.length > 0) {
@@ -1423,9 +1572,12 @@ export function App() {
                 disabled={busy !== null}
                 onClick={() => leaveProblem(returnToBrowse)}
               >
-                <span className="lc-label-long">← Problems</span>
+                <span className="lc-label-long">
+                  {isScratchpad(problem) ? "← Home" : "← Problems"}
+                </span>
                 <span className="lc-label-short">←</span>
               </button>
+              {!isScratchpad(problem) ? (
               <div className="lc-problem-nav" role="group" aria-label="Problem">
                 <button
                   type="button"
@@ -1459,6 +1611,11 @@ export function App() {
                   ›
                 </button>
               </div>
+              ) : (
+                <span className="lc-current" title="Scratchpad">
+                  Scratchpad
+                </span>
+              )}
             </>
           ) : (
             <span className="lc-muted lc-browse-hint">
@@ -1466,36 +1623,11 @@ export function App() {
               <span className="lc-label-short">Problems</span>
             </span>
           )}
-          {/* On mobile the gear moves into the ⋯ menu — see HeaderOverflow. */}
-          <button
-            type="button"
-            className="lc-icon lc-tip-target lc-desktop-only"
-            aria-label="Settings"
-            data-tip="Settings — paths, LLM, serve"
-            data-tip-placement="bottom"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <svg
-              className="lc-icon-svg"
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.75"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-            </svg>
-          </button>
         </div>
 
         <div className="lc-header-center">
           <PairingBadge pairing={pairing} onPair={setPairing} />
-          {problem && (
+          {problem && !isScratchpad(problem) && (
             <div className="lc-actions">
               <button
                 type="button"
@@ -1534,9 +1666,71 @@ export function App() {
               </button>
             </div>
           )}
+          {problem && isScratchpad(problem) && (
+            <span className="lc-muted lc-browse-hint">scratchpad</span>
+          )}
         </div>
 
         <div className="lc-header-right">
+          {/* Paper / scratchpad — always on the main header, left of ⋯ / Settings. */}
+          <button
+            type="button"
+            className="lc-icon lc-tip-target"
+            aria-label="Scratchpad"
+            data-tip="Scratchpad — blank board (no problem set)"
+            data-tip-placement="bottom"
+            disabled={busy !== null}
+            onClick={() => {
+              if (problem && !isScratchpad(problem)) {
+                leaveProblem(() => void openScratchpad());
+              } else {
+                void openScratchpad();
+              }
+            }}
+          >
+            <svg
+              className="lc-icon-svg"
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6" />
+              <path d="M8 13h8" />
+              <path d="M8 17h5" />
+            </svg>
+          </button>
+          {/* On mobile the gear moves into the ⋯ menu — see HeaderOverflow. */}
+          <button
+            type="button"
+            className="lc-icon lc-tip-target lc-desktop-only"
+            aria-label="Settings"
+            data-tip="Settings — paths, LLM, serve"
+            data-tip-placement="bottom"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <svg
+              className="lc-icon-svg"
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+            </svg>
+          </button>
           {mobile && (
             <HeaderOverflow
               items={[

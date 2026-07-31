@@ -22,6 +22,7 @@ import type {
   ProblemPage,
   ProblemSummary,
   ReviewResponse,
+  BoardScaffold,
   SessionSnapshot,
   TestResponse,
   VizEnvelope,
@@ -289,6 +290,17 @@ export class LcClient {
       dataset,
       layout_only: opts?.layoutOnly === true,
       ...board,
+    });
+  }
+
+  /**
+   * Fresh-board region prompts for Approach / Complexity / Walkthrough.
+   * Soft-fails on the client — load still seeds the generic template.
+   */
+  async scaffoldBoard(taskId: string, dataset?: string): Promise<BoardScaffold> {
+    return this.request("POST", "/coach/scaffold", {
+      task_id: taskId,
+      dataset,
     });
   }
 

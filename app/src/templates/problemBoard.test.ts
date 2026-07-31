@@ -90,6 +90,24 @@ describe("buildProblemTemplate", () => {
     expect(skeletons.every((s) => Boolean(s.customData?.lcRegion))).toBe(true);
   });
 
+  it("accepts AI scaffolding for approach / complexity / walkthrough hints", () => {
+    const custom = buildProblemTemplate({
+      taskId: "two-sum",
+      title: "Two Sum",
+      scaffolding: {
+        approach: "What do you need to look up in O(1)?",
+        complexity: "time ___ · space ___",
+        walkthrough: "Trace nums = [2,7,11] target = 9",
+      },
+    });
+    const approach = custom.find((s) => s.id === "lcregion-approach-hint");
+    const complexity = custom.find((s) => s.id === "lcregion-complexity-hint");
+    const walkthrough = custom.find((s) => s.id === "lcregion-walkthrough-hint");
+    expect(approach?.text).toContain("O(1)");
+    expect(complexity?.text).toContain("time");
+    expect(walkthrough?.text).toContain("[2,7,11]");
+  });
+
   it("locks statement text but leaves region frames resizable", () => {
     const frames = skeletons.filter((s) => s.id?.endsWith("-frame"));
     const content = skeletons.filter((s) => !s.id?.endsWith("-frame"));

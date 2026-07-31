@@ -27,6 +27,15 @@ export interface ProblemTemplateInput {
   caseCount?: number;
   /** Dark board themes need light statement ink. */
   dark?: boolean;
+  /**
+   * Optional AI (or caller) overrides for empty-region prompts.
+   * Missing keys fall back to the generic HINTS.
+   */
+  scaffolding?: {
+    approach?: string;
+    complexity?: string;
+    walkthrough?: string;
+  };
 }
 
 /** Prompts, so an empty region still says what belongs there. */
@@ -147,7 +156,11 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       },
     });
 
-    const hint = HINTS[region.id];
+    const hint =
+      (region.id === "approach" && input.scaffolding?.approach) ||
+      (region.id === "complexity" && input.scaffolding?.complexity) ||
+      (region.id === "walkthrough" && input.scaffolding?.walkthrough) ||
+      HINTS[region.id];
     if (hint) {
       const hintX = region.x + 36;
       const hintY = region.y + 64;
