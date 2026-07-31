@@ -278,34 +278,68 @@ fn center_in(text: &str, width: usize) -> String {
 }
 
 /// Turn a viz tool program into ASCII keyframes the TUI can morph.
-///
-/// Supports linear cell-based kinds (`array`, `stack`, `queue`, `linkedlist`,
-/// `heap`). Hashmap / graph / tree layouts stay on the canvas viz path for now.
 pub fn from_viz_program(program: &crate::llm::tools::VizProgram) -> Option<AsciiAnimProgram> {
     let kind = program.kind.as_str();
-    if !matches!(
-        kind,
-        "array" | "stack" | "queue" | "linkedlist" | "heap"
-    ) {
-        return None;
-    }
-
     let mut frames = Vec::new();
+
     for frame in &program.frames {
-        let labels: Vec<String> = frame.cells.iter().map(value_as_label).collect();
-        if labels.is_empty() || labels.iter().all(|s| s.is_empty()) {
+        let label = frame_label(frame);
+        if label.is_empty() {
             continue;
         }
-        let label = if frame.label.trim().is_empty() {
-            frame.note.trim()
-        } else if frame.note.trim().is_empty() {
-            frame.label.trim()
-        } else {
-            // Keep one line under the picture.
-            frame.label.trim()
-        };
-        frames.push(render_cells(&labels, &frame.highlight, label));
+
+        match kind {
+            "array" | "stack" | "queue" | "linkedlist" | "heap" => {
+                let labels: Vec<String> = frame.cells.iter().map(value_as_label).collect();
+                if labels.is_empty() || labels.iter().all(|s| s.is_empty()) {
+                    continue;
+                }
+                frames.push(render_cells(&labels, &frame.highlight, &label));
+            }
+            "hashmap" => {
+                let labels: Vec<String> = frame
+                    .entries
+                    .iter()
+                    .map(entry_pair_label)
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if labels.is_empty() {
+                    let labels: Vec<String> = frame.cells.iter().map(value_as_label).collect();
+                    if labels.is_empty() {
+                        continue;
+                    }
+                    frames.push(render_cells(&labels, &frame.highlight, &label));
+                } else {
+                    frames.push(render_cells(&labels, &frame.highlight, &label));
+                }
+            }
+            "grid" => {
+                let lines = render_grid_lines(frame);
+                if lines.is_empty() {
+                    continue;
+                }
+                frames.push(AsciiKeyframe {
+                    label,
+                    lines,
+                });
+            }
+            "tree" | "graph" => {
+                // Level-order / node labels as a single row when possible.
+                let labels: Vec<String> = frame
+                    .cells
+                    .iter()
+                    .map(value_as_label)
+                    .filter(|s| s != "·")
+                    .collect();
+                if labels.is_empty() {
+                    continue;
+                }
+                frames.push(render_cells(&labels, &frame.highlight, &label));
+            }
+            _ => continue,
+        }
     }
+
     if frames.is_empty() {
         return None;
     }
@@ -317,6 +351,65 @@ pub fn from_viz_program(program: &crate::llm::tools::VizProgram) -> Option<Ascii
         },
         frames,
     })
+}
+
+fn frame_label(frame: &crate::llm::tools::VizFrame) -> String {
+    if !frame.label.trim().is_empty() {
+        frame.label.trim().to_string()
+    } else if !frame.note.trim().is_empty() {
+        frame.note.trim().to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn entry_pair_label(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Array(pair) if pair.len() >= 2 => {
+            format!(
+                "{}:{}",
+                value_as_label(&pair[0]),
+                value_as_label(&pair[1])
+            )
+        }
+        serde_json::Value::Object(map) => {
+            let k = map
+                .get("key")
+                .or_else(|| map.get("from"))
+                .map(value_as_label)
+                .unwrap_or_default();
+            let v = map
+                .get("value")
+                .or_else(|| map.get("to"))
+                .map(value_as_label)
+                .unwrap_or_default();
+            if k.is_empty() && v.is_empty() {
+                String::new()
+            } else {
+                format!("{k}:{v}")
+            }
+        }
+        other => value_as_label(other),
+    }
+}
+
+fn render_grid_lines(frame: &crate::llm::tools::VizFrame) -> Vec<String> {
+    let mut out = Vec::new();
+    for cell in &frame.cells {
+        if let Some(row) = cell.as_array() {
+            let row_str = row
+                .iter()
+                .map(value_as_label)
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !row_str.is_empty() {
+                out.push(row_str);
+            }
+        } else if !cell.is_null() {
+            out.push(value_as_label(cell));
+        }
+    }
+    out
 }
 
 fn value_as_label(value: &serde_json::Value) -> String {
@@ -364,6 +457,55 @@ pub fn bubble_sort_demo() -> AsciiAnimProgram {
     let mut program = frames_from_array_steps(&steps);
     program.title = "bubble sort (ASCII morph demo)".into();
     program
+}
+
+/// When the model returns no drawable trace, walk sample-case integers in the TUI.
+pub fn fallback_scan_from_cases(
+    title: &str,
+    cases: &[crate::problem::IoCase],
+) -> Option<AsciiAnimProgram> {
+    for case in cases.iter().take(4) {
+        let nums = extract_integers(&case.input)?;
+        if nums.len() < 2 {
+            continue;
+        }
+        let mut frames = Vec::new();
+        frames.push(render_array(&nums, &[0], "sample input"));
+        for i in 0..nums.len() {
+            let label = format!("index {i}");
+            frames.push(render_array(&nums, &[i], &label));
+        }
+        return Some(AsciiAnimProgram {
+            title: title.to_string(),
+            frames,
+        });
+    }
+    None
+}
+
+fn extract_integers(s: &str) -> Option<Vec<i32>> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_digit() || (ch == '-' && cur.is_empty()) {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            if let Ok(n) = cur.parse::<i32>() {
+                out.push(n);
+            }
+            cur.clear();
+        }
+    }
+    if !cur.is_empty() {
+        if let Ok(n) = cur.parse::<i32>() {
+            out.push(n);
+        }
+    }
+    if out.len() >= 2 {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

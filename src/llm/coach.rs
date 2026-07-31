@@ -883,6 +883,61 @@ pub struct ReviewOutcome {
     pub claim: Option<Claim>,
 }
 
+/// Terminal coach: question + `solution.py` only — no whiteboard layout pass,
+/// no `[layout]` / `[code]` merge prefixes.
+pub fn review_submission_text_only(
+    provider: &dyn LlmProvider,
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    question: &str,
+    solution: &str,
+    app_messages: &[String],
+    turn_index: u32,
+) -> Result<ReviewOutcome> {
+    let board = BoardSnapshot {
+        recognized_text: if question.trim().is_empty() {
+            String::new()
+        } else {
+            format!("Student question (terminal):\n{}", question.trim())
+        },
+        pseudocode: Some(solution.to_string()),
+        app_messages: app_messages.to_vec(),
+        turn_index,
+        ..Default::default()
+    };
+
+    let has_approach = !question.trim().is_empty() || solution.trim().len() > 8;
+
+    let (mut review, claim) = if has_approach {
+        if let Ok((claim, review)) = staged_board_review(provider, meta, description, &board) {
+            (review, Some(claim))
+        } else {
+            let prompt = build_review_prompt(meta, description, &board);
+            let reply = provider.chat_ex(
+                &ChatRequest::new(vec![
+                    ChatMessage::system(REVIEW_SYSTEM_PROMPT),
+                    ChatMessage::user(prompt),
+                ])
+                .json(),
+            )?;
+            (parse_review(&reply.content, &meta.cases)?, None)
+        }
+    } else {
+        let prompt = build_review_prompt(meta, description, &board);
+        let reply = provider.chat_ex(
+            &ChatRequest::new(vec![
+                ChatMessage::system(REVIEW_SYSTEM_PROMPT),
+                ChatMessage::user(prompt),
+            ])
+            .json(),
+        )?;
+        (parse_review(&reply.content, &meta.cases)?, None)
+    };
+
+    retrace_counterexample(provider, meta, &board, &mut review);
+    Ok(ReviewOutcome { review, claim })
+}
+
 /// Run Mode A against a board snapshot.
 ///
 /// - With layout/ink/question text: perceive (if PNG) → claim → verdict only
@@ -1063,13 +1118,13 @@ pub fn format_review_card(review: &ReviewResponse) -> String {
     if !review.strengths.is_empty() {
         let _ = writeln!(out, "\nStrengths:");
         for s in &review.strengths {
-            let _ = writeln!(out, "  - {s}");
+            let _ = writeln!(out, "  - {}", strip_review_tag_prefix(s));
         }
     }
     if !review.gaps.is_empty() {
         let _ = writeln!(out, "\nGaps:");
         for g in &review.gaps {
-            let _ = writeln!(out, "  - {g}");
+            let _ = writeln!(out, "  - {}", strip_review_tag_prefix(g));
         }
     }
     if let Some(ce) = &review.counterexample {
@@ -1098,6 +1153,14 @@ fn verdict_label(v: Verdict) -> &'static str {
         Verdict::WrongTrack => "wrong track",
         Verdict::Unclear => "unclear",
     }
+}
+
+fn strip_review_tag_prefix(note: &str) -> String {
+    note.trim()
+        .strip_prefix("[layout] ")
+        .or_else(|| note.trim().strip_prefix("[code] "))
+        .map(str::to_string)
+        .unwrap_or_else(|| note.trim().to_string())
 }
 
 /// The board as the staged path reads it: ink, layout, and canvas notes, with

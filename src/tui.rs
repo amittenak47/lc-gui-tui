@@ -22,7 +22,7 @@ use crate::attempt;
 use crate::config::Config;
 use crate::dataset::{self, Dataset, DATASETS};
 use crate::index::{self, ProblemRow, SearchSort};
-use crate::llm::coach::{format_review_card, review_submission, BoardSnapshot};
+use crate::llm::coach::{format_review_card, review_submission_text_only, BoardSnapshot};
 use crate::llm::make_provider_for_mode;
 use crate::session::{ProblemState, Session};
 use crate::{generator, lists, loader, problem, runner};
@@ -531,6 +531,13 @@ impl App {
 
     fn ensure_workspace(&mut self) -> Result<PathBuf> {
         let row = self.selected_problem.clone().context("no problem")?;
+        let dir = self.dataset.workspace_dir(&self.cfg, &row.task_id);
+        if dir.join(".lc").join("meta.json").exists() {
+            self.session.mark_loaded(&row.key())?;
+            let _ = self.session.add_to_queue(&row.key());
+            self.session = Session::load_or_new()?;
+            return Ok(dir);
+        }
         let json_path = Path::new(&row.json_path);
         let prob = problem::load_task_for(self.dataset, json_path, &row.task_id)?;
         let dir = generator::generate(&self.cfg, self.dataset, &prob, json_path, false)?;
@@ -667,6 +674,12 @@ impl App {
             .unwrap_or("")
             .trim();
 
+        let turn_index = self
+            .coach_messages
+            .iter()
+            .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("assistant"))
+            .count() as u32;
+
         let app_messages: Vec<String> = self
             .coach_messages
             .iter()
@@ -684,23 +697,21 @@ impl App {
             } else {
                 format!("Student question (terminal):\n{question}")
             },
-            pseudocode: Some(solution),
+            pseudocode: Some(solution.clone()),
             app_messages,
-            turn_index: self
-                .coach_messages
-                .iter()
-                .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("assistant"))
-                .count() as u32,
+            turn_index,
             ..Default::default()
         };
 
         let provider = make_provider_for_mode(&self.cfg, "review")?;
-        let outcome = review_submission(
+        let outcome = review_submission_text_only(
             &*provider,
             &meta,
             description.as_deref(),
-            &board,
-            /* include_code */ true,
+            question,
+            &solution,
+            &board.app_messages,
+            turn_index,
         )?;
         let mut card = format_review_card(&outcome.review);
 
@@ -708,10 +719,17 @@ impl App {
             match self.ask_ascii_viz(&meta, description.as_deref(), &board, question) {
                 Ok(Some(program)) => Some(program),
                 Ok(None) => {
-                    card.push_str(
-                        "\n\n(draw on — model returned no array/stack/queue frames to morph)",
-                    );
-                    None
+                    if let Some(fallback) =
+                        ascii_morph::fallback_scan_from_cases("sample-case walk", &meta.cases)
+                    {
+                        card.push_str("\n\n(draw: showing sample inputs — model trace was empty)");
+                        Some(fallback)
+                    } else {
+                        card.push_str(
+                            "\n\n(draw on — no drawable frames; try Ctrl+D off for text-only)",
+                        );
+                        None
+                    }
                 }
                 Err(err) => {
                     card.push_str(&format!("\n\n(draw failed: {err:#})"));
@@ -725,7 +743,7 @@ impl App {
         Ok((card, anim))
     }
 
-    /// Same tool loop as `/coach/viz`, then render linear programs as ASCII.
+    /// Viz tool loop (same tools as `/coach/viz`), rendered as ASCII morph.
     fn ask_ascii_viz(
         &self,
         meta: &crate::generator::WorkspaceMeta,
@@ -734,7 +752,7 @@ impl App {
         ask: &str,
     ) -> Result<Option<AsciiAnimProgram>> {
         use crate::llm::coach::{build_viz_prompt, VIZ_SYSTEM_PROMPT};
-        use crate::llm::tools::{parse_tool_calls, viz_tools, viz_tools_as_prompt, VizProgram};
+        use crate::llm::tools::{viz_tools};
         use crate::llm::{ChatMessage, ChatRequest};
 
         let prompt = build_viz_prompt(meta, description, board, ask);
@@ -742,54 +760,18 @@ impl App {
         let messages = vec![
             ChatMessage::system(VIZ_SYSTEM_PROMPT),
             ChatMessage::user(format!(
-                "{prompt}\n\nPrefer `animate_trace` with an array (or stack/queue) so the \
-                 terminal can morph the steps. Keep the prose to one short sentence."
+                "{prompt}\n\nCall `animate_trace` with viz=array (or stack/queue). \
+                 Each frame must include full `cells` — the array at that step. \
+                 At least 2 frames. One short sentence of prose max."
             )),
         ];
 
-        let reply = match provider.chat_ex(&ChatRequest::new(messages).with_tools(viz_tools())) {
+        let reply = match provider.chat_ex(&ChatRequest::new(messages.clone()).with_tools(viz_tools())) {
             Ok(reply) if !reply.tool_calls.is_empty() => reply,
-            other => {
-                // Plain-JSON fallback when the server won't tool-call (same as serve::viz).
-                let fallback = provider.chat_ex(
-                    &ChatRequest::new(vec![
-                        ChatMessage::system(VIZ_SYSTEM_PROMPT),
-                        ChatMessage::user(format!("{prompt}\n\n{}", viz_tools_as_prompt())),
-                    ])
-                    .json(),
-                );
-                match fallback {
-                    Ok(reply) => {
-                        let calls = parse_tool_calls(&reply.content);
-                        if calls.is_empty() {
-                            other?;
-                            return Ok(None);
-                        }
-                        crate::llm::ChatReply {
-                            content: String::new(),
-                            tool_calls: calls,
-                        }
-                    }
-                    Err(_) => {
-                        other?;
-                        return Ok(None);
-                    }
-                }
-            }
+            first => viz_json_fallback(&*provider, &prompt, board, first)?,
         };
 
-        let mut programs = Vec::new();
-        for call in &reply.tool_calls {
-            if matches!(call.name.as_str(), "draw_structure" | "animate_trace") {
-                if let Ok(program) = serde_json::from_value::<VizProgram>(call.arguments.clone()) {
-                    if program.rejection().is_none() {
-                        programs.push(program);
-                    }
-                }
-            }
-        }
-
-        // Prefer a multi-frame animate_trace; otherwise any convertible program.
+        let programs = viz_programs_from_reply(&reply);
         let anim = programs
             .iter()
             .filter(|p| p.frames.len() >= 2)
@@ -1941,10 +1923,11 @@ fn draw_message(f: &mut Frame, area: Rect, app: &mut App) {
 fn draw_coach_chat(f: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(4), Constraint::Length(3)])
+        .constraints([Constraint::Min(4), Constraint::Length(5)])
         .split(area);
 
     let inner_w = chunks[0].width.saturating_sub(2) as usize;
+    let composer_w = chunks[1].width.saturating_sub(2) as usize;
     let height = chunks[0].height.saturating_sub(2) as usize;
 
     let active_id = app.ascii_msg_id.clone();
@@ -1973,65 +1956,87 @@ fn draw_coach_chat(f: &mut Frame, area: Rect, app: &mut App) {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
         let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
         let id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        let (label, style) = match role {
-            "user" => ("You", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            "assistant" => ("Coach", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            "app" => ("Tests", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            _ => ("?", Style::default().fg(Color::DarkGray)),
+        let (label, header_fg, bubble_bg) = match role {
+            "user" => (
+                "You",
+                Color::Cyan,
+                Color::Rgb(38, 48, 62),
+            ),
+            "assistant" => (
+                "Coach",
+                Color::Green,
+                Color::Rgb(38, 52, 42),
+            ),
+            "app" => (
+                "Tests",
+                Color::Yellow,
+                Color::Rgb(52, 48, 38),
+            ),
+            _ => ("?", Color::DarkGray, Color::Rgb(40, 40, 40)),
         };
-        lines.push(Line::from(Span::styled(label, style)));
+        let header = Style::default()
+            .fg(header_fg)
+            .bg(bubble_bg)
+            .add_modifier(Modifier::BOLD);
+        let body = Style::default().fg(Color::White).bg(bubble_bg);
+        let pad = inner_w.saturating_sub(2);
+
+        lines.push(Line::from(Span::styled(
+            format!(" {label} "),
+            header,
+        )));
         for line in content.lines() {
-            for part in wrap_to_width(&format!("  {line}"), inner_w) {
-                lines.push(Line::from(part));
+            for part in wrap_to_width(line, pad) {
+                lines.push(Line::from(Span::styled(format!(" {part} "), body)));
             }
         }
 
         let is_live = active_id.as_deref() == Some(id) && live_lines.is_some();
         if is_live {
             if let Some((title, frame, step, hint)) = live_lines.as_ref() {
-                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(" ", body)));
                 lines.push(Line::from(Span::styled(
-                    format!("  ▸ {title}"),
+                    format!(" ▸ {title} "),
                     Style::default()
                         .fg(Color::Magenta)
+                        .bg(bubble_bg)
                         .add_modifier(Modifier::BOLD),
                 )));
                 for row in frame {
                     lines.push(Line::from(Span::styled(
-                        format!("  {row}"),
-                        Style::default().fg(Color::Green),
+                        format!(" {row} "),
+                        Style::default().fg(Color::Green).bg(bubble_bg),
                     )));
                 }
                 lines.push(Line::from(Span::styled(
-                    format!("  {step}"),
-                    Style::default().fg(Color::Yellow),
+                    format!(" {step} "),
+                    Style::default().fg(Color::Yellow).bg(bubble_bg),
                 )));
                 lines.push(Line::from(Span::styled(
-                    format!("  {hint}"),
-                    Style::default().fg(Color::DarkGray),
+                    format!(" {hint} "),
+                    Style::default().fg(Color::DarkGray).bg(bubble_bg),
                 )));
             }
         } else if let Some(anim) = msg
             .get("ascii_anim")
             .and_then(|v| serde_json::from_value::<AsciiAnimProgram>(v.clone()).ok())
         {
-            // Frozen last frame for older turns.
             if let Some(last) = anim.frames.last() {
-                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(" ", body)));
                 lines.push(Line::from(Span::styled(
-                    format!("  ▸ {}", anim.title),
-                    Style::default().fg(Color::DarkGray),
+                    format!(" ▸ {} ", anim.title),
+                    Style::default().fg(Color::DarkGray).bg(bubble_bg),
                 )));
                 for row in &last.lines {
                     lines.push(Line::from(Span::styled(
-                        format!("  {row}"),
-                        Style::default().fg(Color::DarkGray),
+                        format!(" {row} "),
+                        Style::default().fg(Color::DarkGray).bg(bubble_bg),
                     )));
                 }
                 if !last.label.is_empty() {
                     lines.push(Line::from(Span::styled(
-                        format!("  {}", last.label),
-                        Style::default().fg(Color::DarkGray),
+                        format!(" {} ", last.label),
+                        Style::default().fg(Color::DarkGray).bg(bubble_bg),
                     )));
                 }
             }
@@ -2054,12 +2059,83 @@ fn draw_coach_chat(f: &mut Frame, area: Rect, app: &mut App) {
     );
     f.render_widget(thread, chunks[0]);
 
-    let composer = Paragraph::new(format!("> {}_", app.input_buf)).block(
+    let composer_body: Vec<Line> = if app.input_buf.is_empty() {
+        vec![Line::from(Span::styled("> _", Style::default().fg(Color::DarkGray)))]
+    } else {
+        let mut out = Vec::new();
+        for part in wrap_to_width(&format!("> {}", app.input_buf), composer_w) {
+            out.push(Line::from(part));
+        }
+        out.push(Line::from(Span::styled("_", Style::default().fg(Color::DarkGray))));
+        out
+    };
+    let composer = Paragraph::new(composer_body).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("message · Enter send"),
+            .title("message · Enter send · Ctrl+D draw"),
     );
     f.render_widget(composer, chunks[1]);
+}
+
+fn viz_json_fallback(
+    provider: &dyn crate::llm::LlmProvider,
+    prompt: &str,
+    board: &BoardSnapshot,
+    first: Result<crate::llm::ChatReply>,
+) -> Result<crate::llm::ChatReply> {
+    use crate::llm::coach::VIZ_SYSTEM_PROMPT;
+    use crate::llm::tools::{parse_tool_calls, viz_tools_as_prompt};
+    use crate::llm::{ChatMessage, ChatReply, ChatRequest};
+
+    let messages = vec![
+        ChatMessage::system(VIZ_SYSTEM_PROMPT),
+        ChatMessage::user(format!("{prompt}\n\n{}", viz_tools_as_prompt()))
+            .with_images(board.images()),
+    ];
+    let retried = provider.chat_ex(&ChatRequest::new(messages).json());
+
+    match retried {
+        Ok(reply) => {
+            let calls = parse_tool_calls(&reply.content);
+            if !calls.is_empty() {
+                Ok(ChatReply {
+                    content: String::new(),
+                    tool_calls: calls,
+                })
+            } else {
+                first.map(|original| {
+                    if original.content.trim().is_empty() {
+                        reply
+                    } else {
+                        original
+                    }
+                })
+            }
+        }
+        Err(fallback_error) => first.map_err(|original| {
+            if crate::llm::is_tool_calling_unsupported(&original) {
+                fallback_error
+            } else {
+                original
+            }
+        }),
+    }
+}
+
+fn viz_programs_from_reply(reply: &crate::llm::ChatReply) -> Vec<crate::llm::tools::VizProgram> {
+    use crate::llm::tools::VizProgram;
+
+    let mut programs = Vec::new();
+    for call in &reply.tool_calls {
+        if matches!(call.name.as_str(), "draw_structure" | "animate_trace") {
+            if let Ok(program) = serde_json::from_value::<VizProgram>(call.arguments.clone()) {
+                if program.rejection().is_none() {
+                    programs.push(program);
+                }
+            }
+        }
+    }
+    programs
 }
 
 fn draw_ascii_anim(f: &mut Frame, area: Rect, app: &App) {
