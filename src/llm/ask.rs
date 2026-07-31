@@ -7,6 +7,7 @@
 use std::fmt::Write as _;
 
 use crate::generator::WorkspaceMeta;
+use crate::llm::helpers::clip;
 use crate::runner::CaseResult;
 
 pub const SYSTEM_PROMPT: &str = "You are a patient competitive-programming tutor. The student is \
@@ -84,13 +85,4 @@ pub fn build_user_prompt(
         "\nHelp me understand why this fails. Coach me — do not write the full corrected solution.\n",
     );
     out
-}
-
-/// Shared by [`crate::llm::coach`], which follows the same section-heading style.
-pub(crate) fn clip(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let head: String = text.chars().take(max).collect();
-    format!("{head}\n…(truncated)")
 }

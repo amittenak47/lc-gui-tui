@@ -585,19 +585,24 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
         assert!(!prompt.contains("- [3] input:"));
     }
 
-    /// Structural half of the reveal gate: review / ambient / staged / viz /
-    /// board / shared / trace must not mention the reveal path. Only `bridge.rs`
-    /// (Mode C + Lazy) may.
+    /// Structural half of the reveal gate: review / ambient / pipeline / viz /
+    /// board / helpers / prompts / trace must not mention the reveal path. Only
+    /// `bridge.rs` (Mode C + Lazy) may.
     #[test]
     fn the_review_and_ambient_builders_cannot_reach_a_reveal() {
         let unprivileged = [
             include_str!("board.rs"),
-            include_str!("shared.rs"),
+            include_str!("../helpers.rs"),
             include_str!("review.rs"),
-            include_str!("staged.rs"),
+            include_str!("pipeline/mod.rs"),
+            include_str!("pipeline/perceive.rs"),
+            include_str!("pipeline/claim.rs"),
+            include_str!("pipeline/verdict.rs"),
+            include_str!("pipeline/code.rs"),
             include_str!("ambient.rs"),
             include_str!("trace.rs"),
             include_str!("viz.rs"),
+            include_str!("prompts.rs"),
         ]
         .concat();
 

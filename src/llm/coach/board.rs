@@ -2,9 +2,9 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-use crate::llm::prompt::clip;
+use crate::llm::helpers::clip;
 
-use super::shared::{MAX_BOARD, MAX_STRUCTURE};
+use crate::llm::helpers::{MAX_BOARD, MAX_STRUCTURE};
 
 // ---------------------------------------------------------------------------
 // What the client captured off the canvas

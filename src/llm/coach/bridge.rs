@@ -4,28 +4,19 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::generator::WorkspaceMeta;
-use crate::llm::prompt::clip;
+use crate::llm::helpers::clip;
 use crate::runner::CaseResult;
 
 use super::board::BoardSnapshot;
-use super::shared::{
+use crate::llm::helpers::{
     parse_reply, write_cases, write_problem_header, MAX_CASE, MAX_REFERENCE,
 };
-use super::staged::{board_without_code, write_claim, Claim};
+use super::pipeline::{board_without_code, write_claim, Claim};
 
 // ---------------------------------------------------------------------------
 // Mode C — the bridge, after an explicit reveal
 // ---------------------------------------------------------------------------
 
-pub const BRIDGE_SYSTEM_PROMPT: &str = "The student has explicitly asked to see how their own \
-approach connects to a working one. You have been given a reference solution. Do NOT dump it.\n\
-\n\
-Your job is a stepwise refactor path from where they already are:\n\
-- Name the parts of their approach that are already correct, concretely.\n\
-- Identify the single missing idea, and why the reference needs it.\n\
-- Give the smallest edit that moves them one step, then the next, in order.\n\
-- Each step should be something they could have written themselves.\n\
-- Reply with a single JSON object and nothing else.";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -100,32 +91,7 @@ pub fn parse_bridge(raw: &str) -> Result<BridgeResponse> {
 // Lazy fill — write the parts of solution.py the student already earned
 // ---------------------------------------------------------------------------
 
-pub const LAZY_FILL_SYSTEM_PROMPT: &str = "The student is drawing on a tablet and turned on Lazy \
-fill. Treat the whiteboard as the only source of truth — ignore a sparse or empty code dock.\n\
-\n\
-Your job: write the Python that implements the claim their board makes. When a claim is given to \
-you, it is the specification — an earlier stage already read the board to produce it, so implement \
-that, not an approach of your own.\n\
-\n\
-Rules:\n\
-- Read ink, layout, and recognized text charitably; tablet handwriting is noisy.\n\
-- If the board shows a correct insight (even without full code), implement that insight fully in \
-`filled_code` — do not leave the earned part as TODO.\n\
-- Only leave `pass` / `# TODO:` for ideas the board has not earned yet. When the claim lists what it \
-has not decided, those items are the only TODOs allowed.\n\
-- Prefer a short correct solution that matches their insight over a longer textbook dump.\n\
-- Do NOT invent an unrelated full reference solution that contradicts their approach.\n\
-- Reply with a single JSON object and nothing else.";
 
-pub const LAZY_HINT_SYSTEM_PROMPT: &str = "The student confirmed a Lazy hint after drawing. The \
-board is primary. You may look at the reference only to flesh out syntax for parts they already \
-earned on the board.\n\
-\n\
-Rules:\n\
-- Interpret the drawing first; fill the correct earned pieces into solution.py.\n\
-- Leave only the unearned idea as TODO/pass.\n\
-- Do not paste the full reference when their board only earned part of it.\n\
-- Reply with a single JSON object and nothing else.";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
