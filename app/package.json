@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Handwriting whiteboard coach for the lc harness — Tauri v2 shell around an Excalidraw canvas, talking to `lc serve` over the LAN.",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
