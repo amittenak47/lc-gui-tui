@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
-use crate::ascii_morph::{self, AsciiAnimProgram, AsciiPlayer};
+use super::ascii_morph::{self, AsciiAnimProgram, AsciiPlayer};
 use crate::attempt;
 use crate::config::Config;
 use crate::dataset::{self, Dataset, DATASETS};

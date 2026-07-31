@@ -8,10 +8,10 @@ use crate::config::Config;
 use crate::dataset::{self, Dataset};
 use crate::problem::{IoCase, Problem};
 
-const README_TMPL: &str = include_str!("../templates/README.md.jinja");
-const SOLUTION_TMPL: &str = include_str!("../templates/solution.py.jinja");
+const README_TMPL: &str = include_str!("../../templates/README.md.jinja");
+const SOLUTION_TMPL: &str = include_str!("../../templates/solution.py.jinja");
 /// Embedded test runner — also rewritten into existing workspaces on each run.
-pub const RUN_TESTS_PY: &str = include_str!("../templates/run_tests.py");
+pub const RUN_TESTS_PY: &str = include_str!("../../templates/run_tests.py");
 
 /// Everything the workspace (and later `lc test` / `lc ask`) needs, written to
 /// `<workspace>/<task_id>/.lc/meta.json`. Built from `Problem`, which cannot

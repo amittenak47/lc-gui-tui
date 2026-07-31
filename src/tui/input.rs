@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::ascii_morph::{self, AsciiPlayer};
+use super::ascii_morph::{self, AsciiPlayer};
 use crate::attempt;
 use crate::dataset;
 use crate::index::{self, SearchSort};
