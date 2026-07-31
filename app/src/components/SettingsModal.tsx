@@ -8,17 +8,20 @@ import { useCallback, useEffect, useState } from "react";
 import type { LcClient } from "../api/client";
 import type { DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
+import {
+  loadOfflineMergePolicy,
+  saveOfflineMergePolicy,
+  type OfflineMergePolicy,
+} from "../util/offlineMerge";
+import { offlinePackMeta, saveOfflinePack } from "../util/offlineCorpus";
 import { useIsMobile } from "../util/mobile";
 
-type TabId = "paths" | "datasets" | "tests" | "llm" | "serve" | "board";
+type TabId = "workspace" | "personalise" | "server";
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "paths", label: "Paths" },
-  { id: "datasets", label: "Datasets" },
-  { id: "tests", label: "Tests" },
-  { id: "llm", label: "LLM" },
-  { id: "serve", label: "Serve" },
-  { id: "board", label: "Board" },
+  { id: "workspace", label: "Workspace" },
+  { id: "personalise", label: "Personalise" },
+  { id: "server", label: "Server" },
 ];
 
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
@@ -63,11 +66,24 @@ export interface SettingsModalProps {
   client: LcClient;
   onClose: () => void;
   onSaved?: () => void;
+  /** Open on a specific tab (e.g. Server from the LLM gate). */
+  initialTab?: TabId;
+  /** Live coach / LLM reachability for the Server tab badge. */
+  coachStatus?: "unknown" | "online" | "offline";
+  coachDetail?: string | null;
 }
 
-export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalProps) {
+export function SettingsModal({
+  open,
+  client,
+  onClose,
+  onSaved,
+  initialTab,
+  coachStatus = "unknown",
+  coachDetail = null,
+}: SettingsModalProps) {
   const mobile = useIsMobile();
-  const [tab, setTab] = useState<TabId>("paths");
+  const [tab, setTab] = useState<TabId>(initialTab ?? "workspace");
   const [draft, setDraft] = useState<LcConfig>(emptyConfig);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -81,6 +97,15 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
     port: number;
   } | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
+  const [offlineMerge, setOfflineMerge] = useState<OfflineMergePolicy>(() =>
+    loadOfflineMergePolicy(),
+  );
+  const [packMeta, setPackMeta] = useState<{
+    built_at: number;
+    problemCount: number;
+  } | null>(null);
+  const [packBusy, setPackBusy] = useState(false);
+  const [packError, setPackError] = useState<string | null>(null);
 
   const refreshLlm = useCallback(async () => {
     try {
@@ -96,6 +121,13 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
     setError(null);
     setBusy("loading…");
     setHandedness(loadInkHandedness());
+    setOfflineMerge(loadOfflineMergePolicy());
+    if (initialTab) setTab(initialTab);
+    void offlinePackMeta().then((meta) => {
+      if (!cancelled && meta) {
+        setPackMeta({ built_at: meta.built_at, problemCount: meta.problemCount });
+      }
+    });
     void (async () => {
       try {
         const cfg = await client.getConfig();
@@ -128,7 +160,7 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
     return () => {
       cancelled = true;
     };
-  }, [open, client, refreshLlm]);
+  }, [open, client, refreshLlm, initialTab]);
 
   if (!open) return null;
 
@@ -210,8 +242,9 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
           {error && <div className="lc-warning">{error}</div>}
           {busy && <div className="lc-muted">{busy}</div>}
 
-          {tab === "paths" && (
+          {tab === "workspace" && (
             <div className="lc-settings-fields">
+              <div className="lc-settings-subhead">Paths</div>
               <label>
                 <span>Problems folder</span>
                 <input
@@ -248,11 +281,8 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                 />
                 <p className="lc-settings-hint">Python used to run tests.</p>
               </label>
-            </div>
-          )}
 
-          {tab === "datasets" && (
-            <div className="lc-settings-fields">
+              <div className="lc-settings-subhead">Datasets</div>
               <p className="lc-muted">
                 Each problem set is indexed into its own table. By default a corpus lives in{" "}
                 <code>&lt;problems folder&gt;/&lt;dataset&gt;/</code>; override it below when it
@@ -292,8 +322,56 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
             </div>
           )}
 
-          {tab === "tests" && (
+          {tab === "personalise" && (
             <div className="lc-settings-fields">
+              <div className="lc-settings-subhead">Writing hand</div>
+              <p className="lc-settings-hint">
+                Places the floating undo / eraser strip under your palm while you write.
+                Saved on this device only — not in <code>config.toml</code>.
+              </p>
+              <div className="lc-settings-choice" role="radiogroup" aria-label="Writing hand">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={handedness === "right"}
+                  className={
+                    handedness === "right"
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => {
+                    setHandedness("right");
+                    saveInkHandedness("right");
+                    window.dispatchEvent(
+                      new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: "right" }),
+                    );
+                  }}
+                >
+                  <strong>Right hand</strong>
+                  <span className="lc-muted">Chrome sits below-right of the tip.</span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={handedness === "left"}
+                  className={
+                    handedness === "left"
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => {
+                    setHandedness("left");
+                    saveInkHandedness("left");
+                    window.dispatchEvent(
+                      new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: "left" }),
+                    );
+                  }}
+                >
+                  <strong>Left hand</strong>
+                  <span className="lc-muted">Chrome sits below-left of the tip.</span>
+                </button>
+              </div>
+
               <div className="lc-settings-subhead">When a case fails</div>
               <div className="lc-settings-choice" role="radiogroup" aria-label="Test run mode">
                 <button
@@ -336,22 +414,113 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                 <code>lc test</code>. Running every case is what lets the coach pick a real
                 counterexample, so leave it on unless a run is slow.
               </p>
+
+              <div className="lc-settings-subhead">Offline ↔ online boards</div>
+              <p className="lc-settings-hint">
+                When the tablet reconnects after working offline, how should local and server
+                copies of the same problem board be reconciled? Saved on this device only.
+              </p>
+              <div className="lc-settings-choice" role="radiogroup" aria-label="Offline merge policy">
+                {(
+                  [
+                    ["ask", "Ask each time", "Show a chooser when both sides have work."],
+                    ["prefer-local", "Prefer this device", "Keep the tablet copy; overwrite the server."],
+                    ["prefer-server", "Prefer the server", "Keep the PC copy; discard local edits."],
+                  ] as const
+                ).map(([id, label, hint]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={offlineMerge === id}
+                    className={
+                      offlineMerge === id
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => {
+                      setOfflineMerge(id);
+                      saveOfflineMergePolicy(id);
+                    }}
+                  >
+                    <strong>{label}</strong>
+                    <span className="lc-muted">{hint}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
-          {tab === "llm" && (
+          {tab === "server" && (
             <div className="lc-settings-fields">
               <div className="lc-settings-callout" role="note">
                 <strong>localhost means the server, not this app</strong>
                 <p>
-                  {mobile ? "This tablet" : "The whiteboard"} talks to{" "}
-                  <code>lc serve</code> over the network. The daemon on your PC then calls the LLM
-                  URL below. <code>localhost</code> and <code>127.0.0.1</code> always refer to{" "}
+                  {mobile ? "This tablet" : "The whiteboard"} talks to <code>lc serve</code> over
+                  the network. The daemon on your PC then calls the LLM URL below.
+                </p>
+                <p>
+                  <code>localhost</code> / <code>127.0.0.1</code> always mean{" "}
                   <strong>the machine running lc serve</strong>
-                  {mobile ? ", not the tablet" : ""}. You do not point the tablet at Ollama directly.
+                  {mobile ? ", not the tablet" : ""}. You do not point the tablet at Ollama
+                  directly.
                 </p>
               </div>
 
+              <div className="lc-settings-subhead">Offline problems</div>
+              <p className="lc-settings-hint">
+                Download every indexed dataset except KodCode onto this device (~100–250&nbsp;MB).
+                Browse and open statements offline; tests need the server.
+              </p>
+              {packMeta && (
+                <p className="lc-muted">
+                  On device: {packMeta.problemCount.toLocaleString()} problems · built{" "}
+                  {new Date(packMeta.built_at * 1000).toLocaleString()}
+                </p>
+              )}
+              {packError && <div className="lc-warning">{packError}</div>}
+              <button
+                type="button"
+                className="lc-secondary"
+                disabled={packBusy || Boolean(busy)}
+                onClick={() => {
+                  setPackBusy(true);
+                  setPackError(null);
+                  void (async () => {
+                    try {
+                      const pack = await client.offlinePack();
+                      await saveOfflinePack(pack);
+                      setPackMeta({
+                        built_at: pack.built_at,
+                        problemCount: pack.problems.length,
+                      });
+                    } catch (cause) {
+                      setPackError(
+                        cause instanceof Error ? cause.message : "Could not download offline pack",
+                      );
+                    } finally {
+                      setPackBusy(false);
+                    }
+                  })();
+                }}
+              >
+                {packBusy ? "Downloading…" : packMeta ? "Refresh offline pack" : "Download offline pack"}
+              </button>
+
+              <div className="lc-settings-subhead">Coach status</div>
+              <p className="lc-coach-live" data-status={coachStatus}>
+                <span className="lc-coach-live-dot" aria-hidden />
+                <span>
+                  {coachStatus === "online"
+                    ? "Coach LLM online"
+                    : coachStatus === "offline"
+                      ? "Coach LLM offline"
+                      : "Coach LLM status unknown"}
+                </span>
+              </p>
+              {coachDetail && <p className="lc-settings-hint">{coachDetail}</p>}
+
+              <div className="lc-settings-subhead">LLM</div>
               <label>
                 <span>Default provider</span>
                 <select
@@ -467,11 +636,8 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                   Refresh
                 </button>
               </div>
-            </div>
-          )}
 
-          {tab === "serve" && (
-            <div className="lc-settings-fields">
+              <div className="lc-settings-subhead">Serve</div>
               <label>
                 <span>Port</span>
                 <input
@@ -486,7 +652,8 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                 />
               </label>
               <p className="lc-muted">
-                Pairing token: {draft.token_set ? "set (use lc serve --lan to rotate)" : "not set (loopback only)"}
+                Pairing token:{" "}
+                {draft.token_set ? "set (use lc serve --lan to rotate)" : "not set (loopback only)"}
               </p>
 
               <div className="lc-settings-subhead">Pair a tablet</div>
@@ -507,69 +674,16 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                     </div>
                   </dl>
                   <p className="lc-muted">
-                    Type these three into the tablet's header. The code changes every time
-                    `lc serve --lan` restarts; devices already paired keep working.
+                    Type these three into the tablet's header. The code changes every time{" "}
+                    <code>lc serve --lan</code> restarts; devices already paired keep working.
                   </p>
                 </>
               ) : (
                 <p className="lc-muted">
-                  No pairing code — this daemon is loopback-only. Restart it with
-                  {" "}
+                  No pairing code — this daemon is loopback-only. Restart it with{" "}
                   <code>lc serve --lan</code> to pair a tablet.
                 </p>
               )}
-            </div>
-          )}
-
-          {tab === "board" && (
-            <div className="lc-settings-fields">
-              <div className="lc-settings-subhead">Writing hand</div>
-              <p className="lc-settings-hint">
-                Places the floating undo / eraser strip under your palm while you write.
-                Saved on this device only — not in <code>config.toml</code>.
-              </p>
-              <div className="lc-settings-choice" role="radiogroup" aria-label="Writing hand">
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={handedness === "right"}
-                  className={
-                    handedness === "right"
-                      ? "lc-settings-choice-option is-active"
-                      : "lc-settings-choice-option"
-                  }
-                  onClick={() => {
-                    setHandedness("right");
-                    saveInkHandedness("right");
-                    window.dispatchEvent(
-                      new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: "right" }),
-                    );
-                  }}
-                >
-                  <strong>Right hand</strong>
-                  <span className="lc-muted">Chrome sits below-right of the tip.</span>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={handedness === "left"}
-                  className={
-                    handedness === "left"
-                      ? "lc-settings-choice-option is-active"
-                      : "lc-settings-choice-option"
-                  }
-                  onClick={() => {
-                    setHandedness("left");
-                    saveInkHandedness("left");
-                    window.dispatchEvent(
-                      new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: "left" }),
-                    );
-                  }}
-                >
-                  <strong>Left hand</strong>
-                  <span className="lc-muted">Chrome sits below-left of the tip.</span>
-                </button>
-              </div>
             </div>
           )}
         </div>

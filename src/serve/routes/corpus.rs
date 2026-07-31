@@ -264,3 +264,79 @@ pub async fn get_problem(
     .map_err(super::common::not_found_if_unresolved)?;
     Ok(Json(detail_of(dataset, problem)))
 }
+
+/// Offline tablet pack: every indexed problem except KodCode (too large).
+#[derive(Debug, Serialize)]
+pub struct OfflinePack {
+    pub v: u32,
+    pub built_at: u64,
+    pub datasets: Vec<DatasetInfo>,
+    pub problems: Vec<ProblemDetail>,
+    pub tags: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+pub async fn offline_pack(State(state): State<Shared>) -> Result<Json<OfflinePack>, AppError> {
+    let cfg = state.cfg_snapshot();
+    let pack = blocking(move || build_offline_pack(&cfg)).await?;
+    Ok(Json(pack))
+}
+
+fn build_offline_pack(cfg: &crate::config::Config) -> anyhow::Result<OfflinePack> {
+    let conn = index::open_db()?;
+    let mut datasets = Vec::new();
+    let mut problems = Vec::new();
+    let mut tags = std::collections::BTreeMap::new();
+
+    for info in index::dataset_infos(&conn, cfg)? {
+        if info.id == "kodcode" {
+            continue;
+        }
+        let dataset = dataset::resolve(Some(&info.id))?;
+        tags.insert(info.id.clone(), index::all_tags(&conn, dataset)?);
+        datasets.push(info);
+
+        let mut offset = 0u32;
+        const PAGE: u32 = 200;
+        loop {
+            let rows = index::search_page(
+                &conn,
+                dataset,
+                None,
+                None,
+                None,
+                SearchSort::TaskId,
+                PAGE,
+                offset,
+            )?;
+            if rows.is_empty() {
+                break;
+            }
+            for row in &rows {
+                match problem::load_task_for(dataset, Path::new(&row.json_path), &row.task_id) {
+                    Ok(problem) => problems.push(detail_of(dataset, problem)),
+                    Err(err) => {
+                        eprintln!(
+                            "offline pack: skip {}/{}: {err:#}",
+                            dataset.id, row.task_id
+                        );
+                    }
+                }
+            }
+            offset = offset.saturating_add(rows.len() as u32);
+            if rows.len() < PAGE as usize {
+                break;
+            }
+        }
+    }
+
+    Ok(OfflinePack {
+        v: 1,
+        built_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        datasets,
+        problems,
+        tags,
+    })
+}

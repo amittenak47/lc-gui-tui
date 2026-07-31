@@ -46,6 +46,7 @@ import {
   type ImportedLibraryItem,
 } from "../templates/libraryImport";
 import { healBoardLayout } from "./healBoardLayout";
+import { healScratchpadGeometry } from "../templates/scratchpad";
 import { regionFrameId, regionFramesOf, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
@@ -480,7 +481,7 @@ export interface BoardProps {
    * The scene is untouched either way — this only changes what `fitView` aims
    * at and whether the code dock is reported.
    */
-  mobileRegion?: RegionId | null;
+  mobileRegion?: string | null;
   /**
    * Chrome that belongs in the middle of the board's bottom row — the mobile
    * page turner. It lives in the same flex row as Appearance and the zoom
@@ -627,7 +628,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const onCodeSlotRef = useRef(onCodeSlot);
   onCodeSlotRef.current = onCodeSlot;
   /** Read by `fitView` and `reportCodeSlot`, which must not re-bind per page. */
-  const mobileRegionRef = useRef<RegionId | null>(mobileRegion);
+  const mobileRegionRef = useRef<string | null>(mobileRegion);
   const strokeWidthRef = useRef(strokeWidth);
   strokeWidthRef.current = strokeWidth;
   /** Zoom at the last brush sample, so a size change can resize the ring. */
@@ -1564,7 +1565,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
   }, [interactive, mobile, reportCodeSlot]);
 
-  const fitView = useCallback((regionId?: RegionId | null) => {
+  const fitView = useCallback((regionId?: string | null) => {
     const api = apiRef.current;
     if (!api) return;
 
@@ -1572,18 +1573,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // + code only — never the full board (Approach / Walkthrough / Coach),
     // which zooms out to a tiny corner.
     const page = regionId ?? mobileRegionRef.current;
-    const wanted: RegionId[] = page ? [page] : ["constraints", "code"];
+    const wanted: string[] = page ? [page] : ["constraints", "code"];
     const paged = wanted.length === 1;
 
     const live = api.getSceneElements() as LayoutElement[];
     const frames = regionFramesOf(live);
     const focusFrames = wanted
-      .map((id) => frames.get(id))
+      .map((id) => frames.get(id as RegionId))
       .filter((frame): frame is LayoutElement => Boolean(frame));
 
     const inWanted = (element: LayoutElement) => {
       const region = element.customData?.lcRegion;
-      return typeof region === "string" && wanted.includes(region as RegionId);
+      return typeof region === "string" && wanted.includes(region);
     };
 
     const tagged = focusFrames.length > 0 ? focusFrames : live.filter(inWanted);
@@ -1881,17 +1882,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     return (async () => {
       await fontsReady;
-      const needed = new Set(
+      const neededRegions = new Set(
         Object.keys(REGIONS).map((id) => `lcregion-${id}-frame`),
       );
       for (let attempt = 0; attempt < 45; attempt++) {
+        const scene = apiRef.current?.getSceneElements() ?? [];
         const ids = new Set(
-          (apiRef.current?.getSceneElements() ?? []).map(
-            (el) => (el as { id?: string }).id ?? "",
-          ),
+          scene.map((el) => (el as { id?: string }).id ?? ""),
         );
+        const hasScratch = scene.some((el) => {
+          const meta = (el as { customData?: { lcScratchFrame?: boolean } }).customData;
+          return Boolean(meta?.lcScratchFrame);
+        });
+        if (hasScratch) {
+          await waitFrame();
+          await waitFrame();
+          return;
+        }
         let ready = true;
-        for (const id of needed) {
+        for (const id of neededRegions) {
           if (!ids.has(id)) {
             ready = false;
             break;
@@ -2337,7 +2346,39 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       zoomIn,
       zoomOut,
       fitView: fitCurrentView,
-      fitRegion: (regionId: RegionId) => fitView(regionId),
+      fitRegion: (regionId: RegionId | string) => fitView(regionId),
+      appendScratchPage: (skeletons: Skeleton[]) => {
+        const api = apiRef.current;
+        if (!api || skeletons.length === 0) return 0;
+        const dark = isDarkTheme(themeId);
+        const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
+        const recolored = recolorTemplateElements(converted, dark) ?? converted;
+        const sized = applyBoardReadingSize(recolored, readingSizeRef.current, {
+          captureFrom: "M",
+        });
+        let maxPage = -1;
+        for (const el of sized) {
+          const page = (el as { customData?: { lcScratchPage?: unknown } }).customData
+            ?.lcScratchPage;
+          if (typeof page === "number" && Number.isFinite(page)) {
+            maxPage = Math.max(maxPage, Math.floor(page));
+          }
+        }
+        const current = api.getSceneElements() as unknown[];
+        api.updateScene({
+          elements: [...current, ...(sized as unknown[])],
+          captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+        });
+        templateRef.current = [
+          ...(templateRef.current as SceneElementLike[]),
+          ...(sized as SceneElementLike[]),
+        ];
+        requestAnimationFrame(() => {
+          syncPageVisibility();
+          scheduleFitView();
+        });
+        return Math.max(0, maxPage);
+      },
       settleFitView,
       waitForTemplate,
       fitCodeToSource,
@@ -2367,9 +2408,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // A board written on a tablet mid-page can only ever hold real values
         // (`getElements` unpages), but clear it anyway: an older file, or one
         // hand-edited, must not restore an invisible page.
-        const healed = healBoardLayout(
-          clearPageVisibility(nextElements as PageableElement[]) as unknown as SceneElementLike[],
-          {
+        const cleared = clearPageVisibility(
+          nextElements as PageableElement[],
+        ) as unknown as SceneElementLike[];
+        const scratchHealed = healScratchpadGeometry(cleared) as SceneElementLike[];
+        const healed = healBoardLayout(scratchHealed, {
             readingSize: readingSizeRef.current,
             codeContentHeight: codeContentHeightRef.current ?? undefined,
           },

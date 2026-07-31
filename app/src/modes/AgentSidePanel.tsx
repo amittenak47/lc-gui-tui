@@ -10,12 +10,11 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type PointerE
 
 import type { BridgeResponse, ReviewResponse } from "../api/types";
 import { Tip } from "../components/Tip";
+import { LONG_PRESS_MS } from "../util/gesture";
 import type { MessageDrawing } from "../viz/drawingState";
 import { Timeline } from "../viz/Timeline";
 import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
-
-const LONG_PRESS_MS = 400;
 
 export type CoachMode = "review" | "ambient";
 

@@ -9,14 +9,18 @@
  * a browser `confirm()` box.
  *
  * The mechanics live here rather than in each dialog: a rAF loop drives
- * `--lc-hold` from 0 to 1 over {@link DEFAULT_HOLD_MS}, and letting go before
- * the end resets it. Keyboard holds (Space / Enter) work the same way, so the
- * gesture is not pointer-only.
+ * `--lc-hold` from 0 to 1 over {@link HOLD_MS}, and letting go before the end
+ * resets it. Optional {@link HoldButtonProps.onTap} fires on a short release
+ * before the fill completes. Keyboard holds (Space / Enter) work the same way,
+ * so the gesture is not pointer-only.
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
-export const DEFAULT_HOLD_MS = 666;
+import { HOLD_MS } from "../util/gesture";
+
+/** @deprecated Prefer {@link HOLD_MS} from `util/gesture`. */
+export const DEFAULT_HOLD_MS = HOLD_MS;
 
 export interface HoldButtonProps {
   /** Text on the button, and what the aria label says you are confirming. */
@@ -24,7 +28,11 @@ export interface HoldButtonProps {
   /** Richer body (a title plus an explanation) in place of the bare label. */
   children?: ReactNode;
   onConfirm: () => void;
-  /** How long the fill takes. Keep it in step with the dialog's hint text. */
+  /**
+   * Short press released before the fill completes.
+   */
+  onTap?: () => void;
+  /** How long the fill takes. Defaults to the shared {@link HOLD_MS}. */
   holdMs?: number;
   disabled?: boolean;
   /** Extra classes — `lc-hold-danger` tints the fill red. */
@@ -41,7 +49,8 @@ export function HoldButton({
   label,
   children,
   onConfirm,
-  holdMs = DEFAULT_HOLD_MS,
+  onTap,
+  holdMs = HOLD_MS,
   disabled = false,
   className,
   ariaLabel,
@@ -54,14 +63,25 @@ export function HoldButton({
   const confirmedRef = useRef(false);
   const onConfirmRef = useRef(onConfirm);
   onConfirmRef.current = onConfirm;
+  const onTapRef = useRef(onTap);
+  onTapRef.current = onTap;
 
-  const stopHold = useCallback((reset: boolean) => {
+  const stopHold = useCallback((opts: { reset: boolean; release?: boolean }) => {
+    const wasHolding = holdingRef.current;
     holdingRef.current = false;
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-    if (reset && !confirmedRef.current) setProgress(0);
+    if (
+      opts.release &&
+      wasHolding &&
+      !confirmedRef.current &&
+      onTapRef.current
+    ) {
+      onTapRef.current();
+    }
+    if (opts.reset && !confirmedRef.current) setProgress(0);
   }, []);
 
   const tick = useCallback(() => {
@@ -79,14 +99,15 @@ export function HoldButton({
   }, [holdMs]);
 
   const startHold = useCallback(() => {
-    if (disabled || confirmedRef.current) return;
+    if (disabled) return;
+    confirmedRef.current = false;
     holdingRef.current = true;
     startRef.current = performance.now();
     setProgress(0);
     rafRef.current = requestAnimationFrame(tick);
   }, [disabled, tick]);
 
-  useEffect(() => () => stopHold(false), [stopHold]);
+  useEffect(() => () => stopHold({ reset: false }), [stopHold]);
 
   // A rejected confirm (or a re-opened dialog) has to be held again.
   useEffect(() => {
@@ -95,7 +116,7 @@ export function HoldButton({
   }, [resetKey]);
 
   useEffect(() => {
-    if (disabled) stopHold(false);
+    if (disabled) stopHold({ reset: false });
   }, [disabled, stopHold]);
 
   return (
@@ -104,16 +125,19 @@ export function HoldButton({
       className={className ? `lc-hold-reveal ${className}` : "lc-hold-reveal"}
       style={{ ["--lc-hold" as string]: String(progress) }}
       disabled={disabled}
-      aria-label={ariaLabel ?? `Hold to confirm: ${label}`}
+      aria-label={
+        ariaLabel ??
+        (onTap ? `${label}: tap to edit, hold to confirm` : `Hold to confirm: ${label}`)
+      }
       onPointerDown={(event) => {
         event.preventDefault();
         (event.currentTarget as HTMLButtonElement).setPointerCapture(event.pointerId);
         startHold();
       }}
-      onPointerUp={() => stopHold(true)}
-      onPointerCancel={() => stopHold(true)}
+      onPointerUp={() => stopHold({ reset: true, release: true })}
+      onPointerCancel={() => stopHold({ reset: true })}
       onPointerLeave={() => {
-        if (holdingRef.current) stopHold(true);
+        if (holdingRef.current) stopHold({ reset: true });
       }}
       onContextMenu={(event) => event.preventDefault()}
       onKeyDown={(event) => {
@@ -128,9 +152,9 @@ export function HoldButton({
       onKeyUp={(event) => {
         if (event.key !== " " && event.key !== "Enter") return;
         event.stopPropagation();
-        stopHold(true);
+        stopHold({ reset: true, release: true });
       }}
-      onBlur={() => stopHold(true)}
+      onBlur={() => stopHold({ reset: true })}
     >
       <span className="lc-hold-reveal-fill" aria-hidden />
       <span className="lc-hold-reveal-label">{children ?? label}</span>

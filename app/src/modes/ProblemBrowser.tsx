@@ -20,6 +20,13 @@ import type { DatasetInfo, ProblemSummary, SessionSnapshot } from "../api/types"
 import { DEFAULT_DATASET } from "../api/types";
 import { BackgroundPalette } from "../components/BackgroundPalette";
 import { useIsMobile } from "../util/mobile";
+import {
+  loadOfflinePack,
+  offlineListDatasets,
+  offlineListTags,
+  offlineSearch,
+  type OfflinePack,
+} from "../util/offlineCorpus";
 import { titleFromSlug } from "../util/text";
 
 export const PAGE_SIZE = 15;
@@ -44,6 +51,8 @@ export interface ProblemBrowserProps {
   themeId: string;
   onThemePick: (id: string) => void;
   session?: SessionSnapshot | null;
+  /** When lc serve is unreachable — skip fetches and show a calm empty state. */
+  offline?: boolean;
   /**
    * Start a session with the given picks (empty = fresh empty queue).
    *
@@ -70,6 +79,7 @@ export function ProblemBrowser({
   themeId,
   onThemePick,
   session = null,
+  offline = false,
   onStartSession,
   onResetSession,
   onRandomSession,
@@ -95,6 +105,7 @@ export function ProblemBrowser({
   /** Multi-select mode: clicks toggle picks instead of opening. */
   const [selectMode, setSelectMode] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const [offlinePack, setOfflinePack] = useState<OfflinePack | null>(null);
 
   const searchRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -144,7 +155,39 @@ export function ProblemBrowser({
   useEffect(() => setPage(0), [pageSize]);
 
   useEffect(() => {
+    if (!offline) {
+      setOfflinePack(null);
+      return;
+    }
     let cancelled = false;
+    void loadOfflinePack().then((pack) => {
+      if (cancelled) return;
+      setOfflinePack(pack);
+      if (pack) {
+        const list = offlineListDatasets(pack);
+        setDatasets(list);
+        setDataset((current) =>
+          list.some((entry) => entry.id === current) ? current : list[0]?.id ?? current,
+        );
+      } else {
+        setDatasets([]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [offline]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (offline) {
+      if (offlinePack) {
+        setTags(offlineListTags(offlinePack, dataset));
+      } else {
+        setTags([]);
+      }
+      return;
+    }
     void client
       .tags(dataset)
       .then((all) => !cancelled && setTags(all))
@@ -154,9 +197,10 @@ export function ProblemBrowser({
     return () => {
       cancelled = true;
     };
-  }, [client, dataset]);
+  }, [client, dataset, offline, offlinePack]);
 
   useEffect(() => {
+    if (offline) return;
     let cancelled = false;
     void client
       .datasets()
@@ -168,12 +212,39 @@ export function ProblemBrowser({
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, offline]);
 
   // Any filter change resets to the first page — as in the TUI.
   useEffect(() => setPage(0), [query, difficulty, tag, sort, dataset]);
 
   useEffect(() => {
+    if (offline) {
+      setLoading(false);
+      if (!offlinePack) {
+        setRows([]);
+        setTotal(0);
+        setError(null);
+        tableReadyRef.current = true;
+        setTableReady(true);
+        return;
+      }
+      const result = offlineSearch(offlinePack, {
+        dataset,
+        q: query || undefined,
+        difficulty: difficulty || undefined,
+        tag: tag || undefined,
+        sort,
+        limit: pageSize,
+        offset: page * pageSize,
+      });
+      setRows(result.items);
+      setTotal(result.total);
+      setSelected((current) => Math.min(current, Math.max(result.items.length - 1, 0)));
+      setError(null);
+      tableReadyRef.current = true;
+      setTableReady(true);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     // Debounce typing/filter changes; fetch immediately on first open.
@@ -210,7 +281,7 @@ export function ProblemBrowser({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [client, dataset, query, difficulty, tag, sort, page, pageSize]);
+  }, [client, dataset, query, difficulty, tag, sort, page, pageSize, offline, offlinePack]);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
@@ -486,6 +557,13 @@ export function ProblemBrowser({
             </div>
 
             {error && <p className="lc-warning">{error}</p>}
+            {offline && (
+              <p className="lc-muted">
+                {offlinePack
+                  ? `Offline pack · ${offlinePack.problems.length.toLocaleString()} problems (no KodCode).`
+                  : "Offline — download a problem pack while online (Settings → Server), or open a scratchpad."}
+              </p>
+            )}
 
             <div className={loading ? "lc-browser-results lc-browser-results-pending" : "lc-browser-results"}>
               <div className="lc-table-head" aria-hidden="true">

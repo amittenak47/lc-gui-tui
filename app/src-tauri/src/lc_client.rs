@@ -42,11 +42,15 @@ pub struct LcResponse {
 /// The coach's review call can take a while on a local model; the daemon's own
 /// LLM timeout is 180s, so stay above it rather than cutting it short here.
 const TIMEOUT: Duration = Duration::from_secs(200);
+/// Fail fast when the host is down / blackholed — do not wait for the full
+/// request timeout just to discover TCP will never connect.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[tauri::command]
 pub async fn lc_request(request: LcRequest) -> Result<LcResponse, String> {
     let client = reqwest::Client::builder()
         .timeout(TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
         .build()
         .map_err(|err| format!("cannot build an HTTP client: {err}"))?;
 
