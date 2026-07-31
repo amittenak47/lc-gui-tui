@@ -131,7 +131,7 @@ const GUTTER_REACH = REGION_GUTTER;
  */
 export function applyPageVisibility<T extends PageableElement>(
   elements: readonly T[],
-  page: RegionId | null,
+  page: string | null,
 ): T[] | null {
   const rects = page ? frameRects(elements) : new Map<string, Rect>();
   let changed = false;
@@ -211,7 +211,7 @@ function num(value: unknown, fallback: number): number {
  */
 export function pageBounds(
   elements: readonly PageableElement[],
-  page: RegionId | null,
+  page: string | null,
 ): { minX: number; minY: number; maxX: number; maxY: number } | null {
   if (!page) return null;
   const rect = frameRects(elements).get(page);

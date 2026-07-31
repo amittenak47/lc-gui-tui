@@ -134,6 +134,7 @@ pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/problems", get(routes::list_problems))
         .route("/datasets", get(routes::list_datasets))
+        .route("/offline/pack", get(routes::offline_pack))
         .route("/tags", get(routes::list_tags))
         .route("/random", get(routes::random_problem))
         .route("/session", get(routes::get_session))

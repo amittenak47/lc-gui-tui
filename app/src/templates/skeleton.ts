@@ -73,6 +73,10 @@ export interface SkeletonMeta {
   lcVizId?: string;
   /** Stable slot name within a viz group, e.g. `cell:3`, `ptr:i`. */
   lcSlot?: string;
+  /** Scratchpad notebook page index (0-based). */
+  lcScratchPage?: number;
+  /** Dashed frame for a scratchpad notebook page. */
+  lcScratchFrame?: boolean;
 }
 
 /** Muted palette: the coach's ink should read as annotation, not as the work. */

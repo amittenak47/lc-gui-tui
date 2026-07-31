@@ -71,7 +71,12 @@ export interface BoardHandle {
   /** Re-center the viewport on the current page (or problem+code on desktop). */
   fitView(): void;
   /** Fit one template region to the viewport — the mobile "page turn". */
-  fitRegion(regionId: RegionId): void;
+  fitRegion(regionId: RegionId | string): void;
+  /**
+   * Append one blank scratchpad page and return its 0-based index.
+   * No-op helper for problem boards — callers should only use this in scratchpad.
+   */
+  appendScratchPage(skeletons: Skeleton[]): number;
   /** Fit after layout has settled (double rAF + short delays). Resolves when
    * the final fit has been applied — call while the board is still hidden.
    */

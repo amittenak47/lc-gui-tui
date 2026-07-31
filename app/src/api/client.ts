@@ -95,6 +95,14 @@ export class LcClient {
     return this.request("GET", "/datasets");
   }
 
+  /**
+   * Full offline problem pack (every indexed dataset except KodCode).
+   * Large — expect tens to hundreds of MB and a long build on the daemon.
+   */
+  async offlinePack(): Promise<import("../util/offlineCorpus").OfflinePack> {
+    return this.request("GET", "/offline/pack");
+  }
+
   /** One random problem matching the filter — the TUI's `R`. */
   async randomProblem(options: SearchOptions = {}): Promise<ProblemSummary | null> {
     const query = new URLSearchParams();
@@ -374,10 +382,13 @@ export class LcClient {
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (cause) {
-      throw new LcApiError(
-        `cannot reach lc serve at ${this.pairing.baseUrl} — is the daemon running, and are you on the same network?`,
-        0,
-      );
+      const message = `cannot reach lc serve at ${this.pairing.baseUrl} — is the daemon running, and are you on the same network?`;
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("lc-server-unreachable", { detail: message }),
+        );
+      }
+      throw new LcApiError(message, 0);
     }
 
     const text = await response.text();

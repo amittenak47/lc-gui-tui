@@ -24,8 +24,9 @@ pub use config::{
     ProviderConfigDto,
 };
 pub use corpus::{
-    adjacent_problem, get_problem, list_datasets, list_problems, list_tags, random_problem,
-    AdjacentResponse, ProblemDetail, ProblemPage, ProblemSummary, SearchQuery,
+    adjacent_problem, get_problem, list_datasets, list_problems, list_tags, offline_pack,
+    random_problem, AdjacentResponse, OfflinePack, ProblemDetail, ProblemPage, ProblemSummary,
+    SearchQuery,
 };
 pub use practice::{
     enqueue_session, get_session, random_session, reset_session, EnqueueBody, RandomSessionBody,
