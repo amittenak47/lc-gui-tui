@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::ascii_morph::AsciiAnimProgram;
+use super::ascii_morph::AsciiAnimProgram;
 use crate::llm::coach::BoardSnapshot;
 
 pub(super) fn coach_message(role: &str, content: String) -> serde_json::Value {

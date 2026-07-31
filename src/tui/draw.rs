@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::ascii_morph::AsciiAnimProgram;
+use super::ascii_morph::AsciiAnimProgram;
 use crate::index::ProblemRow;
 use crate::session::ProblemState;
 

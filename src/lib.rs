@@ -1,9 +1,9 @@
 //! `lc` as a library.
 //!
 //! The CLI (`src/main.rs`) and the LAN daemon ([`serve`]) are both thin shells
-//! over the same modules. Nothing moved when the library root was introduced:
-//! `main.rs` swapped its `mod` declarations for `use lc::*`, and every module
-//! kept its existing `crate::`-relative paths.
+//! over the same modules. Package layout groups harness concerns (`corpus`,
+//! `workspace`, `practice`, `gate`, `design`); [`lib`] re-exports the historical
+//! `crate::dataset`, `crate::generator`, … paths so callers stay stable.
 //!
 //! ## The redaction invariant
 //!
@@ -18,21 +18,26 @@
 //! apply to them. That module lists the solution-bearing columns and tests that
 //! no adapter reads one.
 
-pub mod attempt;
-pub mod ascii_morph;
-pub mod coach;
 pub mod config;
-pub mod dataset;
+pub mod corpus;
 pub mod datasets;
-pub mod generator;
-pub mod index;
-pub mod lists;
+pub mod design;
+pub mod gate;
 pub mod llm;
-pub mod loader;
-pub mod problem;
-pub mod reveal;
-pub mod runner;
+pub mod practice;
 pub mod serve;
-pub mod session;
-pub mod stats;
 pub mod tui;
+pub mod workspace;
+
+pub use corpus::dataset;
+pub use corpus::index;
+pub use corpus::lists;
+pub use corpus::loader;
+pub use corpus::problem;
+pub use design::context as coach;
+pub use gate::reveal;
+pub use practice::session;
+pub use practice::stats;
+pub use workspace::attempt;
+pub use workspace::generator;
+pub use workspace::runner;

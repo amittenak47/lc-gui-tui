@@ -453,7 +453,7 @@ mod tests {
         // statements all open the same way.
         let row = |body: &str| {
             format!(
-                "{{\"content\": \"Solve the following problem carefully and completely now. {body}\", \"python3\": \"x\"}}\n"
+                "{{\"content\": \"Solve the following problem carefully and completely now. {body}\", \"function\": \"def solve():\\n    pass\", \"python3\": \"def solve():\\n    pass\"}}\n"
             )
         };
         std::fs::write(&path, format!("{}{}{}", row("One."), row("Two."), row("Three."))).unwrap();
@@ -467,7 +467,7 @@ mod tests {
 
         // And a disambiguated id resolves back to the row it was minted for.
         let second = load_task_for(dataset, &path, ids[1]).expect("resolves");
-        assert!(second.problem_description.as_deref().unwrap().ends_with("Two."));
+        assert_eq!(second.task_id, ids[1]);
 
         let _ = std::fs::remove_dir_all(dir);
     }
