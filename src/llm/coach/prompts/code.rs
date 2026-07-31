@@ -4,7 +4,7 @@ use crate::generator::WorkspaceMeta;
 use crate::llm::helpers::{clip, write_cases, write_problem_header, MAX_BOARD};
 
 use super::super::board::BoardSnapshot;
-use super::claim::{write_claim, Claim};
+use super::super::stages::claim::{write_claim, Claim};
 
 /// The code pass, conditioned on the frozen claim. Asks "does this code match
 /// the claim?" — never "what approach does this stub suggest?", which is how a
@@ -56,4 +56,3 @@ early\"],\n  \
     );
     out
 }
-

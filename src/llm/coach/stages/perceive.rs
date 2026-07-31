@@ -3,11 +3,9 @@ use std::fmt::Write as _;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::generator::WorkspaceMeta;
 use crate::llm::helpers::parse_reply;
 
-use super::super::board::BoardSnapshot;
-use super::{board_without_code, tidy_list};
+use super::{tidy_list};
 
 /// Stage 1 — what is on the board, with no opinion attached.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -37,25 +35,6 @@ impl Perception {
     }
 }
 
-/// Stage 1 prompt. Deliberately narrow: no statement, no sample cases, no code
-/// dock. Nothing to reason from means nothing to have an opinion about, and it
-/// leaves the context budget for the board itself.
-pub fn build_perceive_prompt(meta: &WorkspaceMeta, board: &BoardSnapshot) -> String {
-    let mut out = String::new();
-    let _ = writeln!(out, "# Board for problem: {}", meta.task_id);
-    board_without_code(board).write_into(&mut out);
-    let _ = writeln!(
-        out,
-        "\n## Your reply\n\n\
-         ```json\n\
-         {{\"observations\": [\"one short clause per thing you can see on the board\"], \
-         \"transcribed_notes\": [\"pieces of text you can read\"], \
-         \"illegible\": [\"regions you cannot read — leave empty if none\"]}}\n\
-         ```"
-    );
-    out
-}
-
 pub fn parse_perception(raw: &str) -> Result<Perception> {
     let mut perception: Perception = parse_reply(raw, "perception")?;
     perception.tidy();
@@ -65,7 +44,7 @@ pub fn parse_perception(raw: &str) -> Result<Perception> {
     Ok(perception)
 }
 
-pub(super) fn write_perception(out: &mut String, perception: Option<&Perception>) {
+pub fn write_perception(out: &mut String, perception: Option<&Perception>) {
     let Some(perception) = perception else {
         return;
     };
@@ -92,4 +71,3 @@ pub(super) fn write_perception(out: &mut String, perception: Option<&Perception>
         }
     }
 }
-

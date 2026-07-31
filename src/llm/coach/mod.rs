@@ -18,52 +18,49 @@
 //! from the review or ambient paths.
 //!
 //! Layout:
-//! - [`prompts`] — all `*_SYSTEM_PROMPT` consts
+//! - [`prompts`] — all `*_SYSTEM_PROMPT` consts and `build_*_prompt` builders
 //! - [`board`] — canvas snapshot
-//! - [`review`] — Mode A oneshot types / parse / merge / format card
-//! - [`pipeline`] — Mode A perceive → claim → verdict / submission entry points
-//! - [`ambient`] — Mode B
+//! - [`modes::review`] — Mode A oneshot types / parse / merge / format card
+//! - [`stages`] — Mode A perceive → claim → verdict types and parsers
+//! - [`assess`] — staged review orchestration entry points
+//! - [`modes::ambient`] — Mode B
 //! - [`trace`] — counterexample retrace
-//! - [`viz`] — Mode D diagram prompts
-//! - [`bridge`] — Mode C reveal bridge + Lazy fill
+//! - [`actions::draw`] — Mode D diagram validation
+//! - [`actions::bridge`] / [`actions::lazy`] — Mode C reveal bridge + Lazy fill
 
-mod ambient;
+mod actions;
+mod assess;
 mod board;
-mod bridge;
-mod pipeline;
+mod modes;
 mod prompts;
-mod review;
+mod stages;
 mod trace;
-mod viz;
 
 #[cfg(test)]
 mod tests;
 
-pub use ambient::{
-    build_ambient_prompt, escalation_instruction, parse_ambient, AmbientNudge,
+pub use actions::{
+    parse_bridge, parse_lazy_fill, validate_citation, validate_highlight, Annotation, BridgeResponse,
+    BridgeStep, Citation, Highlight, LazyFillResponse,
+};
+pub use assess::{
+    perceive_and_claim, review_submission, review_submission_text_only, staged_board_review,
+    ReviewOutcome,
 };
 pub use board::BoardSnapshot;
-pub use bridge::{
-    build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt, parse_bridge,
-    parse_lazy_fill, BridgeResponse, BridgeStep, LazyFillResponse,
-};
 pub use crate::llm::helpers::extract_json;
-pub use pipeline::{
-    build_claim_code_review_prompt, build_claim_prompt, build_perceive_prompt,
-    build_verdict_prompt, on_track_review_from_claim, parse_claim, parse_perception,
-    perceive_and_claim, review_submission, review_submission_text_only, staged_board_review,
-    Claim, Perception, ReviewOutcome,
+pub use modes::ambient::{escalation_instruction, parse_ambient, AmbientNudge};
+pub use modes::review::{
+    format_review_card, merge_layout_and_code_reviews, parse_review, validate_counterexample,
+    Counterexample, Rating, ReviewResponse, Verdict,
 };
 pub use prompts::{
-    AMBIENT_SYSTEM_PROMPT, BRIDGE_SYSTEM_PROMPT, CLAIM_CODE_SYSTEM_PROMPT, CLAIM_SYSTEM_PROMPT,
-    LAZY_FILL_SYSTEM_PROMPT, LAZY_HINT_SYSTEM_PROMPT, PERCEIVE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT,
-    TRACE_SYSTEM_PROMPT, VERDICT_SYSTEM_PROMPT, VIZ_SYSTEM_PROMPT,
+    build_ambient_prompt, build_bridge_prompt, build_claim_code_review_prompt, build_claim_prompt,
+    build_lazy_fill_prompt, build_lazy_hint_prompt, build_perceive_prompt, build_review_prompt,
+    build_trace_prompt, build_verdict_prompt, build_viz_prompt, AMBIENT_SYSTEM_PROMPT,
+    BRIDGE_SYSTEM_PROMPT, CLAIM_CODE_SYSTEM_PROMPT, CLAIM_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
+    LAZY_HINT_SYSTEM_PROMPT, PERCEIVE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT, TRACE_SYSTEM_PROMPT,
+    VERDICT_SYSTEM_PROMPT, VIZ_SYSTEM_PROMPT,
 };
-pub use review::{
-    build_review_prompt, format_review_card, merge_layout_and_code_reviews, parse_review,
-    validate_counterexample, Counterexample, Rating, ReviewResponse, Verdict,
-};
-pub use trace::{build_trace_prompt, parse_trace, retrace_counterexample};
-pub use viz::{
-    build_viz_prompt, validate_citation, validate_highlight, Annotation, Citation, Highlight,
-};
+pub use stages::{on_track_review_from_claim, parse_claim, parse_perception, Claim, Perception};
+pub use trace::{parse_trace, retrace_counterexample};
