@@ -15,7 +15,8 @@
     "android:overlay": "node scripts/android-overlay.mjs",
     "android:dev": "node scripts/android-overlay.mjs && tauri android dev",
     "android:apk": "node scripts/android-overlay.mjs && tauri android build --apk --debug",
-    "android:apk:release": "node scripts/android-overlay.mjs && tauri android build --apk"
+    "android:apk:release": "node scripts/android-overlay.mjs && tauri android build --apk",
+    "icons:sync": "tauri icon ../docs/icons/tauri.manifest.json"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
