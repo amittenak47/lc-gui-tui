@@ -472,10 +472,10 @@ fn cmd_ask(
         .and_then(|p| p.problem_description);
 
     let user_prompt =
-        llm::prompt::build_user_prompt(&meta, description.as_deref(), &solution_src, &selected);
+        llm::ask::build_user_prompt(&meta, description.as_deref(), &solution_src, &selected);
 
     if clipboard {
-        let full = format!("{}\n\n---\n\n{}", llm::prompt::SYSTEM_PROMPT, user_prompt);
+        let full = format!("{}\n\n---\n\n{}", llm::ask::SYSTEM_PROMPT, user_prompt);
         let copied = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(full.clone()));
         match copied {
             Ok(()) => println!("Redacted prompt copied to the clipboard — paste it into Cursor chat."),
@@ -486,7 +486,7 @@ fn cmd_ask(
 
     let provider = llm::make_provider(cfg, provider)?;
     eprintln!("Asking {}…", provider.label());
-    let answer = provider.chat(llm::prompt::SYSTEM_PROMPT, &user_prompt)?;
+    let answer = provider.chat(llm::ask::SYSTEM_PROMPT, &user_prompt)?;
     println!("\n{answer}");
     Ok(())
 }

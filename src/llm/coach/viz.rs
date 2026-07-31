@@ -3,31 +3,16 @@ use std::fmt::Write as _;
 use serde::{Deserialize, Serialize};
 
 use crate::generator::WorkspaceMeta;
-use crate::llm::prompt::clip;
+use crate::llm::helpers::clip;
 use crate::problem::IoCase;
 
 use super::board::BoardSnapshot;
-use super::shared::{write_cases, write_problem_header};
+use crate::llm::helpers::{write_cases, write_problem_header};
 
 // ---------------------------------------------------------------------------
 // Mode D — diagrams and animations, via tool calls
 // ---------------------------------------------------------------------------
 
-pub const VIZ_SYSTEM_PROMPT: &str = "You draw on a student's whiteboard to explain a data \
-structure or trace an algorithm.\n\
-\n\
-You draw by calling tools, never by describing pixels. You do not know where anything is on the \
-board and you must not guess coordinates — the client lays your structures out for you.\n\
-\n\
-Rules:\n\
-- One diagram per idea. To show change over time call `animate_trace` once with many frames; do \
-NOT call `draw_structure` repeatedly to show the same structure at different moments.\n\
-- For algorithm / pointer traces prefer about three frames (start → key middle → end); add more \
-only when a step would be unclear without it.\n\
-- Every frame carries the FULL state at that step, not a diff.\n\
-- Reuse the same `id` when you mean the same structure, so it is updated rather than duplicated.\n\
-- `cite_test_case` only accepts indices into the sample cases you were shown.\n\
-- Keep any prose reply to one sentence; the drawing is the answer.";
 
 /// Prompt for the `viz` mode. `ask` is what the student (or the review) wants
 /// drawn; an empty `ask` means "pick whatever would help most".

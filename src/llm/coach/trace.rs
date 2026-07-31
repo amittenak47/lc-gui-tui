@@ -4,13 +4,14 @@ use anyhow::Result;
 use serde::Deserialize;
 
 use crate::generator::WorkspaceMeta;
-use crate::llm::prompt::clip;
+use crate::llm::helpers::clip;
 use crate::llm::{ChatMessage, ChatRequest, LlmProvider};
 use crate::problem::IoCase;
 
 use super::board::BoardSnapshot;
 use super::review::ReviewResponse;
-use super::shared::{parse_reply, MAX_CASE};
+use crate::llm::helpers::{parse_reply, MAX_CASE};
+use super::prompts::TRACE_SYSTEM_PROMPT;
 
 pub fn retrace_counterexample(
     provider: &dyn LlmProvider,
@@ -48,14 +49,6 @@ pub fn retrace_counterexample(
 // Mode A, second pass — pin the trace to the cited case
 // ---------------------------------------------------------------------------
 
-pub const TRACE_SYSTEM_PROMPT: &str = "You trace one algorithm on one input. Nothing else.\n\
-\n\
-Rules:\n\
-- You are given exactly one test case. Every value you mention must come from it.\n\
-- Walk the student's approach on that input, step by step, and stop at the point where it produces \
-something other than the expected output.\n\
-- Do not mention any other input, do not invent a clearer example, and do not generalize.\n\
-- Four sentences at most. Reply with a single JSON object and nothing else.";
 
 /// A one-case trace prompt.
 ///

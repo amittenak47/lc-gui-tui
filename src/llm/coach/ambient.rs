@@ -4,24 +4,15 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::generator::WorkspaceMeta;
-use crate::llm::prompt::clip;
+use crate::llm::helpers::clip;
 
 use super::board::BoardSnapshot;
-use super::shared::{parse_reply, write_cases, write_problem_header};
+use crate::llm::helpers::{parse_reply, write_cases, write_problem_header};
 
 // ---------------------------------------------------------------------------
 // Mode B — ambient nudges
 // ---------------------------------------------------------------------------
 
-pub const AMBIENT_SYSTEM_PROMPT: &str = "You are watching a student whiteboard a coding problem, \
-over their shoulder, in real time. You speak rarely and briefly.\n\
-\n\
-Rules:\n\
-- One or two sentences. This is a glance, not a review.\n\
-- Do not repeat anything from \"already said\" — escalate instead of looping.\n\
-- If the board is too sparse to judge, say so with low confidence and stay quiet.\n\
-- Never write code or hand them the algorithm.\n\
-- Reply with a single JSON object and nothing else.";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]

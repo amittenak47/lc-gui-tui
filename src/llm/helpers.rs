@@ -1,25 +1,38 @@
+//! Shared text helpers for LLM prompt assembly and reply parsing.
+//!
+//! Kept as a neutral leaf so `viz` / tools can scrape JSON without depending on
+//! `coach`, and coach modules can truncate without depending on `ask`.
+
 use std::fmt::Write as _;
 
 use anyhow::{Context, Result};
 
 use crate::generator::WorkspaceMeta;
-use crate::llm::prompt::clip;
 use crate::problem::IoCase;
 
-pub(super) const MAX_DESCRIPTION: usize = 6000;
-pub(super) const MAX_BOARD: usize = 8000;
-pub(super) const MAX_STRUCTURE: usize = 4000;
-pub(super) const MAX_REFERENCE: usize = 8000;
-pub(super) const MAX_CASE: usize = 400;
+pub const MAX_DESCRIPTION: usize = 6000;
+pub const MAX_BOARD: usize = 8000;
+pub const MAX_STRUCTURE: usize = 4000;
+pub const MAX_REFERENCE: usize = 8000;
+pub const MAX_CASE: usize = 400;
 /// Sample cases shown to the coach. Enough to pick a real counterexample from,
 /// small enough to leave room for the board on a 8k-context local model.
-pub(super) const MAX_CASES_SHOWN: usize = 12;
+pub const MAX_CASES_SHOWN: usize = 12;
+
+/// Shared by coach (and ask), which follow the same section-heading style.
+pub fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max).collect();
+    format!("{head}\n…(truncated)")
+}
 
 // ---------------------------------------------------------------------------
 // Shared sections
 // ---------------------------------------------------------------------------
 
-pub(super) fn write_problem_header(out: &mut String, meta: &WorkspaceMeta, description: Option<&str>) {
+pub fn write_problem_header(out: &mut String, meta: &WorkspaceMeta, description: Option<&str>) {
     let _ = writeln!(out, "# Problem: {}", meta.task_id);
     if let Some(q) = &meta.question_id {
         let _ = writeln!(out, "LeetCode question id: {q}");
@@ -38,7 +51,7 @@ pub(super) fn write_problem_header(out: &mut String, meta: &WorkspaceMeta, descr
 /// The numbered sample cases a counterexample must be cited from. These are
 /// sample I/O out of `.lc/meta.json`, not reference solutions, so showing them
 /// preserves the redaction invariant.
-pub(super) fn write_cases(out: &mut String, cases: &[IoCase]) {
+pub fn write_cases(out: &mut String, cases: &[IoCase]) {
     if cases.is_empty() {
         let _ = writeln!(
             out,
@@ -76,7 +89,7 @@ pub(super) fn write_cases(out: &mut String, cases: &[IoCase]) {
 /// instead of a hard error — an 8B model that emits
 /// `why_your_approach_fails` twice should not cost the student their whole
 /// review.
-pub(super) fn parse_reply<T: serde::de::DeserializeOwned>(raw: &str, what: &str) -> Result<T> {
+pub fn parse_reply<T: serde::de::DeserializeOwned>(raw: &str, what: &str) -> Result<T> {
     let json = extract_json(raw)
         .with_context(|| format!("the coach did not return JSON: {}", clip(raw, 400)))?;
     let value: serde_json::Value = serde_json::from_str(json)

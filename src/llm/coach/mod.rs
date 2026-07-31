@@ -9,29 +9,30 @@
 //! run [`review_submission`]; GUI-only fields (PNG, scene layout, lazy flags)
 //! are simply left unset on text-only paths.
 //!
-//! Mirrors the section-heading style of [`crate::llm::prompt`] and reuses its
-//! [`clip`] helper. Every prompt here is assembled from [`WorkspaceMeta`], the
-//! problem statement, and what the user wrote on the board — the same redacted
-//! sources `lc ask` uses. The one exception is [`build_bridge_prompt`], which
-//! takes reference text the caller obtained through [`crate::reveal`] after an
-//! explicit user action; it is never called from the review or ambient paths.
+//! Mirrors the section-heading style of coach prompts and reuses
+//! [`crate::llm::helpers::clip`]. Every prompt here is assembled from
+//! [`WorkspaceMeta`], the problem statement, and what the user wrote on the
+//! board — the same redacted sources `lc ask` uses. The one exception is
+//! [`build_bridge_prompt`], which takes reference text the caller obtained
+//! through [`crate::reveal`] after an explicit user action; it is never called
+//! from the review or ambient paths.
 //!
-//! Layout (by Mode banner from the former single file):
+//! Layout:
+//! - [`prompts`] — all `*_SYSTEM_PROMPT` consts
 //! - [`board`] — canvas snapshot
 //! - [`review`] — Mode A oneshot types / parse / merge / format card
-//! - [`staged`] — Mode A perceive → claim → verdict / submission entry points
+//! - [`pipeline`] — Mode A perceive → claim → verdict / submission entry points
 //! - [`ambient`] — Mode B
 //! - [`trace`] — counterexample retrace
 //! - [`viz`] — Mode D diagram prompts
 //! - [`bridge`] — Mode C reveal bridge + Lazy fill
-//! - [`shared`] — prompt section helpers / JSON extract
 
 mod ambient;
 mod board;
 mod bridge;
+mod pipeline;
+mod prompts;
 mod review;
-mod shared;
-mod staged;
 mod trace;
 mod viz;
 
@@ -40,31 +41,29 @@ mod tests;
 
 pub use ambient::{
     build_ambient_prompt, escalation_instruction, parse_ambient, AmbientNudge,
-    AMBIENT_SYSTEM_PROMPT,
 };
 pub use board::BoardSnapshot;
 pub use bridge::{
     build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt, parse_bridge,
-    parse_lazy_fill, BridgeResponse, BridgeStep, LazyFillResponse, BRIDGE_SYSTEM_PROMPT,
-    LAZY_FILL_SYSTEM_PROMPT, LAZY_HINT_SYSTEM_PROMPT,
+    parse_lazy_fill, BridgeResponse, BridgeStep, LazyFillResponse,
+};
+pub use crate::llm::helpers::extract_json;
+pub use pipeline::{
+    build_claim_code_review_prompt, build_claim_prompt, build_perceive_prompt,
+    build_verdict_prompt, on_track_review_from_claim, parse_claim, parse_perception,
+    perceive_and_claim, review_submission, review_submission_text_only, staged_board_review,
+    Claim, Perception, ReviewOutcome,
+};
+pub use prompts::{
+    AMBIENT_SYSTEM_PROMPT, BRIDGE_SYSTEM_PROMPT, CLAIM_CODE_SYSTEM_PROMPT, CLAIM_SYSTEM_PROMPT,
+    LAZY_FILL_SYSTEM_PROMPT, LAZY_HINT_SYSTEM_PROMPT, PERCEIVE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT,
+    TRACE_SYSTEM_PROMPT, VERDICT_SYSTEM_PROMPT, VIZ_SYSTEM_PROMPT,
 };
 pub use review::{
     build_review_prompt, format_review_card, merge_layout_and_code_reviews, parse_review,
     validate_counterexample, Counterexample, Rating, ReviewResponse, Verdict,
-    REVIEW_SYSTEM_PROMPT,
 };
-pub use shared::extract_json;
-pub use staged::{
-    build_claim_code_review_prompt, build_claim_prompt, build_perceive_prompt,
-    build_verdict_prompt, on_track_review_from_claim, parse_claim, parse_perception,
-    perceive_and_claim, review_submission, review_submission_text_only, staged_board_review,
-    Claim, Perception, ReviewOutcome, CLAIM_CODE_SYSTEM_PROMPT, CLAIM_SYSTEM_PROMPT,
-    PERCEIVE_SYSTEM_PROMPT, VERDICT_SYSTEM_PROMPT,
-};
-pub use trace::{
-    build_trace_prompt, parse_trace, retrace_counterexample, TRACE_SYSTEM_PROMPT,
-};
+pub use trace::{build_trace_prompt, parse_trace, retrace_counterexample};
 pub use viz::{
     build_viz_prompt, validate_citation, validate_highlight, Annotation, Citation, Highlight,
-    VIZ_SYSTEM_PROMPT,
 };
