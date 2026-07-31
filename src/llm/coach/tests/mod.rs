@@ -585,24 +585,24 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
         assert!(!prompt.contains("- [3] input:"));
     }
 
-    /// Structural half of the reveal gate: review / ambient / pipeline / viz /
+    /// Structural half of the reveal gate: review / ambient / stages / draw /
     /// board / helpers / prompts / trace must not mention the reveal path. Only
-    /// `bridge.rs` (Mode C + Lazy) may.
+    /// `prompts/bridge.rs` (Mode C) may.
     #[test]
     fn the_review_and_ambient_builders_cannot_reach_a_reveal() {
         let unprivileged = [
-            include_str!("board.rs"),
-            include_str!("../helpers.rs"),
-            include_str!("review.rs"),
-            include_str!("pipeline/mod.rs"),
-            include_str!("pipeline/perceive.rs"),
-            include_str!("pipeline/claim.rs"),
-            include_str!("pipeline/verdict.rs"),
-            include_str!("pipeline/code.rs"),
-            include_str!("ambient.rs"),
-            include_str!("trace.rs"),
-            include_str!("viz.rs"),
-            include_str!("prompts.rs"),
+            include_str!("../board.rs"),
+            include_str!("../../helpers.rs"),
+            include_str!("../modes/review.rs"),
+            include_str!("../assess.rs"),
+            include_str!("../stages/perceive.rs"),
+            include_str!("../stages/claim.rs"),
+            include_str!("../stages/verdict.rs"),
+            include_str!("../prompts/code.rs"),
+            include_str!("../modes/ambient.rs"),
+            include_str!("../trace.rs"),
+            include_str!("../actions/draw.rs"),
+            include_str!("../prompts/system.rs"),
         ]
         .concat();
 
@@ -613,10 +613,10 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
             );
         }
         // And the privileged half does, so the test is actually discriminating.
-        let bridge = include_str!("bridge.rs");
+        let bridge = include_str!("../prompts/bridge.rs");
         assert!(
             bridge.contains("SolutionReveal"),
-            "bridge.rs must still reference SolutionReveal"
+            "prompts/bridge.rs must still reference SolutionReveal"
         );
     }
 

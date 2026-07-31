@@ -1,4 +1,4 @@
-//! Mode A staged review pipeline: perceive → claim → (verdict | on-track) → optional code pass.
+//! Mode A staged review orchestration: perceive → claim → (verdict | on-track) → optional code pass.
 //!
 //! Why this exists: one call that perceives, names, judges, and cites all at
 //! once gives a small VLM every reason to invent a flaw — the schema has a
@@ -12,43 +12,19 @@
 use anyhow::Result;
 
 use crate::generator::WorkspaceMeta;
-use crate::llm::helpers::clip;
 use crate::llm::{ChatMessage, ChatRequest, LlmProvider};
 
 use super::board::BoardSnapshot;
+use super::modes::review::{merge_layout_and_code_reviews, parse_review, ReviewResponse};
 use super::prompts::{
-    CLAIM_CODE_SYSTEM_PROMPT, CLAIM_SYSTEM_PROMPT, PERCEIVE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT,
-    VERDICT_SYSTEM_PROMPT,
+    build_claim_code_review_prompt, build_claim_prompt, build_perceive_prompt,
+    build_review_prompt, build_verdict_prompt, CLAIM_CODE_SYSTEM_PROMPT, CLAIM_SYSTEM_PROMPT,
+    PERCEIVE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT, VERDICT_SYSTEM_PROMPT,
 };
-use super::review::{
-    build_review_prompt, merge_layout_and_code_reviews, parse_review, ReviewResponse,
+use super::stages::{
+    on_track_review_from_claim, parse_claim, parse_perception, Claim, Perception,
 };
 use super::trace::retrace_counterexample;
-
-pub mod claim;
-pub mod code;
-pub mod perceive;
-pub mod verdict;
-
-pub use claim::{board_without_code, build_claim_prompt, parse_claim, write_claim, Claim};
-pub use code::build_claim_code_review_prompt;
-pub use perceive::{build_perceive_prompt, parse_perception, Perception};
-pub use verdict::{build_verdict_prompt, on_track_review_from_claim};
-
-/// How many items any staged list keeps, and how long each may be. Local models
-/// will happily return thirty observations; the next prompt has to fit beside a
-/// board and a problem statement in 8k.
-pub(super) const MAX_STAGE_ITEMS: usize = 8;
-pub(super) const MAX_STAGE_ITEM: usize = 240;
-pub(super) const MAX_CLAIM_FIELD: usize = 600;
-
-pub(super) fn tidy_list(list: &mut Vec<String>) {
-    list.retain(|item| !item.trim().is_empty());
-    for item in list.iter_mut() {
-        *item = clip(item.trim(), MAX_STAGE_ITEM);
-    }
-    list.truncate(MAX_STAGE_ITEMS);
-}
 
 /// Result of [`review_submission`]: the card to show, plus the frozen claim
 /// when the staged path ran (Lazy / follow-ups can reuse it).
@@ -242,4 +218,3 @@ pub fn perceive_and_claim(
     let claim = parse_claim(&reply.content)?;
     Ok((claim, perception))
 }
-
