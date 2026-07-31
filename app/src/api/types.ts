@@ -295,6 +295,15 @@ export interface LazyFillResponse {
   note: string;
 }
 
+/** Problem-specific empty-region prompts from `POST /coach/scaffold`. */
+export interface BoardScaffold {
+  approach: string;
+  complexity: string;
+  walkthrough: string;
+  provider?: string;
+  task_id?: string;
+}
+
 export interface Annotation {
   region: string;
   text: string;

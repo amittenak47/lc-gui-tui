@@ -84,6 +84,7 @@ import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
+import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import {
   STROKE_WIDTH_DEFAULT,
@@ -512,17 +513,15 @@ const TOOLS: Array<{ tool: ToolName; label: string; hint: string; emoji?: string
 ];
 
 /** Layouts where you ink — floating pen/eraser swap sits above each of these. */
-const INK_SWAP_REGIONS: readonly RegionId[] = [
-  "approach",
-  "complexity",
-  "walkthrough",
-  "scratch",
-];
-
-interface InkSwapAnchor {
-  region: RegionId;
+interface InkChromePos {
   left: number;
   top: number;
+}
+
+type InkChromePhase = "in" | "shown" | "out";
+
+interface InkChromeState extends InkChromePos {
+  phase: InkChromePhase;
 }
 
 /** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
@@ -584,7 +583,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [penStrokeWidth, setPenStrokeWidth] = useState(STROKE_WIDTH_DEFAULT);
   const [eraserStrokeWidth, setEraserStrokeWidth] = useState(STROKE_WIDTH_DEFAULT);
   const strokeWidth = activeTool === "eraser" ? eraserStrokeWidth : penStrokeWidth;
-  const [inkSwapAnchors, setInkSwapAnchors] = useState<InkSwapAnchor[]>([]);
+  const [inkChrome, setInkChrome] = useState<InkChromeState | null>(null);
+  const [inkChromeLive, setInkChromeLive] = useState(false);
+  const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
+  const [stampTrash, setStampTrash] = useState<{
+    left: number;
+    top: number;
+    ids: string[];
+  } | null>(null);
+  const inkChromeHideRef = useRef<number | null>(null);
+  const inkChromeExitRef = useRef<number | null>(null);
+  const inkMoveRafRef = useRef<number | null>(null);
+  const inkMovePendingRef = useRef<{ x: number; y: number } | null>(null);
+  const inkHandednessRef = useRef(inkHandedness);
+  inkHandednessRef.current = inkHandedness;
   const [pressureSensitive, setPressureSensitive] = useState(true);
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
@@ -950,73 +962,90 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   /**
-   * Screen anchors for the pen/eraser swap chip above each ink layout.
-   * Same coordinate space as the code dock (board-local, not page offsets).
+   * Near-pen undo/redo/eraser cluster — tracks the tip while you write (under
+   * the hand), then stays briefly after lift before exiting.
    */
-  const reportInkSwapAnchors = useCallback(() => {
-    const api = apiRef.current;
-    if (!api) {
-      setInkSwapAnchors((current) => (current.length === 0 ? current : []));
-      return;
-    }
-
-    const state = api.getAppState() as {
-      scrollX?: number;
-      scrollY?: number;
-      zoom?: { value?: number };
-      width?: number;
-      height?: number;
-    };
-    const zoom = state.zoom?.value ?? 1;
-    const scrollX = state.scrollX ?? 0;
-    const scrollY = state.scrollY ?? 0;
-    const viewH = typeof state.height === "number" ? state.height : 0;
-    const viewW = typeof state.width === "number" ? state.width : 0;
-    const page = mobileRegionRef.current;
-    const chip = 40;
+  const placeInkChrome = useCallback((clientX: number, clientY: number, opts?: { end?: boolean }) => {
+    const board = boardRef.current;
+    if (!board) return;
+    const rect = board.getBoundingClientRect();
+    const chip = 44;
     const gap = 4;
-    // undo + redo + pen/eraser swap
-    const clusterW = chip * 3 + gap * 2;
+    // pen/eraser + undo + redo + compact slider
+    const clusterW = chip * 3 + gap * 2 + 88;
+    const clusterH = chip;
+    const padX = 56;
+    const padY = 72;
+    const hand = inkHandednessRef.current;
+    // Right hand → chrome under palm (below-right); left hand → below-left.
+    let left =
+      hand === "right"
+        ? clientX - rect.left + padX
+        : clientX - rect.left - padX - clusterW;
+    let top = clientY - rect.top + padY;
+    left = Math.max(8, Math.min(left, rect.width - clusterW - 8));
+    top = Math.max(8, Math.min(top, rect.height - clusterH - 8));
+    const next = { left: roundPx(left), top: roundPx(top) };
 
-    const frames = api.getSceneElements() as LayoutElement[];
-    const next: InkSwapAnchor[] = [];
-    for (const region of INK_SWAP_REGIONS) {
-      if (page !== null && page !== region) continue;
-      const frame = frames.find(
-        (el) =>
-          el.type === "rectangle" &&
-          el.customData?.lcRegionFrame &&
-          el.customData?.lcRegion === region,
-      );
-      if (!frame) continue;
-
-      const frameLeft = (frame.x + scrollX) * zoom;
-      const frameTop = (frame.y + scrollY) * zoom;
-      const frameWidth = num(frame.width, REGIONS[region].w) * zoom;
-      // Top-right of the layout chrome — above the ink area, clear of the label.
-      const left = roundPx(frameLeft + frameWidth - clusterW - 8);
-      const top = roundPx(frameTop + 8);
-      if (top + chip < -8 || top > viewH + 8 || left + clusterW < -8 || left > viewW + 8) {
-        continue;
-      }
-      next.push({ region, left, top });
-    }
-
-    setInkSwapAnchors((current) => {
-      if (
-        current.length === next.length &&
-        current.every(
-          (anchor, i) =>
-            anchor.region === next[i]?.region &&
-            anchor.left === next[i]?.left &&
-            anchor.top === next[i]?.top,
-        )
-      ) {
+    setInkChrome((current) => {
+      if (!current) return { ...next, phase: "in" };
+      if (current.left === next.left && current.top === next.top && current.phase !== "out") {
         return current;
       }
-      return next;
+      return {
+        ...next,
+        phase: current.phase === "out" ? "in" : current.phase === "in" ? "in" : "shown",
+      };
     });
+
+    if (inkChromeHideRef.current != null) {
+      window.clearTimeout(inkChromeHideRef.current);
+      inkChromeHideRef.current = null;
+    }
+    if (inkChromeExitRef.current != null) {
+      window.clearTimeout(inkChromeExitRef.current);
+      inkChromeExitRef.current = null;
+    }
+
+    if (opts?.end) {
+      setInkChromeLive(false);
+      inkChromeHideRef.current = window.setTimeout(() => {
+        setInkChrome((current) => (current ? { ...current, phase: "out" } : null));
+        inkChromeHideRef.current = null;
+        inkChromeExitRef.current = window.setTimeout(() => {
+          setInkChrome(null);
+          inkChromeExitRef.current = null;
+        }, 180);
+      }, 2600);
+    } else {
+      setInkChromeLive(true);
+    }
   }, []);
+
+  const onInkStrokeMove = useCallback(
+    (clientX: number, clientY: number) => {
+      inkMovePendingRef.current = { x: clientX, y: clientY };
+      if (inkMoveRafRef.current != null) return;
+      inkMoveRafRef.current = window.requestAnimationFrame(() => {
+        inkMoveRafRef.current = null;
+        const pending = inkMovePendingRef.current;
+        if (!pending) return;
+        placeInkChrome(pending.x, pending.y);
+      });
+    },
+    [placeInkChrome],
+  );
+
+  const onInkStrokeEnd = useCallback(
+    (clientX: number, clientY: number) => {
+      if (inkMoveRafRef.current != null) {
+        window.cancelAnimationFrame(inkMoveRafRef.current);
+        inkMoveRafRef.current = null;
+      }
+      placeInkChrome(clientX, clientY, { end: true });
+    },
+    [placeInkChrome],
+  );
 
   const setStrokeWidth = useCallback((width: number) => {
     if (activeTool === "eraser") {
@@ -1083,6 +1112,55 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     setActiveTool(tool);
   }, [activeTool]);
+
+  const handleStylusAccessory = useCallback(
+    (event: PointerEvent) => {
+      // Stylus only — never steal mouse right-click.
+      if (event.pointerType !== "pen" && event.pointerType !== "eraser") return false;
+      // Common mappings: eraser tip (button 5 / buttons bit 5), barrel (button 2).
+      const eraserTip =
+        event.pointerType === "eraser" || event.button === 5 || (event.buttons & 32) !== 0;
+      const barrel = event.button === 2 || event.button === 5;
+      if (!eraserTip && !barrel) return false;
+      const toEraser = activeToolRef.current !== "eraser";
+      if (shapesOpen) setShapesOpen(false);
+      setTool(toEraser ? "eraser" : "freedraw");
+      placeInkChrome(event.clientX, event.clientY, { end: true });
+      return true;
+    },
+    [setTool, shapesOpen, placeInkChrome],
+  );
+
+  useEffect(() => {
+    const onHand = (event: Event) => {
+      const detail = (event as CustomEvent<InkHandedness>).detail;
+      if (detail === "left" || detail === "right") {
+        setInkHandedness(detail);
+      } else {
+        setInkHandedness(loadInkHandedness());
+      }
+    };
+    window.addEventListener("lc-ink-handedness", onHand);
+    return () => window.removeEventListener("lc-ink-handedness", onHand);
+  }, []);
+
+  const deleteSelectedStamps = useCallback(() => {
+    const api = apiRef.current;
+    if (!api || !stampTrash) return;
+    const kill = new Set(stampTrash.ids);
+    const current = api.getSceneElements() as Array<{
+      id: string;
+      isDeleted?: boolean;
+      [key: string]: unknown;
+    }>;
+    api.updateScene({
+      elements: current.map((el) => (kill.has(el.id) ? { ...el, isDeleted: true } : el)),
+      appState: { selectedElementIds: {} },
+      captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+    });
+    setStampTrash(null);
+    onChange?.();
+  }, [onChange, stampTrash]);
 
   /** Scene coords from a pointer event over the Excalidraw viewport. */
   const clientToScene = useCallback((clientX: number, clientY: number) => {
@@ -1862,10 +1940,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         layoutSyncingRef.current = false;
         applyRegionLayout();
         reportCodeSlot();
-        reportInkSwapAnchors();
       });
     },
-    [applyRegionLayout, reportCodeSlot, reportInkSwapAnchors],
+    [applyRegionLayout, reportCodeSlot],
   );
   const setReadingSize = useCallback(
     (next: BoardReadingSize) => {
@@ -1902,16 +1979,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // canvas, so zooming out on a tablet shows one frame, not the whole column.
     syncPageVisibility();
     reportCodeSlot();
-    reportInkSwapAnchors();
     void settleFitView().then(() => {
       reportCodeSlot();
-      reportInkSwapAnchors();
     });
   }, [
     interactive,
     mobileRegion,
     reportCodeSlot,
-    reportInkSwapAnchors,
     settleFitView,
     syncPageVisibility,
   ]);
@@ -1936,7 +2010,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // Frames: pin column position, zero rotation; resize height/width still works.
       applyRegionLayout();
       reportCodeSlot();
-      reportInkSwapAnchors();
 
       const editingId = appState?.editingTextElement?.id ?? null;
       const prevEditingId = editingTextIdRef.current;
@@ -2048,9 +2121,85 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // it landed on; everything else goes back under.
       syncPageVisibility();
 
+      // Stamp trash: when a library stamp (or its group) is selected, float a
+      // delete control at the selection's top-right.
+      {
+        const selectedIds = new Set(
+          Object.entries(appState?.selectedElementIds ?? {})
+            .filter(([, on]) => on)
+            .map(([id]) => id),
+        );
+        if (selectedIds.size === 0) {
+          setStampTrash((current) => (current ? null : current));
+        } else {
+          type StampEl = {
+            id: string;
+            x: number;
+            y: number;
+            width?: number;
+            height?: number;
+            isDeleted?: boolean;
+            customData?: { lcStamp?: boolean; lcStampGroup?: string } | null;
+          };
+          const els = api.getSceneElements() as StampEl[];
+          const selected = els.filter((el) => selectedIds.has(el.id) && !el.isDeleted);
+          const stampSelected = selected.filter((el) => el.customData?.lcStamp);
+          if (stampSelected.length === 0) {
+            setStampTrash((current) => (current ? null : current));
+          } else {
+            const groupIds = new Set(
+              stampSelected
+                .map((el) => el.customData?.lcStampGroup)
+                .filter((id): id is string => Boolean(id)),
+            );
+            const toDelete = els.filter((el) => {
+              if (el.isDeleted || !el.customData?.lcStamp) return false;
+              if (selectedIds.has(el.id)) return true;
+              const g = el.customData.lcStampGroup;
+              return Boolean(g && groupIds.has(g));
+            });
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (const el of toDelete) {
+              const w = typeof el.width === "number" ? el.width : 0;
+              const h = typeof el.height === "number" ? el.height : 0;
+              minX = Math.min(minX, el.x);
+              minY = Math.min(minY, el.y);
+              maxX = Math.max(maxX, el.x + w);
+              maxY = Math.max(maxY, el.y + h);
+            }
+            const state = api.getAppState() as {
+              scrollX?: number;
+              scrollY?: number;
+              zoom?: { value?: number };
+            };
+            const zoom = state.zoom?.value ?? 1;
+            const scrollX = state.scrollX ?? 0;
+            const scrollY = state.scrollY ?? 0;
+            const left = roundPx((maxX + scrollX) * zoom - 36);
+            const top = roundPx((minY + scrollY) * zoom - 40);
+            const ids = toDelete.map((el) => el.id);
+            setStampTrash((current) => {
+              if (
+                current &&
+                current.left === left &&
+                current.top === top &&
+                current.ids.length === ids.length &&
+                current.ids.every((id, i) => id === ids[i])
+              ) {
+                return current;
+              }
+              return { left, top, ids };
+            });
+          }
+        }
+      }
+
       onChange?.();
     },
-    [activeTool, applyRegionLayout, onChange, reportCodeSlot, reportInkSwapAnchors, setTool, syncPageVisibility],
+    [activeTool, applyRegionLayout, onChange, reportCodeSlot, setTool, syncPageVisibility],
   );
 
   useImperativeHandle(
@@ -2372,6 +2521,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           getViewport={getViewport}
           clip={inkClip}
           onChange={onChange}
+          onStrokeMove={onInkStrokeMove}
+          onStrokeEnd={onInkStrokeEnd}
+          onStylusAccessory={handleStylusAccessory}
         />
       )}
       {interactive && activeTool === "eraser" && <EraserBrush ref={eraserBrushRef} />}
@@ -2387,7 +2539,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               setZoomPct((current) => (current === pct ? current : pct));
               rasterInkRef.current?.repaint();
               reportCodeSlot();
-              reportInkSwapAnchors();
 
               if (!mobile || clampingScrollRef.current) return;
               const bounds = pageBoundsRef.current;
@@ -2425,22 +2576,45 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           setZoomPct((current) => (current === pct ? current : pct));
           apiRef.current.setActiveTool({ type: "hand" });
           reportCodeSlot();
-          reportInkSwapAnchors();
         }}
         onChange={handleSceneChange}
         initialData={initialData}
         UIOptions={UI_OPTIONS}
       />
-      {interactive &&
-        inkSwapAnchors.map((anchor) => {
+      {interactive && inkChrome && (() => {
           const toEraser = activeTool !== "eraser";
+          const phaseClass =
+            inkChrome.phase === "in"
+              ? "lc-ink-chrome-in"
+              : inkChrome.phase === "out"
+                ? "lc-ink-chrome-out"
+                : "";
           return (
             <div
-              key={anchor.region}
-              className="lc-ink-chrome"
-              style={{ left: anchor.left, top: anchor.top }}
+              className={["lc-ink-chrome", phaseClass, inkChromeLive ? "lc-ink-chrome-live" : ""]
+                .filter(Boolean)
+                .join(" ")}
+              style={{ left: inkChrome.left, top: inkChrome.top }}
               onPointerDown={(event) => event.stopPropagation()}
+              onAnimationEnd={() => {
+                if (inkChrome.phase === "in") {
+                  setInkChrome((current) =>
+                    current && current.phase === "in" ? { ...current, phase: "shown" } : current,
+                  );
+                }
+              }}
             >
+              <button
+                type="button"
+                className="lc-ink-chrome-btn"
+                aria-label={toEraser ? "Switch to eraser" : "Switch to pen"}
+                onClick={() => {
+                  if (shapesOpen) setShapesOpen(false);
+                  setTool(toEraser ? "eraser" : "freedraw");
+                }}
+              >
+                {toEraser ? <PinkEraserIcon /> : <PenIcon />}
+              </button>
               <button
                 type="button"
                 className="lc-ink-chrome-btn"
@@ -2457,20 +2631,49 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               >
                 <RedoIcon />
               </button>
-              <button
-                type="button"
-                className="lc-ink-chrome-btn"
-                aria-label={toEraser ? "Switch to eraser" : "Switch to pen"}
-                onClick={() => {
-                  if (shapesOpen) setShapesOpen(false);
-                  setTool(toEraser ? "eraser" : "freedraw");
-                }}
+              <div
+                className="lc-ink-chrome-slider"
+                onPointerDown={(event) => event.stopPropagation()}
               >
-                {toEraser ? <PinkEraserIcon /> : <PenIcon />}
-              </button>
+                <StrokeSizeSlider
+                  value={strokeWidth}
+                  onChange={setStrokeWidth}
+                  label={activeTool === "eraser" ? "Eraser size" : "Stroke weight"}
+                  eraser={activeTool === "eraser"}
+                />
+              </div>
             </div>
           );
-        })}
+        })()}
+      {interactive && stampTrash && (
+        <button
+          type="button"
+          className="lc-stamp-trash"
+          style={{ left: stampTrash.left, top: stampTrash.top }}
+          aria-label="Delete stamp"
+          title="Delete stamp"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => deleteSelectedStamps()}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <path d="M3 6h18" />
+            <path d="M8 6V4h8v2" />
+            <path d="M19 6l-1 14H6L5 6" />
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 });
@@ -2760,6 +2963,7 @@ function BoardToolbar({
         "lc-toolbar",
         mobile ? "lc-toolbar-mobile" : "",
         mobile && folded ? "lc-toolbar-folded" : "",
+        shapesOpen ? "lc-toolbar-shapes-open" : "",
       ]
         .filter(Boolean)
         .join(" ")}

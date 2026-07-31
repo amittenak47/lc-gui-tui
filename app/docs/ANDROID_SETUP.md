@@ -27,6 +27,17 @@ npm run android:init
 
 `android:init` generates `src-tauri/gen/android/` and applies the cleartext-HTTP overlay (required for `lc serve` on LAN).
 
+### What is `android-overlay.mjs`?
+
+`src-tauri/gen/android/` is **generated** by `tauri android init` and is not in git. Android 9+ blocks cleartext HTTP in WebViews by default, which breaks calls to `lc serve` on your LAN (`http://192.168.x.x:7878`).
+
+`scripts/android-overlay.mjs` re-applies two edits after every init or regen:
+
+1. Copy `src-tauri/android-overlay/network_security_config.xml` into the generated `res/xml/`.
+2. Add `android:networkSecurityConfig="@xml/network_security_config"` on `<application>` in `AndroidManifest.xml`.
+
+`android:dev`, `android:apk`, and `android-dev.mjs` run this automatically before every build. Idempotent — safe to run twice.
+
 ---
 
 ## 3. Permanent PATH on Windows (cmd)
@@ -80,20 +91,34 @@ for %P in ("%PATH:;=";"%") do @echo %~P
 
 ### Option A — USB dev loop (build + install + hot reload)
 
+All npm commands below run from **`app\`** (not the repo root).
+
 ```cmd
 cd C:\Users\Amit\lc_harness\lc\app
 adb devices
 npm run android:dev
 ```
 
-If Tauri says “No available Android Emulator” but `adb devices` shows your tablet, pass the serial:
+With a specific tablet, use the cmd wrapper. Pass the USB serial only so the script can verify `adb` sees it — Tauri itself auto-picks the connected device (its `DEVICE` arg matches the Bluetooth name, not the serial, so we do not forward the serial to Tauri):
 
 ```cmd
-npm run android:dev -- <your-device-serial>
+app\scripts\android-dev.cmd <your-device-serial>
 ```
 
-**Common error:** `Opening Android Studio` / file not found — means `adb` was not on PATH when Tauri ran. Fix PATH, open a **new** cmd, retry.
+Or with one tablet plugged in, no serial needed:
 
+```cmd
+cd C:\Users\Amit\lc_harness\lc\app
+npm run android:dev
+```
+**Common error:** `Port 1420 is already in use` — a previous `android:dev` is still running. Ctrl+C it, or:
+
+```cmd
+netstat -ano | findstr :1420
+taskkill /PID <pid> /F
+```
+
+**Common error:** `Opening Android Studio` / file not found — often `adb` missing from PATH, or no device connected. Fix PATH, open a **new** cmd, `adb devices`, retry.
 **Common error:** `Port 1420 is already in use` — stop the previous `android:dev` (Ctrl+C) or:
 
 ```cmd

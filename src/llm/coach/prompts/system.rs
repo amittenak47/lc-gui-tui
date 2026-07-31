@@ -214,3 +214,18 @@ Rules:\n\
 - Leave only the unearned idea as TODO/pass.\n\
 - Do not paste the full reference when their board only earned part of it.\n\
 - Reply with a single JSON object and nothing else.";
+
+pub const SCAFFOLD_SYSTEM_PROMPT: &str = "You prepare a blank whiteboard for a coding interview \
+practice problem. The student has not started yet.\n\
+\n\
+Return JSON only:\n\
+{\"approach\":\"...\",\"complexity\":\"...\",\"walkthrough\":\"...\"}\n\
+\n\
+Rules:\n\
+- Write short region prompts (2–5 lines each) that structure how they should think.\n\
+- Do NOT give away the algorithm, data structure choice, or final complexity answer.\n\
+- Do NOT write solution code or pseudocode that solves the problem.\n\
+- approach: what to clarify (inputs, invariants, what to scan) — questions and blank slots.\n\
+- complexity: remind them to justify time and space once they have an approach.\n\
+- walkthrough: which example fields to track by hand (indices, window, stack contents, …).\n\
+- Prefer bullet-like short lines. No markdown fences.";

@@ -40,8 +40,8 @@ mod trace;
 mod tests;
 
 pub use actions::{
-    parse_bridge, parse_lazy_fill, validate_citation, validate_highlight, Annotation, BridgeResponse,
-    BridgeStep, Citation, Highlight, LazyFillResponse,
+    parse_board_scaffold, parse_bridge, parse_lazy_fill, validate_citation, validate_highlight,
+    Annotation, BoardScaffold, BridgeResponse, BridgeStep, Citation, Highlight, LazyFillResponse,
 };
 pub use assess::{
     perceive_and_claim, review_submission, review_submission_text_only, staged_board_review,
@@ -57,10 +57,10 @@ pub use modes::review::{
 pub use prompts::{
     build_ambient_prompt, build_bridge_prompt, build_claim_code_review_prompt, build_claim_prompt,
     build_lazy_fill_prompt, build_lazy_hint_prompt, build_perceive_prompt, build_review_prompt,
-    build_trace_prompt, build_verdict_prompt, build_viz_prompt, AMBIENT_SYSTEM_PROMPT,
-    BRIDGE_SYSTEM_PROMPT, CLAIM_CODE_SYSTEM_PROMPT, CLAIM_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
-    LAZY_HINT_SYSTEM_PROMPT, PERCEIVE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT, TRACE_SYSTEM_PROMPT,
-    VERDICT_SYSTEM_PROMPT, VIZ_SYSTEM_PROMPT,
+    build_scaffold_prompt, build_trace_prompt, build_verdict_prompt, build_viz_prompt,
+    AMBIENT_SYSTEM_PROMPT, BRIDGE_SYSTEM_PROMPT, CLAIM_CODE_SYSTEM_PROMPT, CLAIM_SYSTEM_PROMPT,
+    LAZY_FILL_SYSTEM_PROMPT, LAZY_HINT_SYSTEM_PROMPT, PERCEIVE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT,
+    SCAFFOLD_SYSTEM_PROMPT, TRACE_SYSTEM_PROMPT, VERDICT_SYSTEM_PROMPT, VIZ_SYSTEM_PROMPT,
 };
 pub use stages::{on_track_review_from_claim, parse_claim, parse_perception, Claim, Perception};
 pub use trace::{parse_trace, retrace_counterexample};

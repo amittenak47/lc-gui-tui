@@ -57,6 +57,15 @@ export interface RasterInkLayerProps {
    */
   clip?: SceneBounds | null;
   onChange?: () => void;
+  /** Fired while drawing so near-pen chrome can track the tip. */
+  onStrokeMove?: (clientX: number, clientY: number) => void;
+  /** Fired when a stroke ends — board-local client coords for near-pen chrome. */
+  onStrokeEnd?: (clientX: number, clientY: number) => void;
+  /**
+   * Stylus barrel / eraser tip: toggle pen↔eraser. Return true if handled so
+   * the stroke is not started.
+   */
+  onStylusAccessory?: (event: PointerEvent) => boolean;
 }
 
 function cloneOps(ops: readonly InkOp[]): InkOp[] {
@@ -65,7 +74,19 @@ function cloneOps(ops: readonly InkOp[]): InkOp[] {
 
 export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
   function RasterInkLayer(
-    { enabled, tool, strokeWidth, inkColor, pressureSensitive, getViewport, clip = null, onChange },
+    {
+      enabled,
+      tool,
+      strokeWidth,
+      inkColor,
+      pressureSensitive,
+      getViewport,
+      clip = null,
+      onChange,
+      onStrokeMove,
+      onStrokeEnd,
+      onStylusAccessory,
+    },
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -327,6 +348,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       if (!canvas) return;
 
       const begin = (event: PointerEvent) => {
+        if (onStylusAccessory?.(event)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        // Primary tip only for drawing. Barrel / eraser tip are accessory.
         if (event.button !== 0) return;
         const viewport = getViewport();
         if (!viewport || !isCanvasTarget(event.target, canvas)) return;
@@ -397,6 +424,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         live.points.push(...stamps);
         lastPointRef.current = point;
         repaint();
+        onStrokeMove?.(event.clientX, event.clientY);
       };
 
       const end = (event: PointerEvent) => {
@@ -408,6 +436,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           /* ignore */
         }
         commitLive();
+        onStrokeEnd?.(event.clientX, event.clientY);
       };
 
       canvas.addEventListener("pointerdown", begin, true);
@@ -420,7 +449,19 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         canvas.removeEventListener("pointerup", end, true);
         canvas.removeEventListener("pointercancel", end, true);
       };
-    }, [commitLive, enabled, getViewport, inkColor, pressureSensitive, repaint, strokeWidth, tool]);
+    }, [
+      commitLive,
+      enabled,
+      getViewport,
+      inkColor,
+      onStrokeEnd,
+      onStrokeMove,
+      onStylusAccessory,
+      pressureSensitive,
+      repaint,
+      strokeWidth,
+      tool,
+    ]);
 
     if (!enabled) return null;
 

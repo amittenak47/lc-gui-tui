@@ -514,18 +514,118 @@ input[type="checkbox"] {
   height: 100%;
 }
 
-/* Quick undo / redo / pen↔eraser above each ink layout. */
+/* Quick undo / redo / pen↔eraser — follows the stylus tip (palm zone). */
 .lc-ink-chrome {
   position: absolute;
   z-index: 12;
   display: inline-flex;
+  align-items: center;
   gap: 4px;
-  padding: 2px;
+  padding: 2px 6px 2px 2px;
   border: 1px solid var(--chrome-edge);
   border-radius: 12px;
   background: var(--surface);
   box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
   touch-action: manipulation;
+  transition:
+    left 70ms linear,
+    top 70ms linear;
+  will-change: left, top, opacity, transform;
+}
+
+.lc-ink-chrome-slider {
+  display: flex;
+  align-items: center;
+  min-width: 84px;
+  max-width: 110px;
+  margin-left: 2px;
+  padding-left: 4px;
+  border-left: 1px solid var(--line);
+}
+
+.lc-ink-chrome-slider .lc-stroke-slider {
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  min-height: 0;
+  padding: 0;
+}
+
+.lc-ink-chrome-slider .lc-stroke-slider-input {
+  width: 56px;
+  height: 18px;
+  writing-mode: horizontal-tb;
+}
+
+.lc-ink-chrome-slider .lc-stroke-slider-cap {
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+.lc-ink-chrome-slider .lc-stroke-slider-value {
+  font-size: 10px;
+  min-width: 1.4em;
+}
+
+.lc-stamp-trash {
+  position: absolute;
+  z-index: 13;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+  touch-action: manipulation;
+}
+
+.lc-stamp-trash:active {
+  transform: scale(0.96);
+  background: color-mix(in srgb, #dc2626 12%, var(--surface));
+  color: #dc2626;
+}
+
+/* Mid-stroke: ignore hits so the tip cannot tap Undo by accident. */
+.lc-ink-chrome-live {
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.lc-ink-chrome-in {
+  animation: lc-ink-chrome-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lc-ink-chrome-out {
+  animation: lc-ink-chrome-out 160ms ease-in both;
+  pointer-events: none;
+}
+
+@keyframes lc-ink-chrome-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes lc-ink-chrome-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.94);
+  }
 }
 
 .lc-ink-chrome-btn {
@@ -1441,8 +1541,14 @@ input[type="checkbox"] {
   .lc-spinner,
   .lc-spinner-check,
   .lc-browser-body-ready,
-  .lc-pairing-form {
+  .lc-pairing-form,
+  .lc-ink-chrome-in,
+  .lc-ink-chrome-out {
     animation: none;
+  }
+
+  .lc-ink-chrome {
+    transition: none;
   }
 
   .lc-shape,
@@ -3946,6 +4052,11 @@ button.lc-row-selected:hover:not(:disabled) {
   max-height: none;
   overflow: hidden;
   scrollbar-width: none;
+}
+
+/* Shape library sits below the strip — do not clip it. */
+.lc-mobile .lc-toolbar.lc-toolbar-shapes-open {
+  overflow: visible;
 }
 
 .lc-mobile .lc-toolbar-expandable {

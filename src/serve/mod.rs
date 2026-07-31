@@ -157,6 +157,7 @@ pub fn router(state: Shared) -> Router {
         .route("/coach/viz", post(viz::viz))
         .route("/coach/reveal", post(coach::reveal))
         .route("/coach/lazy", post(coach::lazy_fill))
+        .route("/coach/scaffold", post(coach::scaffold))
         .route("/coach/capabilities", get(coach::capabilities))
         .route("/coach/session", get(ws::session))
         .route(

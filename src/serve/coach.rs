@@ -16,10 +16,10 @@ use serde::{Deserialize, Serialize};
 use super::common::{description_for, load_meta, resolve_dataset};
 use super::{blocking, board_session, AppError, Shared};
 use crate::llm::coach::{
-    build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt, parse_bridge,
-    parse_lazy_fill, perceive_and_claim, review_submission, BoardSnapshot, BridgeResponse, Claim,
-    LazyFillResponse, ReviewResponse, BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
-    LAZY_HINT_SYSTEM_PROMPT,
+    build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt, build_scaffold_prompt,
+    parse_board_scaffold, parse_bridge, parse_lazy_fill, perceive_and_claim, review_submission,
+    BoardScaffold, BoardSnapshot, BridgeResponse, Claim, LazyFillResponse, ReviewResponse,
+    BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT, LAZY_HINT_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
 };
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
 use crate::reveal::{SolutionReveal, UserConsent};
@@ -356,6 +356,55 @@ pub async fn lazy_fill(
             task_id: meta.task_id,
             provider: provider.label(),
             fill,
+        })
+    })
+    .await?;
+    Ok(Json(envelope))
+}
+
+// ---------------------------------------------------------------------------
+// Fresh-board region scaffolding (problem load)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct ScaffoldRequest {
+    pub task_id: String,
+    #[serde(default)]
+    pub dataset: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScaffoldEnvelope {
+    pub task_id: String,
+    pub provider: String,
+    #[serde(flatten)]
+    pub scaffold: BoardScaffold,
+}
+
+pub async fn scaffold(
+    State(state): State<Shared>,
+    Json(request): Json<ScaffoldRequest>,
+) -> Result<Json<ScaffoldEnvelope>, AppError> {
+    let dataset = resolve_dataset(request.dataset.as_deref())?;
+    let task_id = request.task_id.clone();
+    let cfg = state.cfg_snapshot();
+    let envelope = blocking(move || {
+        let meta = load_meta(&cfg, dataset, &task_id)?;
+        let description = description_for(&meta);
+        let provider = make_provider_for_mode(&cfg, "review")?;
+        let prompt = build_scaffold_prompt(&meta, description.as_deref());
+        let reply = provider.chat_ex(
+            &ChatRequest::new(vec![
+                ChatMessage::system(SCAFFOLD_SYSTEM_PROMPT),
+                ChatMessage::user(prompt),
+            ])
+            .json(),
+        )?;
+        let scaffold = parse_board_scaffold(&reply.content)?;
+        Ok(ScaffoldEnvelope {
+            task_id: meta.task_id,
+            provider: provider.label(),
+            scaffold,
         })
     })
     .await?;

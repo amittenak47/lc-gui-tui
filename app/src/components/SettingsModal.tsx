@@ -7,9 +7,10 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { LcClient } from "../api/client";
 import type { DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
+import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { useIsMobile } from "../util/mobile";
 
-type TabId = "paths" | "datasets" | "tests" | "llm" | "serve";
+type TabId = "paths" | "datasets" | "tests" | "llm" | "serve" | "board";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "paths", label: "Paths" },
@@ -17,6 +18,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "tests", label: "Tests" },
   { id: "llm", label: "LLM" },
   { id: "serve", label: "Serve" },
+  { id: "board", label: "Board" },
 ];
 
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
@@ -78,6 +80,7 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
     host: string | null;
     port: number;
   } | null>(null);
+  const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
 
   const refreshLlm = useCallback(async () => {
     try {
@@ -92,6 +95,7 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
     let cancelled = false;
     setError(null);
     setBusy("loading…");
+    setHandedness(loadInkHandedness());
     void (async () => {
       try {
         const cfg = await client.getConfig();
@@ -514,6 +518,58 @@ export function SettingsModal({ open, client, onClose, onSaved }: SettingsModalP
                   <code>lc serve --lan</code> to pair a tablet.
                 </p>
               )}
+            </div>
+          )}
+
+          {tab === "board" && (
+            <div className="lc-settings-fields">
+              <div className="lc-settings-subhead">Writing hand</div>
+              <p className="lc-settings-hint">
+                Places the floating undo / eraser strip under your palm while you write.
+                Saved on this device only — not in <code>config.toml</code>.
+              </p>
+              <div className="lc-settings-choice" role="radiogroup" aria-label="Writing hand">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={handedness === "right"}
+                  className={
+                    handedness === "right"
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => {
+                    setHandedness("right");
+                    saveInkHandedness("right");
+                    window.dispatchEvent(
+                      new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: "right" }),
+                    );
+                  }}
+                >
+                  <strong>Right hand</strong>
+                  <span className="lc-muted">Chrome sits below-right of the tip.</span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={handedness === "left"}
+                  className={
+                    handedness === "left"
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => {
+                    setHandedness("left");
+                    saveInkHandedness("left");
+                    window.dispatchEvent(
+                      new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: "left" }),
+                    );
+                  }}
+                >
+                  <strong>Left hand</strong>
+                  <span className="lc-muted">Chrome sits below-left of the tip.</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
