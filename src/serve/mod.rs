@@ -17,6 +17,7 @@
 //! token, generated once and shown as a QR code for the tablet to scan.
 
 pub mod coach;
+pub mod common;
 pub mod routes;
 pub mod board_session;
 pub mod session;

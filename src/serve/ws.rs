@@ -14,7 +14,7 @@ use axum::response::Response;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
-use super::routes::{description_for, load_meta};
+use super::common::{description_for, load_meta};
 use super::{board_session, AppError, Shared};
 use crate::llm::coach::{build_ambient_prompt, parse_ambient, AmbientNudge, BoardSnapshot};
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest, LlmProvider};

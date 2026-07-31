@@ -14,8 +14,7 @@ use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use super::coach::resolve_dataset;
-use super::routes::{description_for, load_meta};
+use super::common::{description_for, load_meta, resolve_dataset};
 use super::{blocking, AppError, Shared};
 use crate::llm::coach::{
     build_viz_prompt, validate_citation, validate_highlight, Annotation, BoardSnapshot, Citation,
