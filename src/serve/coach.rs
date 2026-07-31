@@ -13,7 +13,7 @@ use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use super::routes::{description_for, load_meta};
+use super::common::{description_for, load_meta, resolve_dataset};
 use super::{blocking, board_session, AppError, Shared};
 use crate::llm::coach::{
     build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt, parse_bridge,
@@ -21,16 +21,10 @@ use crate::llm::coach::{
     LazyFillResponse, ReviewResponse, BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
     LAZY_HINT_SYSTEM_PROMPT,
 };
-use crate::dataset::{self, Dataset};
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
 use crate::reveal::{SolutionReveal, UserConsent};
 use crate::runner;
 use crate::session::Session;
-
-/// A request's dataset slug, or a 400 naming the ones that exist.
-pub(crate) fn resolve_dataset(slug: Option<&str>) -> Result<&'static Dataset, AppError> {
-    dataset::resolve(slug).map_err(AppError::bad_request)
-}
 
 // ---------------------------------------------------------------------------
 // Capabilities (vision / provider per mode)
@@ -640,7 +634,13 @@ mod tests {
     fn only_the_reveal_handler_can_consent() {
         let reveal_handler = include_str!("coach.rs");
         let ambient_handler = include_str!("ws.rs");
-        let corpus_routes = include_str!("routes.rs");
+        let route_sources = [
+            ("routes/corpus.rs", include_str!("routes/corpus.rs")),
+            ("routes/practice.rs", include_str!("routes/practice.rs")),
+            ("routes/workspace.rs", include_str!("routes/workspace.rs")),
+            ("routes/config.rs", include_str!("routes/config.rs")),
+            ("routes/attempt.rs", include_str!("routes/attempt.rs")),
+        ];
         let viz_handler = include_str!("viz.rs");
 
         let consent_call = concat!("UserConsent::from_explicit_user_action", "()");
@@ -649,11 +649,10 @@ mod tests {
             1,
             "the reveal handler is the only place allowed to grant consent"
         );
-        for (name, source) in [
-            ("ws.rs", ambient_handler),
-            ("routes.rs", corpus_routes),
-            ("viz.rs", viz_handler),
-        ] {
+        for (name, source) in route_sources
+            .into_iter()
+            .chain([("ws.rs", ambient_handler), ("viz.rs", viz_handler)])
+        {
             assert!(
                 !source.contains("SolutionReveal") && !source.contains("UserConsent"),
                 "{name} must not be able to reach the reveal path"
