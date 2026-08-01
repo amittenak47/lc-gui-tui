@@ -195,11 +195,13 @@ body {
   z-index: 1;
 }
 
-/* Offline / host:IP — horizontally centered on the header, not the flex row. */
+/* Offline / host:IP — horizontally screen-centered; vertically matches row icons. */
 .lc-header-pairing-anchor {
   position: absolute;
   left: 50%;
+  /* Match .lc-header padding so align-items:center lands with the icon row. */
   top: 5px;
+  bottom: 5px;
   transform: translateX(-50%);
   z-index: 2;
   display: flex;
@@ -4706,7 +4708,9 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-header-pairing-anchor {
+  /* Match .lc-mobile .lc-header vertical padding (safe-top + 2px / 3px). */
   top: calc(2px + var(--lc-safe-top));
+  bottom: 3px;
 }
 
 .lc-mobile .lc-brand {
