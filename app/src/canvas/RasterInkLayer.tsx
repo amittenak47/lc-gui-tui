@@ -42,6 +42,8 @@ export interface RasterInkHandle {
    * left out — the pen is still down, so there is no stroke to read yet.
    */
   getOps(): InkOp[];
+  /** Replace committed ink (notebook restore). Clears undo/redo. */
+  setOps(ops: readonly InkOp[]): void;
 }
 
 export interface RasterInkLayerProps {
@@ -321,6 +323,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         },
         getOps() {
           return [...opsRef.current];
+        },
+        setOps(ops) {
+          opsRef.current = cloneOps(ops);
+          undoRef.current = [];
+          redoRef.current = [];
+          liveRef.current = null;
+          invalidateBake();
+          repaint();
         },
         repaint,
       }),

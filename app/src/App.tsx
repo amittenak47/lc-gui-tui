@@ -41,11 +41,10 @@ import { LoadingDoodle } from "./components/LoadingDoodle";
 import { LlmStatusDialog } from "./components/LlmStatusDialog";
 import { ServerStatusDialog, type ServerGateKind } from "./components/ServerStatusDialog";
 import { SettingsModal } from "./components/SettingsModal";
-import { LONG_PRESS_MS } from "./util/gesture";
 import { Board } from "./canvas/Board";
 import { loadBoardReadingSize, saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
 import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
-import { sceneHash, studentAuthoredElements, studentElements } from "./canvas/capture";
+import { studentAuthoredElements, studentElements } from "./canvas/capture";
 import type { StructureBaseline } from "./canvas/boardDelta";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
 import { buildSnapshot, sceneFingerprint, structureBaselineFromBoard } from "./canvas/snapshot";
@@ -150,10 +149,6 @@ export function App() {
   const [scratchEntryOpen, setScratchEntryOpen] = useState(false);
   const [scratchLibOpen, setScratchLibOpen] = useState(false);
   const scratchLibResumeRef = useRef<(() => void) | null>(null);
-  const scratchHoldRef = useRef<{
-    timer: ReturnType<typeof setTimeout> | null;
-    held: boolean;
-  }>({ timer: null, held: false });
   const [pairing, setPairing] = useState<Pairing>(() => loadPairing());
   const [pairingEditing, setPairingEditing] = useState(false);
   const client = useMemo(() => new LcClient(pairing), [pairing]);
@@ -394,6 +389,19 @@ export function App() {
   const [mode, setMode] = useState<Mode>("review");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!error) return;
+    const timer = window.setTimeout(() => setError(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [error]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   const [pseudocode, setPseudocode] = useState("");
   /** Drives the fade between the browser and the board. */
   const [entering, setEntering] = useState(false);
@@ -473,6 +481,8 @@ export function App() {
   const [leaving, setLeaving] = useState<{ run: () => void } | null>(null);
   const [leavingPending, setLeavingPending] = useState(false);
   const [leavingError, setLeavingError] = useState<string | null>(null);
+  /** open → exit fade; dialog stays mounted through the fade then unmounts. */
+  const [leavingPhase, setLeavingPhase] = useState<"open" | "exit">("open");
 
   /** "Reset the practice session?" — our own modal, held to confirm. */
   const [resetOpen, setResetOpen] = useState(false);
@@ -545,8 +555,10 @@ export function App() {
    * Coach open/close changes the canvas box (side panel or bottom sheet).
    * Nudge Excalidraw + our fit so the board fills the freed space.
    */
+  // Desktop: coach docks beside the board and changes width — refit.
+  // Mobile: coach overlays; keep the template size (no vertical rescale).
   useEffect(() => {
-    if (!problem) return;
+    if (!problem || mobile) return;
     const timer = window.setTimeout(() => {
       window.dispatchEvent(new Event("resize"));
       void boardRef.current?.settleFitView();
@@ -654,7 +666,7 @@ export function App() {
     }
   }, [client]);
 
-  // Debounced board persistence — skip when sceneHash is unchanged.
+  // Debounced board persistence — skip when scene + ink fingerprint is unchanged.
   const lastSavedHashRef = useRef<number | null>(null);
   useEffect(() => {
     if (!problem) return;
@@ -662,7 +674,8 @@ export function App() {
       const board = boardRef.current;
       if (!board || boardSaveSuspendedRef.current) return;
       const elements = board.getElements();
-      const hash = sceneHash(elements);
+      const inkOps = board.getInkOpCount();
+      const hash = sceneFingerprint(elements, inkOps);
       if (lastSavedHashRef.current === hash) return;
       const blob = board.saveBoard();
       dirtyRef.current = true;
@@ -864,7 +877,7 @@ export function App() {
         await refreshSession();
 
         const saved = loaded.resume.board as
-          | { v?: number; elements?: unknown[]; appState?: unknown }
+          | { v?: number; elements?: unknown[]; appState?: unknown; ink?: unknown[] }
           | null;
         const hasSavedBoard =
           saved && saved.v === 1 && Array.isArray(saved.elements) && saved.elements.length > 0;
@@ -901,7 +914,10 @@ export function App() {
         // so `restoreBoard` heals them against the current skeletons.
         lastSavedHashRef.current = null;
         if (hasSavedBoard && saved?.elements) {
-          boardRef.current?.restoreBoard(saved.elements, saved.appState, { skeletons });
+          boardRef.current?.restoreBoard(saved.elements, saved.appState, {
+            skeletons,
+            ink: Array.isArray(saved.ink) ? (saved.ink as import("./canvas/rasterInk").InkOp[]) : [],
+          });
         } else {
           boardRef.current?.seedTemplate(skeletons);
         }
@@ -918,6 +934,9 @@ export function App() {
         await boardRef.current?.waitForTemplate();
         await boardRef.current?.settleFitView();
         syncDrawingsToBoard(resumedMessages);
+        if (hasSavedBoard && saved && Array.isArray(saved.ink)) {
+          boardRef.current?.setInkOps(saved.ink as import("./canvas/rasterInk").InkOp[]);
+        }
 
         setBrowseMotion("idle");
         setSwitchMotion("idle");
@@ -986,6 +1005,7 @@ export function App() {
             const skeletons = buildScratchpadTemplate(pages, dark);
             boardRef.current?.restoreBoard(notebook.board.elements, notebook.board.appState, {
               skeletons,
+              ink: Array.isArray(notebook.board.ink) ? notebook.board.ink : [],
             });
             setScratchPageCount(pages);
             setScratchNotebookId(notebook.id);
@@ -1008,13 +1028,20 @@ export function App() {
         lastIdsRef.current = new Set();
         await boardRef.current?.waitForTemplate();
         await boardRef.current?.settleFitView();
+        // Ink layer may have mounted after the first restore — re-apply saved strokes.
+        if (restored && notebookId) {
+          const notebook = getScratchNotebook(notebookId);
+          if (notebook && Array.isArray(notebook.board.ink)) {
+            boardRef.current?.setInkOps(notebook.board.ink);
+          }
+        }
 
         setBoardPreparing(false);
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
         setEntering(true);
         window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
-        setCoachOpen(true);
+        setCoachOpen(false);
       } catch (cause) {
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
@@ -1310,7 +1337,7 @@ export function App() {
         capturedIds = snapshot.ids;
       } else {
         if (!note) {
-          setError("type a question, or turn on Review board");
+          setError("type a question, or turn on Review");
           return;
         }
         payload = {
@@ -1488,10 +1515,37 @@ export function App() {
     [client, problem, pushCoachMessage],
   );
 
+  const askCoach = useCallback(
+    async (question: string) => {
+      const note = question.trim();
+      if (!problem || !note) {
+        setError("type a question, or turn on Ask");
+        return;
+      }
+      setBusy("asking…");
+      setError(null);
+      setNotice(null);
+      setCoachOpen(true);
+      setCoachPhase("Thinking…");
+      try {
+        await syncSolution();
+        const result = await client.ask(problem.task_id, note, problem.dataset);
+        pushCoachMessage("assistant", result.reply);
+      } catch (cause) {
+        setError(messageOf(cause));
+      } finally {
+        setCoachPhase(null);
+        setBusy(null);
+      }
+    },
+    [client, problem, syncSolution, pushCoachMessage],
+  );
+
   const sendCoachChat = useCallback(
     (text: string, flags: CoachSendFlags) => {
       const flagBits = [
-        flags.reviewBoard ? "Review board" : null,
+        flags.ask ? "Ask" : null,
+        flags.reviewBoard ? "Review" : null,
         flags.draw ? "Draw" : null,
         flags.lazy ? "Lazy" : null,
       ].filter(Boolean);
@@ -1516,8 +1570,12 @@ export function App() {
         }
         pushCoachMessage("user", shown || "Send", attachments ? { attachments } : undefined);
 
-        if (flags.reviewBoard || text) {
-          await submitForReview(text, flags.reviewBoard, attachments, flags.lazy);
+        // Review runs the staged pipeline. Ask (or bare text without Review)
+        // skips it and does a single-turn Q&A.
+        if (flags.reviewBoard) {
+          await submitForReview(text, true, attachments, flags.lazy);
+        } else if (flags.ask || text) {
+          await askCoach(text || "What should I focus on next?");
         }
         if (flags.draw) {
           await askForDiagram(text);
@@ -1555,6 +1613,7 @@ export function App() {
     [
       pushCoachMessage,
       submitForReview,
+      askCoach,
       askForDiagram,
       problem,
       client,
@@ -1860,6 +1919,7 @@ export function App() {
         return;
       }
       setLeavingError(null);
+      setLeavingPhase("open");
       setLeaving({ run: next });
     },
     [problem],
@@ -1868,11 +1928,25 @@ export function App() {
   const resolveLeave = useCallback(
     async (save: boolean) => {
       const pending = leaving;
-      if (!problem || !pending) return;
+      if (!problem || !pending || leavingPending) return;
       setLeavingPending(true);
       setLeavingError(null);
       boardSaveSuspendedRef.current = true;
       agentSaveSuspendedRef.current = true;
+
+      // Fade the dialog out immediately and show the workspace loading spinner
+      // underneath so save/API latency never leaves the modal stuck on screen.
+      setLeavingPhase("exit");
+      setSwitchMotion("busy");
+      const fadeMs = prefersReducedMotion() ? 0 : LEAVE_DIALOG_FADE_MS;
+      const fadeDone = waitMs(fadeMs);
+
+      const dismissDialog = async () => {
+        await fadeDone;
+        setLeaving(null);
+        setLeavingPhase("open");
+      };
+
       try {
         if (isScratchpad(problem)) {
           if (save) {
@@ -1888,6 +1962,11 @@ export function App() {
                 setScratchNotebookId(saved.id);
               } catch (cause) {
                 if (cause instanceof ScratchpadLibraryFullError) {
+                  await dismissDialog();
+                  setSwitchMotion("idle");
+                  setLeavingPending(false);
+                  // Re-open leave flow after the library dialog frees a slot.
+                  setLeaving({ run: pending.run });
                   scratchLibResumeRef.current = () => {
                     void resolveLeave(true);
                   };
@@ -1898,39 +1977,62 @@ export function App() {
               }
             }
           }
-          setLeaving(null);
+          await dismissDialog();
+          setLeavingPending(false);
           pending.run();
           return;
         }
         // Flush the thread first, so a "save" keeps the last exchange and an
-        // archive of a solved attempt is complete.
-        if (coachMessages.length > 0) {
-          await client
-            .putAgentSession(problem.task_id, coachMessages, problem.dataset)
-            .catch(() => {
-              /* best-effort */
-            });
-        }
-        await client.finishAttempt(
-          problem.task_id,
-          { solved: attemptState?.solved ?? tests?.all_passed ?? false, save },
-          problem.dataset,
-        );
-        setLeaving(null);
+        // archive of a solved attempt is complete. Dialog is already fading —
+        // don't wait on the network to start dismissing.
+        const saveWork = (async () => {
+          if (coachMessages.length > 0) {
+            await client
+              .putAgentSession(problem.task_id, coachMessages, problem.dataset)
+              .catch(() => {
+                /* best-effort */
+              });
+          }
+          await client.finishAttempt(
+            problem.task_id,
+            { solved: attemptState?.solved ?? tests?.all_passed ?? false, save },
+            problem.dataset,
+          );
+        })();
+
+        await dismissDialog();
+        await saveWork;
+        setLeavingPending(false);
+        // Keep switchMotion busy — pending.run() (pickProblem / browse) takes over.
         pending.run();
       } catch (cause) {
-        // The workspace is untouched on a failure, so let autosave resume.
+        // The workspace is untouched on a failure — bring the dialog back.
+        await fadeDone;
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
-        setLeavingError(messageOf(cause));
-      } finally {
+        setSwitchMotion("idle");
+        setLeavingPhase("open");
         setLeavingPending(false);
+        setLeavingError(messageOf(cause));
+        // If we already unmounted during dismiss, remount with the error.
+        setLeaving((current) => current ?? { run: pending.run });
       }
     },
-    [client, problem, leaving, coachMessages, attemptState, tests, scratchNotebookId, scratchPageCount],
+    [
+      client,
+      problem,
+      leaving,
+      leavingPending,
+      coachMessages,
+      attemptState,
+      tests,
+      scratchNotebookId,
+      scratchPageCount,
+    ],
   );
 
   const returnToBrowse = useCallback(() => {
+    setSwitchMotion("idle");
     setBrowseMotion("enter");
     setActiveRegion("constraints");
     setProblem(null);
@@ -2096,44 +2198,16 @@ export function App() {
         </div>
 
         <div className="lc-header-right">
-          {/* Paper icon: browse only. Hold = load/new menu; tap = new notebook. */}
+          {/* Paper icon opens the scratchpad load / new menu. */}
           {!problem && (
             <button
               type="button"
               className="lc-icon lc-tip-target"
               aria-label="Scratchpad"
-              data-tip="Scratchpad — tap for new, hold to load"
+              data-tip="Scratchpad — open load / new"
               data-tip-placement="bottom"
               disabled={busy !== null}
-              onPointerDown={(event) => {
-                if (event.button !== 0) return;
-                scratchHoldRef.current.held = false;
-                if (scratchHoldRef.current.timer) clearTimeout(scratchHoldRef.current.timer);
-                scratchHoldRef.current.timer = setTimeout(() => {
-                  scratchHoldRef.current.held = true;
-                  setScratchEntryOpen(true);
-                }, LONG_PRESS_MS);
-              }}
-              onPointerUp={() => {
-                if (scratchHoldRef.current.timer) {
-                  clearTimeout(scratchHoldRef.current.timer);
-                  scratchHoldRef.current.timer = null;
-                }
-                if (scratchHoldRef.current.held) return;
-                void openScratchpad({ fresh: true });
-              }}
-              onPointerLeave={() => {
-                if (scratchHoldRef.current.timer) {
-                  clearTimeout(scratchHoldRef.current.timer);
-                  scratchHoldRef.current.timer = null;
-                }
-              }}
-              onPointerCancel={() => {
-                if (scratchHoldRef.current.timer) {
-                  clearTimeout(scratchHoldRef.current.timer);
-                  scratchHoldRef.current.timer = null;
-                }
-              }}
+              onClick={() => setScratchEntryOpen(true)}
             >
               <svg
                 className="lc-icon-svg"
@@ -2158,11 +2232,12 @@ export function App() {
             <button
               type="button"
               className="lc-icon lc-tip-target is-active"
-              aria-label="Scratchpad (open)"
-              data-tip="Scratchpad — open"
+              aria-label="Scratchpad notebooks"
+              data-tip="Scratchpad — save / load"
               data-tip-placement="bottom"
               aria-pressed="true"
-              disabled
+              disabled={busy !== null}
+              onClick={() => setScratchEntryOpen(true)}
             >
               <svg
                 className="lc-icon-svg lc-icon-svg-filled"
@@ -2245,19 +2320,13 @@ export function App() {
 
       {busy && problem && switchMotion === "idle" && <div className="lc-busy">{busy}</div>}
       {error && (
-        <div className="lc-warning lc-banner">
+        <div className="lc-warning lc-banner" role="status">
           <span>{error}</span>
-          <button type="button" className="lc-link" onClick={() => setError(null)}>
-            dismiss
-          </button>
         </div>
       )}
       {notice && !error && (
-        <div className="lc-banner lc-notice">
+        <div className="lc-banner lc-notice" role="status">
           <span>{notice}</span>
-          <button type="button" className="lc-link" onClick={() => setNotice(null)}>
-            dismiss
-          </button>
         </div>
       )}
 
@@ -2281,6 +2350,8 @@ export function App() {
             onReadingSizeChange={setReadingSize}
             interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
             onCodeSlot={onCodeSlot}
+            linedPaperToggle={Boolean(problem)}
+            showReadingSize={Boolean(problem && !isScratchpad(problem) && mobile)}
             mobileRegion={
               problem
                 ? isScratchpad(problem)
@@ -2307,6 +2378,7 @@ export function App() {
                 />
               ) : null
             }
+            coachFold={null}
           />
           {(!problem || holdBrowseOverlay) && (
             <div
@@ -2394,6 +2466,7 @@ export function App() {
             open={coachOpen}
             mode={mode}
             onModeChange={setMode}
+            onOpenChange={setCoachOpen}
             busy={busy !== null}
             thinking={busy !== null || thinking}
             thinkingPhase={coachPhase}
@@ -2489,17 +2562,19 @@ export function App() {
         <ScratchpadDialog
           mode="leave"
           pending={leavingPending}
+          exiting={leavingPhase === "exit"}
           error={leavingError}
           onChoose={(choice, notebookId) => {
             if (choice === "load" && notebookId) {
               setLeaving(null);
+              setLeavingPhase("open");
               void openScratchpad({ notebookId });
               return;
             }
             void resolveLeave(choice === "save");
           }}
           onCancel={() => {
-            if (leavingPending) return;
+            if (leavingPending || leavingPhase === "exit") return;
             setLeaving(null);
             setLeavingError(null);
           }}
@@ -2511,10 +2586,11 @@ export function App() {
           taskId={problem.task_id}
           solved={attemptState?.solved ?? tests?.all_passed ?? false}
           pending={leavingPending}
+          exiting={leavingPhase === "exit"}
           error={leavingError}
           onChoose={(save) => void resolveLeave(save)}
           onCancel={() => {
-            if (leavingPending) return;
+            if (leavingPending || leavingPhase === "exit") return;
             setLeaving(null);
             setLeavingError(null);
           }}
@@ -2525,13 +2601,40 @@ export function App() {
         <ScratchpadDialog
           mode="entry"
           pending={busy !== null}
+          allowSave={Boolean(problem && isScratchpad(problem))}
           onChoose={(choice, notebookId) => {
             setScratchEntryOpen(false);
+            if (choice === "save") {
+              const board = boardRef.current;
+              if (!board || !problem || !isScratchpad(problem)) return;
+              try {
+                const blob = board.saveBoard();
+                const saved = saveScratchNotebook({
+                  id: scratchNotebookId ?? undefined,
+                  board: blob,
+                  agent: coachMessages,
+                  pageCount: Math.max(
+                    scratchPageCount,
+                    countScratchPages(blob.elements),
+                  ),
+                });
+                setScratchNotebookId(saved.id);
+                setNotice(`Saved “${saved.title}”.`);
+              } catch (cause) {
+                if (cause instanceof ScratchpadLibraryFullError) {
+                  scratchLibResumeRef.current = () => setScratchEntryOpen(true);
+                  setScratchLibOpen(true);
+                  return;
+                }
+                setError(messageOf(cause));
+              }
+              return;
+            }
             if (choice === "load" && notebookId) {
               void openScratchpad({ notebookId });
-            } else {
-              void openScratchpad({ fresh: true });
+              return;
             }
+            void openScratchpad({ fresh: true });
           }}
           onCancel={() => setScratchEntryOpen(false)}
         />
@@ -3041,6 +3144,9 @@ function waitMs(ms: number): Promise<void> {
     window.setTimeout(resolve, ms);
   });
 }
+
+/** Leave dialog fade duration (ms). Reduced-motion callers pass 0 at use sites. */
+const LEAVE_DIALOG_FADE_MS = 180;
 
 function prefersReducedMotion(): boolean {
   return (

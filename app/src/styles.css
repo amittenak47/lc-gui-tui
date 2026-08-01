@@ -532,51 +532,85 @@ input[type="checkbox"] {
   z-index: 12;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 6px 2px 2px;
-  border: 1px solid var(--chrome-edge);
-  border-radius: 12px;
-  background: var(--surface);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
+  gap: 0;
+  padding: 1px 1px 1px 0;
+  border: 1px solid color-mix(in srgb, var(--chrome-edge) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
   touch-action: manipulation;
   transition:
-    left 70ms linear,
-    top 70ms linear;
+    left 90ms linear,
+    top 90ms linear;
   will-change: left, top, opacity, transform;
+  opacity: 0.92;
 }
 
-.lc-ink-chrome-slider {
+.lc-ink-chrome-dial-wrap {
   display: flex;
   align-items: center;
-  min-width: 84px;
-  max-width: 110px;
-  margin-left: 2px;
-  padding-left: 4px;
+  justify-content: center;
+  margin-left: 0;
+  padding-left: 1px;
   border-left: 1px solid var(--line);
 }
 
-.lc-ink-chrome-slider .lc-stroke-slider {
-  flex-direction: row;
-  align-items: center;
-  gap: 2px;
-  min-height: 0;
-  padding: 0;
+.lc-ink-chrome-dial {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  touch-action: none;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.lc-ink-chrome-slider .lc-stroke-slider-input {
-  width: 56px;
-  height: 18px;
-  writing-mode: horizontal-tb;
+.lc-ink-chrome-dial.is-eraser {
+  width: 40px;
+  height: 40px;
 }
 
-.lc-ink-chrome-slider .lc-stroke-slider-cap {
-  font-size: 9px;
-  opacity: 0.55;
+.lc-ink-chrome-dial.is-eraser svg {
+  width: 40px;
+  height: 40px;
 }
 
-.lc-ink-chrome-slider .lc-stroke-slider-value {
-  font-size: 10px;
-  min-width: 1.4em;
+.lc-ink-chrome-dial:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent);
+}
+
+.lc-ink-chrome-dial-track {
+  stroke: color-mix(in srgb, var(--ink) 22%, transparent);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.lc-ink-chrome-dial-fill {
+  stroke: var(--ink);
+  stroke-width: 3;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+.lc-ink-chrome-dial-knob {
+  fill: var(--surface);
+  stroke: var(--ink);
+  stroke-width: 1.25;
+}
+
+.lc-ink-chrome-dial-core {
+  fill: color-mix(in srgb, var(--surface) 88%, transparent);
+  stroke: color-mix(in srgb, var(--ink) 18%, transparent);
+  stroke-width: 1;
+}
+
+.lc-ink-chrome-dial-value {
+  fill: var(--ink);
+  font-size: 7px;
+  font-weight: 600;
+  pointer-events: none;
 }
 
 .lc-stamp-trash {
@@ -603,53 +637,47 @@ input[type="checkbox"] {
   color: #dc2626;
 }
 
-/* Mid-stroke: ignore hits so the tip cannot tap Undo by accident. */
-.lc-ink-chrome-live {
-  pointer-events: none;
-  opacity: 0.55;
-}
-
 .lc-ink-chrome-in {
   animation: lc-ink-chrome-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .lc-ink-chrome-out {
-  animation: lc-ink-chrome-out 160ms ease-in both;
+  animation: lc-ink-chrome-out 200ms ease-in both;
   pointer-events: none;
 }
 
 @keyframes lc-ink-chrome-in {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.92);
+    transform: translateY(4px) scale(0.94);
   }
   to {
-    opacity: 1;
+    opacity: 0.92;
     transform: translateY(0) scale(1);
   }
 }
 
 @keyframes lc-ink-chrome-out {
   from {
-    opacity: 1;
+    opacity: 0.92;
     transform: translateY(0) scale(1);
   }
   to {
     opacity: 0;
-    transform: translateY(4px) scale(0.94);
+    transform: translateY(-4px) scale(0.96);
   }
 }
 
 .lc-ink-chrome-btn {
-  width: var(--touch);
-  height: var(--touch);
-  min-height: var(--touch);
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 10px;
+  border-radius: 5px;
   background: transparent;
   color: var(--ink);
 }
@@ -659,10 +687,15 @@ input[type="checkbox"] {
   background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
+.lc-ink-chrome .lc-tool-svg {
+  width: 12px;
+  height: 12px;
+}
+
 .lc-mobile .lc-ink-chrome-btn {
-  width: calc(var(--touch) + 4px);
-  height: calc(var(--touch) + 4px);
-  min-height: calc(var(--touch) + 4px);
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
 }
 
 /* Eraser brush preview: circle + crosshair (pen uses crosshair; Excalidraw uses a fixed circle). */
@@ -734,7 +767,8 @@ input[type="checkbox"] {
 
 .lc-stroke-slider {
   display: flex;
-  flex-direction: column;
+  /* min→input→max in DOM; reverse so max stays on top for the vertical track. */
+  flex-direction: column-reverse;
   align-items: center;
   gap: 2px;
   padding: 4px 2px;
@@ -1113,28 +1147,6 @@ input[type="checkbox"] {
   margin-top: 2px;
 }
 
-.lc-shape-import-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--line);
-}
-
-.lc-shape-import {
-  min-height: 32px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
-.lc-shape-import-hint {
-  margin: 0 0 6px;
-  font-size: 11px;
-  line-height: 1.4;
-}
-
 @keyframes lc-shape-mod-in {
   from {
     opacity: 0;
@@ -1360,11 +1372,177 @@ input[type="checkbox"] {
   pointer-events: auto;
 }
 
+.lc-map-chrome-left {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
 .lc-map-chrome-right {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
+}
+
+.lc-map-chrome-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+
+.lc-zoom-row {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.lc-lined-toggle {
+  width: 36px;
+  min-width: 36px;
+  min-height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
+  color: var(--ink);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.lc-lined-toggle:hover {
+  background: var(--panel);
+}
+
+.lc-lined-toggle:active {
+  transform: scale(0.97);
+}
+
+.lc-lined-toggle.is-active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--chrome-edge));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.lc-chrome-eye {
+  width: 36px;
+  min-width: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
+  color: var(--ink);
+}
+
+.lc-chrome-eye.is-dimmed {
+  opacity: 0.45;
+}
+
+.lc-map-controls-collapsed {
+  justify-content: flex-end;
+}
+
+.lc-map-controls-collapsed .lc-map-chrome-left:empty {
+  display: none;
+}
+
+.lc-map-controls-collapsed .lc-map-chrome-right {
+  align-items: flex-end;
+}
+
+.lc-board-lined-overlay {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: 2px;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(100% - 1.25px),
+    color-mix(in srgb, var(--ink) 42%, transparent) calc(100% - 1.25px),
+    color-mix(in srgb, var(--ink) 42%, transparent) 100%
+  );
+  opacity: 0.9;
+}
+
+.lc-coach-fold {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.lc-coach-fold-bar {
+  display: block;
+  width: 44px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+
+.lc-coach-fold:hover .lc-coach-fold-bar,
+.lc-coach-fold:focus-visible .lc-coach-fold-bar,
+.lc-coach-sheet-handle:hover .lc-coach-fold-bar,
+.lc-coach-sheet-handle:focus-visible .lc-coach-fold-bar {
+  background: color-mix(in srgb, var(--ink) 48%, transparent);
+}
+
+.lc-coach-sheet-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px 8px;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.lc-coach-sheet-handle:active {
+  cursor: grabbing;
+}
+
+.lc-coach-fold-open {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding-top: 8px;
+  padding-bottom: 10px;
+}
+
+.lc-coach-fold-closed {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  z-index: 13;
+  pointer-events: auto;
+  padding-bottom: 4px;
 }
 
 .lc-reading-size,
@@ -1406,8 +1584,19 @@ input[type="checkbox"] {
   border-left: 1px solid var(--chrome-edge);
 }
 
-.lc-map-btn:hover {
+.lc-map-btn:hover:not(:disabled) {
   background: var(--panel);
+}
+
+.lc-map-btn:disabled {
+  opacity: 1;
+  cursor: default;
+  background: color-mix(in srgb, var(--ink) 14%, var(--panel));
+  color: color-mix(in srgb, var(--ink) 42%, transparent);
+}
+
+.lc-zoom .lc-map-btn:disabled {
+  background: color-mix(in srgb, var(--ink) 16%, var(--surface));
 }
 
 .lc-palette-compact {
@@ -1498,8 +1687,8 @@ input[type="checkbox"] {
 .lc-palette-popover-map {
   left: 0;
   right: auto;
-  bottom: calc(100% + 6px);
-  top: auto;
+  top: calc(100% + 6px);
+  bottom: auto;
 }
 
 .lc-coach-toggle-open {
@@ -1564,6 +1753,8 @@ input[type="checkbox"] {
   .lc-server-gate-modal,
   .lc-server-gate-boot-enter,
   .lc-server-gate-boot-exit,
+  .lc-leave-dialog-exit,
+  .lc-leave-dialog-exit .lc-settings-modal,
   .lc-offline-chip-enter,
   .lc-pairing-edit-enter,
   .lc-gate-morph-to-dialog,
@@ -1617,6 +1808,8 @@ input[type="checkbox"] {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  padding-top: 0;
+  flex: 1 1 auto;
 }
 
 .lc-coach-messages {
@@ -2072,7 +2265,23 @@ input[type="checkbox"] {
   border-color: var(--line);
 }
 
+.lc-flag:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: color-mix(in srgb, var(--ink) 6%, var(--panel));
+  color: color-mix(in srgb, var(--ink) 45%, transparent);
+  border-color: color-mix(in srgb, var(--line) 70%, transparent);
+}
+
 .lc-flag-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+  color: var(--accent);
+}
+
+.lc-flag-active:disabled {
+  opacity: 1;
+  cursor: pointer;
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 22%, var(--panel));
   color: var(--accent);
@@ -3106,6 +3315,35 @@ button.lc-row-selected:hover:not(:disabled) {
   -webkit-backdrop-filter: blur(8px);
 }
 
+.lc-leave-dialog-exit {
+  animation: lc-leave-dialog-out 180ms ease-in both;
+  pointer-events: none;
+}
+
+.lc-leave-dialog-exit .lc-settings-modal {
+  animation: lc-leave-dialog-card-out 180ms ease-in both;
+}
+
+@keyframes lc-leave-dialog-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes lc-leave-dialog-card-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
 .lc-settings-modal {
   width: min(560px, 100%);
   max-height: min(90vh, 720px);
@@ -4125,6 +4363,9 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile {
   --lc-coach-sheet: min(42vh, 400px);
+  /* Clear Android's home-swipe gesture band at the bottom edge. */
+  --lc-coach-sheet-lift: 14px;
+  --lc-coach-peek: 34px;
 }
 
 /* Pad the whole shell above the Android nav bar — floating controls stay at
@@ -4140,7 +4381,8 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile.lc-app-coach-open .lc-main {
   margin-right: 0;
-  margin-bottom: var(--lc-coach-sheet);
+  /* Coach sheets over the board — do not shrink the template to make room. */
+  margin-bottom: 0;
 }
 
 .lc-mobile.lc-app-coach-open .lc-header {
@@ -4158,13 +4400,37 @@ button.lc-row-selected:hover:not(:disabled) {
   top: auto;
   left: 0;
   right: 0;
-  bottom: 0;
+  bottom: var(--lc-coach-sheet-lift);
   width: auto;
   height: var(--lc-coach-sheet);
   max-height: none;
   border-left: none;
   border-top: 1px solid var(--chrome-edge);
   box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
+  /* Peek handle stays visible when parked; board chrome sits above it. */
+  z-index: 40;
+}
+
+.lc-mobile .lc-side-sheet-parked {
+  border-top-color: color-mix(in srgb, var(--chrome-edge) 70%, transparent);
+  box-shadow: 0 -2px 10px rgb(0 0 0 / 10%);
+}
+
+.lc-mobile .lc-side-sheet-parked .lc-coach-chat {
+  pointer-events: none;
+  opacity: 0;
+}
+
+.lc-mobile .lc-map-controls {
+  /* Room for the parked coach peek handle under the chrome. */
+  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift));
+}
+
+.lc-mobile.lc-app-coach-open .lc-map-controls {
+  /* Sheet covers the bottom; keep controls from fighting the handle. */
+  bottom: calc(4px + var(--lc-coach-sheet) + var(--lc-coach-sheet-lift));
+  opacity: 0;
+  pointer-events: none;
 }
 
 .lc-mobile.lc-app-coach-open .lc-side {
@@ -4458,24 +4724,14 @@ button.lc-row-selected:hover:not(:disabled) {
   min-width: 0;
 }
 
-.lc-mobile .lc-toolbar .lc-stroke-slider-cap:first-of-type {
-  order: 3; /* max on the right */
-}
-
 .lc-mobile .lc-toolbar .lc-stroke-slider-input {
-  order: 2;
   width: 72px;
   height: 22px;
   writing-mode: horizontal-tb;
   direction: ltr;
 }
 
-.lc-mobile .lc-toolbar .lc-stroke-slider-cap:nth-of-type(2) {
-  order: 1; /* min on the left */
-}
-
 .lc-mobile .lc-toolbar .lc-stroke-slider-value {
-  order: 4;
   min-width: 1.6em;
 }
 
@@ -4536,7 +4792,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-map-controls {
   left: 4px;
   right: 4px;
-  bottom: 4px;
+  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift));
   align-items: center;
   gap: 4px;
 }
@@ -5100,7 +5356,7 @@ button.lc-row-selected:hover:not(:disabled) {
   align-items: center;
 }
 
-.lc-map-controls-paged .lc-palette-compact {
+.lc-map-controls-paged .lc-map-chrome-left {
   grid-column: 1;
   justify-self: start;
 }
@@ -5302,6 +5558,45 @@ button.lc-row-selected:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.lc-scratch-load-row {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.lc-scratch-load-row .lc-scratch-load-hold {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lc-scratch-load-trash {
+  flex: 0 0 auto;
+  width: 42px;
+  min-height: 42px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lc-scratch-load-trash:hover:not(:disabled) {
+  background: color-mix(in srgb, #b91c1c 12%, var(--surface));
+  border-color: color-mix(in srgb, #b91c1c 40%, var(--chrome-edge));
+}
+
+.lc-scratch-load-trash:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .lc-settings-choice-option {

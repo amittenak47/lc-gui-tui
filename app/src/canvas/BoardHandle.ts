@@ -11,6 +11,15 @@
 import type { RegionId } from "../templates/regions";
 import type { Skeleton } from "../templates/skeleton";
 import type { InkStroke, SceneElementLike } from "./capture";
+import type { InkOp } from "./rasterInk";
+
+export interface BoardBlob {
+  v: 1;
+  elements: unknown[];
+  appState: { scrollX: number; scrollY: number; zoom: number };
+  /** Raster pen/eraser ops — optional for older saves. */
+  ink?: InkOp[];
+}
 
 export type ToolName =
   | "hand"
@@ -45,7 +54,10 @@ export interface BoardHandle {
   clearStudentWork(): void;
   /** Restore the original problem template layout (frames + statement). */
   resetTemplate(): void;
-  /** Base64 PNG of the board, raster pen ink included, for vision models only. */
+  /**
+   * Base64 PNG of the board, raster pen ink included, for vision models only.
+   * Export uses scene bounds — viewport zoom does not change what the coach sees.
+   */
   exportPng(): Promise<string>;
   /**
    * True when the bitmap ink layer holds strokes. Pen ink is pixels, not scene
@@ -53,16 +65,20 @@ export interface BoardHandle {
    * build where nothing OCRs it.
    */
   hasRasterInk(): boolean;
-  /** Freedraw strokes in absolute coordinates, for the ink recognizer. */
+  /** Freedraw strokes in absolute scene coordinates, for the ink recognizer. */
   getStrokes(): InkStroke[];
   /**
    * Raster pen strokes in scene coordinates, for the ink recognizer. Separate
    * from {@link getStrokes} because the pen writes pixels, not `freedraw`
    * elements — both sources have to reach ML Kit or handwriting goes unread.
+   * Scene coords are zoom-independent: writing while zoomed in is the same size
+   * to the coach as writing while zoomed out.
    */
   getInkStrokes(): InkStroke[];
   /** Committed raster ink ops — for ambient/review fingerprints. */
   getInkOpCount(): number;
+  /** Replace raster ink (notebook restore after the ink layer has mounted). */
+  setInkOps(ops: InkOp[]): void;
   setTool(tool: ToolName): void;
   undo(): void;
   scrollToContent(): void;
@@ -87,13 +103,13 @@ export interface BoardHandle {
   fitCodeToSource(source: string): void;
   /** Small PNGs of student template boxes that have content (for chat attachments). */
   exportRegionThumbs(): Promise<Array<{ region: RegionId; label: string; png: string }>>;
-  /** Persistable board blob (excludes coach viz). */
-  saveBoard(): { v: 1; elements: unknown[]; appState: { scrollX: number; scrollY: number; zoom: number } };
+  /** Persistable board blob (excludes coach viz; includes raster ink). */
+  saveBoard(): BoardBlob;
   /** Restore a saved board without recording undo history. */
   restoreBoard(
     elements: unknown[],
     appState?: unknown,
-    options?: { skeletons?: Skeleton[] },
+    options?: { skeletons?: Skeleton[]; ink?: InkOp[] },
   ): void;
   /** Recolor template scaffolding for the current theme (after restore/seed). */
   applyThemeInk(themeId: string): void;

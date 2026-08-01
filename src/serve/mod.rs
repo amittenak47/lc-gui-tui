@@ -155,6 +155,7 @@ pub fn router(state: Shared) -> Router {
         .route("/workspace/:id/test", post(routes::run_tests))
         .route("/workspace/:id/open", post(routes::open_workspace))
         .route("/coach/review", post(coach::review))
+        .route("/coach/ask", post(coach::ask))
         .route("/coach/viz", post(viz::viz))
         .route("/coach/reveal", post(coach::reveal))
         .route("/coach/lazy", post(coach::lazy_fill))

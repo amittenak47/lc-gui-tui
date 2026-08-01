@@ -6,16 +6,18 @@ import { useEffect, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import {
+  deleteScratchNotebook,
   listScratchNotebooks,
   type ScratchNotebookMeta,
 } from "../util/scratchpadStore";
 
 export type ScratchLeaveChoice = "save" | "discard" | "load";
-export type ScratchEntryChoice = "new" | "load";
+export type ScratchEntryChoice = "new" | "load" | "save";
 
 interface LeaveProps {
   mode: "leave";
   pending: boolean;
+  exiting?: boolean;
   error: string | null;
   onChoose: (choice: ScratchLeaveChoice, notebookId?: string) => void;
   onCancel: () => void;
@@ -24,7 +26,10 @@ interface LeaveProps {
 interface EntryProps {
   mode: "entry";
   pending?: boolean;
+  exiting?: boolean;
   error?: string | null;
+  /** When already inside a notebook, offer Save alongside New / Load. */
+  allowSave?: boolean;
   onChoose: (choice: ScratchEntryChoice, notebookId?: string) => void;
   onCancel: () => void;
 }
@@ -44,22 +49,34 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !props.pending) props.onCancel();
+      if (event.key === "Escape" && !props.pending && !props.exiting) props.onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [props]);
 
   const pending = Boolean(props.pending);
+  const exiting = Boolean(props.exiting);
   const error = props.error ?? null;
   const isLeave = props.mode === "leave";
+  const allowSave = props.mode === "entry" && Boolean(props.allowSave);
+  const locked = pending || exiting;
+
+  const refreshList = () => setNotebooks(listScratchNotebooks());
+
+  const removeNotebook = (id: string) => {
+    deleteScratchNotebook(id);
+    refreshList();
+  };
 
   return (
     <div
-      className="lc-settings-backdrop"
+      className={["lc-settings-backdrop", exiting && "lc-leave-dialog-exit"]
+        .filter(Boolean)
+        .join(" ")}
       role="presentation"
       onClick={(event) => {
-        if (event.target === event.currentTarget && !pending) props.onCancel();
+        if (event.target === event.currentTarget && !locked) props.onCancel();
       }}
     >
       <div
@@ -69,13 +86,15 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
         aria-label={isLeave ? "Leave scratchpad?" : "Open scratchpad"}
       >
         <div className="lc-settings-head">
-          <h2>{isLeave ? "Leave scratchpad?" : "Open scratchpad"}</h2>
+          <h2>{isLeave ? "Leave scratchpad?" : "Scratchpad"}</h2>
           <p className="lc-muted">
             {pickingLoad
-              ? "Pick a saved notebook"
+              ? "Pick a saved notebook — trash removes it."
               : isLeave
                 ? "Hold to confirm."
-                : "Quick tap opens blank. Hold the icon for this menu."}
+                : allowSave
+                  ? "Save this notebook, load another, or start blank."
+                  : "Start blank or load a saved notebook."}
           </p>
         </div>
 
@@ -88,25 +107,36 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                 <p className="lc-muted">No saved notebooks yet.</p>
               )}
               {notebooks.map((entry) => (
-                <HoldButton
-                  key={entry.id}
-                  label={`Load ${entry.title}`}
-                  className="lc-hold-choice"
-                  disabled={pending}
-                  onConfirm={() => props.onChoose("load", entry.id)}
-                  resetKey={error}
-                >
-                  <strong>{entry.title}</strong>
-                  <span className="lc-muted">
-                    {entry.pageCount} page{entry.pageCount === 1 ? "" : "s"} ·{" "}
-                    {new Date(entry.updatedAt).toLocaleString()}
-                  </span>
-                </HoldButton>
+                <div key={entry.id} className="lc-scratch-load-row">
+                  <HoldButton
+                    label={`Load ${entry.title}`}
+                    className="lc-hold-choice lc-scratch-load-hold"
+                    disabled={locked}
+                    onConfirm={() => props.onChoose("load", entry.id)}
+                    resetKey={error}
+                  >
+                    <strong>{entry.title}</strong>
+                    <span className="lc-muted">
+                      {entry.pageCount} page{entry.pageCount === 1 ? "" : "s"} ·{" "}
+                      {new Date(entry.updatedAt).toLocaleString()}
+                    </span>
+                  </HoldButton>
+                  <button
+                    type="button"
+                    className="lc-scratch-load-trash"
+                    aria-label={`Delete ${entry.title}`}
+                    title="Delete notebook"
+                    disabled={locked}
+                    onClick={() => removeNotebook(entry.id)}
+                  >
+                    🗑
+                  </button>
+                </div>
               ))}
               <button
                 type="button"
                 className="lc-secondary"
-                disabled={pending}
+                disabled={locked}
                 onClick={() => setPickingLoad(false)}
               >
                 Back
@@ -119,7 +149,7 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                   <HoldButton
                     label="Load"
                     className="lc-hold-choice"
-                    disabled={pending || notebooks.length === 0}
+                    disabled={locked || notebooks.length === 0}
                     onConfirm={() => setPickingLoad(true)}
                     resetKey={error}
                   >
@@ -128,7 +158,7 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                   <HoldButton
                     label="Save"
                     className="lc-hold-choice"
-                    disabled={pending}
+                    disabled={locked}
                     onConfirm={() => props.onChoose("save")}
                     resetKey={error}
                   >
@@ -137,7 +167,7 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                   <HoldButton
                     label="Discard"
                     className="lc-hold-choice lc-hold-danger"
-                    disabled={pending}
+                    disabled={locked}
                     onConfirm={() => props.onChoose("discard")}
                     resetKey={error}
                   >
@@ -146,10 +176,21 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                 </>
               ) : (
                 <>
+                  {allowSave && (
+                    <HoldButton
+                      label="Save"
+                      className="lc-hold-choice"
+                      disabled={locked}
+                      onConfirm={() => props.onChoose("save")}
+                    >
+                      <strong>Save</strong>
+                      <span className="lc-muted">Keep this notebook in the library.</span>
+                    </HoldButton>
+                  )}
                   <HoldButton
                     label="New notebook"
                     className="lc-hold-choice"
-                    disabled={pending}
+                    disabled={locked}
                     onConfirm={() => props.onChoose("new")}
                   >
                     <strong>New notebook</strong>
@@ -158,7 +199,7 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                   <HoldButton
                     label="Load"
                     className="lc-hold-choice"
-                    disabled={pending || notebooks.length === 0}
+                    disabled={locked || notebooks.length === 0}
                     onConfirm={() => setPickingLoad(true)}
                   >
                     <strong>Load…</strong>
@@ -171,7 +212,7 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
         </div>
 
         <div className="lc-settings-foot">
-          <button type="button" className="lc-secondary" disabled={pending} onClick={props.onCancel}>
+          <button type="button" className="lc-secondary" disabled={locked} onClick={props.onCancel}>
             {isLeave ? "Keep writing" : "Cancel"}
           </button>
         </div>

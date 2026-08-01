@@ -93,7 +93,7 @@ describe("applyBoardReadingSize", () => {
     expect(meta.fontSize).toBe(26);
     expect(meta.y).toBe(150);
 
-    expect(body0.fontSize).toBe(28);
+    expect(body0.fontSize).toBe(44);
     expect(body0.y).toBe(200);
     expect(body1.y).toBeGreaterThan(body0.y!);
   });
@@ -111,7 +111,7 @@ describe("applyBoardReadingSize", () => {
     ];
     const a = applyBoardReadingSize(elements, "M", { zoom: 0.5 });
     const b = applyBoardReadingSize(elements, "M", { zoom: 1.5 });
-    expect(a[0].fontSize).toBe(24);
-    expect(b[0].fontSize).toBe(24);
+    expect(a[0].fontSize).toBe(36);
+    expect(b[0].fontSize).toBe(36);
   });
 });

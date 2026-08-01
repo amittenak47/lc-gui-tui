@@ -147,7 +147,7 @@ export interface MonacoBlockProps {
 export default function MonacoBlock({
   value,
   language,
-  themeId = "parchment",
+  themeId = "blue",
   zoom = 1,
   fontSizePref = "M",
   height = "min(42vh, 360px)",

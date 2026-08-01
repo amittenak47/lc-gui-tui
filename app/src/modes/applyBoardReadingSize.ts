@@ -8,7 +8,7 @@
  * Monaco scales its CSS px by the same zoom so the dock stays proportional.
  */
 
-import { BODY_FONT_PX, type BoardReadingSize } from "./codeFontSize";
+import { BODY_FONT_PX, STATEMENT_LINE_HEIGHT_RATIO, type BoardReadingSize } from "./codeFontSize";
 
 type ReadingMeta = {
   lcRegion?: string;
@@ -32,6 +32,8 @@ export type ReadingElement = {
   width?: number;
   height?: number;
   fontSize?: number;
+  /** Excalidraw lineHeight multiplier (line box / fontSize). */
+  lineHeight?: number;
   text?: string;
   customData?: ReadingMeta | null;
 };
@@ -88,7 +90,7 @@ function ensureBases(element: ReadingElement): ReadingMeta {
   }
   if (meta.lcLineHeightBase == null) {
     const base = meta.lcFontBase ?? 28;
-    meta.lcLineHeightBase = base < 26 ? 34 / 24 : 40 / 28;
+    meta.lcLineHeightBase = base < 26 ? 34 / 24 : STATEMENT_LINE_HEIGHT_RATIO;
   }
   return meta;
 }
@@ -135,6 +137,8 @@ export interface ApplyReadingOpts {
   captureFrom?: BoardReadingSize;
   /** Ignored — kept for call-site compatibility. Zoom no longer counter-scales fonts. */
   zoom?: number;
+  /** Snap body blocks onto the lined-paper pitch so statement text sits on the rules. */
+  lined?: boolean;
 }
 
 /**
@@ -144,9 +148,11 @@ export interface ApplyReadingOpts {
 export function applyBoardReadingSize<T extends ReadingElement>(
   elements: readonly T[],
   size: BoardReadingSize,
-  _opts?: ApplyReadingOpts,
+  opts?: ApplyReadingOpts,
 ): T[] {
   const targetFont = BODY_FONT_PX[size];
+  const lined = Boolean(opts?.lined);
+  const gridPitch = targetFont * STATEMENT_LINE_HEIGHT_RATIO;
 
   const frames = new Map<string, { x: number; y: number; width?: number }>();
   for (const element of elements) {
@@ -177,7 +183,7 @@ export function applyBoardReadingSize<T extends ReadingElement>(
     number,
     { element: T; meta: ReadingMeta; patch: Partial<ReadingElement> }
   >();
-  let cursor = bodyAnchor;
+  let cursor = lined ? Math.round(bodyAnchor / gridPitch) * gridPitch : bodyAnchor;
   const gap = 22;
   const constraintsW = frameWidth(frames, "constraints");
   const textWidth =
@@ -189,8 +195,11 @@ export function applyBoardReadingSize<T extends ReadingElement>(
     // Preserve code vs prose ratio from the template (24 vs 28).
     const ratio = Math.min(1.05, Math.max(0.8, baseFont / 28));
     const fontSize = Math.round(targetFont * ratio * 10) / 10;
-    const lhRatio = meta.lcLineHeightBase ?? 40 / 28;
-    const lineH = fontSize * lhRatio;
+    // Lined mode uses a shared prose pitch so rules match every body line.
+    const lhRatio = lined
+      ? STATEMENT_LINE_HEIGHT_RATIO
+      : (meta.lcLineHeightBase ?? STATEMENT_LINE_HEIGHT_RATIO);
+    const lineH = lined ? gridPitch : fontSize * lhRatio;
     // Approximate soft-wrap: chars per line shrinks as font grows.
     const wrapWidth = textWidth ?? element.width ?? 800;
     const avgChar = fontSize * 0.55;
@@ -207,13 +216,18 @@ export function applyBoardReadingSize<T extends ReadingElement>(
 
     const patch: Partial<ReadingElement> = {};
     if (element.fontSize !== fontSize) patch.fontSize = fontSize;
+    if (element.lineHeight !== lhRatio) patch.lineHeight = lhRatio;
     if (element.y !== y) patch.y = y;
     if (element.height !== height) patch.height = height;
     if (textWidth != null && element.width !== textWidth) patch.width = textWidth;
     meta.lcRegionOy = oy;
 
     bodyPatch.set(index, { element, meta, patch });
-    cursor = oy + height + gap;
+    if (lined) {
+      cursor = Math.ceil((oy + height + 0.001) / gridPitch) * gridPitch;
+    } else {
+      cursor = oy + height + gap;
+    }
   }
 
   let changed = false;
@@ -228,7 +242,10 @@ export function applyBoardReadingSize<T extends ReadingElement>(
     if (!planned) return element;
 
     const { meta, patch } = planned;
-    if (Object.keys(patch).length === 0 && meta.lcRegionOy === element.customData?.lcRegionOy) {
+    if (
+      Object.keys(patch).length === 0 &&
+      meta.lcRegionOy === element.customData?.lcRegionOy
+    ) {
       return element;
     }
     changed = true;

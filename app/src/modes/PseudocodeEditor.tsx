@@ -34,7 +34,7 @@ export interface PseudocodeEditorProps {
 export function PseudocodeEditor({
   value,
   onChange,
-  themeId = "parchment",
+  themeId = "blue",
   zoom = 1,
   readingSize = "M",
   defaultOpen = true,

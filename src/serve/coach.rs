@@ -16,10 +16,11 @@ use serde::{Deserialize, Serialize};
 use super::common::{description_for, load_meta, resolve_dataset};
 use super::{blocking, board_session, AppError, Shared};
 use crate::llm::coach::{
-    build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt, build_scaffold_prompt,
-    parse_board_scaffold, parse_bridge, parse_lazy_fill, perceive_and_claim, review_submission,
-    BoardScaffold, BoardSnapshot, BridgeResponse, Claim, LazyFillResponse, ReviewResponse,
-    BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT, LAZY_HINT_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
+    build_ask_prompt, build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt,
+    build_scaffold_prompt, parse_board_scaffold, parse_bridge, parse_lazy_fill, perceive_and_claim,
+    review_submission, BoardScaffold, BoardSnapshot, BridgeResponse, Claim, LazyFillResponse,
+    ReviewResponse, ASK_SYSTEM_PROMPT, BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
+    LAZY_HINT_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
 };
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
 use crate::reveal::{SolutionReveal, UserConsent};
@@ -405,6 +406,55 @@ pub async fn scaffold(
             task_id: meta.task_id,
             provider: provider.label(),
             scaffold,
+        })
+    })
+    .await?;
+    Ok(Json(envelope))
+}
+
+// ---------------------------------------------------------------------------
+// Ask — single-turn Q&A (no staged perceive → claim → verdict pipeline)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct AskRequest {
+    pub task_id: String,
+    #[serde(default)]
+    pub dataset: Option<String>,
+    pub question: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AskEnvelope {
+    pub task_id: String,
+    pub provider: String,
+    pub reply: String,
+}
+
+pub async fn ask(
+    State(state): State<Shared>,
+    Json(request): Json<AskRequest>,
+) -> Result<Json<AskEnvelope>, AppError> {
+    let question = request.question.trim().to_string();
+    if question.is_empty() {
+        return Err(AppError::bad_request(anyhow!("type a question first")));
+    }
+    let dataset = resolve_dataset(request.dataset.as_deref())?;
+    let task_id = request.task_id.clone();
+    let cfg = state.cfg_snapshot();
+    let envelope = blocking(move || {
+        let meta = load_meta(&cfg, dataset, &task_id)?;
+        let description = description_for(&meta);
+        let provider = make_provider_for_mode(&cfg, "review")?;
+        let prompt = build_ask_prompt(&meta, description.as_deref(), &question);
+        let reply = provider.chat_ex(&ChatRequest::new(vec![
+            ChatMessage::system(ASK_SYSTEM_PROMPT),
+            ChatMessage::user(prompt),
+        ]))?;
+        Ok(AskEnvelope {
+            task_id: meta.task_id,
+            provider: provider.label(),
+            reply: reply.content.trim().to_string(),
         })
     })
     .await?;

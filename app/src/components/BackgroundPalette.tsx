@@ -47,7 +47,7 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
     );
   }
 
-  const tipPlacement = variant === "header" ? "bottom" : variant === "map" ? "top" : "left";
+  const tipPlacement = variant === "header" ? "bottom" : variant === "map" ? "bottom" : "left";
   const popoverClass =
     variant === "header"
       ? "lc-palette-popover lc-palette-popover-header"

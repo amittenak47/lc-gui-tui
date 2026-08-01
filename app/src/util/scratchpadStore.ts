@@ -2,6 +2,8 @@
  * Local multipage scratchpad notebooks — independent of lc serve.
  */
 
+import type { BoardBlob } from "../canvas/BoardHandle";
+
 export const SCRATCHPAD_LIBRARY_LIMIT = 20;
 export const SCRATCHPAD_PAGE_LIMIT = 5;
 
@@ -13,11 +15,7 @@ export class ScratchpadLibraryFullError extends Error {
   }
 }
 
-export interface ScratchBoardBlob {
-  v: 1;
-  elements: unknown[];
-  appState: { scrollX: number; scrollY: number; zoom: number };
-}
+export type ScratchBoardBlob = BoardBlob;
 
 export interface ScratchNotebookMeta {
   id: string;

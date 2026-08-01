@@ -38,19 +38,12 @@ import {
   type ShapeModValue,
   type ShapeStamp,
 } from "../templates/shapes";
-import {
-  loadImportedLibrary,
-  parseExcalidrawLibrary,
-  placeImportedElements,
-  saveImportedLibrary,
-  type ImportedLibraryItem,
-} from "../templates/libraryImport";
 import { healBoardLayout } from "./healBoardLayout";
-import { healScratchpadGeometry } from "../templates/scratchpad";
+import { healScratchpadGeometry, SCRATCH_PAGE_W } from "../templates/scratchpad";
 import { regionFrameId, regionFramesOf, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
-import { REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
+import { REGION_MIN, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
 import {
   BOARD_THEMES,
   DEFAULT_FONT_SIZE,
@@ -66,6 +59,7 @@ import { isDarkTheme } from "../theme/appThemes";
 import {
   loadBoardReadingSize,
   saveBoardReadingSize,
+  statementLinePitch,
   type BoardReadingSize,
 } from "../modes/codeFontSize";
 
@@ -85,10 +79,11 @@ import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
+import { InkChromeSizeDial } from "./InkChromeSizeDial";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
+import { loadInkToolPrefs, saveInkToolPrefs } from "../util/inkToolPrefs";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import {
-  STROKE_WIDTH_DEFAULT,
   clampExportScale,
   exportScaleFrom,
   inkOpsBounds,
@@ -352,10 +347,57 @@ function mobilePageInsets(toolbarH: number): {
   bottom: number;
 } {
   return {
-    top: Math.max(34, Math.round(toolbarH) + 6),
+    top: Math.max(34, Math.round(toolbarH) + 2),
+    left: 2,
+    right: 2,
+    // Bottom chrome overlays the page; keep a thin pad off the physical edge.
+    bottom: 8,
+  };
+}
+
+/** Desktop page fit — fill under the toolbar to the board bottom; chrome overlays. */
+function desktopPageInsets(toolbarH: number, chromeHidden: boolean): {
+  top: number;
+  left: number;
+  right: number;
+  bottom: number;
+} {
+  return {
+    top: Math.max(40, Math.round(toolbarH) + 2),
     left: 4,
     right: 4,
-    bottom: 36,
+    // Map chrome + coach fold sit on top of the page — do not reserve their height.
+    bottom: chromeHidden ? 8 : 12,
+  };
+}
+
+/**
+ * Measure the live chrome hole so the dashed frame can touch the toolbar and
+ * run to the board bottom (controls overlay the page; coach does not shrink it).
+ */
+function measureChromeInsets(
+  boardEl: HTMLElement | null,
+  toolbarH: number,
+  chromeHidden: boolean,
+  mobile: boolean,
+): { top: number; left: number; right: number; bottom: number } {
+  const fallback = mobile
+    ? mobilePageInsets(toolbarH)
+    : desktopPageInsets(toolbarH, chromeHidden);
+  if (!boardEl) return fallback;
+  const board = boardEl.getBoundingClientRect();
+  if (board.width < 8 || board.height < 8) return fallback;
+
+  const toolbar = boardEl.querySelector(".lc-toolbar") as HTMLElement | null;
+  const top = toolbar
+    ? Math.max(2, Math.round(toolbar.getBoundingClientRect().bottom - board.top + 2))
+    : fallback.top;
+
+  return {
+    top,
+    left: fallback.left,
+    right: fallback.right,
+    bottom: fallback.bottom,
   };
 }
 
@@ -489,6 +531,12 @@ export interface BoardProps {
    * can share a baseline and never overlap.
    */
   bottomCenter?: ReactNode;
+  /** Show lined-paper toggle in the map chrome. */
+  linedPaperToggle?: boolean;
+  /** Show S/M/L reading size (problem boards on mobile — not scratchpad). */
+  showReadingSize?: boolean;
+  /** Optional fold handle under the bottom chrome (coach closed → open). */
+  coachFold?: ReactNode;
 }
 
 const INK_COLORS_LIGHT = ["#1e1e1e", "#64748b", "#b45309", "#1d4ed8", "#166534", "#b91c1c"] as const;
@@ -500,6 +548,12 @@ function defaultInk(themeId: string): string {
 
 function inkSwatches(themeId: string): readonly string[] {
   return isDarkTheme(themeId) ? INK_COLORS_DARK : INK_COLORS_LIGHT;
+}
+
+function resolveInkColor(themeId: string, preferred: string | null | undefined): string {
+  const swatches = inkSwatches(themeId);
+  if (preferred && swatches.includes(preferred)) return preferred;
+  return defaultInk(themeId);
 }
 
 const TOOLS: Array<{ tool: ToolName; label: string; hint: string; emoji?: string }> = [
@@ -572,6 +626,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onReadingSizeChange,
     mobileRegion = null,
     bottomCenter = null,
+    linedPaperToggle = false,
+    showReadingSize = false,
+    coachFold = null,
   },
   ref,
 ) {
@@ -580,12 +637,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const mobile = useIsMobile();
   const [activeTool, setActiveTool] = useState<ToolName>("hand");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
-  const [inkColor, setInkColor] = useState(() => defaultInk(themeId));
-  const [penStrokeWidth, setPenStrokeWidth] = useState(STROKE_WIDTH_DEFAULT);
-  const [eraserStrokeWidth, setEraserStrokeWidth] = useState(STROKE_WIDTH_DEFAULT);
+  const inkPrefsRef = useRef(loadInkToolPrefs());
+  const [inkColor, setInkColor] = useState(() =>
+    resolveInkColor(themeId, inkPrefsRef.current.inkColor),
+  );
+  const [penStrokeWidth, setPenStrokeWidth] = useState(() => inkPrefsRef.current.penWidth);
+  const [eraserStrokeWidth, setEraserStrokeWidth] = useState(() => inkPrefsRef.current.eraserWidth);
   const strokeWidth = activeTool === "eraser" ? eraserStrokeWidth : penStrokeWidth;
   const [inkChrome, setInkChrome] = useState<InkChromeState | null>(null);
-  const [inkChromeLive, setInkChromeLive] = useState(false);
   const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [stampTrash, setStampTrash] = useState<{
     left: number;
@@ -594,15 +653,41 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   } | null>(null);
   const inkChromeHideRef = useRef<number | null>(null);
   const inkChromeExitRef = useRef<number | null>(null);
-  const inkMoveRafRef = useRef<number | null>(null);
-  const inkMovePendingRef = useRef<{ x: number; y: number } | null>(null);
+  const inkChromeShowRef = useRef<number | null>(null);
+  const inkTrailRef = useRef<Array<{ x: number; y: number; t: number }>>([]);
   const inkHandednessRef = useRef(inkHandedness);
   inkHandednessRef.current = inkHandedness;
-  const [pressureSensitive, setPressureSensitive] = useState(true);
+  const [linedPaper, setLinedPaper] = useState(false);
+  const linedPaperRef = useRef(linedPaper);
+  linedPaperRef.current = linedPaper;
+  const [linedSlot, setLinedSlot] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    gap: number;
+    phase: number;
+  } | null>(null);
+  const lastLinedSlotRef = useRef<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    gap: number;
+    phase: number;
+  } | null>(null);
+  const [mapChromeHidden, setMapChromeHidden] = useState(false);
+  const mapChromeHiddenRef = useRef(mapChromeHidden);
+  mapChromeHiddenRef.current = mapChromeHidden;
+  const [pressureSensitive, setPressureSensitiveState] = useState(
+    () => inkPrefsRef.current.pressureSensitive,
+  );
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [zoomPct, setZoomPct] = useState(100);
+  /** Effective zoom-out floor as a percent — page fit on mobile, else ZOOM_MIN. */
+  const [zoomFloorPct, setZoomFloorPct] = useState(() => Math.round(ZOOM_MIN * 100));
   /** Scene box of the open mobile page — clips the raster ink layer to it. */
   const [inkClip, setInkClip] = useState<SceneBounds | null>(null);
   /** Floor zoom for the open mobile page (fit-to-chrome); null on desktop. */
@@ -962,28 +1047,167 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     notify(next);
   }, []);
 
+  /** Keep lined paper clipped to the open template frame (screen space). */
+  const reportLinedSlot = useCallback(() => {
+    if (!linedPaperRef.current) {
+      if (lastLinedSlotRef.current !== null) {
+        lastLinedSlotRef.current = null;
+        setLinedSlot(null);
+      }
+      return;
+    }
+    const api = apiRef.current;
+    const bounds = pageBoundsRef.current;
+    if (!api || !bounds) {
+      if (lastLinedSlotRef.current !== null) {
+        lastLinedSlotRef.current = null;
+        setLinedSlot(null);
+      }
+      return;
+    }
+    const state = api.getAppState() as {
+      scrollX?: number;
+      scrollY?: number;
+      zoom?: { value?: number };
+    };
+    const zoom = state.zoom?.value ?? 1;
+    const scrollX = state.scrollX ?? 0;
+    const scrollY = state.scrollY ?? 0;
+    // Keep lines inside the dashed stroke.
+    const pad = Math.max(2, Math.round(3 * zoom));
+    const left = roundPx((bounds.minX + scrollX) * zoom + pad);
+    const top = roundPx((bounds.minY + scrollY) * zoom + pad);
+    const width = roundPx(Math.max(0, (bounds.maxX - bounds.minX) * zoom - pad * 2));
+    const height = roundPx(Math.max(0, (bounds.maxY - bounds.minY) * zoom - pad * 2));
+    // Match statement prose pitch so rules sit under each text line.
+    const pitchScene = statementLinePitch(readingSizeRef.current);
+    const gap = Math.max(12, Math.round(pitchScene * zoom));
+
+    let phase = 0;
+    const elements = api.getSceneElements() as Array<{
+      id?: string;
+      type?: string;
+      y?: number;
+      fontSize?: number;
+    }>;
+    const body = elements.find(
+      (el) => el.type === "text" && typeof el.id === "string" && el.id.includes("-body-"),
+    );
+    if (body && typeof body.y === "number") {
+      const fontSize =
+        typeof body.fontSize === "number" && body.fontSize > 0
+          ? body.fontSize
+          : pitchScene / (40 / 28);
+      // Rule under the glyph baseline of the first statement line.
+      const baselineScene = body.y + fontSize * 0.82;
+      const baselinePx = (baselineScene + scrollY) * zoom;
+      const rel = baselinePx - top;
+      // Gradient paints the rule at the end of each gap tile.
+      phase = ((rel - gap + 1) % gap + gap) % gap;
+    }
+
+    const next = { left, top, width, height, gap, phase: roundPx(phase) };
+    const prev = lastLinedSlotRef.current;
+    if (
+      prev &&
+      prev.left === next.left &&
+      prev.top === next.top &&
+      prev.width === next.width &&
+      prev.height === next.height &&
+      prev.gap === next.gap &&
+      prev.phase === next.phase
+    ) {
+      return;
+    }
+    lastLinedSlotRef.current = next;
+    setLinedSlot(next);
+  }, []);
+
   /**
-   * Near-pen undo/redo/eraser cluster — tracks the tip while you write (under
-   * the hand), then stays briefly after lift before exiting.
+   * Near-pen undo/redo/eraser cluster — appears after a short pause at stroke
+   * end, above recent writing, then fades after ~8s. Never tracks mid-stroke.
    */
-  const placeInkChrome = useCallback((clientX: number, clientY: number, opts?: { end?: boolean }) => {
+  const clearInkChromeTimers = useCallback(() => {
+    if (inkChromeHideRef.current != null) {
+      window.clearTimeout(inkChromeHideRef.current);
+      inkChromeHideRef.current = null;
+    }
+    if (inkChromeExitRef.current != null) {
+      window.clearTimeout(inkChromeExitRef.current);
+      inkChromeExitRef.current = null;
+    }
+    if (inkChromeShowRef.current != null) {
+      window.clearTimeout(inkChromeShowRef.current);
+      inkChromeShowRef.current = null;
+    }
+  }, []);
+
+  const placeInkChrome = useCallback((clientX: number, clientY: number) => {
     const board = boardRef.current;
     if (!board) return;
     const rect = board.getBoundingClientRect();
-    const chip = 44;
-    const gap = 4;
-    // pen/eraser + undo + redo + compact slider
-    const clusterW = chip * 3 + gap * 2 + 88;
-    const clusterH = chip;
-    const padX = 56;
-    const padY = 72;
+    // Buttons (~24) × 3 + gaps + radial dial (~38)
+    const clusterW = 24 * 3 + 4 + 38;
+    const clusterH = 38;
+    const pad = 12;
     const hand = inkHandednessRef.current;
-    // Right hand → chrome under palm (below-right); left hand → below-left.
-    let left =
-      hand === "right"
-        ? clientX - rect.left + padX
-        : clientX - rect.left - padX - clusterW;
-    let top = clientY - rect.top + padY;
+
+    const now = performance.now();
+    // Keep a longer trail, but ignore the tip — sit over older ink so the hand
+    // doesn't cover the chrome.
+    const trail = inkTrailRef.current.filter((point) => now - point.t < 4000);
+    inkTrailRef.current = trail;
+    const older = trail.filter((point) => now - point.t >= 700);
+    const histPts = older.length > 0 ? older : trail.length > 0 ? trail : [{ x: clientX, y: clientY, t: now }];
+    const histX = histPts.reduce((sum, point) => sum + point.x, 0) / histPts.length;
+    const histY = histPts.reduce((sum, point) => sum + point.y, 0) / histPts.length;
+    const histMinX = Math.min(...histPts.map((point) => point.x));
+    const histMaxX = Math.max(...histPts.map((point) => point.x));
+    const histMinY = Math.min(...histPts.map((point) => point.y));
+    const histMaxY = Math.max(...histPts.map((point) => point.y));
+
+    // Writing direction: historical → tip. Place chrome opposite that vector.
+    let dx = clientX - histX;
+    let dy = clientY - histY;
+    const mag = Math.hypot(dx, dy);
+    if (mag < 8) {
+      // Stationary / short stroke: default above historical top.
+      dx = 0;
+      dy = 1;
+    } else {
+      dx /= mag;
+      dy /= mag;
+    }
+
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    const offset = 40;
+    let centerX: number;
+    let centerY: number;
+
+    if (absDy >= absDx * 1.15) {
+      // Mostly vertical: use historical top/bottom edge + pad away from tip.
+      centerX = histX + (hand === "right" ? -10 : 10);
+      centerY = dy > 0 ? histMinY - pad - clusterH / 2 : histMaxY + pad + clusterH / 2;
+    } else if (absDx >= absDy * 1.15) {
+      // Mostly horizontal: sit beside historical ink, opposite writing.
+      centerY = histY;
+      centerX = dx > 0 ? histMinX - pad - clusterW / 2 : histMaxX + pad + clusterW / 2;
+      // Nudge slightly toward the non-writing (palm) side vertically if needed.
+      centerY += hand === "right" ? -6 : 6;
+    } else {
+      // Diagonal: blend — opposite direction from historical center toward tip.
+      centerX = histX - dx * offset;
+      centerY = histY - dy * offset;
+      // Prefer historical bbox edges along the dominant axis of the blend.
+      if (dy > 0) centerY = Math.min(centerY, histMinY - pad - clusterH / 2);
+      else centerY = Math.max(centerY, histMaxY + pad + clusterH / 2);
+      if (dx > 0) centerX = Math.min(centerX, histMinX - pad - clusterW / 2);
+      else centerX = Math.max(centerX, histMaxX + pad + clusterW / 2);
+    }
+
+    let left = centerX - rect.left - clusterW / 2;
+    let top = centerY - rect.top - clusterH / 2;
     left = Math.max(8, Math.min(left, rect.width - clusterW - 8));
     top = Math.max(8, Math.min(top, rect.height - clusterH - 8));
     const next = { left: roundPx(left), top: roundPx(top) };
@@ -1008,57 +1232,87 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       inkChromeExitRef.current = null;
     }
 
-    if (opts?.end) {
-      setInkChromeLive(false);
-      inkChromeHideRef.current = window.setTimeout(() => {
-        setInkChrome((current) => (current ? { ...current, phase: "out" } : null));
-        inkChromeHideRef.current = null;
-        inkChromeExitRef.current = window.setTimeout(() => {
-          setInkChrome(null);
-          inkChromeExitRef.current = null;
-        }, 180);
-      }, 2600);
-    } else {
-      setInkChromeLive(true);
-    }
+    inkChromeHideRef.current = window.setTimeout(() => {
+      setInkChrome((current) => (current ? { ...current, phase: "out" } : null));
+      inkChromeHideRef.current = null;
+      inkChromeExitRef.current = window.setTimeout(() => {
+        setInkChrome(null);
+        inkChromeExitRef.current = null;
+      }, 200);
+    }, 8000);
   }, []);
 
-  const onInkStrokeMove = useCallback(
+  const onInkStrokeMove = useCallback((clientX: number, clientY: number) => {
+    // Track trail only — never mount chrome mid-stroke (perf + less obtrusive).
+    const now = performance.now();
+    const trail = inkTrailRef.current;
+    const last = trail[trail.length - 1];
+    if (!last || now - last.t > 24 || Math.hypot(clientX - last.x, clientY - last.y) > 6) {
+      trail.push({ x: clientX, y: clientY, t: now });
+      if (trail.length > 120) trail.splice(0, trail.length - 120);
+    }
+    if (inkChromeShowRef.current != null) {
+      window.clearTimeout(inkChromeShowRef.current);
+      inkChromeShowRef.current = null;
+    }
+    // Hide any lingering chrome as soon as writing resumes.
+    if (inkChromeHideRef.current != null || inkChromeExitRef.current != null) {
+      clearInkChromeTimers();
+    }
+    setInkChrome((current) => (current ? null : current));
+  }, [clearInkChromeTimers]);
+
+  const onInkStrokeEnd = useCallback(
     (clientX: number, clientY: number) => {
-      inkMovePendingRef.current = { x: clientX, y: clientY };
-      if (inkMoveRafRef.current != null) return;
-      inkMoveRafRef.current = window.requestAnimationFrame(() => {
-        inkMoveRafRef.current = null;
-        const pending = inkMovePendingRef.current;
-        if (!pending) return;
-        placeInkChrome(pending.x, pending.y);
-      });
+      const now = performance.now();
+      inkTrailRef.current.push({ x: clientX, y: clientY, t: now });
+      if (inkChromeShowRef.current != null) {
+        window.clearTimeout(inkChromeShowRef.current);
+      }
+      // Micro-delay so a short pause mid-word doesn't flash the chrome.
+      inkChromeShowRef.current = window.setTimeout(() => {
+        inkChromeShowRef.current = null;
+        placeInkChrome(clientX, clientY);
+      }, 280);
     },
     [placeInkChrome],
   );
 
-  const onInkStrokeEnd = useCallback(
-    (clientX: number, clientY: number) => {
-      if (inkMoveRafRef.current != null) {
-        window.cancelAnimationFrame(inkMoveRafRef.current);
-        inkMoveRafRef.current = null;
-      }
-      placeInkChrome(clientX, clientY, { end: true });
+  const persistInkPrefs = useCallback(
+    (patch: Partial<{ penWidth: number; eraserWidth: number; pressureSensitive: boolean; inkColor: string }>) => {
+      const next = {
+        penWidth: patch.penWidth ?? penStrokeWidth,
+        eraserWidth: patch.eraserWidth ?? eraserStrokeWidth,
+        pressureSensitive: patch.pressureSensitive ?? pressureSensitive,
+        inkColor: patch.inkColor ?? inkColor,
+      };
+      inkPrefsRef.current = next;
+      saveInkToolPrefs(next);
     },
-    [placeInkChrome],
+    [penStrokeWidth, eraserStrokeWidth, pressureSensitive, inkColor],
   );
 
   const setStrokeWidth = useCallback((width: number) => {
     if (activeTool === "eraser") {
       setEraserStrokeWidth(width);
+      persistInkPrefs({ eraserWidth: width });
     } else {
       setPenStrokeWidth(width);
+      persistInkPrefs({ penWidth: width });
       apiRef.current?.updateScene({ appState: { currentItemStrokeWidth: width } });
     }
     if (activeTool === "eraser") {
       apiRef.current?.setCursor?.(eraserCanvasCursorCss());
     }
-  }, [activeTool]);
+  }, [activeTool, persistInkPrefs]);
+
+  const setPressureSensitive = useCallback(
+    (enabled: boolean) => {
+      setPressureSensitiveState(enabled);
+      persistInkPrefs({ pressureSensitive: enabled });
+    },
+    [persistInkPrefs],
+  );
 
   const setTool = useCallback((tool: ToolName) => {
     if (tool === "freedraw") {
@@ -1126,7 +1380,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const toEraser = activeToolRef.current !== "eraser";
       if (shapesOpen) setShapesOpen(false);
       setTool(toEraser ? "eraser" : "freedraw");
-      placeInkChrome(event.clientX, event.clientY, { end: true });
+      placeInkChrome(event.clientX, event.clientY);
       return true;
     },
     [setTool, shapesOpen, placeInkChrome],
@@ -1390,13 +1644,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const setInk = useCallback((color: string) => {
     setInkColor(color);
+    persistInkPrefs({ inkColor: color });
     apiRef.current?.updateScene({ appState: { currentItemStrokeColor: color } });
-  }, []);
+  }, [persistInkPrefs]);
 
   useEffect(() => {
     const api = apiRef.current;
     const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
-    const ink = defaultInk(themeId);
+    const ink = resolveInkColor(themeId, inkPrefsRef.current.inkColor);
     setInkColor(ink);
     if (!api) return;
 
@@ -1569,18 +1824,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const api = apiRef.current;
     if (!api) return;
 
-    // One region per page on mobile; on desktop, land on the problem statement
-    // + code only — never the full board (Approach / Walkthrough / Coach),
-    // which zooms out to a tiny corner.
+    // One region / scratch page per fit so the dashed border can fill the chrome
+    // hole. Desktop landing uses the problem statement alone (code stays below).
     const page = regionId ?? mobileRegionRef.current;
-    const wanted: string[] = page ? [page] : ["constraints", "code"];
-    const paged = wanted.length === 1;
+    const wanted: string[] = page ? [page] : ["constraints"];
 
-    const live = api.getSceneElements() as LayoutElement[];
-    const frames = regionFramesOf(live);
-    const focusFrames = wanted
+    let live = api.getSceneElements() as LayoutElement[];
+    let frames = regionFramesOf(live);
+    let focusFrames = wanted
       .map((id) => frames.get(id as RegionId))
       .filter((frame): frame is LayoutElement => Boolean(frame));
+
+    // Scratch pages use pad-* ids that aren't in REGIONS — find by lcRegion.
+    if (focusFrames.length === 0 && page) {
+      focusFrames = live.filter((element) => {
+        const region = element.customData?.lcRegion;
+        return (
+          element.customData?.lcRegionFrame === true &&
+          typeof region === "string" &&
+          region === page
+        );
+      }) as LayoutElement[];
+    }
 
     const inWanted = (element: LayoutElement) => {
       const region = element.customData?.lcRegion;
@@ -1597,17 +1862,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           ? template.filter(inWanted)
           : live;
 
-    const focus = target.length > 0 ? target : live;
+    let focus = target.length > 0 ? target : live;
 
-    /*
-     * The zoom is computed here rather than by `scrollToContent`.
-     *
-     * Excalidraw's fit quantises the zoom to 0.1 steps and caps it at 1. This
-     * board is ~3900 units wide, so a tablet's honest fit is around 0.19 — and
-     * 0.19 floored to a 0.1 step is 0.1, half the size it asked for. That is
-     * why a page landed as a stamp in the corner with the whole column visible
-     * around it. Fitting by hand costs one `updateScene` and lands exactly.
-     */
     const state = api.getAppState() as {
       width?: number;
       height?: number;
@@ -1615,6 +1871,86 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const viewWidth = num(state.width, 0);
     const viewHeight = num(state.height, 0);
     if (viewWidth < 1 || viewHeight < 1) return;
+
+    const safeTop = mobile ? 0 : safeCssPx("--lc-safe-top");
+    const safeBottom = mobile ? 0 : safeCssPx("--lc-safe-bottom");
+    const safeLeft = mobile ? 0 : safeCssPx("--lc-safe-left");
+    const safeRight = mobile ? 0 : safeCssPx("--lc-safe-right");
+    const measured = measureChromeInsets(
+      boardRef.current,
+      toolbarHeightRef.current,
+      mapChromeHiddenRef.current,
+      mobile,
+    );
+    const inset = {
+      top: measured.top + safeTop,
+      left: measured.left + safeLeft,
+      right: measured.right + safeRight,
+      bottom: measured.bottom + safeBottom,
+    };
+    const availWidth = Math.max(80, viewWidth - inset.left - inset.right);
+    const availHeight = Math.max(80, viewHeight - inset.top - inset.bottom);
+
+    /*
+     * Size the focus frame so width-fill zoom also fills height — the dashed
+     * border then touches the toolbar and the magnification row.
+     */
+    const primary =
+      focus.find((element) => element.customData?.lcRegionFrame) ?? focus[0];
+    if (primary && typeof primary.id === "string") {
+      const regionKey = primary.customData?.lcRegion;
+      const isScratch =
+        typeof regionKey === "string" && regionKey.startsWith("pad-");
+      const frameW = Math.max(
+        1,
+        num(primary.width, isScratch ? SCRATCH_PAGE_W : REGIONS.constraints.w),
+      );
+      const zoomForWidth = clampZoom(availWidth / frameW);
+      const fillHeight = availHeight / Math.max(0.05, zoomForWidth);
+      const regionMin =
+        typeof regionKey === "string" && regionKey in REGION_MIN
+          ? REGION_MIN[regionKey as RegionId].minH
+          : 800;
+      const nextH = Math.max(regionMin, Math.round(fillHeight));
+      const curH = num(primary.height, 0);
+      if (Math.abs(curH - nextH) > 2 || Math.abs(num(primary.width, 0) - frameW) > 2) {
+        const nextElements = live.map((element) =>
+          element.id === primary.id ? { ...element, height: nextH, width: frameW } : element,
+        ) as LayoutElement[];
+        const synced = isScratch
+          ? nextElements
+          : syncRegionLayout(nextElements, {
+              codeContentHeight: codeContentHeightRef.current ?? undefined,
+            }) ?? nextElements;
+        layoutSyncingRef.current = true;
+        api.updateScene({
+          elements: synced as unknown[],
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        layoutSyncingRef.current = false;
+        live = synced;
+        frames = regionFramesOf(live);
+        focusFrames = wanted
+          .map((id) => frames.get(id as RegionId))
+          .filter((frame): frame is LayoutElement => Boolean(frame));
+        if (focusFrames.length === 0 && page) {
+          focusFrames = live.filter((element) => {
+            const region = element.customData?.lcRegion;
+            return (
+              element.customData?.lcRegionFrame === true &&
+              typeof region === "string" &&
+              region === page
+            );
+          }) as LayoutElement[];
+        }
+        focus =
+          focusFrames.length > 0
+            ? focusFrames
+            : live.filter(inWanted).length > 0
+              ? live.filter(inWanted)
+              : live;
+      }
+    }
 
     let minX = Infinity;
     let minY = Infinity;
@@ -1629,47 +1965,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
 
-    // Leave room for the floating toolbar; the bottom inset is larger so the
-    // fit prefers the upper viewport rather than centring the stack. A paged
-    // fit wants the frame to fill the screen, so its insets are just chrome.
-    const safeTop = mobile ? 0 : safeCssPx("--lc-safe-top");
-    const safeBottom = mobile ? 0 : safeCssPx("--lc-safe-bottom");
-    const safeLeft = mobile ? 0 : safeCssPx("--lc-safe-left");
-    const safeRight = mobile ? 0 : safeCssPx("--lc-safe-right");
-    const inset = paged
-      ? mobile
-        ? mobilePageInsets(toolbarHeightRef.current)
-        : {
-            top: 14 + safeTop,
-            left: 56 + safeLeft,
-            right: 14 + safeRight,
-            bottom: 62 + safeBottom,
-          }
-      : {
-          top: 28 + safeTop,
-          left: 72 + safeLeft,
-          right: 28 + safeRight,
-          bottom: 120 + safeBottom,
-        };
-    const availWidth = Math.max(80, viewWidth - inset.left - inset.right);
-    const availHeight = Math.max(80, viewHeight - inset.top - inset.bottom);
     const boxWidth = Math.max(1, maxX - minX);
     const boxHeight = Math.max(1, maxY - minY);
-    const zoom = clampZoom(
-      Math.min(availWidth / boxWidth, availHeight / boxHeight) * (paged ? 1 : 0.98),
-    );
-    if (mobile && paged) {
-      fitZoomMinRef.current = zoom;
-      pageBoundsRef.current = { minX, minY, maxX, maxY };
-    } else if (!mobile) {
-      fitZoomMinRef.current = null;
-    }
+    // Exact fill of the chrome hole (both axes).
+    const zoom = clampZoom(Math.min(availWidth / boxWidth, availHeight / boxHeight));
+    fitZoomMinRef.current = zoom;
+    setZoomFloorPct(Math.round(zoom * 100));
+    pageBoundsRef.current = { minX, minY, maxX, maxY };
 
-    // Centre whatever axis has room to spare; the other one starts at its inset.
-    // Mobile pages top-align under the toolbar so the template fills the canvas.
     const slackX = Math.max(0, availWidth - boxWidth * zoom);
-    const slackY = paged && !mobile ? Math.max(0, availHeight - boxHeight * zoom) : 0;
-    // scene → screen: (scene + scroll) * zoom  (see Board.stamp)
+    const slackY = Math.max(0, availHeight - boxHeight * zoom);
     api.updateScene({
       appState: {
         zoom: { value: zoom },
@@ -1680,7 +1985,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
     setZoomPct(Math.round(zoom * 100));
     requestAnimationFrame(reportCodeSlot);
-  }, [mobile, reportCodeSlot]);
+    requestAnimationFrame(reportLinedSlot);
+  }, [mobile, reportCodeSlot, reportLinedSlot]);
 
   /** Run fit after Excalidraw has applied scene + container size. */
   const scheduleFitView = useCallback(() => {
@@ -1694,12 +2000,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
   }, [fitView]);
 
+  useEffect(() => {
+    reportLinedSlot();
+  }, [linedPaper, reportLinedSlot]);
+
   /** Keep the template tucked under the toolbar when its strip grows or folds. */
   useEffect(() => {
     if (!mobile || !interactive || mobileRegionRef.current === null) return;
     const handle = window.setTimeout(() => fitView(), 80);
     return () => window.clearTimeout(handle);
   }, [toolbarHeight, mobile, interactive, fitView]);
+
+  /** Refit when bottom chrome is hidden/shown so the page fills the freed space. */
+  useEffect(() => {
+    if (!interactive) return;
+    const handle = window.setTimeout(() => fitView(), 60);
+    return () => window.clearTimeout(handle);
+  }, [mapChromeHidden, interactive, fitView]);
 
   /** Fit the current page, or the landing pair on desktop. Event-handler safe. */
   const fitCurrentView = useCallback(() => {
@@ -1783,30 +2100,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [convert, setTool],
   );
 
-  const stampImported = useCallback(
-    (item: ImportedLibraryItem, moveAsOne: boolean) => {
-      const api = apiRef.current;
-      if (!api) return;
-      const state = api.getAppState() as {
-        scrollX?: number;
-        scrollY?: number;
-        width?: number;
-        height?: number;
-        zoom?: { value?: number };
-      };
-      const zoom = state.zoom?.value ?? 1;
-      const x = Math.round(-(state.scrollX ?? 0) + (state.width ?? 1200) / (2 * zoom) - 200);
-      const y = Math.round(-(state.scrollY ?? 0) + (state.height ?? 800) / (2 * zoom) - 100);
-      const pieces = placeImportedElements(item.elements, x, y, moveAsOne);
-      api.updateScene({
-        elements: [...(api.getSceneElements() as unknown[]), ...pieces],
-        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-      });
-      setShapesOpen(false);
-      setTool("selection");
-    },
-    [setTool],
-  );
+
 
   // Excalidraw can reset the active tool during its own mount; re-assert the
   // default once the API is live so a session starts in pan mode, not drawing.
@@ -1827,6 +2121,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const recolored = recolorTemplateElements(converted, dark) ?? converted;
     const sized = applyBoardReadingSize(recolored, readingSizeRef.current, {
       captureFrom: "M",
+      lined: linedPaperRef.current,
     });
     templateRef.current = sized;
     apiRef.current?.updateScene({
@@ -1938,6 +2233,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const current = api.getSceneElements() as SceneElementLike[];
       const scaled = applyBoardReadingSize(current, size, {
         captureFrom: opts?.captureFrom ?? size,
+        lined: linedPaperRef.current,
       });
       if (scaled === current) return;
       layoutSyncingRef.current = true;
@@ -1949,9 +2245,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         layoutSyncingRef.current = false;
         applyRegionLayout();
         reportCodeSlot();
+        reportLinedSlot();
       });
     },
-    [applyRegionLayout, reportCodeSlot],
+    [applyRegionLayout, reportCodeSlot, reportLinedSlot],
   );
   const setReadingSize = useCallback(
     (next: BoardReadingSize) => {
@@ -2232,8 +2529,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const recolored = recolorTemplateElements(converted, dark) ?? converted;
         const next = applyBoardReadingSize(recolored, readingSizeRef.current, {
           captureFrom: "M",
+          lined: linedPaperRef.current,
         });
         templateRef.current = next;
+        rasterInkRef.current?.clear();
         apiRef.current?.updateScene({
           elements: next as unknown[],
           captureUpdate: CaptureUpdateAction.NEVER,
@@ -2338,6 +2637,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       getStrokes: () => captureStrokes(elements()),
       getInkStrokes: () => inkStrokesFromOps(rasterInkRef.current?.getOps() ?? []),
       getInkOpCount: () => (rasterInkRef.current?.getOps() ?? []).length,
+      setInkOps: (ops) => {
+        rasterInkRef.current?.setOps(ops);
+      },
       setTool,
       undo: () => {
         undoBoard();
@@ -2355,6 +2657,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const recolored = recolorTemplateElements(converted, dark) ?? converted;
         const sized = applyBoardReadingSize(recolored, readingSizeRef.current, {
           captureFrom: "M",
+          lined: linedPaperRef.current,
         });
         let maxPage = -1;
         for (const el of sized) {
@@ -2391,6 +2694,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           zoom?: { value?: number };
         };
         const kept = elements().filter((element) => !isCoachElement(element));
+        const ink = rasterInkRef.current?.getOps() ?? [];
         return {
           v: 1 as const,
           elements: kept as unknown[],
@@ -2399,6 +2703,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             scrollY: state.scrollY ?? 0,
             zoom: state.zoom?.value ?? 1,
           },
+          ink,
         };
       },
       restoreBoard: (nextElements, appState, options) => {
@@ -2429,6 +2734,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           ...(Object.keys(saved).length > 0 ? { appState: saved } : {}),
           captureUpdate: CaptureUpdateAction.NEVER,
         });
+        rasterInkRef.current?.setOps(options?.ink ?? []);
         requestAnimationFrame(() => {
           apiRef.current?.history?.clear();
           syncPageVisibility();
@@ -2440,7 +2746,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (!api) return;
         const dark = isDarkTheme(nextThemeId);
         const theme = BOARD_THEMES.find((candidate) => candidate.id === nextThemeId) ?? BOARD_THEMES[0];
-        const ink = defaultInk(nextThemeId);
+        const ink = resolveInkColor(nextThemeId, inkPrefsRef.current.inkColor);
         setInkColor(ink);
         const scene = api.getSceneElements() as SceneElementLike[];
         const recolored = recolorTemplateElements(scene, dark);
@@ -2470,27 +2776,47 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
 
   const initialData = useMemo(
-    () => ({
-      appState: {
-        viewBackgroundColor: theme.background,
-        currentItemStrokeColor: defaultInk(themeId),
-        currentItemStrokeWidth: 1,
-        currentItemRoughness: 1,
-        // Not the hand-drawn default: typed notes should read like notes.
-        currentItemFontFamily: FONT_UI,
-        currentItemFontSize: DEFAULT_FONT_SIZE,
-        // Prefer click-to-place text with a wrap width over drag-to-size.
-        currentItemAutoResize: false,
-      },
-      // We call settleFitView ourselves — Excalidraw's default fits the entire
-      // board and lands the problem as a postage stamp in the corner.
-      scrollToContent: false,
-    }),
+    () => {
+      const prefs = inkPrefsRef.current;
+      return {
+        appState: {
+          viewBackgroundColor: theme.background,
+          currentItemStrokeColor: resolveInkColor(themeId, prefs.inkColor),
+          currentItemStrokeWidth: prefs.penWidth,
+          currentItemRoughness: 1,
+          // Not the hand-drawn default: typed notes should read like notes.
+          currentItemFontFamily: FONT_UI,
+          currentItemFontSize: DEFAULT_FONT_SIZE,
+          // Prefer click-to-place text with a wrap width over drag-to-size.
+          currentItemAutoResize: false,
+        },
+        // We call settleFitView ourselves — Excalidraw's default fits the entire
+        // board and lands the problem as a postage stamp in the corner.
+        scrollToContent: false,
+      };
+    },
     [theme.background, themeId],
   );
 
   return (
-    <div ref={boardRef} className={interactive ? "lc-board" : "lc-board lc-board-idle"}>
+    <div
+      ref={boardRef}
+      className={interactive ? "lc-board" : "lc-board lc-board-idle"}
+    >
+      {linedPaper && linedSlot && linedSlot.width > 8 && linedSlot.height > 8 && (
+        <div
+          className="lc-board-lined-overlay"
+          aria-hidden
+          style={{
+            left: linedSlot.left,
+            top: linedSlot.top,
+            width: linedSlot.width,
+            height: linedSlot.height,
+            backgroundSize: `100% ${linedSlot.gap}px`,
+            backgroundPosition: `0 ${linedSlot.phase}px`,
+          }}
+        />
+      )}
       {interactive && (
         <>
           <BoardToolbar
@@ -2516,7 +2842,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               setShapesOpen(true);
             }}
             onStamp={stamp}
-            onStampImported={stampImported}
             onClear={() => {
               rasterInkRef.current?.clear();
               apiRef.current?.updateScene({
@@ -2531,45 +2856,95 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             onHeightChange={setToolbarHeight}
           />
           <div
-            className={
-              bottomCenter ? "lc-map-controls lc-map-controls-paged" : "lc-map-controls"
-            }
+            className={[
+              bottomCenter ? "lc-map-controls lc-map-controls-paged" : "lc-map-controls",
+              mapChromeHidden ? "lc-map-controls-collapsed" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
           >
-            {onThemePick && (
-              <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
-            )}
-            {bottomCenter}
+            <div className="lc-map-chrome-left">
+              {!mapChromeHidden && onThemePick && (
+                <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
+              )}
+            </div>
+            {!mapChromeHidden && bottomCenter}
             <div className="lc-map-chrome-right">
-              {mobile && (
+              <div className="lc-map-chrome-row">
+                <button
+                  type="button"
+                  className={
+                    mapChromeHidden
+                      ? "lc-map-btn lc-chrome-eye is-dimmed"
+                      : "lc-map-btn lc-chrome-eye"
+                  }
+                  aria-pressed={!mapChromeHidden}
+                  aria-label={mapChromeHidden ? "Show board chrome" : "Hide board chrome"}
+                  title={mapChromeHidden ? "Show controls" : "Hide controls"}
+                  onClick={() => setMapChromeHidden((current) => !current)}
+                >
+                  <EyeIcon closed={mapChromeHidden} />
+                </button>
+                {!mapChromeHidden && linedPaperToggle && (
+                  <button
+                    type="button"
+                    className={
+                      linedPaper ? "lc-lined-toggle is-active" : "lc-lined-toggle"
+                    }
+                    aria-pressed={linedPaper}
+                    aria-label="Lined paper"
+                    title="Lined paper"
+                    onClick={() => {
+                      const next = !linedPaperRef.current;
+                      linedPaperRef.current = next;
+                      setLinedPaper(next);
+                      reflowReadingText();
+                      requestAnimationFrame(reportLinedSlot);
+                    }}
+                  >
+                    <span aria-hidden>🗒️</span>
+                  </button>
+                )}
+              </div>
+              {!mapChromeHidden && showReadingSize && (
                 <ReadingSizeControl value={readingSize} onChange={setReadingSize} />
               )}
-              <ZoomControls
-                zoomPct={zoomPct}
-                onZoomIn={zoomIn}
-                onZoomOut={zoomOut}
-                onFit={fitCurrentView}
-              />
+              {!mapChromeHidden && (
+                <ZoomControls
+                  zoomPct={zoomPct}
+                  zoomFloorPct={zoomFloorPct}
+                  zoomMaxPct={Math.round(ZOOM_MAX * 100)}
+                  onZoomIn={zoomIn}
+                  onZoomOut={zoomOut}
+                  onFit={fitCurrentView}
+                />
+              )}
             </div>
+            {coachFold}
           </div>
         </>
       )}
-      {interactive && (
-        <RasterInkLayer
-          ref={rasterInkRef}
-          enabled={interactive}
-          tool={inkToolActive ? (activeTool === "eraser" ? "eraser" : "pen") : null}
-          strokeWidth={strokeWidth}
-          inkColor={inkColor}
-          pressureSensitive={pressureSensitive}
-          getViewport={getViewport}
-          clip={inkClip}
-          onChange={onChange}
-          onStrokeMove={onInkStrokeMove}
-          onStrokeEnd={onInkStrokeEnd}
-          onStylusAccessory={handleStylusAccessory}
-        />
-      )}
       {interactive && activeTool === "eraser" && <EraserBrush ref={eraserBrushRef} />}
+      <RasterInkLayer
+        ref={rasterInkRef}
+        enabled={interactive}
+        tool={
+          interactive && inkToolActive
+            ? activeTool === "eraser"
+              ? "eraser"
+              : "pen"
+            : null
+        }
+        strokeWidth={strokeWidth}
+        inkColor={inkColor}
+        pressureSensitive={pressureSensitive}
+        getViewport={getViewport}
+        clip={inkClip}
+        onChange={onChange}
+        onStrokeMove={interactive ? onInkStrokeMove : undefined}
+        onStrokeEnd={interactive ? onInkStrokeEnd : undefined}
+        onStylusAccessory={interactive ? handleStylusAccessory : undefined}
+      />
       <Excalidraw
         viewModeEnabled={!interactive}
         handleKeyboardGlobally={interactive}
@@ -2582,6 +2957,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               setZoomPct((current) => (current === pct ? current : pct));
               rasterInkRef.current?.repaint();
               reportCodeSlot();
+              reportLinedSlot();
 
               if (!mobile || clampingScrollRef.current) return;
               const bounds = pageBoundsRef.current;
@@ -2634,9 +3010,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 : "";
           return (
             <div
-              className={["lc-ink-chrome", phaseClass, inkChromeLive ? "lc-ink-chrome-live" : ""]
-                .filter(Boolean)
-                .join(" ")}
+              className={["lc-ink-chrome", phaseClass].filter(Boolean).join(" ")}
               style={{ left: inkChrome.left, top: inkChrome.top }}
               onPointerDown={(event) => event.stopPropagation()}
               onAnimationEnd={() => {
@@ -2675,10 +3049,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 <RedoIcon />
               </button>
               <div
-                className="lc-ink-chrome-slider"
+                className="lc-ink-chrome-dial-wrap"
                 onPointerDown={(event) => event.stopPropagation()}
               >
-                <StrokeSizeSlider
+                <InkChromeSizeDial
                   value={strokeWidth}
                   onChange={setStrokeWidth}
                   label={activeTool === "eraser" ? "Eraser size" : "Stroke weight"}
@@ -2736,7 +3110,6 @@ interface ToolbarProps {
   shapesOpen: boolean;
   onToggleShapes: () => void;
   onStamp: (shape: ShapeStamp, mods: Record<string, ShapeModValue>, moveAsOne: boolean) => void;
-  onStampImported: (item: ImportedLibraryItem, moveAsOne: boolean) => void;
   onClear: () => void;
   onReset: () => void;
   onUndo: () => void;
@@ -2762,7 +3135,6 @@ function BoardToolbar({
   shapesOpen,
   onToggleShapes,
   onStamp,
-  onStampImported,
   onClear,
   onReset,
   onUndo,
@@ -2784,17 +3156,13 @@ function BoardToolbar({
     active === "arrow" ||
     active === "eraser";
   const [configuring, setConfiguring] = useState<ShapeStamp | null>(null);
-  const [configuringImport, setConfiguringImport] = useState<ImportedLibraryItem | null>(null);
   const [mods, setMods] = useState<Record<string, ShapeModValue>>({});
   const [moveAsOne, setMoveAsOne] = useState(true);
   const [shapePhase, setShapePhase] = useState<"list" | "fade" | "mod">("list");
-  const [imported, setImported] = useState<ImportedLibraryItem[]>(() => loadImportedLibrary());
-  const [importError, setImportError] = useState<string | null>(null);
   /** Reset asks first, in our own modal — never a browser confirm box. */
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [folded, setFolded] = useState(mobile);
-  const importRef = useRef<HTMLInputElement | null>(null);
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -2810,26 +3178,14 @@ function BoardToolbar({
   useEffect(() => {
     if (!shapesOpen) {
       setConfiguring(null);
-      setConfiguringImport(null);
       setMods({});
       setShapePhase("list");
-      setImportError(null);
     }
   }, [shapesOpen]);
 
   const pickShape = (shape: ShapeStamp) => {
     setConfiguring(shape);
-    setConfiguringImport(null);
     setMods({ ...shape.defaults });
-    setMoveAsOne(true);
-    setShapePhase("fade");
-    window.setTimeout(() => setShapePhase("mod"), 200);
-  };
-
-  const pickImported = (item: ImportedLibraryItem) => {
-    setConfiguring(null);
-    setConfiguringImport(item);
-    setMods({});
     setMoveAsOne(true);
     setShapePhase("fade");
     window.setTimeout(() => setShapePhase("mod"), 200);
@@ -2838,44 +3194,17 @@ function BoardToolbar({
   const backToList = () => {
     setShapePhase("list");
     setConfiguring(null);
-    setConfiguringImport(null);
     setMods({});
   };
 
   const placeConfigured = () => {
     if (configuring) {
       onStamp(configuring, mods, moveAsOne);
-    } else if (configuringImport) {
-      onStampImported(configuringImport, moveAsOne);
     }
     backToList();
   };
 
-  const onImportFile = async (file: File | null) => {
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const items = parseExcalidrawLibrary(text);
-      setImported((current) => {
-        const merged = [...current];
-        for (const item of items) {
-          if (!merged.some((existing) => existing.id === item.id)) merged.push(item);
-        }
-        saveImportedLibrary(merged);
-        return merged;
-      });
-      setImportError(null);
-    } catch (cause) {
-      setImportError(cause instanceof Error ? cause.message : String(cause));
-    }
-  };
-
-  const clearImported = () => {
-    setImported([]);
-    saveImportedLibrary([]);
-  };
-
-  const modifierTitle = configuring?.label ?? configuringImport?.name ?? "";
+  const modifierTitle = configuring?.label ?? "";
 
   const pickTool = (tool: ToolName) => {
     if (shapesOpen) onToggleShapes();
@@ -3068,46 +3397,7 @@ function BoardToolbar({
           {shapePhase !== "mod" && (
             <>
               {SHAPE_GROUPS.map((group) => {
-                const items =
-                  group === "imported"
-                    ? []
-                    : SHAPES.filter((shape) => shape.group === group);
-                if (group === "imported") {
-                  if (imported.length === 0) return null;
-                  return (
-                    <div key={group} className="lc-shape-group">
-                      <h4>{group}</h4>
-                      {imported.map((item) => {
-                        const fading =
-                          shapePhase === "fade" &&
-                          configuringImport &&
-                          configuringImport.id !== item.id;
-                        const rising =
-                          shapePhase === "fade" &&
-                          configuringImport &&
-                          configuringImport.id === item.id;
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            role="menuitem"
-                            className={
-                              rising
-                                ? "lc-shape lc-shape-rising"
-                                : fading
-                                  ? "lc-shape lc-shape-fade"
-                                  : "lc-shape"
-                            }
-                            onClick={() => pickImported(item)}
-                          >
-                            {item.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  );
-                }
-
+                const items = SHAPES.filter((shape) => shape.group === group);
                 if (
                   shapePhase === "fade" &&
                   configuring &&
@@ -3150,38 +3440,11 @@ function BoardToolbar({
                   </div>
                 );
               })}
-
-              <div className="lc-shape-import-row">
-                <input
-                  ref={importRef}
-                  type="file"
-                  accept=".excalidrawlib,application/json"
-                  hidden
-                  onChange={(event) => {
-                    void onImportFile(event.target.files?.[0] ?? null);
-                    event.target.value = "";
-                  }}
-                />
-                <button
-                  type="button"
-                  className="lc-secondary lc-shape-import lc-tip-target"
-                  data-tip="Import a local .excalidrawlib — download from libraries.excalidraw.com on another machine"
-                  data-tip-placement="right"
-                  onClick={() => importRef.current?.click()}
-                >
-                  Import library…
-                </button>
-                {imported.length > 0 && (
-                  <button type="button" className="lc-link" onClick={clearImported}>
-                    Clear imports
-                  </button>
-                )}
-              </div>
-              {importError && <p className="lc-warning">{importError}</p>}
             </>
           )}
 
-          {shapePhase === "mod" && (configuring || configuringImport) && (
+          {shapePhase === "mod" && configuring && (
+
             <div className="lc-shape-modifier">
               <button type="button" className="lc-shape-back" onClick={backToList}>
                 ← {modifierTitle}
@@ -3490,25 +3753,51 @@ function ClearIcon() {
   );
 }
 
+function EyeIcon({ closed = false }: { closed?: boolean }) {
+  if (closed) {
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+        <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+        <path d="M1 1l22 22" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 function ZoomControls({
   zoomPct,
+  zoomFloorPct,
+  zoomMaxPct,
   onZoomIn,
   onZoomOut,
   onFit,
 }: {
   zoomPct: number;
+  zoomFloorPct: number;
+  zoomMaxPct: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
 }) {
+  const atMin = zoomPct <= zoomFloorPct;
+  const atMax = zoomPct >= zoomMaxPct;
   return (
     <div className="lc-zoom" role="group" aria-label="Zoom">
       <button
         type="button"
         className="lc-map-btn"
-        data-tip="Zoom in"
+        data-tip={atMax ? `Maximum zoom (${zoomMaxPct}%)` : "Zoom in"}
         data-tip-placement="left"
-        aria-label="Zoom in"
+        aria-label={atMax ? `Zoom in disabled, maximum ${zoomMaxPct}%` : "Zoom in"}
+        disabled={atMax}
         onClick={onZoomIn}
       >
         +
@@ -3516,9 +3805,10 @@ function ZoomControls({
       <button
         type="button"
         className="lc-map-btn"
-        data-tip="Zoom out"
+        data-tip={atMin ? `Minimum zoom (${zoomFloorPct}%)` : "Zoom out"}
         data-tip-placement="left"
-        aria-label="Zoom out"
+        aria-label={atMin ? `Zoom out disabled, minimum ${zoomFloorPct}%` : "Zoom out"}
+        disabled={atMin}
         onClick={onZoomOut}
       >
         −
@@ -3526,9 +3816,9 @@ function ZoomControls({
       <button
         type="button"
         className="lc-map-btn"
-        data-tip={`Center view (${zoomPct}%)`}
+        data-tip={`Fit width (${zoomPct}%)`}
         data-tip-placement="left"
-        aria-label={`Center view, ${zoomPct}% zoom`}
+        aria-label={`Fit width, ${zoomPct}% zoom`}
         onClick={onFit}
       >
         ⊡

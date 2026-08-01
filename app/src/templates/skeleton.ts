@@ -84,7 +84,7 @@ export const COACH_INK = "#5b6478";
 export const COACH_ACCENT = "#c2410c";
 export const COACH_FILL = "#f1f5f9";
 export const STUDENT_HINT = "#4b5563";
-/** Near-black dashed frames — stay readable on parchment when zoomed out. */
+/** Near-black dashed frames — stay readable on light boards when zoomed out. */
 export const REGION_BORDER = "#0c0a08";
 export const TEXT_PRIMARY = "#14110e";
 export const TEXT_BODY = "#1f1a14";
@@ -137,17 +137,21 @@ export interface BoardTheme {
   hint: string;
 }
 
+/**
+ * Appearance swatches — five light tints, then five dark counterparts in the
+ * same hue order (blue → green → pink → beige → purple).
+ */
 export const BOARD_THEMES: BoardTheme[] = [
-  { id: "parchment", label: "Parchment", background: "#f5f0e4", hint: "#8a7f6c" },
-  { id: "linen", label: "Linen", background: "#ebe3d4", hint: "#857a68" },
-  { id: "sand", label: "Sand", background: "#e8dcc4", hint: "#8a7d66" },
-  { id: "papyrus", label: "Papyrus", background: "#ddd0b4", hint: "#7a6f58" },
-  { id: "wheat", label: "Wheat", background: "#e5d4b0", hint: "#8a7758" },
-  { id: "midnight", label: "Midnight", background: "#1a1d23", hint: "#6b7280" },
-  { id: "graphite", label: "Graphite", background: "#23262e", hint: "#7a8494" },
-  { id: "ocean", label: "Ocean", background: "#1a2229", hint: "#6b8099" },
-  { id: "pine", label: "Pine", background: "#1a211e", hint: "#6b8a7a" },
-  { id: "dusk", label: "Dusk", background: "#221e24", hint: "#8a7a85" },
+  { id: "blue", label: "Blue", background: "#e8f0fa", hint: "#6b84a3" },
+  { id: "green", label: "Green", background: "#e8f4ec", hint: "#6b9078" },
+  { id: "pink", label: "Pink", background: "#f8ebee", hint: "#a07080" },
+  { id: "beige", label: "Beige", background: "#f5efe4", hint: "#95866c" },
+  { id: "purple", label: "Purple", background: "#efeaf6", hint: "#8574a0" },
+  { id: "ocean", label: "Ocean", background: "#141e28", hint: "#6b8aa3" },
+  { id: "pine", label: "Pine", background: "#141e19", hint: "#6b8f7a" },
+  { id: "dusk", label: "Dusk", background: "#22161c", hint: "#9a7a88" },
+  { id: "graphite", label: "Graphite", background: "#1c1a17", hint: "#8a8578" },
+  { id: "midnight", label: "Midnight", background: "#17141f", hint: "#8a7a9a" },
 ];
 
 /** Tag a whole group as the coach's, so capture and replacement both work. */
