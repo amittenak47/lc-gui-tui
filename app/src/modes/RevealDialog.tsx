@@ -14,6 +14,7 @@
 
 import type { BridgeResponse } from "../api/types";
 import { HoldButton } from "../components/HoldButton";
+import { HOLD_SENSITIVE_MS } from "../util/gesture";
 
 export interface RevealDialogProps {
   taskId: string;
@@ -74,6 +75,7 @@ export function RevealDialog({
                 label="Lazy"
                 ariaLabel="Hold to lazy-fill solution code"
                 className="lc-hold-choice"
+                holdMs={HOLD_SENSITIVE_MS}
                 disabled={pending}
                 onConfirm={onConfirmLazy}
                 resetKey={error}
@@ -81,6 +83,7 @@ export function RevealDialog({
               <HoldButton
                 label="Reveal"
                 ariaLabel="Hold to reveal"
+                holdMs={HOLD_SENSITIVE_MS}
                 disabled={pending}
                 onConfirm={onConfirm}
                 resetKey={error}

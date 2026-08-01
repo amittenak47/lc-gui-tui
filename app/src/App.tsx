@@ -49,6 +49,7 @@ import type { StructureBaseline } from "./canvas/boardDelta";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
 import { buildSnapshot, sceneFingerprint, structureBaselineFromBoard } from "./canvas/snapshot";
 import { sha256Hex } from "./util/codeHash";
+import { HOLD_SENSITIVE_MS } from "./util/gesture";
 import { skeletonOf } from "./util/solutionSplit";
 import {
   AgentSidePanel,
@@ -2139,6 +2140,7 @@ export function App() {
                 label="Offline"
                 className="lc-offline-chip"
                 ariaLabel="Offline: tap to edit host, hold to retry"
+                holdMs={HOLD_SENSITIVE_MS}
                 onTap={() => setPairingEditing(true)}
                 onConfirm={() => {
                   openGate("startup");
