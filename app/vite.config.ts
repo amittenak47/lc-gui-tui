@@ -11,6 +11,11 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     host: "0.0.0.0",
+    // Cargo locks DLLs under src-tauri/target while compiling; Vite watching
+    // them on Windows throws EBUSY and kills beforeDevCommand.
+    watch: {
+      ignored: ["**/src-tauri/**"],
+    },
   },
   define: {
     // Excalidraw reads process.env.IS_PREACT at module scope.

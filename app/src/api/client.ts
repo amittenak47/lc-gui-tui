@@ -369,6 +369,29 @@ export class LcClient {
     }
   }
 
+  /** Single-turn Q&A — skips the staged review pipeline. */
+  async ask(
+    taskId: string,
+    question: string,
+    dataset?: string,
+  ): Promise<{ task_id: string; provider: string; reply: string }> {
+    try {
+      return await this.request("POST", "/coach/ask", {
+        task_id: taskId,
+        dataset,
+        question,
+      });
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 404) {
+        throw new LcApiError(
+          "Ask needs a daemon that serves POST /coach/ask — rebuild and restart `lc serve`",
+          404,
+        );
+      }
+      throw cause;
+    }
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (this.pairing.token) headers["X-LC-Token"] = this.pairing.token;

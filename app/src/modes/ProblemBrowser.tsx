@@ -28,6 +28,7 @@ import {
   type OfflinePack,
 } from "../util/offlineCorpus";
 import { titleFromSlug } from "../util/text";
+import { loadBrowsePosition, saveBrowsePosition } from "../util/browsePosition";
 
 export const PAGE_SIZE = 15;
 /** Smallest page the phone browser will request — still usable on iPhone SE. */
@@ -85,17 +86,18 @@ export function ProblemBrowser({
   onRandomSession,
 }: ProblemBrowserProps) {
   const mobile = useIsMobile();
-  const [dataset, setDataset] = useState<string>(DEFAULT_DATASET);
+  const initial = useMemo(() => loadBrowsePosition(), []);
+  const [dataset, setDataset] = useState<string>(initial.dataset);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
-  const [query, setQuery] = useState("");
-  const [difficulty, setDifficulty] = useState<string>("");
-  const [tag, setTag] = useState<string>("");
-  const [sort, setSort] = useState<string>("task_id");
-  const [page, setPage] = useState(0);
+  const [query, setQuery] = useState(initial.query);
+  const [difficulty, setDifficulty] = useState<string>(initial.difficulty);
+  const [tag, setTag] = useState<string>(initial.tag);
+  const [sort, setSort] = useState<string>(initial.sort);
+  const [page, setPage] = useState(initial.page);
 
   const [rows, setRows] = useState<ProblemSummary[]>([]);
   const [total, setTotal] = useState(0);
-  const [selected, setSelected] = useState(0);
+  const [selected, setSelected] = useState(initial.selected);
   const [tags, setTags] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -215,8 +217,28 @@ export function ProblemBrowser({
   }, [client, offline]);
 
   // Any filter change resets to the first page — as in the TUI.
-  useEffect(() => setPage(0), [query, difficulty, tag, sort, dataset]);
+  // Skip the first run so a restored browse position keeps its page.
+  const skipPageResetRef = useRef(true);
+  useEffect(() => {
+    if (skipPageResetRef.current) {
+      skipPageResetRef.current = false;
+      return;
+    }
+    setPage(0);
+  }, [query, difficulty, tag, sort, dataset]);
 
+  // Persist browse spot so returning from a problem lands on the same tab/page.
+  useEffect(() => {
+    saveBrowsePosition({
+      dataset,
+      query,
+      difficulty,
+      tag,
+      sort,
+      page,
+      selected,
+    });
+  }, [dataset, query, difficulty, tag, sort, page, selected]);
   useEffect(() => {
     if (offline) {
       setLoading(false);

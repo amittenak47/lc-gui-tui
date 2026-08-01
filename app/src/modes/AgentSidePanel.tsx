@@ -1,20 +1,28 @@
 /**
  * Coach side panel — chat thread + composer (codebase-graph Ask-style).
  *
- * Draw / Review board are composer flags that ride along with Send, not
- * standalone actions. Structured results (review, tests, nudges) render
- * inside the message list as assistant turns.
+ * Ask / Draw / Review are composer flags that ride along with Send, not
+ * standalone actions. Ask skips the staged pipeline; Review runs it.
+ * Structured results (review, tests, nudges) render inside the message list
+ * as assistant turns.
  */
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent, type ReactNode } from "react";
 
 import type { BridgeResponse, ReviewResponse } from "../api/types";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS } from "../util/gesture";
+import { useIsMobile } from "../util/mobile";
 import type { MessageDrawing } from "../viz/drawingState";
 import { Timeline } from "../viz/Timeline";
 import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
+
+/** Visible strip when the mobile coach sheet is parked closed. */
+const COACH_SHEET_PEEK_PX = 34;
+/** Drag past this fraction of sheet height (or fling) to snap open/closed. */
+const COACH_SHEET_SNAP = 0.28;
+const COACH_SHEET_FLING_VX = 0.55;
 
 export type CoachMode = "review" | "ambient";
 
@@ -80,13 +88,15 @@ interface MessageMenuState {
 }
 
 export interface CoachSendFlags {
+  /** Ask the coach a question without the staged review pipeline. */
+  ask: boolean;
   /** Ask the coach to draw on the board. */
   draw: boolean;
-  /** Attach the current board (and code dock) to the request. */
+  /** Attach the current board and run the staged review pipeline. */
   reviewBoard: boolean;
   /**
    * Fill the parts of solution.py the board already justifies (no reference
-   * dump). Works with Draw / Review board / a plain question.
+   * dump). Works with Draw / Review / a plain question.
    */
   lazy: boolean;
 }
@@ -125,6 +135,10 @@ export interface AgentSidePanelProps {
   open: boolean;
   mode: CoachMode;
   onModeChange: (mode: CoachMode) => void;
+  /** Open / close the coach (header toggle + sheet snap). */
+  onOpenChange?: (open: boolean) => void;
+  /** @deprecated Prefer onOpenChange — kept for call sites that only close. */
+  onClose?: () => void;
   busy: boolean;
   thinking?: boolean;
   /** Phased status while the local model works (replaces a bare "Thinking…"). */
@@ -145,6 +159,8 @@ export function AgentSidePanel({
   open,
   mode,
   onModeChange,
+  onOpenChange,
+  onClose,
   busy,
   thinking = false,
   thinkingPhase = null,
@@ -155,7 +171,16 @@ export function AgentSidePanel({
   onDrawingFrame,
   children,
 }: AgentSidePanelProps) {
+  const mobile = useIsMobile();
+  const setOpen = useCallback(
+    (next: boolean) => {
+      onOpenChange?.(next);
+      if (!next) onClose?.();
+    },
+    [onClose, onOpenChange],
+  );
   const [draft, setDraft] = useState("");
+  const [ask, setAsk] = useState(false);
   const [draw, setDraw] = useState(false);
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
@@ -165,6 +190,17 @@ export function AgentSidePanel({
   const [copyFlash, setCopyFlash] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const [sheetOffset, setSheetOffset] = useState(0);
+  const [sheetDragging, setSheetDragging] = useState(false);
+  const sheetDragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startOffset: number;
+    lastY: number;
+    lastT: number;
+    velocity: number;
+  } | null>(null);
   const longPressRef = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
     messageId: string | null;
@@ -172,6 +208,115 @@ export function AgentSidePanel({
     startY: number;
     moved: boolean;
   }>({ timer: null, messageId: null, startX: 0, startY: 0, moved: false });
+
+  const sheetHeight = () => panelRef.current?.offsetHeight ?? 0;
+  const closedOffset = () => Math.max(0, sheetHeight() - COACH_SHEET_PEEK_PX);
+
+  useLayoutEffect(() => {
+    if (!mobile || sheetDragging) return;
+    const apply = () => setSheetOffset(open ? 0 : closedOffset());
+    apply();
+    const id = window.requestAnimationFrame(apply);
+    return () => window.cancelAnimationFrame(id);
+  }, [mobile, open, sheetDragging]);
+
+  useEffect(() => {
+    if (!mobile) return;
+    const onResize = () => {
+      if (sheetDragRef.current) return;
+      setSheetOffset(open ? 0 : closedOffset());
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [mobile, open]);
+
+  const endSheetDrag = useCallback(
+    (event: PointerEvent<HTMLElement>) => {
+      const drag = sheetDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      sheetDragRef.current = null;
+      setSheetDragging(false);
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        /* already released */
+      }
+
+      const closed = closedOffset();
+      const offset = Math.min(
+        closed,
+        Math.max(0, drag.startOffset + (event.clientY - drag.startY)),
+      );
+      const travel = Math.abs(event.clientY - drag.startY);
+      // Tap the handle to toggle when you didn't really drag.
+      if (travel < 10) {
+        const nextOpen = !open;
+        setOpen(nextOpen);
+        setSheetOffset(nextOpen ? 0 : closed);
+        return;
+      }
+      const flungOpen = drag.velocity < -COACH_SHEET_FLING_VX;
+      const flungClosed = drag.velocity > COACH_SHEET_FLING_VX;
+      const nextOpen = flungOpen
+        ? true
+        : flungClosed
+          ? false
+          : offset < closed * (1 - COACH_SHEET_SNAP);
+      setOpen(nextOpen);
+      setSheetOffset(nextOpen ? 0 : closed);
+    },
+    [open, setOpen],
+  );
+
+  const onSheetHandlePointerDown = useCallback(
+    (event: PointerEvent<HTMLElement>) => {
+      if (!mobile) return;
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const startOffset = open ? 0 : closedOffset();
+      sheetDragRef.current = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startOffset,
+        lastY: event.clientY,
+        lastT: performance.now(),
+        velocity: 0,
+      };
+      setSheetDragging(true);
+      setSheetOffset(startOffset);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [mobile, open],
+  );
+
+  const onSheetHandlePointerMove = useCallback(
+    (event: PointerEvent<HTMLElement>) => {
+      const drag = sheetDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const now = performance.now();
+      const dt = Math.max(1, now - drag.lastT);
+      const dy = event.clientY - drag.lastY;
+      drag.velocity = dy / dt;
+      drag.lastY = event.clientY;
+      drag.lastT = now;
+      const closed = closedOffset();
+      const next = Math.min(
+        closed,
+        Math.max(0, drag.startOffset + (event.clientY - drag.startY)),
+      );
+      setSheetOffset(next);
+    },
+    [],
+  );
+
+  const onSheetHandleKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLElement>) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      setOpen(!open);
+    },
+    [open, setOpen],
+  );
 
   const clearLongPress = useCallback(() => {
     const state = longPressRef.current;
@@ -268,9 +413,9 @@ export function AgentSidePanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [messageMenu, closeMessageMenu]);
 
-  if (!open) return null;
+  if (!open && !mobile) return null;
 
-  const canSend = !busy && (draft.trim().length > 0 || draw || reviewBoard || lazy);
+  const canSend = !busy && (draft.trim().length > 0 || ask || draw || reviewBoard || lazy);
   const menuMessage = messageMenu
     ? messages.find((message) => message.id === messageMenu.messageId)
     : undefined;
@@ -293,8 +438,12 @@ export function AgentSidePanel({
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!canSend) return;
-    onSend(draft.trim(), { draw, reviewBoard, lazy });
+    onSend(draft.trim(), { ask, draw, reviewBoard, lazy });
     setDraft("");
+    setAsk(false);
+    setDraw(false);
+    setReviewBoard(false);
+    setLazy(false);
     closeMessageMenu();
   };
 
@@ -309,14 +458,52 @@ export function AgentSidePanel({
     setLightboxClosing(false);
   };
 
+  const sheetStyle =
+    mobile
+      ? {
+          transform: `translate3d(0, ${sheetOffset}px, 0)`,
+          transition: sheetDragging ? "none" : "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
+        }
+      : undefined;
+
   return (
-    <aside className="lc-side lc-side-open" id="lc-coach-panel" aria-label="Coach">
+    <aside
+      ref={panelRef}
+      className={[
+        "lc-side",
+        "lc-side-open",
+        mobile ? "lc-side-sheet" : "",
+        mobile && !open && !sheetDragging ? "lc-side-sheet-parked" : "",
+        mobile && sheetDragging ? "lc-side-sheet-dragging" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      id="lc-coach-panel"
+      aria-label="Coach"
+      style={sheetStyle}
+    >
+      <div
+        className="lc-coach-sheet-handle"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={open ? "Drag down to close coach" : "Drag up to open coach"}
+        title={open ? "Drag down to close" : "Drag up to open"}
+        onPointerDown={mobile ? onSheetHandlePointerDown : undefined}
+        onPointerMove={mobile ? onSheetHandlePointerMove : undefined}
+        onPointerUp={mobile ? endSheetDrag : undefined}
+        onPointerCancel={mobile ? endSheetDrag : undefined}
+        onKeyDown={onSheetHandleKeyDown}
+        onClick={mobile ? undefined : () => setOpen(false)}
+      >
+        <span className="lc-coach-fold-bar" aria-hidden />
+      </div>
       <div className="lc-coach-chat">
         <div className="lc-coach-messages" ref={listRef} aria-live="polite">
           {messages.length === 0 && !children && !thinking && (
             <p className="lc-muted lc-coach-empty">
-              Ask a question, optionally flag <strong>Review board</strong> to attach your
-              sketch/code, or <strong>Draw</strong> to request a diagram.
+              Ask a question with <strong>Ask</strong>, flag <strong>Review</strong> to run a
+              staged board review, or <strong>Draw</strong> to request a diagram.
             </p>
           )}
           {messages.map((message) => (
@@ -484,6 +671,33 @@ export function AgentSidePanel({
               </Tip>
             </div>
             <div className="lc-coach-composer-actions">
+              <Tip
+                tip={
+                  lazy || reviewBoard
+                    ? "Turn off Review / Lazy to use Ask"
+                    : "Ask a question without the staged review pipeline"
+                }
+                placement="left"
+              >
+                <button
+                  type="button"
+                  className={ask ? "lc-flag lc-flag-active" : "lc-flag"}
+                  aria-pressed={ask}
+                  disabled={busy || lazy || reviewBoard}
+                  onClick={() =>
+                    setAsk((current) => {
+                      const next = !current;
+                      if (next) {
+                        setLazy(false);
+                        setReviewBoard(false);
+                      }
+                      return next;
+                    })
+                  }
+                >
+                  Ask
+                </button>
+              </Tip>
               <Tip tip="Allow coach to draw on the board" placement="left">
                 <button
                   type="button"
@@ -495,27 +709,46 @@ export function AgentSidePanel({
                   Draw
                 </button>
               </Tip>
-              <Tip tip="Allow coach to review the board" placement="left">
+              <Tip
+                tip={ask ? "Turn off Ask to use Review" : "Run a staged review of the board"}
+                placement="left"
+              >
                 <button
                   type="button"
                   className={reviewBoard ? "lc-flag lc-flag-active" : "lc-flag"}
                   aria-pressed={reviewBoard}
-                  disabled={busy}
-                  onClick={() => setReviewBoard((current) => !current)}
+                  disabled={busy || ask}
+                  onClick={() =>
+                    setReviewBoard((current) => {
+                      const next = !current;
+                      if (next) setAsk(false);
+                      return next;
+                    })
+                  }
                 >
-                  Review board
+                  Review
                 </button>
               </Tip>
               <Tip
-                tip="Drawing-first: interpret the board and fill the correct earned parts of solution.py"
+                tip={
+                  ask
+                    ? "Turn off Ask to use Lazy"
+                    : "Drawing-first: interpret the board and fill the correct earned parts of solution.py"
+                }
                 placement="left"
               >
                 <button
                   type="button"
                   className={lazy ? "lc-flag lc-flag-active" : "lc-flag"}
                   aria-pressed={lazy}
-                  disabled={busy}
-                  onClick={() => setLazy((current) => !current)}
+                  disabled={busy || ask}
+                  onClick={() =>
+                    setLazy((current) => {
+                      const next = !current;
+                      if (next) setAsk(false);
+                      return next;
+                    })
+                  }
                 >
                   Lazy
                 </button>

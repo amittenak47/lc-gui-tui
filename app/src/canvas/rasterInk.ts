@@ -13,8 +13,8 @@ import type { InkStroke } from "./capture";
 
 export const STROKE_WIDTH_MIN = 1;
 export const STROKE_WIDTH_MAX = 32;
-/** Eraser slider goes 3× farther so the brush can clear large areas. */
-export const ERASER_WIDTH_MAX = 96;
+/** Eraser dial goes farther so the brush can clear large areas (4× prior max of 96). */
+export const ERASER_WIDTH_MAX = 384;
 export const STROKE_WIDTH_DEFAULT = 2;
 
 export interface ScenePoint {

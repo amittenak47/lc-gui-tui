@@ -14,14 +14,14 @@ export function StrokeSizeSlider({ value, onChange, label, eraser = false }: Str
   return (
     <div className="lc-stroke-slider" role="group" aria-label={label}>
       <span className="lc-stroke-slider-cap" aria-hidden>
-        {max}
+        {STROKE_WIDTH_MIN}
       </span>
       <input
         type="range"
         className="lc-stroke-slider-input"
         min={STROKE_WIDTH_MIN}
         max={max}
-        step={0.5}
+        step={0.1}
         value={clamped}
         aria-label={label}
         aria-valuemin={STROKE_WIDTH_MIN}
@@ -30,7 +30,7 @@ export function StrokeSizeSlider({ value, onChange, label, eraser = false }: Str
         onChange={(event) => onChange(Number(event.target.value))}
       />
       <span className="lc-stroke-slider-cap" aria-hidden>
-        {STROKE_WIDTH_MIN}
+        {max}
       </span>
       <span className="lc-stroke-slider-value" aria-hidden>
         {Number.isInteger(clamped) ? clamped : clamped.toFixed(1)}

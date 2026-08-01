@@ -12,16 +12,24 @@ export const BOARD_READING_SIZES: BoardReadingSize[] = ["S", "M", "L"];
 
 /** Statement body scene font (prose). Code samples in the statement stay ~86%. */
 export const BODY_FONT_PX: Record<BoardReadingSize, number> = {
-  S: 20,
-  M: 24,
-  L: 28,
+  S: 28,
+  M: 36,
+  L: 44,
 };
+
+/** Prose lineHeight / fontSize — matches problemBoard template (40 / 28). */
+export const STATEMENT_LINE_HEIGHT_RATIO = 40 / 28;
+
+/** Scene-space distance between lined-paper rules / statement baselines. */
+export function statementLinePitch(size: BoardReadingSize): number {
+  return BODY_FONT_PX[size] * STATEMENT_LINE_HEIGHT_RATIO;
+}
 
 /** Monaco CSS px at zoom 1 — close to statement body so they track together. */
 export const CODE_FONT_PX: Record<BoardReadingSize, number> = {
-  S: 14,
-  M: 16,
-  L: 18,
+  S: 16,
+  M: 20,
+  L: 24,
 };
 
 /** Relative to Medium — used by tests / legacy helpers. */

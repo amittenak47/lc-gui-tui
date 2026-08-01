@@ -1,6 +1,8 @@
 /**
  * UI chrome themes — paired with board backgrounds so the browser overlay,
  * side panel, and canvas all feel like one surface.
+ *
+ * Light and dark swatches share a hue order: blue → green → pink → beige → purple.
  */
 
 import { BOARD_THEMES, type BoardTheme } from "../templates/skeleton";
@@ -20,29 +22,27 @@ interface ChromeEntry {
 }
 
 const CHROME: Record<string, ChromeEntry> = {
-  parchment: { panel: "#ede8dc", overlay: "rgb(245 240 228 / 98%)", mode: "light" },
-  linen: { panel: "#e4dcd0", overlay: "rgb(235 227 212 / 98%)", mode: "light" },
-  sand: { panel: "#e0d4bc", overlay: "rgb(232 220 196 / 98%)", mode: "light" },
-  papyrus: { panel: "#d4c8ac", overlay: "rgb(221 208 180 / 98%)", mode: "light" },
-  wheat: { panel: "#dcc8a4", overlay: "rgb(229 212 176 / 98%)", mode: "light" },
-  midnight: { panel: "#22252c", overlay: "rgb(26 29 35 / 98%)", mode: "dark" },
-  graphite: { panel: "#2a2e38", overlay: "rgb(35 38 46 / 98%)", mode: "dark" },
-  ocean: { panel: "#212a33", overlay: "rgb(26 34 41 / 98%)", mode: "dark" },
-  pine: { panel: "#212824", overlay: "rgb(26 33 30 / 98%)", mode: "dark" },
-  dusk: { panel: "#2a2428", overlay: "rgb(34 30 36 / 98%)", mode: "dark" },
+  blue: { panel: "#dce7f4", overlay: "rgb(232 240 250 / 98%)", mode: "light" },
+  green: { panel: "#dceee3", overlay: "rgb(232 244 236 / 98%)", mode: "light" },
+  pink: { panel: "#f0e0e5", overlay: "rgb(248 235 238 / 98%)", mode: "light" },
+  beige: { panel: "#ebe3d4", overlay: "rgb(245 239 228 / 98%)", mode: "light" },
+  purple: { panel: "#e4dceb", overlay: "rgb(239 234 246 / 98%)", mode: "light" },
+  ocean: { panel: "#1c2a35", overlay: "rgb(20 30 40 / 98%)", mode: "dark" },
+  pine: { panel: "#1c2a24", overlay: "rgb(20 30 25 / 98%)", mode: "dark" },
+  dusk: { panel: "#2e2028", overlay: "rgb(34 22 28 / 98%)", mode: "dark" },
+  graphite: { panel: "#2a2723", overlay: "rgb(28 26 23 / 98%)", mode: "dark" },
+  midnight: { panel: "#24202c", overlay: "rgb(23 20 31 / 98%)", mode: "dark" },
 };
 
 const LIGHT_TOKENS = {
   ink: "#1f2937",
   muted: "#5b6478",
   hint: "#6b7280",
-  // Darker dividers so coach/composer edges read on parchment.
   line: "#6b7280",
   accent: "#b45309",
   ok: "#166534",
   bad: "#b91c1c",
   surface: "rgb(255 255 255 / 94%)",
-  // Soft slate selection — not accent orange (that fights Medium difficulty).
   selectEdge: "#3f4f63",
   selectFill: "rgb(63 79 99 / 11%)",
 };
@@ -51,13 +51,11 @@ const DARK_TOKENS = {
   ink: "#e8eaed",
   muted: "#9aa3af",
   hint: "#7a8494",
-  // Lighter dividers so coach/composer edges read on midnight boards.
   line: "#9aa3af",
   accent: "#f97316",
   ok: "#4ade80",
   bad: "#f87171",
   surface: "rgb(36 40 48 / 94%)",
-  // Cool sky selection — calm on charcoal, distinct from accent.
   selectEdge: "#7dd3fc",
   selectFill: "rgb(125 211 252 / 14%)",
 };
@@ -69,13 +67,20 @@ export const APP_THEMES: AppTheme[] = BOARD_THEMES.map((theme) => ({
 
 const STORAGE_KEY = "lc-app-theme";
 
-/** Map retired theme ids to their parchment-era replacements. */
+/** Map retired theme ids onto the current hue-ordered palette. */
 const LEGACY_THEME_IDS: Record<string, string> = {
-  paper: "parchment",
-  warm: "sand",
-  cool: "linen",
-  sage: "wheat",
-  slate: "papyrus",
+  // Classic neutrals → nearest hue
+  paper: "beige",
+  warm: "beige",
+  cool: "blue",
+  sage: "green",
+  slate: "beige",
+  // Parchment-era lights
+  parchment: "beige",
+  linen: "blue",
+  sand: "beige",
+  papyrus: "beige",
+  wheat: "green",
 };
 
 export function loadThemeId(): string {

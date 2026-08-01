@@ -215,12 +215,16 @@ export function healScratchpadGeometry(elements: readonly unknown[]): unknown[] 
     const origin = scratchPageOrigin(page);
 
     if (meta?.lcScratchFrame) {
+      const keepH =
+        typeof el.height === "number" && Number.isFinite(el.height) && el.height >= 400
+          ? el.height
+          : SCRATCH_PAGE_H;
       return {
         ...el,
         x: origin.x,
         y: origin.y,
         width: SCRATCH_PAGE_W,
-        height: SCRATCH_PAGE_H,
+        height: keepH,
       };
     }
 

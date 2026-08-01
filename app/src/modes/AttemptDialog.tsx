@@ -27,6 +27,8 @@ export interface AttemptDialogProps {
   taskId: string;
   solved: boolean;
   pending: boolean;
+  /** Fade the dialog out while save / next load starts underneath. */
+  exiting?: boolean;
   error: string | null;
   /** Keep the work (`save`) or clear it. */
   onChoose: (save: boolean) => void;
@@ -38,24 +40,27 @@ export function AttemptDialog({
   taskId,
   solved,
   pending,
+  exiting = false,
   error,
   onChoose,
   onCancel,
 }: AttemptDialogProps) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !pending) onCancel();
+      if (event.key === "Escape" && !pending && !exiting) onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel, pending]);
+  }, [onCancel, pending, exiting]);
 
   return (
     <div
-      className="lc-settings-backdrop"
+      className={["lc-settings-backdrop", exiting && "lc-leave-dialog-exit"]
+        .filter(Boolean)
+        .join(" ")}
       role="presentation"
       onClick={(event) => {
-        if (event.target === event.currentTarget && !pending) onCancel();
+        if (event.target === event.currentTarget && !pending && !exiting) onCancel();
       }}
     >
       <div
@@ -76,7 +81,7 @@ export function AttemptDialog({
             <HoldButton
               label={solved ? "Save attempt" : "Save progress"}
               className="lc-hold-choice"
-              disabled={pending}
+              disabled={pending || exiting}
               onConfirm={() => onChoose(true)}
               resetKey={error}
             >
@@ -90,7 +95,7 @@ export function AttemptDialog({
             <HoldButton
               label={solved ? "Clear attempt" : "Discard"}
               className="lc-hold-choice lc-hold-danger"
-              disabled={pending}
+              disabled={pending || exiting}
               onConfirm={() => onChoose(false)}
               resetKey={error}
             >
@@ -110,7 +115,12 @@ export function AttemptDialog({
         </div>
 
         <div className="lc-settings-foot">
-          <button type="button" className="lc-secondary" disabled={pending} onClick={onCancel}>
+          <button
+            type="button"
+            className="lc-secondary"
+            disabled={pending || exiting}
+            onClick={onCancel}
+          >
             Keep working
           </button>
         </div>

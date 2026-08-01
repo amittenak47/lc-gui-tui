@@ -41,7 +41,7 @@ describe("healBoardLayout", () => {
 
     const healed = healBoardLayout(elements, { readingSize: "M" });
     const text = healed.find((el) => el.id.endsWith("-body-0"))!;
-    expect(text.fontSize).toBe(24);
+    expect(text.fontSize).toBe(36);
     expect(text.width).toBeGreaterThan(400);
   });
 });

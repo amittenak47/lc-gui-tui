@@ -1,14 +1,8 @@
 /**
  * A built-in stamp palette for code and system-design sketching.
  *
- * Excalidraw's own libraries are `.excalidrawlib` bundles fetched from
- * libraries.excalidraw.com, which a LAN-only tablet app cannot rely on. These
- * are defined as ordinary skeletons instead: no network, no CSP exemption, and
- * they land wherever the student taps rather than at a fixed offset.
- *
  * Each stamp opens a short modifier sheet (size, rows, label, …) before it is
  * placed. Stamp ink stays a fixed sketch colour — it does not follow Appearance.
- * Extra shapes can be imported from a local `.excalidrawlib` file.
  */
 
 import { FONT_CODE, FONT_UI, TEXT_PRIMARY, type Skeleton } from "./skeleton";
@@ -127,10 +121,10 @@ export const SHAPES: ShapeStamp[] = [
     id: "array",
     label: "Array",
     group: "data structures",
-    fields: [{ key: "length", label: "Length", kind: "int", min: 1, max: 16, step: 1 }],
+    fields: [{ key: "length", label: "Length", kind: "int", min: 1, max: 32, step: 1 }],
     defaults: { length: 5 },
     build: (x, y, mods, palette) => {
-      const length = clampInt(intOf(mods, "length", 5), 1, 16);
+      const length = clampInt(intOf(mods, "length", 5), 1, 32);
       const cell = 56;
       const out: Skeleton[] = [];
       for (let i = 0; i < length; i++) {
@@ -145,13 +139,13 @@ export const SHAPES: ShapeStamp[] = [
     label: "Grid",
     group: "data structures",
     fields: [
-      { key: "rows", label: "Rows", kind: "int", min: 1, max: 10, step: 1 },
-      { key: "cols", label: "Cols", kind: "int", min: 1, max: 10, step: 1 },
+      { key: "rows", label: "Rows", kind: "int", min: 1, max: 24, step: 1 },
+      { key: "cols", label: "Cols", kind: "int", min: 1, max: 24, step: 1 },
     ],
     defaults: { rows: 3, cols: 4 },
     build: (x, y, mods, palette) => {
-      const rows = clampInt(intOf(mods, "rows", 3), 1, 10);
-      const cols = clampInt(intOf(mods, "cols", 4), 1, 10);
+      const rows = clampInt(intOf(mods, "rows", 3), 1, 24);
+      const cols = clampInt(intOf(mods, "cols", 4), 1, 24);
       const cell = 48;
       const out: Skeleton[] = [];
       for (let r = 0; r < rows; r++) {
@@ -166,10 +160,10 @@ export const SHAPES: ShapeStamp[] = [
     id: "linked-list",
     label: "Linked list",
     group: "data structures",
-    fields: [{ key: "nodes", label: "Nodes", kind: "int", min: 1, max: 8, step: 1 }],
+    fields: [{ key: "nodes", label: "Nodes", kind: "int", min: 1, max: 24, step: 1 }],
     defaults: { nodes: 3 },
     build: (x, y, mods, palette) => {
-      const nodes = clampInt(intOf(mods, "nodes", 3), 1, 8);
+      const nodes = clampInt(intOf(mods, "nodes", 3), 1, 24);
       const node = 72;
       const gap = 44;
       const out: Skeleton[] = [];
@@ -188,29 +182,42 @@ export const SHAPES: ShapeStamp[] = [
     id: "tree",
     label: "Tree",
     group: "data structures",
-    fields: [{ key: "levels", label: "Levels", kind: "int", min: 1, max: 3, step: 1 }],
+    fields: [{ key: "levels", label: "Levels", kind: "int", min: 1, max: 10, step: 1 }],
     defaults: { levels: 2 },
     build: (x, y, mods, palette) => {
-      const levels = clampInt(intOf(mods, "levels", 2), 1, 3);
-      const size = 64;
-      const out: Skeleton[] = [box(palette, x + 96, y, size, size, "", { mono: true })];
-      if (levels === 1) return out;
+      const levels = clampInt(intOf(mods, "levels", 2), 1, 10);
+      const size = 56;
+      const vGap = 96;
+      const leafCount = 2 ** Math.max(0, levels - 1);
+      const hGap = size + 20;
+      const totalWidth = Math.max(hGap, leafCount * hGap);
+      const centers: Array<{ cx: number; cy: number; level: number; index: number }> = [];
 
-      out.push(arrow(palette, x + 128, y + size, x + 32, y + 120));
-      out.push(arrow(palette, x + 128, y + size, x + 224, y + 120));
-      out.push(box(palette, x, y + 120, size, size, "", { mono: true }));
-      out.push(box(palette, x + 192, y + 120, size, size, "", { mono: true }));
-      if (levels === 2) return out;
+      for (let level = 0; level < levels; level++) {
+        const count = 2 ** level;
+        const span = totalWidth / count;
+        for (let i = 0; i < count; i++) {
+          centers.push({
+            level,
+            index: i,
+            cx: x + span * (i + 0.5),
+            cy: y + level * vGap,
+          });
+        }
+      }
 
-      const leaves = [
-        { px: x + 32, lx: x - 48 },
-        { px: x + 32, lx: x + 48 },
-        { px: x + 224, lx: x + 144 },
-        { px: x + 224, lx: x + 240 },
-      ];
-      for (const leaf of leaves) {
-        out.push(arrow(palette, leaf.px, y + 120 + size, leaf.lx + size / 2, y + 240));
-        out.push(box(palette, leaf.lx, y + 240, size, size, "", { mono: true }));
+      const out: Skeleton[] = [];
+      for (const node of centers) {
+        if (node.level === 0) continue;
+        const parent = centers.find(
+          (candidate) =>
+            candidate.level === node.level - 1 && candidate.index === Math.floor(node.index / 2),
+        );
+        if (!parent) continue;
+        out.push(arrow(palette, parent.cx, parent.cy + size, node.cx, node.cy));
+      }
+      for (const node of centers) {
+        out.push(box(palette, node.cx - size / 2, node.cy, size, size, "", { mono: true }));
       }
       return out;
     },
@@ -219,10 +226,10 @@ export const SHAPES: ShapeStamp[] = [
     id: "stack",
     label: "Stack",
     group: "data structures",
-    fields: [{ key: "height", label: "Height", kind: "int", min: 1, max: 10, step: 1 }],
+    fields: [{ key: "height", label: "Height", kind: "int", min: 1, max: 20, step: 1 }],
     defaults: { height: 4 },
     build: (x, y, mods, palette) => {
-      const height = clampInt(intOf(mods, "height", 4), 1, 10);
+      const height = clampInt(intOf(mods, "height", 4), 1, 20);
       const out: Skeleton[] = [];
       for (let i = 0; i < height; i++) {
         out.push(box(palette, x, y + i * 44, 120, 44, "", { mono: true }));
@@ -235,10 +242,10 @@ export const SHAPES: ShapeStamp[] = [
     id: "hashmap",
     label: "Hash map",
     group: "data structures",
-    fields: [{ key: "rows", label: "Rows", kind: "int", min: 1, max: 10, step: 1 }],
+    fields: [{ key: "rows", label: "Rows", kind: "int", min: 1, max: 20, step: 1 }],
     defaults: { rows: 4 },
     build: (x, y, mods, palette) => {
-      const rows = clampInt(intOf(mods, "rows", 4), 1, 10);
+      const rows = clampInt(intOf(mods, "rows", 4), 1, 20);
       const out: Skeleton[] = [
         caption(palette, x, y - 22, "key"),
         caption(palette, x + 132, y - 22, "value"),
@@ -273,10 +280,10 @@ export const SHAPES: ShapeStamp[] = [
     id: "queue",
     label: "Queue / topic",
     group: "system design",
-    fields: [{ key: "slots", label: "Slots", kind: "int", min: 1, max: 10, step: 1 }],
+    fields: [{ key: "slots", label: "Slots", kind: "int", min: 1, max: 24, step: 1 }],
     defaults: { slots: 4 },
     build: (x, y, mods, palette) => {
-      const slots = clampInt(intOf(mods, "slots", 4), 1, 10);
+      const slots = clampInt(intOf(mods, "slots", 4), 1, 24);
       const out: Skeleton[] = [caption(palette, x, y - 22, "front")];
       for (let i = 0; i < slots; i++) {
         out.push(box(palette, x + i * 60, y, 60, 52, "", { mono: true }));
@@ -330,7 +337,7 @@ export const SHAPES: ShapeStamp[] = [
   },
 ];
 
-export const SHAPE_GROUPS = ["data structures", "system design", "flow", "imported"] as const;
+export const SHAPE_GROUPS = ["data structures", "system design", "flow"] as const;
 
 export function shapesInGroup(group: ShapeStamp["group"]): ShapeStamp[] {
   return SHAPES.filter((shape) => shape.group === group);
