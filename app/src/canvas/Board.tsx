@@ -66,7 +66,7 @@ import {
 /** Default wrap width for the text tool (canvas units). User can resize the box. */
 const TEXT_WRAP_WIDTH = 420;
 import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
-import type { BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
+import type { BoardBinaryFile, BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
 import { applyMetadata, keepOnClear, isCoachElement } from "./scene";
 import {
@@ -103,6 +103,12 @@ interface ExcalidrawApi {
   getSceneElements(): readonly unknown[];
   getAppState(): Record<string, unknown>;
   getFiles(): Record<string, unknown>;
+  addFiles?(files: Array<{
+    id: string;
+    mimeType: string;
+    dataURL: string;
+    created: number;
+  }>): void;
   updateScene(scene: {
     elements?: unknown[];
     appState?: Record<string, unknown>;
@@ -319,6 +325,121 @@ async function exportRegionBlob(
     out.toBlob(resolve, "image/png", 0.75),
   );
   return composited ?? (await plain());
+}
+
+/**
+ * Capture an arbitrary scene rectangle (board screenshot of a region), including
+ * raster ink. Works even when the rect contains only ink / empty background.
+ */
+async function exportSceneFrameBlob(
+  api: ExcalidrawApi,
+  ops: readonly InkOp[],
+  frame: { x: number; y: number; width: number; height: number },
+): Promise<Blob> {
+  const appState = api.getAppState();
+  const files = api.getFiles();
+  const all = api.getSceneElements() as SceneElementLike[];
+  const background =
+    (appState as { viewBackgroundColor?: string }).viewBackgroundColor ?? "#fff";
+  const bounds: SceneBounds = {
+    minX: frame.x,
+    minY: frame.y,
+    maxX: frame.x + frame.width,
+    maxY: frame.y + frame.height,
+  };
+  const drawScale = clampExportScale(2, bounds);
+  const width = Math.max(1, Math.round(frame.width * drawScale));
+  const height = Math.max(1, Math.round(frame.height * drawScale));
+
+  const out = document.createElement("canvas");
+  out.width = width;
+  out.height = height;
+  const ctx = out.getContext("2d");
+  if (!ctx) {
+    return new Blob([], { type: "image/png" });
+  }
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, width, height);
+
+  if (all.length > 0) {
+    const board = await exportToCanvas({
+      elements: all as never,
+      appState: {
+        ...(appState as object),
+        exportBackground: true,
+        viewBackgroundColor: background,
+      } as never,
+      files: files as never,
+      exportPadding: 0,
+    });
+    const [minX, minY, maxX, maxY] = getCommonBounds(all as never);
+    const boardBounds: SceneBounds = { minX, minY, maxX, maxY };
+    const boardScale = exportScaleFrom(board.width, board.height, boardBounds);
+    if (boardScale !== null) {
+      ctx.drawImage(
+        board,
+        (frame.x - minX) * boardScale,
+        (frame.y - minY) * boardScale,
+        frame.width * boardScale,
+        frame.height * boardScale,
+        0,
+        0,
+        width,
+        height,
+      );
+    }
+  }
+
+  const regionOps = ops.filter((op) =>
+    op.points.some(
+      (pt) =>
+        pt.x >= bounds.minX &&
+        pt.y >= bounds.minY &&
+        pt.x <= bounds.maxX &&
+        pt.y <= bounds.maxY,
+    ),
+  );
+  if (regionOps.length > 0) {
+    const inkCanvas = document.createElement("canvas");
+    inkCanvas.width = width;
+    inkCanvas.height = height;
+    const inkCtx = inkCanvas.getContext("2d");
+    if (inkCtx) {
+      paintInkAtScale(inkCtx, regionOps, { x: bounds.minX, y: bounds.minY }, drawScale);
+      ctx.drawImage(inkCanvas, 0, 0);
+    }
+  }
+
+  const composited = await new Promise<Blob | null>((resolve) =>
+    out.toBlob(resolve, "image/png", 0.85),
+  );
+  return composited ?? new Blob([], { type: "image/png" });
+}
+
+function newImageFileId(): string {
+  return `lcimg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function loadImageSize(dataURL: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () =>
+      resolve({
+        width: Math.max(1, img.naturalWidth || img.width),
+        height: Math.max(1, img.naturalHeight || img.height),
+      });
+    img.onerror = () => reject(new Error("image load failed"));
+    img.src = dataURL;
+  });
 }
 
 const ZOOM_MIN = 0.15;
@@ -573,11 +694,14 @@ interface InkChromePos {
   top: number;
 }
 
-type InkChromePhase = "in" | "shown" | "out";
+type InkChromePhase = "parked" | "in" | "shown" | "out";
 
 interface InkChromeState extends InkChromePos {
   phase: InkChromePhase;
 }
+
+/** Off-canvas warm instance — dial/buttons stay mounted so show is O(1) style update. */
+const PARKED_INK_CHROME: InkChromeState = { left: -9999, top: -9999, phase: "parked" };
 
 /** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
 const UI_OPTIONS = {
@@ -644,7 +768,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [penStrokeWidth, setPenStrokeWidth] = useState(() => inkPrefsRef.current.penWidth);
   const [eraserStrokeWidth, setEraserStrokeWidth] = useState(() => inkPrefsRef.current.eraserWidth);
   const strokeWidth = activeTool === "eraser" ? eraserStrokeWidth : penStrokeWidth;
-  const [inkChrome, setInkChrome] = useState<InkChromeState | null>(null);
+  const [inkChrome, setInkChrome] = useState<InkChromeState>(PARKED_INK_CHROME);
   const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [stampTrash, setStampTrash] = useState<{
     left: number;
@@ -654,9 +778,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const inkChromeHideRef = useRef<number | null>(null);
   const inkChromeExitRef = useRef<number | null>(null);
   const inkChromeShowRef = useRef<number | null>(null);
+  const inkChromeElRef = useRef<HTMLDivElement | null>(null);
+  const inkChromeVisibleRef = useRef(false);
   const inkTrailRef = useRef<Array<{ x: number; y: number; t: number }>>([]);
   const inkHandednessRef = useRef(inkHandedness);
   inkHandednessRef.current = inkHandedness;
+  inkChromeVisibleRef.current = inkChrome.phase !== "parked" && inkChrome.phase !== "out";
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
@@ -685,6 +812,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
+  const [captureMenuOpen, setCaptureMenuOpen] = useState(false);
+  const [captureRegion, setCaptureRegion] = useState<{
+    originX: number;
+    originY: number;
+    currentX: number;
+    currentY: number;
+  } | null>(null);
+  const captureDragRef = useRef<{
+    originX: number;
+    originY: number;
+    currentX: number;
+    currentY: number;
+  } | null>(null);
+  const [captureArmed, setCaptureArmed] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const [zoomPct, setZoomPct] = useState(100);
   /** Effective zoom-out floor as a percent — page fit on mobile, else ZOOM_MIN. */
   const [zoomFloorPct, setZoomFloorPct] = useState(() => Math.round(ZOOM_MIN * 100));
@@ -1149,7 +1291,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // Buttons (~24) × 3 + gaps + radial dial (~38)
     const clusterW = 24 * 3 + 4 + 38;
     const clusterH = 38;
-    const pad = 12;
+    const pad = 20;
     const hand = inkHandednessRef.current;
 
     const now = performance.now();
@@ -1165,15 +1307,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const histMaxX = Math.max(...histPts.map((point) => point.x));
     const histMinY = Math.min(...histPts.map((point) => point.y));
     const histMaxY = Math.max(...histPts.map((point) => point.y));
+    const histSpan = Math.hypot(histMaxX - histMinX, histMaxY - histMinY);
+    const shortMark = histSpan < 28;
 
     // Writing direction: historical → tip. Place chrome opposite that vector.
     let dx = clientX - histX;
     let dy = clientY - histY;
     const mag = Math.hypot(dx, dy);
-    if (mag < 8) {
-      // Stationary / short stroke: default above historical top.
-      dx = 0;
+    if (mag < 8 || shortMark) {
+      // Stationary / short stroke / tiny mark: default above, palm-side nudge.
+      dx = hand === "right" ? -0.35 : 0.35;
       dy = 1;
+      const n = Math.hypot(dx, dy);
+      dx /= n;
+      dy /= n;
     } else {
       dx /= mag;
       dy /= mag;
@@ -1181,45 +1328,76 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     const absDx = Math.abs(dx);
     const absDy = Math.abs(dy);
-    const offset = 40;
+    // Short marks get extra clearance so chrome doesn't sit on a single dot.
+    const offset = shortMark ? 88 : 64;
+    const shortPad = shortMark ? pad + 16 : pad;
     let centerX: number;
     let centerY: number;
 
     if (absDy >= absDx * 1.15) {
       // Mostly vertical: use historical top/bottom edge + pad away from tip.
-      centerX = histX + (hand === "right" ? -10 : 10);
-      centerY = dy > 0 ? histMinY - pad - clusterH / 2 : histMaxY + pad + clusterH / 2;
+      centerX = histX + (hand === "right" ? -18 : 18);
+      centerY = dy > 0 ? histMinY - shortPad - clusterH / 2 : histMaxY + shortPad + clusterH / 2;
     } else if (absDx >= absDy * 1.15) {
       // Mostly horizontal: sit beside historical ink, opposite writing.
-      centerY = histY;
-      centerX = dx > 0 ? histMinX - pad - clusterW / 2 : histMaxX + pad + clusterW / 2;
-      // Nudge slightly toward the non-writing (palm) side vertically if needed.
-      centerY += hand === "right" ? -6 : 6;
+      centerY = histY + (hand === "right" ? -10 : 10);
+      centerX = dx > 0 ? histMinX - shortPad - clusterW / 2 : histMaxX + shortPad + clusterW / 2;
     } else {
       // Diagonal: blend — opposite direction from historical center toward tip.
       centerX = histX - dx * offset;
       centerY = histY - dy * offset;
       // Prefer historical bbox edges along the dominant axis of the blend.
-      if (dy > 0) centerY = Math.min(centerY, histMinY - pad - clusterH / 2);
-      else centerY = Math.max(centerY, histMaxY + pad + clusterH / 2);
-      if (dx > 0) centerX = Math.min(centerX, histMinX - pad - clusterW / 2);
-      else centerX = Math.max(centerX, histMaxX + pad + clusterW / 2);
+      if (dy > 0) centerY = Math.min(centerY, histMinY - shortPad - clusterH / 2);
+      else centerY = Math.max(centerY, histMaxY + shortPad + clusterH / 2);
+      if (dx > 0) centerX = Math.min(centerX, histMinX - shortPad - clusterW / 2);
+      else centerX = Math.max(centerX, histMaxX + shortPad + clusterW / 2);
     }
 
     let left = centerX - rect.left - clusterW / 2;
     let top = centerY - rect.top - clusterH / 2;
+
+    // Near edges: prefer the open side of the board so chrome doesn't stack on cramped writing.
+    const edgeMargin = 48;
+    const tipLocalX = clientX - rect.left;
+    const tipLocalY = clientY - rect.top;
+    if (tipLocalX < edgeMargin) {
+      left = Math.max(left, tipLocalX + shortPad);
+    } else if (tipLocalX > rect.width - edgeMargin) {
+      left = Math.min(left, tipLocalX - shortPad - clusterW);
+    }
+    if (tipLocalY < edgeMargin) {
+      top = Math.max(top, tipLocalY + shortPad);
+    } else if (tipLocalY > rect.height - edgeMargin) {
+      top = Math.min(top, tipLocalY - shortPad - clusterH);
+    }
+
     left = Math.max(8, Math.min(left, rect.width - clusterW - 8));
     top = Math.max(8, Math.min(top, rect.height - clusterH - 8));
     const next = { left: roundPx(left), top: roundPx(top) };
 
+    // Clear any mid-stroke soft-hide so the warm instance can appear.
+    const node = inkChromeElRef.current;
+    if (node) {
+      node.style.opacity = "";
+      node.style.pointerEvents = "";
+      node.style.visibility = "";
+    }
+
     setInkChrome((current) => {
-      if (!current) return { ...next, phase: "in" };
-      if (current.left === next.left && current.top === next.top && current.phase !== "out") {
+      const wasHidden =
+        current.phase === "parked" || current.phase === "out";
+      if (
+        current.left === next.left &&
+        current.top === next.top &&
+        !wasHidden &&
+        current.phase !== "out"
+      ) {
         return current;
       }
       return {
         ...next,
-        phase: current.phase === "out" ? "in" : current.phase === "in" ? "in" : "shown",
+        // First reveal (or after hide) uses the enter animation; reposition stays "shown".
+        phase: wasHidden ? "in" : current.phase === "in" ? "in" : "shown",
       };
     });
 
@@ -1233,17 +1411,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
 
     inkChromeHideRef.current = window.setTimeout(() => {
-      setInkChrome((current) => (current ? { ...current, phase: "out" } : null));
+      setInkChrome((current) =>
+        current.phase === "parked" ? current : { ...current, phase: "out" },
+      );
       inkChromeHideRef.current = null;
       inkChromeExitRef.current = window.setTimeout(() => {
-        setInkChrome(null);
+        setInkChrome(PARKED_INK_CHROME);
         inkChromeExitRef.current = null;
       }, 200);
     }, 8000);
   }, []);
 
   const onInkStrokeMove = useCallback((clientX: number, clientY: number) => {
-    // Track trail only — never mount chrome mid-stroke (perf + less obtrusive).
+    // Track trail only — never show/move chrome mid-stroke (perf + less obtrusive).
     const now = performance.now();
     const trail = inkTrailRef.current;
     const last = trail[trail.length - 1];
@@ -1255,11 +1435,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.clearTimeout(inkChromeShowRef.current);
       inkChromeShowRef.current = null;
     }
-    // Hide any lingering chrome as soon as writing resumes.
-    if (inkChromeHideRef.current != null || inkChromeExitRef.current != null) {
-      clearInkChromeTimers();
+    // Soft-hide via the DOM — no React setState mid-stroke.
+    if (inkChromeVisibleRef.current) {
+      const node = inkChromeElRef.current;
+      if (node) {
+        node.style.opacity = "0";
+        node.style.pointerEvents = "none";
+      }
+      if (inkChromeHideRef.current != null || inkChromeExitRef.current != null) {
+        clearInkChromeTimers();
+      }
     }
-    setInkChrome((current) => (current ? null : current));
   }, [clearInkChromeTimers]);
 
   const onInkStrokeEnd = useCallback(
@@ -1269,13 +1455,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (inkChromeShowRef.current != null) {
         window.clearTimeout(inkChromeShowRef.current);
       }
-      // Micro-delay so a short pause mid-word doesn't flash the chrome.
+      // Park the warm instance after the stroke (never unmount — that was the hitch).
+      if (inkChromeVisibleRef.current) {
+        clearInkChromeTimers();
+        setInkChrome(PARKED_INK_CHROME);
+        inkChromeVisibleRef.current = false;
+      }
+      // Longer delay so lifting to a new line doesn't flash the chrome.
       inkChromeShowRef.current = window.setTimeout(() => {
         inkChromeShowRef.current = null;
         placeInkChrome(clientX, clientY);
-      }, 280);
+      }, 500);
     },
-    [placeInkChrome],
+    [clearInkChromeTimers, placeInkChrome],
   );
 
   const persistInkPrefs = useCallback(
@@ -2102,6 +2294,167 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [convert, setTool],
   );
 
+  /** Place an image element at viewport center (or an explicit scene rect). */
+  const insertImageFromDataURL = useCallback(
+    async (
+      dataURL: string,
+      mimeType: string,
+      place?: { x: number; y: number; width: number; height: number },
+    ) => {
+      const api = apiRef.current;
+      if (!api) return;
+      const fileId = newImageFileId();
+      const created = Date.now();
+      api.addFiles?.([
+        {
+          id: fileId,
+          mimeType: mimeType || "image/png",
+          dataURL,
+          created,
+        },
+      ]);
+
+      let width: number;
+      let height: number;
+      let x: number;
+      let y: number;
+      if (place) {
+        width = Math.max(1, place.width);
+        height = Math.max(1, place.height);
+        x = place.x;
+        y = place.y;
+      } else {
+        const size = await loadImageSize(dataURL);
+        const maxEdge = 420;
+        const scale = Math.min(1, maxEdge / Math.max(size.width, size.height));
+        width = Math.max(1, Math.round(size.width * scale));
+        height = Math.max(1, Math.round(size.height * scale));
+        const state = api.getAppState() as {
+          scrollX?: number;
+          scrollY?: number;
+          width?: number;
+          height?: number;
+          zoom?: { value?: number };
+        };
+        const zoom = state.zoom?.value ?? 1;
+        x = Math.round(-(state.scrollX ?? 0) + (state.width ?? 1200) / (2 * zoom) - width / 2);
+        y = Math.round(-(state.scrollY ?? 0) + (state.height ?? 800) / (2 * zoom) - height / 2);
+      }
+
+      const pieces = convertToExcalidrawElements(
+        [
+          {
+            type: "image",
+            x,
+            y,
+            width,
+            height,
+            fileId: fileId as never,
+            status: "saved",
+            scale: [1, 1],
+          },
+        ] as never,
+        { regenerateIds: true },
+      ) as Array<{
+        id: string;
+        customData?: Record<string, unknown> | null;
+        [key: string]: unknown;
+      }>;
+
+      const tagged = pieces.map((element) => ({
+        ...element,
+        locked: false,
+        customData: {
+          ...(element.customData ?? {}),
+          lcStamp: true,
+          lcImage: true,
+        },
+      }));
+
+      api.updateScene({
+        elements: [...(api.getSceneElements() as unknown[]), ...tagged],
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+      setTool("selection");
+      setCaptureMenuOpen(false);
+      setCaptureArmed(false);
+      setCaptureRegion(null);
+    },
+    [setTool],
+  );
+
+  const pickImageFile = useCallback(() => {
+    setCaptureMenuOpen(false);
+    setShapesOpen(false);
+    imageInputRef.current?.click();
+  }, []);
+
+  const onImageFileChosen = useCallback(
+    async (file: File | null) => {
+      if (!file || !file.type.startsWith("image/")) return;
+      const dataURL = await blobToDataURL(file);
+      await insertImageFromDataURL(dataURL, file.type || "image/png");
+    },
+    [insertImageFromDataURL],
+  );
+
+  const captureEntireBoard = useCallback(async () => {
+    const api = apiRef.current;
+    if (!api) return;
+    setCaptureMenuOpen(false);
+    const blob = await exportBoardBlob(api, rasterInkRef.current?.getOps() ?? []);
+    if (!blob || blob.size === 0) return;
+    const dataURL = await blobToDataURL(blob);
+    await insertImageFromDataURL(dataURL, "image/png");
+  }, [insertImageFromDataURL]);
+
+  const beginRegionCapture = useCallback(() => {
+    setCaptureMenuOpen(false);
+    setShapesOpen(false);
+    setTool("hand");
+    setCaptureArmed(true);
+    setCaptureRegion(null);
+    captureDragRef.current = null;
+  }, [setTool]);
+
+  useEffect(() => {
+    if (!captureArmed) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        captureDragRef.current = null;
+        setCaptureRegion(null);
+        setCaptureArmed(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [captureArmed]);
+
+  const finishRegionCapture = useCallback(
+    async (originX: number, originY: number, currentX: number, currentY: number) => {
+      const api = apiRef.current;
+      setCaptureArmed(false);
+      setCaptureRegion(null);
+      if (!api) return;
+      const a = clientToScene(originX, originY);
+      const b = clientToScene(currentX, currentY);
+      const x = Math.min(a.x, b.x);
+      const y = Math.min(a.y, b.y);
+      const width = Math.abs(b.x - a.x);
+      const height = Math.abs(b.y - a.y);
+      if (width < 8 || height < 8) return;
+      const blob = await exportSceneFrameBlob(
+        api,
+        rasterInkRef.current?.getOps() ?? [],
+        { x, y, width, height },
+      );
+      if (!blob || blob.size === 0) return;
+      const dataURL = await blobToDataURL(blob);
+      await insertImageFromDataURL(dataURL, "image/png", { x, y, width, height });
+    },
+    [clientToScene, insertImageFromDataURL],
+  );
+
 
 
   // Excalidraw can reset the active tool during its own mount; re-assert the
@@ -2697,6 +3050,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         };
         const kept = elements().filter((element) => !isCoachElement(element));
         const ink = rasterInkRef.current?.getOps() ?? [];
+        const rawFiles = (api?.getFiles() ?? {}) as Record<string, BoardBinaryFile>;
+        const files: Record<string, BoardBinaryFile> = {};
+        for (const [id, file] of Object.entries(rawFiles)) {
+          if (!file || typeof file.dataURL !== "string") continue;
+          files[id] = {
+            id: file.id ?? id,
+            mimeType: file.mimeType ?? "image/png",
+            dataURL: file.dataURL,
+            created: file.created ?? Date.now(),
+          };
+        }
         return {
           v: 1 as const,
           elements: kept as unknown[],
@@ -2706,6 +3070,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             zoom: state.zoom?.value ?? 1,
           },
           ink,
+          ...(Object.keys(files).length > 0 ? { files } : {}),
         };
       },
       restoreBoard: (nextElements, appState, options) => {
@@ -2731,6 +3096,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         delete saved.zoom;
         delete saved.scrollX;
         delete saved.scrollY;
+        if (options?.files && apiRef.current?.addFiles) {
+          const list = Object.values(options.files).map((file) => ({
+            id: file.id,
+            mimeType: file.mimeType,
+            dataURL: file.dataURL,
+            created: file.created,
+          }));
+          if (list.length > 0) apiRef.current.addFiles(list);
+        }
         apiRef.current?.updateScene({
           elements: healed,
           ...(Object.keys(saved).length > 0 ? { appState: saved } : {}),
@@ -2842,8 +3216,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               // Shape library is exclusive with drawing tools.
               setTool("selection");
               setShapesOpen(true);
+              setCaptureMenuOpen(false);
             }}
             onStamp={stamp}
+            onPickImage={pickImageFile}
+            captureMenuOpen={captureMenuOpen}
+            onToggleCaptureMenu={() => {
+              setCaptureMenuOpen((open) => !open);
+              setShapesOpen(false);
+            }}
+            onCaptureEntire={captureEntireBoard}
+            onCaptureRegion={beginRegionCapture}
             onClear={() => {
               rasterInkRef.current?.clear();
               apiRef.current?.updateScene({
@@ -2856,6 +3239,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             onRedo={redoBoard}
             mobile={mobile}
             onHeightChange={setToolbarHeight}
+          />
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            className="lc-hidden-file"
+            aria-hidden
+            tabIndex={-1}
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              event.target.value = "";
+              void onImageFileChosen(file);
+            }}
           />
           <div
             className={[
@@ -3002,23 +3398,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         initialData={initialData}
         UIOptions={UI_OPTIONS}
       />
-      {interactive && inkChrome && (() => {
+      {interactive && (() => {
           const toEraser = activeTool !== "eraser";
           const phaseClass =
-            inkChrome.phase === "in"
-              ? "lc-ink-chrome-in"
-              : inkChrome.phase === "out"
-                ? "lc-ink-chrome-out"
-                : "";
+            inkChrome.phase === "parked"
+              ? "lc-ink-chrome-parked"
+              : inkChrome.phase === "in"
+                ? "lc-ink-chrome-in"
+                : inkChrome.phase === "out"
+                  ? "lc-ink-chrome-out"
+                  : "";
           return (
             <div
+              ref={inkChromeElRef}
               className={["lc-ink-chrome", phaseClass].filter(Boolean).join(" ")}
               style={{ left: inkChrome.left, top: inkChrome.top }}
+              aria-hidden={inkChrome.phase === "parked" || inkChrome.phase === "out"}
               onPointerDown={(event) => event.stopPropagation()}
               onAnimationEnd={() => {
                 if (inkChrome.phase === "in") {
                   setInkChrome((current) =>
-                    current && current.phase === "in" ? { ...current, phase: "shown" } : current,
+                    current.phase === "in" ? { ...current, phase: "shown" } : current,
                   );
                 }
               }}
@@ -3093,6 +3493,71 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           </svg>
         </button>
       )}
+      {interactive && captureArmed && (
+        <div
+          className="lc-capture-overlay"
+          aria-label="Drag to capture a region"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            const next = {
+              originX: event.clientX,
+              originY: event.clientY,
+              currentX: event.clientX,
+              currentY: event.clientY,
+            };
+            captureDragRef.current = next;
+            setCaptureRegion(next);
+          }}
+          onPointerMove={(event) => {
+            const drag = captureDragRef.current;
+            if (!drag) return;
+            event.preventDefault();
+            const next = { ...drag, currentX: event.clientX, currentY: event.clientY };
+            captureDragRef.current = next;
+            setCaptureRegion(next);
+          }}
+          onPointerUp={(event) => {
+            event.preventDefault();
+            const drag = captureDragRef.current;
+            captureDragRef.current = null;
+            setCaptureRegion(null);
+            if (!drag) {
+              setCaptureArmed(false);
+              return;
+            }
+            void finishRegionCapture(
+              drag.originX,
+              drag.originY,
+              event.clientX,
+              event.clientY,
+            );
+          }}
+          onPointerCancel={() => {
+            captureDragRef.current = null;
+            setCaptureArmed(false);
+            setCaptureRegion(null);
+          }}
+        >
+          <div className="lc-capture-hint">Drag a rectangle to capture · Esc cancels</div>
+          {captureRegion && (() => {
+            const board = boardRef.current?.getBoundingClientRect();
+            if (!board) return null;
+            const left = Math.min(captureRegion.originX, captureRegion.currentX) - board.left;
+            const top = Math.min(captureRegion.originY, captureRegion.currentY) - board.top;
+            const width = Math.abs(captureRegion.currentX - captureRegion.originX);
+            const height = Math.abs(captureRegion.currentY - captureRegion.originY);
+            return (
+              <div
+                className="lc-capture-rect"
+                style={{ left, top, width, height }}
+              />
+            );
+          })()}
+        </div>
+      )}
+
     </div>
   );
 });
@@ -3112,6 +3577,11 @@ interface ToolbarProps {
   shapesOpen: boolean;
   onToggleShapes: () => void;
   onStamp: (shape: ShapeStamp, mods: Record<string, ShapeModValue>, moveAsOne: boolean) => void;
+  onPickImage: () => void;
+  captureMenuOpen: boolean;
+  onToggleCaptureMenu: () => void;
+  onCaptureEntire: () => void;
+  onCaptureRegion: () => void;
   onClear: () => void;
   onReset: () => void;
   onUndo: () => void;
@@ -3137,6 +3607,11 @@ function BoardToolbar({
   shapesOpen,
   onToggleShapes,
   onStamp,
+  onPickImage,
+  captureMenuOpen,
+  onToggleCaptureMenu,
+  onCaptureEntire,
+  onCaptureRegion,
   onClear,
   onReset,
   onUndo,
@@ -3210,6 +3685,7 @@ function BoardToolbar({
 
   const pickTool = (tool: ToolName) => {
     if (shapesOpen) onToggleShapes();
+    if (captureMenuOpen) onToggleCaptureMenu();
     onPick(tool);
   };
 
@@ -3330,6 +3806,48 @@ function BoardToolbar({
     </button>
   );
 
+  const mediaButtons = (
+    <>
+      <button
+        type="button"
+        className="lc-tool lc-tool-labeled"
+        aria-label="Add image"
+        title="Add image"
+        onClick={onPickImage}
+      >
+        <span className="lc-tool-emoji" aria-hidden>
+          🖼
+        </span>
+        <span className="lc-tool-caption">Image</span>
+      </button>
+      <div className="lc-capture-wrap">
+        <button
+          type="button"
+          className={captureMenuOpen ? "lc-tool lc-tool-active lc-tool-labeled" : "lc-tool lc-tool-labeled"}
+          aria-label="Capture board"
+          aria-expanded={captureMenuOpen}
+          title="Capture board"
+          onClick={onToggleCaptureMenu}
+        >
+          <span className="lc-tool-emoji" aria-hidden>
+            📷
+          </span>
+          <span className="lc-tool-caption">Capture</span>
+        </button>
+        {captureMenuOpen && (
+          <div className="lc-capture-menu" role="menu">
+            <button type="button" role="menuitem" onClick={onCaptureEntire}>
+              Entire board
+            </button>
+            <button type="button" role="menuitem" onClick={onCaptureRegion}>
+              Region…
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div
       ref={toolbarRootRef}
@@ -3338,6 +3856,7 @@ function BoardToolbar({
         mobile ? "lc-toolbar-mobile" : "",
         mobile && folded ? "lc-toolbar-folded" : "",
         shapesOpen ? "lc-toolbar-shapes-open" : "",
+        captureMenuOpen ? "lc-toolbar-capture-open" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -3376,6 +3895,7 @@ function BoardToolbar({
             renderToolButton(tool, label, hint, emoji),
           )}
           {shapesButton}
+          {mediaButtons}
           {toolExtras}
         </div>
       ) : (
@@ -3384,6 +3904,7 @@ function BoardToolbar({
             renderToolButton(tool, label, hint, emoji),
           )}
           {shapesButton}
+          {mediaButtons}
           {toolExtras}
         </>
       )}

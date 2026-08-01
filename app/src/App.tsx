@@ -901,7 +901,13 @@ export function App() {
         await refreshSession();
 
         const saved = loaded.resume.board as
-          | { v?: number; elements?: unknown[]; appState?: unknown; ink?: unknown[] }
+          | {
+              v?: number;
+              elements?: unknown[];
+              appState?: unknown;
+              ink?: unknown[];
+              files?: import("./canvas/BoardHandle").BoardBlob["files"];
+            }
           | null;
         const hasSavedBoard =
           saved && saved.v === 1 && Array.isArray(saved.elements) && saved.elements.length > 0;
@@ -941,6 +947,7 @@ export function App() {
           boardRef.current?.restoreBoard(saved.elements, saved.appState, {
             skeletons,
             ink: Array.isArray(saved.ink) ? (saved.ink as import("./canvas/rasterInk").InkOp[]) : [],
+            files: saved.files,
           });
         } else {
           boardRef.current?.seedTemplate(skeletons);
@@ -1030,6 +1037,7 @@ export function App() {
             boardRef.current?.restoreBoard(notebook.board.elements, notebook.board.appState, {
               skeletons,
               ink: Array.isArray(notebook.board.ink) ? notebook.board.ink : [],
+              files: notebook.board.files,
             });
             setScratchPageCount(pages);
             setScratchNotebookId(notebook.id);
@@ -2148,7 +2156,8 @@ export function App() {
           )}
         </div>
 
-        <div className="lc-header-center">
+        {/* Screen-centered — not balanced against left/right header chrome. */}
+        <div className="lc-header-pairing-anchor">
           <div
             className={[
               "lc-header-pairing-slot",
@@ -2164,6 +2173,7 @@ export function App() {
                 className="lc-offline-chip"
                 ariaLabel="Offline: tap to edit host, hold to retry"
                 holdMs={HOLD_SENSITIVE_MS}
+                resetKey={gateOpen}
                 onTap={() => setPairingEditing(true)}
                 onConfirm={() => {
                   openGate("startup");
@@ -2181,6 +2191,9 @@ export function App() {
               />
             )}
           </div>
+        </div>
+
+        <div className="lc-header-center">
           {problem && !isScratchpad(problem) && (
             <div className="lc-actions">
               <button
