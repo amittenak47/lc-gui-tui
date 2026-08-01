@@ -41,6 +41,7 @@ import { LoadingDoodle } from "./components/LoadingDoodle";
 import { LlmStatusDialog } from "./components/LlmStatusDialog";
 import { ServerStatusDialog, type ServerGateKind } from "./components/ServerStatusDialog";
 import { SettingsModal } from "./components/SettingsModal";
+import { offlinePackDownloader } from "./util/offlinePackDownload";
 import { StatusBanner } from "./components/StatusBanner";
 import { SmartTips } from "./components/SmartTips";
 import { Board } from "./canvas/Board";
@@ -155,6 +156,26 @@ export function App() {
   const [pairing, setPairing] = useState<Pairing>(() => loadPairing());
   const [pairingEditing, setPairingEditing] = useState(false);
   const client = useMemo(() => new LcClient(pairing), [pairing]);
+
+  /** Background offline pack download — survives leaving Settings; pauses on app background. */
+  useEffect(() => {
+    offlinePackDownloader.bindClient(client);
+    void offlinePackDownloader.hydrate();
+  }, [client]);
+
+  useEffect(() => {
+    const onBackground = () => offlinePackDownloader.onBackground();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") onBackground();
+      else offlinePackDownloader.onForeground();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onBackground);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onBackground);
+    };
+  }, []);
 
   /** Reachability of `lc serve` — offline skips problem/tests/coach that need it. */
   const [serverLink, setServerLink] = useState<"checking" | "online" | "offline">("checking");

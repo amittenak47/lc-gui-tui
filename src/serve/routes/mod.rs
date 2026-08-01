@@ -25,8 +25,9 @@ pub use config::{
 };
 pub use corpus::{
     adjacent_problem, get_problem, list_datasets, list_problems, list_tags, offline_pack,
-    random_problem, AdjacentResponse, OfflinePack, ProblemDetail, ProblemPage, ProblemSummary,
-    SearchQuery,
+    offline_pack_chunk, offline_pack_dataset_keys, offline_pack_manifest, random_problem,
+    AdjacentResponse, OfflineDatasetKeys, OfflinePack, OfflinePackChunk, OfflinePackManifest,
+    ProblemDetail, ProblemPage, ProblemSummary, SearchQuery,
 };
 pub use practice::{
     enqueue_session, get_session, random_session, reset_session, EnqueueBody, RandomSessionBody,

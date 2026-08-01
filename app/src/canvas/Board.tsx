@@ -2011,12 +2011,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => window.clearTimeout(handle);
   }, [toolbarHeight, mobile, interactive, fitView]);
 
-  /** Refit when bottom chrome is hidden/shown so the page fills the freed space. */
+  /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
     if (!interactive) return;
-    const handle = window.setTimeout(() => fitView(), 60);
-    return () => window.clearTimeout(handle);
-  }, [mapChromeHidden, interactive, fitView]);
+    requestAnimationFrame(() => {
+      reportCodeSlot();
+      reportLinedSlot();
+    });
+  }, [mapChromeHidden, interactive, reportCodeSlot, reportLinedSlot]);
 
   /** Fit the current page, or the landing pair on desktop. Event-handler safe. */
   const fitCurrentView = useCallback(() => {

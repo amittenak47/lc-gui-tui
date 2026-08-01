@@ -7,13 +7,15 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { LcClient } from "../api/client";
 import type { DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
+import { HoldButton } from "./HoldButton";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import {
   loadOfflineMergePolicy,
   saveOfflineMergePolicy,
   type OfflineMergePolicy,
 } from "../util/offlineMerge";
-import { offlinePackMeta, saveOfflinePack } from "../util/offlineCorpus";
+import { offlinePackMeta } from "../util/offlineCorpus";
+import { offlinePackDownloader } from "../util/offlinePackDownload";
 import { useIsMobile } from "../util/mobile";
 
 type TabId = "workspace" | "personalise" | "server";
@@ -106,6 +108,11 @@ export function SettingsModal({
   } | null>(null);
   const [packBusy, setPackBusy] = useState(false);
   const [packError, setPackError] = useState<string | null>(null);
+  const [packProgress, setPackProgress] = useState(0);
+  const [packIndeterminate, setPackIndeterminate] = useState(false);
+  const [packResumable, setPackResumable] = useState(false);
+  const [packInfo, setPackInfo] = useState<string | null>(null);
+  const [packMode, setPackMode] = useState<"full" | "delta" | null>(null);
 
   const refreshLlm = useCallback(async () => {
     try {
@@ -114,6 +121,56 @@ export function SettingsModal({
       setLlmStatus(null);
     }
   }, [client]);
+
+  useEffect(() => {
+    return offlinePackDownloader.subscribe((snap) => {
+      setPackBusy(snap.phase === "running");
+      setPackProgress(snap.progress);
+      setPackIndeterminate(snap.indeterminate);
+      setPackResumable(snap.resumable || snap.phase === "paused");
+      setPackInfo(snap.info);
+      setPackMode(snap.mode);
+      if (snap.phase === "error") setPackError(snap.error);
+      else if (snap.phase === "running" || snap.phase === "done" || snap.phase === "uptodate") {
+        setPackError(null);
+      }
+      if (snap.phase === "done") {
+        void offlinePackMeta().then((meta) => {
+          if (meta) {
+            setPackMeta({ built_at: meta.built_at, problemCount: meta.problemCount });
+          }
+        });
+      }
+    });
+  }, []);
+
+  const packPct = Math.round(packProgress * 100);
+  const packActive = packBusy || packResumable;
+  const packLabel = packBusy
+    ? packIndeterminate
+      ? "Downloading…"
+      : `Downloading… ${packPct}%`
+    : packResumable
+      ? `Resume download${packProgress > 0 ? ` (${packPct}%)` : ""}`
+      : packMeta
+        ? "Refresh offline pack"
+        : "Download offline pack";
+
+  const onPackTap = useCallback(() => {
+    if (busy) return;
+    if (packBusy) {
+      offlinePackDownloader.pause();
+      return;
+    }
+    setPackError(null);
+    setPackInfo(null);
+    void offlinePackDownloader.start(client, { delta: Boolean(packMeta) });
+  }, [busy, client, packBusy, packMeta]);
+
+  const onPackAbort = useCallback(() => {
+    if (!packActive) return;
+    void offlinePackDownloader.abort();
+  }, [packActive]);
 
   useEffect(() => {
     if (!open) return;
@@ -478,34 +535,39 @@ export function SettingsModal({
                   {new Date(packMeta.built_at * 1000).toLocaleString()}
                 </p>
               )}
+              {packInfo && <p className="lc-muted">{packInfo}</p>}
               {packError && <div className="lc-warning">{packError}</div>}
-              <button
-                type="button"
-                className="lc-secondary"
-                disabled={packBusy || Boolean(busy)}
-                onClick={() => {
-                  setPackBusy(true);
-                  setPackError(null);
-                  void (async () => {
-                    try {
-                      const pack = await client.offlinePack();
-                      await saveOfflinePack(pack);
-                      setPackMeta({
-                        built_at: pack.built_at,
-                        problemCount: pack.problems.length,
-                      });
-                    } catch (cause) {
-                      setPackError(
-                        cause instanceof Error ? cause.message : "Could not download offline pack",
-                      );
-                    } finally {
-                      setPackBusy(false);
-                    }
-                  })();
-                }}
+              <HoldButton
+                label={packLabel}
+                className={[
+                  "lc-pack-download",
+                  "lc-progress-fill",
+                  packActive ? "lc-hold-danger" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                trackProgress={packActive ? packProgress : 0}
+                fillIndeterminate={packBusy && packIndeterminate}
+                disabled={Boolean(busy)}
+                onTap={onPackTap}
+                onConfirm={onPackAbort}
+                ariaLabel={
+                  packActive
+                    ? `${packLabel}: tap to pause, hold to abort`
+                    : packMeta
+                      ? `${packLabel}: tap to delta refresh`
+                      : packLabel
+                }
               >
-                {packBusy ? "Downloading…" : packMeta ? "Refresh offline pack" : "Download offline pack"}
-              </button>
+                {packLabel}
+              </HoldButton>
+              <p className="lc-settings-hint">
+                {packActive
+                  ? "Tap to pause · hold to abort (keeps the finished pack on device)."
+                  : packMode === "delta"
+                    ? "Refresh only fetches changed datasets and problems — unchanged corpora stay on device."
+                    : "Downloads in the background — you can close Settings. Closing the app pauses; reopening resumes."}
+              </p>
 
               <div className="lc-settings-subhead">Coach status</div>
               <p className="lc-coach-live" data-status={coachStatus}>
