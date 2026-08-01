@@ -57,7 +57,7 @@ export interface StatementBlock {
 }
 
 /**
- * What counts as a code-ish line.
+ * What counts as a code-ish line (outside markdown fences).
  *
  * Structural markers only — brackets, comparison operators, and the corpus's
  * `Input:`/`Output:` prefixes. Matching bare variable names like `nums` or
@@ -67,6 +67,9 @@ export interface StatementBlock {
  */
 const CODE_LINE = /^(Input|Output|Explanation):|[[\]]|<=|>=|==|!=|\w+\[\w*\]/;
 
+/** Opening or closing markdown fence: ``` or ```python */
+const FENCE_LINE = /^\s*```[\w+-]*\s*$/;
+
 /**
  * Split a statement into prose and code-ish blocks.
  *
@@ -74,6 +77,10 @@ const CODE_LINE = /^(Input|Output|Explanation):|[[\]]|<=|>=|==|!=|\w+\[\w*\]/;
  * already visually distinct — `Input: mat = [[0,0,0],...]`, `1 <= m, n <= 104`.
  * Setting those in a proportional font is what made the first pass hard to read,
  * so they get the monospace face while the surrounding prose does not.
+ *
+ * Markdown fences (` ``` ` / ` ```python `) are recognized too: fence markers are
+ * dropped and the enclosed lines are always monospace (KodCode doctest examples
+ * arrive this way).
  */
 export function parseStatement(
   description: string | null | undefined,
@@ -86,18 +93,35 @@ export function parseStatement(
   const lines = description
     .split("\n")
     .map((line) => line.replace(/\s+$/, ""))
-    .filter((line, index, all) => line.trim().length > 0 || all[index - 1]?.trim().length > 0)
-    .slice(0, maxLines);
+    .filter((line, index, all) => line.trim().length > 0 || all[index - 1]?.trim().length > 0);
 
   const blocks: StatementBlock[] = [];
+  let inFence = false;
+  let emitted = 0;
+
   for (const line of lines) {
-    const isCode = CODE_LINE.test(line);
+    if (FENCE_LINE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (emitted >= maxLines) break;
+
+    const isCode =
+      inFence || CODE_LINE.test(line) || /^\s*>>> /.test(line) || /^\s*\.\.\. /.test(line);
+    // Soft-strip a leading markdown heading marker so `# Title` reads as Title.
+    const display = !isCode ? line.replace(/^\s{0,3}#{1,6}\s+/, "") : line;
+
     const last = blocks[blocks.length - 1];
     if (last && last.code === isCode) {
-      last.text += `\n${line}`;
+      last.text += `\n${display}`;
     } else {
-      blocks.push({ text: line, code: isCode });
+      blocks.push({ text: display, code: isCode });
     }
+    emitted += 1;
+  }
+
+  if (blocks.length === 0) {
+    return [{ text: "(no description in the corpus)", code: false }];
   }
   return blocks.map((block) => ({ ...block, text: block.text.trim() }));
 }

@@ -1757,6 +1757,9 @@ input[type="checkbox"] {
   .lc-leave-dialog-exit .lc-settings-modal,
   .lc-offline-chip-enter,
   .lc-pairing-edit-enter,
+  .lc-banner-slot,
+  .lc-banner,
+  .lc-smart-tip,
   .lc-gate-morph-to-dialog,
   .lc-gate-morph-to-spinner,
   .lc-gate-option-label {
@@ -2493,6 +2496,21 @@ input[type="checkbox"] {
   font-size: 13px;
 }
 
+.lc-banner-slot {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-banner-slot.is-open {
+  grid-template-rows: 1fr;
+}
+
+.lc-banner-slot-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
 .lc-banner {
   display: flex;
   align-items: center;
@@ -2500,6 +2518,16 @@ input[type="checkbox"] {
   padding: 8px 12px;
   background: #fef2f2;
   border-bottom: 1px solid #fecaca;
+  transform: translateY(-40%);
+  opacity: 0;
+  transition:
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 180ms ease;
+}
+
+.lc-banner-slot.is-open .lc-banner {
+  transform: translateY(0);
+  opacity: 1;
 }
 
 .lc-banner span {
@@ -4245,12 +4273,19 @@ button.lc-row-selected:hover:not(:disabled) {
   position: relative;
 }
 
+/* CSS ::after tips are disabled — {@link SmartTips} portals a viewport-clamped tip. */
 .lc-tip-target::after {
-  content: attr(data-tip);
-  position: absolute;
-  z-index: 100;
+  content: none !important;
+  display: none !important;
+}
+
+.lc-smart-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10000;
   width: max-content;
-  max-width: 220px;
+  max-width: min(220px, calc(100vw - 16px));
   padding: 4px 8px;
   border-radius: 5px;
   background: var(--ink);
@@ -4264,87 +4299,13 @@ button.lc-row-selected:hover:not(:disabled) {
   text-align: center;
   pointer-events: none;
   opacity: 0;
+  /* Keep off-screen until measured so we never flash a clipped tip. */
+  transform: translate3d(-9999px, -9999px, 0);
   transition: opacity 100ms ease-out;
 }
 
-.lc-tip-target:hover::after,
-.lc-tip-target:focus-visible::after {
+.lc-smart-tip.is-placed {
   opacity: 1;
-}
-
-/* Placement */
-.lc-tip-target[data-tip-placement="top"]::after,
-.lc-tip-target:not([data-tip-placement])::after {
-  left: 50%;
-  bottom: calc(100% + 5px);
-  transform: translateX(-50%);
-}
-
-.lc-tip-target[data-tip-placement="bottom"]::after {
-  left: 50%;
-  top: calc(100% + 5px);
-  bottom: auto;
-  transform: translateX(-50%);
-}
-
-.lc-tip-target[data-tip-placement="left"]::after {
-  right: calc(100% + 5px);
-  left: auto;
-  top: 50%;
-  bottom: auto;
-  transform: translateY(-50%);
-}
-
-.lc-tip-target[data-tip-placement="right"]::after {
-  left: calc(100% + 5px);
-  top: 50%;
-  bottom: auto;
-  transform: translateY(-50%);
-}
-
-/* Map zoom cluster: tips open left. Appearance (left) keeps top placement. */
-.lc-map-chrome-right .lc-tip-target::after {
-  right: calc(100% + 5px);
-  left: auto;
-  top: 50%;
-  bottom: auto;
-  transform: translateY(-50%);
-}
-
-.lc-palette-map.lc-tip-target::after,
-.lc-palette-map .lc-tip-target::after {
-  left: 50%;
-  right: auto;
-  bottom: calc(100% + 5px);
-  top: auto;
-  transform: translateX(-50%);
-}
-
-.lc-palette-popover .lc-tip-target::after {
-  right: calc(100% + 5px);
-  left: auto;
-  top: 50%;
-  bottom: auto;
-  transform: translateY(-50%);
-}
-
-/* Browser filter tip on the trailing Random control — keep it inside the panel */
-.lc-browser-filters > .lc-tip-target:last-child[data-tip-placement="bottom"]::after,
-.lc-browser-filters > button.lc-tip-target:last-of-type[data-tip-placement="bottom"]::after {
-  left: auto;
-  right: 0;
-  transform: none;
-}
-
-/* Footer tips near the right edge open leftward instead of overflowing */
-.lc-browser-foot-nav .lc-tip-target[data-tip-placement="top"]::after {
-  left: auto;
-  right: 0;
-  transform: none;
-}
-
-.lc-browser-foot-stats {
-  position: relative;
 }
 
 /* ---------------------------------------------------------------------------

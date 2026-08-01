@@ -9,7 +9,7 @@ export interface TipProps {
   placement?: TipPlacement;
 }
 
-/** Hover/focus tooltip for small controls — does not alter layout positioning. */
+/** Hover/focus tooltip target — {@link SmartTips} renders the floating label. */
 export function Tip({ tip, children, className, placement = "top" }: TipProps) {
   return (
     <span

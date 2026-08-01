@@ -41,6 +41,8 @@ import { LoadingDoodle } from "./components/LoadingDoodle";
 import { LlmStatusDialog } from "./components/LlmStatusDialog";
 import { ServerStatusDialog, type ServerGateKind } from "./components/ServerStatusDialog";
 import { SettingsModal } from "./components/SettingsModal";
+import { StatusBanner } from "./components/StatusBanner";
+import { SmartTips } from "./components/SmartTips";
 import { Board } from "./canvas/Board";
 import { loadBoardReadingSize, saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
 import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
@@ -2321,16 +2323,8 @@ export function App() {
       </header>
 
       {busy && problem && switchMotion === "idle" && <div className="lc-busy">{busy}</div>}
-      {error && (
-        <div className="lc-warning lc-banner" role="status">
-          <span>{error}</span>
-        </div>
-      )}
-      {notice && !error && (
-        <div className="lc-banner lc-notice" role="status">
-          <span>{notice}</span>
-        </div>
-      )}
+      <StatusBanner text={error} variant="error" />
+      <StatusBanner text={!error ? notice : null} variant="notice" />
 
       <main className="lc-main">
         <div
@@ -2723,6 +2717,7 @@ export function App() {
           if (serverLink === "online") void probeLlm();
         }}
       />
+      <SmartTips />
     </div>
   );
 }

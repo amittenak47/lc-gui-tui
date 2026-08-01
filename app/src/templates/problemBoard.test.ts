@@ -51,6 +51,33 @@ describe("parseStatement", () => {
     expect(parseStatement(null)[0].text).toContain("no description");
     expect(parseStatement("")[0].text).toContain("no description");
   });
+
+  it("renders markdown fences as monospace without showing the markers", () => {
+    const blocks = parseStatement(`Returns values above the mean.
+
+\`\`\`python
+above_average([1, 2, 3, 4, 5])
+[4, 5]
+\`\`\`
+
+Keep relative order.`);
+    const joined = blocks.map((block) => block.text).join("\n");
+    expect(joined).not.toContain("```");
+    expect(joined).toContain("above_average([1, 2, 3, 4, 5])");
+    const code = blocks.filter((block) => block.code);
+    expect(code.some((block) => block.text.includes("above_average"))).toBe(true);
+    expect(blocks.some((block) => !block.code && block.text.includes("relative order"))).toBe(
+      true,
+    );
+  });
+
+  it("treats doctest arrows as code", () => {
+    const blocks = parseStatement(`Compute the average.
+
+>>> above_average([1, 2, 3])
+[3]`);
+    expect(blocks.some((block) => block.code && block.text.includes(">>>"))).toBe(true);
+  });
 });
 
 describe("buildProblemTemplate", () => {
