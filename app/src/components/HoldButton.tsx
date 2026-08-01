@@ -43,6 +43,13 @@ export interface HoldButtonProps {
    * rather than left sitting full.
    */
   resetKey?: unknown;
+  /**
+   * External fill baseline (e.g. download progress). Hold fill runs from here
+   * to 1 instead of from 0.
+   */
+  trackProgress?: number;
+  /** Shimmer fill while total is unknown. */
+  fillIndeterminate?: boolean;
 }
 
 export function HoldButton({
@@ -55,8 +62,10 @@ export function HoldButton({
   className,
   ariaLabel,
   resetKey,
+  trackProgress = 0,
+  fillIndeterminate = false,
 }: HoldButtonProps) {
-  const [progress, setProgress] = useState(0);
+  const [holdProgress, setHoldProgress] = useState(0);
   const holdingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const startRef = useRef(0);
@@ -81,17 +90,22 @@ export function HoldButton({
     ) {
       onTapRef.current();
     }
-    if (opts.reset && !confirmedRef.current) setProgress(0);
+    if (opts.reset && !confirmedRef.current) setHoldProgress(0);
   }, []);
+
+  const displayProgress =
+    holdProgress > 0
+      ? Math.min(1, trackProgress + (1 - trackProgress) * holdProgress)
+      : trackProgress;
 
   const tick = useCallback(() => {
     if (!holdingRef.current) return;
     const next = Math.min(1, (performance.now() - startRef.current) / holdMs);
-    setProgress(next);
+    setHoldProgress(next);
     if (next >= 1) {
       holdingRef.current = false;
       confirmedRef.current = true;
-      setProgress(1);
+      setHoldProgress(1);
       onConfirmRef.current();
       return;
     }
@@ -103,7 +117,7 @@ export function HoldButton({
     confirmedRef.current = false;
     holdingRef.current = true;
     startRef.current = performance.now();
-    setProgress(0);
+    setHoldProgress(0);
     rafRef.current = requestAnimationFrame(tick);
   }, [disabled, tick]);
 
@@ -112,8 +126,12 @@ export function HoldButton({
   // A rejected confirm (or a re-opened dialog) has to be held again.
   useEffect(() => {
     confirmedRef.current = false;
-    setProgress(0);
+    setHoldProgress(0);
   }, [resetKey]);
+
+  useEffect(() => {
+    if (!holdingRef.current) setHoldProgress(0);
+  }, [trackProgress]);
 
   useEffect(() => {
     if (disabled) stopHold({ reset: false });
@@ -122,13 +140,24 @@ export function HoldButton({
   return (
     <button
       type="button"
-      className={className ? `lc-hold-reveal ${className}` : "lc-hold-reveal"}
-      style={{ ["--lc-hold" as string]: String(progress) }}
+      className={[
+        "lc-hold-reveal",
+        fillIndeterminate ? "lc-progress-fill is-indeterminate" : "",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={
+        fillIndeterminate && holdProgress === 0
+          ? undefined
+          : { ["--lc-hold" as string]: String(displayProgress) }
+      }
       disabled={disabled}
       aria-label={
         ariaLabel ??
         (onTap ? `${label}: tap to edit, hold to confirm` : `Hold to confirm: ${label}`)
       }
+      aria-busy={fillIndeterminate || (trackProgress > 0 && trackProgress < 1)}
       onPointerDown={(event) => {
         event.preventDefault();
         (event.currentTarget as HTMLButtonElement).setPointerCapture(event.pointerId);

@@ -575,6 +575,50 @@ pub fn search_page(
     Ok(out)
 }
 
+/// Paginated task ids — for offline-pack delta reconciliation.
+pub fn task_id_page(
+    conn: &Connection,
+    dataset: &'static Dataset,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<String>> {
+    let sql = format!(
+        "SELECT task_id FROM {} ORDER BY task_id LIMIT {limit} OFFSET {offset}",
+        dataset.table
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Problems indexed after `since_mtime` — offline-pack delta chunks.
+pub fn search_page_since(
+    conn: &Connection,
+    dataset: &'static Dataset,
+    since_mtime: i64,
+    sort: SearchSort,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<ProblemRow>> {
+    let mut sql = format!("SELECT {ROW_COLUMNS} FROM {}", dataset.table);
+    sql.push_str(&format!(" WHERE mtime > {since_mtime}"));
+    sql.push_str(" ORDER BY ");
+    sql.push_str(&sort.order_clause(dataset));
+    sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], row_reader(dataset))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 pub fn all_tags(conn: &Connection, dataset: &Dataset) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT DISTINCT tag FROM {} ORDER BY tag",

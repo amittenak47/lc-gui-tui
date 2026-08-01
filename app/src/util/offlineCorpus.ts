@@ -8,7 +8,8 @@
 import type { DatasetInfo, ProblemDetail, ProblemPage, ProblemSummary } from "../api/types";
 
 const DB_NAME = "lc.offline.corpus.v1";
-const DB_VERSION = 1;
+/** v2: same store; download checkpoints live under key `download`. */
+const DB_VERSION = 2;
 const STORE = "pack";
 const PACK_KEY = "current";
 
@@ -18,6 +19,8 @@ export interface OfflinePack {
   datasets: DatasetInfo[];
   problems: ProblemDetail[];
   tags: Record<string, string[]>;
+  /** Per-dataset index watermark — enables delta refresh. */
+  dataset_built_at?: Record<string, number>;
 }
 
 export interface OfflinePackMeta {

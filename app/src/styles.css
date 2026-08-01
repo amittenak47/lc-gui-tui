@@ -1760,6 +1760,7 @@ input[type="checkbox"] {
   .lc-banner-slot,
   .lc-banner,
   .lc-smart-tip,
+  .lc-progress-fill.is-indeterminate .lc-hold-reveal-fill,
   .lc-gate-morph-to-dialog,
   .lc-gate-morph-to-spinner,
   .lc-gate-option-label {
@@ -3990,6 +3991,44 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-hold-reveal-label {
   position: relative;
   z-index: 1;
+}
+
+.lc-progress-fill {
+  display: block;
+  width: 100%;
+  text-align: center;
+}
+
+.lc-progress-fill .lc-hold-reveal-fill {
+  inset: 0 auto 0 0;
+  width: calc(var(--lc-hold, 0) * 100%);
+  transform: none;
+  transition: width 120ms linear;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 78%, #fff 12%) 0%,
+    var(--accent) 55%,
+    color-mix(in srgb, var(--accent) 82%, #000 18%) 100%
+  );
+}
+
+.lc-progress-fill.is-indeterminate .lc-hold-reveal-fill {
+  width: 36%;
+  transition: none;
+  animation: lc-progress-indeterminate 1.15s ease-in-out infinite;
+}
+
+@keyframes lc-progress-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+.lc-pack-download {
+  margin-top: 4px;
 }
 
 .lc-hold-reveal:disabled {

@@ -60,6 +60,24 @@ function datasetSuffix(dataset?: string): string {
   return dataset ? `?dataset=${encodeURIComponent(dataset)}` : "";
 }
 
+export interface OfflinePackOptions {
+  /** `0..1` with Content-Length; `-1` while indeterminate (building / proxy buffer). */
+  onProgress?: (ratio: number) => void;
+  signal?: AbortSignal;
+}
+
+function concatBytes(chunks: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const chunk of chunks) total += chunk.length;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
 export class LcClient {
   constructor(
     private pairing: Pairing,
@@ -95,12 +113,100 @@ export class LcClient {
     return this.request("GET", "/datasets");
   }
 
+  /** Resumable pack plan (no problem bodies). */
+  async offlinePackManifest(): Promise<import("../util/offlinePackDownload").OfflinePackManifest> {
+    return this.request("GET", "/offline/pack/manifest");
+  }
+
+  /** One page of problems for a resumable pack download. */
+  async offlinePackChunk(options: {
+    dataset: string;
+    offset: number;
+    limit?: number;
+    since?: number;
+  }): Promise<import("../util/offlinePackDownload").OfflinePackChunk> {
+    const query = new URLSearchParams();
+    query.set("dataset", options.dataset);
+    query.set("offset", String(options.offset));
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    if (options.since !== undefined) query.set("since", String(options.since));
+    return this.request("GET", `/offline/pack/chunk?${query}`);
+  }
+
+  /** Task ids for one dataset — reconcile deletions on delta refresh. */
+  async offlinePackDatasetKeys(options: {
+    dataset: string;
+    offset: number;
+    limit?: number;
+  }): Promise<import("../util/offlinePackDownload").OfflineDatasetKeys> {
+    const query = new URLSearchParams();
+    query.set("dataset", options.dataset);
+    query.set("offset", String(options.offset));
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    return this.request("GET", `/offline/pack/keys?${query}`);
+  }
+
   /**
    * Full offline problem pack (every indexed dataset except KodCode).
-   * Large — expect tens to hundreds of MB and a long build on the daemon.
+   * Prefer {@link offlinePackManifest} + {@link offlinePackChunk} for resumable downloads.
+   *
+   * {@link OfflinePackOptions.onProgress} receives `0..1` when Content-Length
+   * is known, or `-1` while the total is unknown / the body is still buffering
+   * (e.g. Tauri proxy). Closing the app or aborting leaves any prior pack intact.
    */
-  async offlinePack(): Promise<import("../util/offlineCorpus").OfflinePack> {
-    return this.request("GET", "/offline/pack");
+  async offlinePack(options: OfflinePackOptions = {}): Promise<import("../util/offlineCorpus").OfflinePack> {
+    const { onProgress, signal } = options;
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (this.pairing.token) headers["X-LC-Token"] = this.pairing.token;
+
+    onProgress?.(-1);
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.pairing.baseUrl}/offline/pack`, {
+        method: "GET",
+        headers,
+        signal,
+      });
+    } catch (cause) {
+      if (signal?.aborted) throw new LcApiError("Download cancelled", 0);
+      const message = `cannot reach lc serve at ${this.pairing.baseUrl} — is the daemon running, and are you on the same network?`;
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("lc-server-unreachable", { detail: message }));
+      }
+      throw new LcApiError(message, 0);
+    }
+
+    if (!response.ok) {
+      const rawText = await response.text();
+      throw new LcApiError(errorMessage(rawText, response.status), response.status);
+    }
+
+    const total = Number(response.headers.get("content-length") || 0);
+    const reader = response.body?.getReader?.();
+
+    let rawText: string;
+    if (!reader) {
+      rawText = await response.text();
+      onProgress?.(1);
+    } else {
+      const chunks: Uint8Array[] = [];
+      let received = 0;
+      if (total <= 0) onProgress?.(-1);
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        chunks.push(value);
+        received += value.length;
+        if (total > 0) onProgress?.(Math.min(0.99, received / total));
+        else onProgress?.(-1);
+      }
+      rawText = new TextDecoder().decode(concatBytes(chunks));
+      onProgress?.(1);
+    }
+
+    return (rawText ? JSON.parse(rawText) : null) as import("../util/offlineCorpus").OfflinePack;
   }
 
   /** One random problem matching the filter — the TUI's `R`. */
