@@ -95,13 +95,19 @@ export function stampAlongSegment(
   return out;
 }
 
-function drawStroke(ctx: CanvasRenderingContext2D, op: InkDrawOp): void {
+function drawStrokeFrom(
+  ctx: CanvasRenderingContext2D,
+  op: InkDrawOp,
+  fromIndex: number,
+): void {
   if (op.points.length < 2) return;
+  const start = Math.max(1, fromIndex + 1);
+  if (start >= op.points.length) return;
   ctx.globalCompositeOperation = "source-over";
   ctx.strokeStyle = op.color;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (let index = 1; index < op.points.length; index++) {
+  for (let index = start; index < op.points.length; index++) {
     const prev = op.points[index - 1];
     const next = op.points[index];
     ctx.lineWidth = inkLineWidth(op.baseWidth, prev.pressure, op.pressureSensitive);
@@ -112,14 +118,29 @@ function drawStroke(ctx: CanvasRenderingContext2D, op: InkDrawOp): void {
   }
 }
 
-function eraseStamps(ctx: CanvasRenderingContext2D, op: InkEraseOp): void {
+function eraseStampsFrom(
+  ctx: CanvasRenderingContext2D,
+  op: InkEraseOp,
+  fromIndex: number,
+): void {
+  const start = Math.max(0, fromIndex);
+  if (start >= op.points.length) return;
   ctx.globalCompositeOperation = "destination-out";
   ctx.fillStyle = "rgba(0,0,0,1)";
-  for (const point of op.points) {
+  for (let index = start; index < op.points.length; index++) {
+    const point = op.points[index];
     ctx.beginPath();
     ctx.arc(point.x, point.y, op.radius, 0, Math.PI * 2);
     ctx.fill();
   }
+}
+
+function drawStroke(ctx: CanvasRenderingContext2D, op: InkDrawOp): void {
+  drawStrokeFrom(ctx, op, 0);
+}
+
+function eraseStamps(ctx: CanvasRenderingContext2D, op: InkEraseOp): void {
+  eraseStampsFrom(ctx, op, 0);
 }
 
 /** Apply one committed or live op in scene space (caller sets the transform). */
@@ -127,6 +148,26 @@ export function applyInkOp(ctx: CanvasRenderingContext2D, op: InkOp): void {
   if (op.kind === "draw") drawStroke(ctx, op);
   else eraseStamps(ctx, op);
   ctx.globalCompositeOperation = "source-over";
+}
+
+/**
+ * Paint only the unpainted tail of a live op. `fromIndex` is the last point
+ * already covered (draw) or the first undrawn stamp index (erase). Returns the
+ * next `fromIndex` for a subsequent call — O(new points), not O(all points).
+ */
+export function applyInkOpFrom(
+  ctx: CanvasRenderingContext2D,
+  op: InkOp,
+  fromIndex: number,
+): number {
+  if (op.kind === "draw") {
+    drawStrokeFrom(ctx, op, fromIndex);
+    ctx.globalCompositeOperation = "source-over";
+    return Math.max(fromIndex, op.points.length - 1);
+  }
+  eraseStampsFrom(ctx, op, fromIndex);
+  ctx.globalCompositeOperation = "source-over";
+  return op.points.length;
 }
 
 /** Scene-space transform used by the live ink overlay and the bake buffer. */

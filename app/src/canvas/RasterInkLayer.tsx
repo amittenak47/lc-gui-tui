@@ -17,6 +17,7 @@ import {
 
 import {
   applyInkOp,
+  applyInkOpFrom,
   eraserSceneRadius,
   inkBakeKey,
   inkLineWidth,
@@ -98,12 +99,31 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const undoRef = useRef<InkOp[][]>([]);
     const redoRef = useRef<InkOp[][]>([]);
     const liveRef = useRef<InkOp | null>(null);
+    /** Next fromIndex for {@link applyInkOpFrom} — advances as live ink is painted. */
+    const liveDrawnIndexRef = useRef(0);
     const drawingRef = useRef(false);
     const lastPointRef = useRef<ReturnType<typeof scenePointFromPointer> | null>(null);
     // Read through a ref so a page turn doesn't rebuild `repaint` and with it
     // every pointer listener on the layer.
     const clipRef = useRef<SceneBounds | null>(clip);
     clipRef.current = clip;
+
+    // Keep the hot pointer path off React effect deps — rebinding mid-stroke
+    // drops pointer capture and cuts ink short.
+    const getViewportRef = useRef(getViewport);
+    getViewportRef.current = getViewport;
+    const onStrokeMoveRef = useRef(onStrokeMove);
+    onStrokeMoveRef.current = onStrokeMove;
+    const onStrokeEndRef = useRef(onStrokeEnd);
+    onStrokeEndRef.current = onStrokeEnd;
+    const onStylusAccessoryRef = useRef(onStylusAccessory);
+    onStylusAccessoryRef.current = onStylusAccessory;
+    const inkColorRef = useRef(inkColor);
+    inkColorRef.current = inkColor;
+    const strokeWidthRef = useRef(strokeWidth);
+    strokeWidthRef.current = strokeWidth;
+    const pressureSensitiveRef = useRef(pressureSensitive);
+    pressureSensitiveRef.current = pressureSensitive;
 
     const alignToExcalidraw = useCallback((canvas: HTMLCanvasElement) => {
       const board = canvas.parentElement;
@@ -202,6 +222,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       bakeKeyRef.current = "";
     }, []);
 
+    /** Full rebuild: clear, blit bake, replay entire live op. Used on pan/zoom/undo. */
     const repaint = useCallback(() => {
       const canvas = canvasRef.current;
       const viewport = getViewport();
@@ -248,8 +269,60 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         } else {
           applyInkOp(ctx, live);
         }
+        liveDrawnIndexRef.current =
+          live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
+      } else {
+        liveDrawnIndexRef.current = 0;
       }
     }, [alignToExcalidraw, ensureBake, getViewport]);
+
+    /**
+     * Hot path: paint only new live segments/stamps without clearing or
+     * re-blitting the bake. Falls back to full repaint if the view changed.
+     */
+    const paintLiveIncremental = useCallback(() => {
+      const canvas = canvasRef.current;
+      const viewport = getViewport();
+      const live = liveRef.current;
+      if (!canvas || !viewport || !live || viewport.width < 1 || viewport.height < 1) return;
+      const excalRect = alignToExcalidraw(canvas);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = excalRect?.width ?? viewport.width;
+      const cssH = excalRect?.height ?? viewport.height;
+      const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
+      const key = inkBakeKey(view, dpr, cssW, cssH, clipRef.current);
+      // View/clip/size change — bake is stale; must clear + rebuild.
+      if (
+        !bakeRef.current ||
+        bakeKeyRef.current !== key ||
+        canvas.width !== Math.round(cssW * dpr) ||
+        canvas.height !== Math.round(cssH * dpr)
+      ) {
+        repaint();
+        return;
+      }
+
+      setInkSceneTransform(ctx, view, dpr);
+      const clipBox = clipRef.current;
+      const from = liveDrawnIndexRef.current;
+      if (clipBox) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(
+          clipBox.minX,
+          clipBox.minY,
+          clipBox.maxX - clipBox.minX,
+          clipBox.maxY - clipBox.minY,
+        );
+        ctx.clip();
+        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from);
+        ctx.restore();
+      } else {
+        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from);
+      }
+    }, [alignToExcalidraw, getViewport, repaint]);
 
     const commitLive = useCallback(() => {
       const live = liveRef.current;
@@ -262,6 +335,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       redoRef.current = [];
       opsRef.current = [...opsRef.current, live];
       liveRef.current = null;
+      liveDrawnIndexRef.current = 0;
       lastPointRef.current = null;
 
       const canvas = canvasRef.current;
@@ -280,6 +354,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       onChange?.();
     }, [alignToExcalidraw, getViewport, invalidateBake, onChange, repaint, stampOntoBake]);
 
+    const paintLiveIncrementalRef = useRef(paintLiveIncremental);
+    paintLiveIncrementalRef.current = paintLiveIncremental;
+    const repaintRef = useRef(repaint);
+    repaintRef.current = repaint;
+    const commitLiveRef = useRef(commitLive);
+    commitLiveRef.current = commitLive;
+
     useImperativeHandle(
       ref,
       () => ({
@@ -289,6 +370,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           redoRef.current = [];
           opsRef.current = [];
           liveRef.current = null;
+          liveDrawnIndexRef.current = 0;
           invalidateBake();
           repaint();
           onChange?.();
@@ -298,6 +380,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           redoRef.current.push(cloneOps(opsRef.current));
           opsRef.current = undoRef.current.pop() ?? [];
           liveRef.current = null;
+          liveDrawnIndexRef.current = 0;
           invalidateBake();
           repaint();
           onChange?.();
@@ -308,6 +391,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           undoRef.current.push(cloneOps(opsRef.current));
           opsRef.current = redoRef.current.pop() ?? [];
           liveRef.current = null;
+          liveDrawnIndexRef.current = 0;
           invalidateBake();
           repaint();
           onChange?.();
@@ -329,6 +413,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           undoRef.current = [];
           redoRef.current = [];
           liveRef.current = null;
+          liveDrawnIndexRef.current = 0;
           invalidateBake();
           repaint();
         },
@@ -358,14 +443,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       if (!canvas) return;
 
       const begin = (event: PointerEvent) => {
-        if (onStylusAccessory?.(event)) {
+        if (onStylusAccessoryRef.current?.(event)) {
           event.preventDefault();
           event.stopPropagation();
           return;
         }
         // Primary tip only for drawing. Barrel / eraser tip are accessory.
         if (event.button !== 0) return;
-        const viewport = getViewport();
+        const viewport = getViewportRef.current();
         if (!viewport || !isCanvasTarget(event.target, canvas)) return;
         event.preventDefault();
         event.stopPropagation();
@@ -384,27 +469,33 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           event.pressure,
         );
         lastPointRef.current = point;
+        const width = strokeWidthRef.current;
         if (tool === "pen") {
           liveRef.current = {
             kind: "draw",
-            color: inkColor,
-            baseWidth: strokeWidth,
-            pressureSensitive,
+            color: inkColorRef.current,
+            baseWidth: width,
+            pressureSensitive: pressureSensitiveRef.current,
             points: [point],
           };
+          liveDrawnIndexRef.current = 0;
         } else {
           liveRef.current = {
             kind: "erase",
-            radius: eraserSceneRadius(strokeWidth),
+            radius: eraserSceneRadius(width),
             points: [point],
           };
+          liveDrawnIndexRef.current = 0;
         }
-        repaint();
+        // One full blit so the bake is under the first stamp/segment.
+        repaintRef.current();
+        // Soft-hide near-pen chrome on stroke start (same path as move).
+        onStrokeMoveRef.current?.(event.clientX, event.clientY);
       };
 
       const move = (event: PointerEvent) => {
         if (!drawingRef.current) return;
-        const viewport = getViewport();
+        const viewport = getViewportRef.current();
         if (!viewport) return;
         event.preventDefault();
         const rect = canvas.getBoundingClientRect();
@@ -419,12 +510,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const last = lastPointRef.current;
         if (!live || !last) return;
 
+        const width = strokeWidthRef.current;
         const step =
           live.kind === "erase"
             ? Math.max(live.radius * 0.45, 0.5)
             : Math.max(
                 inkLineWidth(
-                  strokeWidth,
+                  width,
                   point.pressure,
                   live.kind === "draw" ? live.pressureSensitive : false,
                 ) * 0.35,
@@ -433,8 +525,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const stamps = stampAlongSegment(last, point, step);
         live.points.push(...stamps);
         lastPointRef.current = point;
-        repaint();
-        onStrokeMove?.(event.clientX, event.clientY);
+        paintLiveIncrementalRef.current();
+        onStrokeMoveRef.current?.(event.clientX, event.clientY);
       };
 
       const end = (event: PointerEvent) => {
@@ -445,8 +537,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         } catch {
           /* ignore */
         }
-        commitLive();
-        onStrokeEnd?.(event.clientX, event.clientY);
+        commitLiveRef.current();
+        onStrokeEndRef.current?.(event.clientX, event.clientY);
       };
 
       canvas.addEventListener("pointerdown", begin, true);
@@ -459,19 +551,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         canvas.removeEventListener("pointerup", end, true);
         canvas.removeEventListener("pointercancel", end, true);
       };
-    }, [
-      commitLive,
-      enabled,
-      getViewport,
-      inkColor,
-      onStrokeEnd,
-      onStrokeMove,
-      onStylusAccessory,
-      pressureSensitive,
-      repaint,
-      strokeWidth,
-      tool,
-    ]);
+      // Intentionally omit paint/callback deps — read via refs so a Board
+      // re-render (chrome dismiss) never tears down capture mid-stroke.
+    }, [enabled, tool]);
 
     if (!enabled) return null;
 

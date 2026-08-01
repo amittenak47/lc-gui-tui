@@ -77,6 +77,7 @@ export function HoldButton({
 
   const stopHold = useCallback((opts: { reset: boolean; release?: boolean }) => {
     const wasHolding = holdingRef.current;
+    const wasConfirmed = confirmedRef.current;
     holdingRef.current = false;
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
@@ -85,12 +86,17 @@ export function HoldButton({
     if (
       opts.release &&
       wasHolding &&
-      !confirmedRef.current &&
+      !wasConfirmed &&
       onTapRef.current
     ) {
       onTapRef.current();
     }
-    if (opts.reset && !confirmedRef.current) setHoldProgress(0);
+    // Always clear the fill on release — leaving it full after confirm made
+    // Offline look stuck after the gate dialog closed.
+    if (opts.reset) {
+      confirmedRef.current = false;
+      setHoldProgress(0);
+    }
   }, []);
 
   const displayProgress =
@@ -107,6 +113,11 @@ export function HoldButton({
       confirmedRef.current = true;
       setHoldProgress(1);
       onConfirmRef.current();
+      // Clear the filled look once the confirm action has run (dialog open, etc.).
+      window.setTimeout(() => {
+        confirmedRef.current = false;
+        setHoldProgress(0);
+      }, 0);
       return;
     }
     rafRef.current = requestAnimationFrame(tick);

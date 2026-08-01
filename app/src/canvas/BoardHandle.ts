@@ -19,6 +19,16 @@ export interface BoardBlob {
   appState: { scrollX: number; scrollY: number; zoom: number };
   /** Raster pen/eraser ops — optional for older saves. */
   ink?: InkOp[];
+  /** Excalidraw binary files (images) keyed by file id. */
+  files?: Record<string, BoardBinaryFile>;
+}
+
+/** Persisted image binary — mirrors Excalidraw BinaryFileData fields we need. */
+export interface BoardBinaryFile {
+  id: string;
+  mimeType: string;
+  dataURL: string;
+  created: number;
 }
 
 export type ToolName =
@@ -109,7 +119,7 @@ export interface BoardHandle {
   restoreBoard(
     elements: unknown[],
     appState?: unknown,
-    options?: { skeletons?: Skeleton[]; ink?: InkOp[] },
+    options?: { skeletons?: Skeleton[]; ink?: InkOp[]; files?: Record<string, BoardBinaryFile> },
   ): void;
   /** Recolor template scaffolding for the current theme (after restore/seed). */
   applyThemeInk(themeId: string): void;

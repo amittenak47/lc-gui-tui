@@ -21,8 +21,8 @@ import { useIsMobile } from "../util/mobile";
 type TabId = "workspace" | "personalise" | "server";
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "workspace", label: "Workspace" },
   { id: "personalise", label: "Personalise" },
+  { id: "workspace", label: "Workspace" },
   { id: "server", label: "Server" },
 ];
 
@@ -85,7 +85,7 @@ export function SettingsModal({
   coachDetail = null,
 }: SettingsModalProps) {
   const mobile = useIsMobile();
-  const [tab, setTab] = useState<TabId>(initialTab ?? "workspace");
+  const [tab, setTab] = useState<TabId>(initialTab ?? "personalise");
   const [draft, setDraft] = useState<LcConfig>(emptyConfig);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -131,7 +131,7 @@ export function SettingsModal({
       setPackInfo(snap.info);
       setPackMode(snap.mode);
       if (snap.phase === "error") setPackError(snap.error);
-      else if (snap.phase === "running" || snap.phase === "done" || snap.phase === "uptodate") {
+      else if (snap.phase === "running" || snap.phase === "done") {
         setPackError(null);
       }
       if (snap.phase === "done") {
@@ -271,7 +271,7 @@ export function SettingsModal({
       className="lc-settings-backdrop"
       role="presentation"
       onClick={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
+        if (e.target === e.currentTarget) onClose();
       }}
     >
       <div className="lc-settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
@@ -751,7 +751,7 @@ export function SettingsModal({
         </div>
 
         <div className="lc-settings-foot">
-          <button type="button" className="lc-secondary" disabled={!!busy} onClick={onClose}>
+          <button type="button" className="lc-secondary" onClick={onClose}>
             Cancel
           </button>
           <button type="button" className="lc-primary" disabled={!!busy} onClick={() => void save()}>
