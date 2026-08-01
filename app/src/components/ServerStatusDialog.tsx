@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 
 import { HoldButton } from "./HoldButton";
 import { LoadingDoodle } from "./LoadingDoodle";
+import { HOLD_SENSITIVE_MS } from "../util/gesture";
 
 export type ServerGateKind = "startup" | "dropped";
 export type ServerGateOption = "wait" | "offline";
@@ -107,6 +108,7 @@ export function ServerStatusDialog({
             <HoldButton
               label={option === "wait" ? "Wait" : "Continue offline"}
               className="lc-hold-choice lc-gate-option-hold"
+              holdMs={HOLD_SENSITIVE_MS}
               onTap={cycleOption}
               onConfirm={confirm}
               resetKey={option}

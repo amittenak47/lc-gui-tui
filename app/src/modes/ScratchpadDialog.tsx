@@ -133,14 +133,6 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                   </button>
                 </div>
               ))}
-              <button
-                type="button"
-                className="lc-secondary"
-                disabled={locked}
-                onClick={() => setPickingLoad(false)}
-              >
-                Back
-              </button>
             </div>
           ) : (
             <div className="lc-settings-choice">
@@ -212,6 +204,16 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
         </div>
 
         <div className="lc-settings-foot">
+          {pickingLoad && (
+            <button
+              type="button"
+              className="lc-secondary"
+              disabled={locked}
+              onClick={() => setPickingLoad(false)}
+            >
+              Back
+            </button>
+          )}
           <button type="button" className="lc-secondary" disabled={locked} onClick={props.onCancel}>
             {isLeave ? "Keep writing" : "Cancel"}
           </button>
