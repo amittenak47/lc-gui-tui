@@ -569,7 +569,8 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
         assert!(prompt.contains("show the scan"));
         assert!(prompt.contains("- [0] input:"));
         assert!(VIZ_SYSTEM_PROMPT.contains("must not guess coordinates"));
-        assert!(VIZ_SYSTEM_PROMPT.contains("about three frames"));
+        assert!(VIZ_SYSTEM_PROMPT.contains("fine-grained frames"));
+        assert!(VIZ_SYSTEM_PROMPT.contains("5–12 frames"));
     }
 
     /// Observed from granite-4.1-8b: it emitted `why_your_approach_fails`

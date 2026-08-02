@@ -13,9 +13,8 @@
  * button, colour fans out of one dot ({@link ColorRadial}).
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   SHAPES,
   SHAPE_GROUPS,
@@ -29,6 +28,9 @@ import { FontSizeSlider } from "./FontSizeSlider";
 import { inkSwatches } from "./inkColors";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
+
+/** Hold this long on Text to open Text / Code (click also toggles the menu). */
+const TEXT_HOLD_MS = 240;
 
 /** The five tools that earn a permanent seat on the bar. */
 const TOOLS: Array<{ tool: ToolName; label: string; hint: string; icon?: "pen" | "eraser" }> = [
@@ -67,6 +69,9 @@ export interface BoardToolbarProps {
   onPressureSensitive: (enabled: boolean) => void;
   fontSize: number;
   onFontSize: (size: number) => void;
+  /** Plain text vs monospace code note (Text tool long-press). */
+  textMode: "plain" | "code";
+  onTextMode: (mode: "plain" | "code") => void;
   /** The data-structure library panel — opened from the shapes flyout. */
   shapesOpen: boolean;
   onToggleShapes: () => void;
@@ -98,6 +103,8 @@ export function BoardToolbar({
   onPressureSensitive,
   fontSize,
   onFontSize,
+  textMode,
+  onTextMode,
   shapesOpen,
   onToggleShapes,
   onStamp,
@@ -124,10 +131,42 @@ export function BoardToolbar({
   const [mods, setMods] = useState<Record<string, ShapeModValue>>({});
   const [moveAsOne, setMoveAsOne] = useState(true);
   const [shapePhase, setShapePhase] = useState<"list" | "fade" | "mod">("list");
-  /** Reset asks first, in our own modal — never a browser confirm box. */
-  const [confirmingReset, setConfirmingReset] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [textFlyoutOpen, setTextFlyoutOpen] = useState(false);
+  const textHoldTimerRef = useRef<number | null>(null);
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
+
+  const clearTextHold = useCallback(() => {
+    if (textHoldTimerRef.current != null) {
+      window.clearTimeout(textHoldTimerRef.current);
+      textHoldTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearTextHold, [clearTextHold]);
+
+  // A press anywhere else closes the text / shape flyouts.
+  useEffect(() => {
+    if (!textFlyoutOpen && !shapeMenuOpen) return;
+    const onDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && toolbarRootRef.current?.contains(target)) return;
+      setTextFlyoutOpen(false);
+      setShapeMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setTextFlyoutOpen(false);
+        setShapeMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [textFlyoutOpen, shapeMenuOpen]);
 
   // Read through a ref so an inline callback cannot rebuild the observer on
   // every render.
@@ -152,25 +191,6 @@ export function BoardToolbar({
       setShapePhase("list");
     }
   }, [shapesOpen]);
-
-  // A press anywhere else closes the shape flyout.
-  useEffect(() => {
-    if (!shapeMenuOpen) return;
-    const onDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && toolbarRootRef.current?.contains(target)) return;
-      setShapeMenuOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setShapeMenuOpen(false);
-    };
-    window.addEventListener("pointerdown", onDown, true);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onDown, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [shapeMenuOpen]);
 
   const pickShape = (shape: ShapeStamp) => {
     setConfiguring(shape);
@@ -197,7 +217,27 @@ export function BoardToolbar({
     if (shapesOpen) onToggleShapes();
     if (captureMenuOpen) onToggleCaptureMenu();
     setShapeMenuOpen(false);
+    setTextFlyoutOpen(false);
     onPick(tool);
+  };
+
+  const pickTextVariant = (mode: "plain" | "code") => {
+    clearTextHold();
+    setTextFlyoutOpen(false);
+    if (shapesOpen) onToggleShapes();
+    if (captureMenuOpen) onToggleCaptureMenu();
+    setShapeMenuOpen(false);
+    onTextMode(mode);
+  };
+
+  const onTextToolClick = () => {
+    clearTextHold();
+    if (active === "text" && !shapesOpen) {
+      setTextFlyoutOpen((open) => !open);
+      return;
+    }
+    pickTextVariant(textMode);
+    setTextFlyoutOpen(true);
   };
 
   const shapeToolActive = SHAPE_TOOLS.some((entry) => entry.tool === active);
@@ -242,7 +282,77 @@ export function BoardToolbar({
       aria-label="Drawing tools"
     >
       <div className="lc-toolbar-row">
-        {TOOLS.map(({ tool, label, hint, icon }) => renderToolButton(tool, label, hint, icon))}
+        {TOOLS.map(({ tool, label, hint, icon }) =>
+          tool === "text" ? (
+            <div key="text" className="lc-text-wrap">
+              <button
+                type="button"
+                className={
+                  active === "text" && !shapesOpen
+                    ? "lc-tool lc-tool-active"
+                    : "lc-tool"
+                }
+                aria-label={
+                  textMode === "code"
+                    ? "Code note — click for Text / Code"
+                    : "Text — click for Text / Code"
+                }
+                title={
+                  textMode === "code"
+                    ? "Code note (monospace on canvas) — click for Text / Code"
+                    : "Text — click for Text / Code"
+                }
+                aria-pressed={active === "text" && !shapesOpen}
+                aria-haspopup="menu"
+                aria-expanded={textFlyoutOpen}
+                onClick={onTextToolClick}
+                onPointerDown={() => {
+                  clearTextHold();
+                  textHoldTimerRef.current = window.setTimeout(() => {
+                    textHoldTimerRef.current = null;
+                    setShapeMenuOpen(false);
+                    setTextFlyoutOpen(true);
+                  }, TEXT_HOLD_MS);
+                }}
+                onPointerUp={clearTextHold}
+                onPointerCancel={clearTextHold}
+              >
+                <span className="lc-tool-emoji" aria-hidden>
+                  {textMode === "code" ? "</>" : "T"}
+                </span>
+              </button>
+              {textFlyoutOpen && (
+                <div className="lc-text-flyout" role="menu" aria-label="Text mode">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={textMode === "plain" ? "is-active" : undefined}
+                    onClick={() => pickTextVariant("plain")}
+                  >
+                    <span className="lc-text-flyout-glyph" aria-hidden>
+                      T
+                    </span>
+                    Text
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={textMode === "code" ? "is-active" : undefined}
+                    onClick={() => pickTextVariant("code")}
+                  >
+                    <span className="lc-text-flyout-glyph" aria-hidden>
+                      {"</>"}
+                    </span>
+                    Code note
+                    <span className="lc-muted lc-text-flyout-sub">Monospace on canvas</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            renderToolButton(tool, label, hint, icon)
+          ),
+        )}
 
         <div className="lc-tool-sep" />
 
@@ -351,20 +461,22 @@ export function BoardToolbar({
           className="lc-tool"
           aria-label="Reset board"
           title="Reset board"
-          onClick={() => setConfirmingReset(true)}
+          onClick={onReset}
         >
           <ResetIcon />
         </button>
 
         <div className="lc-tool-sep" />
 
-        <ColorRadial
-          colors={inkSwatches(themeId)}
-          value={inkColor}
-          onPick={onInk}
-          handedness={handedness}
-          compact={mobile}
-        />
+        <div className="lc-color-wrap">
+          <ColorRadial
+            colors={inkSwatches(themeId)}
+            value={inkColor}
+            onPick={onInk}
+            handedness={handedness}
+            compact={mobile}
+          />
+        </div>
 
         {showStrokeSizes && (
           <div className="lc-stroke-controls">
@@ -521,21 +633,6 @@ export function BoardToolbar({
             </div>
           )}
         </div>
-      )}
-
-      {confirmingReset && (
-        <ConfirmDialog
-          title="Reset the board?"
-          message="The board goes back to the original problem layout. Everything you drew, typed, or stamped on the canvas is cleared."
-          detail="Your solution code and the coach thread are not touched."
-          confirmLabel="Reset board"
-          cancelLabel="Keep my work"
-          onConfirm={() => {
-            setConfirmingReset(false);
-            onReset();
-          }}
-          onCancel={() => setConfirmingReset(false)}
-        />
       )}
     </div>
   );

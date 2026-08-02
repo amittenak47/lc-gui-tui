@@ -116,6 +116,11 @@ export class AmbientCoach {
   /** Interactive runs awaiting a `result` or `error`, keyed by request id. */
   private readonly pending = new Map<string, PendingRun>();
   private runSeq = 0;
+  /**
+   * False after an older daemon rejects a `run` frame. Further jobs skip the
+   * socket and let the caller fall straight to HTTP.
+   */
+  private runsSupported = true;
 
   constructor(
     private readonly pairing: Pairing,
@@ -137,6 +142,8 @@ export class AmbientCoach {
    */
   connect(taskId: string): void {
     this.stop();
+    // A fresh socket might be a rebuilt daemon — try run frames again.
+    this.runsSupported = true;
     const socket = this.createSocket(coachSocketUrl(this.pairing));
     this.socket = socket;
 
@@ -191,6 +198,11 @@ export class AmbientCoach {
     payload: Record<string, unknown>,
     handlers: RunHandlers = {},
   ): Promise<T> {
+    if (!this.runsSupported) {
+      return Promise.reject(
+        new Error("cannot parse frame: daemon has no run frames — use HTTP"),
+      );
+    }
     const requestId = `run-${Date.now().toString(36)}-${(this.runSeq += 1)}`;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(requestId, {
@@ -248,7 +260,17 @@ export class AmbientCoach {
         return true;
       }
       case "error": {
-        if (!frame.request_id) return false;
+        // An older daemon that only knows hello/snapshot/reset cannot parse
+        // `run`, and answers with an ambient error (no request_id). Fail every
+        // waiting run so App can fall back to HTTP instead of hanging.
+        if (!frame.request_id) {
+          if (this.pending.size > 0 && isRunProtocolMismatch(frame.message)) {
+            this.runsSupported = false;
+            this.failPending(frame.message);
+            return true;
+          }
+          return false;
+        }
         const run = this.pending.get(frame.request_id);
         if (!run) return true;
         this.pending.delete(frame.request_id);
@@ -342,4 +364,16 @@ export class AmbientCoach {
       this.handlers.onError?.("could not reach the coach");
     }
   }
+}
+
+/** Older daemons reject `run`/`cancel` with a serde unknown-variant parse error. */
+function isRunProtocolMismatch(message: string): boolean {
+  const text = message.toLowerCase();
+  return (
+    text.includes("cannot parse frame") ||
+    text.includes("unknown variant `run`") ||
+    text.includes("unknown variant run") ||
+    text.includes("unknown variant `cancel`") ||
+    text.includes("unknown variant cancel")
+  );
 }

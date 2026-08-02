@@ -652,7 +652,7 @@ export function App() {
       for (const drawing of visible) {
         applyViz(
           api,
-          (skeletons) => board.convert(skeletons),
+          (skeletons) => board.convert(skeletons, { regenerateIds: false }),
           drawing.program,
           drawing.frameIndex ?? 0,
         );
@@ -720,7 +720,7 @@ export function App() {
           const saved = saveScratchNotebook({
             id: scratchNotebookId ?? undefined,
             board: blob,
-            agent: coachMessages,
+            agent: persistableCoachMessages(coachMessages),
             pageCount: Math.max(
               scratchPageCount,
               countScratchPages(blob.elements),
@@ -780,7 +780,7 @@ export function App() {
   );
 
   const syncSolution = useCallback(async () => {
-    if (!problem) return;
+    if (!problem || isScratchpad(problem)) return;
     await client.putSolution(problem.task_id, pseudocodeRef.current, problem.dataset);
   }, [client, problem]);
 
@@ -1397,7 +1397,13 @@ export function App() {
       content: string,
       extra?: Pick<
         CoachChatMessage,
-        "review" | "attachments" | "drawing" | "bridge" | "bridgePending" | "bridgeError"
+        | "review"
+        | "attachments"
+        | "drawing"
+        | "bridge"
+        | "bridgePending"
+        | "bridgeError"
+        | "flags"
       >,
     ) => {
       dirtyRef.current = true;
@@ -1835,10 +1841,7 @@ export function App() {
         flags.reviewBoard ? "Review" : null,
         flags.draw ? "Draw" : null,
         flags.lazy ? "Lazy" : null,
-      ].filter(Boolean);
-      const shown = [text, flagBits.length > 0 ? flagBits.join(" · ") : null]
-        .filter(Boolean)
-        .join("\n");
+      ].filter((bit): bit is string => Boolean(bit));
 
       void (async () => {
         let attachments: CoachChatMessage["attachments"];
@@ -1855,7 +1858,10 @@ export function App() {
             /* thumbnails are best-effort */
           }
         }
-        pushCoachMessage("user", shown || "Send", attachments ? { attachments } : undefined);
+        pushCoachMessage("user", text || "Send", {
+          ...(attachments ? { attachments } : {}),
+          ...(flagBits.length > 0 ? { flags: flagBits } : {}),
+        });
 
         // Review runs the staged pipeline. Ask (or bare text without Review)
         // skips it and does a single-turn Q&A.
@@ -2058,6 +2064,7 @@ export function App() {
     if (!problem || coachMessages.length === 0) return;
     const timer = window.setTimeout(() => {
       if (agentSaveSuspendedRef.current) return;
+      const agent = persistableCoachMessages(coachMessages);
       if (isScratchpad(problem)) {
         // Board autosave only writes when the scene + ink fingerprint moves, so
         // a chat-only exchange would otherwise be lost. Write the notebook with
@@ -2069,7 +2076,7 @@ export function App() {
           const saved = saveScratchNotebook({
             id: scratchNotebookId ?? undefined,
             board: blob,
-            agent: coachMessages,
+            agent,
             pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
           });
           if (!scratchNotebookId) setScratchNotebookId(saved.id);
@@ -2082,7 +2089,7 @@ export function App() {
         return;
       }
       void client
-        .putAgentSession(problem.task_id, coachMessages, problem.dataset)
+        .putAgentSession(problem.task_id, agent, problem.dataset)
         .catch(() => {
           /* best-effort — the thread is still on screen */
         });
@@ -2175,7 +2182,12 @@ export function App() {
         });
         const drawing = next.find((message) => message.drawing?.program.id === programId)?.drawing;
         if (drawing && drawing.expanded && !drawing.redacted) {
-          applyViz(api, (skeletons) => board.convert(skeletons), drawing.program, frameIndex);
+          applyViz(
+            api,
+            (skeletons) => board.convert(skeletons, { regenerateIds: false }),
+            drawing.program,
+            frameIndex,
+          );
         }
         return next;
       });
@@ -2265,7 +2277,7 @@ export function App() {
                 const saved = saveScratchNotebook({
                   id: scratchNotebookId ?? undefined,
                   board: blob,
-                  agent: coachMessages,
+                  agent: persistableCoachMessages(coachMessages),
                   pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
                 });
                 setScratchNotebookId(saved.id);
@@ -2297,7 +2309,11 @@ export function App() {
         const saveWork = (async () => {
           if (coachMessages.length > 0) {
             await client
-              .putAgentSession(problem.task_id, coachMessages, problem.dataset)
+              .putAgentSession(
+                problem.task_id,
+                persistableCoachMessages(coachMessages),
+                problem.dataset,
+              )
               .catch(() => {
                 /* best-effort */
               });
@@ -2923,7 +2939,7 @@ export function App() {
                 const saved = saveScratchNotebook({
                   id: scratchNotebookId ?? undefined,
                   board: blob,
-                  agent: coachMessages,
+                  agent: persistableCoachMessages(coachMessages),
                   pageCount: Math.max(
                     scratchPageCount,
                     countScratchPages(blob.elements),
@@ -3490,6 +3506,8 @@ function isSocketRunUnavailable(cause: unknown): boolean {
   const message = messageOf(cause).toLowerCase();
   return (
     message.includes("cannot parse frame") ||
+    message.includes("unknown variant") ||
+    message.includes("no run frames") ||
     message.includes("connection closed") ||
     message.includes("connection failed") ||
     message.includes("could not reach the coach")
@@ -3508,26 +3526,49 @@ function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
     if (!entry || typeof entry !== "object") return [];
     const message = entry as Partial<CoachChatMessage> & { drawing?: unknown };
     if (typeof message.id !== "string" || typeof message.role !== "string") return [];
+    // Older builds could persist an in-flight placeholder. Drop it — a turn
+    // stuck on "Working…" would wait for a socket that will never answer.
+    if (message.pending) return [];
     const drawing = restoreMessageDrawing(message.drawing);
+    const content = typeof message.content === "string" ? message.content : "";
+    const processEvents = Array.isArray(message.processEvents)
+      ? message.processEvents
+      : undefined;
+    const flags = Array.isArray(message.flags)
+      ? message.flags.filter((flag): flag is string => typeof flag === "string" && flag.length > 0)
+      : undefined;
+    // Empty assistant shells left after stripping `pending` are noise.
+    if (
+      message.role === "assistant" &&
+      !content.trim() &&
+      !message.review &&
+      !message.bridge &&
+      !message.attachments?.length &&
+      !drawing &&
+      !processEvents?.length
+    ) {
+      return [];
+    }
     return [
       {
         id: message.id,
         role: message.role as CoachChatMessage["role"],
-        content: typeof message.content === "string" ? message.content : "",
+        content,
         at: typeof message.at === "number" ? message.at : Date.now(),
         review: message.review,
         bridge: message.bridge,
         attachments: message.attachments,
-        // `pending` is deliberately not restored: a run that was in flight when
-        // the app closed is not in flight now, and a turn stuck on "Working…"
-        // would wait for a socket that will never answer it.
-        ...(Array.isArray(message.processEvents)
-          ? { processEvents: message.processEvents }
-          : {}),
+        ...(flags && flags.length > 0 ? { flags } : {}),
+        ...(processEvents ? { processEvents } : {}),
         ...(drawing ? { drawing } : {}),
       },
     ];
   });
+}
+
+/** Persist finished turns only — never an in-flight `pending` placeholder. */
+function persistableCoachMessages(messages: CoachChatMessage[]): CoachChatMessage[] {
+  return messages.filter((message) => !message.pending);
 }
 
 /**

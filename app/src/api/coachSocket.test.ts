@@ -335,6 +335,36 @@ describe("AmbientCoach", () => {
     coach.stop();
   });
 
+  it("fails waiting runs when an old daemon cannot parse a run frame", async () => {
+    const socket = fakeSocket();
+    const ambient: ServerFrame[] = [];
+    const coach = new AmbientCoach(
+      pairing,
+      { onFrame: (frame) => ambient.push(frame) },
+      () => socket,
+      "s1",
+    );
+    coach.connect("two-sum");
+    socket.onopen?.({});
+
+    const answered = coach.run("ask", { task_id: "two-sum", question: "why?" });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "error",
+        message:
+          "cannot parse frame: unknown variant `run`, expected one of `hello`, `snapshot`, `reset`",
+      }),
+    });
+
+    await expect(answered).rejects.toThrow(/cannot parse frame/);
+    // Swallowed as a run failure so the UI can fall back to HTTP — not ambient noise.
+    expect(ambient).toEqual([]);
+    await expect(coach.run("ask", { task_id: "two-sum", question: "again?" })).rejects.toThrow(
+      /no run frames/,
+    );
+    coach.stop();
+  });
+
   it("queues a run sent before the handshake instead of dropping it", () => {
     const socket = fakeSocket();
     const coach = new AmbientCoach(pairing, { onFrame: () => {} }, () => socket, "s1");

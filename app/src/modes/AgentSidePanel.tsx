@@ -60,6 +60,30 @@ function formatMessageQuote(message: CoachChatMessage): string {
   return `> **${label}:**\n${quoted}\n\n`;
 }
 
+/**
+ * Scroll when the thread grows or a turn's content changes — not when the
+ * student only scrubs a drawing's frameIndex (Prev / Play / Next).
+ */
+function coachScrollSignature(messages: CoachChatMessage[]): string {
+  return messages
+    .map((message) =>
+      [
+        message.id,
+        message.role,
+        message.content,
+        message.pending ? "1" : "0",
+        message.processEvents?.length ?? 0,
+        message.flags?.join(",") ?? "",
+        message.drawing?.program.id ?? "",
+        message.drawing?.expanded ? "1" : "0",
+        message.attachments?.length ?? 0,
+        message.review ? "1" : "0",
+        message.bridge ? "1" : "0",
+      ].join("\x1f"),
+    )
+    .join("\x1e");
+}
+
 async function copyToClipboard(text: string): Promise<boolean> {
   const trimmed = text.trim();
   if (!trimmed) return false;
@@ -132,6 +156,8 @@ export interface CoachChatMessage {
   attachments?: CoachAttachment[];
   /** Coach diagram — expand/collapse controls board visibility. */
   drawing?: MessageDrawing;
+  /** Composer flags that rode along with Send — footnotes under the bubble text. */
+  flags?: string[];
   /**
    * What the coach did on the way to this answer, in order, as the daemon
    * reported it. Kept on the turn rather than in a global status line so it
@@ -199,6 +225,8 @@ export function AgentSidePanel({
   );
   const [draft, setDraft] = useState("");
   const [ask, setAsk] = useState(askOnly);
+  const askActive = ask || askOnly;
+  const flagUnavailable = askOnly ? " lc-flag-unavailable" : "";
   const [draw, setDraw] = useState(false);
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
@@ -393,8 +421,11 @@ export function AgentSidePanel({
     (message: CoachChatMessage) => {
       const text = formatMessageQuote(message);
       if (!text) return;
+      // Quote becomes the draft for a new send — its own user turn when they hit
+      // Send. Threaded reply bubbles can replace this later.
       setDraft((current) => (current.trim() ? `${current.trimEnd()}\n\n${text}` : text));
       closeMessageMenu();
+      onOpenChange?.(true);
       requestAnimationFrame(() => {
         const el = composerRef.current;
         if (!el) return;
@@ -403,7 +434,7 @@ export function AgentSidePanel({
         el.setSelectionRange(end, end);
       });
     },
-    [closeMessageMenu],
+    [closeMessageMenu, onOpenChange],
   );
 
   const copyMessage = useCallback(
@@ -420,7 +451,14 @@ export function AgentSidePanel({
     const node = listRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
-  }, [messages, thinking, thinkingPhase, children, open]);
+  }, [
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- signature ignores frameIndex
+    coachScrollSignature(messages),
+    thinking,
+    thinkingPhase,
+    children,
+    open,
+  ]);
 
   useEffect(() => {
     if (!lightbox) return;
@@ -571,6 +609,18 @@ export function AgentSidePanel({
               {message.content ? (
                 <div className="lc-coach-turn-body">{message.content}</div>
               ) : null}
+              {message.flags && message.flags.length > 0 && (
+                <div className="lc-coach-turn-footnotes">
+                  <span className="lc-coach-turn-flag-rule" aria-hidden />
+                  <div className="lc-coach-turn-flags" aria-label="Send flags">
+                    {message.flags.map((flag) => (
+                      <span key={flag} className="lc-coach-turn-flag">
+                        {flag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               {message.pending && !message.processEvents?.length && (
                 <div className="lc-coach-turn-body">
                   <span className="lc-coach-spinner" aria-hidden />
@@ -719,10 +769,11 @@ export function AgentSidePanel({
               >
                 <button
                   type="button"
-                  className={ask ? "lc-flag lc-flag-active" : "lc-flag"}
-                  aria-pressed={ask}
-                  disabled={busy || askOnly || lazy || reviewBoard}
-                  onClick={() =>
+                  className={askActive ? "lc-flag lc-flag-active" : "lc-flag"}
+                  aria-pressed={askActive}
+                  disabled={busy || (!askOnly && (lazy || reviewBoard))}
+                  onClick={() => {
+                    if (askOnly) return;
                     setAsk((current) => {
                       const next = !current;
                       if (next) {
@@ -730,8 +781,8 @@ export function AgentSidePanel({
                         setReviewBoard(false);
                       }
                       return next;
-                    })
-                  }
+                    });
+                  }}
                 >
                   Ask
                 </button>
@@ -744,7 +795,7 @@ export function AgentSidePanel({
               >
                 <button
                   type="button"
-                  className={draw ? "lc-flag lc-flag-active" : "lc-flag"}
+                  className={`lc-flag${draw ? " lc-flag-active" : ""}${flagUnavailable}`}
                   aria-pressed={draw}
                   disabled={busy || askOnly}
                   onClick={() => setDraw((current) => !current)}
@@ -764,7 +815,7 @@ export function AgentSidePanel({
               >
                 <button
                   type="button"
-                  className={reviewBoard ? "lc-flag lc-flag-active" : "lc-flag"}
+                  className={`lc-flag${reviewBoard ? " lc-flag-active" : ""}${flagUnavailable}`}
                   aria-pressed={reviewBoard}
                   disabled={busy || askOnly || ask}
                   onClick={() =>
@@ -790,7 +841,7 @@ export function AgentSidePanel({
               >
                 <button
                   type="button"
-                  className={lazy ? "lc-flag lc-flag-active" : "lc-flag"}
+                  className={`lc-flag${lazy ? " lc-flag-active" : ""}${flagUnavailable}`}
                   aria-pressed={lazy}
                   disabled={busy || askOnly || ask}
                   onClick={() =>
@@ -840,7 +891,7 @@ export function AgentSidePanel({
               disabled={!menuHasText}
               onClick={() => quoteMessage(menuMessage)}
             >
-              Quote
+              Quote in reply
             </button>
           </div>
         </>

@@ -41,6 +41,8 @@ export interface RasterInkHandle {
   canUndo(): boolean;
   /** True once anything has been painted or erased on this layer. */
   hasInk(): boolean;
+  /** Pen/eraser tip is down — skip camera/repaint work that would cut the stroke. */
+  isDrawing(): boolean;
   repaint(): void;
   /**
    * Committed ops, for the recognizer and the PNG export. The in-progress op is
@@ -103,6 +105,15 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const lastPointRef = useRef<ReturnType<typeof scenePointFromPointer> | null>(null);
     /** Running EMA of stylus pressure for the live stroke — see smoothPressure. */
     const smoothedPressureRef = useRef(0.5);
+    /**
+     * Viewport + CSS box frozen at pointerdown for the whole stroke.
+     *
+     * Mid-stroke scroll/zoom used to change `inkBakeKey` and force a full
+     * `repaint()` on every move — that hitch is what cuts a letter like "g"
+     * short. Keep mapping and incremental paint on the stroke-start frame.
+     */
+    const strokeViewRef = useRef<ViewportTransform | null>(null);
+    const strokeBoxRef = useRef<{ width: number; height: number } | null>(null);
     // Read through a ref so a page turn doesn't rebuild `repaint` and with it
     // every pointer listener on the layer.
     const clipRef = useRef<SceneBounds | null>(clip);
@@ -120,6 +131,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     strokeWidthRef.current = strokeWidth;
     const pressureSensitiveRef = useRef(pressureSensitive);
     pressureSensitiveRef.current = pressureSensitive;
+    const toolRef = useRef(tool);
+    toolRef.current = tool;
 
     /**
      * Sit exactly on the Excalidraw canvas, on whole device pixels.
@@ -234,9 +247,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     /** Full rebuild: clear, blit bake, replay entire live op. Used on pan/zoom/undo. */
     const repaint = useCallback(() => {
       const canvas = canvasRef.current;
-      const viewport = getViewport();
+      // Prefer the stroke-start frame while a gesture is open (or just set up).
+      const frozen = strokeViewRef.current;
+      const box = strokeBoxRef.current;
+      const viewport = frozen ?? getViewport();
       if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
-      const excalRect = alignToExcalidraw(canvas);
+      const excalRect = frozen && box ? box : alignToExcalidraw(canvas);
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       const dpr = window.devicePixelRatio || 1;
@@ -288,30 +304,43 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
     /**
      * Hot path: paint only new live segments/stamps without clearing or
-     * re-blitting the bake. Falls back to full repaint if the view changed.
+     * re-blitting the bake. Uses the stroke-start viewport so a camera jitter
+     * cannot force a full rebuild mid-glyph.
      */
     const paintLiveIncremental = useCallback(() => {
       const canvas = canvasRef.current;
-      const viewport = getViewport();
+      const view = strokeViewRef.current;
+      const box = strokeBoxRef.current;
       const live = liveRef.current;
-      if (!canvas || !viewport || !live || viewport.width < 1 || viewport.height < 1) return;
-      const excalRect = alignToExcalidraw(canvas);
+      if (!canvas || !view || !box || !live || box.width < 1 || box.height < 1) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       const dpr = window.devicePixelRatio || 1;
-      const cssW = excalRect?.width ?? viewport.width;
-      const cssH = excalRect?.height ?? viewport.height;
-      const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
+      const cssW = box.width;
+      const cssH = box.height;
       const key = inkBakeKey(view, dpr, cssW, cssH, clipRef.current);
-      // View/clip/size change — bake is stale; must clear + rebuild.
+      // Size/DPR change only — never scroll/zoom mid-stroke (those are frozen).
       if (
         !bakeRef.current ||
         bakeKeyRef.current !== key ||
         canvas.width !== Math.round(cssW * dpr) ||
         canvas.height !== Math.round(cssH * dpr)
       ) {
-        repaint();
-        return;
+        // Still avoid a full clear if we can: ensureBake under the frozen view.
+        ensureBake(view, dpr, cssW, cssH);
+        if (
+          !bakeRef.current ||
+          canvas.width !== Math.round(cssW * dpr) ||
+          canvas.height !== Math.round(cssH * dpr)
+        ) {
+          repaint();
+          return;
+        }
+        // Blit bake then continue incremental from current fromIndex.
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(bakeRef.current, 0, 0);
+        liveDrawnIndexRef.current = 0;
       }
 
       setInkSceneTransform(ctx, view, dpr);
@@ -332,7 +361,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       } else {
         liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from);
       }
-    }, [alignToExcalidraw, getViewport, repaint]);
+    }, [ensureBake, repaint]);
 
     const commitLive = useCallback(() => {
       const live = liveRef.current;
@@ -415,6 +444,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           // pixels are gone but the board is not the untouched one we seeded.
           return opsRef.current.length > 0;
         },
+        isDrawing() {
+          return drawingRef.current;
+        },
         getOps() {
           return [...opsRef.current];
         },
@@ -433,6 +465,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     );
 
     useEffect(() => {
+      if (drawingRef.current) return;
       invalidateBake();
       repaint();
     }, [enabled, clip, invalidateBake, repaint]);
@@ -440,6 +473,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     useEffect(() => {
       if (!enabled) return;
       const onResize = () => {
+        if (drawingRef.current) return;
         invalidateBake();
         repaint();
       };
@@ -448,11 +482,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     }, [enabled, invalidateBake, repaint]);
 
     useEffect(() => {
-      if (!enabled || !tool) return;
+      if (!enabled) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
 
       const begin = (event: PointerEvent) => {
+        if (!toolRef.current) return;
         if (onStylusAccessoryRef.current?.(event)) {
           event.preventDefault();
           event.stopPropagation();
@@ -469,20 +504,33 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         } catch {
           /* ignore */
         }
-        drawingRef.current = true;
+        // Freeze camera + CSS box for the whole stroke before the first paint.
+        // Align once here — never again on move (DOM writes mid-glyph hitch).
+        const excalRect = alignToExcalidraw(canvas);
+        const cssW = excalRect?.width ?? viewport.width;
+        const cssH = excalRect?.height ?? viewport.height;
+        const strokeView: ViewportTransform = {
+          ...viewport,
+          width: cssW,
+          height: cssH,
+        };
+        strokeViewRef.current = strokeView;
+        strokeBoxRef.current = { width: cssW, height: cssH };
+
         const rect = canvas.getBoundingClientRect();
         const point = scenePointFromPointer(
           event.clientX,
           event.clientY,
           rect,
-          viewport,
+          strokeView,
           event.pressure,
         );
         lastPointRef.current = point;
         smoothedPressureRef.current = point.pressure;
         inkMetrics.begin();
         const width = strokeWidthRef.current;
-        if (tool === "pen") {
+        const activeTool = toolRef.current;
+        if (activeTool === "pen") {
           liveRef.current = {
             kind: "draw",
             color: inkColorRef.current,
@@ -499,14 +547,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           };
           liveDrawnIndexRef.current = 0;
         }
-        // One full blit so the bake is under the first stamp/segment.
+        // Full blit under the frozen view while drawingRef is still false so
+        // scroll/resize guards do not skip this first paint.
         repaintRef.current();
+        drawingRef.current = true;
       };
 
       const move = (event: PointerEvent) => {
         if (!drawingRef.current) return;
-        const viewport = getViewportRef.current();
-        if (!viewport) return;
+        const strokeView = strokeViewRef.current;
+        if (!strokeView) return;
         event.preventDefault();
         const live = liveRef.current;
         if (!live) return;
@@ -535,7 +585,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             sample.clientX,
             sample.clientY,
             rect,
-            viewport,
+            strokeView,
             sample.pressure,
           );
           if (pressureSensitive) {
@@ -566,6 +616,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const end = (event: PointerEvent) => {
         if (!drawingRef.current) return;
         drawingRef.current = false;
+        strokeViewRef.current = null;
+        strokeBoxRef.current = null;
         try {
           canvas.releasePointerCapture(event.pointerId);
         } catch {
@@ -585,9 +637,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         canvas.removeEventListener("pointerup", end, true);
         canvas.removeEventListener("pointercancel", end, true);
       };
-      // Intentionally omit paint/callback deps — read via refs so a Board
-      // re-render (chrome dismiss) never tears down capture mid-stroke.
-    }, [enabled, tool]);
+      // Tool is read via toolRef — never rebind listeners when pen↔eraser flips.
+      // Paint callbacks stay on refs so a Board re-render never drops capture.
+    }, [alignToExcalidraw, enabled]);
 
     if (!enabled) return null;
 

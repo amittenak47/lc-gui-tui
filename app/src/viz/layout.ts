@@ -37,11 +37,13 @@ export function slotId(ctx: RenderContext, slot: string): string {
 }
 
 /**
- * A boxed cell with its value as a separate centred text element.
+ * A boxed cell with its value as a bound label centred in the rectangle.
  *
- * Bound labels (`label: { text }` on a rectangle) drift after
- * `convertToExcalidrawElements` regenerates ids — values floated beside empty
- * boxes. Explicit text with `textAlign`/`verticalAlign` stays inside the cell.
+ * Separate text siblings were supposed to sit in the box via
+ * `textAlign`/`verticalAlign`/`autoResize:false`, but Excalidraw's convert
+ * path still anchors them top-left and clips long values. Bound labels use
+ * the container's box; with `regenerateIds: false` on viz convert the ids
+ * stay stable across frames (the reason labels were abandoned earlier).
  */
 export function cellBox(
   ctx: RenderContext,
@@ -52,7 +54,8 @@ export function cellBox(
   options: { highlighted?: boolean; width?: number; height?: number } = {},
 ): Skeleton[] {
   const highlighted = options.highlighted ?? false;
-  const width = options.width ?? CELL;
+  // Long values (e.g. 1800) need a wider box than the default digit cell.
+  const width = options.width ?? Math.max(CELL, text.length * 12 + 20);
   const height = options.height ?? CELL;
   const ink = highlighted ? COACH_ACCENT : "#1e1e1e";
   return [
@@ -68,20 +71,13 @@ export function cellBox(
       fillStyle: "solid",
       strokeWidth: highlighted ? 2 : 1,
       roughness: 0,
-    },
-    {
-      id: slotId(ctx, `${slot}-val`),
-      type: "text",
-      x,
-      y,
-      width,
-      height,
-      text,
-      fontSize: 16,
-      fontFamily: FONT_CODE,
-      strokeColor: ink,
-      textAlign: "center",
-      verticalAlign: "middle",
+      label: {
+        text,
+        fontSize: 16,
+        strokeColor: ink,
+        textAlign: "center",
+        verticalAlign: "middle",
+      },
     },
   ];
 }

@@ -8,10 +8,12 @@
  * a resting palm, and this is the fix for that, not a smaller version of it.
  *
  * The arc leans away from the writing hand so the fan opens into empty board
- * instead of under the wrist.
+ * instead of under the wrist. The fan itself is portaled with `position: fixed`
+ * so the toolbar row's horizontal scroller cannot clip it.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type { InkHandedness } from "../util/inkHandedness";
 
@@ -64,6 +66,7 @@ export function ColorRadial({
 }: ColorRadialProps) {
   const [open, setOpen] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const holdTimerRef = useRef<number | null>(null);
   /** Set while a press is still down, so pointerup can pick what it landed on. */
@@ -87,12 +90,38 @@ export function ColorRadial({
 
   useEffect(() => clearHold, [clearHold]);
 
+  // Pin the fan to the live centre of the colour dot so it sits above the
+  // toolbar island even when the row scrolls or the window resizes.
+  useLayoutEffect(() => {
+    if (!open) {
+      setAnchor(null);
+      return;
+    }
+    const sync = () => {
+      const node = rootRef.current;
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      setAnchor({
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      });
+    };
+    sync();
+    window.addEventListener("resize", sync);
+    window.addEventListener("scroll", sync, true);
+    return () => {
+      window.removeEventListener("resize", sync);
+      window.removeEventListener("scroll", sync, true);
+    };
+  }, [open]);
+
   // Any press outside the fan closes it, as does Escape.
   useEffect(() => {
     if (!open) return;
     const onDown = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && rootRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest(".lc-color-fan")) return;
       close();
     };
     const onKey = (event: KeyboardEvent) => {
@@ -157,6 +186,46 @@ export function ColorRadial({
     };
   }, [open, seatAt, onPick, close]);
 
+  const fan =
+    open &&
+    anchor &&
+    createPortal(
+      <div
+        className="lc-color-fan"
+        role="menu"
+        aria-label="Ink colour"
+        style={{ left: anchor.x, top: anchor.y }}
+      >
+        {layout.map((seat) => {
+          const state =
+            seat.color === hovered
+              ? " is-hovered"
+              : seat.color === value
+                ? " is-current"
+                : "";
+          return (
+            <button
+              key={seat.color}
+              type="button"
+              role="menuitem"
+              className={`lc-color-seat${state}`}
+              style={{
+                background: seat.color,
+                transform: `translate(${seat.x}px, ${seat.y}px)`,
+              }}
+              aria-label={`Ink ${seat.color}`}
+              aria-pressed={seat.color === value}
+              onClick={() => {
+                onPick(seat.color);
+                close();
+              }}
+            />
+          );
+        })}
+      </div>,
+      document.body,
+    );
+
   return (
     <div
       ref={rootRef}
@@ -192,37 +261,7 @@ export function ColorRadial({
       >
         <span className="lc-color-dot-fill" style={{ background: value }} aria-hidden />
       </button>
-
-      {open && (
-        <div className="lc-color-fan" role="menu" aria-label="Ink colour">
-          {layout.map((seat) => {
-            const state =
-              seat.color === hovered
-                ? " is-hovered"
-                : seat.color === value
-                  ? " is-current"
-                  : "";
-            return (
-              <button
-                key={seat.color}
-                type="button"
-                role="menuitem"
-                className={`lc-color-seat${state}`}
-                style={{
-                  background: seat.color,
-                  transform: `translate(${seat.x}px, ${seat.y}px)`,
-                }}
-                aria-label={`Ink ${seat.color}`}
-                aria-pressed={seat.color === value}
-                onClick={() => {
-                  onPick(seat.color);
-                  close();
-                }}
-              />
-            );
-          })}
-        </div>
-      )}
+      {fan}
     </div>
   );
 }

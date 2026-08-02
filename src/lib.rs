@@ -25,6 +25,7 @@ pub mod design;
 pub mod gate;
 pub mod llm;
 pub mod practice;
+pub mod scratchpad;
 pub mod serve;
 pub mod tui;
 pub mod workspace;

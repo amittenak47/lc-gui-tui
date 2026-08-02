@@ -12,8 +12,8 @@ impl VizTool for AnimateTrace {
         tool_schema(
             self.name(),
             "Draw one structure stepped through time. Emit the full state in every frame; the \
-             student scrubs the timeline. Use this instead of drawing the same array several \
-             times.",
+             student scrubs the timeline. Prefer many short frames (digit-by-digit, index-by-index) \
+             over a few coarse ones. Use this instead of drawing the same array several times.",
             serde_json::json!({
                 "type": "object",
                 "properties": {

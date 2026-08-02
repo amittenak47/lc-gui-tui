@@ -8,9 +8,9 @@
 
 import { useEffect, useRef } from "react";
 
-const DOODLE_TTL_MS = 8_000;
+const DOODLE_TTL_MS = 6_666;
 /** How long the tail-to-head erase takes after TTL. */
-const ERASE_MS = 900;
+const ERASE_MS = 666;
 
 interface Point {
   x: number;

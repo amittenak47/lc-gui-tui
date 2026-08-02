@@ -186,7 +186,9 @@ impl Dataset {
 pub fn split_key(key: &str) -> (&str, &str) {
     match key.split_once('/') {
         Some((dataset, task_id))
-            if DATASETS.iter().any(|d| d.id == dataset) && !task_id.is_empty() =>
+            if (DATASETS.iter().any(|d| d.id == dataset)
+                || dataset == crate::scratchpad::DATASET_ID)
+                && !task_id.is_empty() =>
         {
             (dataset, task_id)
         }
