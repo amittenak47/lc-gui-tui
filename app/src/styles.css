@@ -2233,6 +2233,55 @@ input[type="checkbox"] {
   cursor: default;
 }
 
+/* What the coach did on the way to an answer. Quiet by default — it is
+   context for the answer, not the answer. */
+.lc-coach-process {
+  margin-bottom: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.lc-coach-process-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--muted-ink, inherit);
+  opacity: 0.85;
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: left;
+  font: inherit;
+  min-width: 0;
+}
+
+.lc-coach-process-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.lc-coach-process-steps {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  list-style: none;
+  border-left: 1px solid var(--chrome-edge);
+}
+
+.lc-coach-process-step {
+  padding: 1px 0;
+  opacity: 0.8;
+}
+
+.lc-coach-process-step-rejected {
+  opacity: 1;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
 .lc-coach-drawing {
   margin-top: 8px;
   border-top: 1px solid var(--chrome-edge);

@@ -239,6 +239,131 @@ describe("AmbientCoach", () => {
     vi.useRealTimers();
   });
 
+  it("routes frames by request id so a nudge cannot land on a run", async () => {
+    const socket = fakeSocket();
+    const ambient: ServerFrame[] = [];
+    const process: string[] = [];
+    const coach = new AmbientCoach(
+      pairing,
+      { onFrame: (frame) => ambient.push(frame) },
+      () => socket,
+      "s1",
+    );
+    coach.connect("two-sum");
+    socket.onopen?.({});
+
+    const answered = coach.run<{ verdict: string }>(
+      "review",
+      { task_id: "two-sum", recognized_text: "two pointers" },
+      { onProcess: (event) => process.push(`${event.kind}:${event.label}`) },
+    );
+    const sent = JSON.parse(socket.sent[1]);
+    expect(sent).toMatchObject({
+      type: "run",
+      action: "review",
+      payload: { task_id: "two-sum", recognized_text: "two pointers" },
+    });
+    const requestId = sent.request_id as string;
+    expect(coach.busy).toBe(true);
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "stage",
+        request_id: requestId,
+        stage: "claim",
+        detail: "naming the approach",
+      }),
+    });
+    // An ambient nudge arriving mid-run belongs to the ambient handler alone.
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "thinking" }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "tool_event",
+        request_id: requestId,
+        name: "draw_structure",
+        status: "rejected",
+        summary: "array",
+        reason: "no frames",
+      }),
+    });
+    // A stage for a request nobody is waiting on is dropped, not misfiled.
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "stage", request_id: "someone-else", stage: "code", detail: "" }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "result",
+        request_id: requestId,
+        action: "review",
+        body: { verdict: "on_track" },
+      }),
+    });
+
+    await expect(answered).resolves.toEqual({ verdict: "on_track" });
+    expect(process).toEqual(["stage:claim", "tool:draw_structure"]);
+    expect(ambient.map((frame) => frame.type)).toEqual(["thinking"]);
+    expect(coach.busy).toBe(false);
+    coach.stop();
+  });
+
+  it("rejects a run on an error that names it, and leaves ambient errors alone", async () => {
+    const socket = fakeSocket();
+    const ambient: ServerFrame[] = [];
+    const coach = new AmbientCoach(
+      pairing,
+      { onFrame: (frame) => ambient.push(frame) },
+      () => socket,
+      "s1",
+    );
+    coach.connect("two-sum");
+    socket.onopen?.({});
+
+    const answered = coach.run("ask", { task_id: "two-sum", question: "why?" });
+    const requestId = JSON.parse(socket.sent[1]).request_id as string;
+
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "error", message: "the ambient model is down" }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "error", request_id: requestId, message: "busy" }),
+    });
+
+    await expect(answered).rejects.toThrow("busy");
+    expect(ambient).toEqual([{ type: "error", message: "the ambient model is down" }]);
+    coach.stop();
+  });
+
+  it("queues a run sent before the handshake instead of dropping it", () => {
+    const socket = fakeSocket();
+    const coach = new AmbientCoach(pairing, { onFrame: () => {} }, () => socket, "s1");
+    coach.connect("two-sum");
+
+    void coach.run("ask", { task_id: "two-sum", question: "why?" }).catch(() => {});
+    expect(socket.sent).toHaveLength(0);
+
+    socket.onopen?.({});
+    // Hello first, then the queued run — the daemon needs the session named.
+    expect(JSON.parse(socket.sent[0]).type).toBe("hello");
+    expect(JSON.parse(socket.sent[1])).toMatchObject({ type: "run", action: "ask" });
+    coach.stop();
+  });
+
+  it("cancels an in-flight run when the socket is torn down", async () => {
+    const socket = fakeSocket();
+    const coach = new AmbientCoach(pairing, { onFrame: () => {} }, () => socket, "s1");
+    coach.connect("two-sum");
+    socket.onopen?.({});
+
+    const answered = coach.run("review", { task_id: "two-sum" });
+    const requestId = JSON.parse(socket.sent[1]).request_id as string;
+    coach.stop();
+
+    expect(JSON.parse(socket.sent[2])).toEqual({ type: "cancel", request_id: requestId });
+    await expect(answered).rejects.toThrow("stopped before it answered");
+  });
+
   it("resets the ladder and re-analyses the same board afterwards", async () => {
     vi.useFakeTimers();
     const socket = fakeSocket();

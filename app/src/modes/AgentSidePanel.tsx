@@ -9,7 +9,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent, type ReactNode } from "react";
 
-import type { BridgeResponse, ReviewResponse } from "../api/types";
+import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
+import { STAGE_LABELS } from "../api/types";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS } from "../util/gesture";
 import { useIsMobile } from "../util/mobile";
@@ -129,6 +130,15 @@ export interface CoachChatMessage {
   attachments?: CoachAttachment[];
   /** Coach diagram — expand/collapse controls board visibility. */
   drawing?: MessageDrawing;
+  /**
+   * What the coach did on the way to this answer, in order, as the daemon
+   * reported it. Kept on the turn rather than in a global status line so it
+   * survives scrollback: "which stage found the counterexample?" is a question
+   * about a specific answer, asked after the fact.
+   */
+  processEvents?: CoachProcessEvent[];
+  /** The request is still in flight — this turn is a placeholder. */
+  pending?: boolean;
 }
 
 export interface AgentSidePanelProps {
@@ -538,9 +548,18 @@ export function AgentSidePanel({
               >
                 {ROLE_LABEL[message.role]}
               </div>
+              {message.processEvents && message.processEvents.length > 0 && (
+                <ProcessBlock events={message.processEvents} running={Boolean(message.pending)} />
+              )}
               {message.content ? (
                 <div className="lc-coach-turn-body">{message.content}</div>
               ) : null}
+              {message.pending && !message.processEvents?.length && (
+                <div className="lc-coach-turn-body">
+                  <span className="lc-coach-spinner" aria-hidden />
+                  Working…
+                </div>
+              )}
               {message.attachments && message.attachments.length > 0 && (
                 <div className="lc-coach-attachments" aria-label="Attached layouts">
                   {message.attachments.map((att) => (
@@ -605,7 +624,7 @@ export function AgentSidePanel({
             </div>
           ))}
           {children}
-          {thinking && (
+          {thinking && !messages.some((message) => message.pending) && (
             <div className="lc-coach-turn lc-coach-turn-assistant lc-coach-thinking" role="status">
               <div className="lc-coach-turn-role">Coach</div>
               <div className="lc-coach-turn-body">
@@ -823,6 +842,76 @@ export function AgentSidePanel({
       )}
     </aside>
   );
+}
+
+/**
+ * What the coach did, one line per stage or tool call.
+ *
+ * Collapsed once the answer lands: the answer is what the student came for,
+ * and a finished process log they did not ask to see is noise. While the run
+ * is working it stays open, because then it *is* the content.
+ */
+function ProcessBlock({
+  events,
+  running,
+}: {
+  events: CoachProcessEvent[];
+  running: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const expanded = running || open;
+  // "done" closes the block rather than adding a line to it.
+  const shown = events.filter((event) => event.label !== "done");
+  const latest = shown[shown.length - 1];
+  if (shown.length === 0) return null;
+
+  return (
+    <div className={running ? "lc-coach-process lc-coach-process-running" : "lc-coach-process"}>
+      <button
+        type="button"
+        className="lc-coach-process-toggle"
+        aria-expanded={expanded}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {running && <span className="lc-coach-spinner" aria-hidden />}
+        <span aria-hidden>{expanded ? "▾" : "▸"}</span>
+        <span className="lc-coach-process-label">
+          {running ? processLine(latest) : `${shown.length} step${shown.length === 1 ? "" : "s"}`}
+        </span>
+      </button>
+      {expanded && (
+        <ol className="lc-coach-process-steps">
+          {shown.map((event, index) => (
+            <li
+              key={`${event.ts}-${index}`}
+              className={
+                event.status === "rejected"
+                  ? "lc-coach-process-step lc-coach-process-step-rejected"
+                  : "lc-coach-process-step"
+              }
+            >
+              {processLine(event)}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/** One process line. Unknown stage names fall back to the daemon's own text. */
+function processLine(event: CoachProcessEvent | undefined): string {
+  if (!event) return "Working…";
+  if (event.kind === "tool") {
+    const verb =
+      event.status === "rejected"
+        ? "dropped"
+        : event.status === "accepted"
+          ? "drew"
+          : "asked for";
+    return [`${verb} ${event.label}`, event.detail].filter(Boolean).join(" — ");
+  }
+  return STAGE_LABELS[event.label] ?? event.detail ?? event.label;
 }
 
 function DrawingSection({
