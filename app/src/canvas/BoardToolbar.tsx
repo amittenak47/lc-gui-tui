@@ -129,15 +129,21 @@ export function BoardToolbar({
   const [helpOpen, setHelpOpen] = useState(false);
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
 
+  // Read through a ref so an inline callback cannot rebuild the observer on
+  // every render.
+  const onHeightChangeRef = useRef(onHeightChange);
+  onHeightChangeRef.current = onHeightChange;
+
   useEffect(() => {
     const node = toolbarRootRef.current;
-    if (!node || !onHeightChange) return;
-    const publish = () => onHeightChange(Math.ceil(node.getBoundingClientRect().height));
+    if (!node) return;
+    const publish = () =>
+      onHeightChangeRef.current?.(Math.ceil(node.getBoundingClientRect().height));
     publish();
     const observer = new ResizeObserver(publish);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [onHeightChange]);
+  }, []);
 
   useEffect(() => {
     if (!shapesOpen) {

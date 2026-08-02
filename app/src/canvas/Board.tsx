@@ -817,9 +817,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** True while fitCamera is applying zoom/scroll (not user input). */
   const fittingCameraRef = useRef(false);
   /** Measured toolbar height so fitView lands the template under it. */
-  const [toolbarHeight, setToolbarHeight] = useState(36);
-  const toolbarHeightRef = useRef(toolbarHeight);
-  toolbarHeightRef.current = toolbarHeight;
+  /**
+   * Height of the floating tool island, for the page inset.
+   *
+   * Deliberately a ref and not state: the island changes height when the active
+   * tool shows or hides its size wheel, and routing that through React used to
+   * re-render the board and fire a refit, which threw away whatever zoom the
+   * user had set. Picking up the pen is not a request to reframe the page.
+   */
+  const toolbarHeightRef = useRef(36);
   const clampingScrollRef = useRef(false);
   const [readingSizeLocal, setReadingSizeLocal] = useState<BoardReadingSize>(() => loadBoardReadingSize());
   const readingSize = readingSizeProp ?? readingSizeLocal;
@@ -2163,13 +2169,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     reportTitleSlot();
   }, [mobileRegion, interactive, reportTitleSlot]);
 
-  /** Keep the template tucked under the toolbar when its strip grows or folds. */
-  useEffect(() => {
-    if (!interactive || mobileRegionRef.current === null) return;
-    const handle = window.setTimeout(() => refitToViewport(), 80);
-    return () => window.clearTimeout(handle);
-  }, [toolbarHeight, interactive, refitToViewport]);
-
   /** Page-locked boards: grow the frame and refit width on every board resize. */
   useEffect(() => {
     if (!interactive) return;
@@ -2178,6 +2177,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     let timer: number | null = null;
     const run = () => {
       if (mobileRegionRef.current === null) return;
+      // Once the user has zoomed or panned, the camera is theirs: resize the
+      // page frame to the new viewport, but leave zoom and scroll alone.
+      if (userAdjustedCameraRef.current) {
+        fitFrame();
+        return;
+      }
       refitToViewport();
     };
     const observer = new ResizeObserver(() => {
@@ -2195,7 +2200,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.removeEventListener("resize", onWindowResize);
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [interactive, refitToViewport]);
+  }, [interactive, fitFrame, refitToViewport]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
@@ -3271,7 +3276,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 onUndo={undoBoard}
                 onRedo={redoBoard}
                 mobile={mobile}
-                onHeightChange={setToolbarHeight}
+                onHeightChange={(height) => {
+                  toolbarHeightRef.current = height;
+                }}
               />
               </div>
             )}
