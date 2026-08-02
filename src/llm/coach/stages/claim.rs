@@ -32,6 +32,16 @@ pub struct Claim {
     /// the Socratic question on the on-track path, so that path needs no second
     /// call to ask something specific.
     pub confirming_question: String,
+    /// The planner catalog entry this claim matches, when the model recognized
+    /// one. Absent is the normal case and carries no judgement: a student may
+    /// invent an approach nobody catalogued.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_approach_id: Option<String>,
+    /// Other approaches the board could equally be arguing for. Offered to the
+    /// student as choices when the claim does not decide the answer — never
+    /// used to pick one for them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatible_alternatives: Vec<String>,
 }
 
 impl Claim {
@@ -53,6 +63,12 @@ impl Claim {
         self.confirming_question = clip(self.confirming_question.trim(), MAX_CLAIM_FIELD);
         tidy_list(&mut self.key_steps);
         tidy_list(&mut self.unresolved);
+        tidy_list(&mut self.compatible_alternatives);
+        self.matched_approach_id = self
+            .matched_approach_id
+            .take()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
         if self.claim_sufficient {
             self.unresolved.clear();
         }
@@ -106,4 +122,30 @@ pub fn write_claim(out: &mut String, claim: &Claim) {
             let _ = writeln!(out, "  - {item}");
         }
     }
+}
+
+/// The session's committed approach, for the stages that come after the claim.
+///
+/// The instruction matters more than the text: several approaches solve most of
+/// these problems, and a model handed a list of them will drift toward whichever
+/// it likes best. It is being told to coach *this* one — not to pick.
+pub fn write_committed_approach(out: &mut String, committed: &super::super::CommittedApproach) {
+    let _ = writeln!(
+        out,
+        "\n## The approach this session is coaching (committed — work inside it)"
+    );
+    let _ = writeln!(out, "\n- approach: {}", committed.name);
+    if !committed.key_steps.is_empty() {
+        let _ = writeln!(out, "- its steps, as the student has them:");
+        for (i, step) in committed.key_steps.iter().enumerate() {
+            let _ = writeln!(out, "  {}. {step}", i + 1);
+        }
+    }
+    let _ = writeln!(
+        out,
+        "\nOther approaches may also solve this problem. Do not propose one, and do not \
+         re-describe the student's work as a different approach. If this approach cannot be \
+         made to work, say exactly which step fails and why — the decision to change approach \
+         is the student's, not yours."
+    );
 }

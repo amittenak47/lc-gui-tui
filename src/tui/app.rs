@@ -719,11 +719,12 @@ impl App {
         board: &BoardSnapshot,
         ask: &str,
     ) -> Result<Option<AsciiAnimProgram>> {
-        use crate::llm::coach::{build_viz_prompt, VIZ_SYSTEM_PROMPT};
+        use crate::llm::coach::{build_viz_prompt, CoachContext, VIZ_SYSTEM_PROMPT};
         use crate::llm::tools::{viz_tools};
         use crate::llm::{ChatMessage, ChatRequest};
 
-        let prompt = build_viz_prompt(meta, description, board, ask);
+        // The terminal coach has no board session to commit an approach in.
+        let prompt = build_viz_prompt(meta, description, board, ask, &CoachContext::default());
         let provider = make_provider_for_mode(&self.cfg, "viz")?;
         let messages = vec![
             ChatMessage::system(VIZ_SYSTEM_PROMPT),

@@ -14,6 +14,7 @@ use anyhow::Result;
 use crate::generator::WorkspaceMeta;
 use crate::llm::{ChatMessage, ChatRequest, LlmProvider};
 
+use super::approach::CoachContext;
 use super::board::BoardSnapshot;
 use super::events::EventSink;
 use super::modes::review::{merge_layout_and_code_reviews, parse_review, ReviewResponse};
@@ -112,6 +113,7 @@ pub fn review_submission(
         description,
         board,
         include_code,
+        &CoachContext::default(),
         &EventSink::none(),
     )
 }
@@ -127,6 +129,7 @@ pub fn review_submission_with_events(
     description: Option<&str>,
     board: &BoardSnapshot,
     include_code: bool,
+    ctx: &CoachContext,
     events: &EventSink,
 ) -> Result<ReviewOutcome> {
     let has_layout =
@@ -138,7 +141,7 @@ pub fn review_submission_with_events(
             .is_some_and(|p| p.trim().len() > 8);
 
     let staged = if has_layout {
-        staged_board_review_with_events(provider, meta, description, board, events).ok()
+        staged_board_review_with_events(provider, meta, description, board, ctx, events).ok()
     } else {
         None
     };
@@ -151,7 +154,7 @@ pub fn review_submission_with_events(
                 }
                 events.stage("code", "checking solution.py against that claim");
                 let code_prompt =
-                    build_claim_code_review_prompt(meta, description, board, &claim);
+                    build_claim_code_review_prompt(meta, description, board, &claim, ctx);
                 let code_reply = provider.chat_ex(
                     &ChatRequest::new(vec![
                         ChatMessage::system(CLAIM_CODE_SYSTEM_PROMPT),
@@ -202,7 +205,14 @@ pub fn staged_board_review(
     description: Option<&str>,
     board: &BoardSnapshot,
 ) -> Result<(Claim, ReviewResponse)> {
-    staged_board_review_with_events(provider, meta, description, board, &EventSink::none())
+    staged_board_review_with_events(
+        provider,
+        meta,
+        description,
+        board,
+        &CoachContext::default(),
+        &EventSink::none(),
+    )
 }
 
 /// [`staged_board_review`] with stage reporting.
@@ -211,9 +221,11 @@ pub fn staged_board_review_with_events(
     meta: &WorkspaceMeta,
     description: Option<&str>,
     board: &BoardSnapshot,
+    ctx: &CoachContext,
     events: &EventSink,
 ) -> Result<(Claim, ReviewResponse)> {
-    let (claim, _) = perceive_and_claim_with_events(provider, meta, description, board, events)?;
+    let (claim, _) =
+        perceive_and_claim_with_events(provider, meta, description, board, ctx, events)?;
 
     if claim.decides_the_answer() {
         // The gate the whole pipeline turns on: a claim that decides the answer
@@ -226,7 +238,7 @@ pub fn staged_board_review_with_events(
         return Err(err);
     }
     events.stage("verdict", "judging that claim against the sample cases");
-    let prompt = build_verdict_prompt(meta, description, board, &claim);
+    let prompt = build_verdict_prompt(meta, description, board, &claim, ctx);
     let reply = provider.chat_ex(
         &ChatRequest::new(vec![
             ChatMessage::system(VERDICT_SYSTEM_PROMPT),
@@ -247,7 +259,14 @@ pub fn perceive_and_claim(
     description: Option<&str>,
     board: &BoardSnapshot,
 ) -> Result<(Claim, Option<Perception>)> {
-    perceive_and_claim_with_events(provider, meta, description, board, &EventSink::none())
+    perceive_and_claim_with_events(
+        provider,
+        meta,
+        description,
+        board,
+        &CoachContext::default(),
+        &EventSink::none(),
+    )
 }
 
 /// [`perceive_and_claim`] with stage reporting.
@@ -256,6 +275,7 @@ pub fn perceive_and_claim_with_events(
     meta: &WorkspaceMeta,
     description: Option<&str>,
     board: &BoardSnapshot,
+    ctx: &CoachContext,
     events: &EventSink,
 ) -> Result<(Claim, Option<Perception>)> {
     let perception = if board.png.is_some() {
@@ -280,7 +300,7 @@ pub fn perceive_and_claim_with_events(
         return Err(err);
     }
     events.stage("claim", "naming the approach your board argues for");
-    let prompt = build_claim_prompt(meta, description, board, perception.as_ref());
+    let prompt = build_claim_prompt(meta, description, board, perception.as_ref(), ctx);
     let mut message = ChatMessage::user(prompt);
     if perception.is_none() {
         message = message.with_images(board.images());

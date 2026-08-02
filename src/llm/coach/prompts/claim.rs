@@ -4,6 +4,7 @@ use crate::generator::WorkspaceMeta;
 use crate::llm::helpers::{write_cases, write_problem_header};
 
 use super::super::board::BoardSnapshot;
+use super::super::approach::CoachContext;
 use super::super::stages::claim::board_without_code;
 use super::super::stages::perceive::{write_perception, Perception};
 
@@ -15,6 +16,7 @@ pub fn build_claim_prompt(
     description: Option<&str>,
     board: &BoardSnapshot,
     perception: Option<&Perception>,
+    ctx: &CoachContext,
 ) -> String {
     let mut out = String::new();
     write_problem_header(&mut out, meta, description);
@@ -34,9 +36,13 @@ pub fn build_claim_prompt(
 claim leaves undecided\",\n  \
            \"unresolved\": [\"parts of the problem the board has not decided — empty when \
 claim_sufficient is true\"],\n  \
-           \"confirming_question\": \"one question that would confirm or stress-test this claim\"\n\
+           \"confirming_question\": \"one question that would confirm or stress-test this claim\",\n  \
+           \"compatible_alternatives\": [\"other approaches this same board could be arguing for \
+— list them only when the board genuinely has not settled it, never to \
+second-guess a clear board\"]\n\
          }}\n\
          ```"
     );
+    let _ = ctx;
     out
 }

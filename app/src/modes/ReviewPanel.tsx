@@ -115,10 +115,50 @@ export function ReviewPanel({
         <p className="lc-warning">{review.counterexample_rejected}</p>
       )}
 
+      {review.approach_transition && (
+        // The board changed enough that the coach is now reading it as a
+        // different approach. Saying so is the point: an unannounced switch is
+        // indistinguishable from the coach contradicting itself.
+        <div className="lc-review-transition">
+          <h3>Switching approach</h3>
+          <p>
+            From <strong>{review.approach_transition.from}</strong> to{" "}
+            <strong>{review.approach_transition.to}</strong> — {review.approach_transition.reason}
+          </p>
+          {review.approach_transition.what_carries_over &&
+            review.approach_transition.what_carries_over.length > 0 && (
+              <>
+                <p className="lc-muted">What carries over:</p>
+                <ul>
+                  {review.approach_transition.what_carries_over.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+        </div>
+      )}
+
       {review.socratic_question && (
         <div className="lc-review-action">
           <h3>Try this</h3>
           <p>{review.socratic_question}</p>
+        </div>
+      )}
+
+      {review.candidate_approaches && review.candidate_approaches.length > 0 && (
+        // Choices, not a decision. Sending one back as chat is what picks it —
+        // there is deliberately no button that commits on the student's behalf.
+        <div className="lc-review-candidates">
+          <h3>Or say which of these you meant</h3>
+          <ul>
+            {review.candidate_approaches.map((candidate) => (
+              <li key={candidate.id || candidate.name}>
+                <strong>{candidate.name}</strong>
+                {candidate.when_to_use ? ` — ${candidate.when_to_use}` : ""}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
