@@ -27,7 +27,17 @@ const TABS: { id: TabId; label: string }[] = [
 ];
 
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
-const MODES = ["ambient", "review", "bridge", "viz"] as const;
+const MODES = ["ambient", "review", "bridge", "viz", "planner"] as const;
+
+/** What each coach mode is for, shown under its provider picker. */
+const MODE_HINTS: Record<(typeof MODES)[number], string> = {
+  ambient: "Every-2m glance at the board.",
+  review: "The staged review, and Ask.",
+  bridge: "The stepwise path shown after an explicit reveal.",
+  viz: "Tool calls for diagrams and animations.",
+  planner:
+    "One call per problem that catalogs the approaches it admits. Point this at a frontier model to guide the local coach — it never sees or writes a solution.",
+};
 
 function llmServerHint(provider: "local" | "ollama" | "openai" | "groq"): string {
   switch (provider) {
@@ -57,7 +67,13 @@ function emptyConfig(): LcConfig {
     ollama: emptyProvider(),
     openai: emptyProvider(),
     groq: emptyProvider(),
-    modes: { ambient: "local", review: "local", bridge: "local", viz: "local" },
+    modes: {
+      ambient: "local",
+      review: "local",
+      bridge: "local",
+      viz: "local",
+      planner: "local",
+    },
     serve_port: 7878,
     token_set: false,
   };
@@ -675,6 +691,7 @@ export function SettingsModal({
                       </option>
                     ))}
                   </select>
+                  <p className="lc-settings-hint">{MODE_HINTS[mode]}</p>
                 </label>
               ))}
 

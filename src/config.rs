@@ -144,6 +144,10 @@ pub struct LlmModes {
     pub bridge: String,
     /// Tool-calling for diagrams and animations.
     pub viz: String,
+    /// One structured call per problem that catalogs the approaches it admits.
+    /// Point this at a frontier model to have it guide the local executor;
+    /// leaving it `local` is fine and still gated by `coach.planner_enabled`.
+    pub planner: String,
 }
 
 impl Default for LlmModes {
@@ -153,11 +157,12 @@ impl Default for LlmModes {
             review: "local".into(),
             bridge: "local".into(),
             viz: "local".into(),
+            planner: "local".into(),
         }
     }
 }
 
-pub const COACH_MODES: [&str; 4] = ["ambient", "review", "bridge", "viz"];
+pub const COACH_MODES: [&str; 5] = ["ambient", "review", "bridge", "viz", "planner"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModeCapability {
@@ -174,6 +179,7 @@ impl LlmModes {
             "review" => &self.review,
             "bridge" => &self.bridge,
             "viz" => &self.viz,
+            "planner" => &self.planner,
             other => bail!(
                 "unknown coach mode {other:?} — expected one of {}",
                 COACH_MODES.join(", ")
@@ -205,6 +211,7 @@ impl LlmModes {
             "review" => self.review = provider.to_string(),
             "bridge" => self.bridge = provider.to_string(),
             "viz" => self.viz = provider.to_string(),
+            "planner" => self.planner = provider.to_string(),
             other => bail!(
                 "unknown coach mode {other:?} — expected one of {}",
                 COACH_MODES.join(", ")

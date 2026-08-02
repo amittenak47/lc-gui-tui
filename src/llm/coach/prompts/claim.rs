@@ -5,6 +5,7 @@ use crate::llm::helpers::{write_cases, write_problem_header};
 
 use super::super::board::BoardSnapshot;
 use super::super::approach::CoachContext;
+use super::super::planner::write_catalog;
 use super::super::stages::claim::board_without_code;
 use super::super::stages::perceive::{write_perception, Perception};
 
@@ -23,6 +24,7 @@ pub fn build_claim_prompt(
     write_cases(&mut out, &meta.cases);
     board_without_code(board).write_into(&mut out);
     write_perception(&mut out, perception);
+    write_catalog(&mut out, &ctx.catalog);
     let _ = writeln!(
         out,
         "\n## Your reply\n\n\
@@ -37,12 +39,13 @@ claim leaves undecided\",\n  \
            \"unresolved\": [\"parts of the problem the board has not decided — empty when \
 claim_sufficient is true\"],\n  \
            \"confirming_question\": \"one question that would confirm or stress-test this claim\",\n  \
+           \"matched_approach_id\": \"the id of the family above their board matches, or null \
+if it matches none — matching none is fine and common\",\n  \
            \"compatible_alternatives\": [\"other approaches this same board could be arguing for \
 — list them only when the board genuinely has not settled it, never to \
 second-guess a clear board\"]\n\
          }}\n\
          ```"
     );
-    let _ = ctx;
     out
 }

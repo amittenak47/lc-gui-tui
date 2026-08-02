@@ -69,13 +69,25 @@ pub async fn run_viz(
 ) -> Result<VizEnvelope, AppError> {
     let dataset = resolve_dataset(request.dataset.as_deref())?;
     let cfg = state.cfg_snapshot();
+    let board_key = dataset.key(&request.task_id);
+    // Draw is often the first thing asked on a fresh problem, so the planner
+    // runs here too — and skips itself when a review already ran it.
+    super::coach::ensure_catalog(state, dataset, &request.task_id, &board_key, &events).await;
     // A diagram is coaching too: it is drawn for the approach the session
-    // committed to, not for whichever one the drawing model prefers.
-    let ctx = if cfg.coach.approach_commitment {
+    // committed to, not for whichever one the drawing model prefers. The
+    // planner's viz plan rides along on the same context.
+    let ctx = {
         let mut store = state.board_sessions.lock().await;
-        store.entry(&dataset.key(&request.task_id)).coach_context()
-    } else {
-        CoachContext::default()
+        let session = store.entry(&board_key);
+        let full = session.coach_context();
+        if cfg.coach.approach_commitment {
+            full
+        } else {
+            CoachContext {
+                viz_plan: full.viz_plan,
+                ..CoachContext::default()
+            }
+        }
     };
     let envelope = blocking(move || {
         let meta = load_meta(&cfg, dataset, &request.task_id)?;

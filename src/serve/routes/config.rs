@@ -21,6 +21,13 @@ pub struct ModesConfigDto {
     pub review: String,
     pub bridge: String,
     pub viz: String,
+    /// Absent on a client older than the planner; defaults to `local`.
+    #[serde(default = "default_mode")]
+    pub planner: String,
+}
+
+fn default_mode() -> String {
+    "local".to_string()
 }
 
 /// Streaming-coach feature flags. Serialized flat so an older client that does
@@ -95,6 +102,7 @@ fn config_dto(cfg: &Config) -> ConfigDto {
             review: cfg.llm.modes.review.clone(),
             bridge: cfg.llm.modes.bridge.clone(),
             viz: cfg.llm.modes.viz.clone(),
+            planner: cfg.llm.modes.planner.clone(),
         },
         serve_port: cfg.serve.port,
         coach: CoachFlagsDto {
@@ -144,6 +152,7 @@ fn apply_config_dto(cfg: &mut Config, dto: &ConfigDto) -> anyhow::Result<()> {
     cfg.set("llm.modes.review", &dto.modes.review)?;
     cfg.set("llm.modes.bridge", &dto.modes.bridge)?;
     cfg.set("llm.modes.viz", &dto.modes.viz)?;
+    cfg.set("llm.modes.planner", &dto.modes.planner)?;
     cfg.serve.port = dto.serve_port;
     cfg.coach.ws_runs = dto.coach.ws_runs;
     cfg.coach.process_events_ui = dto.coach.process_events_ui;
