@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { studentElements } from "../canvas/capture";
-import { isCoachElement, keepOnClear } from "../canvas/scene";
+import { isCoachElement, isTemplateElement } from "../canvas/scene";
 import { mergeVizElements } from "./apply";
 
 describe("coach overlay ownership", () => {
-  it("keeps highlight overlays on Clear and strips them from capture", () => {
+  it("counts highlight overlays as the coach's, and strips them from capture", () => {
     const highlight = {
       id: "h1",
       type: "rectangle",
@@ -31,9 +31,9 @@ describe("coach overlay ownership", () => {
       customData: { lcRegion: "approach" },
     };
 
-    expect(keepOnClear(highlight)).toBe(true);
-    expect(keepOnClear(student)).toBe(false);
-    expect(keepOnClear(template)).toBe(true);
+    expect(isTemplateElement(highlight)).toBe(false);
+    expect(isTemplateElement(student)).toBe(false);
+    expect(isTemplateElement(template)).toBe(true);
 
     expect(isCoachElement(highlight)).toBe(true);
     expect(studentElements([student, highlight]).map((el) => el.id)).toEqual(["s1"]);

@@ -234,10 +234,7 @@ export function BoardToolbar({
       ref={toolbarRootRef}
       className={[
         "lc-toolbar",
-        "lc-toolbar-float",
         mobile ? "lc-toolbar-compact" : "",
-        shapesOpen ? "lc-toolbar-shapes-open" : "",
-        captureMenuOpen ? "lc-toolbar-capture-open" : "",
       ]
         .filter(Boolean)
         .join(" ")}
