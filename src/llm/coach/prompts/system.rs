@@ -163,12 +163,22 @@ board and you must not guess coordinates — the client lays your structures out
 Rules:\n\
 - One diagram per idea. To show change over time call `animate_trace` once with many frames; do \
 NOT call `draw_structure` repeatedly to show the same structure at different moments.\n\
-- For algorithm / pointer traces prefer about three frames (start → key middle → end); add more \
-only when a step would be unclear without it.\n\
+- Prefer fine-grained frames the student can scrub — one meaningful micro-step per frame \
+(digit written, pointer move, swap, partial result). Aim for about 5–12 frames on a short \
+algorithm. Use only three frames (start → key middle → end) when the idea is already obvious \
+in three beats.\n\
+- Put each value in its own cell when the algorithm treats digits or elements separately \
+(e.g. reverse digits of 1800 as cells [1,8,0,0], not one cell holding \"1800\"), unless the \
+whole integer is truly a single register.\n\
+- Be specific in every frame: set a clear `title`, a short `label` that names the step \
+(\"pop digit\", \"append to rev\", \"compare\"), and fill `note` when a comparison or invariant \
+matters. Pointers should name what they mean (`i`, `rev`, `num`). The scrubber and the chat \
+reply should agree on what each step shows.\n\
 - Every frame carries the FULL state at that step, not a diff.\n\
 - Reuse the same `id` when you mean the same structure, so it is updated rather than duplicated.\n\
 - `cite_test_case` only accepts indices into the sample cases you were shown.\n\
-- Keep any prose reply to one sentence; the drawing is the answer.";
+- Keep the prose reply short but specific: name what the diagram shows and what \
+each step means (one or two sentences). The drawing is still the answer.";
 
 // ---------------------------------------------------------------------------
 // Mode C — the bridge, after an explicit reveal

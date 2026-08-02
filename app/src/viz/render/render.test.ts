@@ -206,23 +206,31 @@ describe("agent-lane slotting", () => {
 });
 
 describe("cellBox value alignment", () => {
-  it("places value text on the same center as the cell box", () => {
+  it("binds the value as a centred label on the cell box", () => {
     const ctx: RenderContext = {
       program: SAMPLES.array,
       frame: SAMPLES.array.frames[0]!,
       frameIndex: 0,
       origin: { x: 0, y: 0 },
     };
-    const [box, value] = cellBox(ctx, "cell-0", 40, 80, "7");
+    const [box] = cellBox(ctx, "cell-0", 40, 80, "7");
     expect(box.type).toBe("rectangle");
-    expect(value.type).toBe("text");
-    expect(value.x).toBe(box.x);
-    expect(value.y).toBe(box.y);
-    expect(value.width).toBe(box.width);
-    expect(value.height).toBe(box.height);
-    expect(value.textAlign).toBe("center");
-    expect(value.verticalAlign).toBe("middle");
-    expect(value.width).toBe(CELL);
+    expect(box.label?.text).toBe("7");
+    expect(box.label?.textAlign).toBe("center");
+    expect(box.label?.verticalAlign).toBe("middle");
+    expect(box.width).toBeGreaterThanOrEqual(CELL);
+  });
+
+  it("widens the cell for multi-digit values so text is not clipped", () => {
+    const ctx: RenderContext = {
+      program: SAMPLES.array,
+      frame: SAMPLES.array.frames[0]!,
+      frameIndex: 0,
+      origin: { x: 0, y: 0 },
+    };
+    const [box] = cellBox(ctx, "cell-0", 40, 80, "1800");
+    expect(box.width).toBeGreaterThan(CELL);
+    expect(box.label?.text).toBe("1800");
   });
 });
 

@@ -33,6 +33,15 @@ pub fn clip(text: &str, max: usize) -> String {
 // ---------------------------------------------------------------------------
 
 pub fn write_problem_header(out: &mut String, meta: &WorkspaceMeta, description: Option<&str>) {
+    if crate::scratchpad::is_meta(meta) {
+        let _ = writeln!(out, "# Scratchpad");
+        if !meta.tags.is_empty() {
+            let _ = writeln!(out, "Tags: {}", meta.tags.join(", "));
+        }
+        let desc = description.unwrap_or(crate::scratchpad::COACH_DESCRIPTION);
+        let _ = writeln!(out, "\n## Context\n\n{}", clip(desc, MAX_DESCRIPTION));
+        return;
+    }
     let _ = writeln!(out, "# Problem: {}", meta.task_id);
     if let Some(q) = &meta.question_id {
         let _ = writeln!(out, "LeetCode question id: {q}");

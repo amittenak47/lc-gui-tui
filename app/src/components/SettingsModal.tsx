@@ -11,6 +11,10 @@ import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { HoldButton } from "./HoldButton";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import {
+  loadAutoSaveCaptures,
+  saveAutoSaveCaptures,
+} from "../util/capturePrefs";
+import {
   loadOfflineMergePolicy,
   saveOfflineMergePolicy,
   type OfflineMergePolicy,
@@ -146,6 +150,7 @@ export function SettingsModal({
     port: number;
   } | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
+  const [autoSaveCaptures, setAutoSaveCaptures] = useState(() => loadAutoSaveCaptures());
   const [offlineMerge, setOfflineMerge] = useState<OfflineMergePolicy>(() =>
     loadOfflineMergePolicy(),
   );
@@ -225,6 +230,7 @@ export function SettingsModal({
     setError(null);
     setBusy("loading…");
     setHandedness(loadInkHandedness());
+    setAutoSaveCaptures(loadAutoSaveCaptures());
     setOfflineMerge(loadOfflineMergePolicy());
     if (initialTab) setTab(initialTab);
     void offlinePackMeta().then((meta) => {
@@ -430,7 +436,7 @@ export function SettingsModal({
             <div className="lc-settings-fields">
               <div className="lc-settings-subhead">Writing hand</div>
               <p className="lc-settings-hint">
-                Places the floating undo / eraser strip under your palm while you write.
+                Tilts the colour picker so swatches sit clear of your writing hand.
                 Saved on this device only — not in <code>config.toml</code>.
               </p>
               <div className="lc-settings-choice" role="radiogroup" aria-label="Writing hand">
@@ -473,6 +479,55 @@ export function SettingsModal({
                 >
                   <strong>Left hand</strong>
                   <span className="lc-muted">Chrome sits below-left of the tip.</span>
+                </button>
+              </div>
+
+              <div className="lc-settings-subhead">Screen captures</div>
+              <p className="lc-settings-hint">
+                When you capture the board (entire or a region), also save a PNG to this device.
+                Uses the share sheet on phones, or a download on desktop. Saved on this device
+                only.
+              </p>
+              <div
+                className="lc-settings-choice"
+                role="radiogroup"
+                aria-label="Auto-save screen captures"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={autoSaveCaptures}
+                  className={
+                    autoSaveCaptures
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => {
+                    setAutoSaveCaptures(true);
+                    saveAutoSaveCaptures(true);
+                  }}
+                >
+                  <strong>Auto-save captures</strong>
+                  <span className="lc-muted">
+                    Also place the image on the board and save a PNG to this device.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!autoSaveCaptures}
+                  className={
+                    !autoSaveCaptures
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => {
+                    setAutoSaveCaptures(false);
+                    saveAutoSaveCaptures(false);
+                  }}
+                >
+                  <strong>Board only</strong>
+                  <span className="lc-muted">Place the capture on the board; do not save a file.</span>
                 </button>
               </div>
 

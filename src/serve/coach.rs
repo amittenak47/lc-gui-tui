@@ -603,12 +603,23 @@ pub async fn run_ask(
     if question.is_empty() {
         return Err(AppError::bad_request(anyhow!("type a question first")));
     }
-    let dataset = resolve_dataset(request.dataset.as_deref())?;
     let task_id = request.task_id.clone();
+    let dataset_slug = request.dataset.clone();
+    let scratchpad = crate::scratchpad::is_request(dataset_slug.as_deref(), &task_id);
+    let dataset = if scratchpad {
+        None
+    } else {
+        Some(resolve_dataset(dataset_slug.as_deref())?)
+    };
+    let board_key = if scratchpad {
+        crate::scratchpad::board_key()
+    } else {
+        dataset.unwrap().key(&task_id)
+    };
     let cfg = state.cfg_snapshot();
     let ctx = {
         let mut store = state.board_sessions.lock().await;
-        let session = store.entry(&dataset.key(&task_id));
+        let session = store.entry(&board_key);
         let full = session.coach_context();
         if cfg.coach.approach_commitment {
             full
@@ -620,8 +631,17 @@ pub async fn run_ask(
         }
     };
     let envelope = blocking(move || {
-        let meta = load_meta(&cfg, dataset, &task_id)?;
-        let description = description_for(&meta);
+        let (meta, description) = if scratchpad {
+            (
+                crate::scratchpad::workspace_meta(),
+                Some(crate::scratchpad::COACH_DESCRIPTION.to_string()),
+            )
+        } else {
+            let dataset = dataset.expect("dataset resolved before blocking");
+            let meta = load_meta(&cfg, dataset, &task_id)?;
+            let description = description_for(&meta);
+            (meta, description)
+        };
         let provider = make_provider_for_mode(&cfg, "review")?;
         events.stage("ask", "answering from the problem statement and your code");
         let prompt = build_ask_prompt(&meta, description.as_deref(), &question, &ctx);

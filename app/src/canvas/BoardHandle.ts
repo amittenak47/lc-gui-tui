@@ -57,7 +57,7 @@ export interface BoardHandle {
   /** Replace the whole element list. Used by the viz applier. */
   setElements(elements: unknown[]): void;
   /** Turn skeletons into real elements without touching the scene. */
-  convert(skeletons: Skeleton[]): unknown[];
+  convert(skeletons: Skeleton[], opts?: { regenerateIds?: boolean }): unknown[];
   /** Lay down a fresh template, discarding whatever was on the board. */
   seedTemplate(skeletons: Skeleton[]): void;
   /** Restore the original problem template layout (frames + statement). */

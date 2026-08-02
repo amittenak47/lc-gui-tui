@@ -34,12 +34,20 @@ export interface Skeleton {
   roundness?: null | { type: number };
   textAlign?: "left" | "center" | "right";
   verticalAlign?: "top" | "middle" | "bottom";
+  /** When false, width/height + textAlign/verticalAlign center text in the box. */
+  autoResize?: boolean;
   points?: Array<[number, number]>;
   locked?: boolean;
   /** Radians — template frames stay at 0. */
   angle?: number;
   customData?: SkeletonMeta | null;
-  label?: { text: string; fontSize?: number; strokeColor?: string };
+  label?: {
+    text: string;
+    fontSize?: number;
+    strokeColor?: string;
+    textAlign?: "left" | "center" | "right";
+    verticalAlign?: "top" | "middle" | "bottom";
+  };
 }
 
 export interface SkeletonMeta {

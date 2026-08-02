@@ -31,8 +31,8 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
     return () => document.removeEventListener("mousedown", onPointer);
   }, [open]);
 
-  // Map popover opens *below* the Theme chip — tip above the chip.
-  const tipPlacement = variant === "header" ? "bottom" : variant === "map" ? "top" : "left";
+  // Map/header popovers open above or below the chip — tip on the opposite side.
+  const tipPlacement = variant === "header" || variant === "map" ? "bottom" : "left";
 
   if (variant === "inline") {
     return (
@@ -63,7 +63,7 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
   return (
     <div
       ref={rootRef}
-      className={`lc-palette-compact${variant === "header" ? " lc-palette-header" : ""}${variant === "map" ? " lc-palette-map" : ""}${open ? " lc-palette-compact-open" : ""}`}
+      className={`lc-palette-compact${variant === "header" ? " lc-palette-header" : ""}${variant === "map" ? " lc-palette-map" : ""}`}
     >
       <button
         type="button"

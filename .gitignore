@@ -71,3 +71,7 @@ htmlcov/
 
 # --- Misc tooling ---
 .mimicflow/
+
+# --- Local / agent docs (not shipped; ingest from docs/fix-log/) ---
+docs/*.md
+docs/fix-log/

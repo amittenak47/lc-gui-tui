@@ -50,6 +50,7 @@ import { REGION_GUTTER, REGION_MIN, REGIONS, STUDENT_REGION_ORDER, type RegionId
 import {
   BOARD_THEMES,
   DEFAULT_FONT_SIZE,
+  FONT_CODE,
   FONT_UI,
   type Skeleton,
 } from "../templates/skeleton";
@@ -68,7 +69,7 @@ import {
 /** Default wrap width for the text tool (canvas units). User can resize the box. */
 const TEXT_WRAP_WIDTH = 420;
 import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
-import { textBaselineY, SCRATCH_LINE_PITCH, linedRuleClearance } from "../modes/textBaseline";
+import { textBaselineY, SCRATCH_LINE_PITCH, linedRuleClearance, defaultLineHeight } from "../modes/textBaseline";
 import type { BoardBinaryFile, BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
 import { applyMetadata, isCoachElement } from "./scene";
@@ -83,7 +84,9 @@ import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
+import { loadAutoSaveCaptures, saveCaptureToDevice } from "../util/capturePrefs";
 import { loadInkToolPrefs, saveInkToolPrefs } from "../util/inkToolPrefs";
+import { useRepeatPress } from "../util/useRepeatPress";
 import {
   clampExportScale,
   exportScaleFrom,
@@ -741,6 +744,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   mobileRef.current = mobile;
   const [activeTool, setActiveTool] = useState<ToolName>("hand");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
+  /** Plain prose vs monospace “code note” for the Text tool. */
+  const [textMode, setTextMode] = useState<"plain" | "code">("plain");
+  const textModeRef = useRef(textMode);
+  textModeRef.current = textMode;
   const inkPrefsRef = useRef(loadInkToolPrefs());
   const [inkColor, setInkColor] = useState(() =>
     resolveInkColor(themeId, inkPrefsRef.current.inkColor),
@@ -1382,6 +1389,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [persistInkPrefs],
   );
 
+  const applyTextModeToAppState = useCallback((mode: "plain" | "code") => {
+    apiRef.current?.updateScene({
+      appState: {
+        currentItemFontFamily: mode === "code" ? FONT_CODE : FONT_UI,
+      },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+  }, []);
+
   const setTool = useCallback((tool: ToolName) => {
     if (tool === "freedraw") {
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcInk", locked: false });
@@ -1394,6 +1410,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // flips to selection and the crosshair dies before you can place again.
       // Do not resetCursor here: setActiveTool already sets the text crosshair.
       apiRef.current?.setActiveTool({ type: "text", locked: true });
+      applyTextModeToAppState(textModeRef.current);
     } else {
       apiRef.current?.setActiveTool({ type: tool, locked: false });
       apiRef.current?.resetCursor?.();
@@ -1434,7 +1451,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
 
     setActiveTool(tool);
-  }, [activeTool]);
+  }, [activeTool, applyTextModeToAppState]);
+
+  const pickTextMode = useCallback(
+    (mode: "plain" | "code") => {
+      setTextMode(mode);
+      textModeRef.current = mode;
+      applyTextModeToAppState(mode);
+      setTool("text");
+    },
+    [applyTextModeToAppState, setTool],
+  );
 
   const handleStylusAccessory = useCallback(
     (event: PointerEvent) => {
@@ -2408,6 +2435,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [insertImageFromDataURL],
   );
 
+  const maybeAutoSaveCapture = useCallback(async (blob: Blob) => {
+    if (!loadAutoSaveCaptures()) return;
+    try {
+      await saveCaptureToDevice(blob);
+    } catch {
+      /* best-effort — board image still placed */
+    }
+  }, []);
+
   const captureEntireBoard = useCallback(async () => {
     const api = apiRef.current;
     if (!api) return;
@@ -2416,7 +2452,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!blob || blob.size === 0) return;
     const dataURL = await blobToDataURL(blob);
     await insertImageFromDataURL(dataURL, "image/png");
-  }, [insertImageFromDataURL]);
+    await maybeAutoSaveCapture(blob);
+  }, [insertImageFromDataURL, maybeAutoSaveCapture]);
 
   const beginRegionCapture = useCallback(() => {
     setCaptureMenuOpen(false);
@@ -2461,8 +2498,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!blob || blob.size === 0) return;
       const dataURL = await blobToDataURL(blob);
       await insertImageFromDataURL(dataURL, "image/png", { x, y, width, height });
+      await maybeAutoSaveCapture(blob);
     },
-    [clientToScene, insertImageFromDataURL],
+    [clientToScene, insertImageFromDataURL, maybeAutoSaveCapture],
   );
 
 
@@ -2719,6 +2757,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
         if (el.type !== "text" || el.customData?.lcRegion || el.customData?.lcVizId) {
           return el;
+        }
+
+        const wantFont = textModeRef.current === "code" ? FONT_CODE : FONT_UI;
+        if (el.id === editingId && el.fontFamily !== wantFont) {
+          changed = true;
+          return {
+            ...el,
+            fontFamily: wantFont,
+            lineHeight: defaultLineHeight(wantFont),
+            version: (el.version ?? 0) + 1,
+            versionNonce: Math.floor(Math.random() * 2 ** 31),
+          };
         }
 
         const raw = (el.originalText ?? el.text ?? "").trim();
@@ -3282,6 +3332,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 onPressureSensitive={setPressureSensitive}
                 fontSize={fontSize}
                 onFontSize={setFontSize}
+                textMode={textMode}
+                onTextMode={pickTextMode}
                 shapesOpen={shapesOpen}
                 onToggleShapes={() => {
                   if (shapesOpen) {
@@ -3396,7 +3448,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             apiRef.current.onScrollChange?.((scrollX, scrollY, zoom) => {
               const pct = Math.round(zoom.value * 100);
               setZoomPct((current) => (current === pct ? current : pct));
-              rasterInkRef.current?.repaint();
+              // Full ink rebuild mid-stroke drops coalesced samples and cuts glyphs.
+              if (!rasterInkRef.current?.isDrawing()) {
+                rasterInkRef.current?.repaint();
+              }
               reportCodeSlot();
               reportLinedSlot();
               reportTitleSlot();
@@ -3587,27 +3642,29 @@ function ZoomControls({
 }) {
   const atMin = zoomPct <= zoomFloorPct;
   const atMax = zoomPct >= zoomMaxPct;
+  const zoomInHold = useRepeatPress(onZoomIn, { disabled: atMax, delayMs: 400, intervalMs: 120 });
+  const zoomOutHold = useRepeatPress(onZoomOut, { disabled: atMin, delayMs: 400, intervalMs: 120 });
   return (
     <div className="lc-zoom" role="group" aria-label="Zoom">
       <button
         type="button"
         className="lc-map-btn"
-        data-tip={atMax ? `Maximum zoom (${zoomMaxPct}%)` : "Zoom in"}
+        data-tip={atMax ? `Maximum zoom (${zoomMaxPct}%)` : "Zoom in — hold to keep going"}
         data-tip-placement="left"
         aria-label={atMax ? `Zoom in disabled, maximum ${zoomMaxPct}%` : "Zoom in"}
         disabled={atMax}
-        onClick={onZoomIn}
+        {...zoomInHold}
       >
         +
       </button>
       <button
         type="button"
         className="lc-map-btn"
-        data-tip={atMin ? `Minimum zoom (${zoomFloorPct}%)` : "Zoom out"}
+        data-tip={atMin ? `Minimum zoom (${zoomFloorPct}%)` : "Zoom out — hold to keep going"}
         data-tip-placement="left"
         aria-label={atMin ? `Zoom out disabled, minimum ${zoomFloorPct}%` : "Zoom out"}
         disabled={atMin}
-        onClick={onZoomOut}
+        {...zoomOutHold}
       >
         −
       </button>

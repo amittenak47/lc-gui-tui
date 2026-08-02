@@ -50,6 +50,15 @@ export function Timeline({
     [total],
   );
 
+  const togglePlay = useCallback(() => {
+    setPlaying((wasPlaying) => {
+      if (wasPlaying) return false;
+      // At the end, Play means "from the start again", not a no-op pause.
+      if (frame >= total - 1) show(0);
+      return true;
+    });
+  }, [frame, total, show]);
+
   // Draw the saved/initial frame when the program arrives or is replaced.
   // Depend on program.id only — feeding frameIndex back from the parent would
   // retrigger this every scrub and loop.
@@ -89,7 +98,7 @@ export function Timeline({
             </button>
             <button
               type="button"
-              onClick={() => setPlaying((p) => !p)}
+              onClick={togglePlay}
               aria-label={playing ? "Pause" : "Play"}
             >
               {playing ? "pause" : "play"}

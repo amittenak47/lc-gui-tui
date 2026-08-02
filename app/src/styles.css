@@ -546,6 +546,32 @@ input[type="checkbox"] {
   height: 100%;
 }
 
+/* Delete control for a selected library stamp / capture image. */
+.lc-stamp-trash {
+  position: absolute;
+  z-index: 45;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 22%);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.lc-stamp-trash:hover,
+.lc-stamp-trash:focus-visible {
+  border-color: color-mix(in srgb, #c44 55%, var(--line));
+  color: #c44;
+  background: color-mix(in srgb, #c44 10%, var(--surface));
+}
+
 /* Eraser brush preview: circle + crosshair (pen uses crosshair; Excalidraw uses a fixed circle). */
 /*
  * Position comes from an inline `transform` written by Board's pointer handler
@@ -903,10 +929,72 @@ input[type="checkbox"] {
 
 /* Flyouts need to escape the scroller, so anchor them to the island instead. */
 .lc-shapes-wrap,
-.lc-capture-wrap {
+.lc-capture-wrap,
+.lc-color-wrap {
   position: static;
   display: inline-flex;
   flex-shrink: 0;
+}
+
+.lc-text-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.lc-text-flyout {
+  position: absolute;
+  z-index: 70;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 148px;
+  padding: 6px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+
+.lc-text-flyout button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+
+.lc-text-flyout-sub {
+  flex: 1 1 100%;
+  margin-left: 28px;
+  font-size: 11px;
+}
+
+.lc-text-flyout button:hover,
+.lc-text-flyout button:focus-visible,
+.lc-text-flyout button.is-active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.lc-text-flyout-glyph {
+  width: 22px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .lc-shape-flyout {
@@ -989,13 +1077,16 @@ input[type="checkbox"] {
 }
 
 .lc-color-fan {
-  position: absolute;
-  z-index: 80;
-  left: 50%;
-  top: 50%;
+  position: fixed;
+  z-index: 90;
   width: 0;
   height: 0;
+  pointer-events: none;
   animation: lc-fade 120ms ease-out;
+}
+
+.lc-color-fan .lc-color-seat {
+  pointer-events: auto;
 }
 
 .lc-color-seat {
@@ -1487,11 +1578,6 @@ input[type="checkbox"] {
   pointer-events: auto;
 }
 
-/* Theme popover opens under the chip — lift the row so coach / window edge don't clip it. */
-.lc-map-controls:has(.lc-palette-compact-open) {
-  bottom: 108px;
-}
-
 .lc-map-chrome-left {
   display: flex;
   flex-direction: column;
@@ -1844,9 +1930,9 @@ input[type="checkbox"] {
 .lc-palette-popover-map {
   left: 0;
   right: auto;
-  /* Stay under the Theme chip; map-controls sit high enough that coach won't clip. */
-  top: calc(100% + 6px);
-  bottom: auto;
+  /* Open above the Theme chip so the dock / coach peek cannot cover it. */
+  bottom: calc(100% + 6px);
+  top: auto;
   display: flex;
   flex-direction: column;
   z-index: 48;
@@ -2043,6 +2129,40 @@ input[type="checkbox"] {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.lc-coach-turn-footnotes {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.lc-coach-turn-flag-rule {
+  display: block;
+  width: 28px;
+  height: 0;
+  border-top: 1px solid color-mix(in srgb, var(--ink) 22%, transparent);
+}
+
+.lc-coach-turn-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.lc-coach-turn-flag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ink) 48%, transparent);
+  line-height: 1.2;
+}
+
+.lc-coach-turn-user .lc-coach-turn-flag {
+  color: color-mix(in srgb, var(--accent) 55%, var(--ink));
 }
 
 .lc-coach-turn-selectable {
@@ -2496,6 +2616,14 @@ input[type="checkbox"] {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 22%, var(--panel));
   color: var(--accent);
+}
+
+.lc-flag-unavailable:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  background: color-mix(in srgb, var(--ink) 4%, var(--panel));
+  color: color-mix(in srgb, var(--ink) 40%, transparent);
+  border-color: color-mix(in srgb, var(--line) 60%, transparent);
 }
 
 .lc-side-body {
@@ -4583,10 +4711,16 @@ button.lc-row-selected:hover:not(:disabled) {
  * ------------------------------------------------------------------------ */
 
 .lc-mobile {
-  --lc-coach-sheet: min(42vh, 400px);
+  --lc-coach-sheet: min(58vh, 520px);
   /* Clear Android's home-swipe gesture band at the bottom edge. */
   --lc-coach-sheet-lift: 14px;
   --lc-coach-peek: 34px;
+}
+
+@media (pointer: coarse) and (min-width: 768px) {
+  .lc-mobile {
+    --lc-coach-sheet: min(64vh, 600px);
+  }
 }
 
 /* Pad the whole shell above the Android nav bar — floating controls stay at
@@ -4637,10 +4771,6 @@ button.lc-row-selected:hover:not(:disabled) {
   bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift));
 }
 
-.lc-mobile .lc-map-controls:has(.lc-palette-compact-open) {
-  /* Keep Theme popover (under the chip) above the coach peek. */
-  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + 96px);
-}
 
 .lc-mobile.lc-app-coach-open .lc-map-controls {
   /* Sheet covers the bottom; keep controls from fighting the handle. */
@@ -4915,10 +5045,6 @@ button.lc-row-selected:hover:not(:disabled) {
   bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift));
   align-items: center;
   gap: 4px;
-}
-
-.lc-mobile .lc-map-controls:has(.lc-palette-compact-open) {
-  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + 96px);
 }
 
 .lc-mobile .lc-map-btn {
