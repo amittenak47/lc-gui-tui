@@ -6,11 +6,14 @@ import {
   eraserScreenRadius,
   exportScaleFrom,
   inkLineWidth,
+  INK_STEP_FACTOR,
+  INK_STEP_FACTOR_PRESSURE,
   inkOpsBounds,
   inkStrokesFromOps,
   paintInkAtScale,
   scenePointFromCanvasPixel,
   scenePointFromPointer,
+  smoothPressure,
   unionSceneBounds,
   type InkOp,
   type ScenePoint,
@@ -45,6 +48,31 @@ describe("rasterInk sizing", () => {
     expect(inkLineWidth(2, 0.5)).toBeLessThan(inkLineWidth(2, 0.9));
     expect(inkLineWidth(2, 0.2)).toBeGreaterThan(0);
     expect(inkLineWidth(2, 0.9, false)).toBe(inkLineWidth(2, 0.2, false));
+  });
+
+  it("stamps denser under pressure than at constant width", () => {
+    expect(INK_STEP_FACTOR_PRESSURE).toBeLessThan(INK_STEP_FACTOR);
+    expect(INK_STEP_FACTOR_PRESSURE).toBeGreaterThan(0);
+  });
+});
+
+describe("rasterInk pressure smoothing", () => {
+  it("moves toward the sample without reaching it in one step", () => {
+    const next = smoothPressure(0.2, 1);
+    expect(next).toBeGreaterThan(0.2);
+    expect(next).toBeLessThan(1);
+  });
+
+  it("damps a single spike far more than a sustained press", () => {
+    const spike = smoothPressure(0.5, 1);
+    let sustained = 0.5;
+    for (let i = 0; i < 4; i += 1) sustained = smoothPressure(sustained, 1);
+    expect(spike - 0.5).toBeLessThan(sustained - 0.5);
+    expect(sustained).toBeGreaterThan(0.85);
+  });
+
+  it("holds steady when pressure does not change", () => {
+    expect(smoothPressure(0.6, 0.6)).toBeCloseTo(0.6, 10);
   });
 });
 

@@ -62,6 +62,33 @@ export function inkLineWidth(
   return base;
 }
 
+/**
+ * Stamp spacing along a segment, as a fraction of the current line width.
+ *
+ * A stroke is a chain of round-capped segments, so the spacing decides how the
+ * edge reads. At a constant width, 0.35 is invisible. Under pressure the width
+ * changes between samples, and at 0.35 consecutive caps step the edge instead
+ * of tapering it — visible as a scalloped stroke on a fast, light flick. Denser
+ * stamps cost strictly linear paint time, which the coalesced batch already
+ * amortises into one paint per frame.
+ */
+export const INK_STEP_FACTOR = 0.35;
+export const INK_STEP_FACTOR_PRESSURE = 0.2;
+
+/**
+ * EMA weight for stylus pressure.
+ *
+ * Raw pressure from a stylus is noisy at a few percent per sample, and width is
+ * proportional to it, so an unsmoothed stroke shimmers along its edges. Low
+ * enough to kill that, high enough that a deliberate press still lands within a
+ * couple of samples.
+ */
+export const PRESSURE_SMOOTHING = 0.4;
+
+export function smoothPressure(previous: number, sample: number): number {
+  return previous + (sample - previous) * PRESSURE_SMOOTHING;
+}
+
 /** Scene-unit eraser radius from the same slider as pen width. */
 export function eraserSceneRadius(strokeWidth: number): number {
   return strokeWidth * 1.75;
