@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { APP_THEMES } from "../theme/appThemes";
+import { APP_THEMES, type AppTheme } from "../theme/appThemes";
 
 export interface BackgroundPaletteProps {
   themeId: string;
@@ -13,6 +13,9 @@ export interface BackgroundPaletteProps {
   /** `inline` in the browser footer; `compact`/`header`/`map` are popovers. */
   variant?: "inline" | "compact" | "header" | "map";
 }
+
+const LIGHT_THEMES = APP_THEMES.filter((theme) => theme.mode === "light");
+const DARK_THEMES = APP_THEMES.filter((theme) => theme.mode === "dark");
 
 export function BackgroundPalette({ themeId, onPick, variant = "compact" }: BackgroundPaletteProps) {
   const [open, setOpen] = useState(false);
@@ -28,10 +31,13 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
     return () => document.removeEventListener("mousedown", onPointer);
   }, [open]);
 
+  // Map popover opens *below* the Theme chip — tip above the chip.
+  const tipPlacement = variant === "header" ? "bottom" : variant === "map" ? "top" : "left";
+
   if (variant === "inline") {
     return (
-      <div className="lc-bg-palette lc-bg-palette-inline" role="group" aria-label="Background colour">
-        <span className="lc-bg-palette-label">Appearance</span>
+      <div className="lc-bg-palette lc-bg-palette-inline" role="group" aria-label="Theme">
+        <span className="lc-bg-palette-label">Theme</span>
         <div className="lc-bg-palette-swatches">
           {APP_THEMES.map((theme) => (
             <Swatch
@@ -47,7 +53,6 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
     );
   }
 
-  const tipPlacement = variant === "header" ? "bottom" : variant === "map" ? "bottom" : "left";
   const popoverClass =
     variant === "header"
       ? "lc-palette-popover lc-palette-popover-header"
@@ -74,41 +79,99 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
             ? undefined
             : { background: current.background }
         }
-        data-tip="Board and UI appearance"
+        data-tip="Board and UI theme"
         data-tip-placement={tipPlacement}
-        aria-label="Appearance"
+        aria-label="Theme"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
         {variant === "header" && (
           <>
             <span className="lc-palette-chip" style={{ background: current.background }} aria-hidden />
-            Appearance
+            Theme
           </>
         )}
         {variant === "map" && (
           <span className="lc-palette-map-label">
             <span className="lc-palette-chip" style={{ background: current.background }} aria-hidden />
-            Appearance
+            Theme
           </span>
         )}
       </button>
       {open && (
-        <div className={popoverClass} role="listbox" aria-label="Background colour">
-          {APP_THEMES.map((theme) => (
-            <Swatch
-              key={theme.id}
-              theme={theme}
-              active={theme.id === themeId}
-              onPick={(id) => {
-                onPick(id);
-                setOpen(false);
-              }}
-              tipPlacement={tipPlacement}
-            />
-          ))}
+        <div className={popoverClass} role="listbox" aria-label="Theme">
+          {variant === "map" ? (
+            <div className="lc-palette-grouped">
+              <ThemeGroup
+                label="Light"
+                themes={LIGHT_THEMES}
+                themeId={themeId}
+                onPick={(id) => {
+                  onPick(id);
+                  setOpen(false);
+                }}
+                tipPlacement={tipPlacement}
+              />
+              <ThemeGroup
+                label="Dark"
+                themes={DARK_THEMES}
+                themeId={themeId}
+                onPick={(id) => {
+                  onPick(id);
+                  setOpen(false);
+                }}
+                tipPlacement={tipPlacement}
+              />
+            </div>
+          ) : (
+            <div className="lc-palette-grid">
+              {APP_THEMES.map((theme) => (
+                <Swatch
+                  key={theme.id}
+                  theme={theme}
+                  active={theme.id === themeId}
+                  onPick={(id) => {
+                    onPick(id);
+                    setOpen(false);
+                  }}
+                  tipPlacement={tipPlacement}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ThemeGroup({
+  label,
+  themes,
+  themeId,
+  onPick,
+  tipPlacement,
+}: {
+  label: string;
+  themes: AppTheme[];
+  themeId: string;
+  onPick: (id: string) => void;
+  tipPlacement: "top" | "left" | "bottom";
+}) {
+  return (
+    <div className="lc-palette-group">
+      <span className="lc-palette-group-label">{label}</span>
+      <div className="lc-palette-group-swatches">
+        {themes.map((theme) => (
+          <Swatch
+            key={theme.id}
+            theme={theme}
+            active={theme.id === themeId}
+            onPick={onPick}
+            tipPlacement={tipPlacement}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -119,7 +182,7 @@ function Swatch({
   onPick,
   tipPlacement,
 }: {
-  theme: (typeof APP_THEMES)[number];
+  theme: AppTheme;
   active: boolean;
   onPick: (id: string) => void;
   tipPlacement: "top" | "left" | "bottom";

@@ -336,6 +336,7 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       text: block.text,
       fontSize,
       fontFamily: block.code ? FONT_CODE : FONT_UI,
+      lineHeight: lineHeight / fontSize,
       strokeColor: block.code ? ink.primary : ink.body,
       locked: true,
       customData: {

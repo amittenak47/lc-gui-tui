@@ -43,7 +43,7 @@ import { healScratchpadGeometry, SCRATCH_PAGE_W } from "../templates/scratchpad"
 import { regionFrameId, regionFramesOf, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
-import { REGION_MIN, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
+import { REGION_GUTTER, REGION_MIN, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
 import {
   BOARD_THEMES,
   DEFAULT_FONT_SIZE,
@@ -51,6 +51,7 @@ import {
   type Skeleton,
 } from "../templates/skeleton";
 import { BackgroundPalette } from "../components/BackgroundPalette";
+import { INK_COLORS_DARK, INK_COLORS_LIGHT } from "./inkColors";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ReadingSizeControl } from "../components/ReadingSizeControl";
 import { FontSizeSlider } from "./FontSizeSlider";
@@ -66,6 +67,7 @@ import {
 /** Default wrap width for the text tool (canvas units). User can resize the box. */
 const TEXT_WRAP_WIDTH = 420;
 import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
+import { textBaselineY, SCRATCH_LINE_PITCH, linedRuleClearance } from "../modes/textBaseline";
 import type { BoardBinaryFile, BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
 import { applyMetadata, keepOnClear, isCoachElement } from "./scene";
@@ -523,7 +525,7 @@ function measureChromeInsets(
 }
 
 /**
- * Keep the viewport inside the open template page on mobile.
+ * Keep the viewport inside the open template page.
  * Zoomed in: pan freely within the box. At fit zoom: locked (no empty gutter).
  */
 function clampScrollToBounds(
@@ -544,19 +546,26 @@ function clampScrollToBounds(
 
   let nextX: number;
   let nextY: number;
-  if (contentW <= visW + 0.5) {
+  // Use a looser epsilon so a width-fitted page does not allow one-sided drift
+  // from float error / gutter padding.
+  if (contentW <= visW + 1) {
     nextX = inset.left / zoom - bounds.minX + (visW - contentW) / 2;
   } else {
     const maxX = inset.left / zoom - bounds.minX;
     const minX = (viewWidth - inset.right) / zoom - bounds.maxX;
-    nextX = Math.min(maxX, Math.max(minX, scrollX));
+    // Guard against inverted ranges (bad bounds) — never allow min > max.
+    const lo = Math.min(minX, maxX);
+    const hi = Math.max(minX, maxX);
+    nextX = Math.min(hi, Math.max(lo, scrollX));
   }
-  if (contentH <= visH + 0.5) {
+  if (contentH <= visH + 1) {
     nextY = inset.top / zoom - bounds.minY + (visH - contentH) / 2;
   } else {
     const maxY = inset.top / zoom - bounds.minY;
     const minY = (viewHeight - inset.bottom) / zoom - bounds.maxY;
-    nextY = Math.min(maxY, Math.max(minY, scrollY));
+    const lo = Math.min(minY, maxY);
+    const hi = Math.max(minY, maxY);
+    nextY = Math.min(hi, Math.max(lo, scrollY));
   }
   return { scrollX: nextX, scrollY: nextY };
 }
@@ -660,9 +669,6 @@ export interface BoardProps {
   coachFold?: ReactNode;
 }
 
-const INK_COLORS_LIGHT = ["#1e1e1e", "#64748b", "#b45309", "#1d4ed8", "#166534", "#b91c1c"] as const;
-const INK_COLORS_DARK = ["#f3f4f6", "#94a3b8", "#fb923c", "#60a5fa", "#4ade80", "#f87171"] as const;
-
 function defaultInk(themeId: string): string {
   return isDarkTheme(themeId) ? INK_COLORS_DARK[0] : INK_COLORS_LIGHT[0];
 }
@@ -759,6 +765,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const apiRef = useRef<ExcalidrawApi | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const mobile = useIsMobile();
+  const mobileRef = useRef(mobile);
+  mobileRef.current = mobile;
   const [activeTool, setActiveTool] = useState<ToolName>("hand");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
   const inkPrefsRef = useRef(loadInkToolPrefs());
@@ -836,6 +844,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const fitZoomMinRef = useRef<number | null>(null);
   /** Live page bounds for scroll clamping (same box as inkClip). */
   const pageBoundsRef = useRef<SceneBounds | null>(null);
+  /** Student changed zoom/pan — skip auto camera reset on resize refits. */
+  const userAdjustedCameraRef = useRef(false);
+  /** True while fitCamera is applying zoom/scroll (not user input). */
+  const fittingCameraRef = useRef(false);
   /** Measured toolbar height so fitView lands the template under it. */
   const [toolbarHeight, setToolbarHeight] = useState(36);
   const toolbarHeightRef = useRef(toolbarHeight);
@@ -855,7 +867,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const onCodeSlotRef = useRef(onCodeSlot);
   onCodeSlotRef.current = onCodeSlot;
   /** Read by `fitView` and `reportCodeSlot`, which must not re-bind per page. */
-  const mobileRegionRef = useRef<string | null>(mobileRegion);
+  const mobileRegionRef = useRef<string | null>(mobileRegion ?? null);
+  // Keep in sync during render so seed/restore → settleFitView sees the page
+  // before the page-turn effect runs (otherwise fit zooms to every scratch page).
+  mobileRegionRef.current = mobileRegion ?? null;
+  const prevMobileRegionRef = useRef<string | null>(mobileRegion ?? null);
   const strokeWidthRef = useRef(strokeWidth);
   strokeWidthRef.current = strokeWidth;
   /** Zoom at the last brush sample, so a size change can resize the ring. */
@@ -1097,7 +1113,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const page = mobileRegionRef.current;
 
     const bounds = pageBounds(live, page);
-    pageBoundsRef.current = bounds;
+    // Pan clamp uses the tight frame (no gutter pad) so a fitted page cannot
+    // drift off one edge. Ink clip keeps the half-gutter pad.
+    if (bounds) {
+      const pad = REGION_GUTTER / 2;
+      pageBoundsRef.current = {
+        minX: bounds.minX + pad,
+        minY: bounds.minY + pad,
+        maxX: bounds.maxX - pad,
+        maxY: bounds.maxY - pad,
+      };
+    } else {
+      pageBoundsRef.current = null;
+    }
     setInkClip((current) => (sameBounds(current, bounds) ? current : bounds));
 
     const next = applyPageVisibility(live, page);
@@ -1222,7 +1250,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const width = roundPx(Math.max(0, (bounds.maxX - bounds.minX) * zoom - pad * 2));
     const height = roundPx(Math.max(0, (bounds.maxY - bounds.minY) * zoom - pad * 2));
     // Match statement prose pitch so rules sit under each text line.
-    const pitchScene = statementLinePitch(readingSizeRef.current);
+    // Scratchpad has no reading-size control — keep the authored grid.
+    const page = mobileRegionRef.current;
+    const isScratch = typeof page === "string" && page.startsWith("pad-");
+    const pitchScene = isScratch
+      ? SCRATCH_LINE_PITCH
+      : statementLinePitch(readingSizeRef.current);
     const gap = Math.max(12, Math.round(pitchScene * zoom));
 
     let phase = 0;
@@ -1231,20 +1264,46 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       type?: string;
       y?: number;
       fontSize?: number;
+      lineHeight?: number;
+      fontFamily?: number;
+      customData?: { lcLineHeightBase?: number; lcFontBase?: number } | null;
     }>;
     const body = elements.find(
       (el) => el.type === "text" && typeof el.id === "string" && el.id.includes("-body-"),
     );
-    if (body && typeof body.y === "number") {
-      const fontSize =
-        typeof body.fontSize === "number" && body.fontSize > 0
-          ? body.fontSize
-          : pitchScene / (40 / 28);
-      // Rule under the glyph baseline of the first statement line.
-      const baselineScene = body.y + fontSize * 0.82;
-      const baselinePx = (baselineScene + scrollY) * zoom;
-      const rel = baselinePx - top;
-      // Gradient paints the rule at the end of each gap tile.
+    // Prefer title/hint over PAGE label so large chrome sets the grid.
+    const scratchAnchor =
+      elements.find(
+        (el) => el.type === "text" && typeof el.id === "string" && el.id.includes("-title"),
+      ) ??
+      elements.find(
+        (el) => el.type === "text" && typeof el.id === "string" && el.id.includes("-hint"),
+      ) ??
+      elements.find(
+        (el) =>
+          el.type === "text" &&
+          typeof el.id === "string" &&
+          el.id.startsWith("lcscratch-"),
+      );
+    const anchor = body ?? scratchAnchor;
+    if (anchor && typeof anchor.y === "number") {
+      const baselineScene = textBaselineY({ ...anchor, y: anchor.y });
+      if (baselineScene != null) {
+        const fontSize =
+          typeof anchor.fontSize === "number" && anchor.fontSize > 0
+            ? anchor.fontSize
+            : 28;
+        // Rule sits just under the glyphs — not through the baseline.
+        const ruleScene = baselineScene + linedRuleClearance(fontSize);
+        const rulePx = (ruleScene + scrollY) * zoom;
+        const rel = rulePx - top;
+        // Gradient paints the rule at the end of each gap tile.
+        phase = ((rel - gap + 1) % gap + gap) % gap;
+      }
+    } else if (isScratch) {
+      // No chrome text — still lock rules to the authored pitch from the frame top.
+      const firstRulePx = (bounds.minY + SCRATCH_LINE_PITCH + scrollY) * zoom;
+      const rel = firstRulePx - top;
       phase = ((rel - gap + 1) % gap + gap) % gap;
     }
 
@@ -1869,7 +1928,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const setZoom = useCallback(
     (next: number) => {
-      const floor = mobile && fitZoomMinRef.current != null ? fitZoomMinRef.current : ZOOM_MIN;
+      userAdjustedCameraRef.current = true;
+      const floor =
+        mobile && mobileRegionRef.current != null && fitZoomMinRef.current != null
+          ? fitZoomMinRef.current
+          : ZOOM_MIN;
       const clamped = clampZoom(next, floor);
       const api = apiRef.current;
       if (!api) return;
@@ -1881,8 +1944,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       };
       const bounds = pageBoundsRef.current;
       let appState: Record<string, unknown> = { zoom: { value: clamped } };
-      if (mobile && bounds && typeof state.width === "number" && typeof state.height === "number") {
-        const inset = mobilePageInsets(toolbarHeightRef.current);
+      // Tablet page lock only — desktop (coach on the right) stays free to pan.
+      if (
+        mobile &&
+        mobileRegionRef.current != null &&
+        bounds &&
+        typeof state.width === "number" &&
+        typeof state.height === "number"
+      ) {
+        const inset = measureChromeInsets(
+          boardRef.current,
+          toolbarHeightRef.current,
+          mapChromeHiddenRef.current,
+          mobile,
+        );
         const clampedScroll = clampScrollToBounds(
           state.scrollX ?? 0,
           state.scrollY ?? 0,
@@ -1943,6 +2018,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (event.shiftKey && !event.ctrlKey && !event.metaKey) {
         event.preventDefault();
         event.stopPropagation();
+        userAdjustedCameraRef.current = true;
         api.updateScene({
           appState: {
             scrollX: (state.scrollX ?? 0) - (event.deltaY || event.deltaX) / zoom,
@@ -1967,9 +2043,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       let next = zoom - delta / 100;
       next +=
         Math.log10(Math.max(1, zoom)) * -sign * Math.min(1, absDelta / 20);
-      const floor = mobile && fitZoomMinRef.current != null ? fitZoomMinRef.current : ZOOM_MIN;
+      const floor =
+        mobile && mobileRegionRef.current != null && fitZoomMinRef.current != null
+          ? fitZoomMinRef.current
+          : ZOOM_MIN;
       const nextZoom = clampZoom(next, floor);
       if (nextZoom === zoom) return;
+      userAdjustedCameraRef.current = true;
 
       let appState = getStateForZoom(
         {
@@ -1983,11 +2063,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const full = api.getAppState() as { width?: number; height?: number };
       if (
         mobile &&
+        mobileRegionRef.current != null &&
         bounds &&
         typeof full.width === "number" &&
         typeof full.height === "number"
       ) {
-        const inset = mobilePageInsets(toolbarHeightRef.current);
+        const inset = measureChromeInsets(
+          boardRef.current,
+          toolbarHeightRef.current,
+          mapChromeHiddenRef.current,
+          mobile,
+        );
         const clampedScroll = clampScrollToBounds(
           appState.scrollX,
           appState.scrollY,
@@ -2012,177 +2098,254 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
   }, [interactive, mobile, reportCodeSlot]);
 
-  const fitView = useCallback((regionId?: string | null) => {
-    const api = apiRef.current;
-    if (!api) return;
+  type FitMode = "frame" | "camera" | "both";
 
-    // One region / scratch page per fit so the dashed border can fill the chrome
-    // hole. Desktop landing uses the problem statement alone (code stays below).
-    const page = regionId ?? mobileRegionRef.current;
-    const wanted: string[] = page ? [page] : ["constraints"];
+  const runFit = useCallback(
+    (regionId?: string | null, mode: FitMode = "both") => {
+      const api = apiRef.current;
+      if (!api) return;
 
-    let live = api.getSceneElements() as LayoutElement[];
-    let frames = regionFramesOf(live);
-    let focusFrames = wanted
-      .map((id) => frames.get(id as RegionId))
-      .filter((frame): frame is LayoutElement => Boolean(frame));
+      // One region / scratch page per fit so the dashed border can fill the chrome
+      // hole. Desktop landing uses the problem statement alone (code stays below).
+      const page = regionId ?? mobileRegionRef.current;
+      const wanted: string[] = page ? [page] : ["constraints"];
 
-    // Scratch pages use pad-* ids that aren't in REGIONS — find by lcRegion.
-    if (focusFrames.length === 0 && page) {
-      focusFrames = live.filter((element) => {
+      let live = api.getSceneElements() as LayoutElement[];
+      let frames = regionFramesOf(live);
+      let focusFrames = wanted
+        .map((id) => frames.get(id as RegionId))
+        .filter((frame): frame is LayoutElement => Boolean(frame));
+
+      // Scratch pages use pad-* ids that aren't in REGIONS — find by lcRegion.
+      if (focusFrames.length === 0 && page) {
+        focusFrames = live.filter((element) => {
+          const region = element.customData?.lcRegion;
+          return (
+            element.customData?.lcRegionFrame === true &&
+            typeof region === "string" &&
+            region === page
+          );
+        }) as LayoutElement[];
+      }
+
+      const inWanted = (element: LayoutElement) => {
         const region = element.customData?.lcRegion;
-        return (
-          element.customData?.lcRegionFrame === true &&
-          typeof region === "string" &&
-          region === page
-        );
-      }) as LayoutElement[];
-    }
+        return typeof region === "string" && wanted.includes(region);
+      };
 
-    const inWanted = (element: LayoutElement) => {
-      const region = element.customData?.lcRegion;
-      return typeof region === "string" && wanted.includes(region);
-    };
+      const tagged = focusFrames.length > 0 ? focusFrames : live.filter(inWanted);
 
-    const tagged = focusFrames.length > 0 ? focusFrames : live.filter(inWanted);
+      const template = templateRef.current as LayoutElement[];
+      const target =
+        tagged.length > 0
+          ? tagged
+          : template.length > 0
+            ? template.filter(inWanted)
+            : live;
 
-    const template = templateRef.current as LayoutElement[];
-    const target =
-      tagged.length > 0
-        ? tagged
-        : template.length > 0
-          ? template.filter(inWanted)
-          : live;
+      // Prefer the frame alone for page-locked fits so we never zoom to all pages.
+      let focus =
+        focusFrames.length > 0
+          ? focusFrames
+          : target.length > 0
+            ? target
+            : live;
 
-    let focus = target.length > 0 ? target : live;
-
-    const state = api.getAppState() as {
-      width?: number;
-      height?: number;
-    };
-    const viewWidth = num(state.width, 0);
-    const viewHeight = num(state.height, 0);
-    if (viewWidth < 1 || viewHeight < 1) return;
-
-    const safeTop = mobile ? 0 : safeCssPx("--lc-safe-top");
-    const safeBottom = mobile ? 0 : safeCssPx("--lc-safe-bottom");
-    const safeLeft = mobile ? 0 : safeCssPx("--lc-safe-left");
-    const safeRight = mobile ? 0 : safeCssPx("--lc-safe-right");
-    const measured = measureChromeInsets(
-      boardRef.current,
-      toolbarHeightRef.current,
-      mapChromeHiddenRef.current,
-      mobile,
-    );
-    const inset = {
-      top: measured.top + safeTop,
-      left: measured.left + safeLeft,
-      right: measured.right + safeRight,
-      bottom: measured.bottom + safeBottom,
-    };
-    const availWidth = Math.max(80, viewWidth - inset.left - inset.right);
-    const availHeight = Math.max(80, viewHeight - inset.top - inset.bottom);
-
-    /*
-     * Size the focus frame so width-fill zoom also fills height — the dashed
-     * border then touches the toolbar and the magnification row.
-     */
-    const primary =
-      focus.find((element) => element.customData?.lcRegionFrame) ?? focus[0];
-    if (primary && typeof primary.id === "string") {
-      const regionKey = primary.customData?.lcRegion;
-      const isScratch =
-        typeof regionKey === "string" && regionKey.startsWith("pad-");
-      const frameW = Math.max(
-        1,
-        num(primary.width, isScratch ? SCRATCH_PAGE_W : REGIONS.constraints.w),
+      const state = api.getAppState() as {
+        width?: number;
+        height?: number;
+      };
+      // Prefer the live board box — appState can lag a coach open/close by a frame.
+      const boardBox = boardRef.current?.getBoundingClientRect();
+      const viewWidth = Math.max(
+        num(state.width, 0),
+        boardBox && boardBox.width > 8 ? Math.round(boardBox.width) : 0,
       );
-      const zoomForWidth = clampZoom(availWidth / frameW);
-      const fillHeight = availHeight / Math.max(0.05, zoomForWidth);
-      const regionMin =
-        typeof regionKey === "string" && regionKey in REGION_MIN
-          ? REGION_MIN[regionKey as RegionId].minH
-          : 800;
-      const nextH = Math.max(regionMin, Math.round(fillHeight));
-      const curH = num(primary.height, 0);
-      if (Math.abs(curH - nextH) > 2 || Math.abs(num(primary.width, 0) - frameW) > 2) {
-        const nextElements = live.map((element) =>
-          element.id === primary.id ? { ...element, height: nextH, width: frameW } : element,
-        ) as LayoutElement[];
-        const synced = isScratch
-          ? nextElements
-          : syncRegionLayout(nextElements, {
-              codeContentHeight: codeContentHeightRef.current ?? undefined,
-            }) ?? nextElements;
-        layoutSyncingRef.current = true;
+      const viewHeight = Math.max(
+        num(state.height, 0),
+        boardBox && boardBox.height > 8 ? Math.round(boardBox.height) : 0,
+      );
+      if (viewWidth < 1 || viewHeight < 1) return;
+
+      const safeTop = mobile ? 0 : safeCssPx("--lc-safe-top");
+      const safeBottom = mobile ? 0 : safeCssPx("--lc-safe-bottom");
+      const safeLeft = mobile ? 0 : safeCssPx("--lc-safe-left");
+      const safeRight = mobile ? 0 : safeCssPx("--lc-safe-right");
+      const measured = measureChromeInsets(
+        boardRef.current,
+        toolbarHeightRef.current,
+        mapChromeHiddenRef.current,
+        mobile,
+      );
+      const inset = {
+        top: measured.top + safeTop,
+        left: measured.left + safeLeft,
+        right: measured.right + safeRight,
+        bottom: measured.bottom + safeBottom,
+      };
+      const availWidth = Math.max(80, viewWidth - inset.left - inset.right);
+      const availHeight = Math.max(80, viewHeight - inset.top - inset.bottom);
+
+      const isScratchPage = typeof page === "string" && page.startsWith("pad-");
+
+      if (mode === "frame" || mode === "both") {
+        /*
+         * Grow/shrink the focus *frame* so width-fill zoom also fills height.
+         * Zoom alone cannot do this when the authored aspect is wider than the hole.
+         */
+        const primary =
+          focus.find((element) => element.customData?.lcRegionFrame) ??
+          (focusFrames[0] ?? null);
+        if (primary && typeof primary.id === "string") {
+          const regionKey = primary.customData?.lcRegion;
+          const isScratch =
+            typeof regionKey === "string" && regionKey.startsWith("pad-");
+          const frameW = Math.max(
+            1,
+            isScratch ? SCRATCH_PAGE_W : num(primary.width, REGIONS.constraints.w),
+          );
+          // Raw ratio — do not floor to ZOOM_MIN or fillHeight collapses.
+          const zoomForWidth = Math.max(0.05, Math.min(ZOOM_MAX, availWidth / frameW));
+          const fillHeight = availHeight / zoomForWidth;
+          const regionMin =
+            typeof regionKey === "string" && regionKey in REGION_MIN
+              ? REGION_MIN[regionKey as RegionId].minH
+              : 800;
+          const nextH = Math.max(regionMin, Math.round(fillHeight));
+          const curH = num(primary.height, 0);
+          if (Math.abs(curH - nextH) > 1 || Math.abs(num(primary.width, 0) - frameW) > 1) {
+            const nextElements = live.map((element) =>
+              element.id === primary.id ? { ...element, height: nextH, width: frameW } : element,
+            ) as LayoutElement[];
+            const synced = isScratch
+              ? nextElements
+              : syncRegionLayout(nextElements, {
+                  codeContentHeight: codeContentHeightRef.current ?? undefined,
+                }) ?? nextElements;
+            layoutSyncingRef.current = true;
+            api.updateScene({
+              elements: synced as unknown[],
+              captureUpdate: CaptureUpdateAction.NEVER,
+            });
+            layoutSyncingRef.current = false;
+            live = synced;
+            frames = regionFramesOf(live);
+            focusFrames = wanted
+              .map((id) => frames.get(id as RegionId))
+              .filter((frame): frame is LayoutElement => Boolean(frame));
+            if (focusFrames.length === 0 && page) {
+              focusFrames = live.filter((element) => {
+                const region = element.customData?.lcRegion;
+                return (
+                  element.customData?.lcRegionFrame === true &&
+                  typeof region === "string" &&
+                  region === page
+                );
+              }) as LayoutElement[];
+            }
+            focus =
+              focusFrames.length > 0
+                ? focusFrames
+                : live.filter(inWanted).length > 0
+                  ? live.filter(inWanted)
+                  : live;
+          }
+        }
+      }
+
+      if (mode === "camera" || mode === "both") {
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const element of focus) {
+          if (typeof element.x !== "number" || typeof element.y !== "number") continue;
+          // Page fit: only the frame size matters (ignore text that may extend).
+          if (page && !element.customData?.lcRegionFrame) continue;
+          minX = Math.min(minX, element.x);
+          minY = Math.min(minY, element.y);
+          maxX = Math.max(maxX, element.x + num(element.width, 0));
+          maxY = Math.max(maxY, element.y + num(element.height, 0));
+        }
+        if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+          // Fall back to whatever we focused if no frame was tagged.
+          for (const element of focus) {
+            if (typeof element.x !== "number" || typeof element.y !== "number") continue;
+            minX = Math.min(minX, element.x);
+            minY = Math.min(minY, element.y);
+            maxX = Math.max(maxX, element.x + num(element.width, 0));
+            maxY = Math.max(maxY, element.y + num(element.height, 0));
+          }
+        }
+        if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+
+        const boxWidth = Math.max(1, maxX - minX);
+        const boxHeight = Math.max(1, maxY - minY);
+        // Exact fill of the chrome hole (both axes).
+        const zoom = clampZoom(Math.min(availWidth / boxWidth, availHeight / boxHeight));
+        fitZoomMinRef.current = zoom;
+        // Tablet locks zoom-out at page fit; desktop (coach on the right) stays free.
+        setZoomFloorPct(
+          Math.round((mobile && page ? zoom : ZOOM_MIN) * 100),
+        );
+        pageBoundsRef.current = { minX, minY, maxX, maxY };
+
+        const slackX = Math.max(0, availWidth - boxWidth * zoom);
+        const slackY = isScratchPage ? 0 : Math.max(0, availHeight - boxHeight * zoom);
+        fittingCameraRef.current = true;
         api.updateScene({
-          elements: synced as unknown[],
+          appState: {
+            zoom: { value: zoom },
+            scrollX: (inset.left + slackX / 2) / zoom - minX,
+            scrollY: (inset.top + slackY / 2) / zoom - minY,
+          },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
-        layoutSyncingRef.current = false;
-        live = synced;
-        frames = regionFramesOf(live);
-        focusFrames = wanted
-          .map((id) => frames.get(id as RegionId))
-          .filter((frame): frame is LayoutElement => Boolean(frame));
-        if (focusFrames.length === 0 && page) {
-          focusFrames = live.filter((element) => {
-            const region = element.customData?.lcRegion;
-            return (
-              element.customData?.lcRegionFrame === true &&
-              typeof region === "string" &&
-              region === page
-            );
-          }) as LayoutElement[];
-        }
-        focus =
-          focusFrames.length > 0
-            ? focusFrames
-            : live.filter(inWanted).length > 0
-              ? live.filter(inWanted)
-              : live;
+        requestAnimationFrame(() => {
+          fittingCameraRef.current = false;
+        });
+        setZoomPct(Math.round(zoom * 100));
+        requestAnimationFrame(reportCodeSlot);
+        requestAnimationFrame(reportLinedSlot);
       }
-    }
+    },
+    [mobile, reportCodeSlot, reportLinedSlot],
+  );
 
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const element of focus) {
-      if (typeof element.x !== "number" || typeof element.y !== "number") continue;
-      minX = Math.min(minX, element.x);
-      minY = Math.min(minY, element.y);
-      maxX = Math.max(maxX, element.x + num(element.width, 0));
-      maxY = Math.max(maxY, element.y + num(element.height, 0));
-    }
-    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+  const fitFrame = useCallback(
+    (regionId?: string | null) => {
+      runFit(regionId, "frame");
+    },
+    [runFit],
+  );
 
-    const boxWidth = Math.max(1, maxX - minX);
-    const boxHeight = Math.max(1, maxY - minY);
-    // Exact fill of the chrome hole (both axes).
-    const zoom = clampZoom(Math.min(availWidth / boxWidth, availHeight / boxHeight));
-    fitZoomMinRef.current = zoom;
-    setZoomFloorPct(Math.round(zoom * 100));
-    pageBoundsRef.current = { minX, minY, maxX, maxY };
+  const fitCamera = useCallback(
+    (regionId?: string | null) => {
+      runFit(regionId, "camera");
+    },
+    [runFit],
+  );
 
-    const slackX = Math.max(0, availWidth - boxWidth * zoom);
-    const slackY = Math.max(0, availHeight - boxHeight * zoom);
-    api.updateScene({
-      appState: {
-        zoom: { value: zoom },
-        scrollX: (inset.left + slackX / 2) / zoom - minX,
-        scrollY: (inset.top + slackY / 2) / zoom - minY,
-      },
-      captureUpdate: CaptureUpdateAction.NEVER,
-    });
-    setZoomPct(Math.round(zoom * 100));
-    requestAnimationFrame(reportCodeSlot);
-    requestAnimationFrame(reportLinedSlot);
-  }, [mobile, reportCodeSlot, reportLinedSlot]);
+  const fitView = useCallback(
+    (regionId?: string | null) => {
+      userAdjustedCameraRef.current = false;
+      runFit(regionId, "both");
+    },
+    [runFit],
+  );
+
+  /** Resize the page frame and refit zoom/scroll to the chrome hole (window/board resize). */
+  const refitToViewport = useCallback(
+    (regionId?: string | null) => {
+      userAdjustedCameraRef.current = false;
+      runFit(regionId, "both");
+    },
+    [runFit],
+  );
 
   /** Run fit after Excalidraw has applied scene + container size. */
   const scheduleFitView = useCallback(() => {
-    const run = () => fitView();
+    const run = () => refitToViewport();
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         run();
@@ -2190,7 +2353,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         window.setTimeout(run, 200);
       });
     });
-  }, [fitView]);
+  }, [refitToViewport]);
 
   useEffect(() => {
     reportLinedSlot();
@@ -2198,10 +2361,37 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   /** Keep the template tucked under the toolbar when its strip grows or folds. */
   useEffect(() => {
-    if (!mobile || !interactive || mobileRegionRef.current === null) return;
-    const handle = window.setTimeout(() => fitView(), 80);
+    if (!interactive || mobileRegionRef.current === null) return;
+    const handle = window.setTimeout(() => refitToViewport(), 80);
     return () => window.clearTimeout(handle);
-  }, [toolbarHeight, mobile, interactive, fitView]);
+  }, [toolbarHeight, interactive, refitToViewport]);
+
+  /** Page-locked boards: grow the frame and refit width on every board resize. */
+  useEffect(() => {
+    if (!interactive) return;
+    const board = boardRef.current;
+    if (!board || typeof ResizeObserver === "undefined") return;
+    let timer: number | null = null;
+    const run = () => {
+      if (mobileRegionRef.current === null) return;
+      refitToViewport();
+    };
+    const observer = new ResizeObserver(() => {
+      if (timer != null) window.clearTimeout(timer);
+      timer = window.setTimeout(run, 60);
+    });
+    observer.observe(board);
+    const onWindowResize = () => {
+      if (timer != null) window.clearTimeout(timer);
+      timer = window.setTimeout(run, 60);
+    };
+    window.addEventListener("resize", onWindowResize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", onWindowResize);
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, [interactive, refitToViewport]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
@@ -2214,8 +2404,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   /** Fit the current page, or the landing pair on desktop. Event-handler safe. */
   const fitCurrentView = useCallback(() => {
-    fitView();
-  }, [fitView]);
+    refitToViewport();
+  }, [refitToViewport]);
 
   const settleFitView = useCallback((): Promise<void> => {
     const waitFrame = () =>
@@ -2227,14 +2417,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return (async () => {
       await waitFrame();
       await waitFrame();
-      fitView();
+      refitToViewport();
       await wait(50);
-      fitView();
+      refitToViewport();
       await wait(120);
-      fitView();
+      refitToViewport();
       await waitFrame();
     })();
-  }, [fitView]);
+  }, [refitToViewport]);
 
   /** Drop a configured stamp near the middle of what's currently on screen. */
   const stamp = useCallback(
@@ -2628,14 +2818,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [onReadingSizeChange, reflowReadingText],
   );
 
-  // Page turn: refit on the new region and re-report (or clear) the code slot.
-  // Same settle pattern as problem load — Excalidraw needs a couple of frames
-  // before scroll/zoom land where they were asked to.
+  const wasInteractiveRef = useRef(false);
+
+  // Page turn / prepare→ready: refit the locked page so scratch fills the chrome hole.
   useEffect(() => {
     const next = mobileRegion ?? null;
-    const previous = mobileRegionRef.current;
-    mobileRegionRef.current = next;
-    if (!interactive || previous === next) return;
+    const previous = prevMobileRegionRef.current;
+    const becameInteractive = interactive && !wasInteractiveRef.current;
+    wasInteractiveRef.current = interactive;
+    prevMobileRegionRef.current = next;
+    if (!interactive) return;
+    if (!becameInteractive && previous === next) return;
+    userAdjustedCameraRef.current = false;
     // Hide the other pages *before* fitting: a page is the only thing on the
     // canvas, so zooming out on a tablet shows one frame, not the whole column.
     syncPageVisibility();
@@ -3003,7 +3197,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       zoomIn,
       zoomOut,
       fitView: fitCurrentView,
-      fitRegion: (regionId: RegionId | string) => fitView(regionId),
+      fitFrame,
+      refitToViewport,
+      fitRegion: (regionId: RegionId | string) => {
+        refitToViewport(regionId);
+      },
       appendScratchPage: (skeletons: Skeleton[]) => {
         const api = apiRef.current;
         if (!api || skeletons.length === 0) return 0;
@@ -3146,7 +3344,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
       },
     }),
-    [convert, elements, fitCodeToSource, fitCurrentView, fitView, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut],
+    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, refitToViewport, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
@@ -3357,13 +3555,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               reportCodeSlot();
               reportLinedSlot();
 
-              if (!mobile || clampingScrollRef.current) return;
+              // Tablet only — desktop keeps free pan (coach docks on the right).
+              if (!fittingCameraRef.current && !clampingScrollRef.current) {
+                userAdjustedCameraRef.current = true;
+              }
+              if (!mobileRef.current || mobileRegionRef.current == null || clampingScrollRef.current) {
+                return;
+              }
               const bounds = pageBoundsRef.current;
               const api = apiRef.current;
               if (!bounds || !api) return;
               const state = api.getAppState() as { width?: number; height?: number };
               if (typeof state.width !== "number" || typeof state.height !== "number") return;
-              const inset = mobilePageInsets(toolbarHeightRef.current);
+              const inset = measureChromeInsets(
+                boardRef.current,
+                toolbarHeightRef.current,
+                mapChromeHiddenRef.current,
+                mobileRef.current,
+              );
               const next = clampScrollToBounds(
                 scrollX,
                 scrollY,

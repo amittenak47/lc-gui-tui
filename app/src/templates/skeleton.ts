@@ -22,6 +22,7 @@ export interface Skeleton {
   text?: string;
   fontSize?: number;
   fontFamily?: number;
+  lineHeight?: number;
   strokeColor?: string;
   backgroundColor?: string;
   fillStyle?: "solid" | "hachure" | "cross-hatch";
@@ -138,20 +139,22 @@ export interface BoardTheme {
 }
 
 /**
- * Appearance swatches — five light tints, then five dark counterparts in the
- * same hue order (blue → green → pink → beige → purple).
+ * Appearance swatches — six light tints, then six dark counterparts.
+ * Hues: sky → mint → rose → peach → lilac → coral | ocean → forest → wine → umber → plum → storm.
  */
 export const BOARD_THEMES: BoardTheme[] = [
-  { id: "blue", label: "Blue", background: "#e8f0fa", hint: "#6b84a3" },
-  { id: "green", label: "Green", background: "#e8f4ec", hint: "#6b9078" },
-  { id: "pink", label: "Pink", background: "#f8ebee", hint: "#a07080" },
-  { id: "beige", label: "Beige", background: "#f5efe4", hint: "#95866c" },
-  { id: "purple", label: "Purple", background: "#efeaf6", hint: "#8574a0" },
-  { id: "ocean", label: "Ocean", background: "#141e28", hint: "#6b8aa3" },
-  { id: "pine", label: "Pine", background: "#141e19", hint: "#6b8f7a" },
-  { id: "dusk", label: "Dusk", background: "#22161c", hint: "#9a7a88" },
-  { id: "graphite", label: "Graphite", background: "#1c1a17", hint: "#8a8578" },
-  { id: "midnight", label: "Midnight", background: "#17141f", hint: "#8a7a9a" },
+  { id: "blue", label: "Sky", background: "#d6e8ff", hint: "#5b7fa8" },
+  { id: "green", label: "Mint", background: "#d4f0e4", hint: "#4d8f72" },
+  { id: "pink", label: "Rose", background: "#fce1ea", hint: "#a8657f" },
+  { id: "beige", label: "Peach", background: "#f9e8d4", hint: "#9a7f5e" },
+  { id: "purple", label: "Lilac", background: "#ebe2f8", hint: "#7d6a9e" },
+  { id: "coral", label: "Coral", background: "#ffe8df", hint: "#b07a68" },
+  { id: "ocean", label: "Ocean", background: "#0f1a24", hint: "#6a9cc4" },
+  { id: "pine", label: "Forest", background: "#101f18", hint: "#6baf8f" },
+  { id: "dusk", label: "Wine", background: "#281820", hint: "#c48a9a" },
+  { id: "graphite", label: "Umber", background: "#1c1916", hint: "#a89882" },
+  { id: "midnight", label: "Plum", background: "#16122a", hint: "#9a88c4" },
+  { id: "storm", label: "Storm", background: "#141c28", hint: "#7a98b8" },
 ];
 
 /** Tag a whole group as the coach's, so capture and replacement both work. */
