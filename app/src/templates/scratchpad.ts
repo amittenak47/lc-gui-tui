@@ -53,7 +53,6 @@ export function buildScratchPageSkeletons(
   const textWidth = SCRATCH_PAGE_W - 72;
   const linePitch = SCRATCH_LINE_PITCH;
   const labelLh = defaultLineHeight(FONT_UI);
-  const labelY = topYForLinedRow(y, 1, linePitch, 20, FONT_UI, labelLh);
   const titleY = topYForLinedRow(y, 3, linePitch, 56, FONT_UI, labelLh);
   const hintY = topYForLinedRow(y, 5, linePitch, 26, FONT_UI, labelLh);
 
@@ -86,26 +85,6 @@ export function buildScratchPageSkeletons(
         lcRegionFrame: true,
         lcScratchPage: index,
         lcScratchFrame: true,
-      },
-    },
-    {
-      id: `lcscratch-${index}-label`,
-      type: "text",
-      x: x + 36,
-      y: labelY,
-      width: textWidth,
-      text: `PAGE ${index + 1}`,
-      fontSize: 20,
-      fontFamily: FONT_UI,
-      lineHeight: labelLh,
-      strokeColor: ink.hint,
-      opacity: 100,
-      locked: true,
-      customData: {
-        ...at(x + 36, labelY - y),
-        lcFontBase: 20,
-        lcFixedSize: true,
-        lcLineHeightBase: labelLh,
       },
     },
   ];
@@ -151,6 +130,22 @@ export function buildScratchPageSkeletons(
   }
 
   return skeletons;
+}
+
+/**
+ * Where the page's pager sits — the line the baked `PAGE N` label used to own.
+ *
+ * The pager is a React overlay rather than a skeleton: it has to be pressable,
+ * and Excalidraw text is not. Board projects this scene point through the
+ * camera so the control rides the page instead of the viewport.
+ */
+export function scratchTitleAnchor(index: number): { x: number; y: number } {
+  const { x, y } = scratchPageOrigin(index);
+  const labelLh = defaultLineHeight(FONT_UI);
+  return {
+    x: x + 36,
+    y: topYForLinedRow(y, 1, SCRATCH_LINE_PITCH, 20, FONT_UI, labelLh),
+  };
 }
 
 /** Fresh notebook with `pageCount` blank pages (at least one). */
