@@ -23,6 +23,7 @@
 //! - [`modes::review`] — Mode A oneshot types / parse / merge / format card
 //! - [`stages`] — Mode A perceive → claim → verdict types and parsers
 //! - [`approach`] — which approach a board session is committed to coaching
+//! - [`planner`] — one structured call cataloging the approaches a problem admits
 //! - [`assess`] — staged review orchestration entry points
 //! - [`events`] — [`EventSink`], the stage/tool progress channel the socket relays
 //! - [`modes::ambient`] — Mode B
@@ -36,6 +37,7 @@ mod assess;
 mod board;
 mod events;
 mod modes;
+mod planner;
 mod prompts;
 mod stages;
 mod trace;
@@ -57,6 +59,10 @@ pub use approach::{
     CoachContext, CommitSource, CommittedApproach,
 };
 pub use board::BoardSnapshot;
+pub use planner::{
+    build_planner_prompt, parse_plan, write_catalog, write_viz_plan, ApproachPlan, VizPlan,
+    PLANNER_SYSTEM_PROMPT,
+};
 pub use events::{CoachEvent, EventSink, ToolStatus, STAGE_NAMES};
 pub use crate::llm::helpers::extract_json;
 pub use modes::ambient::{escalation_instruction, parse_ambient, AmbientNudge};

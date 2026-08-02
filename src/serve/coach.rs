@@ -17,11 +17,12 @@ use super::common::{description_for, load_meta, resolve_dataset};
 use super::{blocking, board_session, AppError, Shared};
 use crate::llm::coach::{
     build_ask_prompt, build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt,
-    build_scaffold_prompt, parse_board_scaffold, parse_bridge, parse_lazy_fill, perceive_and_claim,
-    review_submission_with_events, ApproachCandidate, ApproachOutcome, ApproachTransition,
-    BoardScaffold, BoardSnapshot, BridgeResponse, Claim, EventSink, LazyFillResponse,
+    build_planner_prompt, build_scaffold_prompt, parse_board_scaffold, parse_bridge,
+    parse_lazy_fill, parse_plan, perceive_and_claim, review_submission_with_events,
+    ApproachCandidate, ApproachOutcome, ApproachPlan, ApproachTransition, BoardScaffold,
+    BoardSnapshot, BridgeResponse, Claim, CoachContext, EventSink, LazyFillResponse,
     ReviewResponse, ASK_SYSTEM_PROMPT, BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
-    LAZY_HINT_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
+    LAZY_HINT_SYSTEM_PROMPT, PLANNER_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
 };
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
 use crate::reveal::{SolutionReveal, UserConsent};
@@ -121,13 +122,14 @@ pub async fn run_review(
     let layout_only = request.layout_only;
     let task_id_for_llm = request.task_id.clone();
     let cfg = state.cfg_snapshot();
+    ensure_catalog(state, dataset, &request.task_id, &board_key, &events).await;
     // What the session already decided, read before the model runs so every
     // stage after the claim is handed the same committed approach.
     let ctx = if cfg.coach.approach_commitment {
         let mut store = state.board_sessions.lock().await;
         store.entry(&board_key).coach_context()
     } else {
-        crate::llm::coach::CoachContext::default()
+        CoachContext::default()
     };
     let outcome = blocking(move || {
         let meta = load_meta(&cfg, dataset, &task_id_for_llm)?;
@@ -203,6 +205,68 @@ pub async fn run_review(
     }
 
     Ok(envelope)
+}
+
+/// Run the planner once per task, if it is enabled and has not run yet.
+///
+/// Deliberately best-effort: a planner that is down, misconfigured, or answers
+/// with something unusable must cost nothing but the call. The whole coach
+/// works with an empty catalog — that is the default — so a failure here is a
+/// missing hint, not a failed review.
+///
+/// The skip rules are what keep it to one call: the catalog is per board
+/// session, a task switch clears the session, and a non-empty catalog is never
+/// rebuilt.
+pub(crate) async fn ensure_catalog(
+    state: &Shared,
+    dataset: &'static crate::dataset::Dataset,
+    task_id: &str,
+    board_key: &str,
+    events: &EventSink,
+) {
+    let cfg = state.cfg_snapshot();
+    if !cfg.coach.planner_enabled {
+        return;
+    }
+    {
+        let mut store = state.board_sessions.lock().await;
+        if store.entry(board_key).approach().has_catalog() {
+            return;
+        }
+    }
+
+    events.stage("plan_approaches", "cataloging the approaches this problem admits");
+    let task_id = task_id.to_string();
+    let planned: Option<ApproachPlan> = blocking(move || {
+        let meta = load_meta(&cfg, dataset, &task_id)?;
+        let description = description_for(&meta);
+        let provider = make_provider_for_mode(&cfg, "planner")?;
+        let reply = provider.chat_ex(
+            &ChatRequest::new(vec![
+                ChatMessage::system(PLANNER_SYSTEM_PROMPT),
+                ChatMessage::user(build_planner_prompt(&meta, description.as_deref())),
+            ])
+            .json()
+            .with_temperature(0.2),
+        )?;
+        parse_plan(&reply.content)
+    })
+    .await
+    .ok();
+
+    let Some(plan) = planned else {
+        events.stage("plan_approaches", "no usable plan — coaching from the board alone");
+        return;
+    };
+    let named = plan.candidate_approaches.len();
+    {
+        let mut store = state.board_sessions.lock().await;
+        store.entry(board_key).approach_mut().set_plan(plan);
+    }
+    events.stage(
+        "plan_approaches",
+        format!("{named} approach families worth recognizing"),
+    );
 }
 
 /// A review, plus the claim it froze (when the staged path ran).
@@ -397,7 +461,7 @@ pub async fn run_lazy_fill(
             if commitment_enabled {
                 session.coach_context()
             } else {
-                crate::llm::coach::CoachContext::default()
+                CoachContext::default()
             },
         )
     };
@@ -542,12 +606,25 @@ pub async fn run_ask(
     let dataset = resolve_dataset(request.dataset.as_deref())?;
     let task_id = request.task_id.clone();
     let cfg = state.cfg_snapshot();
+    let ctx = {
+        let mut store = state.board_sessions.lock().await;
+        let session = store.entry(&dataset.key(&task_id));
+        let full = session.coach_context();
+        if cfg.coach.approach_commitment {
+            full
+        } else {
+            CoachContext {
+                catalog: full.catalog,
+                ..CoachContext::default()
+            }
+        }
+    };
     let envelope = blocking(move || {
         let meta = load_meta(&cfg, dataset, &task_id)?;
         let description = description_for(&meta);
         let provider = make_provider_for_mode(&cfg, "review")?;
         events.stage("ask", "answering from the problem statement and your code");
-        let prompt = build_ask_prompt(&meta, description.as_deref(), &question);
+        let prompt = build_ask_prompt(&meta, description.as_deref(), &question, &ctx);
         let reply = provider.chat_ex(&ChatRequest::new(vec![
             ChatMessage::system(ASK_SYSTEM_PROMPT),
             ChatMessage::user(prompt),
@@ -944,6 +1021,10 @@ mod tests {
             ("routes/attempt.rs", include_str!("routes/attempt.rs")),
         ];
         let viz_handler = include_str!("viz.rs");
+        // The planner is the newest way a model could learn the answer, and the
+        // one most likely to be pointed at a frontier API. It reads the same
+        // redacted sources `lc ask` does and nothing else.
+        let planner = include_str!("../llm/coach/planner.rs");
 
         let consent_call = concat!("UserConsent::from_explicit_user_action", "()");
         assert_eq!(
@@ -951,10 +1032,11 @@ mod tests {
             1,
             "the reveal handler is the only place allowed to grant consent"
         );
-        for (name, source) in route_sources
-            .into_iter()
-            .chain([("ws.rs", ambient_handler), ("viz.rs", viz_handler)])
-        {
+        for (name, source) in route_sources.into_iter().chain([
+            ("ws.rs", ambient_handler),
+            ("viz.rs", viz_handler),
+            ("llm/coach/planner.rs", planner),
+        ]) {
             assert!(
                 !source.contains("SolutionReveal") && !source.contains("UserConsent"),
                 "{name} must not be able to reach the reveal path"
@@ -970,6 +1052,23 @@ mod tests {
         assert!(
             !review_body.contains("Reveal") && !review_body.contains("Consent"),
             "the review handler must not touch the reveal path"
+        );
+
+        // `ensure_catalog` builds the planner call. Its inputs are the same
+        // three the review path uses; a `SolutionReveal` cannot appear in it
+        // without the whole-file assertion above failing, but the prompt it
+        // hands over must not carry the corpus's answer either.
+        let planner_start = reveal_handler
+            .find("pub(crate) async fn ensure_catalog(")
+            .expect("the planner runner");
+        let planner_end = reveal_handler[planner_start..]
+            .find("/// A review, plus the claim")
+            .expect("the outcome struct follows")
+            + planner_start;
+        let planner_body = &reveal_handler[planner_start..planner_end];
+        assert!(
+            !planner_body.contains("solution") && !planner_body.contains("completion"),
+            "the planner is built from the redacted problem, nothing else"
         );
 
         let lazy_start = reveal_handler

@@ -26,6 +26,9 @@ pub fn build_viz_prompt(
     if let Some(committed) = ctx.committed() {
         write_committed_approach(&mut out, committed);
     }
+    if let Some(plan) = ctx.viz_plan.as_ref() {
+        super::super::planner::write_viz_plan(&mut out, plan);
+    }
 
     let _ = writeln!(out, "\n## What to draw");
     if ask.trim().is_empty() {

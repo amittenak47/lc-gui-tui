@@ -122,6 +122,9 @@ impl ApproachOutcome {
 pub struct CoachContext {
     pub committed: Option<CommittedApproach>,
     pub catalog: Vec<ApproachCandidate>,
+    /// What the planner said a diagram of this problem should show. Only the
+    /// viz prompt reads it.
+    pub viz_plan: Option<super::planner::VizPlan>,
 }
 
 impl CoachContext {
@@ -138,6 +141,8 @@ pub struct ApproachSession {
     pub catalog: Vec<ApproachCandidate>,
     pub committed: Option<CommittedApproach>,
     pub transition_log: Vec<ApproachTransition>,
+    /// From the same planner call as the catalog.
+    pub viz_plan: Option<super::planner::VizPlan>,
 }
 
 impl ApproachSession {
@@ -151,6 +156,13 @@ impl ApproachSession {
         self.catalog = catalog;
     }
 
+    /// Store a whole planner answer. Called once per task while the catalog is
+    /// empty — see the skip rules in `serve::coach`.
+    pub fn set_plan(&mut self, plan: super::planner::ApproachPlan) {
+        self.catalog = plan.candidate_approaches;
+        self.viz_plan = Some(plan.viz_plan).filter(|plan| !plan.is_empty());
+    }
+
     /// Whether the planner has already run for this session.
     pub fn has_catalog(&self) -> bool {
         !self.catalog.is_empty()
@@ -161,6 +173,7 @@ impl ApproachSession {
         CoachContext {
             committed: self.committed.clone(),
             catalog: self.catalog.clone(),
+            viz_plan: self.viz_plan.clone(),
         }
     }
 

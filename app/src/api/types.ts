@@ -150,6 +150,8 @@ export interface LcConfig {
     review: string;
     bridge: string;
     viz: string;
+    /** Frontier plans the approaches; the local executor coaches. */
+    planner: string;
   };
   serve_port: number;
   /** Streaming-coach feature flags. Absent on a daemon older than Phase 1. */
