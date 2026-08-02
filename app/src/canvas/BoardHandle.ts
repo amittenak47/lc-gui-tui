@@ -117,6 +117,15 @@ export interface BoardHandle {
   fitCodeToSource(source: string): void;
   /** Small PNGs of student template boxes that have content (for chat attachments). */
   exportRegionThumbs(): Promise<Array<{ region: RegionId; label: string; png: string }>>;
+  /**
+   * PNG of one coach diagram, cropped to the group it drew.
+   *
+   * The post-draw review asks a vision model whether the picture says what the
+   * program claims, so it needs the picture *as rendered* — not the whole
+   * board, where the diagram would be a few hundred pixels in a corner.
+   * Empty string when that group is not on the board.
+   */
+  exportVizPng(programId: string): Promise<string>;
   /** Persistable board blob (excludes coach viz; includes raster ink). */
   saveBoard(): BoardBlob;
   /** Restore a saved board without recording undo history. */

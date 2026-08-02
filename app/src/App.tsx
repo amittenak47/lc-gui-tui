@@ -29,6 +29,7 @@ import type {
   AttemptState,
   CoachFlags,
   CoachProcessEvent,
+  DrawReviewEnvelope,
   LazyFillResponse,
   ProblemDetail,
   ReviewResponse,
@@ -1594,6 +1595,63 @@ export function App() {
     runCoachJob,
   ]);
 
+  /**
+   * Look at each diagram after the board rendered it, and take one correction.
+   *
+   * This runs *after* the turn is finished, deliberately: the diagram the
+   * student asked for is already on the board and already theirs to read. The
+   * check is an improvement pass, so a slow or failing one must not hold up
+   * what already works.
+   */
+  const reviewDrawings = useCallback(
+    async (drawables: VizProgram[], ask: string) => {
+      const board = boardRef.current;
+      if (!board || !problem || !coachFlags.draw_review_enabled) return;
+      for (const program of drawables) {
+        try {
+          const png = await board.exportVizPng(program.id);
+          // No pixels means the group is not on the board — collapsed, capped
+          // out, or replaced. Nothing to look at.
+          if (!png) continue;
+          const verdict = await runCoachJob<DrawReviewEnvelope>(
+            "draw_review",
+            { task_id: problem.task_id, dataset: problem.dataset, program, png, ask },
+            null,
+            () => client.drawReview(problem.task_id, program, png, ask, problem.dataset),
+          );
+          const fixed = verdict.program ? parseVizProgram(verdict.program) : null;
+          if (!fixed) continue;
+          // The replacement keeps the program id, so it lands on top of the
+          // diagram it is fixing rather than beside it.
+          setCoachMessages((current) => {
+            const next = current.map((message) =>
+              message.drawing?.program.id === fixed.id
+                ? { ...message, drawing: { ...message.drawing, program: fixed, frameIndex: 0 } }
+                : message,
+            );
+            queueMicrotask(() => syncDrawingsToBoard(next));
+            return next;
+          });
+          pushCoachMessage(
+            "assistant",
+            `Redrew that diagram — ${verdict.issues[0] ?? verdict.fix_hint}`,
+          );
+        } catch {
+          // Best-effort by design: the diagram on the board already passed the
+          // schema gate, which is the check with teeth.
+        }
+      }
+    },
+    [
+      client,
+      problem,
+      coachFlags.draw_review_enabled,
+      runCoachJob,
+      syncDrawingsToBoard,
+      pushCoachMessage,
+    ],
+  );
+
   const askForDiagram = useCallback(async (ask = "") => {
     const board = boardRef.current;
     if (!board || !problem) return;
@@ -1640,6 +1698,7 @@ export function App() {
           queueMicrotask(() => syncDrawingsToBoard(current));
           return current;
         });
+        void reviewDrawings(drawables, ask);
       }
 
       const api = sceneApi();
@@ -1707,6 +1766,7 @@ export function App() {
     finishCoachTurn,
     runCoachJob,
     pushCoachMessage,
+    reviewDrawings,
   ]);
 
   const applyFilledCode = useCallback(

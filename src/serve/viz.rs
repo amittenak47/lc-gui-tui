@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 use super::common::{description_for, load_meta, resolve_dataset};
 use super::{blocking, AppError, Shared};
 use crate::llm::coach::{
-    build_viz_prompt, validate_citation, validate_highlight, Annotation, BoardSnapshot, Citation,
-    CoachContext, EventSink, Highlight, ToolStatus, VIZ_SYSTEM_PROMPT,
+    build_draw_fix_prompt, build_draw_review_prompt, build_viz_prompt, parse_draw_review,
+    validate_citation, validate_highlight, Annotation, BoardSnapshot, Citation, CoachContext,
+    DrawReview, EventSink, Highlight, ToolStatus, DRAW_REVIEW_SYSTEM_PROMPT, VIZ_SYSTEM_PROMPT,
 };
 use crate::llm::tools::{parse_tool_calls, viz_tools, viz_tools_as_prompt, VizProgram};
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest, ChatReply, ToolCall};
@@ -187,6 +188,189 @@ pub async fn run_viz(
     })
     .await?;
     Ok(envelope)
+}
+
+// ---------------------------------------------------------------------------
+// `POST /coach/draw_review` — the post-render check
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct DrawReviewRequest {
+    pub task_id: String,
+    #[serde(default)]
+    pub dataset: Option<String>,
+    /// The program the client actually rendered.
+    pub program: VizProgram,
+    /// Base64 PNG of the agent-owned group for that program id.
+    #[serde(default)]
+    pub png: Option<String>,
+    /// What the student asked for, so taste is judged against their ask.
+    #[serde(default)]
+    pub ask: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DrawReviewEnvelope {
+    pub task_id: String,
+    pub provider: String,
+    #[serde(flatten)]
+    pub review: DrawReview,
+    /// The replacement program, when the critique found something and the redraw
+    /// produced a drawable answer under the same id. `None` means leave the
+    /// diagram alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program: Option<VizProgram>,
+    /// Why no vision check ran, when one could not. Shown as a process line
+    /// rather than an error — the schema gate already passed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+}
+
+pub async fn draw_review(
+    State(state): State<Shared>,
+    Json(request): Json<DrawReviewRequest>,
+) -> Result<Json<DrawReviewEnvelope>, AppError> {
+    Ok(Json(
+        run_draw_review(&state, request, EventSink::none()).await?,
+    ))
+}
+
+/// Look at the rendered diagram, and redraw it once if it is wrong.
+///
+/// Hard caps, both deliberate: one critique, one redraw. A small model asked
+/// to keep improving a picture will happily make it worse three times while the
+/// student watches, and the schema gate — which has teeth — has already passed.
+pub async fn run_draw_review(
+    state: &Shared,
+    request: DrawReviewRequest,
+    events: EventSink,
+) -> Result<DrawReviewEnvelope, AppError> {
+    let dataset = resolve_dataset(request.dataset.as_deref())?;
+    let cfg = state.cfg_snapshot();
+    if !cfg.coach.draw_review_enabled {
+        return Err(AppError::bad_request(anyhow!(
+            "the post-draw review is off — turn on Settings → Coach → check drawn diagrams"
+        )));
+    }
+
+    let envelope = blocking(move || {
+        let meta = load_meta(&cfg, dataset, &request.task_id)?;
+        let description = description_for(&meta);
+        let provider = make_provider_for_mode(&cfg, "viz")?;
+
+        // The critique is a question about a picture. Without a vision model
+        // there is no picture to ask about, and asking a text model to judge
+        // the JSON it just wrote is not a second opinion.
+        let vision = cfg
+            .llm
+            .modes
+            .capabilities(&cfg.llm)?
+            .into_iter()
+            .find(|mode| mode.mode == "viz")
+            .is_some_and(|mode| mode.vision);
+        let png = request.png.as_deref().filter(|png| !png.trim().is_empty());
+        let Some(png) = png.filter(|_| vision) else {
+            let why = if vision {
+                "draw_review skipped (no image of the diagram)"
+            } else {
+                "draw_review skipped (no vision)"
+            };
+            events.stage("draw_review", why);
+            return Ok(DrawReviewEnvelope {
+                task_id: meta.task_id,
+                provider: provider.label(),
+                review: DrawReview {
+                    ok: true,
+                    ..Default::default()
+                },
+                program: None,
+                skipped: Some(why.to_string()),
+            });
+        };
+
+        events.stage("draw_review", "checking the diagram against what it should show");
+        let prompt =
+            build_draw_review_prompt(&meta, description.as_deref(), &request.ask, &request.program);
+        let reply = provider.chat_ex(
+            &ChatRequest::new(vec![
+                ChatMessage::system(DRAW_REVIEW_SYSTEM_PROMPT),
+                ChatMessage::user(prompt).with_images(vec![png.to_string()]),
+            ])
+            .json()
+            .with_temperature(0.0),
+        )?;
+        let review = parse_draw_review(&reply.content)?;
+
+        if review.ok {
+            events.stage("done", "the diagram says what it should");
+            return Ok(DrawReviewEnvelope {
+                task_id: meta.task_id,
+                provider: provider.label(),
+                review,
+                program: None,
+                skipped: None,
+            });
+        }
+
+        events.stage("draw_fix", "redrawing it once");
+        let fix = provider.chat_ex(
+            &ChatRequest::new(vec![
+                ChatMessage::system(VIZ_SYSTEM_PROMPT),
+                ChatMessage::user(build_draw_fix_prompt(&request.program, &review)),
+            ])
+            .with_tools(viz_tools()),
+        );
+        let replacement = fix
+            .ok()
+            .map(|reply| replacement_program(&reply, &request.program.id, &events))
+            .unwrap_or(None);
+
+        events.stage("done", "");
+        Ok(DrawReviewEnvelope {
+            task_id: meta.task_id,
+            provider: provider.label(),
+            review,
+            program: replacement,
+            skipped: None,
+        })
+    })
+    .await?;
+    Ok(envelope)
+}
+
+/// The one redraw, pinned to the id it is replacing.
+///
+/// A fix under a different id is not a fix — it is a second diagram beside the
+/// broken one. Rather than reject that outright the id is *rewritten*, because
+/// the model getting the id wrong says nothing about whether the drawing is
+/// better, and the client replaces a group by id.
+fn replacement_program(
+    reply: &ChatReply,
+    original_id: &str,
+    events: &EventSink,
+) -> Option<VizProgram> {
+    for call in &reply.tool_calls {
+        if call.name != "draw_structure" && call.name != "animate_trace" {
+            continue;
+        }
+        let Ok(mut program) = serde_json::from_value::<VizProgram>(call.arguments.clone()) else {
+            continue;
+        };
+        program.id = original_id.to_string();
+        match program.rejection() {
+            None => {
+                events.tool(&call.name, ToolStatus::Accepted, "redrawn", None);
+                return Some(program);
+            }
+            Some(why) => events.tool(
+                &call.name,
+                ToolStatus::Rejected,
+                "redraw",
+                Some(format!("the redraw was dropped: {why}")),
+            ),
+        }
+    }
+    None
 }
 
 /// Re-ask for the diagram as JSON, for a server that will not tool-call.

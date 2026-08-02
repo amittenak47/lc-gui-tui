@@ -29,6 +29,7 @@
 //! - [`modes::ambient`] — Mode B
 //! - [`trace`] — counterexample retrace
 //! - [`actions::draw`] — Mode D diagram validation
+//! - [`actions::draw_review`] — the post-render vision check on a drawn diagram
 //! - [`actions::bridge`] / [`actions::lazy`] — Mode C reveal bridge + Lazy fill
 
 mod actions;
@@ -46,8 +47,10 @@ mod trace;
 mod tests;
 
 pub use actions::{
-    parse_board_scaffold, parse_bridge, parse_lazy_fill, validate_citation, validate_highlight,
-    Annotation, BoardScaffold, BridgeResponse, BridgeStep, Citation, Highlight, LazyFillResponse,
+    build_draw_fix_prompt, build_draw_review_prompt, parse_board_scaffold, parse_bridge,
+    parse_draw_review, parse_lazy_fill, validate_citation, validate_highlight, Annotation,
+    BoardScaffold, BridgeResponse, BridgeStep, Citation, DrawReview, Highlight, LazyFillResponse,
+    DRAW_REVIEW_SYSTEM_PROMPT,
 };
 pub use assess::{
     perceive_and_claim, perceive_and_claim_with_events, review_submission,
