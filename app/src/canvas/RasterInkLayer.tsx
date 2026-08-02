@@ -60,10 +60,6 @@ export interface RasterInkLayerProps {
    */
   clip?: SceneBounds | null;
   onChange?: () => void;
-  /** Fired while drawing so near-pen chrome can track the tip. */
-  onStrokeMove?: (clientX: number, clientY: number) => void;
-  /** Fired when a stroke ends — board-local client coords for near-pen chrome. */
-  onStrokeEnd?: (clientX: number, clientY: number) => void;
   /**
    * Stylus barrel / eraser tip: toggle pen↔eraser. Return true if handled so
    * the stroke is not started.
@@ -86,8 +82,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       getViewport,
       clip = null,
       onChange,
-      onStrokeMove,
-      onStrokeEnd,
       onStylusAccessory,
     },
     ref,
@@ -112,10 +106,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     // drops pointer capture and cuts ink short.
     const getViewportRef = useRef(getViewport);
     getViewportRef.current = getViewport;
-    const onStrokeMoveRef = useRef(onStrokeMove);
-    onStrokeMoveRef.current = onStrokeMove;
-    const onStrokeEndRef = useRef(onStrokeEnd);
-    onStrokeEndRef.current = onStrokeEnd;
     const onStylusAccessoryRef = useRef(onStylusAccessory);
     onStylusAccessoryRef.current = onStylusAccessory;
     const inkColorRef = useRef(inkColor);
@@ -489,8 +479,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         }
         // One full blit so the bake is under the first stamp/segment.
         repaintRef.current();
-        // Soft-hide near-pen chrome on stroke start (same path as move).
-        onStrokeMoveRef.current?.(event.clientX, event.clientY);
       };
 
       const move = (event: PointerEvent) => {
@@ -526,7 +514,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         live.points.push(...stamps);
         lastPointRef.current = point;
         paintLiveIncrementalRef.current();
-        onStrokeMoveRef.current?.(event.clientX, event.clientY);
       };
 
       const end = (event: PointerEvent) => {
@@ -538,7 +525,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           /* ignore */
         }
         commitLiveRef.current();
-        onStrokeEndRef.current?.(event.clientX, event.clientY);
       };
 
       canvas.addEventListener("pointerdown", begin, true);

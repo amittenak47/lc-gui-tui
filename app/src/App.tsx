@@ -2416,18 +2416,21 @@ export function App() {
                 : null
             }
             bottomCenter={
+              problem && !isScratchpad(problem) && mobile ? (
+                <RegionPager
+                  active={activeRegion}
+                  onPick={setActiveRegion}
+                  disabled={busy !== null || boardPreparing}
+                />
+              ) : null
+            }
+            pageTitle={
               problem && isScratchpad(problem) ? (
                 <ScratchPager
                   index={scratchPageIndex}
                   count={scratchPageCount}
                   onPick={setScratchPageIndex}
                   onAddPage={addScratchPage}
-                  disabled={busy !== null || boardPreparing}
-                />
-              ) : problem && mobile ? (
-                <RegionPager
-                  active={activeRegion}
-                  onPick={setActiveRegion}
                   disabled={busy !== null || boardPreparing}
                 />
               ) : null
@@ -2848,6 +2851,11 @@ function HeaderOverflow({ items }: { items: OverflowItem[] }) {
 
 /**
  * Scratchpad notebook pager — Next on the last page adds a blank page.
+ *
+ * It sits on the page's own title line rather than in the board's bottom row:
+ * the notebook is what is being paged, so `‹ 1/3 ›` belongs above `Scratchpad`
+ * the way a page number belongs on the paper. Board positions it through the
+ * camera; the sizing here is in `em` so it scales with the slot's font size.
  */
 function ScratchPager({
   index,
@@ -2864,48 +2872,31 @@ function ScratchPager({
 }) {
   const atEnd = index >= count - 1;
   return (
-    <nav className="lc-pager" aria-label="Notebook pages">
+    <nav className="lc-page-pager" aria-label="Notebook pages">
       <button
         type="button"
-        className="lc-pager-step"
+        className="lc-page-pager-step"
         aria-label="Previous page"
         disabled={disabled || index <= 0}
         onClick={() => onPick(Math.max(0, index - 1))}
       >
         ‹
       </button>
-      <div className="lc-pager-body">
-        <span className="lc-pager-label">
-          Page {index + 1}
-          {count > 1 ? ` / ${count}` : ""}
-        </span>
-        <div className="lc-pager-dots" role="tablist" aria-label="Notebook pages">
-          {Array.from({ length: count }, (_, page) => (
-            <button
-              key={page}
-              type="button"
-              role="tab"
-              className={page === index ? "lc-pager-dot lc-pager-dot-active" : "lc-pager-dot"}
-              aria-selected={page === index}
-              aria-label={`Page ${page + 1}`}
-              title={`Page ${page + 1}`}
-              disabled={disabled}
-              onClick={() => onPick(page)}
-            />
-          ))}
-        </div>
-      </div>
+      <span className="lc-page-pager-count">
+        {index + 1}/{count}
+      </span>
       <button
         type="button"
-        className="lc-pager-step"
+        className="lc-page-pager-step"
         aria-label={atEnd ? "Add page" : "Next page"}
+        title={atEnd ? "Add page" : "Next page"}
         disabled={disabled || (atEnd && count >= SCRATCHPAD_PAGE_LIMIT)}
         onClick={() => {
           if (atEnd) onAddPage();
           else onPick(index + 1);
         }}
       >
-        ›
+        {atEnd && count < SCRATCHPAD_PAGE_LIMIT ? "+" : "›"}
       </button>
     </nav>
   );
