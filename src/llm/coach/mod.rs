@@ -23,6 +23,7 @@
 //! - [`modes::review`] — Mode A oneshot types / parse / merge / format card
 //! - [`stages`] — Mode A perceive → claim → verdict types and parsers
 //! - [`assess`] — staged review orchestration entry points
+//! - [`events`] — [`EventSink`], the stage/tool progress channel the socket relays
 //! - [`modes::ambient`] — Mode B
 //! - [`trace`] — counterexample retrace
 //! - [`actions::draw`] — Mode D diagram validation
@@ -31,6 +32,7 @@
 mod actions;
 mod assess;
 mod board;
+mod events;
 mod modes;
 mod prompts;
 mod stages;
@@ -44,10 +46,12 @@ pub use actions::{
     Annotation, BoardScaffold, BridgeResponse, BridgeStep, Citation, Highlight, LazyFillResponse,
 };
 pub use assess::{
-    perceive_and_claim, review_submission, review_submission_text_only, staged_board_review,
-    ReviewOutcome,
+    perceive_and_claim, perceive_and_claim_with_events, review_submission,
+    review_submission_text_only, review_submission_with_events, staged_board_review,
+    staged_board_review_with_events, ReviewOutcome,
 };
 pub use board::BoardSnapshot;
+pub use events::{CoachEvent, EventSink, ToolStatus, STAGE_NAMES};
 pub use crate::llm::helpers::extract_json;
 pub use modes::ambient::{escalation_instruction, parse_ambient, AmbientNudge};
 pub use modes::review::{

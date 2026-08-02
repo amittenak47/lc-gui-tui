@@ -13,6 +13,42 @@ pub struct Config {
     pub tests: TestsConfig,
     pub llm: LlmConfig,
     pub serve: ServeConfig,
+    pub coach: CoachConfig,
+}
+
+/// Feature flags for the streaming coach loops.
+///
+/// The two Phase 1 flags default on because they only change *how* an answer
+/// arrives (a socket run with stage frames instead of a blocking POST). The
+/// planner and the post-draw review both spend extra model calls, so they stay
+/// off until the user opts in from Settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CoachConfig {
+    /// UI drives Ask/Review/Draw/Lazy over `WS /coach/session` `run` frames
+    /// instead of the blocking `POST /coach/*` endpoints.
+    pub ws_runs: bool,
+    /// Show the per-stage process blocks in the chat thread.
+    pub process_events_ui: bool,
+    /// Run the frontier/local planner once per task to catalog approaches.
+    pub planner_enabled: bool,
+    /// Vision-check a rendered diagram and allow one corrective tool call.
+    pub draw_review_enabled: bool,
+    /// Freeze one approach per board session and require an explicit,
+    /// reasoned transition to leave it.
+    pub approach_commitment: bool,
+}
+
+impl Default for CoachConfig {
+    fn default() -> Self {
+        Self {
+            ws_runs: true,
+            process_events_ui: true,
+            planner_enabled: false,
+            draw_review_enabled: false,
+            approach_commitment: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -468,6 +504,11 @@ impl Config {
             "tests.stop_on_first_failure" => {
                 self.tests.stop_on_first_failure = parse_bool(value)?
             }
+            "coach.ws_runs" => self.coach.ws_runs = parse_bool(value)?,
+            "coach.process_events_ui" => self.coach.process_events_ui = parse_bool(value)?,
+            "coach.planner_enabled" => self.coach.planner_enabled = parse_bool(value)?,
+            "coach.draw_review_enabled" => self.coach.draw_review_enabled = parse_bool(value)?,
+            "coach.approach_commitment" => self.coach.approach_commitment = parse_bool(value)?,
             _ if key.starts_with("data.datasets.") => {
                 let slug = &key["data.datasets.".len()..];
                 crate::dataset::get(slug)?;
@@ -516,7 +557,8 @@ impl Config {
                  llm.provider, llm.local.{{base_url,model,vision_model}}, \
                  llm.ollama.{{base_url,model,vision_model}}, \
                  llm.openai.{{base_url,model,vision_model}}, \
-                 llm.groq.{{base_url,model,vision_model}}, llm.modes.<{}>, serve.port, serve.token",
+                 llm.groq.{{base_url,model,vision_model}}, llm.modes.<{}>, serve.port, serve.token, \
+                 coach.{{ws_runs,process_events_ui,planner_enabled,draw_review_enabled,approach_commitment}}",
                 crate::dataset::DATASETS
                     .iter()
                     .map(|d| d.id)
@@ -534,6 +576,11 @@ impl Config {
             "workspace" | "workspace.dir" => self.workspace.dir.clone(),
             "python" | "python.executable" => self.python.executable.clone(),
             "tests.stop_on_first_failure" => self.tests.stop_on_first_failure.to_string(),
+            "coach.ws_runs" => self.coach.ws_runs.to_string(),
+            "coach.process_events_ui" => self.coach.process_events_ui.to_string(),
+            "coach.planner_enabled" => self.coach.planner_enabled.to_string(),
+            "coach.draw_review_enabled" => self.coach.draw_review_enabled.to_string(),
+            "coach.approach_commitment" => self.coach.approach_commitment.to_string(),
             _ if key.starts_with("data.datasets.") => {
                 let slug = &key["data.datasets.".len()..];
                 crate::dataset::get(slug)?;

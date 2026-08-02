@@ -1,4 +1,4 @@
-//! `WS /coach/session` — Mode B, the ambient coach.
+//! `WS /coach/session` — Mode B (the ambient coach) and interactive runs.
 //!
 //! The 15-second cadence lives on the *client*: it hashes the scene, skips
 //! unchanged boards, and only then sends a frame. That is the main cost
@@ -6,6 +6,25 @@
 //! is the part the client cannot do: hold the "already said" ladder so the
 //! coach escalates instead of repeating itself, and re-check the fingerprint as
 //! a backstop against a client that forgets to.
+//!
+//! ## Interactive runs
+//!
+//! Ask / Review / Draw / Lazy also arrive here, as [`ClientFrame::Run`] frames
+//! carrying a client-generated `request_id`. They exist because the answer is
+//! not the only thing worth sending: a staged review makes three or four
+//! blocking model calls, and until now the chat filled that silence with a
+//! timer that guessed at the phases. Now each stage boundary is a real frame.
+//!
+//! Two frames share one socket, so routing is by `request_id`: interactive
+//! frames always carry it, ambient frames never do. One run is allowed in
+//! flight per socket; a second is refused rather than queued, because the
+//! client that sent it has one composer and one placeholder turn to fill.
+//!
+//! `POST /coach/*` stays as it was — same handlers, same envelopes, just
+//! [`EventSink::none`] instead of a live sink.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -13,11 +32,36 @@ use axum::extract::State;
 use axum::response::Response;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{self, UnboundedSender};
 
 use super::common::{description_for, load_meta};
-use super::{board_session, AppError, Shared};
-use crate::llm::coach::{build_ambient_prompt, parse_ambient, AmbientNudge, BoardSnapshot};
+use super::{board_session, coach, viz, AppError, Shared};
+use crate::llm::coach::{
+    build_ambient_prompt, parse_ambient, AmbientNudge, BoardSnapshot, CoachEvent, EventSink,
+};
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest, LlmProvider};
+
+/// What an interactive `run` frame is asking for. Bridge / Reveal are
+/// deliberately absent: they sit behind a confirmation dialog and stay on HTTP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunAction {
+    Ask,
+    Review,
+    Viz,
+    Lazy,
+}
+
+impl RunAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            RunAction::Ask => "ask",
+            RunAction::Review => "review",
+            RunAction::Viz => "viz",
+            RunAction::Lazy => "lazy",
+        }
+    }
+}
 
 /// Frames the client sends.
 #[derive(Debug, Deserialize)]
@@ -30,6 +74,16 @@ pub enum ClientFrame {
         #[serde(default)]
         dataset: Option<String>,
     },
+    /// One interactive coach job. `payload` is the same body the matching
+    /// `POST /coach/*` endpoint takes, so the two transports cannot diverge.
+    Run {
+        request_id: String,
+        action: RunAction,
+        #[serde(default)]
+        payload: serde_json::Value,
+    },
+    /// Stop the run with this id. Late stages are dropped; no `result` follows.
+    Cancel { request_id: String },
     /// A board snapshot worth looking at. The client only sends these when its
     /// own scene hash changed and enough new strokes accumulated.
     Snapshot {
@@ -65,7 +119,45 @@ pub enum ServerFrame {
         nudge: AmbientNudge,
         nudges_so_far: u32,
     },
-    Error { message: String },
+    /// An interactive run entered a named stage. `detail` is a short human
+    /// string; the client is free to show its own label for a known stage.
+    Stage {
+        request_id: String,
+        stage: String,
+        detail: String,
+    },
+    /// One diagram tool call, as it was proposed / accepted / dropped.
+    ToolEvent {
+        request_id: String,
+        name: String,
+        status: String,
+        summary: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// The finished run. `body` is the same envelope `POST /coach/<action>`
+    /// returns, unchanged.
+    Result {
+        request_id: String,
+        action: String,
+        body: serde_json::Value,
+    },
+    Error {
+        /// Present for interactive failures, absent for ambient ones — that is
+        /// how the client knows which turn to put the message on.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        message: String,
+    },
+}
+
+impl ServerFrame {
+    fn ambient_error(message: impl Into<String>) -> Self {
+        ServerFrame::Error {
+            request_id: None,
+            message: message.into(),
+        }
+    }
 }
 
 pub async fn session(
@@ -75,8 +167,37 @@ pub async fn session(
     Ok(upgrade.on_upgrade(move |socket| drive(state, socket)))
 }
 
+/// The interactive run this socket is currently working on.
+struct InFlight {
+    request_id: String,
+    cancel: Arc<AtomicBool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl InFlight {
+    /// Stop the run and forget it. The flag is what a stage boundary checks;
+    /// the abort is what stops the task if it is waiting on the blocking pool
+    /// handoff rather than inside a provider call.
+    fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        self.task.abort();
+    }
+}
+
 async fn drive(state: Shared, socket: WebSocket) {
     let (mut sink, mut stream) = socket.split();
+    // Outgoing frames go through a channel so a run's stage events can be
+    // written while the read loop is still waiting for the next client frame.
+    let (outgoing, mut queued) = mpsc::unbounded_channel::<ServerFrame>();
+    let writer = tokio::spawn(async move {
+        while let Some(frame) = queued.recv().await {
+            if send(&mut sink, frame).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut in_flight: Option<InFlight> = None;
 
     while let Some(Ok(message)) = stream.next().await {
         let text = match message {
@@ -90,20 +211,189 @@ async fn drive(state: Shared, socket: WebSocket) {
         let frame: ClientFrame = match serde_json::from_str(&text) {
             Ok(frame) => frame,
             Err(err) => {
-                let _ = send(&mut sink, ServerFrame::Error {
-                    message: format!("cannot parse frame: {err}"),
-                })
-                .await;
+                let _ = outgoing.send(ServerFrame::ambient_error(format!(
+                    "cannot parse frame: {err}"
+                )));
                 continue;
             }
         };
 
-        let reply = handle(&state, frame).await;
-        let closed = send(&mut sink, reply).await.is_err();
-        if closed {
-            break;
+        match frame {
+            ClientFrame::Cancel { request_id } => {
+                if let Some(running) = in_flight.take_if_matching(&request_id) {
+                    running.cancel();
+                    let _ = outgoing.send(ServerFrame::Error {
+                        request_id: Some(request_id),
+                        message: "cancelled".into(),
+                    });
+                }
+            }
+
+            ClientFrame::Run {
+                request_id,
+                action,
+                payload,
+            } => {
+                // One composer, one placeholder turn: a second run while one is
+                // working is a mistake to report, not work to queue.
+                if in_flight.as_ref().is_some_and(|run| !run.task.is_finished()) {
+                    let _ = outgoing.send(ServerFrame::Error {
+                        request_id: Some(request_id),
+                        message: "busy — the coach is still working on the previous request".into(),
+                    });
+                    continue;
+                }
+                in_flight = Some(spawn_run(
+                    state.clone(),
+                    outgoing.clone(),
+                    request_id,
+                    action,
+                    payload,
+                ));
+            }
+
+            // Ambient stays inline: its whole point is the escalation ladder,
+            // and two snapshots in flight at once would read and write it out
+            // of order. The client already gates overlapping ticks.
+            other => {
+                let reply = handle(&state, other).await;
+                if outgoing.send(reply).is_err() {
+                    break;
+                }
+            }
         }
     }
+
+    // A dropped connection is an implicit cancel: no `result` frame is owed to
+    // a client that is no longer there.
+    if let Some(running) = in_flight {
+        running.cancel();
+    }
+    drop(outgoing);
+    let _ = writer.await;
+}
+
+/// `Option<InFlight>::take()`, but only for the run the client named — a stale
+/// `cancel` for a finished request must not stop the one that replaced it.
+trait TakeIfMatching {
+    fn take_if_matching(&mut self, request_id: &str) -> Option<InFlight>;
+}
+
+impl TakeIfMatching for Option<InFlight> {
+    fn take_if_matching(&mut self, request_id: &str) -> Option<InFlight> {
+        if self.as_ref().is_some_and(|run| run.request_id == request_id) {
+            self.take()
+        } else {
+            None
+        }
+    }
+}
+
+fn spawn_run(
+    state: Shared,
+    outgoing: UnboundedSender<ServerFrame>,
+    request_id: String,
+    action: RunAction,
+    payload: serde_json::Value,
+) -> InFlight {
+    let events = run_event_sink(outgoing.clone(), request_id.clone());
+    let cancel = events
+        .cancel_handle()
+        .expect("a wired sink is always cancellable");
+
+    let task = tokio::spawn({
+        let request_id = request_id.clone();
+        async move {
+            let outcome = run_action(&state, action, payload, events.clone()).await;
+            // A run that was cancelled already had its `error` frame sent, and
+            // whatever it produced afterwards is for a turn the client closed.
+            if events.is_cancelled() {
+                return;
+            }
+            let _ = outgoing.send(match outcome {
+                Ok(body) => ServerFrame::Result {
+                    request_id,
+                    action: action.as_str().to_string(),
+                    body,
+                },
+                Err(err) => ServerFrame::Error {
+                    request_id: Some(request_id),
+                    message: err.message(),
+                },
+            });
+        }
+    });
+
+    InFlight {
+        request_id,
+        cancel,
+        task,
+    }
+}
+
+/// Translate pipeline events into frames for one request id.
+fn run_event_sink(outgoing: UnboundedSender<ServerFrame>, request_id: String) -> EventSink {
+    EventSink::new(move |event| {
+        let frame = match event {
+            CoachEvent::Stage { stage, detail } => ServerFrame::Stage {
+                request_id: request_id.clone(),
+                stage,
+                detail,
+            },
+            CoachEvent::Tool {
+                name,
+                status,
+                summary,
+                reason,
+            } => ServerFrame::ToolEvent {
+                request_id: request_id.clone(),
+                name,
+                status: status.as_str().to_string(),
+                summary,
+                reason,
+            },
+        };
+        // A closed receiver means the socket is gone; the cancel flag is what
+        // actually stops the run, so dropping the frame here is right.
+        let _ = outgoing.send(frame);
+    })
+}
+
+/// Dispatch to the same handler body the HTTP route uses.
+async fn run_action(
+    state: &Shared,
+    action: RunAction,
+    payload: serde_json::Value,
+    events: EventSink,
+) -> Result<serde_json::Value, AppError> {
+    fn parse<T: serde::de::DeserializeOwned>(
+        payload: serde_json::Value,
+        what: &str,
+    ) -> Result<T, AppError> {
+        serde_json::from_value(payload).map_err(|err| {
+            AppError::bad_request(anyhow::anyhow!("cannot read the {what} payload: {err}"))
+        })
+    }
+
+    let body = match action {
+        RunAction::Ask => {
+            let envelope = coach::run_ask(state, parse(payload, "ask")?, events).await?;
+            serde_json::to_value(envelope)
+        }
+        RunAction::Review => {
+            let envelope = coach::run_review(state, parse(payload, "review")?, events).await?;
+            serde_json::to_value(envelope)
+        }
+        RunAction::Viz => {
+            let envelope = viz::run_viz(state, parse(payload, "viz")?, events).await?;
+            serde_json::to_value(envelope)
+        }
+        RunAction::Lazy => {
+            let envelope = coach::run_lazy_fill(state, parse(payload, "lazy")?, events).await?;
+            serde_json::to_value(envelope)
+        }
+    };
+    Ok(body.map_err(anyhow::Error::from)?)
 }
 
 async fn handle(state: &Shared, frame: ClientFrame) -> ServerFrame {
@@ -135,6 +425,10 @@ async fn handle(state: &Shared, frame: ClientFrame) -> ServerFrame {
             }
         }
 
+        ClientFrame::Run { .. } | ClientFrame::Cancel { .. } => {
+            unreachable!("interactive frames are dispatched in `drive`, not here")
+        }
+
         ClientFrame::Snapshot {
             session_id,
             task_id,
@@ -144,11 +438,7 @@ async fn handle(state: &Shared, frame: ClientFrame) -> ServerFrame {
         } => {
             let dataset = match crate::dataset::resolve(dataset.as_deref()) {
                 Ok(dataset) => dataset,
-                Err(err) => {
-                    return ServerFrame::Error {
-                        message: format!("{err:#}"),
-                    }
-                }
+                Err(err) => return ServerFrame::ambient_error(format!("{err:#}")),
             };
             let mut board = board;
             {
@@ -189,9 +479,7 @@ async fn handle(state: &Shared, frame: ClientFrame) -> ServerFrame {
                         nudge,
                     }
                 }
-                Err(err) => ServerFrame::Error {
-                    message: format!("{err:#}"),
-                },
+                Err(err) => ServerFrame::ambient_error(format!("{err:#}")),
             }
         }
     }
@@ -252,7 +540,11 @@ mod tests {
         let raw = r#"{"type": "snapshot", "session_id": "s1", "task_id": "two-sum",
                       "scene_hash": 99, "recognized_text": "two pointers"}"#;
         match serde_json::from_str::<ClientFrame>(raw).unwrap() {
-            ClientFrame::Snapshot {
+            ClientFrame::Run { .. } | ClientFrame::Cancel { .. } => {
+            unreachable!("interactive frames are dispatched in `drive`, not here")
+        }
+
+        ClientFrame::Snapshot {
                 scene_hash, board, ..
             } => {
                 assert_eq!(scene_hash, 99);
@@ -278,5 +570,110 @@ mod tests {
         assert_eq!(json["type"], "nudge");
         assert_eq!(json["closeness"], "warm");
         assert_eq!(json["nudges_so_far"], 1);
+    }
+
+    #[test]
+    fn a_run_frame_carries_its_action_and_the_http_body_verbatim() {
+        let raw = r#"{"type": "run", "request_id": "r-1", "action": "review",
+                      "payload": {"task_id": "two-sum", "recognized_text": "hash map"}}"#;
+        match serde_json::from_str::<ClientFrame>(raw).unwrap() {
+            ClientFrame::Run {
+                request_id,
+                action,
+                payload,
+            } => {
+                assert_eq!(request_id, "r-1");
+                assert_eq!(action, RunAction::Review);
+                // The payload is the `POST /coach/review` body, so it must
+                // deserialize into the very struct that route takes.
+                let request: coach::ReviewRequest = serde_json::from_value(payload).unwrap();
+                assert_eq!(request.task_id, "two-sum");
+                assert_eq!(request.board.recognized_text, "hash map");
+            }
+            other => panic!("expected a run, got {other:?}"),
+        }
+
+        assert!(
+            serde_json::from_str::<ClientFrame>(
+                r#"{"type": "run", "request_id": "r-2", "action": "bridge", "payload": {}}"#
+            )
+            .is_err(),
+            "bridge stays behind the confirm dialog on HTTP — it is not a run action"
+        );
+    }
+
+    /// The routing rule the client depends on: every interactive frame names
+    /// its request, and no ambient frame does. Without that, a nudge that
+    /// happens to land mid-review would overwrite the review's placeholder.
+    #[test]
+    fn interactive_frames_carry_a_request_id_and_ambient_frames_do_not() {
+        let json = |frame: &ServerFrame| -> serde_json::Value {
+            serde_json::from_str(&serde_json::to_string(frame).unwrap()).unwrap()
+        };
+
+        let stage = json(&ServerFrame::Stage {
+            request_id: "r-1".into(),
+            stage: "claim".into(),
+            detail: "naming the approach".into(),
+        });
+        assert_eq!(stage["type"], "stage");
+        assert_eq!(stage["request_id"], "r-1");
+
+        let tool = json(&ServerFrame::ToolEvent {
+            request_id: "r-1".into(),
+            name: "draw_structure".into(),
+            status: "rejected".into(),
+            summary: "array".into(),
+            reason: Some("no frames".into()),
+        });
+        assert_eq!(tool["status"], "rejected");
+        assert_eq!(tool["reason"], "no frames");
+
+        let result = json(&ServerFrame::Result {
+            request_id: "r-1".into(),
+            action: "review".into(),
+            body: serde_json::json!({"verdict": "on_track"}),
+        });
+        assert_eq!(result["type"], "result");
+        assert_eq!(result["body"]["verdict"], "on_track");
+
+        let interactive_error = json(&ServerFrame::Error {
+            request_id: Some("r-1".into()),
+            message: "busy".into(),
+        });
+        assert_eq!(interactive_error["request_id"], "r-1");
+
+        let ambient_error = json(&ServerFrame::ambient_error("the model is down"));
+        assert_eq!(ambient_error["type"], "error");
+        assert!(
+            ambient_error.get("request_id").is_none(),
+            "an ambient failure belongs to no chat turn: {ambient_error}"
+        );
+        assert!(json(&ServerFrame::Thinking).get("request_id").is_none());
+    }
+
+    /// A `cancel` naming a request that already finished must not stop the run
+    /// that replaced it — the ids are the only thing keeping them apart.
+    #[test]
+    fn cancel_only_takes_the_run_it_names() {
+        fn run(request_id: &str) -> InFlight {
+            InFlight {
+                request_id: request_id.into(),
+                cancel: Arc::new(AtomicBool::new(false)),
+                task: tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .unwrap()
+                    .block_on(async { tokio::spawn(std::future::ready(())) }),
+            }
+        }
+
+        let mut in_flight = Some(run("r-2"));
+        assert!(in_flight.take_if_matching("r-1").is_none());
+        assert!(in_flight.is_some(), "the live run survives a stale cancel");
+
+        let taken = in_flight.take_if_matching("r-2").expect("its own cancel lands");
+        taken.cancel();
+        assert!(taken.cancel.load(Ordering::Relaxed));
+        assert!(in_flight.is_none());
     }
 }

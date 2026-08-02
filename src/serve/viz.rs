@@ -18,7 +18,7 @@ use super::common::{description_for, load_meta, resolve_dataset};
 use super::{blocking, AppError, Shared};
 use crate::llm::coach::{
     build_viz_prompt, validate_citation, validate_highlight, Annotation, BoardSnapshot, Citation,
-    Highlight, VIZ_SYSTEM_PROMPT,
+    EventSink, Highlight, ToolStatus, VIZ_SYSTEM_PROMPT,
 };
 use crate::llm::tools::{parse_tool_calls, viz_tools, viz_tools_as_prompt, VizProgram};
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest, ChatReply, ToolCall};
@@ -53,6 +53,20 @@ pub async fn viz(
     State(state): State<Shared>,
     Json(request): Json<VizRequest>,
 ) -> Result<Json<VizEnvelope>, AppError> {
+    Ok(Json(run_viz(&state, request, EventSink::none()).await?))
+}
+
+/// The diagram request without the HTTP wrapper.
+///
+/// The socket path passes a live sink, which is where the per-tool
+/// accepted/rejected events come from: a student who asked for a drawing and
+/// got three of five calls dropped should see that as it happens, not infer it
+/// from a short diagram.
+pub async fn run_viz(
+    state: &Shared,
+    request: VizRequest,
+    events: EventSink,
+) -> Result<VizEnvelope, AppError> {
     let dataset = resolve_dataset(request.dataset.as_deref())?;
     let cfg = state.cfg_snapshot();
     let envelope = blocking(move || {
@@ -61,6 +75,7 @@ pub async fn viz(
         let prompt = build_viz_prompt(&meta, description.as_deref(), &request.board, &request.ask);
 
         let provider = make_provider_for_mode(&cfg, "viz")?;
+        events.stage("draw_tools", "choosing which diagram tools to call");
         let mut messages = vec![
             ChatMessage::system(VIZ_SYSTEM_PROMPT),
             ChatMessage::user(prompt.clone()).with_images(request.board.images()),
@@ -75,7 +90,15 @@ pub async fn viz(
             other => draw_without_tool_calls(&*provider, &prompt, &request.board, other)?,
         };
 
-        let mut envelope = collect_envelope(&meta.task_id, provider.label(), &reply, &meta.cases, &request.board);
+        events.stage("validate", "checking each call against the renderer's schema");
+        let mut envelope = collect_envelope(
+            &meta.task_id,
+            provider.label(),
+            &reply,
+            &meta.cases,
+            &request.board,
+            &events,
+        );
 
         let drawable_rejected = !envelope.programs.is_empty()
             || !envelope.annotations.is_empty()
@@ -88,6 +111,7 @@ pub async fn viz(
             && !envelope.rejected.is_empty()
             && !reply.tool_calls.is_empty()
         {
+            events.stage("draw_fix", "every call was dropped — asking once more with the reasons");
             messages.push(assistant_with_tools(&reply));
             messages.push(ChatMessage::user(format!(
                 "Your previous tool calls were rejected:\n- {}\n\n\
@@ -95,8 +119,14 @@ pub async fn viz(
                 envelope.rejected.join("\n- ")
             )));
             if let Ok(retry) = provider.chat_ex(&ChatRequest::new(messages).with_tools(viz_tools())) {
-                let retried =
-                    collect_envelope(&meta.task_id, provider.label(), &retry, &meta.cases, &request.board);
+                let retried = collect_envelope(
+                    &meta.task_id,
+                    provider.label(),
+                    &retry,
+                    &meta.cases,
+                    &request.board,
+                    &events,
+                );
                 if retried.programs.is_empty()
                     && retried.annotations.is_empty()
                     && retried.citations.is_empty()
@@ -126,10 +156,11 @@ pub async fn viz(
                 provider.label()
             ));
         }
+        events.stage("done", "");
         Ok(envelope)
     })
     .await?;
-    Ok(Json(envelope))
+    Ok(envelope)
 }
 
 /// Re-ask for the diagram as JSON, for a server that will not tool-call.
@@ -189,6 +220,7 @@ fn collect_envelope(
     reply: &ChatReply,
     cases: &[crate::problem::IoCase],
     board: &BoardSnapshot,
+    events: &EventSink,
 ) -> VizEnvelope {
     let mut envelope = VizEnvelope {
         task_id: task_id.to_string(),
@@ -197,48 +229,117 @@ fn collect_envelope(
         ..Default::default()
     };
 
+    /// Accepting is quiet — the drawing itself is the evidence — but a drop
+    /// gets its reason, which is the same string the envelope carries.
+    fn drop_call(envelope: &mut VizEnvelope, events: &EventSink, name: &str, why: String) {
+        events.tool(name, ToolStatus::Rejected, name.to_string(), Some(why.clone()));
+        envelope.rejected.push(why);
+    }
+
     for call in &reply.tool_calls {
+        events.tool(&call.name, ToolStatus::Proposed, call.name.clone(), None);
         match call.name.as_str() {
             "draw_structure" | "animate_trace" => {
                 match serde_json::from_value::<VizProgram>(call.arguments.clone()) {
                     Ok(program) => match program.rejection() {
-                        None => envelope.programs.push(program),
-                        Some(why) => envelope.rejected.push(format!("dropped a diagram: {why}")),
+                        None => {
+                            events.tool(
+                                &call.name,
+                                ToolStatus::Accepted,
+                                summarize_program(&program),
+                                None,
+                            );
+                            envelope.programs.push(program);
+                        }
+                        Some(why) => drop_call(
+                            &mut envelope,
+                            events,
+                            &call.name,
+                            format!("dropped a diagram: {why}"),
+                        ),
                     },
-                    Err(err) => envelope
-                        .rejected
-                        .push(format!("unreadable {} call: {err}", call.name)),
+                    Err(err) => drop_call(
+                        &mut envelope,
+                        events,
+                        &call.name,
+                        format!("unreadable {} call: {err}", call.name),
+                    ),
                 }
             }
             "annotate_region" => {
                 match serde_json::from_value::<Annotation>(call.arguments.clone()) {
                     Ok(annotation) if !annotation.text.trim().is_empty() => {
-                        envelope.annotations.push(annotation)
+                        events.tool(
+                            &call.name,
+                            ToolStatus::Accepted,
+                            format!("note on {}", annotation.region),
+                            None,
+                        );
+                        envelope.annotations.push(annotation);
                     }
-                    _ => envelope
-                        .rejected
-                        .push("dropped an empty annotation".to_string()),
+                    _ => drop_call(
+                        &mut envelope,
+                        events,
+                        &call.name,
+                        "dropped an empty annotation".to_string(),
+                    ),
                 }
             }
             "cite_test_case" => match validate_citation(&call.arguments, cases) {
-                Some(citation) => envelope.citations.push(citation),
-                None => envelope.rejected.push(format!(
-                    "dropped a citation: no such case (this problem has {} sample cases)",
-                    cases.len()
-                )),
+                Some(citation) => {
+                    events.tool(
+                        &call.name,
+                        ToolStatus::Accepted,
+                        format!("case {}", citation.case_number),
+                        None,
+                    );
+                    envelope.citations.push(citation);
+                }
+                None => drop_call(
+                    &mut envelope,
+                    events,
+                    &call.name,
+                    format!(
+                        "dropped a citation: no such case (this problem has {} sample cases)",
+                        cases.len()
+                    ),
+                ),
             },
             "highlight_student_work" => match validate_highlight(&call.arguments, board) {
-                Some(highlight) => envelope.highlights.push(highlight),
-                None => envelope
-                    .rejected
-                    .push("dropped a highlight: no matching element ids on the board".to_string()),
+                Some(highlight) => {
+                    events.tool(
+                        &call.name,
+                        ToolStatus::Accepted,
+                        format!("{} element(s)", highlight.ids.len()),
+                        None,
+                    );
+                    envelope.highlights.push(highlight);
+                }
+                None => drop_call(
+                    &mut envelope,
+                    events,
+                    &call.name,
+                    "dropped a highlight: no matching element ids on the board".to_string(),
+                ),
             },
-            other => envelope
-                .rejected
-                .push(format!("ignored an unknown tool call {other:?}")),
+            other => drop_call(
+                &mut envelope,
+                events,
+                &call.name,
+                format!("ignored an unknown tool call {other:?}"),
+            ),
         }
     }
     envelope
+}
+
+fn summarize_program(program: &VizProgram) -> String {
+    let title = program.title.trim();
+    if title.is_empty() {
+        program.id.clone()
+    } else {
+        title.to_string()
+    }
 }
 
 fn assistant_with_tools(reply: &ChatReply) -> ChatMessage {
