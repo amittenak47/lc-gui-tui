@@ -60,8 +60,6 @@ export interface BoardHandle {
   convert(skeletons: Skeleton[]): unknown[];
   /** Lay down a fresh template, discarding whatever was on the board. */
   seedTemplate(skeletons: Skeleton[]): void;
-  /** Erase the student's work, keeping the template scaffolding. */
-  clearStudentWork(): void;
   /** Restore the original problem template layout (frames + statement). */
   resetTemplate(): void;
   /**

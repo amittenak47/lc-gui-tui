@@ -71,7 +71,7 @@ import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
 import { textBaselineY, SCRATCH_LINE_PITCH, linedRuleClearance } from "../modes/textBaseline";
 import type { BoardBinaryFile, BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
-import { applyMetadata, keepOnClear, isCoachElement } from "./scene";
+import { applyMetadata, isCoachElement } from "./scene";
 import {
   applyPageVisibility,
   clearPageVisibility,
@@ -2481,6 +2481,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const resetTemplate = useCallback(() => {
     const skeletons = seedSkeletonsRef.current;
     if (skeletons.length === 0) return;
+    // Handwriting lives on the raster layer, not in the scene, so replacing the
+    // elements leaves every stroke on screen. Reset is now the only board-wide
+    // control — it has to clear both halves, which is what its dialog promises.
+    rasterInkRef.current?.clear();
     const dark = isDarkTheme(themeId);
     const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
     const recolored = recolorTemplateElements(converted, dark) ?? converted;
@@ -2912,16 +2916,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           apiRef.current?.history?.clear();
           syncPageVisibility();
           scheduleFitView();
-        });
-      },
-      clearStudentWork: () => {
-        // Keep the template and the coach's diagrams; drop only what the
-        // student drew. Membership comes from `customData`, which survives
-        // conversion — matching on id prefixes did not, which is why this used
-        // to wipe the problem statement.
-        apiRef.current?.updateScene({
-          elements: elements().filter(keepOnClear) as unknown[],
-          captureUpdate: CaptureUpdateAction.IMMEDIATELY,
         });
       },
       resetTemplate,

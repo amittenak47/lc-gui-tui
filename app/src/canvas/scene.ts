@@ -77,11 +77,3 @@ export function isTemplateElement(element: { customData?: SkeletonMeta | null })
 export function isCoachElement(element: { customData?: SkeletonMeta | null }): boolean {
   return Boolean(element.customData?.lcVizId);
 }
-
-/**
- * What **Clear** keeps: the template and the coach's diagrams. Only the
- * student's own strokes go.
- */
-export function keepOnClear(element: { customData?: SkeletonMeta | null }): boolean {
-  return isTemplateElement(element) || isCoachElement(element);
-}
