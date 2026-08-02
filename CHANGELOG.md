@@ -6,6 +6,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — the coach shows its work, and stops changing its mind
+
+- **Stages arrive as they happen.** Ask, Review, Draw and Lazy run over the
+  session WebSocket, which now carries `run` / `cancel` frames and reports each
+  pipeline stage and diagram tool call back to the chat turn that asked for it.
+  The chat used to fill that silence with a timer guessing at phases; on a slow
+  local model the guess was usually wrong. `POST /coach/*` still works and is
+  what `coach.ws_runs = false` puts the UI back on.
+- **One approach per board session.** Several approaches are valid on most of
+  these problems, and a model that knows three of them could read a half-drawn
+  board as a different one each turn. The session now commits to the approach
+  the board argues for, and every stage after the claim coaches inside it. Only
+  a board that actually changed can move the commitment — and when it does, the
+  card says so, with a reason and what carries over. A student who asks to
+  switch is honoured immediately.
+- **An optional planner.** `llm.modes.planner` catalogs the approach families a
+  problem admits, once, and the local coach uses it to recognize what the
+  student drew — never to recommend from. It sees the same redacted problem
+  `lc ask` does. Off unless `coach.planner_enabled`.
+- **An optional check on drawn diagrams.** After a diagram renders, a vision
+  model can look at the picture and redraw it once if it does not show what the
+  program claims — catching the diagrams that type-check and are still wrong.
+  One critique, one redraw, no loop. Off unless `coach.draw_review_enabled`.
+- How the coach works, and why, is written down in
+  [`docs/coach.md`](docs/coach.md).
+
 ### Fixed — the problem sets' empty columns
 
 - **KodCode now fills every column in the browser.** Difficulty comes from its

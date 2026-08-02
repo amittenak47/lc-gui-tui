@@ -664,16 +664,14 @@ mod tests {
     /// that replaced it — the ids are the only thing keeping them apart.
     #[test]
     fn cancel_only_takes_the_run_it_names() {
-        fn run(request_id: &str) -> InFlight {
-            InFlight {
-                request_id: request_id.into(),
-                cancel: Arc::new(AtomicBool::new(false)),
-                task: tokio::runtime::Builder::new_current_thread()
-                    .build()
-                    .unwrap()
-                    .block_on(async { tokio::spawn(std::future::ready(())) }),
-            }
-        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime to hang the join handle off");
+        let run = |request_id: &str| InFlight {
+            request_id: request_id.into(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            task: runtime.spawn(std::future::ready(())),
+        };
 
         let mut in_flight = Some(run("r-2"));
         assert!(in_flight.take_if_matching("r-1").is_none());

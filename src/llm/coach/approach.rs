@@ -180,11 +180,10 @@ impl ApproachSession {
     /// Fold a fresh claim into the commitment, and say what happened.
     pub fn observe_claim(&mut self, fingerprint: u64, claim: &Claim) -> ApproachOutcome {
         let named = claim.understood_approach.trim();
+        // A claim that names nothing is not evidence about anything, committed
+        // or not. Holding is the only safe answer either way.
         if named.is_empty() {
-            return match self.committed {
-                Some(_) => ApproachOutcome::Held,
-                None => ApproachOutcome::Held,
-            };
+            return ApproachOutcome::Held;
         }
 
         let Some(current) = self.committed.clone() else {
@@ -303,17 +302,18 @@ impl ApproachSession {
     }
 
     fn commitment_from(&self, fingerprint: u64, claim: &Claim) -> CommittedApproach {
+        // The model's own id first, then a name match — a claim that recognized
+        // the family it drew is worth more than our string comparison, but the
+        // comparison still catches the common case of it not answering at all.
         let matched = claim
             .matched_approach_id
             .as_deref()
             .and_then(|id| self.catalog.iter().find(|entry| entry.id == id))
-            .or_else(|| self.match_catalog(&claim.understood_approach).map(|_| {
-                // `match_catalog` returns a clone; re-find to borrow.
+            .or_else(|| {
                 self.catalog
                     .iter()
                     .find(|entry| same_approach(&entry.name, &claim.understood_approach))
-                    .expect("just matched")
-            }));
+            });
         CommittedApproach {
             id: matched.map(|entry| entry.id.clone()),
             name: claim.understood_approach.trim().to_string(),

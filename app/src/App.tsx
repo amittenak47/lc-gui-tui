@@ -3001,6 +3001,9 @@ export function App() {
         }}
         onSaved={() => {
           void client.capabilities().then(setCapabilities).catch(() => setCapabilities(null));
+          // Turning `ws_runs` on or off changes whether the socket is open at
+          // all, so the flags have to be re-read, not just saved.
+          void refreshCoachFlags();
           if (serverLink === "online") void probeLlm();
         }}
       />
