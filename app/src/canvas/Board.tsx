@@ -3182,6 +3182,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // duplicated whatever the student already attached as Approach/etc.
         return thumbs;
       },
+      exportVizPng: async (programId: string) => {
+        const api = apiRef.current;
+        if (!api) return "";
+        const group = (api.getSceneElements() as SceneElementLike[]).filter(
+          (el) => !el.isDeleted && el.customData?.lcVizId === programId,
+        );
+        if (group.length === 0) return "";
+        // Crop to the group's own bounds with a little air, so the model is
+        // looking at the diagram rather than hunting for it.
+        const pad = 24;
+        const minX = Math.min(...group.map((el) => el.x)) - pad;
+        const minY = Math.min(...group.map((el) => el.y)) - pad;
+        const maxX = Math.max(...group.map((el) => el.x + el.width)) + pad;
+        const maxY = Math.max(...group.map((el) => el.y + el.height)) + pad;
+        return captureImage(
+          () =>
+            exportRegionBlob(api, [], group, {
+              x: minX,
+              y: minY,
+              width: maxX - minX,
+              height: maxY - minY,
+            }),
+          { maxEdge: 900, maxBase64: 2 * 1024 * 1024 },
+        );
+      },
       getStrokes: () => captureStrokes(elements()),
       getInkStrokes: () => inkStrokesFromOps(rasterInkRef.current?.getOps() ?? []),
       getInkOpCount: () => (rasterInkRef.current?.getOps() ?? []).length,

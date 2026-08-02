@@ -160,6 +160,7 @@ pub fn router(state: Shared) -> Router {
         .route("/coach/review", post(coach::review))
         .route("/coach/ask", post(coach::ask))
         .route("/coach/viz", post(viz::viz))
+        .route("/coach/draw_review", post(viz::draw_review))
         .route("/coach/reveal", post(coach::reveal))
         .route("/coach/lazy", post(coach::lazy_fill))
         .route("/coach/scaffold", post(coach::scaffold))

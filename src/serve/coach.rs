@@ -1025,6 +1025,9 @@ mod tests {
         // one most likely to be pointed at a frontier API. It reads the same
         // redacted sources `lc ask` does and nothing else.
         let planner = include_str!("../llm/coach/planner.rs");
+        // The draw review is the only path that sends a rendered picture back
+        // to a model. It gets the diagram and the problem, never the answer.
+        let draw_review = include_str!("../llm/coach/actions/draw_review.rs");
 
         let consent_call = concat!("UserConsent::from_explicit_user_action", "()");
         assert_eq!(
@@ -1036,6 +1039,7 @@ mod tests {
             ("ws.rs", ambient_handler),
             ("viz.rs", viz_handler),
             ("llm/coach/planner.rs", planner),
+            ("llm/coach/actions/draw_review.rs", draw_review),
         ]) {
             assert!(
                 !source.contains("SolutionReveal") && !source.contains("UserConsent"),

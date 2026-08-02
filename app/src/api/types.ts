@@ -391,6 +391,20 @@ export interface VizEnvelope {
   rejected: string[];
 }
 
+/** One structured critique of a diagram the client already rendered. */
+export interface DrawReviewEnvelope {
+  task_id: string;
+  provider: string;
+  /** Whether the diagram is good enough to leave alone. */
+  ok: boolean;
+  issues: string[];
+  fix_hint: string;
+  /** A replacement program under the same id, when the redraw produced one. */
+  program?: unknown;
+  /** Why no vision check ran. Shown as a process line, not an error. */
+  skipped?: string | null;
+}
+
 export interface ModeCapability {
   mode: string;
   provider: string;
@@ -410,7 +424,7 @@ export interface AmbientNudge {
 }
 
 /** What an interactive `run` frame asks the coach to do. */
-export type RunAction = "ask" | "review" | "viz" | "lazy";
+export type RunAction = "ask" | "review" | "viz" | "lazy" | "draw_review";
 
 /**
  * Stages the daemon reports, in roughly the order they can occur. The daemon is

@@ -50,6 +50,8 @@ pub enum RunAction {
     Review,
     Viz,
     Lazy,
+    /// The post-render check on a diagram the client already drew.
+    DrawReview,
 }
 
 impl RunAction {
@@ -59,6 +61,7 @@ impl RunAction {
             RunAction::Review => "review",
             RunAction::Viz => "viz",
             RunAction::Lazy => "lazy",
+            RunAction::DrawReview => "draw_review",
         }
     }
 }
@@ -390,6 +393,11 @@ async fn run_action(
         }
         RunAction::Lazy => {
             let envelope = coach::run_lazy_fill(state, parse(payload, "lazy")?, events).await?;
+            serde_json::to_value(envelope)
+        }
+        RunAction::DrawReview => {
+            let envelope =
+                viz::run_draw_review(state, parse(payload, "draw review")?, events).await?;
             serde_json::to_value(envelope)
         }
     };

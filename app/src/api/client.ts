@@ -433,6 +433,27 @@ export class LcClient {
   }
 
   /**
+   * Look at a diagram the board already rendered, and redraw it once if the
+   * picture does not say what the program claims. Refused by the daemon unless
+   * `coach.draw_review_enabled` is on.
+   */
+  async drawReview(
+    taskId: string,
+    program: unknown,
+    png: string,
+    ask = "",
+    dataset?: string,
+  ): Promise<import("./types").DrawReviewEnvelope> {
+    return this.request("POST", "/coach/draw_review", {
+      task_id: taskId,
+      dataset,
+      program,
+      png,
+      ask,
+    });
+  }
+
+  /**
    * Phase 5. `confirmReveal` must come from the user's own confirmation, not a
    * default or a stored preference — the daemon rejects the call without it.
    */
