@@ -3,7 +3,9 @@ use std::fmt::Write as _;
 use crate::generator::WorkspaceMeta;
 use crate::llm::helpers::clip;
 
+use super::super::approach::CoachContext;
 use super::super::board::BoardSnapshot;
+use super::super::stages::claim::write_committed_approach;
 use crate::llm::helpers::{write_cases, write_problem_header};
 
 /// Prompt for the `viz` mode. `ask` is what the student (or the review) wants
@@ -13,11 +15,17 @@ pub fn build_viz_prompt(
     description: Option<&str>,
     board: &BoardSnapshot,
     ask: &str,
+    ctx: &CoachContext,
 ) -> String {
     let mut out = String::new();
     write_problem_header(&mut out, meta, description);
     write_cases(&mut out, &meta.cases);
     board.write_into(&mut out);
+    // A diagram of a different approach than the one being coached is worse
+    // than no diagram: it reads as the coach quietly changing its advice.
+    if let Some(committed) = ctx.committed() {
+        write_committed_approach(&mut out, committed);
+    }
 
     let _ = writeln!(out, "\n## What to draw");
     if ask.trim().is_empty() {

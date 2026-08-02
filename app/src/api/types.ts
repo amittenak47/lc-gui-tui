@@ -270,6 +270,24 @@ export interface Counterexample {
   why_your_approach_fails: string;
 }
 
+/** One approach family, as the planner catalogued it. Never a solution. */
+export interface ApproachCandidate {
+  id: string;
+  name: string;
+  when_to_use: string;
+  strengths: string[];
+  weaknesses: string[];
+  sketch_steps: string[];
+}
+
+/** A recorded move from one committed approach to another, with its reason. */
+export interface ApproachTransition {
+  from: string;
+  to: string;
+  reason: string;
+  what_carries_over?: string[];
+}
+
 export interface ReviewResponse {
   task_id: string;
   provider: string;
@@ -289,6 +307,17 @@ export interface ReviewResponse {
   /** Present when layout and code were scored in separate LLM passes. */
   layout_verdict?: Verdict | null;
   code_verdict?: Verdict | null;
+  /**
+   * Set when this review moved the session's committed approach. The daemon
+   * only sends it for a board that actually changed — a model that merely read
+   * the same drawing differently is held to the commitment and says nothing.
+   */
+  approach_transition?: ApproachTransition | null;
+  /**
+   * Approaches the board could equally be arguing for. Offered as choices, not
+   * applied: picking one is a message the student sends.
+   */
+  candidate_approaches?: ApproachCandidate[];
 }
 
 export interface BridgeStep {

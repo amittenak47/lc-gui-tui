@@ -4,7 +4,8 @@ use crate::generator::WorkspaceMeta;
 use crate::llm::helpers::clip;
 
 use super::super::board::BoardSnapshot;
-use super::super::stages::claim::{board_without_code, write_claim, Claim};
+use super::super::approach::CoachContext;
+use super::super::stages::claim::{board_without_code, write_claim, write_committed_approach, Claim};
 use crate::llm::helpers::{write_cases, write_problem_header, MAX_REFERENCE};
 
 /// Lazy fill without a reference (composer Lazy flag).
@@ -19,6 +20,7 @@ pub fn build_lazy_fill_prompt(
     description: Option<&str>,
     board: &BoardSnapshot,
     claim: Option<&Claim>,
+    ctx: &CoachContext,
 ) -> String {
     let mut out = String::new();
     write_problem_header(&mut out, meta, description);
@@ -27,6 +29,11 @@ pub fn build_lazy_fill_prompt(
     board_without_code(board).write_into(&mut out);
     if let Some(claim) = claim {
         write_claim(&mut out, claim);
+    }
+    // Lazy writes code for the approach the session committed to — never for a
+    // better one it thought of while reading the board.
+    if let Some(committed) = ctx.committed() {
+        write_committed_approach(&mut out, committed);
     }
     let _ = writeln!(
         out,

@@ -18,9 +18,10 @@ use super::{blocking, board_session, AppError, Shared};
 use crate::llm::coach::{
     build_ask_prompt, build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt,
     build_scaffold_prompt, parse_board_scaffold, parse_bridge, parse_lazy_fill, perceive_and_claim,
-    review_submission_with_events, BoardScaffold, BoardSnapshot, BridgeResponse, Claim, EventSink,
-    LazyFillResponse, ReviewResponse, ASK_SYSTEM_PROMPT, BRIDGE_SYSTEM_PROMPT,
-    LAZY_FILL_SYSTEM_PROMPT, LAZY_HINT_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
+    review_submission_with_events, ApproachCandidate, ApproachOutcome, ApproachTransition,
+    BoardScaffold, BoardSnapshot, BridgeResponse, Claim, EventSink, LazyFillResponse,
+    ReviewResponse, ASK_SYSTEM_PROMPT, BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
+    LAZY_HINT_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
 };
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
 use crate::reveal::{SolutionReveal, UserConsent};
@@ -64,6 +65,17 @@ pub struct ReviewEnvelope {
     pub provider: String,
     #[serde(flatten)]
     pub review: ReviewResponse,
+    /// Set when this review moved the session's committed approach. The card
+    /// shows it as a note: a switch the student was not told about is the
+    /// flip-flop the commitment model exists to prevent, and a switch they
+    /// *were* told about is the coach being honest about a board that changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approach_transition: Option<ApproachTransition>,
+    /// Alternatives worth naming when the board has not settled which approach
+    /// it is arguing for. Offered as text under the confirming question —
+    /// never picked for the student.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub candidate_approaches: Vec<ApproachCandidate>,
 }
 
 pub async fn review(
@@ -88,6 +100,7 @@ pub async fn run_review(
     // Board baselines are keyed per corpus: `two-sum` is a different board in
     // each of the three datasets that has one.
     let board_key = dataset.key(&request.task_id);
+    let commitment_enabled = state.cfg_snapshot().coach.approach_commitment;
     let mut board = request.board.clone();
     {
         let mut store = state.board_sessions.lock().await;
@@ -108,6 +121,14 @@ pub async fn run_review(
     let layout_only = request.layout_only;
     let task_id_for_llm = request.task_id.clone();
     let cfg = state.cfg_snapshot();
+    // What the session already decided, read before the model runs so every
+    // stage after the claim is handed the same committed approach.
+    let ctx = if cfg.coach.approach_commitment {
+        let mut store = state.board_sessions.lock().await;
+        store.entry(&board_key).coach_context()
+    } else {
+        crate::llm::coach::CoachContext::default()
+    };
     let outcome = blocking(move || {
         let meta = load_meta(&cfg, dataset, &task_id_for_llm)?;
         let description = description_for(&meta);
@@ -119,6 +140,7 @@ pub async fn run_review(
             description.as_deref(),
             &board_for_prompt,
             /* include_code */ !layout_only,
+            &ctx,
             &events,
         )?;
 
@@ -127,12 +149,17 @@ pub async fn run_review(
                 task_id: meta.task_id,
                 provider: provider.label(),
                 review: outcome.review,
+                approach_transition: None,
+                candidate_approaches: Vec::new(),
             },
             claim: outcome.claim,
         })
     })
     .await?;
-    let ReviewHttpOutcome { envelope, claim } = outcome;
+    let ReviewHttpOutcome {
+        mut envelope,
+        claim,
+    } = outcome;
 
     // Advance the server baseline only after a successful review.
     {
@@ -156,7 +183,22 @@ pub async fn run_review(
         // fill arrives as its own request a moment later, and it should write
         // code for the claim the student just read, not for a second reading.
         if let Some(claim) = claim {
-            session.remember_claim(board_session::drawn_board_fingerprint(&board), claim);
+            let fingerprint = board_session::drawn_board_fingerprint(&board);
+            if commitment_enabled {
+                let outcome = session.observe_claim(fingerprint, &claim);
+                if let ApproachOutcome::Transitioned(transition) = outcome {
+                    envelope.approach_transition = Some(transition);
+                }
+                envelope.candidate_approaches = session.approach().candidates_for(&claim);
+                // A commitment that held against drift is the *committed*
+                // approach the student is coaching, not the one this reading
+                // named — say so on the card rather than silently disagreeing
+                // with the sentence right above it.
+                if let Some(committed) = session.approach().committed.as_ref() {
+                    envelope.review.understood_approach = committed.name.clone();
+                }
+            }
+            session.remember_claim(fingerprint, claim);
         }
     }
 
@@ -342,14 +384,22 @@ pub async fn run_lazy_fill(
     let dataset = resolve_dataset(request.dataset.as_deref())?;
     let mut board = request.board.clone();
     let board_key = dataset.key(&request.task_id);
-    let frozen_claim = {
+    let commitment_enabled = state.cfg_snapshot().coach.approach_commitment;
+    let (frozen_claim, ctx) = {
         let mut store = state.board_sessions.lock().await;
         let session = store.entry(&board_key);
         board = board_session::resolve_board_snapshot(session, board);
         if let Some(pseudo) = board_session::resolve_pseudocode(session, &board) {
             board.pseudocode = Some(pseudo);
         }
-        session.claim_for(board_session::drawn_board_fingerprint(&board))
+        (
+            session.claim_for(board_session::drawn_board_fingerprint(&board)),
+            if commitment_enabled {
+                session.coach_context()
+            } else {
+                crate::llm::coach::CoachContext::default()
+            },
+        )
     };
     if board.is_empty() {
         return Err(AppError::bad_request(anyhow!(
@@ -383,7 +433,8 @@ pub async fn run_lazy_fill(
             return Err(err);
         }
         events.stage("lazy", "writing the parts the board already justifies");
-        let prompt = build_lazy_fill_prompt(&meta, description.as_deref(), &board, claim.as_ref());
+        let prompt =
+            build_lazy_fill_prompt(&meta, description.as_deref(), &board, claim.as_ref(), &ctx);
         let reply = provider.chat_ex(
             &ChatRequest::new(vec![
                 ChatMessage::system(LAZY_FILL_SYSTEM_PROMPT),
@@ -774,7 +825,7 @@ mod tests {
             .expect("the claim the review just froze");
         assert_eq!(found.understood_approach, claim.understood_approach);
 
-        let prompt = build_lazy_fill_prompt(&meta(), None, &lazy_send, Some(&found));
+        let prompt = build_lazy_fill_prompt(&meta(), None, &lazy_send, Some(&found), &Default::default());
         assert!(prompt.contains("full working Python for the claim above"));
     }
 
@@ -808,7 +859,15 @@ mod tests {
 
         let (sink, events) = record();
         let provider = ScriptedProvider::new(&[seen_image, SUFFICIENT_CLAIM]);
-        review_submission_with_events(&provider, &meta(), None, &board_with_png, false, &sink)
+        review_submission_with_events(
+            &provider,
+            &meta(),
+            None,
+            &board_with_png,
+            false,
+            &Default::default(),
+            &sink,
+        )
             .expect("staged");
         assert_eq!(provider.stages(), vec!["perceive", "claim"]);
         assert_eq!(
@@ -834,7 +893,7 @@ mod tests {
             pseudocode: Some("def reverse(x):\n    return int(str(x)[::-1])".into()),
             ..drawn_board()
         };
-        review_submission_with_events(&provider, &meta(), None, &board, true, &sink)
+        review_submission_with_events(&provider, &meta(), None, &board, true, &Default::default(), &sink)
             .expect("staged");
         assert_eq!(
             *events.lock().unwrap(),
@@ -860,6 +919,7 @@ mod tests {
             None,
             &drawn_board(),
             false,
+            &Default::default(),
             &sink,
         );
         assert!(failed.is_err(), "a cancelled run must not return a card");

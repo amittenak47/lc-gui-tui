@@ -18,7 +18,7 @@ use super::common::{description_for, load_meta, resolve_dataset};
 use super::{blocking, AppError, Shared};
 use crate::llm::coach::{
     build_viz_prompt, validate_citation, validate_highlight, Annotation, BoardSnapshot, Citation,
-    EventSink, Highlight, ToolStatus, VIZ_SYSTEM_PROMPT,
+    CoachContext, EventSink, Highlight, ToolStatus, VIZ_SYSTEM_PROMPT,
 };
 use crate::llm::tools::{parse_tool_calls, viz_tools, viz_tools_as_prompt, VizProgram};
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest, ChatReply, ToolCall};
@@ -69,10 +69,24 @@ pub async fn run_viz(
 ) -> Result<VizEnvelope, AppError> {
     let dataset = resolve_dataset(request.dataset.as_deref())?;
     let cfg = state.cfg_snapshot();
+    // A diagram is coaching too: it is drawn for the approach the session
+    // committed to, not for whichever one the drawing model prefers.
+    let ctx = if cfg.coach.approach_commitment {
+        let mut store = state.board_sessions.lock().await;
+        store.entry(&dataset.key(&request.task_id)).coach_context()
+    } else {
+        CoachContext::default()
+    };
     let envelope = blocking(move || {
         let meta = load_meta(&cfg, dataset, &request.task_id)?;
         let description = description_for(&meta);
-        let prompt = build_viz_prompt(&meta, description.as_deref(), &request.board, &request.ask);
+        let prompt = build_viz_prompt(
+            &meta,
+            description.as_deref(),
+            &request.board,
+            &request.ask,
+            &ctx,
+        );
 
         let provider = make_provider_for_mode(&cfg, "viz")?;
         events.stage("draw_tools", "choosing which diagram tools to call");

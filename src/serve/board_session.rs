@@ -10,7 +10,9 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::llm::coach::{BoardSnapshot, Claim};
+use crate::llm::coach::{
+    ApproachOutcome, ApproachSession, BoardSnapshot, Claim, CoachContext,
+};
 
 /// One element as captured off the canvas (`{id, type, x, y, w, h, text?}`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +65,10 @@ pub struct BoardSessionState {
     /// the review, and this is how the same understanding reaches it instead of
     /// the model interpreting the drawing twice and disagreeing with itself.
     claim: Option<(u64, Claim)>,
+    /// Which approach this session is coaching, and what it took to get there.
+    /// See [`crate::llm::coach::ApproachSession`] — the claim freeze above
+    /// holds one *review* together, this holds a whole session together.
+    approach: ApproachSession,
 }
 
 #[derive(Debug, Default)]
@@ -94,6 +100,24 @@ impl BoardSessionState {
     /// Hold the claim a review just froze, keyed to the board it describes.
     pub fn remember_claim(&mut self, fingerprint: u64, claim: Claim) {
         self.claim = Some((fingerprint, claim));
+    }
+
+    /// Fold a fresh claim into the session's approach commitment.
+    pub fn observe_claim(&mut self, fingerprint: u64, claim: &Claim) -> ApproachOutcome {
+        self.approach.observe_claim(fingerprint, claim)
+    }
+
+    pub fn approach(&self) -> &ApproachSession {
+        &self.approach
+    }
+
+    pub fn approach_mut(&mut self) -> &mut ApproachSession {
+        &mut self.approach
+    }
+
+    /// What the stages after the claim should be told about this session.
+    pub fn coach_context(&self) -> CoachContext {
+        self.approach.context()
     }
 
     /// The stored claim, but only if it was read off *this* board. A claim about

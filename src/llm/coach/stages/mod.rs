@@ -6,7 +6,7 @@ pub mod claim;
 pub mod perceive;
 pub mod verdict;
 
-pub use claim::{parse_claim, Claim};
+pub use claim::{parse_claim, write_committed_approach, Claim};
 pub use perceive::{parse_perception, Perception};
 pub use verdict::on_track_review_from_claim;
 

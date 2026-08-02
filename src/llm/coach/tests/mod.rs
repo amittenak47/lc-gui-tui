@@ -152,6 +152,7 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
                 .into(),
             unresolved: vec![],
             confirming_question: "Which input would you run to see the zero disappear?".into(),
+            ..Default::default()
         }
     }
 
@@ -301,7 +302,7 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
             illegible: vec!["a smudge under the arrow".into()],
         };
 
-        let prompt = build_claim_prompt(&meta, Some("Reverse an integer."), &board, Some(&perception));
+        let prompt = build_claim_prompt(&meta, Some("Reverse an integer."), &board, Some(&perception), &CoachContext::default());
         assert!(prompt.contains("Reverse an integer."));
         assert!(prompt.contains("- [0] input:"), "stage 2 may cite from the cases later");
         assert!(prompt.contains("two boxes joined by an arrow"));
@@ -311,7 +312,7 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
         assert!(prompt.contains("\"claim_sufficient\""));
 
         // On a text-only build there is no perception section at all.
-        let text_only = build_claim_prompt(&meta, None, &board, None);
+        let text_only = build_claim_prompt(&meta, None, &board, None, &CoachContext::default());
         assert!(!text_only.contains("an earlier pass looked at the image"));
         assert!(text_only.contains("reverse digits"));
 
@@ -330,7 +331,7 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
             unresolved: vec!["negative inputs".into()],
             ..sufficient_claim()
         };
-        let prompt = build_verdict_prompt(&meta, None, &BoardSnapshot::default(), &claim);
+        let prompt = build_verdict_prompt(&meta, None, &BoardSnapshot::default(), &claim, &CoachContext::default());
 
         assert!(prompt.contains("frozen — read it as given"));
         assert!(prompt.contains("trailing zeros mean the double reversal cannot round-trip"));
@@ -356,7 +357,7 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
             ..Default::default()
         };
         let prompt =
-            build_claim_code_review_prompt(&meta, None, &board, &sufficient_claim());
+            build_claim_code_review_prompt(&meta, None, &board, &sufficient_claim(), &CoachContext::default());
 
         assert!(prompt.contains("Does this code implement the claim above?"));
         assert!(prompt.contains("The claim the board makes"));
@@ -378,18 +379,87 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
         };
         let claim = sufficient_claim();
 
-        let with_claim = build_lazy_fill_prompt(&meta, None, &board, Some(&claim));
+        let with_claim = build_lazy_fill_prompt(&meta, None, &board, Some(&claim), &CoachContext::default());
         assert!(with_claim.contains("full working Python for the claim above"));
         assert!(with_claim.contains("reverse the digits once"));
         assert!(!with_claim.contains("WRONG OLD ATTEMPT"), "the dock is not the truth here");
 
         // No review yet for this board: fall back to reading the drawing.
-        let without = build_lazy_fill_prompt(&meta, None, &board, None);
+        let without = build_lazy_fill_prompt(&meta, None, &board, None, &CoachContext::default());
         assert!(without.contains("Interpret the drawing"));
         assert!(!without.contains("The claim the board makes"));
         assert!(!without.contains("WRONG OLD ATTEMPT"));
 
         assert!(LAZY_FILL_SYSTEM_PROMPT.contains("it is the specification"));
+    }
+
+    /// Every stage that runs after the claim is told which approach the session
+    /// is coaching, and told not to swap it. Without that the drawing model and
+    /// the code model can each pick a different valid approach, and the student
+    /// gets three coaches disagreeing inside one turn.
+    #[test]
+    fn every_stage_after_the_claim_is_handed_the_committed_approach() {
+        let meta = meta_with_cases(2);
+        let board = BoardSnapshot {
+            recognized_text: "sort, then walk in from both ends".into(),
+            pseudocode: Some("nums.sort()".into()),
+            ..Default::default()
+        };
+        let ctx = CoachContext {
+            committed: Some(CommittedApproach {
+                id: Some("A".into()),
+                name: "two pointers on a sorted array".into(),
+                key_steps: vec!["sort the array".into(), "walk in from both ends".into()],
+                source: CommitSource::BoardClaim,
+                committed_at_fingerprint: 11,
+            }),
+            ..Default::default()
+        };
+        let claim = sufficient_claim();
+
+        for (what, prompt) in [
+            ("verdict", build_verdict_prompt(&meta, None, &board, &claim, &ctx)),
+            ("code", build_claim_code_review_prompt(&meta, None, &board, &claim, &ctx)),
+            ("lazy", build_lazy_fill_prompt(&meta, None, &board, Some(&claim), &ctx)),
+            ("viz", build_viz_prompt(&meta, None, &board, "show the scan", &ctx)),
+        ] {
+            assert!(
+                prompt.contains("two pointers on a sorted array"),
+                "the {what} stage must know which approach it is coaching"
+            );
+            assert!(
+                prompt.contains("walk in from both ends"),
+                "the {what} stage must know its steps"
+            );
+            assert!(
+                prompt.contains("Do not propose one"),
+                "the {what} stage must be told not to swap approaches: {prompt}"
+            );
+        }
+
+        // Nothing committed — a fresh session, the TUI, a caller with no board
+        // session — reads exactly as it did before any of this existed.
+        let bare = build_verdict_prompt(&meta, None, &board, &claim, &CoachContext::default());
+        assert!(!bare.contains("committed — work inside it"));
+    }
+
+    /// The claim stage is where alternatives come from, so it has to ask.
+    #[test]
+    fn the_claim_prompt_asks_for_alternatives_only_for_an_unsettled_board() {
+        let meta = meta_with_cases(2);
+        let prompt = build_claim_prompt(
+            &meta,
+            None,
+            &BoardSnapshot::default(),
+            None,
+            &CoachContext::default(),
+        );
+        assert!(prompt.contains("compatible_alternatives"));
+        assert!(
+            prompt.contains("never to \nsecond-guess a clear board")
+                || prompt.contains("never to second-guess a clear board"),
+            "listing alternatives for a settled board is how oscillation starts: {prompt}"
+        );
     }
 
     #[test]
@@ -495,7 +565,7 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
     #[test]
     fn the_viz_prompt_forbids_coordinates_and_numbers_the_cases() {
         let meta = meta_with_cases(2);
-        let prompt = build_viz_prompt(&meta, None, &BoardSnapshot::default(), "show the scan");
+        let prompt = build_viz_prompt(&meta, None, &BoardSnapshot::default(), "show the scan", &CoachContext::default());
         assert!(prompt.contains("show the scan"));
         assert!(prompt.contains("- [0] input:"));
         assert!(VIZ_SYSTEM_PROMPT.contains("must not guess coordinates"));

@@ -4,7 +4,8 @@ use crate::generator::WorkspaceMeta;
 use crate::llm::helpers::{clip, write_cases, write_problem_header, MAX_BOARD};
 
 use super::super::board::BoardSnapshot;
-use super::super::stages::claim::{write_claim, Claim};
+use super::super::approach::CoachContext;
+use super::super::stages::claim::{write_claim, write_committed_approach, Claim};
 
 /// The code pass, conditioned on the frozen claim. Asks "does this code match
 /// the claim?" — never "what approach does this stub suggest?", which is how a
@@ -14,11 +15,15 @@ pub fn build_claim_code_review_prompt(
     description: Option<&str>,
     board: &BoardSnapshot,
     claim: &Claim,
+    ctx: &CoachContext,
 ) -> String {
     let mut out = String::new();
     write_problem_header(&mut out, meta, description);
     write_cases(&mut out, &meta.cases);
     write_claim(&mut out, claim);
+    if let Some(committed) = ctx.committed() {
+        write_committed_approach(&mut out, committed);
+    }
     if !board.app_messages.is_empty() {
         let _ = writeln!(
             out,

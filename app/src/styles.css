@@ -2985,6 +2985,27 @@ code {
   color: var(--muted);
 }
 
+/* An approach switch and the alternatives on offer share the review card's
+   aside styling — they are context for the verdict, not verdicts themselves. */
+.lc-review-transition,
+.lc-review-candidates {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-left: 3px dashed var(--chrome-edge);
+  border-radius: 0 8px 8px 0;
+}
+
+.lc-review-transition h3,
+.lc-review-candidates h3 {
+  margin: 0 0 4px;
+}
+
+.lc-review-transition ul,
+.lc-review-candidates ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
 .lc-review-action {
   margin: 12px 0 0;
   padding: 10px 12px;

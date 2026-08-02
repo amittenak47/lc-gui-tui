@@ -4,7 +4,8 @@ use crate::generator::WorkspaceMeta;
 use crate::llm::helpers::{write_cases, write_problem_header};
 
 use super::super::board::BoardSnapshot;
-use super::super::stages::claim::{board_without_code, write_claim, Claim};
+use super::super::approach::CoachContext;
+use super::super::stages::claim::{board_without_code, write_claim, write_committed_approach, Claim};
 
 /// Stage 3a prompt — reached only when the claim did not decide the answer.
 pub fn build_verdict_prompt(
@@ -12,12 +13,16 @@ pub fn build_verdict_prompt(
     description: Option<&str>,
     board: &BoardSnapshot,
     claim: &Claim,
+    ctx: &CoachContext,
 ) -> String {
     let mut out = String::new();
     write_problem_header(&mut out, meta, description);
     write_cases(&mut out, &meta.cases);
     board_without_code(board).write_into(&mut out);
     write_claim(&mut out, claim);
+    if let Some(committed) = ctx.committed() {
+        write_committed_approach(&mut out, committed);
+    }
     let _ = writeln!(
         out,
         "\n## Your reply\n\n\

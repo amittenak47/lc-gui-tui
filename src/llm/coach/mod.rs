@@ -22,6 +22,7 @@
 //! - [`board`] — canvas snapshot
 //! - [`modes::review`] — Mode A oneshot types / parse / merge / format card
 //! - [`stages`] — Mode A perceive → claim → verdict types and parsers
+//! - [`approach`] — which approach a board session is committed to coaching
 //! - [`assess`] — staged review orchestration entry points
 //! - [`events`] — [`EventSink`], the stage/tool progress channel the socket relays
 //! - [`modes::ambient`] — Mode B
@@ -30,6 +31,7 @@
 //! - [`actions::bridge`] / [`actions::lazy`] — Mode C reveal bridge + Lazy fill
 
 mod actions;
+mod approach;
 mod assess;
 mod board;
 mod events;
@@ -50,6 +52,10 @@ pub use assess::{
     review_submission_text_only, review_submission_with_events, staged_board_review,
     staged_board_review_with_events, ReviewOutcome,
 };
+pub use approach::{
+    same_approach, ApproachCandidate, ApproachOutcome, ApproachSession, ApproachTransition,
+    CoachContext, CommitSource, CommittedApproach,
+};
 pub use board::BoardSnapshot;
 pub use events::{CoachEvent, EventSink, ToolStatus, STAGE_NAMES};
 pub use crate::llm::helpers::extract_json;
@@ -67,5 +73,8 @@ pub use prompts::{
     PERCEIVE_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT, TRACE_SYSTEM_PROMPT,
     VERDICT_SYSTEM_PROMPT, VIZ_SYSTEM_PROMPT,
 };
-pub use stages::{on_track_review_from_claim, parse_claim, parse_perception, Claim, Perception};
+pub use stages::{
+    on_track_review_from_claim, parse_claim, parse_perception, write_committed_approach, Claim,
+    Perception,
+};
 pub use trace::{parse_trace, retrace_counterexample};
