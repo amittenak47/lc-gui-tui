@@ -1574,7 +1574,12 @@ export function App() {
   );
 
   const sendCoachChat = useCallback(
-    (text: string, flags: CoachSendFlags) => {
+    (text: string, requestedFlags: CoachSendFlags) => {
+      // Scratchpad has no solution.py, no review pipeline and no board regions
+      // to draw into — Ask is the only flag that means anything there.
+      const flags: CoachSendFlags = isScratchpad(problem)
+        ? { ask: true, draw: false, reviewBoard: false, lazy: false }
+        : requestedFlags;
       const flagBits = [
         flags.ask ? "Ask" : null,
         flags.reviewBoard ? "Review" : null,
@@ -1801,7 +1806,26 @@ export function App() {
     const timer = window.setTimeout(() => {
       if (agentSaveSuspendedRef.current) return;
       if (isScratchpad(problem)) {
-        // Board autosave already persists the notebook + agent together.
+        // Board autosave only writes when the scene + ink fingerprint moves, so
+        // a chat-only exchange would otherwise be lost. Write the notebook with
+        // the current board so the thread survives a crash or a closed lid.
+        const board = boardRef.current;
+        const blob = board?.saveBoard();
+        if (!blob) return;
+        try {
+          const saved = saveScratchNotebook({
+            id: scratchNotebookId ?? undefined,
+            board: blob,
+            agent: coachMessages,
+            pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
+          });
+          if (!scratchNotebookId) setScratchNotebookId(saved.id);
+        } catch (cause) {
+          if (cause instanceof ScratchpadLibraryFullError) {
+            scratchLibResumeRef.current = null;
+            setScratchLibOpen(true);
+          }
+        }
         return;
       }
       void client
@@ -1811,7 +1835,7 @@ export function App() {
         });
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [client, problem, coachMessages]);
+  }, [client, problem, coachMessages, scratchNotebookId, scratchPageCount]);
 
   const confirmReveal = useCallback(async (mode: "bridge" | "lazy" = "bridge") => {
     const board = boardRef.current;
@@ -2501,6 +2525,7 @@ export function App() {
             thinking={busy !== null || thinking}
             thinkingPhase={coachPhase}
             messages={coachMessages}
+            askOnly={isScratchpad(problem)}
             onSend={sendCoachChat}
             onRequestBridge={(messageId) => {
               revealForMessageIdRef.current = messageId;
