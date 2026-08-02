@@ -27,13 +27,18 @@ import {
 } from "./api/pairing";
 import type {
   AttemptState,
+  CoachFlags,
+  CoachProcessEvent,
+  LazyFillResponse,
   ProblemDetail,
   ReviewResponse,
+  RunAction,
   ServerFrame,
   SessionSnapshot,
   TestResponse,
+  VizEnvelope,
 } from "./api/types";
-import { DEFAULT_DATASET } from "./api/types";
+import { DEFAULT_COACH_FLAGS, DEFAULT_DATASET } from "./api/types";
 import { Tip } from "./components/Tip";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { HoldButton } from "./components/HoldButton";
@@ -498,6 +503,12 @@ export function App() {
 
   const [tests, setTests] = useState<TestResponse | null>(null);
   const [capabilities, setCapabilities] = useState<CoachCapabilities | null>(null);
+  /**
+   * Settings → Coach. Read once at mount and after Settings saves; a daemon
+   * too old to report them leaves the defaults, which is the pre-socket
+   * behaviour for everything except `ws_runs`.
+   */
+  const [coachFlags, setCoachFlags] = useState<CoachFlags>(DEFAULT_COACH_FLAGS);
 
   /** Attempt state for the open problem, so the leave dialog asks the right question. */
   const [attemptState, setAttemptState] = useState<AttemptState | null>(null);
@@ -747,6 +758,19 @@ export function App() {
       cancelled = true;
     };
   }, [client, pairing]);
+
+  const refreshCoachFlags = useCallback(async () => {
+    try {
+      const config = await client.getConfig();
+      setCoachFlags({ ...DEFAULT_COACH_FLAGS, ...(config.coach ?? {}) });
+    } catch {
+      setCoachFlags(DEFAULT_COACH_FLAGS);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void refreshCoachFlags();
+  }, [refreshCoachFlags]);
 
   const modeHasVision = useCallback(
     (modeName: string) =>
@@ -1204,10 +1228,16 @@ export function App() {
     };
   }, [problem, session, navigateBySession, bankFilters, client]);
 
-  // Ambient mode's lifecycle. Never entered while `AMBIENT_ENABLED` is false —
-  // the socket is not opened and no polling timer is created.
+  // The coach socket's lifecycle.
+  //
+  // It carries two things now: the ambient loop (still gated behind
+  // `AMBIENT_ENABLED`, still on its own timer) and interactive runs. Which of
+  // those is wanted decides whether the socket opens at all — with ambient off
+  // and `ws_runs` off, this stays exactly as it was: no connection, no timer.
   useEffect(() => {
-    if (!AMBIENT_ENABLED || mode !== "ambient" || !problem) return;
+    if (!problem) return;
+    const ambient = AMBIENT_ENABLED && mode === "ambient";
+    if (!ambient && !coachFlags.ws_runs) return;
 
     const onFrame = (frame: ServerFrame) => {
       switch (frame.type) {
@@ -1251,7 +1281,8 @@ export function App() {
       onSkip: (reason) => setLastSkip(reason),
     });
     coachRef.current = coach;
-    coach.start(problem.task_id, probe, capture);
+    if (ambient) coach.start(problem.task_id, probe, capture);
+    else coach.connect(problem.task_id);
 
     return () => {
       coach.stop();
@@ -1259,7 +1290,105 @@ export function App() {
       setConnected(false);
       setThinking(false);
     };
-  }, [mode, problem, pairing, probe, capture]);
+  }, [mode, problem, pairing, probe, capture, coachFlags.ws_runs]);
+
+  /**
+   * Open an assistant turn to fill in while the coach works.
+   *
+   * The turn exists from the moment the request leaves, so the stages have
+   * somewhere to land and the student can see the work is theirs — not a
+   * spinner that could belong to anything.
+   */
+  const beginCoachTurn = useCallback((): string => {
+    const id = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    dirtyRef.current = true;
+    setCoachMessages((current) => [
+      ...current,
+      { id, role: "assistant", content: "", at: Date.now(), pending: true, processEvents: [] },
+    ]);
+    return id;
+  }, []);
+
+  const appendProcessEvent = useCallback((messageId: string, event: CoachProcessEvent) => {
+    setCoachMessages((current) =>
+      current.map((message) =>
+        message.id === messageId
+          ? { ...message, processEvents: [...(message.processEvents ?? []), event] }
+          : message,
+      ),
+    );
+  }, []);
+
+  /**
+   * Finish a placeholder turn.
+   *
+   * `produced` replaces it in place, keeping its position in the thread — one
+   * message for a review or an answer, several when Draw returns more than one
+   * diagram. `null` drops it: the failure is already on the error banner, and
+   * an empty turn left behind would read as the coach answering with nothing.
+   */
+  const finishCoachTurn = useCallback(
+    (
+      messageId: string,
+      produced: Array<Partial<CoachChatMessage> & { content: string }> | null,
+    ) => {
+      setCoachMessages((current) => {
+        const index = current.findIndex((message) => message.id === messageId);
+        if (index < 0) return current;
+        const placeholder = current[index];
+        const rest = [...current.slice(0, index), ...current.slice(index + 1)];
+        if (!produced || produced.length === 0) return rest;
+
+        const built: CoachChatMessage[] = produced.map((part, offset) => ({
+          id: offset === 0 ? placeholder.id : `${placeholder.id}-${offset}`,
+          role: "assistant",
+          at: Date.now(),
+          // The process block belongs to the first turn only — repeating it
+          // under every diagram would bury them.
+          ...(offset === 0 ? { processEvents: placeholder.processEvents } : {}),
+          ...part,
+        }));
+        const next = [...current.slice(0, index), ...built, ...current.slice(index + 1)];
+        return built.some((message) => message.drawing?.expanded)
+          ? enforceVisibleDrawingCap(next, MAX_VISIBLE_DRAWINGS)
+          : next;
+      });
+    },
+    [],
+  );
+
+  /**
+   * Run one coach job, over the socket when it is available and blocking HTTP
+   * when it is not.
+   *
+   * The payloads are identical either way — the daemon's `run` frame takes the
+   * same body its `POST /coach/*` route does — so `http` is a straight
+   * fallback, not a second code path with its own quirks.
+   */
+  const runCoachJob = useCallback(
+    async <T,>(
+      action: RunAction,
+      payload: Record<string, unknown>,
+      messageId: string | null,
+      http: () => Promise<T>,
+    ): Promise<T> => {
+      const socket = coachRef.current;
+      if (!coachFlags.ws_runs || !socket) return http();
+      try {
+        return await socket.run<T>(action, payload, {
+          onProcess: (event) => {
+            if (messageId && coachFlags.process_events_ui) appendProcessEvent(messageId, event);
+          },
+        });
+      } catch (cause) {
+        // A daemon that predates run frames, or a socket that dropped, should
+        // cost the student a retry at worst — not the answer.
+        if (isSocketRunUnavailable(cause)) return http();
+        throw cause;
+      }
+    },
+    [coachFlags.ws_runs, coachFlags.process_events_ui, appendProcessEvent],
+  );
 
   const pushCoachMessage = useCallback(
     (
@@ -1305,7 +1434,6 @@ export function App() {
     setNotice(null);
     setCoachOpen(true);
 
-    const phaseTimers: number[] = [];
     const note = studentNote?.trim() ?? "";
     const topic =
       note.length > 0
@@ -1315,22 +1443,32 @@ export function App() {
         : includeBoard
           ? "your board"
           : "your question";
-    const phases = includeBoard
-      ? [
-          note ? "Reading your message…" : "Reading the request…",
-          "Loading your layouts…",
-          `Thinking about ${topic}…`,
-          "Preparing response…",
-        ]
-      : ["Reading your message…", `Thinking about ${topic}…`, "Preparing response…"];
-    let delay = 0;
-    for (const label of phases) {
-      const id = window.setTimeout(() => setCoachPhase(label), delay);
-      phaseTimers.push(id);
-      delay += label.startsWith("Thinking") ? 2200 : 900;
+    // Timed guesses at the phases, for the path that has nothing better. When
+    // runs go over the socket the real stage boundaries arrive instead, and
+    // guessing over the top of them would contradict them.
+    const phaseTimers: number[] = [];
+    if (!coachFlags.ws_runs) {
+      const phases = includeBoard
+        ? [
+            note ? "Reading your message…" : "Reading the request…",
+            "Loading your layouts…",
+            `Thinking about ${topic}…`,
+            "Preparing response…",
+          ]
+        : ["Reading your message…", `Thinking about ${topic}…`, "Preparing response…"];
+      let delay = 0;
+      for (const label of phases) {
+        const id = window.setTimeout(() => setCoachPhase(label), delay);
+        phaseTimers.push(id);
+        delay += label.startsWith("Thinking") ? 2200 : 900;
+      }
+      setCoachPhase(phases[0]);
+    } else {
+      setCoachPhase(`Thinking about ${topic}…`);
     }
-    setCoachPhase(phases[0]);
 
+    const turnId = beginCoachTurn();
+    let finished = false;
     try {
       await syncSolution();
       let payload;
@@ -1378,26 +1516,38 @@ export function App() {
           turn_index: reviewTurnRef.current,
         };
       }
+      // `POST /coach/review` flattens the board into the request body, so the
+      // run payload does the same — the daemon reads one struct either way.
+      const askForReview = (board: typeof payload) =>
+        runCoachJob<ReviewResponse>(
+          "review",
+          {
+            task_id: problem.task_id,
+            dataset: problem.dataset,
+            layout_only: layoutOnly,
+            ...board,
+            app_messages: appMessages(),
+          },
+          turnId,
+          () =>
+            client.review(
+              problem.task_id,
+              { ...board, app_messages: appMessages() },
+              problem.dataset,
+              { layoutOnly },
+            ),
+        );
+
       let result: ReviewResponse;
       try {
-        result = await client.review(
-          problem.task_id,
-          { ...payload, app_messages: appMessages() },
-          problem.dataset,
-          { layoutOnly },
-        );
+        result = await askForReview(payload);
       } catch (cause) {
         // The picture is the first thing to give up: a board too big to buffer,
         // or a local VLM that hangs on the PNG, must not cost the whole review.
         const hasPng = "png" in payload && Boolean(payload.png);
         if (!hasPng || (!isBodyLimitError(cause) && !isLlmTimeoutError(cause))) throw cause;
         const { png: _png, ...withoutPng } = payload;
-        result = await client.review(
-          problem.task_id,
-          { ...withoutPng, app_messages: appMessages() },
-          problem.dataset,
-          { layoutOnly },
-        );
+        result = await askForReview(withoutPng);
         setNotice(
           isLlmTimeoutError(cause)
             ? "the board image timed out at the model — the coach reviewed your text and layout without it"
@@ -1406,10 +1556,14 @@ export function App() {
       }
       // One structured card in the thread — do not also push a prose duplicate.
       // Attachments show what the coach saw (same layouts as the user turn).
-      pushCoachMessage("assistant", "", {
-        review: result,
-        ...(attachments && attachments.length > 0 ? { attachments } : {}),
-      });
+      finished = true;
+      finishCoachTurn(turnId, [
+        {
+          content: "",
+          review: result,
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        },
+      ]);
       // Baseline advances only on success — a failed review must not consume it.
       if (capturedIds) {
         lastReviewIdsRef.current = capturedIds;
@@ -1421,11 +1575,24 @@ export function App() {
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
+      // Every early return above — an empty board, a missing question — lands
+      // here too, and none of them should leave a turn waiting forever.
+      if (!finished) finishCoachTurn(turnId, null);
       for (const id of phaseTimers) window.clearTimeout(id);
       setCoachPhase(null);
       setBusy(null);
     }
-  }, [client, problem, syncSolution, pushCoachMessage, modeHasVision, appMessages]);
+  }, [
+    client,
+    problem,
+    syncSolution,
+    modeHasVision,
+    appMessages,
+    coachFlags.ws_runs,
+    beginCoachTurn,
+    finishCoachTurn,
+    runCoachJob,
+  ]);
 
   const askForDiagram = useCallback(async (ask = "") => {
     const board = boardRef.current;
@@ -1433,17 +1600,20 @@ export function App() {
     setBusy("drawing…");
     setError(null);
     setCoachOpen(true);
+    const turnId = beginCoachTurn();
+    let finished = false;
     try {
       await syncSolution();
       const snapshot = await buildSnapshot(board, recognizerRef.current, {
         pseudocode: pseudocodeRef.current,
         includePng: modeHasVision("viz"),
       });
-      const envelope = await client.viz(
-        problem.task_id,
-        { ...snapshot.board, app_messages: appMessages() },
-        ask,
-        problem.dataset,
+      const vizBoard = { ...snapshot.board, app_messages: appMessages() };
+      const envelope = await runCoachJob<VizEnvelope>(
+        "viz",
+        { task_id: problem.task_id, dataset: problem.dataset, board: vizBoard, ask },
+        turnId,
+        () => client.viz(problem.task_id, vizBoard, ask, problem.dataset),
       );
       const drawables = envelope.programs
         .map(parseVizProgram)
@@ -1455,24 +1625,20 @@ export function App() {
         // Coach ink lives on the agent page — jump there on mobile so drawings
         // aren't parked invisible on Walkthrough / Scratch.
         if (mobile) setActiveRegion("agent");
+        finished = true;
+        finishCoachTurn(
+          turnId,
+          drawables.map((drawable, index) => ({
+            content:
+              drawables.length === 1
+                ? "Drew a diagram on the board."
+                : `Drew diagram ${index + 1} of ${drawables.length} on the board.`,
+            drawing: withNewDrawing(drawable),
+          })),
+        );
         setCoachMessages((current) => {
-          const stamp = Date.now();
-          let next: CoachChatMessage[] = [
-            ...current,
-            ...drawables.map((drawable, index) => ({
-              id: `assistant-${stamp}-${index}-${Math.random().toString(36).slice(2, 7)}`,
-              role: "assistant" as const,
-              content:
-                drawables.length === 1
-                  ? "Drew a diagram on the board."
-                  : `Drew diagram ${index + 1} of ${drawables.length} on the board.`,
-              at: stamp,
-              drawing: withNewDrawing(drawable),
-            })),
-          ];
-          next = enforceVisibleDrawingCap(next, MAX_VISIBLE_DRAWINGS);
-          queueMicrotask(() => syncDrawingsToBoard(next));
-          return next;
+          queueMicrotask(() => syncDrawingsToBoard(current));
+          return current;
         });
       }
 
@@ -1513,7 +1679,8 @@ export function App() {
         (envelope.highlights?.length ?? 0) === 0
       ) {
         if (envelope.message?.trim()) {
-          pushCoachMessage("assistant", envelope.message.trim());
+          finished = true;
+          finishCoachTurn(turnId, [{ content: envelope.message.trim() }]);
         } else {
           setError(
             envelope.rejected?.[0] ??
@@ -1524,9 +1691,23 @@ export function App() {
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
+      if (!finished) finishCoachTurn(turnId, null);
       setBusy(null);
     }
-  }, [client, problem, syncSolution, modeHasVision, sceneApi, appMessages, syncDrawingsToBoard, mobile]);
+  }, [
+    client,
+    problem,
+    syncSolution,
+    modeHasVision,
+    sceneApi,
+    appMessages,
+    syncDrawingsToBoard,
+    mobile,
+    beginCoachTurn,
+    finishCoachTurn,
+    runCoachJob,
+    pushCoachMessage,
+  ]);
 
   const applyFilledCode = useCallback(
     async (filled: string, note: string) => {
@@ -1559,18 +1740,27 @@ export function App() {
       setNotice(null);
       setCoachOpen(true);
       setCoachPhase("Thinking…");
+      const turnId = beginCoachTurn();
+      let finished = false;
       try {
         await syncSolution();
-        const result = await client.ask(problem.task_id, note, problem.dataset);
-        pushCoachMessage("assistant", result.reply);
+        const result = await runCoachJob<{ reply: string }>(
+          "ask",
+          { task_id: problem.task_id, dataset: problem.dataset, question: note },
+          turnId,
+          () => client.ask(problem.task_id, note, problem.dataset),
+        );
+        finished = true;
+        finishCoachTurn(turnId, [{ content: result.reply }]);
       } catch (cause) {
         setError(messageOf(cause));
       } finally {
+        if (!finished) finishCoachTurn(turnId, null);
         setCoachPhase(null);
         setBusy(null);
       }
     },
-    [client, problem, syncSolution, pushCoachMessage],
+    [client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob],
   );
 
   const sendCoachChat = useCallback(
@@ -1625,13 +1815,15 @@ export function App() {
                   includePng: modeHasVision("review"),
                 })
               : null;
-            const fill = await client.lazyFill(
-              problem.task_id,
-              snapshot?.board ?? {
-                recognized_text: text || "Lazy fill from board",
-                pseudocode: pseudocodeRef.current.trim() || undefined,
-              },
-              problem.dataset,
+            const lazyBoard = snapshot?.board ?? {
+              recognized_text: text || "Lazy fill from board",
+              pseudocode: pseudocodeRef.current.trim() || undefined,
+            };
+            const fill = await runCoachJob<LazyFillResponse>(
+              "lazy",
+              { task_id: problem.task_id, dataset: problem.dataset, board: lazyBoard },
+              null,
+              () => client.lazyFill(problem.task_id, lazyBoard, problem.dataset),
             );
             await applyFilledCode(fill.filled_code, fill.note);
           } catch (cause) {
@@ -1652,6 +1844,7 @@ export function App() {
       syncSolution,
       modeHasVision,
       applyFilledCode,
+      runCoachJob,
     ],
   );
 
@@ -3207,6 +3400,24 @@ function messageOf(cause: unknown): string {
 }
 
 /**
+ * Did the socket run fail for a reason HTTP would not share?
+ *
+ * A daemon older than run frames answers with a parse error; a dropped
+ * connection reports itself. Both are worth retrying over HTTP. A model that
+ * timed out, or a board the daemon refused, are not — those would fail the
+ * same way twice and the second attempt only doubles the wait.
+ */
+function isSocketRunUnavailable(cause: unknown): boolean {
+  const message = messageOf(cause).toLowerCase();
+  return (
+    message.includes("cannot parse frame") ||
+    message.includes("connection closed") ||
+    message.includes("connection failed") ||
+    message.includes("could not reach the coach")
+  );
+}
+
+/**
  * Rebuild a stored coach thread.
  *
  * The daemon stores the transcript opaquely, so anything malformed is dropped
@@ -3228,6 +3439,12 @@ function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
         review: message.review,
         bridge: message.bridge,
         attachments: message.attachments,
+        // `pending` is deliberately not restored: a run that was in flight when
+        // the app closed is not in flight now, and a turn stuck on "Working…"
+        // would wait for a socket that will never answer it.
+        ...(Array.isArray(message.processEvents)
+          ? { processEvents: message.processEvents }
+          : {}),
         ...(drawing ? { drawing } : {}),
       },
     ];

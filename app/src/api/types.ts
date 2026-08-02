@@ -152,8 +152,29 @@ export interface LcConfig {
     viz: string;
   };
   serve_port: number;
+  /** Streaming-coach feature flags. Absent on a daemon older than Phase 1. */
+  coach?: CoachFlags;
   token_set: boolean;
 }
+
+/** Settings → Coach. Mirrors `CoachConfig` in `src/config.rs`. */
+export interface CoachFlags {
+  /** Drive Ask/Review/Draw/Lazy over the socket instead of blocking POSTs. */
+  ws_runs: boolean;
+  /** Show per-stage process blocks in the chat thread. */
+  process_events_ui: boolean;
+  planner_enabled: boolean;
+  draw_review_enabled: boolean;
+  approach_commitment: boolean;
+}
+
+export const DEFAULT_COACH_FLAGS: CoachFlags = {
+  ws_runs: true,
+  process_events_ui: true,
+  planner_enabled: false,
+  draw_review_enabled: false,
+  approach_commitment: true,
+};
 
 export interface LlmStatus {
   running: boolean;
@@ -357,6 +378,42 @@ export interface AmbientNudge {
   nudge: string;
 }
 
+/** What an interactive `run` frame asks the coach to do. */
+export type RunAction = "ask" | "review" | "viz" | "lazy";
+
+/**
+ * Stages the daemon reports, in roughly the order they can occur. The daemon is
+ * free to send a name not in this list — the UI falls back to the `detail`
+ * string — but these are the ones it labels itself.
+ */
+export const STAGE_LABELS: Record<string, string> = {
+  perceive: "Reading your board",
+  claim: "Naming your approach",
+  commit_approach: "Sticking with your approach",
+  plan_approaches: "Planning the approaches",
+  verdict: "Checking it against the cases",
+  code: "Reading solution.py",
+  retrace: "Re-tracing the case it cited",
+  ask: "Thinking",
+  lazy: "Writing the earned code",
+  draw_tools: "Choosing what to draw",
+  validate: "Checking the diagram schema",
+  draw_review: "Looking at what it drew",
+  draw_fix: "Redrawing",
+  done: "Done",
+};
+
+/** One line in a chat turn's process block. */
+export interface CoachProcessEvent {
+  kind: "stage" | "tool";
+  /** Stage name, or tool name for a tool event. */
+  label: string;
+  detail?: string;
+  /** Tool events only. */
+  status?: "proposed" | "accepted" | "rejected";
+  ts: number;
+}
+
 /** Frames the daemon sends on `WS /coach/session`. */
 export type ServerFrame =
   | {
@@ -369,4 +426,18 @@ export type ServerFrame =
   | { type: "skipped"; reason: string }
   | { type: "thinking" }
   | ({ type: "nudge"; nudges_so_far: number } & AmbientNudge)
-  | { type: "error"; message: string };
+  | { type: "stage"; request_id: string; stage: string; detail: string }
+  | {
+      type: "tool_event";
+      request_id: string;
+      name: string;
+      status: "proposed" | "accepted" | "rejected";
+      summary: string;
+      reason?: string | null;
+    }
+  | { type: "result"; request_id: string; action: RunAction; body: unknown }
+  /**
+   * `request_id` is what routes a failure: present means it belongs to a chat
+   * turn, absent means the ambient loop hit it and no turn is waiting.
+   */
+  | { type: "error"; request_id?: string | null; message: string };
