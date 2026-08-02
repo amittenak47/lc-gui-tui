@@ -730,6 +730,34 @@ mod tests {
         assert!(cfg.get("llm.modes.telepathy").is_err());
     }
 
+    /// The two flags that only change *how* an answer arrives ship on; the two
+    /// that spend extra model calls ship off. Getting that backwards would have
+    /// every install quietly paying for a planner it never asked for.
+    #[test]
+    fn the_coach_flags_that_cost_model_calls_are_off_by_default() {
+        let mut cfg = Config::default();
+        assert!(cfg.coach.ws_runs);
+        assert!(cfg.coach.process_events_ui);
+        assert!(cfg.coach.approach_commitment);
+        assert!(!cfg.coach.planner_enabled);
+        assert!(!cfg.coach.draw_review_enabled);
+
+        for key in [
+            "coach.ws_runs",
+            "coach.process_events_ui",
+            "coach.planner_enabled",
+            "coach.draw_review_enabled",
+            "coach.approach_commitment",
+        ] {
+            cfg.set(key, "on").unwrap();
+            assert_eq!(cfg.get(key).unwrap(), "true", "{key}");
+            cfg.set(key, "no").unwrap();
+            assert_eq!(cfg.get(key).unwrap(), "false", "{key}");
+        }
+        assert!(cfg.set("coach.planner_enabled", "sometimes").is_err());
+        assert!(cfg.get("coach.telepathy").is_err());
+    }
+
     #[test]
     fn serve_port_must_be_a_port() {
         let mut cfg = Config::default();
@@ -798,5 +826,8 @@ mod tests {
         assert!(cfg.serve.token.is_none());
         assert!(cfg.data.datasets.is_empty(), "no dataset overrides implied");
         assert!(!cfg.tests.stop_on_first_failure);
+        assert_eq!(cfg.llm.modes.planner, "local");
+        assert!(cfg.coach.ws_runs, "a config written before the flags existed gets the defaults");
+        assert!(!cfg.coach.planner_enabled);
     }
 }

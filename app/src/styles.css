@@ -5869,6 +5869,29 @@ button.lc-row-selected:hover:not(:disabled) {
   cursor: default;
 }
 
+/* A coach feature flag: checkbox on the left, label and its one-line
+   explanation stacked beside it. */
+.lc-settings-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.lc-settings-toggle input {
+  margin-top: 3px;
+  flex-shrink: 0;
+  width: auto;
+}
+
+.lc-settings-toggle > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .lc-settings-choice-option {
   display: flex;
   flex-direction: column;

@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { LcClient } from "../api/client";
-import type { DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
+import type { CoachFlags, DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
+import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { HoldButton } from "./HoldButton";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import {
@@ -28,6 +29,35 @@ const TABS: { id: TabId; label: string }[] = [
 
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
 const MODES = ["ambient", "review", "bridge", "viz", "planner"] as const;
+
+/** Settings → Coach, in the order they are worth explaining. */
+const COACH_FLAGS: Array<[keyof CoachFlags, string, string]> = [
+  [
+    "ws_runs",
+    "Answer over the live connection",
+    "Ask, Review, Draw and Lazy stream their stages back as they happen instead of arriving all at once.",
+  ],
+  [
+    "process_events_ui",
+    "Show what the coach is doing",
+    "A collapsible list of stages and diagram tool calls above each answer.",
+  ],
+  [
+    "approach_commitment",
+    "Stick to one approach per board",
+    "Coach the approach your board argues for, and say so when a change of board changes it — instead of quietly switching between valid approaches.",
+  ],
+  [
+    "planner_enabled",
+    "Plan the approaches first",
+    "One call per problem, to the planner provider below, cataloging the approach families it admits. Never sees or writes a solution.",
+  ],
+  [
+    "draw_review_enabled",
+    "Check drawn diagrams",
+    "After a diagram renders, look at the picture and redraw it once if it does not show what it claims. Needs a vision model on the viz provider.",
+  ],
+];
 
 /** What each coach mode is for, shown under its provider picker. */
 const MODE_HINTS: Record<(typeof MODES)[number], string> = {
@@ -75,6 +105,7 @@ function emptyConfig(): LcConfig {
       planner: "local",
     },
     serve_port: 7878,
+    coach: { ...DEFAULT_COACH_FLAGS },
     token_set: false,
   };
 }
@@ -671,6 +702,34 @@ export function SettingsModal({
               {providerFocus === "openai" && (
                 <p className="lc-muted">API key from OPENAI_API_KEY env — not stored in config.toml.</p>
               )}
+
+              <div className="lc-settings-subhead">Coach behaviour</div>
+              <p className="lc-settings-hint">
+                Frontier plans the approaches; local executes. The planner and the drawn-diagram
+                check each cost an extra model call, so both start off.
+              </p>
+              {COACH_FLAGS.map(([key, label, hint]) => (
+                <label key={key} className="lc-settings-toggle">
+                  <input
+                    type="checkbox"
+                    checked={(draft.coach ?? DEFAULT_COACH_FLAGS)[key]}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        coach: {
+                          ...DEFAULT_COACH_FLAGS,
+                          ...(prev.coach ?? {}),
+                          [key]: e.target.checked,
+                        },
+                      }))
+                    }
+                  />
+                  <span>
+                    <strong>{label}</strong>
+                    <span className="lc-muted">{hint}</span>
+                  </span>
+                </label>
+              ))}
 
               <div className="lc-settings-subhead">Coach mode providers</div>
               {MODES.map((mode) => (

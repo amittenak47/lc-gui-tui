@@ -133,6 +133,23 @@ On desktop the app defaults to `http://127.0.0.1:7878` (no pairing). On a tablet
 
 **Lazy** — turns a justified board into `solution.py` (earned steps implemented, the rest stubbed).
 
+The coach answers over the session WebSocket, so each stage of a review — reading
+the board, naming your approach, checking it against the cases — shows up in the
+chat as it happens rather than after. It also sticks to **one approach per
+board**: several approaches are usually valid, and a coach that quietly switches
+between them contradicts its own advice. A change of board that changes the
+answer is announced, with a reason.
+
+Two extras are off until you turn them on in **Settings → Coach**: a **planner**
+(`llm.modes.planner`, point it at a frontier model) that catalogs the approach
+families a problem admits before the local coach reads your board, and a
+**drawn-diagram check** that looks at each rendered diagram and redraws it once
+if the picture does not show what it claims.
+
+How the coach works, and why — redaction, diagrams as programs rather than
+pictures, the approach commitment model, and the socket frame contract →
+[`docs/coach.md`](docs/coach.md).
+
 Browser-over-LAN, spacedesk, and Android build details → [`app/README.md`](app/README.md).
 
 ---
@@ -151,6 +168,9 @@ Browser-over-LAN, spacedesk, and Android build details → [`app/README.md`](app
 | `lc serve [--port N] [--lan]` | Daemon for the whiteboard client |
 | `lc stats` · `lc session reset` · `lc list …` | Progress, session, named lists |
 | `lc config set/get/show/path` | Manage `config.toml` |
+
+Coach modes are per-provider (`llm.modes.<ambient\|review\|bridge\|viz\|planner>`) and
+the coach feature flags are `coach.<ws_runs\|process_events_ui\|approach_commitment\|planner_enabled\|draw_review_enabled>`.
 
 ---
 
