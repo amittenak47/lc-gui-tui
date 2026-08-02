@@ -81,6 +81,8 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
+const NOT_ON_SCRATCHPAD = "Not available on scratchpad";
+
 interface MessageMenuState {
   messageId: string;
   top: number;
@@ -144,6 +146,11 @@ export interface AgentSidePanelProps {
   /** Phased status while the local model works (replaces a bare "Thinking…"). */
   thinkingPhase?: string | null;
   messages: CoachChatMessage[];
+  /**
+   * Scratchpad: no solution.py, no review pipeline, no board regions to draw
+   * into. Ask is pinned on and the other flags are disabled.
+   */
+  askOnly?: boolean;
   onSend: (text: string, flags: CoachSendFlags) => void;
   /** Opens the hold-to-reveal dialog for the review on this message. */
   onRequestBridge?: (messageId: string) => void;
@@ -165,6 +172,7 @@ export function AgentSidePanel({
   thinking = false,
   thinkingPhase = null,
   messages,
+  askOnly = false,
   onSend,
   onRequestBridge,
   onToggleDrawing,
@@ -180,7 +188,7 @@ export function AgentSidePanel({
     [onClose, onOpenChange],
   );
   const [draft, setDraft] = useState("");
-  const [ask, setAsk] = useState(false);
+  const [ask, setAsk] = useState(askOnly);
   const [draw, setDraw] = useState(false);
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
@@ -229,6 +237,15 @@ export function AgentSidePanel({
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, [mobile, open]);
+
+  // Ask-only workspaces pin Ask on and clear the flags they cannot honour.
+  useEffect(() => {
+    if (!askOnly) return;
+    setAsk(true);
+    setDraw(false);
+    setReviewBoard(false);
+    setLazy(false);
+  }, [askOnly]);
 
   const endSheetDrag = useCallback(
     (event: PointerEvent<HTMLElement>) => {
@@ -440,7 +457,7 @@ export function AgentSidePanel({
     if (!canSend) return;
     onSend(draft.trim(), { ask, draw, reviewBoard, lazy });
     setDraft("");
-    setAsk(false);
+    setAsk(askOnly);
     setDraw(false);
     setReviewBoard(false);
     setLazy(false);
@@ -673,9 +690,11 @@ export function AgentSidePanel({
             <div className="lc-coach-composer-actions">
               <Tip
                 tip={
-                  lazy || reviewBoard
-                    ? "Turn off Review / Lazy to use Ask"
-                    : "Ask a question without the staged review pipeline"
+                  askOnly
+                    ? "Scratchpad answers questions only"
+                    : lazy || reviewBoard
+                      ? "Turn off Review / Lazy to use Ask"
+                      : "Ask a question without the staged review pipeline"
                 }
                 placement="left"
               >
@@ -683,7 +702,7 @@ export function AgentSidePanel({
                   type="button"
                   className={ask ? "lc-flag lc-flag-active" : "lc-flag"}
                   aria-pressed={ask}
-                  disabled={busy || lazy || reviewBoard}
+                  disabled={busy || askOnly || lazy || reviewBoard}
                   onClick={() =>
                     setAsk((current) => {
                       const next = !current;
@@ -698,26 +717,37 @@ export function AgentSidePanel({
                   Ask
                 </button>
               </Tip>
-              <Tip tip="Allow coach to draw on the board" placement="left">
+              <Tip
+                tip={
+                  askOnly ? NOT_ON_SCRATCHPAD : "Allow coach to draw on the board"
+                }
+                placement="left"
+              >
                 <button
                   type="button"
                   className={draw ? "lc-flag lc-flag-active" : "lc-flag"}
                   aria-pressed={draw}
-                  disabled={busy}
+                  disabled={busy || askOnly}
                   onClick={() => setDraw((current) => !current)}
                 >
                   Draw
                 </button>
               </Tip>
               <Tip
-                tip={ask ? "Turn off Ask to use Review" : "Run a staged review of the board"}
+                tip={
+                  askOnly
+                    ? NOT_ON_SCRATCHPAD
+                    : ask
+                      ? "Turn off Ask to use Review"
+                      : "Run a staged review of the board"
+                }
                 placement="left"
               >
                 <button
                   type="button"
                   className={reviewBoard ? "lc-flag lc-flag-active" : "lc-flag"}
                   aria-pressed={reviewBoard}
-                  disabled={busy || ask}
+                  disabled={busy || askOnly || ask}
                   onClick={() =>
                     setReviewBoard((current) => {
                       const next = !current;
@@ -731,9 +761,11 @@ export function AgentSidePanel({
               </Tip>
               <Tip
                 tip={
-                  ask
-                    ? "Turn off Ask to use Lazy"
-                    : "Drawing-first: interpret the board and fill the correct earned parts of solution.py"
+                  askOnly
+                    ? NOT_ON_SCRATCHPAD
+                    : ask
+                      ? "Turn off Ask to use Lazy"
+                      : "Drawing-first: interpret the board and fill the correct earned parts of solution.py"
                 }
                 placement="left"
               >
@@ -741,7 +773,7 @@ export function AgentSidePanel({
                   type="button"
                   className={lazy ? "lc-flag lc-flag-active" : "lc-flag"}
                   aria-pressed={lazy}
-                  disabled={busy || ask}
+                  disabled={busy || askOnly || ask}
                   onClick={() =>
                     setLazy((current) => {
                       const next = !current;
