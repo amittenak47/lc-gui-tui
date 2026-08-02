@@ -579,13 +579,13 @@ export function App() {
    * Coach open/close changes the canvas box (side panel or bottom sheet).
    * Nudge Excalidraw + our fit so the board fills the freed space.
    */
-  // Desktop: coach docks beside the board and changes width — refit.
+  // Desktop: coach docks beside the board and changes width — refit page to new hole.
   // Mobile: coach overlays; keep the template size (no vertical rescale).
   useEffect(() => {
     if (!problem || mobile) return;
     const timer = window.setTimeout(() => {
       window.dispatchEvent(new Event("resize"));
-      void boardRef.current?.settleFitView();
+      boardRef.current?.refitToViewport();
     }, 40);
     return () => window.clearTimeout(timer);
   }, [coachOpen, mobile, problem]);

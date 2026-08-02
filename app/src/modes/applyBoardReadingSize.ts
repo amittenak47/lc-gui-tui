@@ -8,7 +8,9 @@
  * Monaco scales its CSS px by the same zoom so the dock stays proportional.
  */
 
+import { FONT_CODE, FONT_UI } from "../templates/skeleton";
 import { BODY_FONT_PX, STATEMENT_LINE_HEIGHT_RATIO, type BoardReadingSize } from "./codeFontSize";
+import { linedRuleClearance, textBaselineOffset } from "./textBaseline";
 
 type ReadingMeta = {
   lcRegion?: string;
@@ -32,6 +34,7 @@ export type ReadingElement = {
   width?: number;
   height?: number;
   fontSize?: number;
+  fontFamily?: number;
   /** Excalidraw lineHeight multiplier (line box / fontSize). */
   lineHeight?: number;
   text?: string;
@@ -170,20 +173,38 @@ export function applyBoardReadingSize<T extends ReadingElement>(
     .filter(({ element }) => isBody(element));
 
   let bodyAnchor: number | null = null;
+  let bodyBaselineAnchor: number | null = null;
   for (const { element } of bodies) {
     const meta = ensureBases(element);
     if (typeof meta.lcRegionOyBase === "number") {
       bodyAnchor =
         bodyAnchor == null ? meta.lcRegionOyBase : Math.min(bodyAnchor, meta.lcRegionOyBase);
+      const baseFont = meta.lcFontBase ?? 28;
+      const lhBase = meta.lcLineHeightBase ?? STATEMENT_LINE_HEIGHT_RATIO;
+      const fontFamily =
+        element.fontFamily ?? (baseFont < 26 ? FONT_CODE : FONT_UI);
+      const baseline =
+        meta.lcRegionOyBase +
+        textBaselineOffset(baseFont, lhBase, fontFamily);
+      bodyBaselineAnchor =
+        bodyBaselineAnchor == null
+          ? baseline
+          : Math.min(bodyBaselineAnchor, baseline);
     }
   }
   if (bodyAnchor == null) bodyAnchor = 200;
+  if (bodyBaselineAnchor == null) {
+    bodyBaselineAnchor =
+      bodyAnchor +
+      textBaselineOffset(targetFont, STATEMENT_LINE_HEIGHT_RATIO, FONT_UI);
+  }
 
   const bodyPatch = new Map<
     number,
     { element: T; meta: ReadingMeta; patch: Partial<ReadingElement> }
   >();
-  let cursor = lined ? Math.round(bodyAnchor / gridPitch) * gridPitch : bodyAnchor;
+  let cursor = bodyAnchor;
+  let baselineCursor = Math.round(bodyBaselineAnchor / gridPitch) * gridPitch;
   const gap = 22;
   const constraintsW = frameWidth(frames, "constraints");
   const textWidth =
@@ -200,6 +221,9 @@ export function applyBoardReadingSize<T extends ReadingElement>(
       ? STATEMENT_LINE_HEIGHT_RATIO
       : (meta.lcLineHeightBase ?? STATEMENT_LINE_HEIGHT_RATIO);
     const lineH = lined ? gridPitch : fontSize * lhRatio;
+    const fontFamily =
+      element.fontFamily ?? (baseFont < 26 ? FONT_CODE : FONT_UI);
+    const baselineOffset = textBaselineOffset(fontSize, lhRatio, fontFamily);
     // Approximate soft-wrap: chars per line shrinks as font grows.
     const wrapWidth = textWidth ?? element.width ?? 800;
     const avgChar = fontSize * 0.55;
@@ -211,7 +235,9 @@ export function applyBoardReadingSize<T extends ReadingElement>(
     }
     const height = Math.round(wrappedLines * lineH * 10) / 10;
     const originY = frameOriginY(frames, meta.lcRegion, element.y - (meta.lcRegionOy ?? 0));
-    const oy = cursor;
+    const oy = lined
+      ? baselineCursor - linedRuleClearance(fontSize) - baselineOffset
+      : cursor;
     const y = originY + oy;
 
     const patch: Partial<ReadingElement> = {};
@@ -224,7 +250,7 @@ export function applyBoardReadingSize<T extends ReadingElement>(
 
     bodyPatch.set(index, { element, meta, patch });
     if (lined) {
-      cursor = Math.ceil((oy + height + 0.001) / gridPitch) * gridPitch;
+      baselineCursor += wrappedLines * gridPitch;
     } else {
       cursor = oy + height + gap;
     }

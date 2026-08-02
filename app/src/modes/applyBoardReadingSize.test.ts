@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { FONT_UI } from "../templates/skeleton";
 import { applyBoardReadingSize, type ReadingElement } from "./applyBoardReadingSize";
+import { STATEMENT_LINE_HEIGHT_RATIO } from "./codeFontSize";
+import { linedRuleClearance, textBaselineOffset } from "./textBaseline";
 
 function text(
   id: string,
@@ -113,5 +116,41 @@ describe("applyBoardReadingSize", () => {
     const b = applyBoardReadingSize(elements, "M", { zoom: 1.5 });
     expect(a[0].fontSize).toBe(36);
     expect(b[0].fontSize).toBe(36);
+  });
+
+  it("snaps body baselines onto the lined grid", () => {
+    const pitch = 36 * STATEMENT_LINE_HEIGHT_RATIO;
+    const frameY = 0;
+    const fontSize = 36;
+    const offset = textBaselineOffset(fontSize, STATEMENT_LINE_HEIGHT_RATIO, FONT_UI);
+    const elements: ReadingElement[] = [
+      {
+        id: "lcregion-constraints-frame",
+        type: "rectangle",
+        x: 0,
+        y: frameY,
+        width: 1000,
+        height: 800,
+        customData: { lcRegion: "constraints", lcRegionFrame: true },
+      },
+      withBodyBase(
+        text("lcregion-constraints-body-0", {
+          fontSize: 28,
+          y: frameY + 200,
+          oy: 200,
+          height: 40,
+          text: "line one",
+        }),
+      ),
+    ];
+
+    const lined = applyBoardReadingSize(elements, "M", { lined: true });
+    const body = lined.find((el) => el.id.endsWith("-body-0"))!;
+    const baseline = body.y! + textBaselineOffset(body.fontSize!, body.lineHeight!, FONT_UI);
+    const clearance = linedRuleClearance(body.fontSize!);
+    const ruleY = Math.round(200 / pitch) * pitch;
+    expect((baseline + clearance) % pitch).toBeCloseTo(0, 4);
+    expect(body.lineHeight).toBe(STATEMENT_LINE_HEIGHT_RATIO);
+    expect(body.y).toBeCloseTo(frameY + ruleY - clearance - offset, 1);
   });
 });

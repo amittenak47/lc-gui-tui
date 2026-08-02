@@ -33,12 +33,20 @@ interface ConvertedElement {
  */
 export function applyMetadata<T extends ConvertedElement>(
   converted: readonly T[],
-  sources: ReadonlyArray<{ id?: string; customData?: SkeletonMeta | null }>,
+  sources: ReadonlyArray<{
+    id?: string;
+    customData?: SkeletonMeta | null;
+    lineHeight?: number;
+  }>,
   fallback?: SkeletonMeta,
 ): T[] {
   const wanted = new Map<string, SkeletonMeta>();
+  const lineHeights = new Map<string, number>();
   for (const source of sources) {
     if (source.id && source.customData) wanted.set(source.id, source.customData);
+    if (source.id && typeof source.lineHeight === "number" && source.lineHeight > 0) {
+      lineHeights.set(source.id, source.lineHeight);
+    }
   }
 
   return converted.map((element) => {
@@ -50,7 +58,13 @@ export function applyMetadata<T extends ConvertedElement>(
       ...inherited,
       ...own,
     };
-    return Object.keys(merged).length > 0 ? { ...element, customData: merged } : element;
+    const lineHeight = lineHeights.get(element.id);
+    const withMeta =
+      Object.keys(merged).length > 0 ? { ...element, customData: merged } : element;
+    if (lineHeight != null && withMeta.lineHeight !== lineHeight) {
+      return { ...withMeta, lineHeight };
+    }
+    return withMeta;
   });
 }
 

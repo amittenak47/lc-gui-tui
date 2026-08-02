@@ -2,7 +2,7 @@
  * UI chrome themes — paired with board backgrounds so the browser overlay,
  * side panel, and canvas all feel like one surface.
  *
- * Light and dark swatches share a hue order: blue → green → pink → beige → purple.
+ * Light and dark swatches share a hue order: sky → mint → rose → peach → lilac → coral.
  */
 
 import { BOARD_THEMES, type BoardTheme } from "../templates/skeleton";
@@ -27,11 +27,13 @@ const CHROME: Record<string, ChromeEntry> = {
   pink: { panel: "#f0e0e5", overlay: "rgb(248 235 238 / 98%)", mode: "light" },
   beige: { panel: "#ebe3d4", overlay: "rgb(245 239 228 / 98%)", mode: "light" },
   purple: { panel: "#e4dceb", overlay: "rgb(239 234 246 / 98%)", mode: "light" },
-  ocean: { panel: "#1c2a35", overlay: "rgb(20 30 40 / 98%)", mode: "dark" },
-  pine: { panel: "#1c2a24", overlay: "rgb(20 30 25 / 98%)", mode: "dark" },
-  dusk: { panel: "#2e2028", overlay: "rgb(34 22 28 / 98%)", mode: "dark" },
-  graphite: { panel: "#2a2723", overlay: "rgb(28 26 23 / 98%)", mode: "dark" },
-  midnight: { panel: "#24202c", overlay: "rgb(23 20 31 / 98%)", mode: "dark" },
+  coral: { panel: "#f5e4dc", overlay: "rgb(255 236 228 / 98%)", mode: "light" },
+  ocean: { panel: "#152433", overlay: "rgb(15 26 36 / 98%)", mode: "dark" },
+  pine: { panel: "#142820", overlay: "rgb(16 31 24 / 98%)", mode: "dark" },
+  dusk: { panel: "#302028", overlay: "rgb(40 24 32 / 98%)", mode: "dark" },
+  graphite: { panel: "#26221e", overlay: "rgb(28 25 22 / 98%)", mode: "dark" },
+  midnight: { panel: "#201a30", overlay: "rgb(22 18 42 / 98%)", mode: "dark" },
+  storm: { panel: "#1a2430", overlay: "rgb(20 28 40 / 98%)", mode: "dark" },
 };
 
 const LIGHT_TOKENS = {

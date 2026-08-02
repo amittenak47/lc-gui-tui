@@ -96,6 +96,10 @@ export interface BoardHandle {
   zoomOut(): void;
   /** Re-center the viewport on the current page (or problem+code on desktop). */
   fitView(): void;
+  /** Grow/shrink the focus frame to the chrome hole without resetting zoom. */
+  fitFrame(): void;
+  /** Resize the page frame and refit zoom/scroll to fill the board (window resize). */
+  refitToViewport(): void;
   /** Fit one template region to the viewport — the mobile "page turn". */
   fitRegion(regionId: RegionId | string): void;
   /**

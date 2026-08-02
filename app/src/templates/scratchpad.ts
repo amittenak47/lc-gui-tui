@@ -8,6 +8,7 @@
 
 import { FONT_UI, templatePalette, type Skeleton } from "./skeleton";
 import { SCRATCHPAD_PAGE_LIMIT } from "../util/scratchpadStore";
+import { defaultLineHeight, SCRATCH_LINE_PITCH, topYForLinedRow } from "../modes/textBaseline";
 
 export const SCRATCHPAD_TASK_ID = "__scratchpad__";
 export const SCRATCHPAD_DATASET = "scratchpad";
@@ -50,6 +51,11 @@ export function buildScratchPageSkeletons(
   const { x, y } = scratchPageOrigin(index);
   const region = scratchPageId(index);
   const textWidth = SCRATCH_PAGE_W - 72;
+  const linePitch = SCRATCH_LINE_PITCH;
+  const labelLh = defaultLineHeight(FONT_UI);
+  const labelY = topYForLinedRow(y, 1, linePitch, 20, FONT_UI, labelLh);
+  const titleY = topYForLinedRow(y, 3, linePitch, 56, FONT_UI, labelLh);
+  const hintY = topYForLinedRow(y, 5, linePitch, 26, FONT_UI, labelLh);
 
   const at = (ox: number, oy: number, extra: Record<string, unknown> = {}) => ({
     lcRegion: region,
@@ -86,18 +92,20 @@ export function buildScratchPageSkeletons(
       id: `lcscratch-${index}-label`,
       type: "text",
       x: x + 36,
-      y: y + 24,
+      y: labelY,
       width: textWidth,
       text: `PAGE ${index + 1}`,
       fontSize: 20,
       fontFamily: FONT_UI,
+      lineHeight: labelLh,
       strokeColor: ink.hint,
       opacity: 100,
       locked: true,
       customData: {
-        ...at(x + 36, y + 24),
+        ...at(x + 36, labelY - y),
         lcFontBase: 20,
         lcFixedSize: true,
+        lcLineHeightBase: labelLh,
       },
     },
   ];
@@ -107,33 +115,37 @@ export function buildScratchPageSkeletons(
       id: `lcscratch-${index}-title`,
       type: "text",
       x: x + 36,
-      y: y + 64,
+      y: titleY,
       width: textWidth,
       text: "Scratchpad",
       fontSize: 56,
       fontFamily: FONT_UI,
+      lineHeight: labelLh,
       strokeColor: ink.primary,
       locked: true,
       customData: {
-        ...at(x + 36, y + 64),
+        ...at(x + 36, titleY - y),
         lcFontBase: 56,
         lcFixedSize: true,
+        lcLineHeightBase: labelLh,
       },
     });
     skeletons.push({
       id: `lcscratch-${index}-hint`,
       type: "text",
       x: x + 36,
-      y: y + 160,
+      y: hintY,
       width: textWidth,
       text: "Blank notebook — Next adds a page. Saves live on this device.",
       fontSize: 26,
       fontFamily: FONT_UI,
+      lineHeight: labelLh,
       strokeColor: ink.hint,
       locked: true,
       customData: {
-        ...at(x + 36, y + 160),
+        ...at(x + 36, hintY - y),
         lcFontBase: 26,
+        lcLineHeightBase: labelLh,
       },
     });
   }

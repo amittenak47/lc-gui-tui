@@ -36,6 +36,7 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 body {
@@ -79,6 +80,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  overflow: hidden;
 }
 
 .lc-app-coach-open .lc-main {
@@ -102,6 +104,12 @@ body {
   --lc-coach-width: 520px;
 }
 
+.lc-app-problem .lc-header {
+  height: var(--lc-header-height);
+  min-height: var(--lc-header-height);
+  max-height: var(--lc-header-height);
+}
+
 .lc-app-problem .lc-side {
   top: var(--lc-header-height);
 }
@@ -123,23 +131,6 @@ body {
   box-sizing: border-box;
   overflow: visible;
   z-index: 45;
-}
-
-/* When Coach is open, stop the header rule before the panel so header + panel
-   read as one surface; the Coach tab sits in the unbroken zone. */
-.lc-app-coach-open .lc-header {
-  border-bottom-color: transparent;
-}
-
-.lc-app-coach-open .lc-header::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: var(--lc-coach-width);
-  bottom: 0;
-  height: 1px;
-  background: var(--chrome-edge);
-  pointer-events: none;
 }
 
 .lc-header button {
@@ -1554,7 +1545,7 @@ input[type="checkbox"] {
   border-color: var(--line);
 }
 
-/* Map-style controls — Appearance left, zoom right, same bottom row. */
+/* Map-style controls — Theme left, zoom right, same bottom row. */
 .lc-map-controls {
   position: absolute;
   z-index: 12;
@@ -1571,6 +1562,11 @@ input[type="checkbox"] {
 
 .lc-map-controls > * {
   pointer-events: auto;
+}
+
+/* Theme popover opens under the chip — lift the row so coach / window edge don't clip it. */
+.lc-map-controls:has(.lc-palette-compact-open) {
+  bottom: 108px;
 }
 
 .lc-map-chrome-left {
@@ -1836,15 +1832,52 @@ input[type="checkbox"] {
   position: absolute;
   right: calc(100% + 6px);
   bottom: 0;
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 4px;
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: 0 2px 8px rgb(0 0 0 / 14%);
   z-index: 20;
+}
+
+.lc-palette-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+.lc-palette-grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lc-palette-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lc-palette-group-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.lc-palette-group-swatches {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+.lc-bg-palette-swatches-grouped {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
 }
 
 .lc-palette-popover-header {
@@ -1888,8 +1921,12 @@ input[type="checkbox"] {
 .lc-palette-popover-map {
   left: 0;
   right: auto;
+  /* Stay under the Theme chip; map-controls sit high enough that coach won't clip. */
   top: calc(100% + 6px);
   bottom: auto;
+  display: flex;
+  flex-direction: column;
+  z-index: 48;
 }
 
 .lc-coach-toggle-open {
@@ -1992,7 +2029,7 @@ input[type="checkbox"] {
   z-index: 40;
   width: var(--lc-coach-width, 520px);
   border-left: 1px solid var(--chrome-edge);
-  border-top: none;
+  border-top: 1px solid var(--chrome-edge);
   padding: 0;
   overflow: hidden;
   background: var(--panel);
@@ -2003,8 +2040,6 @@ input[type="checkbox"] {
 }
 
 .lc-app-coach-open .lc-side {
-  /* Flush under the header — no top rule so it continues the header surface. */
-  border-top: none;
   box-shadow: -6px 8px 18px rgb(0 0 0 / 14%);
 }
 
@@ -4579,16 +4614,6 @@ button.lc-row-selected:hover:not(:disabled) {
   margin-bottom: 0;
 }
 
-.lc-mobile.lc-app-coach-open .lc-header {
-  border-bottom-color: var(--chrome-edge);
-}
-
-/* The desktop rule stops the header rule short of the side panel; a sheet at
-   the bottom of the screen never interrupts it. */
-.lc-mobile.lc-app-coach-open .lc-header::after {
-  display: none;
-}
-
 .lc-mobile .lc-side,
 .lc-mobile.lc-app-problem .lc-side {
   top: auto;
@@ -4618,6 +4643,11 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-map-controls {
   /* Room for the parked coach peek handle under the chrome. */
   bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift));
+}
+
+.lc-mobile .lc-map-controls:has(.lc-palette-compact-open) {
+  /* Keep Theme popover (under the chip) above the coach peek. */
+  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + 96px);
 }
 
 .lc-mobile.lc-app-coach-open .lc-map-controls {
@@ -5017,13 +5047,17 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 4px;
 }
 
+.lc-mobile .lc-map-controls:has(.lc-palette-compact-open) {
+  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + 96px);
+}
+
 .lc-mobile .lc-map-btn {
   width: 24px;
   min-height: 24px;
   font-size: 12px;
 }
 
-/* Appearance is a labeled chip, not a square zoom button — don't inherit 24px width. */
+/* Theme is a labeled chip, not a square zoom button — don't inherit 24px width. */
 .lc-mobile .lc-palette-trigger-map.lc-map-btn {
   width: auto;
   min-width: 0;
@@ -5381,7 +5415,7 @@ button.lc-row-selected:hover:not(:disabled) {
   white-space: normal;
 }
 
-/* Appearance row under the browser card. */
+/* Theme row under the browser card. */
 .lc-mobile .lc-bg-palette-inline {
   padding-top: 6px;
   gap: 6px;
