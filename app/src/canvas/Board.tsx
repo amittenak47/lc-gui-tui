@@ -1267,7 +1267,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const pitchScene = isScratch
       ? SCRATCH_LINE_PITCH
       : statementLinePitch(readingSizeRef.current);
-    const gap = Math.max(12, Math.round(pitchScene * zoom));
+    // Scene pitch straight through the camera, sub-pixel and unclamped: a
+    // floor here (there used to be one at 12px) means the rules stop shrinking
+    // while the ink keeps going, so writing drifts off them as you zoom out.
+    const gap = Math.max(1, Math.round(pitchScene * zoom * 100) / 100);
 
     let phase = 0;
     const elements = api.getSceneElements() as Array<{
@@ -1318,7 +1321,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       phase = ((rel - gap + 1) % gap + gap) % gap;
     }
 
-    const next = { left, top, width, height, gap, phase: roundPx(phase) };
+    const next = {
+      left,
+      top,
+      width,
+      height,
+      gap,
+      // Same sub-pixel precision as the gap, or the phase walks off the rules.
+      phase: Math.round(phase * 100) / 100,
+    };
     const prev = lastLinedSlotRef.current;
     if (
       prev &&
