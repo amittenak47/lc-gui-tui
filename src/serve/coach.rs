@@ -18,9 +18,9 @@ use super::{blocking, board_session, AppError, Shared};
 use crate::llm::coach::{
     build_ask_prompt, build_bridge_prompt, build_lazy_fill_prompt, build_lazy_hint_prompt,
     build_scaffold_prompt, parse_board_scaffold, parse_bridge, parse_lazy_fill, perceive_and_claim,
-    review_submission, BoardScaffold, BoardSnapshot, BridgeResponse, Claim, LazyFillResponse,
-    ReviewResponse, ASK_SYSTEM_PROMPT, BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
-    LAZY_HINT_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
+    review_submission_with_events, BoardScaffold, BoardSnapshot, BridgeResponse, Claim, EventSink,
+    LazyFillResponse, ReviewResponse, ASK_SYSTEM_PROMPT, BRIDGE_SYSTEM_PROMPT,
+    LAZY_FILL_SYSTEM_PROMPT, LAZY_HINT_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
 };
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
 use crate::reveal::{SolutionReveal, UserConsent};
@@ -70,6 +70,20 @@ pub async fn review(
     State(state): State<Shared>,
     Json(request): Json<ReviewRequest>,
 ) -> Result<Json<ReviewEnvelope>, AppError> {
+    Ok(Json(run_review(&state, request, EventSink::none()).await?))
+}
+
+/// The review, without the HTTP wrapper.
+///
+/// Both entry points land here: `POST /coach/review` passes
+/// [`EventSink::none`], and the socket's `run` frame passes a live sink so the
+/// chat can show each stage as it starts. Nothing else differs — one code path
+/// means the two transports cannot drift.
+pub async fn run_review(
+    state: &Shared,
+    request: ReviewRequest,
+    events: EventSink,
+) -> Result<ReviewEnvelope, AppError> {
     let dataset = resolve_dataset(request.dataset.as_deref())?;
     // Board baselines are keyed per corpus: `two-sum` is a different board in
     // each of the three datasets that has one.
@@ -99,12 +113,13 @@ pub async fn review(
         let description = description_for(&meta);
         let provider = make_provider_for_mode(&cfg, "review")?;
 
-        let outcome = review_submission(
+        let outcome = review_submission_with_events(
             &*provider,
             &meta,
             description.as_deref(),
             &board_for_prompt,
             /* include_code */ !layout_only,
+            &events,
         )?;
 
         Ok(ReviewHttpOutcome {
@@ -145,7 +160,7 @@ pub async fn review(
         }
     }
 
-    Ok(Json(envelope))
+    Ok(envelope)
 }
 
 /// A review, plus the claim it froze (when the staged path ran).
@@ -311,6 +326,19 @@ pub async fn lazy_fill(
     State(state): State<Shared>,
     Json(request): Json<LazyRequest>,
 ) -> Result<Json<LazyEnvelope>, AppError> {
+    Ok(Json(run_lazy_fill(&state, request, EventSink::none()).await?))
+}
+
+/// Lazy fill without the HTTP wrapper — see [`run_review`] for why.
+///
+/// Lazy is deliberately thin on stages: it reads the claim a review already
+/// froze rather than forming a new opinion of the board, so there is nothing
+/// between "start" and "wrote the code" worth narrating.
+pub async fn run_lazy_fill(
+    state: &Shared,
+    request: LazyRequest,
+    events: EventSink,
+) -> Result<LazyEnvelope, AppError> {
     let dataset = resolve_dataset(request.dataset.as_deref())?;
     let mut board = request.board.clone();
     let board_key = dataset.key(&request.task_id);
@@ -339,11 +367,22 @@ pub async fn lazy_fill(
         // implements exactly what the student saw on their card. When Lazy is
         // used without a review — or after redrawing — derive one, so the fill
         // still works from a stated claim rather than a fresh guess at the ink.
-        let claim = frozen_claim.or_else(|| {
-            perceive_and_claim(&*provider, &meta, description.as_deref(), &board)
-                .ok()
-                .map(|(claim, _)| claim)
-        });
+        let claim = match frozen_claim {
+            Some(claim) => {
+                events.stage("lazy", "implementing the claim your review froze");
+                Some(claim)
+            }
+            None => {
+                events.stage("claim", "no frozen claim for this board — re-reading it");
+                perceive_and_claim(&*provider, &meta, description.as_deref(), &board)
+                    .ok()
+                    .map(|(claim, _)| claim)
+            }
+        };
+        if let Some(err) = events.cancelled_error() {
+            return Err(err);
+        }
+        events.stage("lazy", "writing the parts the board already justifies");
         let prompt = build_lazy_fill_prompt(&meta, description.as_deref(), &board, claim.as_ref());
         let reply = provider.chat_ex(
             &ChatRequest::new(vec![
@@ -353,6 +392,7 @@ pub async fn lazy_fill(
             .json(),
         )?;
         let fill = parse_lazy_fill(&reply.content)?;
+        events.stage("done", "");
         Ok(LazyEnvelope {
             task_id: meta.task_id,
             provider: provider.label(),
@@ -360,7 +400,7 @@ pub async fn lazy_fill(
         })
     })
     .await?;
-    Ok(Json(envelope))
+    Ok(envelope)
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +475,15 @@ pub async fn ask(
     State(state): State<Shared>,
     Json(request): Json<AskRequest>,
 ) -> Result<Json<AskEnvelope>, AppError> {
+    Ok(Json(run_ask(&state, request, EventSink::none()).await?))
+}
+
+/// Ask without the HTTP wrapper — see [`run_review`] for why.
+pub async fn run_ask(
+    state: &Shared,
+    request: AskRequest,
+    events: EventSink,
+) -> Result<AskEnvelope, AppError> {
     let question = request.question.trim().to_string();
     if question.is_empty() {
         return Err(AppError::bad_request(anyhow!("type a question first")));
@@ -446,11 +495,13 @@ pub async fn ask(
         let meta = load_meta(&cfg, dataset, &task_id)?;
         let description = description_for(&meta);
         let provider = make_provider_for_mode(&cfg, "review")?;
+        events.stage("ask", "answering from the problem statement and your code");
         let prompt = build_ask_prompt(&meta, description.as_deref(), &question);
         let reply = provider.chat_ex(&ChatRequest::new(vec![
             ChatMessage::system(ASK_SYSTEM_PROMPT),
             ChatMessage::user(prompt),
         ]))?;
+        events.stage("done", "");
         Ok(AskEnvelope {
             task_id: meta.task_id,
             provider: provider.label(),
@@ -458,7 +509,7 @@ pub async fn ask(
         })
     })
     .await?;
-    Ok(Json(envelope))
+    Ok(envelope)
 }
 
 #[cfg(test)]
@@ -725,6 +776,98 @@ mod tests {
 
         let prompt = build_lazy_fill_prompt(&meta(), None, &lazy_send, Some(&found));
         assert!(prompt.contains("full working Python for the claim above"));
+    }
+
+    /// What the socket relays is the pipeline's own shape, not a schedule: the
+    /// perceive pass only reports when there was an image to describe, and the
+    /// verdict stage reports either way — including the on-track path, where
+    /// what it says is that no fault-finding call was made.
+    #[test]
+    fn the_stage_events_match_the_stages_that_actually_ran() {
+        use std::sync::{Arc, Mutex};
+        use crate::llm::coach::{review_submission_with_events, CoachEvent, EventSink};
+
+        fn record() -> (EventSink, Arc<Mutex<Vec<String>>>) {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let sink = {
+                let seen = Arc::clone(&seen);
+                EventSink::new(move |event| {
+                    if let CoachEvent::Stage { stage, .. } = event {
+                        seen.lock().unwrap().push(stage);
+                    }
+                })
+            };
+            (sink, seen)
+        }
+
+        let seen_image = r#"{"observations": ["a box with 120 above an arrow"]}"#;
+        let board_with_png = BoardSnapshot {
+            png: Some("base64".into()),
+            ..drawn_board()
+        };
+
+        let (sink, events) = record();
+        let provider = ScriptedProvider::new(&[seen_image, SUFFICIENT_CLAIM]);
+        review_submission_with_events(&provider, &meta(), None, &board_with_png, false, &sink)
+            .expect("staged");
+        assert_eq!(provider.stages(), vec!["perceive", "claim"]);
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["perceive", "claim", "verdict", "done"],
+            "the verdict event is how the student learns nothing went looking for a flaw"
+        );
+
+        // Insufficient claim + a code dock: the two extra model calls each get
+        // their own stage, and the cited case adds the re-trace.
+        let (sink, events) = record();
+        let provider = ScriptedProvider::new(&[
+            r#"{"understood_approach": "reverse the digits and compare",
+                "claim_sufficient": false, "why_sufficient_or_not": "overflow undecided"}"#,
+            r#"{"verdict": "subtly_wrong", "rating": {"correctness": 3},
+                "gaps": ["overflow is undecided"],
+                "counterexample": {"case_index": 1, "why_your_approach_fails": "case 1 overflows"},
+                "socratic_question": "what does the range allow?"}"#,
+            r#"{"verdict": "subtly_wrong", "rating": {"correctness": 3}}"#,
+            r#"{"walks_through": true, "still_fails": true, "why": "still overflows"}"#,
+        ]);
+        let board = BoardSnapshot {
+            pseudocode: Some("def reverse(x):\n    return int(str(x)[::-1])".into()),
+            ..drawn_board()
+        };
+        review_submission_with_events(&provider, &meta(), None, &board, true, &sink)
+            .expect("staged");
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["claim", "verdict", "code", "retrace", "done"],
+            "no perceive event without a PNG, and no retrace event without a citation"
+        );
+    }
+
+    /// Cancelling is checked between stages, so a run the student walked away
+    /// from stops before it spends the next call rather than after the last.
+    #[test]
+    fn a_cancelled_sink_stops_the_pipeline_at_the_next_stage_boundary() {
+        use std::sync::atomic::Ordering;
+        use crate::llm::coach::{review_submission_with_events, EventSink};
+
+        let sink = EventSink::new(|_| {});
+        sink.cancel_handle().unwrap().store(true, Ordering::Relaxed);
+
+        let provider = ScriptedProvider::new(&[SUFFICIENT_CLAIM]);
+        let failed = review_submission_with_events(
+            &provider,
+            &meta(),
+            None,
+            &drawn_board(),
+            false,
+            &sink,
+        );
+        assert!(failed.is_err(), "a cancelled run must not return a card");
+        assert!(
+            provider.stages().is_empty(),
+            "and must not have spent a model call: {:?}",
+            provider.stages()
+        );
     }
 
     /// Verification step 7: no code path from `/coach/review` or

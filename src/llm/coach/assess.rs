@@ -15,6 +15,7 @@ use crate::generator::WorkspaceMeta;
 use crate::llm::{ChatMessage, ChatRequest, LlmProvider};
 
 use super::board::BoardSnapshot;
+use super::events::EventSink;
 use super::modes::review::{merge_layout_and_code_reviews, parse_review, ReviewResponse};
 use super::prompts::{
     build_claim_code_review_prompt, build_claim_prompt, build_perceive_prompt,
@@ -105,6 +106,29 @@ pub fn review_submission(
     board: &BoardSnapshot,
     include_code: bool,
 ) -> Result<ReviewOutcome> {
+    review_submission_with_events(
+        provider,
+        meta,
+        description,
+        board,
+        include_code,
+        &EventSink::none(),
+    )
+}
+
+/// [`review_submission`], reporting each stage boundary to `events`.
+///
+/// The stages are the same ones and in the same order; the sink only observes.
+/// A cancelled sink stops the sequence between stages rather than mid-call —
+/// the provider is blocking HTTP and owns its own timeout.
+pub fn review_submission_with_events(
+    provider: &dyn LlmProvider,
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+    include_code: bool,
+    events: &EventSink,
+) -> Result<ReviewOutcome> {
     let has_layout =
         board.has_visual_evidence() || !board.recognized_text.trim().is_empty();
     let has_code = include_code
@@ -114,7 +138,7 @@ pub fn review_submission(
             .is_some_and(|p| p.trim().len() > 8);
 
     let staged = if has_layout {
-        staged_board_review(provider, meta, description, board).ok()
+        staged_board_review_with_events(provider, meta, description, board, events).ok()
     } else {
         None
     };
@@ -122,6 +146,10 @@ pub fn review_submission(
     let (mut review, claim) = match staged {
         Some((claim, board_review)) => {
             let review = if has_code {
+                if let Some(err) = events.cancelled_error() {
+                    return Err(err);
+                }
+                events.stage("code", "checking solution.py against that claim");
                 let code_prompt =
                     build_claim_code_review_prompt(meta, description, board, &claim);
                 let code_reply = provider.chat_ex(
@@ -139,6 +167,13 @@ pub fn review_submission(
             (review, Some(claim))
         }
         None => {
+            // The staged path degrades to one call when a stage came back
+            // unusable — but a *cancelled* run must not degrade into spending
+            // another call on an answer nobody is waiting for.
+            if let Some(err) = events.cancelled_error() {
+                return Err(err);
+            }
+            events.stage("verdict", "reading it in one pass");
             let prompt = build_review_prompt(meta, description, board);
             let reply = provider.chat_ex(
                 &ChatRequest::new(vec![
@@ -151,7 +186,11 @@ pub fn review_submission(
         }
     };
 
+    if review.counterexample.is_some() {
+        events.stage("retrace", "re-tracing the case it cited");
+    }
     retrace_counterexample(provider, meta, board, &mut review);
+    events.stage("done", "");
     Ok(ReviewOutcome { review, claim })
 }
 
@@ -163,12 +202,30 @@ pub fn staged_board_review(
     description: Option<&str>,
     board: &BoardSnapshot,
 ) -> Result<(Claim, ReviewResponse)> {
-    let (claim, _) = perceive_and_claim(provider, meta, description, board)?;
+    staged_board_review_with_events(provider, meta, description, board, &EventSink::none())
+}
+
+/// [`staged_board_review`] with stage reporting.
+pub fn staged_board_review_with_events(
+    provider: &dyn LlmProvider,
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+    events: &EventSink,
+) -> Result<(Claim, ReviewResponse)> {
+    let (claim, _) = perceive_and_claim_with_events(provider, meta, description, board, events)?;
 
     if claim.decides_the_answer() {
+        // The gate the whole pipeline turns on: a claim that decides the answer
+        // never reaches a stage that was asked to find something wrong.
+        events.stage("verdict", "the claim already decides it — no fault-finding pass");
         return Ok((claim.clone(), on_track_review_from_claim(&claim)));
     }
 
+    if let Some(err) = events.cancelled_error() {
+        return Err(err);
+    }
+    events.stage("verdict", "judging that claim against the sample cases");
     let prompt = build_verdict_prompt(meta, description, board, &claim);
     let reply = provider.chat_ex(
         &ChatRequest::new(vec![
@@ -190,7 +247,19 @@ pub fn perceive_and_claim(
     description: Option<&str>,
     board: &BoardSnapshot,
 ) -> Result<(Claim, Option<Perception>)> {
+    perceive_and_claim_with_events(provider, meta, description, board, &EventSink::none())
+}
+
+/// [`perceive_and_claim`] with stage reporting.
+pub fn perceive_and_claim_with_events(
+    provider: &dyn LlmProvider,
+    meta: &WorkspaceMeta,
+    description: Option<&str>,
+    board: &BoardSnapshot,
+    events: &EventSink,
+) -> Result<(Claim, Option<Perception>)> {
     let perception = if board.png.is_some() {
+        events.stage("perceive", "describing what is on the board");
         let prompt = build_perceive_prompt(meta, board);
         provider
             .chat_ex(
@@ -207,6 +276,10 @@ pub fn perceive_and_claim(
         None
     };
 
+    if let Some(err) = events.cancelled_error() {
+        return Err(err);
+    }
+    events.stage("claim", "naming the approach your board argues for");
     let prompt = build_claim_prompt(meta, description, board, perception.as_ref());
     let mut message = ChatMessage::user(prompt);
     if perception.is_none() {

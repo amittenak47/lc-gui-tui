@@ -23,6 +23,18 @@ pub struct ModesConfigDto {
     pub viz: String,
 }
 
+/// Streaming-coach feature flags. Serialized flat so an older client that does
+/// not know about them simply leaves them at their defaults.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct CoachFlagsDto {
+    pub ws_runs: bool,
+    pub process_events_ui: bool,
+    pub planner_enabled: bool,
+    pub draw_review_enabled: bool,
+    pub approach_commitment: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConfigDto {
     pub data_json_dir: Option<String>,
@@ -43,6 +55,8 @@ pub struct ConfigDto {
     pub groq: ProviderConfigDto,
     pub modes: ModesConfigDto,
     pub serve_port: u16,
+    #[serde(default)]
+    pub coach: CoachFlagsDto,
     /// Present on GET only — never echo the secret.
     #[serde(default)]
     pub token_set: bool,
@@ -83,6 +97,13 @@ fn config_dto(cfg: &Config) -> ConfigDto {
             viz: cfg.llm.modes.viz.clone(),
         },
         serve_port: cfg.serve.port,
+        coach: CoachFlagsDto {
+            ws_runs: cfg.coach.ws_runs,
+            process_events_ui: cfg.coach.process_events_ui,
+            planner_enabled: cfg.coach.planner_enabled,
+            draw_review_enabled: cfg.coach.draw_review_enabled,
+            approach_commitment: cfg.coach.approach_commitment,
+        },
         token_set: cfg
             .serve
             .token
@@ -124,6 +145,11 @@ fn apply_config_dto(cfg: &mut Config, dto: &ConfigDto) -> anyhow::Result<()> {
     cfg.set("llm.modes.bridge", &dto.modes.bridge)?;
     cfg.set("llm.modes.viz", &dto.modes.viz)?;
     cfg.serve.port = dto.serve_port;
+    cfg.coach.ws_runs = dto.coach.ws_runs;
+    cfg.coach.process_events_ui = dto.coach.process_events_ui;
+    cfg.coach.planner_enabled = dto.coach.planner_enabled;
+    cfg.coach.draw_review_enabled = dto.coach.draw_review_enabled;
+    cfg.coach.approach_commitment = dto.coach.approach_commitment;
     Ok(())
 }
 
