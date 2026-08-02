@@ -478,7 +478,7 @@ function mobilePageInsets(toolbarH: number): {
   };
 }
 
-/** Desktop page fit — fill under the toolbar to the board bottom; chrome overlays. */
+/** Desktop page fit — full width under the top toolbar strip. */
 function desktopPageInsets(toolbarH: number, chromeHidden: boolean): {
   top: number;
   left: number;
@@ -489,7 +489,6 @@ function desktopPageInsets(toolbarH: number, chromeHidden: boolean): {
     top: Math.max(40, Math.round(toolbarH) + 2),
     left: 4,
     right: 4,
-    // Map chrome + coach fold sit on top of the page — do not reserve their height.
     bottom: chromeHidden ? 8 : 12,
   };
 }
@@ -3795,7 +3794,7 @@ interface ToolbarProps {
   onReset: () => void;
   onUndo: () => void;
   onRedo: () => void;
-  /** Tablet / phone layout — horizontal strip with a fold control. */
+  /** Horizontal strip with a vertical fold control (all form factors). */
   mobile?: boolean;
   /** Reports strip height so fitView can place the template under it. */
   onHeightChange?: (height: number) => void;
@@ -4062,8 +4061,8 @@ function BoardToolbar({
       ref={toolbarRootRef}
       className={[
         "lc-toolbar",
-        mobile ? "lc-toolbar-mobile" : "",
-        mobile && folded ? "lc-toolbar-folded" : "",
+        mobile ? "lc-toolbar-compact" : "",
+        folded ? "lc-toolbar-folded" : "",
         shapesOpen ? "lc-toolbar-shapes-open" : "",
         captureMenuOpen ? "lc-toolbar-capture-open" : "",
       ]
@@ -4072,25 +4071,22 @@ function BoardToolbar({
       role="toolbar"
       aria-label="Drawing tools"
     >
-      {mobile && (
-        <button
-          type="button"
-          className="lc-tool lc-tool-fold"
-          aria-label={folded ? "Show tools" : "Fold tools"}
-          aria-expanded={!folded}
-          onClick={() => {
-            setFolded((wasFolded) => {
-              if (!wasFolded && shapesOpen) onToggleShapes();
-              return !wasFolded;
-            });
-          }}
-        >
-          {folded ? "▸" : "▾"}
-        </button>
-      )}
+      <button
+        type="button"
+        className="lc-tool lc-tool-fold"
+        aria-label={folded ? "Show tools" : "Fold tools"}
+        aria-expanded={!folded}
+        onClick={() => {
+          setFolded((wasFolded) => {
+            if (!wasFolded && shapesOpen) onToggleShapes();
+            return !wasFolded;
+          });
+        }}
+      >
+        {folded ? "▾" : "▴"}
+      </button>
 
-      {/* Folded mobile: only the active tool stays visible next to the chevron. */}
-      {mobile && folded && activeToolMeta &&
+      {folded && activeToolMeta &&
         renderToolButton(
           activeToolMeta.tool,
           activeToolMeta.label,
@@ -4098,25 +4094,14 @@ function BoardToolbar({
           activeToolMeta.emoji,
         )}
 
-      {mobile ? (
-        <div className="lc-toolbar-expandable">
-          {TOOLS.map(({ tool, label, hint, emoji }) =>
-            renderToolButton(tool, label, hint, emoji),
-          )}
-          {shapesButton}
-          {mediaButtons}
-          {toolExtras}
-        </div>
-      ) : (
-        <>
-          {TOOLS.map(({ tool, label, hint, emoji }) =>
-            renderToolButton(tool, label, hint, emoji),
-          )}
-          {shapesButton}
-          {mediaButtons}
-          {toolExtras}
-        </>
-      )}
+      <div className="lc-toolbar-expandable">
+        {TOOLS.map(({ tool, label, hint, emoji }) =>
+          renderToolButton(tool, label, hint, emoji),
+        )}
+        {shapesButton}
+        {mediaButtons}
+        {toolExtras}
+      </div>
 
       {shapesOpen && (
         <div
