@@ -5,9 +5,9 @@
  * wrapper is Electron — so it mounts straight into the Tauri WebView.
  *
  * Excalidraw's own chrome is hidden (see `.lc-board` in styles.css) and replaced
- * by {@link BoardToolbar}: pen, eraser, text, shapes, undo, clear, plus font
- * size and board background. A stylus session should never need a menu, and
- * everything that changes what the pen does lives in one strip beside the pen.
+ * by {@link BoardToolbar} — one floating island at the bottom of the canvas
+ * holding the tools, shapes, undo/redo, reset and the ink colour. A stylus
+ * session should never need a menu.
  */
 
 import {
@@ -31,15 +31,18 @@ import {
 } from "react";
 
 import {
-  SHAPES,
-  SHAPE_GROUPS,
   resolveShapeMods,
   DEFAULT_SHAPE_PALETTE,
   type ShapeModValue,
   type ShapeStamp,
 } from "../templates/shapes";
 import { healBoardLayout } from "./healBoardLayout";
-import { healScratchpadGeometry, SCRATCH_PAGE_W } from "../templates/scratchpad";
+import {
+  healScratchpadGeometry,
+  parseScratchPageId,
+  scratchTitleAnchor,
+  SCRATCH_PAGE_W,
+} from "../templates/scratchpad";
 import { regionFrameId, regionFramesOf, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
@@ -51,10 +54,8 @@ import {
   type Skeleton,
 } from "../templates/skeleton";
 import { BackgroundPalette } from "../components/BackgroundPalette";
-import { INK_COLORS_DARK, INK_COLORS_LIGHT } from "./inkColors";
-import { ConfirmDialog } from "../components/ConfirmDialog";
+import { resolveInkColor } from "./inkColors";
 import { ReadingSizeControl } from "../components/ReadingSizeControl";
-import { FontSizeSlider } from "./FontSizeSlider";
 import { useIsMobile } from "../util/mobile";
 import { isDarkTheme } from "../theme/appThemes";
 import {
@@ -70,7 +71,7 @@ import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
 import { textBaselineY, SCRATCH_LINE_PITCH, linedRuleClearance } from "../modes/textBaseline";
 import type { BoardBinaryFile, BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
-import { applyMetadata, keepOnClear, isCoachElement } from "./scene";
+import { applyMetadata, isCoachElement } from "./scene";
 import {
   applyPageVisibility,
   clearPageVisibility,
@@ -80,11 +81,9 @@ import {
 import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
-import { StrokeSizeSlider } from "./StrokeSizeSlider";
-import { InkChromeSizeDial } from "./InkChromeSizeDial";
+import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkToolPrefs, saveInkToolPrefs } from "../util/inkToolPrefs";
-import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import {
   clampExportScale,
   exportScaleFrom,
@@ -462,7 +461,12 @@ function safeCssPx(name: "--lc-safe-top" | "--lc-safe-bottom" | "--lc-safe-left"
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Viewport chrome around the fitted template page (toolbar top, map controls bottom). */
+/**
+ * Viewport chrome around the fitted template page.
+ *
+ * Everything the board draws over the canvas now sits in one bottom row, so the
+ * top of the page is free and only the bottom needs clearing.
+ */
 function mobilePageInsets(toolbarH: number): {
   top: number;
   left: number;
@@ -470,15 +474,14 @@ function mobilePageInsets(toolbarH: number): {
   bottom: number;
 } {
   return {
-    top: Math.max(34, Math.round(toolbarH) + 2),
+    top: 6,
     left: 2,
     right: 2,
-    // Bottom chrome overlays the page; keep a thin pad off the physical edge.
-    bottom: 8,
+    bottom: Math.max(44, Math.round(toolbarH) + 16),
   };
 }
 
-/** Desktop page fit — full width under the top toolbar strip. */
+/** Desktop page fit — full width above the floating toolbar. */
 function desktopPageInsets(toolbarH: number, chromeHidden: boolean): {
   top: number;
   left: number;
@@ -486,16 +489,17 @@ function desktopPageInsets(toolbarH: number, chromeHidden: boolean): {
   bottom: number;
 } {
   return {
-    top: Math.max(40, Math.round(toolbarH) + 2),
+    top: 8,
     left: 4,
     right: 4,
-    bottom: chromeHidden ? 8 : 12,
+    bottom: chromeHidden ? 12 : Math.max(52, Math.round(toolbarH) + 20),
   };
 }
 
 /**
- * Measure the live chrome hole so the dashed frame can touch the toolbar and
- * run to the board bottom (controls overlay the page; coach does not shrink it).
+ * Measure the live chrome hole so the dashed frame can run to the top of the
+ * board and stop above the floating controls (they overlay the page; the coach
+ * does not shrink it).
  */
 function measureChromeInsets(
   boardEl: HTMLElement | null,
@@ -510,16 +514,18 @@ function measureChromeInsets(
   const board = boardEl.getBoundingClientRect();
   if (board.width < 8 || board.height < 8) return fallback;
 
-  const toolbar = boardEl.querySelector(".lc-toolbar") as HTMLElement | null;
-  const top = toolbar
-    ? Math.max(2, Math.round(toolbar.getBoundingClientRect().bottom - board.top + 2))
-    : fallback.top;
+  const chrome = boardEl.querySelector(".lc-map-controls") as HTMLElement | null;
+  const chromeRect = chrome?.getBoundingClientRect();
+  const bottom =
+    chromeRect && chromeRect.height > 4
+      ? Math.max(8, Math.round(board.bottom - chromeRect.top + 6))
+      : fallback.bottom;
 
   return {
-    top,
+    top: fallback.top,
     left: fallback.left,
     right: fallback.right,
-    bottom: fallback.bottom,
+    bottom,
   };
 }
 
@@ -660,6 +666,12 @@ export interface BoardProps {
    * can share a baseline and never overlap.
    */
   bottomCenter?: ReactNode;
+  /**
+   * Chrome pinned to the open page's title line — the scratchpad pager. It
+   * rides the page through the camera, so it stays part of the paper instead of
+   * squatting in the bottom bar next to the tools.
+   */
+  pageTitle?: ReactNode;
   /** Show lined-paper toggle in the map chrome. */
   linedPaperToggle?: boolean;
   /** Show S/M/L reading size (problem boards on mobile — not scratchpad). */
@@ -667,46 +679,6 @@ export interface BoardProps {
   /** Optional fold handle under the bottom chrome (coach closed → open). */
   coachFold?: ReactNode;
 }
-
-function defaultInk(themeId: string): string {
-  return isDarkTheme(themeId) ? INK_COLORS_DARK[0] : INK_COLORS_LIGHT[0];
-}
-
-function inkSwatches(themeId: string): readonly string[] {
-  return isDarkTheme(themeId) ? INK_COLORS_DARK : INK_COLORS_LIGHT;
-}
-
-function resolveInkColor(themeId: string, preferred: string | null | undefined): string {
-  const swatches = inkSwatches(themeId);
-  if (preferred && swatches.includes(preferred)) return preferred;
-  return defaultInk(themeId);
-}
-
-const TOOLS: Array<{ tool: ToolName; label: string; hint: string; emoji?: string }> = [
-  { tool: "hand", label: "hand", hint: "Pan — drag to move; scroll wheel zooms", emoji: "✋" },
-  { tool: "selection", label: "⬚", hint: "Select — resize region boxes (they stay locked in place) or move your work" },
-  { tool: "freedraw", label: "Pen", hint: "Pen", emoji: "✏️" },
-  { tool: "eraser", label: "Eraser", hint: "Eraser — only removes ink under the brush", emoji: "erasersvg" },
-  { tool: "text", label: "T", hint: "Text — click to place (Enter finishes, Shift+Enter for a new line)" },
-  { tool: "rectangle", label: "▭", hint: "Rectangle" },
-  { tool: "ellipse", label: "◯", hint: "Ellipse" },
-  { tool: "arrow", label: "↗", hint: "Arrow" },
-];
-
-/** Layouts where you ink — floating pen/eraser swap sits above each of these. */
-interface InkChromePos {
-  left: number;
-  top: number;
-}
-
-type InkChromePhase = "parked" | "in" | "shown" | "out";
-
-interface InkChromeState extends InkChromePos {
-  phase: InkChromePhase;
-}
-
-/** Off-canvas warm instance — dial/buttons stay mounted so show is O(1) style update. */
-const PARKED_INK_CHROME: InkChromeState = { left: -9999, top: -9999, phase: "parked" };
 
 /** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
 const UI_OPTIONS = {
@@ -755,6 +727,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onReadingSizeChange,
     mobileRegion = null,
     bottomCenter = null,
+    pageTitle = null,
     linedPaperToggle = false,
     showReadingSize = false,
     coachFold = null,
@@ -775,22 +748,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [penStrokeWidth, setPenStrokeWidth] = useState(() => inkPrefsRef.current.penWidth);
   const [eraserStrokeWidth, setEraserStrokeWidth] = useState(() => inkPrefsRef.current.eraserWidth);
   const strokeWidth = activeTool === "eraser" ? eraserStrokeWidth : penStrokeWidth;
-  const [inkChrome, setInkChrome] = useState<InkChromeState>(PARKED_INK_CHROME);
   const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [stampTrash, setStampTrash] = useState<{
     left: number;
     top: number;
     ids: string[];
   } | null>(null);
-  const inkChromeHideRef = useRef<number | null>(null);
-  const inkChromeExitRef = useRef<number | null>(null);
-  const inkChromeShowRef = useRef<number | null>(null);
-  const inkChromeElRef = useRef<HTMLDivElement | null>(null);
-  const inkChromeVisibleRef = useRef(false);
-  const inkTrailRef = useRef<Array<{ x: number; y: number; t: number }>>([]);
-  const inkHandednessRef = useRef(inkHandedness);
-  inkHandednessRef.current = inkHandedness;
-  inkChromeVisibleRef.current = inkChrome.phase !== "parked" && inkChrome.phase !== "out";
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
@@ -810,6 +773,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     gap: number;
     phase: number;
   } | null>(null);
+  const [titleSlot, setTitleSlot] = useState<{
+    left: number;
+    top: number;
+    fontPx: number;
+  } | null>(null);
+  const lastTitleSlotRef = useRef<{ left: number; top: number; fontPx: number } | null>(null);
   const [mapChromeHidden, setMapChromeHidden] = useState(false);
   const mapChromeHiddenRef = useRef(mapChromeHidden);
   mapChromeHiddenRef.current = mapChromeHidden;
@@ -848,9 +817,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** True while fitCamera is applying zoom/scroll (not user input). */
   const fittingCameraRef = useRef(false);
   /** Measured toolbar height so fitView lands the template under it. */
-  const [toolbarHeight, setToolbarHeight] = useState(36);
-  const toolbarHeightRef = useRef(toolbarHeight);
-  toolbarHeightRef.current = toolbarHeight;
+  /**
+   * Height of the floating tool island, for the page inset.
+   *
+   * Deliberately a ref and not state: the island changes height when the active
+   * tool shows or hides its size wheel, and routing that through React used to
+   * re-render the board and fire a refit, which threw away whatever zoom the
+   * user had set. Picking up the pen is not a request to reframe the page.
+   */
+  const toolbarHeightRef = useRef(36);
   const clampingScrollRef = useRef(false);
   const [readingSizeLocal, setReadingSizeLocal] = useState<BoardReadingSize>(() => loadBoardReadingSize());
   const readingSize = readingSizeProp ?? readingSizeLocal;
@@ -985,7 +960,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!target.closest(".excalidraw")) return;
       if (
         target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-ink-chrome",
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager",
         )
       ) {
         return;
@@ -1217,6 +1192,43 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   /** Keep lined paper clipped to the open template frame (screen space). */
+  /** Project the open scratch page's title line to screen for the pager overlay. */
+  const reportTitleSlot = useCallback(() => {
+    const api = apiRef.current;
+    const page = mobileRegionRef.current;
+    const index = parseScratchPageId(page);
+    const clear = () => {
+      if (lastTitleSlotRef.current !== null) {
+        lastTitleSlotRef.current = null;
+        setTitleSlot(null);
+      }
+    };
+    if (!api || index == null) {
+      clear();
+      return;
+    }
+    const state = api.getAppState() as {
+      scrollX?: number;
+      scrollY?: number;
+      zoom?: { value?: number };
+    };
+    const zoom = state.zoom?.value ?? 1;
+    const anchor = scratchTitleAnchor(index);
+    // Rides the page, but never shrinks below a pressable size: a scratch page
+    // fits the viewport at ~0.2 zoom, where authored 20px chrome is 4px tall.
+    const next = {
+      left: roundPx((anchor.x + (state.scrollX ?? 0)) * zoom),
+      top: roundPx((anchor.y + (state.scrollY ?? 0)) * zoom),
+      fontPx: Math.max(12, Math.round(20 * zoom)),
+    };
+    const prev = lastTitleSlotRef.current;
+    if (prev && prev.left === next.left && prev.top === next.top && prev.fontPx === next.fontPx) {
+      return;
+    }
+    lastTitleSlotRef.current = next;
+    setTitleSlot(next);
+  }, []);
+
   const reportLinedSlot = useCallback(() => {
     if (!linedPaperRef.current) {
       if (lastLinedSlotRef.current !== null) {
@@ -1255,7 +1267,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const pitchScene = isScratch
       ? SCRATCH_LINE_PITCH
       : statementLinePitch(readingSizeRef.current);
-    const gap = Math.max(12, Math.round(pitchScene * zoom));
+    // Scene pitch straight through the camera, sub-pixel and unclamped: a
+    // floor here (there used to be one at 12px) means the rules stop shrinking
+    // while the ink keeps going, so writing drifts off them as you zoom out.
+    const gap = Math.max(1, Math.round(pitchScene * zoom * 100) / 100);
 
     let phase = 0;
     const elements = api.getSceneElements() as Array<{
@@ -1306,7 +1321,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       phase = ((rel - gap + 1) % gap + gap) % gap;
     }
 
-    const next = { left, top, width, height, gap, phase: roundPx(phase) };
+    const next = {
+      left,
+      top,
+      width,
+      height,
+      gap,
+      // Same sub-pixel precision as the gap, or the phase walks off the rules.
+      phase: Math.round(phase * 100) / 100,
+    };
     const prev = lastLinedSlotRef.current;
     if (
       prev &&
@@ -1322,211 +1345,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     lastLinedSlotRef.current = next;
     setLinedSlot(next);
   }, []);
-
-  /**
-   * Near-pen undo/redo/eraser cluster — appears after a short pause at stroke
-   * end, above recent writing, then fades after ~8s. Never tracks mid-stroke.
-   */
-  const clearInkChromeTimers = useCallback(() => {
-    if (inkChromeHideRef.current != null) {
-      window.clearTimeout(inkChromeHideRef.current);
-      inkChromeHideRef.current = null;
-    }
-    if (inkChromeExitRef.current != null) {
-      window.clearTimeout(inkChromeExitRef.current);
-      inkChromeExitRef.current = null;
-    }
-    if (inkChromeShowRef.current != null) {
-      window.clearTimeout(inkChromeShowRef.current);
-      inkChromeShowRef.current = null;
-    }
-  }, []);
-
-  const placeInkChrome = useCallback((clientX: number, clientY: number) => {
-    const board = boardRef.current;
-    if (!board) return;
-    const rect = board.getBoundingClientRect();
-    // Buttons (~24) × 3 + gaps + radial dial (~38)
-    const clusterW = 24 * 3 + 4 + 38;
-    const clusterH = 38;
-    const pad = 20;
-    const hand = inkHandednessRef.current;
-
-    const now = performance.now();
-    // Keep a longer trail, but ignore the tip — sit over older ink so the hand
-    // doesn't cover the chrome.
-    const trail = inkTrailRef.current.filter((point) => now - point.t < 4000);
-    inkTrailRef.current = trail;
-    const older = trail.filter((point) => now - point.t >= 700);
-    const histPts = older.length > 0 ? older : trail.length > 0 ? trail : [{ x: clientX, y: clientY, t: now }];
-    const histX = histPts.reduce((sum, point) => sum + point.x, 0) / histPts.length;
-    const histY = histPts.reduce((sum, point) => sum + point.y, 0) / histPts.length;
-    const histMinX = Math.min(...histPts.map((point) => point.x));
-    const histMaxX = Math.max(...histPts.map((point) => point.x));
-    const histMinY = Math.min(...histPts.map((point) => point.y));
-    const histMaxY = Math.max(...histPts.map((point) => point.y));
-    const histSpan = Math.hypot(histMaxX - histMinX, histMaxY - histMinY);
-    const shortMark = histSpan < 28;
-
-    // Writing direction: historical → tip. Place chrome opposite that vector.
-    let dx = clientX - histX;
-    let dy = clientY - histY;
-    const mag = Math.hypot(dx, dy);
-    if (mag < 8 || shortMark) {
-      // Stationary / short stroke / tiny mark: default above, palm-side nudge.
-      dx = hand === "right" ? -0.35 : 0.35;
-      dy = 1;
-      const n = Math.hypot(dx, dy);
-      dx /= n;
-      dy /= n;
-    } else {
-      dx /= mag;
-      dy /= mag;
-    }
-
-    const absDx = Math.abs(dx);
-    const absDy = Math.abs(dy);
-    // Short marks get extra clearance so chrome doesn't sit on a single dot.
-    const offset = shortMark ? 88 : 64;
-    const shortPad = shortMark ? pad + 16 : pad;
-    let centerX: number;
-    let centerY: number;
-
-    if (absDy >= absDx * 1.15) {
-      // Mostly vertical: use historical top/bottom edge + pad away from tip.
-      centerX = histX + (hand === "right" ? -18 : 18);
-      centerY = dy > 0 ? histMinY - shortPad - clusterH / 2 : histMaxY + shortPad + clusterH / 2;
-    } else if (absDx >= absDy * 1.15) {
-      // Mostly horizontal: sit beside historical ink, opposite writing.
-      centerY = histY + (hand === "right" ? -10 : 10);
-      centerX = dx > 0 ? histMinX - shortPad - clusterW / 2 : histMaxX + shortPad + clusterW / 2;
-    } else {
-      // Diagonal: blend — opposite direction from historical center toward tip.
-      centerX = histX - dx * offset;
-      centerY = histY - dy * offset;
-      // Prefer historical bbox edges along the dominant axis of the blend.
-      if (dy > 0) centerY = Math.min(centerY, histMinY - shortPad - clusterH / 2);
-      else centerY = Math.max(centerY, histMaxY + shortPad + clusterH / 2);
-      if (dx > 0) centerX = Math.min(centerX, histMinX - shortPad - clusterW / 2);
-      else centerX = Math.max(centerX, histMaxX + shortPad + clusterW / 2);
-    }
-
-    let left = centerX - rect.left - clusterW / 2;
-    let top = centerY - rect.top - clusterH / 2;
-
-    // Near edges: prefer the open side of the board so chrome doesn't stack on cramped writing.
-    const edgeMargin = 48;
-    const tipLocalX = clientX - rect.left;
-    const tipLocalY = clientY - rect.top;
-    if (tipLocalX < edgeMargin) {
-      left = Math.max(left, tipLocalX + shortPad);
-    } else if (tipLocalX > rect.width - edgeMargin) {
-      left = Math.min(left, tipLocalX - shortPad - clusterW);
-    }
-    if (tipLocalY < edgeMargin) {
-      top = Math.max(top, tipLocalY + shortPad);
-    } else if (tipLocalY > rect.height - edgeMargin) {
-      top = Math.min(top, tipLocalY - shortPad - clusterH);
-    }
-
-    left = Math.max(8, Math.min(left, rect.width - clusterW - 8));
-    top = Math.max(8, Math.min(top, rect.height - clusterH - 8));
-    const next = { left: roundPx(left), top: roundPx(top) };
-
-    // Clear any mid-stroke soft-hide so the warm instance can appear.
-    const node = inkChromeElRef.current;
-    if (node) {
-      node.style.opacity = "";
-      node.style.pointerEvents = "";
-      node.style.visibility = "";
-    }
-
-    setInkChrome((current) => {
-      const wasHidden =
-        current.phase === "parked" || current.phase === "out";
-      if (
-        current.left === next.left &&
-        current.top === next.top &&
-        !wasHidden &&
-        current.phase !== "out"
-      ) {
-        return current;
-      }
-      return {
-        ...next,
-        // First reveal (or after hide) uses the enter animation; reposition stays "shown".
-        phase: wasHidden ? "in" : current.phase === "in" ? "in" : "shown",
-      };
-    });
-
-    if (inkChromeHideRef.current != null) {
-      window.clearTimeout(inkChromeHideRef.current);
-      inkChromeHideRef.current = null;
-    }
-    if (inkChromeExitRef.current != null) {
-      window.clearTimeout(inkChromeExitRef.current);
-      inkChromeExitRef.current = null;
-    }
-
-    inkChromeHideRef.current = window.setTimeout(() => {
-      setInkChrome((current) =>
-        current.phase === "parked" ? current : { ...current, phase: "out" },
-      );
-      inkChromeHideRef.current = null;
-      inkChromeExitRef.current = window.setTimeout(() => {
-        setInkChrome(PARKED_INK_CHROME);
-        inkChromeExitRef.current = null;
-      }, 200);
-    }, 8000);
-  }, []);
-
-  const onInkStrokeMove = useCallback((clientX: number, clientY: number) => {
-    // Track trail only — never show/move chrome mid-stroke (perf + less obtrusive).
-    const now = performance.now();
-    const trail = inkTrailRef.current;
-    const last = trail[trail.length - 1];
-    if (!last || now - last.t > 24 || Math.hypot(clientX - last.x, clientY - last.y) > 6) {
-      trail.push({ x: clientX, y: clientY, t: now });
-      if (trail.length > 120) trail.splice(0, trail.length - 120);
-    }
-    if (inkChromeShowRef.current != null) {
-      window.clearTimeout(inkChromeShowRef.current);
-      inkChromeShowRef.current = null;
-    }
-    // Soft-hide via the DOM — no React setState mid-stroke.
-    if (inkChromeVisibleRef.current) {
-      const node = inkChromeElRef.current;
-      if (node) {
-        node.style.opacity = "0";
-        node.style.pointerEvents = "none";
-      }
-      if (inkChromeHideRef.current != null || inkChromeExitRef.current != null) {
-        clearInkChromeTimers();
-      }
-    }
-  }, [clearInkChromeTimers]);
-
-  const onInkStrokeEnd = useCallback(
-    (clientX: number, clientY: number) => {
-      const now = performance.now();
-      inkTrailRef.current.push({ x: clientX, y: clientY, t: now });
-      if (inkChromeShowRef.current != null) {
-        window.clearTimeout(inkChromeShowRef.current);
-      }
-      // Park the warm instance after the stroke (never unmount — that was the hitch).
-      if (inkChromeVisibleRef.current) {
-        clearInkChromeTimers();
-        setInkChrome(PARKED_INK_CHROME);
-        inkChromeVisibleRef.current = false;
-      }
-      // Longer delay so lifting to a new line doesn't flash the chrome.
-      inkChromeShowRef.current = window.setTimeout(() => {
-        inkChromeShowRef.current = null;
-        placeInkChrome(clientX, clientY);
-      }, 500);
-    },
-    [clearInkChromeTimers, placeInkChrome],
-  );
 
   const persistInkPrefs = useCallback(
     (patch: Partial<{ penWidth: number; eraserWidth: number; pressureSensitive: boolean; inkColor: string }>) => {
@@ -1630,10 +1448,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const toEraser = activeToolRef.current !== "eraser";
       if (shapesOpen) setShapesOpen(false);
       setTool(toEraser ? "eraser" : "freedraw");
-      placeInkChrome(event.clientX, event.clientY);
       return true;
     },
-    [setTool, shapesOpen, placeInkChrome],
+    [setTool, shapesOpen],
   );
 
   useEffect(() => {
@@ -1994,7 +1811,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!(target instanceof Element)) return;
       if (
         target.closest(
-          ".lc-code-dock, .lc-toolbar, .lc-map-controls, .lc-ink-chrome, .monaco-editor, textarea, input, [contenteditable='true']",
+          ".lc-code-dock, .lc-toolbar, .lc-map-controls, .monaco-editor, textarea, input, [contenteditable='true']",
         )
       ) {
         return;
@@ -2306,9 +2123,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         setZoomPct(Math.round(zoom * 100));
         requestAnimationFrame(reportCodeSlot);
         requestAnimationFrame(reportLinedSlot);
+        requestAnimationFrame(reportTitleSlot);
       }
     },
-    [mobile, reportCodeSlot, reportLinedSlot],
+    [mobile, reportCodeSlot, reportLinedSlot, reportTitleSlot],
   );
 
   const fitFrame = useCallback(
@@ -2358,12 +2176,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     reportLinedSlot();
   }, [linedPaper, reportLinedSlot]);
 
-  /** Keep the template tucked under the toolbar when its strip grows or folds. */
   useEffect(() => {
-    if (!interactive || mobileRegionRef.current === null) return;
-    const handle = window.setTimeout(() => refitToViewport(), 80);
-    return () => window.clearTimeout(handle);
-  }, [toolbarHeight, interactive, refitToViewport]);
+    reportTitleSlot();
+  }, [mobileRegion, interactive, reportTitleSlot]);
 
   /** Page-locked boards: grow the frame and refit width on every board resize. */
   useEffect(() => {
@@ -2373,6 +2188,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     let timer: number | null = null;
     const run = () => {
       if (mobileRegionRef.current === null) return;
+      // Once the user has zoomed or panned, the camera is theirs: resize the
+      // page frame to the new viewport, but leave zoom and scroll alone.
+      if (userAdjustedCameraRef.current) {
+        fitFrame();
+        return;
+      }
       refitToViewport();
     };
     const observer = new ResizeObserver(() => {
@@ -2390,7 +2211,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.removeEventListener("resize", onWindowResize);
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [interactive, refitToViewport]);
+  }, [interactive, fitFrame, refitToViewport]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
@@ -2660,6 +2481,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const resetTemplate = useCallback(() => {
     const skeletons = seedSkeletonsRef.current;
     if (skeletons.length === 0) return;
+    // Handwriting lives on the raster layer, not in the scene, so replacing the
+    // elements leaves every stroke on screen. Reset is now the only board-wide
+    // control — it has to clear both halves, which is what its dialog promises.
+    rasterInkRef.current?.clear();
     const dark = isDarkTheme(themeId);
     const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
     const recolored = recolorTemplateElements(converted, dark) ?? converted;
@@ -3093,16 +2918,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           scheduleFitView();
         });
       },
-      clearStudentWork: () => {
-        // Keep the template and the coach's diagrams; drop only what the
-        // student drew. Membership comes from `customData`, which survives
-        // conversion — matching on id prefixes did not, which is why this used
-        // to wipe the problem statement.
-        apiRef.current?.updateScene({
-          elements: elements().filter(keepOnClear) as unknown[],
-          captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-        });
-      },
       resetTemplate,
       exportPng: async () => {
         const api = apiRef.current;
@@ -3415,53 +3230,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           }}
         />
       )}
+      {interactive && pageTitle && titleSlot && (
+        <div
+          className="lc-page-title-slot"
+          style={{ left: titleSlot.left, top: titleSlot.top, fontSize: titleSlot.fontPx }}
+        >
+          {pageTitle}
+        </div>
+      )}
       {interactive && (
         <>
-          <BoardToolbar
-            active={activeTool}
-            onPick={setTool}
-            themeId={themeId}
-            inkColor={inkColor}
-            onInk={setInk}
-            strokeWidth={strokeWidth}
-            onStrokeWidth={setStrokeWidth}
-            pressureSensitive={pressureSensitive}
-            onPressureSensitive={setPressureSensitive}
-            fontSize={fontSize}
-            onFontSize={setFontSize}
-            shapesOpen={shapesOpen}
-            onToggleShapes={() => {
-              if (shapesOpen) {
-                setShapesOpen(false);
-                return;
-              }
-              // Shape library is exclusive with drawing tools.
-              setTool("selection");
-              setShapesOpen(true);
-              setCaptureMenuOpen(false);
-            }}
-            onStamp={stamp}
-            onPickImage={pickImageFile}
-            captureMenuOpen={captureMenuOpen}
-            onToggleCaptureMenu={() => {
-              setCaptureMenuOpen((open) => !open);
-              setShapesOpen(false);
-            }}
-            onCaptureEntire={captureEntireBoard}
-            onCaptureRegion={beginRegionCapture}
-            onClear={() => {
-              rasterInkRef.current?.clear();
-              apiRef.current?.updateScene({
-                elements: elements().filter(keepOnClear) as unknown[],
-                captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-              });
-            }}
-            onReset={resetTemplate}
-            onUndo={undoBoard}
-            onRedo={redoBoard}
-            mobile={mobile}
-            onHeightChange={setToolbarHeight}
-          />
           <input
             ref={imageInputRef}
             type="file"
@@ -3477,7 +3255,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           />
           <div
             className={[
-              bottomCenter ? "lc-map-controls lc-map-controls-paged" : "lc-map-controls",
+              "lc-map-controls lc-map-controls-paged",
               mapChromeHidden ? "lc-map-controls-collapsed" : "",
             ]
               .filter(Boolean)
@@ -3488,7 +3266,52 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
               )}
             </div>
-            {!mapChromeHidden && bottomCenter}
+            {!mapChromeHidden && (
+              <div className="lc-board-dock">
+                {bottomCenter}
+              <BoardToolbar
+                active={activeTool}
+                onPick={setTool}
+                themeId={themeId}
+                inkColor={inkColor}
+                onInk={setInk}
+                handedness={inkHandedness}
+                strokeWidth={strokeWidth}
+                onStrokeWidth={setStrokeWidth}
+                pressureSensitive={pressureSensitive}
+                onPressureSensitive={setPressureSensitive}
+                fontSize={fontSize}
+                onFontSize={setFontSize}
+                shapesOpen={shapesOpen}
+                onToggleShapes={() => {
+                  if (shapesOpen) {
+                    setShapesOpen(false);
+                    return;
+                  }
+                  // Shape library is exclusive with drawing tools.
+                  setTool("selection");
+                  setShapesOpen(true);
+                  setCaptureMenuOpen(false);
+                }}
+                onStamp={stamp}
+                onPickImage={pickImageFile}
+                captureMenuOpen={captureMenuOpen}
+                onToggleCaptureMenu={() => {
+                  setCaptureMenuOpen((open) => !open);
+                  setShapesOpen(false);
+                }}
+                onCaptureEntire={captureEntireBoard}
+                onCaptureRegion={beginRegionCapture}
+                onReset={resetTemplate}
+                onUndo={undoBoard}
+                onRedo={redoBoard}
+                mobile={mobile}
+                onHeightChange={(height) => {
+                  toolbarHeightRef.current = height;
+                }}
+              />
+              </div>
+            )}
             <div className="lc-map-chrome-right">
               <div className="lc-map-chrome-row">
                 <button
@@ -3561,8 +3384,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         getViewport={getViewport}
         clip={inkClip}
         onChange={onChange}
-        onStrokeMove={interactive ? onInkStrokeMove : undefined}
-        onStrokeEnd={interactive ? onInkStrokeEnd : undefined}
         onStylusAccessory={interactive ? handleStylusAccessory : undefined}
       />
       <Excalidraw
@@ -3578,6 +3399,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               rasterInkRef.current?.repaint();
               reportCodeSlot();
               reportLinedSlot();
+              reportTitleSlot();
 
               // Tablet only — desktop keeps free pan (coach docks on the right).
               if (!fittingCameraRef.current && !clampingScrollRef.current) {
@@ -3631,72 +3453,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         initialData={initialData}
         UIOptions={UI_OPTIONS}
       />
-      {interactive && (() => {
-          const toEraser = activeTool !== "eraser";
-          const phaseClass =
-            inkChrome.phase === "parked"
-              ? "lc-ink-chrome-parked"
-              : inkChrome.phase === "in"
-                ? "lc-ink-chrome-in"
-                : inkChrome.phase === "out"
-                  ? "lc-ink-chrome-out"
-                  : "";
-          return (
-            <div
-              ref={inkChromeElRef}
-              className={["lc-ink-chrome", phaseClass].filter(Boolean).join(" ")}
-              style={{ left: inkChrome.left, top: inkChrome.top }}
-              aria-hidden={inkChrome.phase === "parked" || inkChrome.phase === "out"}
-              onPointerDown={(event) => event.stopPropagation()}
-              onAnimationEnd={() => {
-                if (inkChrome.phase === "in") {
-                  setInkChrome((current) =>
-                    current.phase === "in" ? { ...current, phase: "shown" } : current,
-                  );
-                }
-              }}
-            >
-              <button
-                type="button"
-                className="lc-ink-chrome-btn"
-                aria-label={toEraser ? "Switch to eraser" : "Switch to pen"}
-                onClick={() => {
-                  if (shapesOpen) setShapesOpen(false);
-                  setTool(toEraser ? "eraser" : "freedraw");
-                }}
-              >
-                {toEraser ? <PinkEraserIcon /> : <PenIcon />}
-              </button>
-              <button
-                type="button"
-                className="lc-ink-chrome-btn"
-                aria-label="Undo"
-                onClick={() => undoBoard()}
-              >
-                <UndoIcon />
-              </button>
-              <button
-                type="button"
-                className="lc-ink-chrome-btn"
-                aria-label="Redo"
-                onClick={() => redoBoard()}
-              >
-                <RedoIcon />
-              </button>
-              <div
-                className="lc-ink-chrome-dial-wrap"
-                onPointerDown={(event) => event.stopPropagation()}
-              >
-                <InkChromeSizeDial
-                  value={strokeWidth}
-                  onChange={setStrokeWidth}
-                  label={activeTool === "eraser" ? "Eraser size" : "Stroke weight"}
-                  eraser={activeTool === "eraser"}
-                />
-              </div>
-            </div>
-          );
-        })()}
       {interactive && stampTrash && (
         <button
           type="button"
@@ -3794,706 +3550,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     </div>
   );
 });
-
-interface ToolbarProps {
-  active: ToolName;
-  onPick: (tool: ToolName) => void;
-  themeId: string;
-  inkColor: string;
-  onInk: (color: string) => void;
-  strokeWidth: number;
-  onStrokeWidth: (width: number) => void;
-  pressureSensitive: boolean;
-  onPressureSensitive: (enabled: boolean) => void;
-  fontSize: number;
-  onFontSize: (size: number) => void;
-  shapesOpen: boolean;
-  onToggleShapes: () => void;
-  onStamp: (shape: ShapeStamp, mods: Record<string, ShapeModValue>, moveAsOne: boolean) => void;
-  onPickImage: () => void;
-  captureMenuOpen: boolean;
-  onToggleCaptureMenu: () => void;
-  onCaptureEntire: () => void;
-  onCaptureRegion: () => void;
-  onClear: () => void;
-  onReset: () => void;
-  onUndo: () => void;
-  onRedo: () => void;
-  /** Horizontal strip with a vertical fold control (all form factors). */
-  mobile?: boolean;
-  /** Reports strip height so fitView can place the template under it. */
-  onHeightChange?: (height: number) => void;
-}
-
-function BoardToolbar({
-  active,
-  onPick,
-  themeId,
-  inkColor,
-  onInk,
-  strokeWidth,
-  onStrokeWidth,
-  pressureSensitive,
-  onPressureSensitive,
-  fontSize,
-  onFontSize,
-  shapesOpen,
-  onToggleShapes,
-  onStamp,
-  onPickImage,
-  captureMenuOpen,
-  onToggleCaptureMenu,
-  onCaptureEntire,
-  onCaptureRegion,
-  onClear,
-  onReset,
-  onUndo,
-  onRedo,
-  mobile = false,
-  onHeightChange,
-}: ToolbarProps) {
-  const showInk =
-    active === "freedraw" ||
-    active === "rectangle" ||
-    active === "ellipse" ||
-    active === "arrow" ||
-    active === "text";
-  // Stroke weight is for pen / shapes / eraser — not the text tool (that has its own slider).
-  const showStrokeSizes =
-    active === "freedraw" ||
-    active === "rectangle" ||
-    active === "ellipse" ||
-    active === "arrow" ||
-    active === "eraser";
-  const [configuring, setConfiguring] = useState<ShapeStamp | null>(null);
-  const [mods, setMods] = useState<Record<string, ShapeModValue>>({});
-  const [moveAsOne, setMoveAsOne] = useState(true);
-  const [shapePhase, setShapePhase] = useState<"list" | "fade" | "mod">("list");
-  /** Reset asks first, in our own modal — never a browser confirm box. */
-  const [confirmingReset, setConfirmingReset] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
-  const [folded, setFolded] = useState(mobile);
-  const toolbarRootRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const node = toolbarRootRef.current;
-    if (!node || !onHeightChange) return;
-    const publish = () => onHeightChange(Math.ceil(node.getBoundingClientRect().height));
-    publish();
-    const observer = new ResizeObserver(publish);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [onHeightChange, folded, shapesOpen]);
-
-  useEffect(() => {
-    if (!shapesOpen) {
-      setConfiguring(null);
-      setMods({});
-      setShapePhase("list");
-    }
-  }, [shapesOpen]);
-
-  const pickShape = (shape: ShapeStamp) => {
-    setConfiguring(shape);
-    setMods({ ...shape.defaults });
-    setMoveAsOne(true);
-    setShapePhase("fade");
-    window.setTimeout(() => setShapePhase("mod"), 200);
-  };
-
-  const backToList = () => {
-    setShapePhase("list");
-    setConfiguring(null);
-    setMods({});
-  };
-
-  const placeConfigured = () => {
-    if (configuring) {
-      onStamp(configuring, mods, moveAsOne);
-    }
-    backToList();
-  };
-
-  const modifierTitle = configuring?.label ?? "";
-
-  const pickTool = (tool: ToolName) => {
-    if (shapesOpen) onToggleShapes();
-    if (captureMenuOpen) onToggleCaptureMenu();
-    onPick(tool);
-  };
-
-  const renderToolButton = (tool: ToolName, label: string, hint: string, emoji?: string) => (
-    <button
-      key={tool}
-      type="button"
-      className={tool === active && !shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
-      aria-label={hint}
-      aria-pressed={tool === active && !shapesOpen}
-      onClick={() => pickTool(tool)}
-    >
-      {emoji === "erasersvg" ? (
-        <PinkEraserIcon />
-      ) : emoji ? (
-        <span className="lc-tool-emoji" aria-hidden>
-          {emoji}
-        </span>
-      ) : (
-        label
-      )}
-    </button>
-  );
-
-  const activeToolMeta = TOOLS.find((entry) => entry.tool === active);
-
-  const toolExtras = (
-    <>
-      {showInk && (
-        <>
-          <div className="lc-tool-sep" />
-          <div className="lc-tool-group lc-ink-colors" role="group" aria-label="Ink colour">
-            {inkSwatches(themeId).map((color) => (
-              <button
-                key={color}
-                type="button"
-                className={
-                  color === inkColor ? "lc-ink-swatch lc-ink-swatch-active" : "lc-ink-swatch"
-                }
-                style={{ background: color }}
-                aria-label={`Ink ${color}`}
-                aria-pressed={color === inkColor}
-                onClick={() => onInk(color)}
-              />
-            ))}
-          </div>
-        </>
-      )}
-
-      {showStrokeSizes && (
-        <>
-          {!showInk && <div className="lc-tool-sep" />}
-          <div className="lc-stroke-controls">
-            <StrokeSizeSlider
-              value={strokeWidth}
-              onChange={onStrokeWidth}
-              label={active === "eraser" ? "Eraser size" : "Stroke weight"}
-              eraser={active === "eraser"}
-            />
-            {active === "freedraw" && (
-              <PressureSensitiveToggle
-                enabled={pressureSensitive}
-                onChange={onPressureSensitive}
-              />
-            )}
-          </div>
-        </>
-      )}
-
-      {active === "text" && (
-        <>
-          <div className="lc-tool-sep" />
-          <div className="lc-stroke-controls">
-            <FontSizeSlider value={fontSize} onChange={onFontSize} />
-          </div>
-        </>
-      )}
-
-      <button type="button" className="lc-tool lc-tool-labeled" aria-label="Undo" onClick={onUndo}>
-        <UndoIcon />
-        <span className="lc-tool-caption">Undo</span>
-      </button>
-      <button type="button" className="lc-tool lc-tool-labeled" aria-label="Redo" onClick={onRedo}>
-        <RedoIcon />
-        <span className="lc-tool-caption">Redo</span>
-      </button>
-
-      <button
-        type="button"
-        className="lc-tool lc-tool-danger lc-tool-labeled"
-        aria-label="Clear your work"
-        onClick={onClear}
-      >
-        <ClearIcon />
-        <span className="lc-tool-caption">Clear</span>
-      </button>
-      <button
-        type="button"
-        className="lc-tool lc-tool-labeled"
-        aria-label="Reset board"
-        onClick={() => setConfirmingReset(true)}
-      >
-        <ResetIcon />
-        <span className="lc-tool-caption">Reset</span>
-      </button>
-    </>
-  );
-
-  const shapesButton = (
-    <button
-      type="button"
-      className={shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
-      aria-label="Shapes"
-      aria-expanded={shapesOpen}
-      onClick={onToggleShapes}
-    >
-      ⬡
-    </button>
-  );
-
-  const mediaButtons = (
-    <>
-      <button
-        type="button"
-        className="lc-tool lc-tool-labeled"
-        aria-label="Add image"
-        title="Add image"
-        onClick={onPickImage}
-      >
-        <span className="lc-tool-emoji" aria-hidden>
-          🖼
-        </span>
-        <span className="lc-tool-caption">Image</span>
-      </button>
-      <div className="lc-capture-wrap">
-        <button
-          type="button"
-          className={captureMenuOpen ? "lc-tool lc-tool-active lc-tool-labeled" : "lc-tool lc-tool-labeled"}
-          aria-label="Capture board"
-          aria-expanded={captureMenuOpen}
-          title="Capture board"
-          onClick={onToggleCaptureMenu}
-        >
-          <span className="lc-tool-emoji" aria-hidden>
-            📷
-          </span>
-          <span className="lc-tool-caption">Capture</span>
-        </button>
-        {captureMenuOpen && (
-          <div className="lc-capture-menu" role="menu">
-            <button type="button" role="menuitem" onClick={onCaptureEntire}>
-              Entire board
-            </button>
-            <button type="button" role="menuitem" onClick={onCaptureRegion}>
-              Region…
-            </button>
-          </div>
-        )}
-      </div>
-    </>
-  );
-
-  return (
-    <div
-      ref={toolbarRootRef}
-      className={[
-        "lc-toolbar",
-        mobile ? "lc-toolbar-compact" : "",
-        folded ? "lc-toolbar-folded" : "",
-        shapesOpen ? "lc-toolbar-shapes-open" : "",
-        captureMenuOpen ? "lc-toolbar-capture-open" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-      role="toolbar"
-      aria-label="Drawing tools"
-    >
-      <button
-        type="button"
-        className="lc-tool lc-tool-fold"
-        aria-label={folded ? "Show tools" : "Fold tools"}
-        aria-expanded={!folded}
-        onClick={() => {
-          setFolded((wasFolded) => {
-            if (!wasFolded && shapesOpen) onToggleShapes();
-            return !wasFolded;
-          });
-        }}
-      >
-        {folded ? "▾" : "▴"}
-      </button>
-
-      {folded && activeToolMeta &&
-        renderToolButton(
-          activeToolMeta.tool,
-          activeToolMeta.label,
-          activeToolMeta.hint,
-          activeToolMeta.emoji,
-        )}
-
-      <div className="lc-toolbar-expandable">
-        {TOOLS.map(({ tool, label, hint, emoji }) =>
-          renderToolButton(tool, label, hint, emoji),
-        )}
-        {shapesButton}
-        {mediaButtons}
-        {toolExtras}
-      </div>
-
-      {shapesOpen && (
-        <div
-          className={
-            shapePhase === "mod" ? "lc-shapes lc-shapes-modifying" : "lc-shapes"
-          }
-          role="menu"
-          aria-label="Shape library"
-        >
-          {shapePhase !== "mod" && (
-            <>
-              {SHAPE_GROUPS.map((group) => {
-                const items = SHAPES.filter((shape) => shape.group === group);
-                if (
-                  shapePhase === "fade" &&
-                  configuring &&
-                  !items.some((shape) => shape.id === configuring.id)
-                ) {
-                  return (
-                    <div key={group} className="lc-shape-group lc-shape-group-fade" aria-hidden>
-                      <h4>{group}</h4>
-                    </div>
-                  );
-                }
-                return (
-                  <div key={group} className="lc-shape-group">
-                    <h4 className={shapePhase === "fade" ? "lc-shape-heading-fade" : undefined}>
-                      {group}
-                    </h4>
-                    {items.map((shape) => {
-                      const fading =
-                        shapePhase === "fade" && configuring && configuring.id !== shape.id;
-                      const rising =
-                        shapePhase === "fade" && configuring && configuring.id === shape.id;
-                      return (
-                        <button
-                          key={shape.id}
-                          type="button"
-                          role="menuitem"
-                          className={
-                            rising
-                              ? "lc-shape lc-shape-rising"
-                              : fading
-                                ? "lc-shape lc-shape-fade"
-                                : "lc-shape"
-                          }
-                          onClick={() => pickShape(shape)}
-                        >
-                          {shape.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </>
-          )}
-
-          {shapePhase === "mod" && configuring && (
-
-            <div className="lc-shape-modifier">
-              <button type="button" className="lc-shape-back" onClick={backToList}>
-                ← {modifierTitle}
-              </button>
-              <p className="lc-muted lc-shape-mod-hint">Configure, then place on the board.</p>
-              {configuring?.fields.map((field) => (
-                <label key={field.key} className="lc-shape-field">
-                  <span>{field.label}</span>
-                  {field.kind === "int" ? (
-                    <input
-                      type="number"
-                      min={field.min}
-                      max={field.max}
-                      step={field.step ?? 1}
-                      value={Number(mods[field.key] ?? configuring.defaults[field.key] ?? 0)}
-                      onChange={(event) =>
-                        setMods((current) => ({
-                          ...current,
-                          [field.key]: Number(event.target.value),
-                        }))
-                      }
-                    />
-                  ) : (
-                    <input
-                      type="text"
-                      placeholder={field.placeholder}
-                      value={String(mods[field.key] ?? configuring.defaults[field.key] ?? "")}
-                      onChange={(event) =>
-                        setMods((current) => ({
-                          ...current,
-                          [field.key]: event.target.value,
-                        }))
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") placeConfigured();
-                      }}
-                    />
-                  )}
-                </label>
-              ))}
-              <label className="lc-shape-lock">
-                <input
-                  type="checkbox"
-                  checked={moveAsOne}
-                  onChange={(event) => setMoveAsOne(event.target.checked)}
-                />
-                <span>
-                  <strong>Move as one piece</strong>
-                  <span className="lc-muted">
-                    {" "}
-                    — on: drag the whole graphic together; off: move parts separately
-                  </span>
-                </span>
-              </label>
-              <button type="button" className="lc-shape-place" onClick={placeConfigured}>
-                Place on board
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="lc-tool-sep lc-desktop-only" />
-
-      {!mobile && (
-      <button
-        type="button"
-        className={helpOpen ? "lc-tool lc-tool-active" : "lc-tool"}
-        title="Keyboard shortcuts"
-        aria-label="Keyboard shortcuts"
-        aria-expanded={helpOpen}
-        onClick={() => setHelpOpen((open) => !open)}
-      >
-        ?
-      </button>
-      )}
-
-      {!mobile && helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
-
-      {confirmingReset && (
-        <ConfirmDialog
-          title="Reset the board?"
-          message="The board goes back to the original problem layout. Everything you drew, typed, or stamped on the canvas is cleared."
-          detail="Your solution code and the coach thread are not touched."
-          confirmLabel="Reset board"
-          cancelLabel="Keep my work"
-          onConfirm={() => {
-            setConfirmingReset(false);
-            onReset();
-          }}
-          onCancel={() => setConfirmingReset(false)}
-        />
-      )}
-    </div>
-  );
-}
-
-/**
- * What the keyboard actually does on this board.
- *
- * Excalidraw's own single-key shortcuts are suppressed by the key guard in
- * `Board`, because they belong to a UI this app hides: pressing `s` or `g` on a
- * selected shape used to open a colour palette nobody asked for, and `1`–`9`
- * silently swapped tools out from under the pen. What is left is this list, and
- * this button is where you can read it.
- */
-function ShortcutsHelp({ onClose }: { onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
-
-  return (
-    <div className="lc-shortcuts" role="dialog" aria-label="Keyboard shortcuts">
-      <header className="lc-shortcuts-head">
-        <strong>Keyboard</strong>
-        <button type="button" className="lc-link" onClick={onClose}>
-          close
-        </button>
-      </header>
-      <dl className="lc-shortcuts-list">
-        {BOARD_SHORTCUTS.map(([keys, what]) => (
-          <div key={keys} className="lc-shortcut">
-            <dt>{keys}</dt>
-            <dd>{what}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="lc-muted lc-shortcuts-note">
-        Tools are the strip on the left — no single-key shortcuts, so nothing changes under
-        your pen by accident.
-      </p>
-    </div>
-  );
-}
-
-const BOARD_SHORTCUTS: Array<[string, string]> = [
-  ["Ctrl / ⌘ + Z", "Undo"],
-  ["Ctrl / ⌘ + Shift + Z", "Redo"],
-  ["Scroll", "Zoom toward the pointer"],
-  ["Shift + scroll", "Pan sideways"],
-  ["Space + drag", "Pan"],
-  ["Delete / Backspace", "Delete the selection"],
-  ["Escape", "Deselect / close a popover"],
-  ["Enter", "Finish a text box (Shift + Enter for a new line)"],
-  ["Arrow keys", "Nudge the selection"],
-];
-
-function PinkEraserIcon() {
-  return (
-    <svg className="lc-tool-svg lc-tool-eraser" viewBox="0 0 24 24" width="20" height="20" aria-hidden>
-      <g transform="rotate(-28 12 12)">
-        <rect x="4.5" y="7" width="15" height="11" rx="2.2" fill="#f9a8d4" stroke="#be185d" strokeWidth="1.2" />
-        <rect x="4.5" y="7" width="15" height="3.8" rx="1.2" fill="#fb7185" />
-        <rect x="4.5" y="15.2" width="15" height="2.8" fill="#fff1f2" opacity="0.95" />
-      </g>
-    </svg>
-  );
-}
-
-function PenIcon() {
-  return (
-    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="20" height="20" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M14.5 4.5 19.5 9.5 9 20H4v-5Z"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        d="m12.5 6.5 5 5"
-      />
-    </svg>
-  );
-}
-
-function ResetIcon() {
-  return (
-    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M3 12a9 9 0 0 1 15.5-6.4L21 8"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M21 3v5h-5"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M21 12a9 9 0 0 1-15.5 6.4L3 16"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M3 21v-5h5"
-      />
-    </svg>
-  );
-}
-
-function UndoIcon() {
-  return (
-    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M9 14 4 9l5-5"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M4 9h10.5a5.5 5.5 0 0 1 0 11H13"
-      />
-    </svg>
-  );
-}
-
-function RedoIcon() {
-  return (
-    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="m15 14 5-5-5-5"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M20 9H9.5a5.5 5.5 0 0 0 0 11H11"
-      />
-    </svg>
-  );
-}
-
-function ClearIcon() {
-  return (
-    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M3 6h18"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M8 6V4h8v2"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        d="M10 11v6M14 11v6"
-      />
-    </svg>
-  );
-}
 
 function EyeIcon({ closed = false }: { closed?: boolean }) {
   if (closed) {

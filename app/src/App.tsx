@@ -1824,7 +1824,12 @@ export function App() {
   );
 
   const sendCoachChat = useCallback(
-    (text: string, flags: CoachSendFlags) => {
+    (text: string, requestedFlags: CoachSendFlags) => {
+      // Scratchpad has no solution.py, no review pipeline and no board regions
+      // to draw into — Ask is the only flag that means anything there.
+      const flags: CoachSendFlags = isScratchpad(problem)
+        ? { ask: true, draw: false, reviewBoard: false, lazy: false }
+        : requestedFlags;
       const flagBits = [
         flags.ask ? "Ask" : null,
         flags.reviewBoard ? "Review" : null,
@@ -2054,7 +2059,26 @@ export function App() {
     const timer = window.setTimeout(() => {
       if (agentSaveSuspendedRef.current) return;
       if (isScratchpad(problem)) {
-        // Board autosave already persists the notebook + agent together.
+        // Board autosave only writes when the scene + ink fingerprint moves, so
+        // a chat-only exchange would otherwise be lost. Write the notebook with
+        // the current board so the thread survives a crash or a closed lid.
+        const board = boardRef.current;
+        const blob = board?.saveBoard();
+        if (!blob) return;
+        try {
+          const saved = saveScratchNotebook({
+            id: scratchNotebookId ?? undefined,
+            board: blob,
+            agent: coachMessages,
+            pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
+          });
+          if (!scratchNotebookId) setScratchNotebookId(saved.id);
+        } catch (cause) {
+          if (cause instanceof ScratchpadLibraryFullError) {
+            scratchLibResumeRef.current = null;
+            setScratchLibOpen(true);
+          }
+        }
         return;
       }
       void client
@@ -2064,7 +2088,7 @@ export function App() {
         });
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [client, problem, coachMessages]);
+  }, [client, problem, coachMessages, scratchNotebookId, scratchPageCount]);
 
   const confirmReveal = useCallback(async (mode: "bridge" | "lazy" = "bridge") => {
     const board = boardRef.current;
@@ -2645,18 +2669,21 @@ export function App() {
                 : null
             }
             bottomCenter={
+              problem && !isScratchpad(problem) && mobile ? (
+                <RegionPager
+                  active={activeRegion}
+                  onPick={setActiveRegion}
+                  disabled={busy !== null || boardPreparing}
+                />
+              ) : null
+            }
+            pageTitle={
               problem && isScratchpad(problem) ? (
                 <ScratchPager
                   index={scratchPageIndex}
                   count={scratchPageCount}
                   onPick={setScratchPageIndex}
                   onAddPage={addScratchPage}
-                  disabled={busy !== null || boardPreparing}
-                />
-              ) : problem && mobile ? (
-                <RegionPager
-                  active={activeRegion}
-                  onPick={setActiveRegion}
                   disabled={busy !== null || boardPreparing}
                 />
               ) : null
@@ -2754,6 +2781,7 @@ export function App() {
             thinking={busy !== null || thinking}
             thinkingPhase={coachPhase}
             messages={coachMessages}
+            askOnly={isScratchpad(problem)}
             onSend={sendCoachChat}
             onRequestBridge={(messageId) => {
               revealForMessageIdRef.current = messageId;
@@ -3079,6 +3107,11 @@ function HeaderOverflow({ items }: { items: OverflowItem[] }) {
 
 /**
  * Scratchpad notebook pager — Next on the last page adds a blank page.
+ *
+ * It sits on the page's own title line rather than in the board's bottom row:
+ * the notebook is what is being paged, so `‹ 1/3 ›` belongs above `Scratchpad`
+ * the way a page number belongs on the paper. Board positions it through the
+ * camera; the sizing here is in `em` so it scales with the slot's font size.
  */
 function ScratchPager({
   index,
@@ -3095,48 +3128,31 @@ function ScratchPager({
 }) {
   const atEnd = index >= count - 1;
   return (
-    <nav className="lc-pager" aria-label="Notebook pages">
+    <nav className="lc-page-pager" aria-label="Notebook pages">
       <button
         type="button"
-        className="lc-pager-step"
+        className="lc-page-pager-step"
         aria-label="Previous page"
         disabled={disabled || index <= 0}
         onClick={() => onPick(Math.max(0, index - 1))}
       >
         ‹
       </button>
-      <div className="lc-pager-body">
-        <span className="lc-pager-label">
-          Page {index + 1}
-          {count > 1 ? ` / ${count}` : ""}
-        </span>
-        <div className="lc-pager-dots" role="tablist" aria-label="Notebook pages">
-          {Array.from({ length: count }, (_, page) => (
-            <button
-              key={page}
-              type="button"
-              role="tab"
-              className={page === index ? "lc-pager-dot lc-pager-dot-active" : "lc-pager-dot"}
-              aria-selected={page === index}
-              aria-label={`Page ${page + 1}`}
-              title={`Page ${page + 1}`}
-              disabled={disabled}
-              onClick={() => onPick(page)}
-            />
-          ))}
-        </div>
-      </div>
+      <span className="lc-page-pager-count">
+        {index + 1}/{count}
+      </span>
       <button
         type="button"
-        className="lc-pager-step"
+        className="lc-page-pager-step"
         aria-label={atEnd ? "Add page" : "Next page"}
+        title={atEnd ? "Add page" : "Next page"}
         disabled={disabled || (atEnd && count >= SCRATCHPAD_PAGE_LIMIT)}
         onClick={() => {
           if (atEnd) onAddPage();
           else onPick(index + 1);
         }}
       >
-        ›
+        {atEnd && count < SCRATCHPAD_PAGE_LIMIT ? "+" : "›"}
       </button>
     </nav>
   );
