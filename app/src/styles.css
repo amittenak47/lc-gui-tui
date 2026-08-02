@@ -546,188 +546,6 @@ input[type="checkbox"] {
   height: 100%;
 }
 
-/* Quick undo / redo / pen↔eraser — follows the stylus tip (palm zone). */
-.lc-ink-chrome {
-  position: absolute;
-  z-index: 12;
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  padding: 1px 1px 1px 0;
-  border: 1px solid color-mix(in srgb, var(--chrome-edge) 55%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-  backdrop-filter: blur(6px);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
-  touch-action: manipulation;
-  transition:
-    left 90ms linear,
-    top 90ms linear;
-  will-change: left, top, opacity, transform;
-  opacity: 0.92;
-}
-
-.lc-ink-chrome-dial-wrap {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 0;
-  padding-left: 1px;
-  border-left: 1px solid var(--line);
-}
-
-.lc-ink-chrome-dial {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  touch-action: none;
-  cursor: pointer;
-  outline: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.lc-ink-chrome-dial.is-eraser {
-  width: 40px;
-  height: 40px;
-}
-
-.lc-ink-chrome-dial.is-eraser svg {
-  width: 40px;
-  height: 40px;
-}
-
-.lc-ink-chrome-dial:focus-visible {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent);
-}
-
-.lc-ink-chrome-dial-track {
-  stroke: color-mix(in srgb, var(--ink) 22%, transparent);
-  stroke-width: 3;
-  stroke-linecap: round;
-}
-
-.lc-ink-chrome-dial-fill {
-  stroke: var(--ink);
-  stroke-width: 3;
-  stroke-linecap: round;
-  opacity: 0.85;
-}
-
-.lc-ink-chrome-dial-knob {
-  fill: var(--surface);
-  stroke: var(--ink);
-  stroke-width: 1.25;
-}
-
-.lc-ink-chrome-dial-core {
-  fill: color-mix(in srgb, var(--surface) 88%, transparent);
-  stroke: color-mix(in srgb, var(--ink) 18%, transparent);
-  stroke-width: 1;
-}
-
-.lc-ink-chrome-dial-value {
-  fill: var(--ink);
-  font-size: 7px;
-  font-weight: 600;
-  pointer-events: none;
-}
-
-.lc-stamp-trash {
-  position: absolute;
-  z-index: 13;
-  width: 36px;
-  height: 36px;
-  min-height: 36px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--chrome-edge);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
-  touch-action: manipulation;
-}
-
-.lc-stamp-trash:active {
-  transform: scale(0.96);
-  background: color-mix(in srgb, #dc2626 12%, var(--surface));
-  color: #dc2626;
-}
-
-.lc-ink-chrome-parked {
-  opacity: 0 !important;
-  pointer-events: none !important;
-  visibility: hidden;
-  /* Keep layout/paint warm off-canvas so first show does not mount mid-write. */
-  left: -9999px !important;
-  top: -9999px !important;
-  transition: none;
-}
-
-.lc-ink-chrome-in {
-  animation: lc-ink-chrome-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.lc-ink-chrome-out {
-  animation: lc-ink-chrome-out 200ms ease-in both;
-  pointer-events: none;
-}
-
-@keyframes lc-ink-chrome-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px) scale(0.94);
-  }
-  to {
-    opacity: 0.92;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes lc-ink-chrome-out {
-  from {
-    opacity: 0.92;
-    transform: translateY(0) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(-4px) scale(0.96);
-  }
-}
-
-.lc-ink-chrome-btn {
-  width: 24px;
-  height: 24px;
-  min-height: 24px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--ink);
-}
-
-.lc-ink-chrome-btn:active {
-  transform: scale(0.96);
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
-}
-
-.lc-ink-chrome .lc-tool-svg {
-  width: 12px;
-  height: 12px;
-}
-
-.lc-mobile .lc-ink-chrome-btn {
-  width: 26px;
-  height: 26px;
-  min-height: 26px;
-}
-
 /* Eraser brush preview: circle + crosshair (pen uses crosshair; Excalidraw uses a fixed circle). */
 /*
  * Position comes from an inline `transform` written by Board's pointer handler
@@ -937,8 +755,9 @@ input[type="checkbox"] {
 
 .lc-capture-menu {
   position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 70;
   display: flex;
   flex-direction: column;
@@ -1042,73 +861,179 @@ input[type="checkbox"] {
   display: none !important;
 }
 
+/*
+ * Floating tool island — one row, bottom-centre, over the canvas.
+ *
+ * It never spans the board and never changes height when the active tool swaps
+ * its extras, so the fitted page underneath does not reflow. Overflow stays
+ * visible so the flyouts can rise out of the top edge; the row inside is what
+ * scrolls when the buttons outrun a narrow screen.
+ */
 .lc-toolbar {
-  position: absolute;
+  position: relative;
   z-index: 15;
-  top: 0;
-  left: 0;
-  right: 0;
   display: flex;
-  flex-direction: row;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 3px;
+  flex-direction: column;
+  align-items: stretch;
+  max-width: min(94vw, 760px);
   padding: 4px 6px;
-  border: none;
-  border-bottom: 1px solid var(--chrome-edge);
-  border-radius: 0;
-  background: var(--surface);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
-  overflow: hidden;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 22px rgb(0 0 0 / 16%);
   box-sizing: border-box;
-  scrollbar-width: none;
 }
 
-.lc-toolbar.lc-toolbar-shapes-open,
-.lc-toolbar.lc-toolbar-capture-open,
-.lc-toolbar.lc-toolbar-capture-open .lc-toolbar-expandable {
-  overflow: visible;
-}
-
-.lc-toolbar-expandable {
+.lc-toolbar-row {
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
   align-items: center;
   gap: 3px;
-  flex: 1;
   min-width: 0;
-  max-height: 52px;
-  opacity: 1;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   scrollbar-width: none;
-  transition:
-    max-height 220ms ease,
-    opacity 180ms ease,
-    margin 180ms ease,
-    padding 180ms ease;
 }
 
-.lc-toolbar-expandable::-webkit-scrollbar {
+.lc-toolbar-row::-webkit-scrollbar {
   display: none;
 }
 
-.lc-toolbar-folded .lc-toolbar-expandable {
-  max-height: 0;
-  opacity: 0;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  pointer-events: none;
-  flex: 0;
+/* Flyouts need to escape the scroller, so anchor them to the island instead. */
+.lc-shapes-wrap,
+.lc-capture-wrap {
+  position: static;
+  display: inline-flex;
+  flex-shrink: 0;
 }
 
-.lc-tool-fold {
-  width: 28px;
-  min-height: 28px;
-  font-size: 11px;
+.lc-shape-flyout {
+  position: absolute;
+  z-index: 70;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 168px;
+  padding: 6px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+
+.lc-shape-flyout button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.lc-shape-flyout button:hover,
+.lc-shape-flyout button:focus-visible,
+.lc-shape-flyout button.is-active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.lc-shape-flyout-glyph {
+  width: 18px;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* Ink colour: one dot, palette on hold. */
+.lc-color-radial {
+  position: relative;
+  display: inline-flex;
   flex-shrink: 0;
+}
+
+.lc-color-dot {
+  width: var(--touch);
+  min-height: var(--touch);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.lc-color-dot-open {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.lc-color-dot-fill {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 22%);
+}
+
+.lc-color-fan {
+  position: absolute;
+  z-index: 80;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  animation: lc-fade 120ms ease-out;
+}
+
+.lc-color-seat {
+  position: absolute;
+  left: -17px;
+  top: -17px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 3px 10px rgb(0 0 0 / 26%);
+  transition: box-shadow 120ms ease;
+}
+
+.lc-color-seat.is-current {
+  border-color: var(--accent);
+}
+
+.lc-color-seat.is-hovered {
+  box-shadow:
+    0 0 0 3px var(--accent),
+    0 3px 12px rgb(0 0 0 / 30%);
+}
+
+.lc-color-radial-compact .lc-color-dot-fill {
+  width: 16px;
+  height: 16px;
+}
+
+/* Bottom dock — pager (when a mode has one) stacked over the island. */
+.lc-board-dock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 /* Hover tips on the drawing strip block the board. */
@@ -1153,51 +1078,11 @@ input[type="checkbox"] {
   color: #fff;
 }
 
-.lc-tool-danger {
-  color: var(--bad);
-}
-
 .lc-tool-mini {
   width: 36px;
   min-height: 30px;
   font-size: 12px;
   border-radius: 6px;
-}
-
-.lc-tool-group {
-  display: flex;
-  flex-direction: row;
-  gap: 4px;
-  padding: 0 2px;
-  align-items: center;
-}
-
-.lc-ink-colors {
-  gap: 4px;
-  padding: 0 2px;
-  align-items: center;
-}
-
-.lc-ink-swatch {
-  width: 18px;
-  height: 18px;
-  min-height: 18px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-}
-
-.lc-ink-swatch-active {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.lc-stroke-preview {
-  display: block;
-  width: 16px;
-  border-radius: 999px;
-  background: currentColor;
 }
 
 .lc-tool-sep {
@@ -1206,21 +1091,6 @@ input[type="checkbox"] {
   margin: 0 3px;
   flex-shrink: 0;
   background: var(--line);
-}
-
-.lc-tool-caption {
-  display: none;
-}
-
-.lc-tool-labeled {
-  min-height: var(--touch);
-  padding: 0;
-  font-size: 14px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0;
 }
 
 .lc-tool-svg {
@@ -1253,8 +1123,9 @@ input[type="checkbox"] {
 .lc-shapes {
   position: absolute;
   z-index: 20;
-  left: 0;
-  top: calc(100% + 6px);
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
   width: min(280px, calc(100vw - 24px));
   max-height: 50vh;
   overflow-y: auto;
@@ -2036,8 +1907,7 @@ input[type="checkbox"] {
   .lc-spinner-check,
   .lc-browser-body-ready,
   .lc-pairing-form,
-  .lc-ink-chrome-in,
-  .lc-ink-chrome-out,
+  .lc-color-fan,
   .lc-server-gate-enter,
   .lc-server-gate-exit,
   .lc-server-gate-modal,
@@ -2058,7 +1928,7 @@ input[type="checkbox"] {
     transition: none;
   }
 
-  .lc-ink-chrome {
+  .lc-color-seat {
     transition: none;
   }
 
@@ -5006,19 +4876,9 @@ button.lc-row-selected:hover:not(:disabled) {
   flex-shrink: 0;
 }
 
-.lc-toolbar-compact .lc-tool-fold {
-  width: 26px;
-  min-height: 26px;
-  font-size: 10px;
-}
-
-.lc-toolbar-compact .lc-tool-labeled {
-  min-height: 30px;
-  padding: 0;
-}
-
-.lc-toolbar-compact .lc-tool-caption {
-  display: none;
+.lc-toolbar-compact .lc-color-dot {
+  width: 28px;
+  min-height: 28px;
 }
 
 .lc-toolbar-compact .lc-tool-emoji {
@@ -5029,12 +4889,6 @@ button.lc-row-selected:hover:not(:disabled) {
   width: 26px;
   min-height: 22px;
   font-size: 10px;
-}
-
-.lc-toolbar-compact .lc-ink-swatch {
-  width: 13px;
-  height: 13px;
-  min-height: 13px;
 }
 
 .lc-toolbar-compact .lc-stroke-controls {
@@ -5051,7 +4905,7 @@ button.lc-row-selected:hover:not(:disabled) {
   transform-origin: center;
 }
 
-.lc-mobile .lc-toolbar-expandable {
+.lc-mobile .lc-toolbar {
   max-width: min(92vw, 720px);
 }
 
@@ -5552,8 +5406,9 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-shortcuts {
   position: absolute;
-  left: calc(100% + 8px);
-  bottom: 0;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
   z-index: 30;
   width: min(340px, 74vw);
   padding: 10px 12px 12px;
@@ -5604,17 +5459,76 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-shortcuts {
-  left: calc(100% + 6px);
-  bottom: 6px;
   width: min(300px, 68vw);
+}
+
+/* --- page-title pager (scratchpad) --- */
+
+/*
+ * Rides the open page's title line. Board writes `left` / `top` / `font-size`
+ * from the camera, and everything inside is in `em`, so the control keeps the
+ * page's proportions while staying pressable when the page is zoomed out.
+ */
+.lc-page-title-slot {
+  position: absolute;
+  z-index: 11;
+  display: flex;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.lc-page-title-slot > * {
+  pointer-events: auto;
+}
+
+.lc-page-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15em;
+  padding: 0.1em 0.2em;
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+  color: var(--muted);
+  font-size: 1em;
+}
+
+.lc-page-pager-step {
+  min-width: 1.7em;
+  min-height: 1.7em;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 1em;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lc-page-pager-step:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+.lc-page-pager-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.lc-page-pager-count {
+  min-width: 2.2em;
+  text-align: center;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
 }
 
 /* --- region pager --- */
 
 /*
- * Appearance · page turner · zoom share one row.
+ * Appearance · tool island · zoom share one row.
  *
- * The pager used to float over the row on its own `left: 50%`, which put it a
+ * The centre used to float over the row on its own `left: 50%`, which put it a
  * few pixels off the others' baseline and, on a narrow tablet, straight on top
  * of the Appearance button. As a grid child it is centred against the board
  * rather than against whatever the side clusters happen to be — the columns are
@@ -5623,7 +5537,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-map-controls-paged {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
-  align-items: center;
+  align-items: end;
 }
 
 .lc-map-controls-paged .lc-map-chrome-left {
@@ -5631,9 +5545,10 @@ button.lc-row-selected:hover:not(:disabled) {
   justify-self: start;
 }
 
-.lc-map-controls-paged .lc-pager {
+.lc-map-controls-paged .lc-board-dock {
   grid-column: 2;
   justify-self: center;
+  min-width: 0;
 }
 
 .lc-map-controls-paged .lc-map-chrome-right {

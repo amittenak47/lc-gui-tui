@@ -2,6 +2,11 @@
  * iOS-style vertical number picker — scroll/drag to change a discrete value.
  * Flick continues with spring-damped momentum. Prevents default on pointerdown
  * so an open text box keeps focus.
+ *
+ * Direction: dragging down raises the value, dragging up lowers it. The list
+ * scrolls under the finger the way a physical wheel would — pull the near edge
+ * toward you and the larger numbers come round — which is the opposite of
+ * treating the drag as a slider handle.
  */
 
 import { useCallback, useEffect, useMemo, useRef, type PointerEvent } from "react";
@@ -123,9 +128,9 @@ export function NumberWheel({
   const runMomentum = useCallback(
     (fromIndex: number, velocityPxPerMs: number) => {
       stopMomentum();
-      // Finger moving up (negative dy) raises the value index — same as drag math.
+      // Finger moving down (positive dy) raises the value index — same as drag math.
       let index = fromIndex;
-      let vel = -velocityPxPerMs / ITEM_H; // indices per ms
+      let vel = velocityPxPerMs / ITEM_H; // indices per ms
       let last = performance.now();
       const listLen = valuesRef.current.length;
 
@@ -179,7 +184,7 @@ export function NumberWheel({
     lastYRef.current = event.clientY;
     lastTRef.current = now;
 
-    const delta = startYRef.current - event.clientY;
+    const delta = event.clientY - startYRef.current;
     const steps = Math.round(delta / ITEM_H);
     const nextIndex = clamp(indexOf(startValueRef.current) + steps, 0, values.length - 1);
     commitIndex(nextIndex);
@@ -204,7 +209,9 @@ export function NumberWheel({
   const pad = Math.floor(VISIBLE / 2);
   const windowStart = clamp(selectedIndex - pad, 0, Math.max(0, values.length - VISIBLE));
   const windowEnd = Math.min(values.length, windowStart + VISIBLE);
-  const visible = values.slice(windowStart, windowEnd);
+  // Larger values sit above the selector, so a drag downward pulls them into it
+  // and the list moves with the finger rather than against it.
+  const visible = values.slice(windowStart, windowEnd).reverse();
 
   return (
     <div className="lc-stroke-slider lc-number-wheel-wrap" role="group" aria-label={label}>
@@ -223,10 +230,11 @@ export function NumberWheel({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onKeyDown={(event) => {
-          if (event.key === "ArrowUp" || event.key === "ArrowRight") {
+          // Arrows follow the drag: Up lowers, Down raises.
+          if (event.key === "ArrowDown" || event.key === "ArrowRight") {
             event.preventDefault();
             commitIndex(selectedIndex + 1);
-          } else if (event.key === "ArrowDown" || event.key === "ArrowLeft") {
+          } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
             event.preventDefault();
             commitIndex(selectedIndex - 1);
           } else if (event.key === "Home") {

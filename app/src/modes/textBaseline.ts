@@ -110,5 +110,13 @@ export function topYForLinedRow(
   return baseline - textBaselineOffset(fontSize, lineHeightRatio, fontFamily);
 }
 
-/** Lined-paper pitch used for scratchpad chrome (reading size is N/A there). */
-export const SCRATCH_LINE_PITCH = 36 * STATEMENT_LINE_HEIGHT_RATIO;
+/**
+ * Lined-paper pitch used for scratchpad chrome (reading size is N/A there).
+ *
+ * Twice the statement's prose pitch. A problem board's rules have to land on
+ * the baselines of typeset text, so they inherit the body font's spacing; a
+ * scratch page has no text to agree with, only handwriting, and handwriting at
+ * prose pitch on a page fitted to a tablet leaves about ten screen pixels a
+ * line. This is the spacing of ruled paper, not of a paragraph.
+ */
+export const SCRATCH_LINE_PITCH = 72 * STATEMENT_LINE_HEIGHT_RATIO;

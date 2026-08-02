@@ -21,14 +21,18 @@ import {
   eraserSceneRadius,
   inkBakeKey,
   inkLineWidth,
+  INK_STEP_FACTOR,
+  INK_STEP_FACTOR_PRESSURE,
   paintRasterInk,
   scenePointFromPointer,
   setInkSceneTransform,
+  smoothPressure,
   stampAlongSegment,
   type InkOp,
   type SceneBounds,
   type ViewportTransform,
 } from "./rasterInk";
+import { inkMetrics } from "./inkMetrics";
 
 export interface RasterInkHandle {
   clear(): void;
@@ -60,10 +64,6 @@ export interface RasterInkLayerProps {
    */
   clip?: SceneBounds | null;
   onChange?: () => void;
-  /** Fired while drawing so near-pen chrome can track the tip. */
-  onStrokeMove?: (clientX: number, clientY: number) => void;
-  /** Fired when a stroke ends — board-local client coords for near-pen chrome. */
-  onStrokeEnd?: (clientX: number, clientY: number) => void;
   /**
    * Stylus barrel / eraser tip: toggle pen↔eraser. Return true if handled so
    * the stroke is not started.
@@ -86,8 +86,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       getViewport,
       clip = null,
       onChange,
-      onStrokeMove,
-      onStrokeEnd,
       onStylusAccessory,
     },
     ref,
@@ -103,6 +101,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const liveDrawnIndexRef = useRef(0);
     const drawingRef = useRef(false);
     const lastPointRef = useRef<ReturnType<typeof scenePointFromPointer> | null>(null);
+    /** Running EMA of stylus pressure for the live stroke — see smoothPressure. */
+    const smoothedPressureRef = useRef(0.5);
     // Read through a ref so a page turn doesn't rebuild `repaint` and with it
     // every pointer listener on the layer.
     const clipRef = useRef<SceneBounds | null>(clip);
@@ -112,10 +112,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     // drops pointer capture and cuts ink short.
     const getViewportRef = useRef(getViewport);
     getViewportRef.current = getViewport;
-    const onStrokeMoveRef = useRef(onStrokeMove);
-    onStrokeMoveRef.current = onStrokeMove;
-    const onStrokeEndRef = useRef(onStrokeEnd);
-    onStrokeEndRef.current = onStrokeEnd;
     const onStylusAccessoryRef = useRef(onStylusAccessory);
     onStylusAccessoryRef.current = onStylusAccessory;
     const inkColorRef = useRef(inkColor);
@@ -125,18 +121,31 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const pressureSensitiveRef = useRef(pressureSensitive);
     pressureSensitiveRef.current = pressureSensitive;
 
+    /**
+     * Sit exactly on the Excalidraw canvas, on whole device pixels.
+     *
+     * The rects are fractional, and a CSS box whose width is not a whole number
+     * of device pixels makes the browser resample the backing store — every
+     * stamp lands a fraction of a pixel off and the whole layer reads soft. The
+     * ink is a bitmap, not vectors, so there is no re-render that would sharpen
+     * it back up. Snap the box to the pixel grid and the mapping is 1:1.
+     */
     const alignToExcalidraw = useCallback((canvas: HTMLCanvasElement) => {
       const board = canvas.parentElement;
       if (!board) return null;
       const excal = board.querySelector("canvas.excalidraw__canvas");
       if (!(excal instanceof HTMLCanvasElement)) return null;
+      const dpr = window.devicePixelRatio || 1;
+      const snap = (value: number) => Math.round(value * dpr) / dpr;
       const boardRect = board.getBoundingClientRect();
       const excalRect = excal.getBoundingClientRect();
-      canvas.style.left = `${excalRect.left - boardRect.left}px`;
-      canvas.style.top = `${excalRect.top - boardRect.top}px`;
-      canvas.style.width = `${excalRect.width}px`;
-      canvas.style.height = `${excalRect.height}px`;
-      return excalRect;
+      const width = snap(excalRect.width);
+      const height = snap(excalRect.height);
+      canvas.style.left = `${snap(excalRect.left - boardRect.left)}px`;
+      canvas.style.top = `${snap(excalRect.top - boardRect.top)}px`;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      return { width, height };
     }, []);
 
     const rebuildBake = useCallback(
@@ -238,8 +247,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       if (canvas.width !== pixelW || canvas.height !== pixelH) {
         canvas.width = pixelW;
         canvas.height = pixelH;
-        canvas.style.width = `${cssW}px`;
-        canvas.style.height = `${cssH}px`;
+        // Whole device pixels, same as alignToExcalidraw — see the note there.
+        canvas.style.width = `${pixelW / dpr}px`;
+        canvas.style.height = `${pixelH / dpr}px`;
       }
 
       const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
@@ -469,6 +479,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           event.pressure,
         );
         lastPointRef.current = point;
+        smoothedPressureRef.current = point.pressure;
+        inkMetrics.begin();
         const width = strokeWidthRef.current;
         if (tool === "pen") {
           liveRef.current = {
@@ -489,8 +501,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         }
         // One full blit so the bake is under the first stamp/segment.
         repaintRef.current();
-        // Soft-hide near-pen chrome on stroke start (same path as move).
-        onStrokeMoveRef.current?.(event.clientX, event.clientY);
       };
 
       const move = (event: PointerEvent) => {
@@ -498,35 +508,59 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const viewport = getViewportRef.current();
         if (!viewport) return;
         event.preventDefault();
-        const rect = canvas.getBoundingClientRect();
-        const point = scenePointFromPointer(
-          event.clientX,
-          event.clientY,
-          rect,
-          viewport,
-          event.pressure,
-        );
         const live = liveRef.current;
-        const last = lastPointRef.current;
-        if (!live || !last) return;
+        if (!live) return;
+        const rect = canvas.getBoundingClientRect();
+
+        /*
+         * Every sample the browser buffered since the last frame, in order.
+         *
+         * A stylus reporting above display Hz gets one `pointermove` per frame
+         * and the rest of its samples inside `getCoalescedEvents()`. Reading
+         * only the move throws the others away, which is what turns a fast
+         * curve into a chain of straight chords — and the faster you write, the
+         * more of the stroke is chord. Consuming the batch costs one extra
+         * `stampAlongSegment` per sample and still paints once per frame.
+         */
+        const coalesced = event.getCoalescedEvents?.();
+        const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
+        inkMetrics.move(batch.length);
 
         const width = strokeWidthRef.current;
-        const step =
-          live.kind === "erase"
-            ? Math.max(live.radius * 0.45, 0.5)
-            : Math.max(
-                inkLineWidth(
-                  width,
-                  point.pressure,
-                  live.kind === "draw" ? live.pressureSensitive : false,
-                ) * 0.35,
-                0.5,
-              );
-        const stamps = stampAlongSegment(last, point, step);
-        live.points.push(...stamps);
-        lastPointRef.current = point;
+        const pressureSensitive = live.kind === "draw" && live.pressureSensitive;
+        for (const sample of batch) {
+          const last = lastPointRef.current;
+          if (!last) break;
+          const point = scenePointFromPointer(
+            sample.clientX,
+            sample.clientY,
+            rect,
+            viewport,
+            sample.pressure,
+          );
+          if (pressureSensitive) {
+            // Filter pressure, not position: smoothing the path would lag the
+            // tip, but width has no business tracking sample noise.
+            smoothedPressureRef.current = smoothPressure(
+              smoothedPressureRef.current,
+              point.pressure,
+            );
+            point.pressure = smoothedPressureRef.current;
+          }
+          const step =
+            live.kind === "erase"
+              ? Math.max(live.radius * 0.45, 0.5)
+              : Math.max(
+                  inkLineWidth(width, point.pressure, pressureSensitive) *
+                    (pressureSensitive ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
+                  0.5,
+                );
+          const stamps = stampAlongSegment(last, point, step);
+          live.points.push(...stamps);
+          lastPointRef.current = point;
+        }
         paintLiveIncrementalRef.current();
-        onStrokeMoveRef.current?.(event.clientX, event.clientY);
+        inkMetrics.painted(event.timeStamp);
       };
 
       const end = (event: PointerEvent) => {
@@ -538,7 +572,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           /* ignore */
         }
         commitLiveRef.current();
-        onStrokeEndRef.current?.(event.clientX, event.clientY);
+        inkMetrics.end();
       };
 
       canvas.addEventListener("pointerdown", begin, true);

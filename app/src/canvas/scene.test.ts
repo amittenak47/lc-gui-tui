@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildProblemTemplate } from "../templates/problemBoard";
-import { applyMetadata, isCoachElement, isTemplateElement, keepOnClear } from "./scene";
+import { applyMetadata, isCoachElement, isTemplateElement } from "./scene";
 
 /** Stand-in for what `convertToExcalidrawElements` returns. */
 function converted(
@@ -48,18 +48,7 @@ describe("applyMetadata", () => {
   });
 });
 
-describe("keepOnClear", () => {
-  it("keeps the template and the coach's diagrams, drops the student's strokes", () => {
-    const scene = [
-      { id: "tmpl", customData: { lcRegion: "constraints" } },
-      { id: "tmpl-label", customData: { lcRegion: "constraints" } },
-      { id: "viz", customData: { lcVizId: "nums" } },
-      { id: "my-stroke" },
-      { id: "my-text", customData: null },
-    ];
-    expect(scene.filter(keepOnClear).map((e) => e.id)).toEqual(["tmpl", "tmpl-label", "viz"]);
-  });
-
+describe("template membership", () => {
   it("survives a whole real template — including its bound labels", () => {
     const skeletons = buildProblemTemplate({
       taskId: "01-matrix",
@@ -81,11 +70,15 @@ describe("keepOnClear", () => {
 
     const tagged = applyMetadata(converted(elements), skeletons as never);
     expect(tagged.length).toBeGreaterThan(5);
+    // The regression: membership comes from `customData`, which survives
+    // conversion — matching on id prefixes did not.
     expect(tagged.every(isTemplateElement)).toBe(true);
-    expect(tagged.filter(keepOnClear)).toHaveLength(tagged.length);
+    expect(isTemplateElement({ customData: null })).toBe(false);
+  });
 
-    // The regression: clearing must not remove any of it.
-    const afterClear = [...tagged, { id: "student-stroke", type: "freedraw" }].filter(keepOnClear);
-    expect(afterClear).toHaveLength(tagged.length);
+  it("separates the coach's diagrams from the student's own work", () => {
+    expect(isCoachElement({ customData: { lcVizId: "nums" } })).toBe(true);
+    expect(isCoachElement({ customData: { lcRegion: "constraints" } })).toBe(false);
+    expect(isCoachElement({ customData: null })).toBe(false);
   });
 });
