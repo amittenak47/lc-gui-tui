@@ -22,6 +22,7 @@ export function FontSizeSlider({ value, onChange }: FontSizeSliderProps) {
       min={TEXT_FONT_MIN}
       max={TEXT_FONT_MAX}
       step={TEXT_FONT_STEP}
+      allowFineScrub
       label="Font size"
       format={(n) => String(Math.round(n))}
     />

@@ -450,8 +450,20 @@ function loadImageSize(dataURL: string): Promise<{ width: number; height: number
 const ZOOM_MIN = 0.15;
 const ZOOM_MAX = 1.75;
 const ZOOM_STEP = 1.15;
+/** Button zoom animation — retargets smoothly on repeat / hold. */
+const ZOOM_ANIM_MS = 220;
+/** Hand-tool pan inertia — exponential friction per ms (same feel as NumberWheel). */
+const PAN_FRICTION = 0.0038;
+/** Minimum scroll speed (scene units/ms) to coast after a flick. */
+const PAN_FLICK_MIN = 0.06;
+/** Stop coasting below this scroll speed. */
+const PAN_REST_SPEED = 0.00025;
 /** Matches Excalidraw's internal wheel-zoom step (not our button ZOOM_STEP). */
 const WHEEL_ZOOM_STEP = 0.1;
+
+function zoomEaseOut(t: number): number {
+  return 1 - (1 - t) * (1 - t);
+}
 
 function clampZoom(value: number, min = ZOOM_MIN): number {
   return Math.min(ZOOM_MAX, Math.max(min, value));
@@ -828,6 +840,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const pageBoundsRef = useRef<SceneBounds | null>(null);
   /** Student changed zoom/pan — skip auto camera reset on resize refits. */
   const userAdjustedCameraRef = useRef(false);
+  const zoomAnimRef = useRef<{
+    from: number;
+    to: number;
+    start: number;
+    rafId: number | null;
+  } | null>(null);
   /** True while fitCamera is applying zoom/scroll (not user input). */
   const fittingCameraRef = useRef(false);
   /** Measured toolbar height so fitView lands the template under it. */
@@ -841,6 +859,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const toolbarHeightRef = useRef(36);
   const clampingScrollRef = useRef(false);
+  /** Hand-tool pan: track velocity from scroll deltas for flick inertia. */
+  const handPanningRef = useRef(false);
+  const panVelocityRef = useRef({ x: 0, y: 0 });
+  const lastPanScrollRef = useRef({ x: 0, y: 0, t: 0 });
+  const inertiaFrameRef = useRef(0);
+  const slotReportFrameRef = useRef(0);
   const [readingSizeLocal, setReadingSizeLocal] = useState<BoardReadingSize>(() => loadBoardReadingSize());
   const readingSize = readingSizeProp ?? readingSizeLocal;
   const readingSizeRef = useRef(readingSize);
@@ -1360,6 +1384,51 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     setLinedSlot(next);
   }, []);
 
+  const scheduleSlotReports = useCallback(() => {
+    if (slotReportFrameRef.current) return;
+    slotReportFrameRef.current = requestAnimationFrame(() => {
+      slotReportFrameRef.current = 0;
+      reportCodeSlot();
+      reportLinedSlot();
+      reportTitleSlot();
+    });
+  }, [reportCodeSlot, reportLinedSlot, reportTitleSlot]);
+
+  const clampPanScroll = useCallback((scrollX: number, scrollY: number, zoom: number) => {
+    if (!mobileRef.current || mobileRegionRef.current == null) {
+      return { scrollX, scrollY };
+    }
+    const bounds = pageBoundsRef.current;
+    const api = apiRef.current;
+    if (!bounds || !api) return { scrollX, scrollY };
+    const state = api.getAppState() as { width?: number; height?: number };
+    if (typeof state.width !== "number" || typeof state.height !== "number") {
+      return { scrollX, scrollY };
+    }
+    const inset = measureChromeInsets(
+      boardRef.current,
+      toolbarHeightRef.current,
+      mapChromeHiddenRef.current,
+      mobileRef.current,
+    );
+    return clampScrollToBounds(
+      scrollX,
+      scrollY,
+      zoom,
+      state.width,
+      state.height,
+      bounds,
+      inset,
+    );
+  }, []);
+
+  const stopPanInertia = useCallback(() => {
+    if (inertiaFrameRef.current) {
+      cancelAnimationFrame(inertiaFrameRef.current);
+      inertiaFrameRef.current = 0;
+    }
+  }, []);
+
   const persistInkPrefs = useCallback(
     (patch: Partial<{
       penWidth: number;
@@ -1797,13 +1866,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return state?.zoom?.value ?? 1;
   }, []);
 
-  const setZoom = useCallback(
-    (next: number) => {
+  const getZoomFloor = useCallback(
+    () =>
+      mobile && mobileRegionRef.current != null && fitZoomMinRef.current != null
+        ? fitZoomMinRef.current
+        : ZOOM_MIN,
+    [mobile],
+  );
+
+  const getBoardCenter = useCallback((): { x: number; y: number } => {
+    const rect = boardRef.current?.getBoundingClientRect();
+    if (rect && rect.width > 0 && rect.height > 0) {
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+    return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+  }, []);
+
+  const applyZoomAtViewport = useCallback(
+    (next: number, viewportX: number, viewportY: number) => {
       userAdjustedCameraRef.current = true;
-      const floor =
-        mobile && mobileRegionRef.current != null && fitZoomMinRef.current != null
-          ? fitZoomMinRef.current
-          : ZOOM_MIN;
+      const floor = getZoomFloor();
       const clamped = clampZoom(next, floor);
       const api = apiRef.current;
       if (!api) return;
@@ -1812,10 +1894,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         scrollY?: number;
         width?: number;
         height?: number;
+        offsetLeft?: number;
+        offsetTop?: number;
+        zoom?: { value?: number };
       };
+      let appState = getStateForZoom(
+        { viewportX, viewportY, nextZoom: clamped },
+        state,
+      );
       const bounds = pageBoundsRef.current;
-      let appState: Record<string, unknown> = { zoom: { value: clamped } };
-      // Tablet page lock only — desktop (coach on the right) stays free to pan.
       if (
         mobile &&
         mobileRegionRef.current != null &&
@@ -1830,8 +1917,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           mobile,
         );
         const clampedScroll = clampScrollToBounds(
-          state.scrollX ?? 0,
-          state.scrollY ?? 0,
+          appState.scrollX,
+          appState.scrollY,
           clamped,
           state.width,
           state.height,
@@ -1847,11 +1934,70 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       setZoomPct(Math.round(clamped * 100));
       requestAnimationFrame(reportCodeSlot);
     },
-    [mobile, reportCodeSlot],
+    [getZoomFloor, mobile, reportCodeSlot],
   );
 
-  const zoomIn = useCallback(() => setZoom(readZoom() * ZOOM_STEP), [readZoom, setZoom]);
-  const zoomOut = useCallback(() => setZoom(readZoom() / ZOOM_STEP), [readZoom, setZoom]);
+  const interpolateZoomAnim = useCallback((): number | null => {
+    const anim = zoomAnimRef.current;
+    if (!anim) return null;
+    const t = Math.min(1, (performance.now() - anim.start) / ZOOM_ANIM_MS);
+    return anim.from + (anim.to - anim.from) * zoomEaseOut(t);
+  }, []);
+
+  const runZoomAnimFrame = useCallback(() => {
+    const anim = zoomAnimRef.current;
+    if (!anim) return;
+    const t = Math.min(1, (performance.now() - anim.start) / ZOOM_ANIM_MS);
+    const z = anim.from + (anim.to - anim.from) * zoomEaseOut(t);
+    const { x, y } = getBoardCenter();
+    applyZoomAtViewport(z, x, y);
+    if (t < 1) {
+      anim.rafId = requestAnimationFrame(runZoomAnimFrame);
+    } else {
+      applyZoomAtViewport(anim.to, x, y);
+      zoomAnimRef.current = null;
+    }
+  }, [applyZoomAtViewport, getBoardCenter]);
+
+  const retargetZoomBy = useCallback(
+    (direction: 1 | -1) => {
+      const floor = getZoomFloor();
+      const anim = zoomAnimRef.current;
+      const currentDest = anim?.to ?? readZoom();
+      const factor = direction === 1 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      const newTo = clampZoom(currentDest * factor, floor);
+      if (Math.abs(newTo - currentDest) < 1e-6) return;
+
+      let from: number;
+      if (anim) {
+        from = interpolateZoomAnim() ?? readZoom();
+        if (anim.rafId != null) cancelAnimationFrame(anim.rafId);
+      } else {
+        from = readZoom();
+      }
+      if (Math.abs(newTo - from) < 1e-6) return;
+
+      zoomAnimRef.current = {
+        from,
+        to: newTo,
+        start: performance.now(),
+        rafId: null,
+      };
+      runZoomAnimFrame();
+    },
+    [getZoomFloor, interpolateZoomAnim, readZoom, runZoomAnimFrame],
+  );
+
+  const zoomIn = useCallback(() => retargetZoomBy(1), [retargetZoomBy]);
+  const zoomOut = useCallback(() => retargetZoomBy(-1), [retargetZoomBy]);
+
+  useEffect(
+    () => () => {
+      const anim = zoomAnimRef.current;
+      if (anim?.rafId != null) cancelAnimationFrame(anim.rafId);
+    },
+    [],
+  );
 
   // Excalidraw pans on wheel by default (Ctrl/Cmd+wheel zooms). Prefer scroll =
   // zoom toward the cursor; hand-tool drag stays the way to pan. Shift+wheel

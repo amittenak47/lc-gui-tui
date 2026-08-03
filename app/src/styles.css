@@ -723,6 +723,15 @@ input[type="checkbox"] {
   opacity: 1;
 }
 
+.lc-number-wheel-fine .lc-number-wheel-item {
+  transition: font-size 140ms ease-out, opacity 140ms ease-out;
+}
+
+.lc-number-wheel-fine .lc-number-wheel-item-active {
+  font-size: 12px;
+  letter-spacing: -0.02em;
+}
+
 .lc-number-wheel-selection {
   pointer-events: none;
   position: absolute;
