@@ -3,13 +3,16 @@
  * Flick continues with spring-damped momentum. Prevents default on pointerdown
  * so an open text box keeps focus.
  *
- * Direction: dragging down raises the value, dragging up lowers it. The list
- * scrolls under the finger the way a physical wheel would — pull the near edge
- * toward you and the larger numbers come round — which is the opposite of
- * treating the drag as a slider handle.
+ * Direction: dragging down raises the value, dragging up lowers it.
  *
  * With {@link allowFineScrub}, hold and drag ~28px horizontally outward to
- * enter fine mode (step 0.1); vertical drag then adjusts in tenths until release.
+ * enter fine mode (step 0.1). Fine stays until pointer release.
+ *
+ * Coarse keeps any fractional part already on the value (12.5 → 13.5 → 14.5).
+ * Fine shows one decimal (12 → 12.0) and steps by tenths.
+ *
+ * Edge padding: empty slots at both ends so the selection band can centre on
+ * min/max (classic picker fix — without it, 1 sits under 2 and cannot scroll in).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
@@ -21,7 +24,7 @@ export interface NumberWheelProps {
   max: number;
   step?: number;
   label: string;
-  /** Format the selected value label (default: trim trailing .0). */
+  /** Format the selected value label in coarse mode (default: trim trailing .0). */
   format?: (value: number) => string;
   /** Hold + drag outward horizontally to scrub in {@link fineStep} increments. */
   allowFineScrub?: boolean;
@@ -44,6 +47,8 @@ const FINE_STEP_DEFAULT = 0.1;
 /** Extra coast for integer-step wheels. */
 const COARSE_MOMENTUM_BOOST = 1.75;
 
+type Slot = number | null;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -51,6 +56,11 @@ function clamp(value: number, min: number, max: number): number {
 function roundToStep(value: number, min: number, step: number): number {
   const n = Math.round((value - min) / step);
   return Math.round((min + n * step) * 1000) / 1000;
+}
+
+function fracPart(value: number): number {
+  const rounded = Math.round(value * 1000) / 1000;
+  return Math.round((rounded - Math.trunc(rounded)) * 1000) / 1000;
 }
 
 function defaultFormat(value: number): string {
@@ -74,8 +84,7 @@ export function NumberWheel({
   allowFineScrub = false,
   fineStep = FINE_STEP_DEFAULT,
 }: NumberWheelProps) {
-  const activeStep = step;
-  const clamped = clamp(roundToStep(value, min, activeStep), min, max);
+  const clamped = clamp(value, min, max);
   const [fineMode, setFineMode] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
@@ -97,29 +106,49 @@ export function NumberWheel({
   clampedRef.current = clamped;
 
   const displayFormat = fineMode ? fineFormat : format;
+  const pad = Math.floor(VISIBLE / 2);
 
-  const values = useMemo(() => {
+  /** Coarse ladder: min..max by `step`, keeping the live fractional offset. */
+  const coarseValues = useMemo(() => {
+    const frac = fineMode ? 0 : fracPart(clamped);
     const out: number[] = [];
-    const count = Math.floor((max - min) / activeStep + 1e-9) + 1;
+    let cursor = Math.round((Math.ceil((min - frac) / step - 1e-9) * step + frac) * 1000) / 1000;
+    if (cursor < min - 1e-9) cursor = Math.round((cursor + step) * 1000) / 1000;
+    while (cursor <= max + 1e-9) {
+      out.push(clamp(Math.round(cursor * 1000) / 1000, min, max));
+      cursor = Math.round((cursor + step) * 1000) / 1000;
+    }
+    if (out.length === 0) out.push(clamp(min + frac, min, max));
+    if (!out.some((entry) => Math.abs(entry - clamped) < 1e-6)) {
+      out.push(clamped);
+      out.sort((a, b) => a - b);
+    }
+    return out;
+  }, [clamped, fineMode, max, min, step]);
+
+  const fineValues = useMemo(() => {
+    const out: number[] = [];
+    const count = Math.floor((max - min) / fineStep + 1e-9) + 1;
     for (let index = 0; index < count; index++) {
-      const next = Math.round((min + index * activeStep) * 1000) / 1000;
+      const next = Math.round((min + index * fineStep) * 1000) / 1000;
       if (next > max + 1e-9) break;
       out.push(clamp(next, min, max));
     }
     if (out[out.length - 1] !== max) out.push(max);
     return out;
-  }, [min, max, activeStep]);
+  }, [fineStep, max, min]);
 
+  const values = fineMode ? fineValues : coarseValues;
   const valuesRef = useRef(values);
   valuesRef.current = values;
+  const listStep = fineMode ? fineStep : step;
 
   const indexOf = useCallback(
-    (v: number, listStep = activeStep) => {
-      const snapped = clamp(roundToStep(v, min, listStep), min, max);
+    (v: number) => {
       let best = 0;
       let bestDist = Infinity;
       for (let index = 0; index < values.length; index++) {
-        const dist = Math.abs(values[index] - snapped);
+        const dist = Math.abs(values[index] - v);
         if (dist < bestDist) {
           bestDist = dist;
           best = index;
@@ -127,7 +156,7 @@ export function NumberWheel({
       }
       return best;
     },
-    [activeStep, max, min, values],
+    [values],
   );
 
   const selectedIndex = indexOf(clamped);
@@ -142,36 +171,50 @@ export function NumberWheel({
 
   useEffect(() => () => stopMomentum(), [stopMomentum]);
 
-  const commitValue = useCallback((next: number, listStep = activeStep) => {
-    const snapped = clamp(roundToStep(next, min, listStep), min, max);
-    if (snapped !== clampedRef.current) {
-      onChangeRef.current(snapped);
-    }
-  }, [activeStep, max, min]);
+  const commitValue = useCallback(
+    (next: number, listStepSize = listStep) => {
+      const snapped = clamp(roundToStep(next, min, listStepSize), min, max);
+      if (Math.abs(snapped - clampedRef.current) > 1e-9) {
+        onChangeRef.current(snapped);
+      }
+    },
+    [listStep, max, min],
+  );
 
   const commitIndex = useCallback(
     (index: number) => {
       const list = valuesRef.current;
       const next = list[clamp(Math.round(index), 0, list.length - 1)];
-      if (next !== undefined) commitValue(next);
+      if (next !== undefined) {
+        if (fineModeRef.current) commitValue(next, fineStep);
+        else onChangeRef.current(clamp(next, min, max));
+      }
     },
-    [commitValue],
+    [commitValue, fineStep, max, min],
   );
 
-  const enterFineMode = useCallback((clientY: number) => {
-    if (!allowFineScrub || fineModeRef.current) return;
-    fineModeRef.current = true;
-    setFineMode(true);
-    fineStartYRef.current = clientY;
-    fineStartValueRef.current = clampedRef.current;
-    stopMomentum();
-  }, [allowFineScrub, stopMomentum]);
+  const enterFineMode = useCallback(
+    (clientY: number) => {
+      if (!allowFineScrub || fineModeRef.current) return;
+      fineModeRef.current = true;
+      setFineMode(true);
+      fineStartYRef.current = clientY;
+      // Snap display to one decimal so "12" fades into "12.0".
+      const start = clamp(roundToStep(clampedRef.current, min, fineStep), min, max);
+      fineStartValueRef.current = start;
+      if (Math.abs(start - clampedRef.current) > 1e-9) {
+        onChangeRef.current(start);
+      }
+      stopMomentum();
+    },
+    [allowFineScrub, fineStep, min, max, stopMomentum],
+  );
 
   const runMomentum = useCallback(
-    (fromIndex: number, velocityPxPerMs: number, listStep = activeStep) => {
+    (fromIndex: number, velocityPxPerMs: number) => {
       stopMomentum();
-      const friction = listStep >= 1 ? COARSE_FRICTION : FRICTION;
-      const boost = listStep >= 1 ? COARSE_MOMENTUM_BOOST : 1;
+      const friction = fineModeRef.current ? FRICTION : COARSE_FRICTION;
+      const boost = fineModeRef.current ? 1 : COARSE_MOMENTUM_BOOST;
       let index = fromIndex;
       let vel = (velocityPxPerMs / ITEM_H) * boost;
       let last = performance.now();
@@ -272,28 +315,21 @@ export function NumberWheel({
     }
     const v = velocityRef.current;
     if (Math.abs(v) >= FLICK_MIN) {
-      runMomentum(indexRef.current, v, activeStep);
+      runMomentum(indexRef.current, v);
     } else {
       commitIndex(indexRef.current);
     }
   };
 
-  const pad = Math.floor(VISIBLE / 2);
-  const fineVisible = useMemo(() => {
-    if (!fineMode) return null;
-    const center = clampedRef.current;
-    const out: number[] = [];
-    for (let i = pad; i >= -pad; i--) {
-      out.push(clamp(roundToStep(center + i * fineStep, min, fineStep), min, max));
+  // Pad with nulls so the active value can sit in the centre selection band at edges.
+  const visible: Slot[] = useMemo(() => {
+    const slots: Slot[] = [];
+    for (let offset = pad; offset >= -pad; offset--) {
+      const index = selectedIndex + offset;
+      slots.push(index >= 0 && index < values.length ? values[index] : null);
     }
-    return out;
-  }, [clamped, fineMode, fineStep, max, min, pad]);
-
-  const windowStart = clamp(selectedIndex - pad, 0, Math.max(0, values.length - VISIBLE));
-  const windowEnd = Math.min(values.length, windowStart + VISIBLE);
-  const coarseVisible = values.slice(windowStart, windowEnd).reverse();
-  const visible = fineMode && fineVisible ? fineVisible : coarseVisible;
-  const listStep = fineMode ? fineStep : activeStep;
+    return slots;
+  }, [pad, selectedIndex, values]);
 
   return (
     <div className="lc-stroke-slider lc-number-wheel-wrap" role="group" aria-label={label}>
@@ -312,31 +348,56 @@ export function NumberWheel({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onKeyDown={(event) => {
-          const keyStep = fineMode ? fineStep : activeStep;
+          const keyStep = fineMode ? fineStep : step;
           if (event.key === "ArrowDown" || event.key === "ArrowRight") {
             event.preventDefault();
-            commitValue(clamped + keyStep, keyStep);
+            if (fineMode) commitValue(clamped + keyStep, keyStep);
+            else {
+              const next = clamp(
+                Math.trunc(clamped) + keyStep + fracPart(clamped),
+                min,
+                max,
+              );
+              onChangeRef.current(next);
+            }
           } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
             event.preventDefault();
-            commitValue(clamped - keyStep, keyStep);
+            if (fineMode) commitValue(clamped - keyStep, keyStep);
+            else {
+              const next = clamp(
+                Math.trunc(clamped) - keyStep + fracPart(clamped),
+                min,
+                max,
+              );
+              onChangeRef.current(next);
+            }
           } else if (event.key === "Home") {
             event.preventDefault();
-            commitValue(min, keyStep);
+            onChangeRef.current(min);
           } else if (event.key === "End") {
             event.preventDefault();
-            commitValue(max, keyStep);
+            onChangeRef.current(max);
           }
         }}
       >
         <div className="lc-number-wheel-fade lc-number-wheel-fade-top" aria-hidden />
         <div className="lc-number-wheel-window" aria-hidden>
-          {visible.map((entry) => {
-            const active =
-              entry === clamped || Math.abs(entry - clamped) < listStep * 0.25;
+          {visible.map((entry, slotIndex) => {
+            if (entry == null) {
+              return (
+                <div
+                  key={`pad-${slotIndex}`}
+                  className="lc-number-wheel-item lc-number-wheel-item-pad"
+                />
+              );
+            }
+            const active = Math.abs(entry - clamped) < listStep * 0.25 + 1e-9;
             return (
               <div
-                key={`${fineMode ? "f" : "c"}-${entry}`}
-                className={active ? "lc-number-wheel-item lc-number-wheel-item-active" : "lc-number-wheel-item"}
+                key={`${fineMode ? "f" : "c"}-${entry}-${slotIndex}`}
+                className={
+                  active ? "lc-number-wheel-item lc-number-wheel-item-active" : "lc-number-wheel-item"
+                }
               >
                 {displayFormat(entry)}
               </div>

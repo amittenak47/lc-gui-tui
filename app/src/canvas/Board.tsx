@@ -65,13 +65,11 @@ import {
   statementLinePitch,
   type BoardReadingSize,
 } from "../modes/codeFontSize";
-
-/** Default wrap width for the text tool (canvas units). User can resize the box. */
-const TEXT_WRAP_WIDTH = 420;
 import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
 import { textBaselineY, SCRATCH_LINE_PITCH, linedRuleClearance, defaultLineHeight } from "../modes/textBaseline";
 import type { BoardBinaryFile, BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
+import { TEXT_FONT_MAX, TEXT_FONT_MIN } from "./FontSizeSlider";
 import { applyMetadata, isCoachElement } from "./scene";
 import {
   applyPageVisibility,
@@ -481,12 +479,13 @@ function safeCssPx(name: "--lc-safe-top" | "--lc-safe-bottom" | "--lc-safe-left"
  * Viewport chrome around the fitted template page.
  *
  * Bottom tray / toolbar overlay the canvas — they do not shrink the board
- * element. Page-fit still clears them when visible; when chrome is hidden the
- * fitted page (and free writing) reclaim that bottom strip.
+ * element. The template page frame includes the toolbar strip; chrome draws on
+ * top. Eye-hide only conceals menu items (toolbar height stays reserved in the
+ * overlay), so fit insets stay small either way.
  */
 function mobilePageInsets(
-  toolbarH: number,
-  chromeHidden: boolean,
+  _toolbarH: number,
+  _chromeHidden: boolean,
 ): {
   top: number;
   left: number;
@@ -497,12 +496,16 @@ function mobilePageInsets(
     top: 6,
     left: 2,
     right: 2,
-    bottom: chromeHidden ? 12 : Math.max(44, Math.round(toolbarH) + 16),
+    // Template includes the bottom chrome strip; toolbar floats over it.
+    bottom: 12,
   };
 }
 
-/** Desktop page fit — full width above the floating toolbar. */
-function desktopPageInsets(toolbarH: number, chromeHidden: boolean): {
+/** Desktop page fit — full board including the toolbar overlay zone. */
+function desktopPageInsets(
+  _toolbarH: number,
+  _chromeHidden: boolean,
+): {
   top: number;
   left: number;
   right: number;
@@ -512,14 +515,13 @@ function desktopPageInsets(toolbarH: number, chromeHidden: boolean): {
     top: 8,
     left: 4,
     right: 4,
-    bottom: chromeHidden ? 12 : Math.max(52, Math.round(toolbarH) + 20),
+    bottom: 12,
   };
 }
 
 /**
- * Measure the live chrome hole so the dashed frame can run to the top of the
- * board and stop above the floating controls (they overlay the page; the coach
- * does not shrink it).
+ * Measure the live chrome hole. Template includes the toolbar overlay area —
+ * stop just above the very bottom edge, not above the floating controls.
  */
 function measureChromeInsets(
   boardEl: HTMLElement | null,
@@ -530,22 +532,14 @@ function measureChromeInsets(
   const fallback = mobile
     ? mobilePageInsets(toolbarH, chromeHidden)
     : desktopPageInsets(toolbarH, chromeHidden);
-  if (chromeHidden || !boardEl) return fallback;
+  if (!boardEl) return fallback;
   const board = boardEl.getBoundingClientRect();
   if (board.width < 8 || board.height < 8) return fallback;
-
-  const chrome = boardEl.querySelector(".lc-map-controls") as HTMLElement | null;
-  const chromeRect = chrome?.getBoundingClientRect();
-  const bottom =
-    chromeRect && chromeRect.height > 4
-      ? Math.max(8, Math.round(board.bottom - chromeRect.top + 6))
-      : fallback.bottom;
-
   return {
     top: fallback.top,
     left: fallback.left,
     right: fallback.right,
-    bottom,
+    bottom: fallback.bottom,
   };
 }
 
@@ -1500,6 +1494,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // Locked keeps Excalidraw on the text tool after a click — otherwise it
       // flips to selection and the crosshair dies before you can place again.
       // Do not resetCursor here: setActiveTool already sets the text crosshair.
+      const zoom =
+        (apiRef.current?.getAppState() as { zoom?: { value?: number } } | undefined)?.zoom
+          ?.value ?? 1;
+      const size = Math.min(
+        TEXT_FONT_MAX,
+        Math.max(TEXT_FONT_MIN, Math.round(DEFAULT_FONT_SIZE / Math.max(zoom, 0.35))),
+      );
+      setFontSizeState(size);
+      apiRef.current?.updateScene({
+        appState: {
+          currentItemFontSize: size,
+          // Paint-like: single tap opens the editor (not drag-to-size).
+          currentItemAutoResize: true,
+        },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
       apiRef.current?.setActiveTool({ type: "text", locked: true });
       applyTextModeToAppState(textModeRef.current);
     } else {
@@ -1884,72 +1894,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
 
   const setFontSize = useCallback((size: number) => {
-    setFontSizeState(size);
-    const api = apiRef.current;
-    if (!api) return;
-    const appState = api.getAppState() as {
-      selectedElementIds?: Record<string, boolean>;
-      editingTextElement?: { id?: string; fontFamily?: number; lineHeight?: number } | null;
-    };
-    const selected = new Set(
-      Object.entries(appState.selectedElementIds ?? {})
-        .filter(([, on]) => on)
-        .map(([id]) => id),
-    );
-    const editingId = appState.editingTextElement?.id ?? editingTextIdRef.current;
-    if (editingId) selected.add(editingId);
-
-    const current = api.getSceneElements() as Array<{
-      id: string;
-      type: string;
-      fontSize?: number;
-      fontFamily?: number;
-      lineHeight?: number;
-      version?: number;
-      versionNonce?: number;
-      [key: string]: unknown;
-    }>;
-    let changed = false;
-    let edited: (typeof current)[number] | null = null;
-    const next = current.map((el) => {
-      if (el.type !== "text" || !selected.has(el.id) || el.fontSize === size) return el;
-      changed = true;
-      const updated = {
-        ...el,
-        fontSize: size,
-        version: (el.version ?? 0) + 1,
-        versionNonce: Math.floor(Math.random() * 2 ** 31),
-      };
-      if (el.id === editingId) edited = updated;
-      return updated;
-    });
-
-    api.updateScene({
-      appState: { currentItemFontSize: size },
-      ...(changed ? { elements: next } : {}),
+    const clamped = Math.min(TEXT_FONT_MAX, Math.max(TEXT_FONT_MIN, Math.round(size)));
+    setFontSizeState(clamped);
+    // Forward-only: size applies to the next typed run / next placed box.
+    // Do not rewrite the editing element or live wysiwyg — that used to resize
+    // the whole box mid-type (Paint keeps prior glyphs at their own size).
+    // Excalidraw still stores one fontSize per text element, so mixed sizes in
+    // one box need separate placements until a rich-text editor exists.
+    apiRef.current?.updateScene({
+      appState: { currentItemFontSize: clamped },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
-
-    // Live wysiwyg keeps its own <textarea> styles — push the size there too so
-    // the caret stays put and the glyphs resize while still typing.
-    if (editingId) {
-      const editable = document.querySelector<HTMLTextAreaElement>(
-        "textarea.excalidraw-wysiwyg",
-      );
-      if (editable) {
-        const source =
-          edited ??
-          next.find((el) => el.id === editingId) ??
-          appState.editingTextElement;
-        editable.style.fontSize = `${size}px`;
-        if (source?.lineHeight) {
-          editable.style.lineHeight = String(source.lineHeight);
-        }
-        requestAnimationFrame(() => {
-          editable.focus({ preventScroll: true });
-        });
-      }
-    }
   }, []);
 
   const setInk = useCallback((color: string) => {
@@ -3023,7 +2978,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       const editingId = appState?.editingTextElement?.id ?? null;
       const prevEditingId = editingTextIdRef.current;
-      const resizing = Boolean(appState?.isResizing || appState?.resizingElement);
       const current = api.getSceneElements() as Array<{
         id: string;
         type: string;
@@ -3073,28 +3027,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           return { ...el, isDeleted: true };
         }
 
-        // First place: wrap at a default width once editing ends. Forcing this
-        // mid-edit fights Excalidraw's caret and blocks placing another box.
-        if (el.id !== editingId && el.autoResize !== false) {
-          changed = true;
-          return {
-            ...el,
-            autoResize: false,
-            width: TEXT_WRAP_WIDTH,
-          };
-        }
-
-        if (
-          resizing &&
-          shiftHeldRef.current &&
-          (appState?.resizingElement?.id === el.id ||
-            appState?.selectedElementIds?.[el.id]) &&
-          el.width !== TEXT_WRAP_WIDTH
-        ) {
-          changed = true;
-          return { ...el, width: TEXT_WRAP_WIDTH };
-        }
-
+        // Leave autoResize alone — Paint-like single-tap placement needs it true.
         return el;
       });
 
@@ -3543,8 +3476,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           // Not the hand-drawn default: typed notes should read like notes.
           currentItemFontFamily: FONT_UI,
           currentItemFontSize: DEFAULT_FONT_SIZE,
-          // Prefer click-to-place text with a wrap width over drag-to-size.
-          currentItemAutoResize: false,
+          // Paint-like: single tap opens the editor (not drag-to-size).
+          currentItemAutoResize: true,
         },
         // We call settleFitView ourselves — Excalidraw's default fits the entire
         // board and lands the problem as a postage stamp in the corner.
@@ -3609,10 +3542,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
               )}
             </div>
-            {!mapChromeHidden && (
-              <div className="lc-board-dock">
-                {bottomCenter}
-                <div className="lc-toolbar-dock-anchor" aria-hidden />
+            <div className="lc-board-dock">
+              {!mapChromeHidden && bottomCenter}
+              <div className="lc-toolbar-dock-anchor" aria-hidden />
+              {!mapChromeHidden && (
               <BoardToolbar
                 active={activeTool}
                 onPick={setTool}
@@ -3658,8 +3591,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   toolbarHeightRef.current = height;
                 }}
               />
-              </div>
-            )}
+              )}
+            </div>
             <div className="lc-map-chrome-right">
               <div className="lc-map-chrome-row">
                 <button

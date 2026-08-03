@@ -1,12 +1,14 @@
 /**
  * Font-size control for the text tool. Uses an iOS-style number wheel so
  * pointerdown can preventDefault and keep an open text box focused.
+ *
+ * Range is ~3× the old 12–48 slider so tablet notes stay readable at fit zoom.
  */
 
 import { NumberWheel } from "./NumberWheel";
 
-export const TEXT_FONT_MIN = 12;
-export const TEXT_FONT_MAX = 48;
+export const TEXT_FONT_MIN = 16;
+export const TEXT_FONT_MAX = 144;
 export const TEXT_FONT_STEP = 1;
 
 export interface FontSizeSliderProps {
