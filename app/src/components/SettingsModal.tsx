@@ -11,6 +11,12 @@ import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { HoldButton } from "./HoldButton";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import {
+  loadInkPressureClip,
+  pressureClipFromPercent,
+  pressureClipToPercent,
+  saveInkPressureClip,
+} from "../util/inkPressureClip";
+import {
   loadAutoSaveCaptures,
   saveAutoSaveCaptures,
 } from "../util/capturePrefs";
@@ -24,6 +30,8 @@ import { offlinePackDownloader } from "../util/offlinePackDownload";
 import { useIsMobile } from "../util/mobile";
 
 type TabId = "workspace" | "personalise" | "server";
+
+const PRESSURE_CLIP_STEPS = [30, 40, 50, 60, 70, 80, 90, 100] as const;
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "personalise", label: "Personalise" },
@@ -119,6 +127,7 @@ interface DevicePrefs {
   handedness: InkHandedness;
   autoSaveCaptures: boolean;
   offlineMerge: OfflineMergePolicy;
+  pressureClip: number;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -126,6 +135,7 @@ function loadDevicePrefs(): DevicePrefs {
     handedness: loadInkHandedness(),
     autoSaveCaptures: loadAutoSaveCaptures(),
     offlineMerge: loadOfflineMergePolicy(),
+    pressureClip: loadInkPressureClip(),
   };
 }
 
@@ -133,7 +143,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
   return (
     a.handedness === b.handedness &&
     a.autoSaveCaptures === b.autoSaveCaptures &&
-    a.offlineMerge === b.offlineMerge
+    a.offlineMerge === b.offlineMerge &&
+    a.pressureClip === b.pressureClip
   );
 }
 
@@ -181,6 +192,7 @@ export function SettingsModal({
   const [offlineMerge, setOfflineMerge] = useState<OfflineMergePolicy>(() =>
     loadOfflineMergePolicy(),
   );
+  const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
   /** Last saved config + device prefs — Cancel restores these; Save advances them. */
   const [baselineConfig, setBaselineConfig] = useState<LcConfig>(emptyConfig);
   const [baselinePrefs, setBaselinePrefs] = useState<DevicePrefs>(loadDevicePrefs);
@@ -263,6 +275,7 @@ export function SettingsModal({
     setHandedness(prefs.handedness);
     setAutoSaveCaptures(prefs.autoSaveCaptures);
     setOfflineMerge(prefs.offlineMerge);
+    setPressureClip(prefs.pressureClip);
     setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     void offlinePackMeta().then((meta) => {
@@ -307,7 +320,7 @@ export function SettingsModal({
 
   if (!open) return null;
 
-  const draftPrefs: DevicePrefs = { handedness, autoSaveCaptures, offlineMerge };
+  const draftPrefs: DevicePrefs = { handedness, autoSaveCaptures, offlineMerge, pressureClip };
   const dirty =
     !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
 
@@ -334,10 +347,12 @@ export function SettingsModal({
       saveInkHandedness(handedness);
       saveAutoSaveCaptures(autoSaveCaptures);
       saveOfflineMergePolicy(offlineMerge);
-      setBaselinePrefs({ handedness, autoSaveCaptures, offlineMerge });
+      saveInkPressureClip(pressureClip);
+      setBaselinePrefs({ handedness, autoSaveCaptures, offlineMerge, pressureClip });
       window.dispatchEvent(
         new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
       );
+      window.dispatchEvent(new CustomEvent("lc-ink-pressure-clip"));
       onSaved?.();
       setBusy(null);
       onClose();
@@ -565,6 +580,35 @@ export function SettingsModal({
                   <strong>Board only</strong>
                   <span className="lc-muted">Place the capture on the board; do not save a file.</span>
                 </button>
+              </div>
+
+              <div className="lc-settings-subhead">Pressure clip</div>
+              <p className="lc-settings-hint">
+                How hard you press before the pen reads as &ldquo;full&rdquo; pressure. Lower
+                values make light strokes reach max ink sooner — useful on a stiff nib or a tablet
+                that reports low pressure. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Pressure clip"
+              >
+                {PRESSURE_CLIP_STEPS.map((percent) => (
+                  <button
+                    key={percent}
+                    type="button"
+                    role="radio"
+                    aria-checked={pressureClipToPercent(pressureClip) === percent}
+                    className={
+                      pressureClipToPercent(pressureClip) === percent
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setPressureClip(pressureClipFromPercent(percent))}
+                  >
+                    <strong>{percent}%</strong>
+                  </button>
+                ))}
               </div>
 
               <div className="lc-settings-subhead">When a case fails</div>

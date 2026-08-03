@@ -19,10 +19,12 @@ import {
   applyInkOp,
   applyInkOpFrom,
   eraserSceneRadius,
+  hasStylusPressure,
   inkBakeKey,
-  inkLineWidth,
+  inkStrokeStyle,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
+  NO_PRESSURE,
   paintRasterInk,
   scenePointFromPointer,
   setInkSceneTransform,
@@ -58,6 +60,8 @@ export interface RasterInkLayerProps {
   tool: "pen" | "eraser" | null;
   strokeWidth: number;
   inkColor: string;
+  inkFullness: number;
+  pressureClip: number;
   pressureSensitive: boolean;
   getViewport: () => ViewportTransform | null;
   /**
@@ -84,6 +88,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       tool,
       strokeWidth,
       inkColor,
+      inkFullness,
+      pressureClip,
       pressureSensitive,
       getViewport,
       clip = null,
@@ -103,8 +109,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const liveDrawnIndexRef = useRef(0);
     const drawingRef = useRef(false);
     const lastPointRef = useRef<ReturnType<typeof scenePointFromPointer> | null>(null);
-    /** Running EMA of stylus pressure for the live stroke — see smoothPressure. */
-    const smoothedPressureRef = useRef(0.5);
+    /** Running EMA of raw stylus pressure for the live stroke — see smoothPressure. */
+    const smoothedPressureRef = useRef(0);
     /**
      * Viewport + CSS box frozen at pointerdown for the whole stroke.
      *
@@ -129,6 +135,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     inkColorRef.current = inkColor;
     const strokeWidthRef = useRef(strokeWidth);
     strokeWidthRef.current = strokeWidth;
+    const inkFullnessRef = useRef(inkFullness);
+    inkFullnessRef.current = inkFullness;
+    const pressureClipRef = useRef(pressureClip);
+    pressureClipRef.current = pressureClip;
     const pressureSensitiveRef = useRef(pressureSensitive);
     pressureSensitiveRef.current = pressureSensitive;
     const toolRef = useRef(tool);
@@ -524,9 +534,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           rect,
           strokeView,
           event.pressure,
+          event.pointerType,
         );
         lastPointRef.current = point;
-        smoothedPressureRef.current = point.pressure;
+        smoothedPressureRef.current = hasStylusPressure(point.pressure) ? point.pressure : 0;
         inkMetrics.begin();
         const width = strokeWidthRef.current;
         const activeTool = toolRef.current;
@@ -535,6 +546,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             kind: "draw",
             color: inkColorRef.current,
             baseWidth: width,
+            maxFullness: inkFullnessRef.current,
+            pressureClip: pressureClipRef.current,
             pressureSensitive: pressureSensitiveRef.current,
             points: [point],
           };
@@ -578,6 +591,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
         const width = strokeWidthRef.current;
         const pressureSensitive = live.kind === "draw" && live.pressureSensitive;
+        const maxFullness = live.kind === "draw" ? live.maxFullness : 1;
+        const pressureClip = live.kind === "draw" ? live.pressureClip : 1;
         for (const sample of batch) {
           const last = lastPointRef.current;
           if (!last) break;
@@ -587,8 +602,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             rect,
             strokeView,
             sample.pressure,
+            sample.pointerType,
           );
-          if (pressureSensitive) {
+          if (pressureSensitive && hasStylusPressure(point.pressure)) {
             // Filter pressure, not position: smoothing the path would lag the
             // tip, but width has no business tracking sample noise.
             smoothedPressureRef.current = smoothPressure(
@@ -596,15 +612,28 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               point.pressure,
             );
             point.pressure = smoothedPressureRef.current;
+          } else {
+            point.pressure = NO_PRESSURE;
           }
           const step =
             live.kind === "erase"
               ? Math.max(live.radius * 0.45, 0.5)
-              : Math.max(
-                  inkLineWidth(width, point.pressure, pressureSensitive) *
-                    (pressureSensitive ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
-                  0.5,
-                );
+              : (() => {
+                  const style = inkStrokeStyle(
+                    width,
+                    maxFullness,
+                    point.pressure,
+                    pressureClip,
+                    pressureSensitive,
+                  );
+                  return Math.max(
+                    style.lineWidth *
+                      (pressureSensitive && hasStylusPressure(point.pressure)
+                        ? INK_STEP_FACTOR_PRESSURE
+                        : INK_STEP_FACTOR),
+                    0.5,
+                  );
+                })();
           const stamps = stampAlongSegment(last, point, step);
           live.points.push(...stamps);
           lastPointRef.current = point;

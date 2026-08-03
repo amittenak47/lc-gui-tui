@@ -36,6 +36,7 @@ import type { ToolName } from "./BoardHandle";
 import { ColorRadial } from "./ColorRadial";
 import { FontSizeSlider } from "./FontSizeSlider";
 import { inkSwatches } from "./inkColors";
+import { InkFullnessSlider } from "./InkFullnessSlider";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
 
@@ -103,6 +104,8 @@ export interface BoardToolbarProps {
   handedness: InkHandedness;
   strokeWidth: number;
   onStrokeWidth: (width: number) => void;
+  inkFullness: number;
+  onInkFullness: (fullness: number) => void;
   pressureSensitive: boolean;
   onPressureSensitive: (enabled: boolean) => void;
   fontSize: number;
@@ -137,6 +140,8 @@ export function BoardToolbar({
   handedness,
   strokeWidth,
   onStrokeWidth,
+  inkFullness,
+  onInkFullness,
   pressureSensitive,
   onPressureSensitive,
   fontSize,
@@ -735,10 +740,13 @@ export function BoardToolbar({
               eraser={active === "eraser"}
             />
             {active === "freedraw" && (
-              <PressureSensitiveToggle
-                enabled={pressureSensitive}
-                onChange={onPressureSensitive}
-              />
+              <>
+                <InkFullnessSlider value={inkFullness} onChange={onInkFullness} />
+                <PressureSensitiveToggle
+                  enabled={pressureSensitive}
+                  onChange={onPressureSensitive}
+                />
+              </>
             )}
           </div>
         )}
