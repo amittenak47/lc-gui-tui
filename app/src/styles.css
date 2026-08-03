@@ -911,6 +911,104 @@ input[type="checkbox"] {
   box-sizing: border-box;
 }
 
+.lc-toolbar-dock-anchor {
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: 14px;
+  transition:
+    width 180ms ease,
+    height 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease;
+}
+
+/* Home slot lights up while the island is floating / docking. */
+.lc-board-dock:has(.lc-toolbar-floating) .lc-toolbar-dock-anchor,
+.lc-board-dock:has(.lc-toolbar-dragging) .lc-toolbar-dock-anchor,
+.lc-board-dock:has(.lc-toolbar-docking) .lc-toolbar-dock-anchor {
+  width: min(70vw, 280px);
+  height: 36px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.lc-board-dock:has(.lc-toolbar-dock-near) .lc-toolbar-dock-anchor {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.lc-toolbar-floating {
+  z-index: 55;
+  max-width: min(94vw, 760px);
+  box-shadow:
+    0 10px 28px rgb(0 0 0 / 22%),
+    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.lc-toolbar-dragging {
+  cursor: grabbing;
+  touch-action: none;
+  box-shadow:
+    0 16px 36px rgb(0 0 0 / 28%),
+    0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  transform: scale(1.03);
+}
+
+.lc-toolbar-docking {
+  transition:
+    left 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    top 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 280ms cubic-bezier(0.34, 1.4, 0.64, 1),
+    box-shadow 220ms ease;
+  transform: scale(1);
+  pointer-events: none;
+}
+
+.lc-toolbar-dock-near {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent),
+    0 12px 28px rgb(0 0 0 / 24%);
+}
+
+.lc-toolbar-grip {
+  width: 22px;
+  min-height: var(--touch);
+  padding: 0;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.lc-toolbar-grip:hover,
+.lc-toolbar-grip:focus-visible {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.lc-toolbar-grip:active,
+.lc-toolbar-dragging .lc-toolbar-grip {
+  cursor: grabbing;
+}
+
+.lc-toolbar-grip-dots {
+  width: 10px;
+  height: 16px;
+  background-image: radial-gradient(circle, currentColor 1.15px, transparent 1.35px);
+  background-size: 5px 5px;
+  background-position: 0 0;
+  opacity: 0.75;
+}
+
 .lc-toolbar-row {
   display: flex;
   flex-direction: row;
@@ -1559,10 +1657,11 @@ input[type="checkbox"] {
   border-color: var(--line);
 }
 
-/* Map-style controls — Theme left, zoom right, same bottom row. */
+/* Map-style controls — Theme left, zoom right, same bottom row.
+ * Always overlays the Excalidraw surface (never in document flow with it). */
 .lc-map-controls {
   position: absolute;
-  z-index: 12;
+  z-index: 30;
   left: 10px;
   right: 10px;
   bottom: 10px;
@@ -1714,12 +1813,13 @@ input[type="checkbox"] {
 
 .lc-coach-sheet-handle {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   flex: 0 0 auto;
   width: 100%;
-  min-height: 44px;
-  padding: 10px 14px 8px;
+  /* Taller hit target; bar sits near the top so thumbs clear the home gesture. */
+  min-height: 52px;
+  padding: 8px 14px 16px;
   border: 0;
   background: transparent;
   cursor: grab;
@@ -2836,10 +2936,13 @@ input[type="checkbox"] {
   display: grid;
   grid-template-rows: 0fr;
   transition: grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  /* Overlay the canvas — never steal flex height from `.lc-main` / Excalidraw. */
+  pointer-events: none;
 }
 
 .lc-banner-slot.is-open {
   grid-template-rows: 1fr;
+  pointer-events: auto;
 }
 
 .lc-banner-slot-inner {
@@ -2859,6 +2962,7 @@ input[type="checkbox"] {
   transition:
     transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 180ms ease;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 12%);
 }
 
 .lc-banner-slot.is-open .lc-banner {
@@ -2883,6 +2987,34 @@ input[type="checkbox"] {
   font-size: 13px;
   color: var(--muted);
   border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 10%);
+}
+
+/*
+ * Status / busy chrome floats over the board the same way the coach sheet does —
+ * opening a banner must not reflow `.lc-main` or resize Excalidraw mid-stroke.
+ */
+.lc-chrome-overlay-top {
+  position: absolute;
+  z-index: 48;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.lc-chrome-overlay-top .lc-busy,
+.lc-chrome-overlay-top .lc-banner-slot.is-open {
+  pointer-events: auto;
+}
+
+/* When coach is open on desktop, keep the banner clear of the side panel. */
+.lc-app-coach-open:not(.lc-mobile) .lc-chrome-overlay-top {
+  right: var(--lc-coach-width, 520px);
 }
 
 .lc-pass {
@@ -4712,9 +4844,10 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile {
   --lc-coach-sheet: min(58vh, 520px);
-  /* Clear Android's home-swipe gesture band at the bottom edge. */
-  --lc-coach-sheet-lift: 14px;
-  --lc-coach-peek: 34px;
+  /* Lift the sheet clear of Android's home-swipe / gesture nav band. */
+  --lc-coach-sheet-lift: 32px;
+  /* Peek tall enough that the grab bar sits above that band when parked. */
+  --lc-coach-peek: 52px;
 }
 
 @media (pointer: coarse) and (min-width: 768px) {

@@ -467,10 +467,14 @@ function safeCssPx(name: "--lc-safe-top" | "--lc-safe-bottom" | "--lc-safe-left"
 /**
  * Viewport chrome around the fitted template page.
  *
- * Everything the board draws over the canvas now sits in one bottom row, so the
- * top of the page is free and only the bottom needs clearing.
+ * Bottom tray / toolbar overlay the canvas — they do not shrink the board
+ * element. Page-fit still clears them when visible; when chrome is hidden the
+ * fitted page (and free writing) reclaim that bottom strip.
  */
-function mobilePageInsets(toolbarH: number): {
+function mobilePageInsets(
+  toolbarH: number,
+  chromeHidden: boolean,
+): {
   top: number;
   left: number;
   right: number;
@@ -480,7 +484,7 @@ function mobilePageInsets(toolbarH: number): {
     top: 6,
     left: 2,
     right: 2,
-    bottom: Math.max(44, Math.round(toolbarH) + 16),
+    bottom: chromeHidden ? 12 : Math.max(44, Math.round(toolbarH) + 16),
   };
 }
 
@@ -511,9 +515,9 @@ function measureChromeInsets(
   mobile: boolean,
 ): { top: number; left: number; right: number; bottom: number } {
   const fallback = mobile
-    ? mobilePageInsets(toolbarH)
+    ? mobilePageInsets(toolbarH, chromeHidden)
     : desktopPageInsets(toolbarH, chromeHidden);
-  if (!boardEl) return fallback;
+  if (chromeHidden || !boardEl) return fallback;
   const board = boardEl.getBoundingClientRect();
   if (board.width < 8 || board.height < 8) return fallback;
 
@@ -2766,7 +2770,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             ...el,
             fontFamily: wantFont,
             lineHeight: defaultLineHeight(wantFont),
-            version: (el.version ?? 0) + 1,
+            version: (typeof el.version === "number" ? el.version : 0) + 1,
             versionNonce: Math.floor(Math.random() * 2 ** 31),
           };
         }
@@ -3319,6 +3323,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             {!mapChromeHidden && (
               <div className="lc-board-dock">
                 {bottomCenter}
+                <div className="lc-toolbar-dock-anchor" aria-hidden />
               <BoardToolbar
                 active={activeTool}
                 onPick={setTool}

@@ -20,7 +20,7 @@ import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
 
 /** Visible strip when the mobile coach sheet is parked closed. */
-const COACH_SHEET_PEEK_PX = 34;
+const COACH_SHEET_PEEK_PX = 52;
 /** Drag past this fraction of sheet height (or fling) to snap open/closed. */
 const COACH_SHEET_SNAP = 0.28;
 const COACH_SHEET_FLING_VX = 0.55;

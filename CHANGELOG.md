@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — settings draft, chrome overlays, movable toolbar
+
+- **Settings save only on Save.** Personalise prefs (writing hand, capture
+  auto-save, offline merge) no longer write immediately. Save stays disabled
+  until something changes; Cancel / backdrop close drop the draft and keep the
+  previous values.
+- **Error / busy banners overlay the canvas.** They no longer sit in document
+  flow under the header, so showing a banner mid-stroke cannot resize
+  Excalidraw and scramble ink.
+- **Bottom tray stays above the board.** Map controls use a higher overlay
+  stack; hiding chrome lets the fitted page reclaim the bottom strip on mobile
+  the same way desktop already did.
+- **Coach sheet grab bar sits higher.** Peek and sheet lift clear Android's
+  home-gesture band so the handle is easier to catch.
+- **Toolbar docks and floats.** Long-press the grip, drag anywhere on the
+  workspace, drop near the bottom slot for a snap-home animation. Position
+  persists until you dock it again.
+
 ### Added — the coach shows its work, and stops changing its mind
 
 - **Stages arrive as they happen.** Ask, Review, Draw and Lazy run over the
