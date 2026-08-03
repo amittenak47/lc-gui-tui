@@ -47,6 +47,13 @@ export interface RasterInkHandle {
   isDrawing(): boolean;
   repaint(): void;
   /**
+   * Cheap camera sync during pan — CSS-translate the baked bitmap when only
+   * scroll changed; rebuild when zoom/size/clip changed.
+   */
+  syncCamera(): void;
+  /** End of pan/inertia — clear translate and rebuild bake at current scroll. */
+  commitCamera(): void;
+  /**
    * Committed ops, for the recognizer and the PNG export. The in-progress op is
    * left out — the pen is still down, so there is no stroke to read yet.
    */
@@ -101,6 +108,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const bakeRef = useRef<HTMLCanvasElement | null>(null);
     const bakeKeyRef = useRef<string>("");
+    /** Viewport the current bake was rasterised at — scroll may lag via CSS translate. */
+    const bakeViewportRef = useRef<ViewportTransform | null>(null);
     const opsRef = useRef<InkOp[]>([]);
     const undoRef = useRef<InkOp[][]>([]);
     const redoRef = useRef<InkOp[][]>([]);
@@ -201,6 +210,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         };
         paintRasterInk(bakeCtx, bakeViewport, opsRef.current, null, dpr, clipRef.current);
         bakeKeyRef.current = key;
+        bakeViewportRef.current = { ...bakeViewport };
         return bake;
       },
       [],
@@ -252,9 +262,111 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
     const invalidateBake = useCallback(() => {
       bakeKeyRef.current = "";
+      bakeViewportRef.current = null;
     }, []);
 
-    /** Full rebuild: clear, blit bake, replay entire live op. Used on pan/zoom/undo. */
+    const blitBakeToCanvas = useCallback(
+      (view: ViewportTransform, cssW: number, cssH: number) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        const dpr = window.devicePixelRatio || 1;
+        const pixelW = Math.round(cssW * dpr);
+        const pixelH = Math.round(cssH * dpr);
+        if (canvas.width !== pixelW || canvas.height !== pixelH) {
+          canvas.width = pixelW;
+          canvas.height = pixelH;
+          canvas.style.width = `${pixelW / dpr}px`;
+          canvas.style.height = `${pixelH / dpr}px`;
+        }
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const bake = bakeRef.current;
+        if (bake) {
+          ctx.drawImage(bake, 0, 0);
+        }
+        const live = liveRef.current;
+        if (live) {
+          setInkSceneTransform(ctx, view, dpr);
+          const clipBox = clipRef.current;
+          if (clipBox) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(
+              clipBox.minX,
+              clipBox.minY,
+              clipBox.maxX - clipBox.minX,
+              clipBox.maxY - clipBox.minY,
+            );
+            ctx.clip();
+            applyInkOp(ctx, live);
+            ctx.restore();
+          } else {
+            applyInkOp(ctx, live);
+          }
+          liveDrawnIndexRef.current =
+            live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
+        } else {
+          liveDrawnIndexRef.current = 0;
+        }
+      },
+      [],
+    );
+
+    const commitCamera = useCallback(() => {
+      if (drawingRef.current) return;
+      const canvas = canvasRef.current;
+      const viewport = getViewport();
+      if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
+      canvas.style.transform = "";
+      const excalRect = alignToExcalidraw(canvas);
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = excalRect?.width ?? viewport.width;
+      const cssH = excalRect?.height ?? viewport.height;
+      const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
+      const key = inkBakeKey(view, dpr, cssW, cssH, clipRef.current);
+      rebuildBake(view, dpr, cssW, cssH, key);
+      blitBakeToCanvas(view, cssW, cssH);
+    }, [alignToExcalidraw, blitBakeToCanvas, getViewport, rebuildBake]);
+
+    const syncCamera = useCallback(() => {
+      if (drawingRef.current) return;
+      const canvas = canvasRef.current;
+      const viewport = getViewport();
+      if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
+      const excalRect = alignToExcalidraw(canvas);
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = excalRect?.width ?? viewport.width;
+      const cssH = excalRect?.height ?? viewport.height;
+      const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
+      const key = inkBakeKey(view, dpr, cssW, cssH, clipRef.current);
+
+      if (!bakeRef.current || bakeKeyRef.current !== key) {
+        canvas.style.transform = "";
+        rebuildBake(view, dpr, cssW, cssH, key);
+        blitBakeToCanvas(view, cssW, cssH);
+        return;
+      }
+
+      const bakeView = bakeViewportRef.current;
+      if (!bakeView) {
+        canvas.style.transform = "";
+        rebuildBake(view, dpr, cssW, cssH, key);
+        blitBakeToCanvas(view, cssW, cssH);
+        return;
+      }
+
+      const dx = (view.scrollX - bakeView.scrollX) * view.zoom;
+      const dy = (view.scrollY - bakeView.scrollY) * view.zoom;
+      if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) {
+        canvas.style.transform = "";
+        return;
+      }
+      canvas.style.transform = `translate(${dx}px, ${dy}px)`;
+    }, [alignToExcalidraw, blitBakeToCanvas, getViewport, rebuildBake]);
+
+    /** Full rebuild: clear, blit bake, replay entire live op. Used on zoom/undo. */
     const repaint = useCallback(() => {
       const canvas = canvasRef.current;
       // Prefer the stroke-start frame while a gesture is open (or just set up).
@@ -262,6 +374,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const box = strokeBoxRef.current;
       const viewport = frozen ?? getViewport();
       if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
+      canvas.style.transform = "";
       const excalRect = frozen && box ? box : alignToExcalidraw(canvas);
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
@@ -470,8 +583,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           repaint();
         },
         repaint,
+        syncCamera,
+        commitCamera,
       }),
-      [invalidateBake, onChange, repaint],
+      [commitCamera, invalidateBake, onChange, repaint, syncCamera],
     );
 
     useEffect(() => {

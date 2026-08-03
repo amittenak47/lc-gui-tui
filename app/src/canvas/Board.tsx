@@ -1653,6 +1653,125 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
   }, []);
 
+  useEffect(() => {
+    if (!interactive) return;
+    const root = boardRef.current;
+    if (!root) return;
+
+    const isHandPanTarget = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) return false;
+      if (
+        target.closest(
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
+        )
+      ) {
+        return false;
+      }
+      return target.closest(".excalidraw") != null;
+    };
+
+    const startPanInertia = (velocityX: number, velocityY: number) => {
+      const api = apiRef.current;
+      if (!api) return;
+      stopPanInertia();
+      let velX = velocityX;
+      let velY = velocityY;
+      let last = performance.now();
+      const state = api.getAppState() as {
+        scrollX?: number;
+        scrollY?: number;
+        zoom?: { value?: number };
+      };
+      let scrollX = state.scrollX ?? 0;
+      let scrollY = state.scrollY ?? 0;
+      const zoom = state.zoom?.value ?? 1;
+
+      const step = (now: number) => {
+        const dt = Math.min(34, Math.max(1, now - last));
+        last = now;
+        scrollX += velX * dt;
+        scrollY += velY * dt;
+        const clamped = clampPanScroll(scrollX, scrollY, zoom);
+        scrollX = clamped.scrollX;
+        scrollY = clamped.scrollY;
+        velX *= Math.exp(-PAN_FRICTION * dt);
+        velY *= Math.exp(-PAN_FRICTION * dt);
+        if (Math.abs(velX) < PAN_REST_SPEED && Math.abs(velY) < PAN_REST_SPEED) {
+          inertiaFrameRef.current = 0;
+          api.updateScene({
+            appState: { scrollX, scrollY },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+          rasterInkRef.current?.commitCamera();
+          scheduleSlotReports();
+          return;
+        }
+        api.updateScene({
+          appState: { scrollX, scrollY },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        rasterInkRef.current?.syncCamera();
+        scheduleSlotReports();
+        inertiaFrameRef.current = requestAnimationFrame(step);
+      };
+      inertiaFrameRef.current = requestAnimationFrame(step);
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (activeToolRef.current !== "hand") return;
+      if (event.button !== 0) return;
+      if (!isHandPanTarget(event.target)) return;
+      stopPanInertia();
+      handPanningRef.current = true;
+      panVelocityRef.current = { x: 0, y: 0 };
+      const api = apiRef.current;
+      const now = performance.now();
+      if (api) {
+        const state = api.getAppState() as { scrollX?: number; scrollY?: number };
+        lastPanScrollRef.current = {
+          x: state.scrollX ?? 0,
+          y: state.scrollY ?? 0,
+          t: now,
+        };
+      } else {
+        lastPanScrollRef.current = { x: 0, y: 0, t: now };
+      }
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (!handPanningRef.current) return;
+      handPanningRef.current = false;
+      if (activeToolRef.current !== "hand") return;
+      if (!isHandPanTarget(event.target)) {
+        rasterInkRef.current?.commitCamera();
+        return;
+      }
+      const vel = panVelocityRef.current;
+      const speed = Math.hypot(vel.x, vel.y);
+      if (speed >= PAN_FLICK_MIN) {
+        startPanInertia(vel.x, vel.y);
+        return;
+      }
+      rasterInkRef.current?.commitCamera();
+    };
+
+    root.addEventListener("pointerdown", onPointerDown, true);
+    root.addEventListener("pointerup", onPointerUp, true);
+    root.addEventListener("pointercancel", onPointerUp, true);
+    return () => {
+      root.removeEventListener("pointerdown", onPointerDown, true);
+      root.removeEventListener("pointerup", onPointerUp, true);
+      root.removeEventListener("pointercancel", onPointerUp, true);
+      stopPanInertia();
+    };
+  }, [clampPanScroll, interactive, scheduleSlotReports, stopPanInertia]);
+
+  useEffect(() => {
+    stopPanInertia();
+    handPanningRef.current = false;
+    rasterInkRef.current?.commitCamera();
+  }, [activeTool, stopPanInertia]);
+
   const inkToolActive = activeTool === "freedraw" || activeTool === "eraser";
 
   // Eraser ring follows the pointer via window listeners so a click-without-move
@@ -3627,13 +3746,29 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             apiRef.current.onScrollChange?.((scrollX, scrollY, zoom) => {
               const pct = Math.round(zoom.value * 100);
               setZoomPct((current) => (current === pct ? current : pct));
-              // Full ink rebuild mid-stroke drops coalesced samples and cuts glyphs.
-              if (!rasterInkRef.current?.isDrawing()) {
-                rasterInkRef.current?.repaint();
+              if (
+                activeToolRef.current === "hand" &&
+                handPanningRef.current &&
+                inertiaFrameRef.current === 0
+              ) {
+                const now = performance.now();
+                const last = lastPanScrollRef.current;
+                if (last.t > 0) {
+                  const dt = Math.max(1, now - last.t);
+                  const instantX = (scrollX - last.x) / dt;
+                  const instantY = (scrollY - last.y) / dt;
+                  panVelocityRef.current = {
+                    x: panVelocityRef.current.x * 0.65 + instantX * 0.35,
+                    y: panVelocityRef.current.y * 0.65 + instantY * 0.35,
+                  };
+                }
+                lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
               }
-              reportCodeSlot();
-              reportLinedSlot();
-              reportTitleSlot();
+              // CSS-translate the baked ink during pan — rebuild only on zoom/size/ops.
+              if (!rasterInkRef.current?.isDrawing()) {
+                rasterInkRef.current?.syncCamera();
+              }
+              scheduleSlotReports();
 
               // Tablet only — desktop keeps free pan (coach docks on the right).
               if (!fittingCameraRef.current && !clampingScrollRef.current) {
