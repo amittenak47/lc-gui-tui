@@ -84,6 +84,7 @@ import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
+import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadAutoSaveCaptures, saveCaptureToDevice } from "../util/capturePrefs";
 import { loadInkToolPrefs, saveInkToolPrefs } from "../util/inkToolPrefs";
 import { useRepeatPress } from "../util/useRepeatPress";
@@ -758,8 +759,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
   const [penStrokeWidth, setPenStrokeWidth] = useState(() => inkPrefsRef.current.penWidth);
   const [eraserStrokeWidth, setEraserStrokeWidth] = useState(() => inkPrefsRef.current.eraserWidth);
+  const [inkFullness, setInkFullnessState] = useState(() => inkPrefsRef.current.inkFullness);
   const strokeWidth = activeTool === "eraser" ? eraserStrokeWidth : penStrokeWidth;
   const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
+  const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
   const [stampTrash, setStampTrash] = useState<{
     left: number;
     top: number;
@@ -1358,17 +1361,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   const persistInkPrefs = useCallback(
-    (patch: Partial<{ penWidth: number; eraserWidth: number; pressureSensitive: boolean; inkColor: string }>) => {
+    (patch: Partial<{
+      penWidth: number;
+      eraserWidth: number;
+      inkFullness: number;
+      pressureSensitive: boolean;
+      inkColor: string;
+    }>) => {
       const next = {
         penWidth: patch.penWidth ?? penStrokeWidth,
         eraserWidth: patch.eraserWidth ?? eraserStrokeWidth,
+        inkFullness: patch.inkFullness ?? inkFullness,
         pressureSensitive: patch.pressureSensitive ?? pressureSensitive,
         inkColor: patch.inkColor ?? inkColor,
       };
       inkPrefsRef.current = next;
       saveInkToolPrefs(next);
     },
-    [penStrokeWidth, eraserStrokeWidth, pressureSensitive, inkColor],
+    [penStrokeWidth, eraserStrokeWidth, inkFullness, pressureSensitive, inkColor],
   );
 
   const setStrokeWidth = useCallback((width: number) => {
@@ -1389,6 +1399,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     (enabled: boolean) => {
       setPressureSensitiveState(enabled);
       persistInkPrefs({ pressureSensitive: enabled });
+    },
+    [persistInkPrefs],
+  );
+
+  const setInkFullness = useCallback(
+    (fullness: number) => {
+      setInkFullnessState(fullness);
+      persistInkPrefs({ inkFullness: fullness });
     },
     [persistInkPrefs],
   );
@@ -1495,6 +1513,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     window.addEventListener("lc-ink-handedness", onHand);
     return () => window.removeEventListener("lc-ink-handedness", onHand);
+  }, []);
+
+  useEffect(() => {
+    const onClip = () => setPressureClip(loadInkPressureClip());
+    window.addEventListener("lc-ink-pressure-clip", onClip);
+    return () => window.removeEventListener("lc-ink-pressure-clip", onClip);
   }, []);
 
   const deleteSelectedStamps = useCallback(() => {
@@ -3333,6 +3357,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 handedness={inkHandedness}
                 strokeWidth={strokeWidth}
                 onStrokeWidth={setStrokeWidth}
+                inkFullness={inkFullness}
+                onInkFullness={setInkFullness}
                 pressureSensitive={pressureSensitive}
                 onPressureSensitive={setPressureSensitive}
                 fontSize={fontSize}
@@ -3437,6 +3463,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
         strokeWidth={strokeWidth}
         inkColor={inkColor}
+        inkFullness={inkFullness}
+        pressureClip={pressureClip}
         pressureSensitive={pressureSensitive}
         getViewport={getViewport}
         clip={inkClip}

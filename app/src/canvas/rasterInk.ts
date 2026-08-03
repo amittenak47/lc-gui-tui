@@ -17,6 +17,12 @@ export const STROKE_WIDTH_MAX = 32;
 export const ERASER_WIDTH_MAX = 384;
 export const STROKE_WIDTH_DEFAULT = 2;
 
+/** Sentinel: mouse / touch without stylus pressure — do not modulate from 0.5. */
+export const NO_PRESSURE = -1;
+
+/** Mild nib spread at full press — width stays mostly from the tip wheel. */
+export const INK_WIDTH_SPREAD = 0.12;
+
 export interface ScenePoint {
   x: number;
   y: number;
@@ -37,6 +43,10 @@ export interface InkDrawOp {
   kind: "draw";
   color: string;
   baseWidth: number;
+  /** Toolbar ink dial — ceiling for stylus-driven opacity (0–1). */
+  maxFullness: number;
+  /** Device pressure-clip when the stroke was drawn (0.3–1). */
+  pressureClip: number;
   pressureSensitive: boolean;
   points: ScenePoint[];
 }
@@ -49,17 +59,59 @@ export interface InkEraseOp {
 
 export type InkOp = InkDrawOp | InkEraseOp;
 
-/** Scene-unit line width from toolbar setting, optionally modulated by stylus pressure. */
+export function hasStylusPressure(pressure: number): boolean {
+  return Number.isFinite(pressure) && pressure >= 0 && pressure !== NO_PRESSURE;
+}
+
+/** Map raw stylus pressure through the personalise clip (30–100% → 0.3–1.0). */
+export function normalizePressure(raw: number, clip: number): number {
+  if (!hasStylusPressure(raw)) return 0;
+  const c = Math.max(0.3, Math.min(1, clip));
+  return Math.min(1, raw / c);
+}
+
+/** Scene-unit line width from tip geometry; mild spread when stylus pressure is active. */
 export function inkLineWidth(
   baseWidth: number,
-  pressure: number,
-  pressureSensitive = true,
+  pNorm: number,
+  pressureSensitive = false,
 ): number {
   const base = baseWidth * 1.35;
-  if (pressureSensitive && pressure > 0 && pressure !== 0.5) {
-    return base * Math.max(0.12, pressure * 1.85);
-  }
-  return base;
+  if (!pressureSensitive) return base;
+  const spread = 1 + INK_WIDTH_SPREAD * Math.max(0, Math.min(1, pNorm));
+  return base * spread;
+}
+
+/** Stroke opacity — fullness via alpha; stylus maps 0..maxFullness. */
+export function inkStrokeAlpha(
+  maxFullness: number,
+  pNorm: number,
+  pressureSensitive: boolean,
+): number {
+  const ceiling = Math.max(0, Math.min(1, maxFullness));
+  if (!pressureSensitive) return ceiling;
+  return ceiling * Math.max(0, Math.min(1, pNorm));
+}
+
+export interface InkStrokeStyle {
+  lineWidth: number;
+  alpha: number;
+}
+
+/** Width + alpha for one sample along a stroke. */
+export function inkStrokeStyle(
+  baseWidth: number,
+  maxFullness: number,
+  pressure: number,
+  pressureClip: number,
+  pressureSensitive: boolean,
+): InkStrokeStyle {
+  const stylus = pressureSensitive && hasStylusPressure(pressure);
+  const pNorm = stylus ? normalizePressure(pressure, pressureClip) : 0;
+  return {
+    lineWidth: inkLineWidth(baseWidth, pNorm, stylus),
+    alpha: inkStrokeAlpha(maxFullness, pNorm, stylus),
+  };
 }
 
 /**
@@ -98,8 +150,12 @@ export function eraserScreenRadius(strokeWidth: number, zoom: number): number {
   return eraserSceneRadius(strokeWidth) * Math.max(0.05, zoom);
 }
 
-function pointerPressure(raw: number): number {
-  return Number.isFinite(raw) && raw > 0 ? raw : 0.5;
+/** Raw pointer pressure: real 0–1 for stylus, {@link NO_PRESSURE} for mouse/touch. */
+export function pointerPressure(raw: number, pointerType: string): number {
+  if (pointerType === "pen") {
+    return Number.isFinite(raw) && raw >= 0 ? raw : 0;
+  }
+  return NO_PRESSURE;
 }
 
 export function stampAlongSegment(
@@ -137,12 +193,23 @@ function drawStrokeFrom(
   for (let index = start; index < op.points.length; index++) {
     const prev = op.points[index - 1];
     const next = op.points[index];
-    ctx.lineWidth = inkLineWidth(op.baseWidth, prev.pressure, op.pressureSensitive);
+    const maxFullness = op.maxFullness ?? 1;
+    const pressureClip = op.pressureClip ?? 1;
+    const style = inkStrokeStyle(
+      op.baseWidth,
+      maxFullness,
+      prev.pressure,
+      pressureClip,
+      op.pressureSensitive,
+    );
+    ctx.lineWidth = style.lineWidth;
+    ctx.globalAlpha = style.alpha;
     ctx.beginPath();
     ctx.moveTo(prev.x, prev.y);
     ctx.lineTo(next.x, next.y);
     ctx.stroke();
   }
+  ctx.globalAlpha = 1;
 }
 
 function eraseStampsFrom(
@@ -315,7 +382,10 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
   let bounds: SceneBounds | null = null;
   for (const op of ops) {
     if (op.kind !== "draw") continue;
-    const half = inkLineWidth(op.baseWidth, 1, op.pressureSensitive) / 2;
+    const maxFullness = op.maxFullness ?? 1;
+    const pressureClip = op.pressureClip ?? 1;
+    const style = inkStrokeStyle(op.baseWidth, maxFullness, 1, pressureClip, op.pressureSensitive);
+    const half = style.lineWidth / 2;
     for (const point of op.points) {
       bounds = unionSceneBounds(bounds, {
         minX: point.x - half,
@@ -502,12 +572,13 @@ export function scenePointFromPointer(
   canvasRect: DOMRect,
   viewport: Pick<ViewportTransform, "zoom" | "scrollX" | "scrollY">,
   pressure: number,
+  pointerType: string,
 ): ScenePoint {
   const localX = clientX - canvasRect.left;
   const localY = clientY - canvasRect.top;
   return {
     ...scenePointFromCanvasPixel(localX, localY, viewport),
-    pressure: pointerPressure(pressure),
+    pressure: pointerPressure(pressure, pointerType),
   };
 }
 

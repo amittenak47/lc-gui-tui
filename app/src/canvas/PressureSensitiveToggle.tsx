@@ -3,7 +3,7 @@ export interface PressureSensitiveToggleProps {
   onChange: (enabled: boolean) => void;
 }
 
-/** Toggle stylus pressure for raster pen width (slider = fixed width when off). */
+/** Toggle stylus pressure for ink fullness (tip width stays mostly fixed). */
 export function PressureSensitiveToggle({ enabled, onChange }: PressureSensitiveToggleProps) {
   return (
     <button
