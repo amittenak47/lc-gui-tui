@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — hand inertia, ink fullness, smooth zoom
+
+- **Hand-tool flick coast.** Release a pan flick and the board keeps sliding with
+  friction instead of stopping dead.
+- **Ink tip vs fullness.** Stroke wheel is nib width; a new Ink dial is max
+  laydown (opacity). Stylus pressure drives fullness up to that ceiling, with
+  only mild width spread — not width∝pressure. Settings → Personalise →
+  Pressure clip (30–100%) remaps hardware press so you need not bury the tip.
+- **Faster pan with dense ink.** The ink bake no longer rebuilds every scroll
+  frame; the bitmap translates with the camera and recommits when pan settles.
+- **Smooth zoom buttons.** +/- retarget an eased zoom animation instead of
+  blocky 1.15× jumps.
+- **Stroke wheel coarse/fine.** Integer steps by default; hold and drag outward
+  for tenths (iPhone-scrub style). Strong flicks cover larger integer ranges.
+
 ### Fixed — settings draft, chrome overlays, movable toolbar
 
 - **Settings save only on Save.** Personalise prefs (writing hand, capture
