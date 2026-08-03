@@ -114,6 +114,33 @@ function emptyConfig(): LcConfig {
   };
 }
 
+/** Device-only prefs edited in Personalise — deferred until Save like config.toml. */
+interface DevicePrefs {
+  handedness: InkHandedness;
+  autoSaveCaptures: boolean;
+  offlineMerge: OfflineMergePolicy;
+}
+
+function loadDevicePrefs(): DevicePrefs {
+  return {
+    handedness: loadInkHandedness(),
+    autoSaveCaptures: loadAutoSaveCaptures(),
+    offlineMerge: loadOfflineMergePolicy(),
+  };
+}
+
+function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
+  return (
+    a.handedness === b.handedness &&
+    a.autoSaveCaptures === b.autoSaveCaptures &&
+    a.offlineMerge === b.offlineMerge
+  );
+}
+
+function configEqual(a: LcConfig, b: LcConfig): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export interface SettingsModalProps {
   open: boolean;
   client: LcClient;
@@ -154,6 +181,9 @@ export function SettingsModal({
   const [offlineMerge, setOfflineMerge] = useState<OfflineMergePolicy>(() =>
     loadOfflineMergePolicy(),
   );
+  /** Last saved config + device prefs — Cancel restores these; Save advances them. */
+  const [baselineConfig, setBaselineConfig] = useState<LcConfig>(emptyConfig);
+  const [baselinePrefs, setBaselinePrefs] = useState<DevicePrefs>(loadDevicePrefs);
   const [packMeta, setPackMeta] = useState<{
     built_at: number;
     problemCount: number;
@@ -229,9 +259,11 @@ export function SettingsModal({
     let cancelled = false;
     setError(null);
     setBusy("loading…");
-    setHandedness(loadInkHandedness());
-    setAutoSaveCaptures(loadAutoSaveCaptures());
-    setOfflineMerge(loadOfflineMergePolicy());
+    const prefs = loadDevicePrefs();
+    setHandedness(prefs.handedness);
+    setAutoSaveCaptures(prefs.autoSaveCaptures);
+    setOfflineMerge(prefs.offlineMerge);
+    setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     void offlinePackMeta().then((meta) => {
       if (!cancelled && meta) {
@@ -243,6 +275,7 @@ export function SettingsModal({
         const cfg = await client.getConfig();
         if (!cancelled) {
           setDraft(cfg);
+          setBaselineConfig(cfg);
           setBusy(null);
         }
         await refreshLlm();
@@ -274,16 +307,37 @@ export function SettingsModal({
 
   if (!open) return null;
 
+  const draftPrefs: DevicePrefs = { handedness, autoSaveCaptures, offlineMerge };
+  const dirty =
+    !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
+
   const patchProvider = (key: "local" | "ollama" | "openai" | "groq", patch: Partial<ProviderConfig>) => {
     setDraft((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   };
 
+  const cancel = () => {
+    // Nothing persisted mid-edit — closing drops the draft. Baseline stays on disk.
+    onClose();
+  };
+
   const save = async () => {
+    if (!dirty) {
+      onClose();
+      return;
+    }
     setBusy("saving…");
     setError(null);
     try {
       const saved = await client.putConfig(draft);
       setDraft(saved);
+      setBaselineConfig(saved);
+      saveInkHandedness(handedness);
+      saveAutoSaveCaptures(autoSaveCaptures);
+      saveOfflineMergePolicy(offlineMerge);
+      setBaselinePrefs({ handedness, autoSaveCaptures, offlineMerge });
+      window.dispatchEvent(
+        new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
+      );
       onSaved?.();
       setBusy(null);
       onClose();
@@ -324,7 +378,7 @@ export function SettingsModal({
       className="lc-settings-backdrop"
       role="presentation"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) cancel();
       }}
     >
       <div className="lc-settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
@@ -449,13 +503,7 @@ export function SettingsModal({
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => {
-                    setHandedness("right");
-                    saveInkHandedness("right");
-                    window.dispatchEvent(
-                      new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: "right" }),
-                    );
-                  }}
+                  onClick={() => setHandedness("right")}
                 >
                   <strong>Right hand</strong>
                   <span className="lc-muted">Chrome sits below-right of the tip.</span>
@@ -469,13 +517,7 @@ export function SettingsModal({
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => {
-                    setHandedness("left");
-                    saveInkHandedness("left");
-                    window.dispatchEvent(
-                      new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: "left" }),
-                    );
-                  }}
+                  onClick={() => setHandedness("left")}
                 >
                   <strong>Left hand</strong>
                   <span className="lc-muted">Chrome sits below-left of the tip.</span>
@@ -502,10 +544,7 @@ export function SettingsModal({
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => {
-                    setAutoSaveCaptures(true);
-                    saveAutoSaveCaptures(true);
-                  }}
+                  onClick={() => setAutoSaveCaptures(true)}
                 >
                   <strong>Auto-save captures</strong>
                   <span className="lc-muted">
@@ -521,10 +560,7 @@ export function SettingsModal({
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => {
-                    setAutoSaveCaptures(false);
-                    saveAutoSaveCaptures(false);
-                  }}
+                  onClick={() => setAutoSaveCaptures(false)}
                 >
                   <strong>Board only</strong>
                   <span className="lc-muted">Place the capture on the board; do not save a file.</span>
@@ -597,10 +633,7 @@ export function SettingsModal({
                         ? "lc-settings-choice-option is-active"
                         : "lc-settings-choice-option"
                     }
-                    onClick={() => {
-                      setOfflineMerge(id);
-                      saveOfflineMergePolicy(id);
-                    }}
+                    onClick={() => setOfflineMerge(id)}
                   >
                     <strong>{label}</strong>
                     <span className="lc-muted">{hint}</span>
@@ -882,10 +915,15 @@ export function SettingsModal({
         </div>
 
         <div className="lc-settings-foot">
-          <button type="button" className="lc-secondary" onClick={onClose}>
+          <button type="button" className="lc-secondary" onClick={cancel}>
             Cancel
           </button>
-          <button type="button" className="lc-primary" disabled={!!busy} onClick={() => void save()}>
+          <button
+            type="button"
+            className="lc-primary"
+            disabled={!dirty || !!busy}
+            onClick={() => void save()}
+          >
             Save
           </button>
         </div>

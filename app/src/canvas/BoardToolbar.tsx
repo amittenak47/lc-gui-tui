@@ -11,9 +11,12 @@
  *
  * Everything that is not a tool hides behind a press: shapes fan out of one
  * button, colour fans out of one dot ({@link ColorRadial}).
+ *
+ * Long-press the grip to undock and drag the island anywhere on the workspace;
+ * drop near the bottom dock slot to snap it home with a short settle animation.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   SHAPES,
@@ -21,7 +24,14 @@ import {
   type ShapeModValue,
   type ShapeStamp,
 } from "../templates/shapes";
+import { LONG_PRESS_MS } from "../util/gesture";
 import type { InkHandedness } from "../util/inkHandedness";
+import {
+  loadToolbarLayout,
+  saveToolbarLayout,
+  TOOLBAR_DOCK_SNAP_PX,
+  type ToolbarLayout,
+} from "../util/toolbarLayout";
 import type { ToolName } from "./BoardHandle";
 import { ColorRadial } from "./ColorRadial";
 import { FontSizeSlider } from "./FontSizeSlider";
@@ -31,6 +41,34 @@ import { StrokeSizeSlider } from "./StrokeSizeSlider";
 
 /** Hold this long on Text to open Text / Code (click also toggles the menu). */
 const TEXT_HOLD_MS = 240;
+
+function clampFloatingPos(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): { x: number; y: number } {
+  const margin = 8;
+  const maxX = Math.max(margin, window.innerWidth - width - margin);
+  const maxY = Math.max(margin, window.innerHeight - height - margin);
+  return {
+    x: Math.min(maxX, Math.max(margin, x)),
+    y: Math.min(maxY, Math.max(margin, y)),
+  };
+}
+
+function dockAnchorRect(toolbar: HTMLElement | null): DOMRect | null {
+  const dock = toolbar?.closest(".lc-board-dock");
+  if (!(dock instanceof HTMLElement)) return null;
+  // Prefer the dedicated anchor (sized when the island is floating); fall back
+  // to the dock column itself.
+  const anchor = dock.querySelector(".lc-toolbar-dock-anchor");
+  if (anchor instanceof HTMLElement) {
+    const rect = anchor.getBoundingClientRect();
+    if (rect.width >= 8 || rect.height >= 8) return rect;
+  }
+  return dock.getBoundingClientRect();
+}
 
 /** The five tools that earn a permanent seat on the bar. */
 const TOOLS: Array<{ tool: ToolName; label: string; hint: string; icon?: "pen" | "eraser" }> = [
@@ -136,6 +174,27 @@ export function BoardToolbar({
   const textHoldTimerRef = useRef<number | null>(null);
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
 
+  const [layout, setLayout] = useState<ToolbarLayout>(() => loadToolbarLayout());
+  const [dragging, setDragging] = useState(false);
+  const [docking, setDocking] = useState(false);
+  const [dockNear, setDockNear] = useState(false);
+  const dragHoldTimerRef = useRef<number | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
+  const floating = layout.mode === "floating";
+  const floatX = layout.mode === "floating" ? layout.x : 0;
+  const floatY = layout.mode === "floating" ? layout.y : 0;
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const draggingRef = useRef(dragging);
+  draggingRef.current = dragging;
+
   const clearTextHold = useCallback(() => {
     if (textHoldTimerRef.current != null) {
       window.clearTimeout(textHoldTimerRef.current);
@@ -143,7 +202,15 @@ export function BoardToolbar({
     }
   }, []);
 
+  const clearDragHold = useCallback(() => {
+    if (dragHoldTimerRef.current != null) {
+      window.clearTimeout(dragHoldTimerRef.current);
+      dragHoldTimerRef.current = null;
+    }
+  }, []);
+
   useEffect(() => clearTextHold, [clearTextHold]);
+  useEffect(() => clearDragHold, [clearDragHold]);
 
   // A press anywhere else closes the text / shape flyouts.
   useEffect(() => {
@@ -176,13 +243,20 @@ export function BoardToolbar({
   useEffect(() => {
     const node = toolbarRootRef.current;
     if (!node) return;
-    const publish = () =>
+    const publish = () => {
+      // Floating chrome does not reserve dock clearance — page fit measures the
+      // remaining bottom tray (pager / eye) instead.
+      if (layout.mode === "floating") {
+        onHeightChangeRef.current?.(0);
+        return;
+      }
       onHeightChangeRef.current?.(Math.ceil(node.getBoundingClientRect().height));
+    };
     publish();
     const observer = new ResizeObserver(publish);
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [layout.mode]);
 
   useEffect(() => {
     if (!shapesOpen) {
@@ -191,6 +265,152 @@ export function BoardToolbar({
       setShapePhase("list");
     }
   }, [shapesOpen]);
+
+  // Keep a restored floating position on-screen after rotate / resize.
+  useLayoutEffect(() => {
+    if (layout.mode !== "floating" || dragging || docking) return;
+    const node = toolbarRootRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const next = clampFloatingPos(layout.x, layout.y, rect.width, rect.height);
+    if (next.x !== layout.x || next.y !== layout.y) {
+      const updated: ToolbarLayout = { mode: "floating", ...next };
+      setLayout(updated);
+      saveToolbarLayout(updated);
+    }
+  }, [layout, dragging, docking]);
+
+  const finishDockAnimation = useCallback(() => {
+    const docked: ToolbarLayout = { mode: "docked" };
+    setLayout(docked);
+    saveToolbarLayout(docked);
+    setDocking(false);
+    setDockNear(false);
+    setDragging(false);
+    dragRef.current = null;
+  }, []);
+
+  const onGripPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    if (docking) return;
+    event.preventDefault();
+    event.stopPropagation();
+    clearDragHold();
+    const fromDocked = layout.mode === "docked";
+    const pointerId = event.pointerId;
+    const clientX = event.clientX;
+    const clientY = event.clientY;
+    const target = event.currentTarget;
+    dragHoldTimerRef.current = window.setTimeout(() => {
+      dragHoldTimerRef.current = null;
+      const node = toolbarRootRef.current;
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const x = fromDocked ? rect.left : floatX;
+      const y = fromDocked ? rect.top : floatY;
+      setLayout({ mode: "floating", x, y });
+      setDragging(true);
+      setDocking(false);
+      setShapeMenuOpen(false);
+      setTextFlyoutOpen(false);
+      setHelpOpen(false);
+      dragRef.current = {
+        pointerId,
+        offsetX: clientX - x,
+        offsetY: clientY - y,
+        width: rect.width,
+        height: rect.height,
+      };
+      try {
+        target.setPointerCapture(pointerId);
+      } catch {
+        /* already captured */
+      }
+    }, LONG_PRESS_MS);
+  };
+
+  const onGripPointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !draggingRef.current) return;
+    const next = clampFloatingPos(
+      event.clientX - drag.offsetX,
+      event.clientY - drag.offsetY,
+      drag.width,
+      drag.height,
+    );
+    setLayout({ mode: "floating", ...next });
+    const anchor = dockAnchorRect(toolbarRootRef.current);
+    if (anchor) {
+      const cx = next.x + drag.width / 2;
+      const cy = next.y + drag.height / 2;
+      const ax = anchor.left + Math.max(anchor.width, 1) / 2;
+      const ay = anchor.top + Math.max(12, anchor.height / 2);
+      setDockNear(Math.hypot(cx - ax, cy - ay) < TOOLBAR_DOCK_SNAP_PX);
+    } else {
+      setDockNear(false);
+    }
+  };
+
+  const onGripPointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
+    clearDragHold();
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    if (!draggingRef.current) {
+      dragRef.current = null;
+      return;
+    }
+
+    const current = layoutRef.current;
+    const curX = current.mode === "floating" ? current.x : floatX;
+    const curY = current.mode === "floating" ? current.y : floatY;
+    const anchor = dockAnchorRect(toolbarRootRef.current);
+    const width = drag.width;
+    const height = drag.height;
+    const cx = curX + width / 2;
+    const cy = curY + height / 2;
+    let shouldDock = false;
+    let dockX = curX;
+    let dockY = curY;
+    if (anchor) {
+      const ax = anchor.left + Math.max(anchor.width, 1) / 2;
+      const ay = anchor.top + Math.max(12, anchor.height / 2);
+      shouldDock = Math.hypot(cx - ax, cy - ay) < TOOLBAR_DOCK_SNAP_PX;
+      dockX = ax - width / 2;
+      dockY = ay - height / 2;
+    }
+
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      /* ignore */
+    }
+
+    if (shouldDock) {
+      setDragging(false);
+      setDocking(true);
+      setDockNear(true);
+      setLayout({ mode: "floating", x: dockX, y: dockY });
+      window.setTimeout(finishDockAnimation, 320);
+      return;
+    }
+
+    const saved: ToolbarLayout = {
+      mode: "floating",
+      ...clampFloatingPos(curX, curY, width, height),
+    };
+    setLayout(saved);
+    saveToolbarLayout(saved);
+    setDragging(false);
+    setDockNear(false);
+    dragRef.current = null;
+  };
 
   const pickShape = (shape: ShapeStamp) => {
     setConfiguring(shape);
@@ -275,13 +495,41 @@ export function BoardToolbar({
       className={[
         "lc-toolbar",
         mobile ? "lc-toolbar-compact" : "",
+        floating ? "lc-toolbar-floating" : "",
+        dragging ? "lc-toolbar-dragging" : "",
+        docking ? "lc-toolbar-docking" : "",
+        dockNear && (dragging || docking) ? "lc-toolbar-dock-near" : "",
       ]
         .filter(Boolean)
         .join(" ")}
+      style={
+        floating || dragging || docking
+          ? {
+              position: "fixed",
+              left: floatX,
+              top: floatY,
+              right: "auto",
+              bottom: "auto",
+              zIndex: 55,
+            }
+          : undefined
+      }
       role="toolbar"
       aria-label="Drawing tools"
     >
       <div className="lc-toolbar-row">
+        <button
+          type="button"
+          className="lc-toolbar-grip"
+          aria-label="Hold and drag to move toolbar"
+          title="Hold and drag to move · drop on the dock to pin"
+          onPointerDown={onGripPointerDown}
+          onPointerMove={onGripPointerMove}
+          onPointerUp={onGripPointerUp}
+          onPointerCancel={onGripPointerUp}
+        >
+          <span className="lc-toolbar-grip-dots" aria-hidden />
+        </button>
         {TOOLS.map(({ tool, label, hint, icon }) =>
           tool === "text" ? (
             <div key="text" className="lc-text-wrap">
