@@ -723,6 +723,11 @@ input[type="checkbox"] {
   opacity: 1;
 }
 
+.lc-number-wheel-item-pad {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .lc-number-wheel-fine .lc-number-wheel-item {
   transition: font-size 140ms ease-out, opacity 140ms ease-out;
 }
@@ -1035,6 +1040,7 @@ input[type="checkbox"] {
 }
 
 /* Flyouts need to escape the scroller, so anchor them to the island instead. */
+.lc-hand-wrap,
 .lc-shapes-wrap,
 .lc-capture-wrap,
 .lc-color-wrap {
@@ -1670,7 +1676,7 @@ input[type="checkbox"] {
  * Always overlays the Excalidraw surface (never in document flow with it). */
 .lc-map-controls {
   position: absolute;
-  z-index: 30;
+  z-index: 50;
   left: 10px;
   right: 10px;
   bottom: 10px;

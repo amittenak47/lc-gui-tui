@@ -40,9 +40,6 @@ import { InkFullnessSlider } from "./InkFullnessSlider";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
 
-/** Hold this long on Text to open Text / Code (click also toggles the menu). */
-const TEXT_HOLD_MS = 240;
-
 function clampFloatingPos(
   x: number,
   y: number,
@@ -71,28 +68,23 @@ function dockAnchorRect(toolbar: HTMLElement | null): DOMRect | null {
   return dock.getBoundingClientRect();
 }
 
-/** The five tools that earn a permanent seat on the bar. */
+/** Permanent seats (Hand + Select share one seat via the Hand flyout). */
 const TOOLS: Array<{ tool: ToolName; label: string; hint: string; icon?: "pen" | "eraser" }> = [
-  { tool: "hand", label: "✋", hint: "Pan — drag to move; scroll wheel zooms" },
-  {
-    tool: "selection",
-    label: "⬚",
-    hint: "Select — resize region boxes (they stay locked in place) or move your work",
-  },
   { tool: "freedraw", label: "Pen", hint: "Pen", icon: "pen" },
   { tool: "eraser", label: "Eraser", hint: "Eraser — only removes ink under the brush", icon: "eraser" },
-  {
-    tool: "text",
-    label: "T",
-    hint: "Text — click to place (Enter finishes, Shift+Enter for a new line)",
-  },
 ];
 
-/** Shapes that used to hold their own seats; now they live behind the flyout. */
+/** Shapes flyout — same menu the ⬡ button opens (includes Text box). */
 const SHAPE_TOOLS: Array<{ tool: ToolName; label: string; glyph: string }> = [
   { tool: "rectangle", label: "Square", glyph: "▭" },
   { tool: "ellipse", label: "Circle", glyph: "◯" },
   { tool: "arrow", label: "Arrow", glyph: "↗" },
+  { tool: "text", label: "Text box", glyph: "T" },
+];
+
+const HAND_TOOLS: Array<{ tool: "hand" | "selection"; label: string; glyph: string; hint: string }> = [
+  { tool: "hand", label: "Hand", glyph: "✋", hint: "Pan the board" },
+  { tool: "selection", label: "Select", glyph: "⬚", hint: "Move or resize work" },
 ];
 
 export interface BoardToolbarProps {
@@ -146,7 +138,7 @@ export function BoardToolbar({
   onPressureSensitive,
   fontSize,
   onFontSize,
-  textMode,
+  textMode: _textMode,
   onTextMode,
   shapesOpen,
   onToggleShapes,
@@ -175,8 +167,7 @@ export function BoardToolbar({
   const [moveAsOne, setMoveAsOne] = useState(true);
   const [shapePhase, setShapePhase] = useState<"list" | "fade" | "mod">("list");
   const [helpOpen, setHelpOpen] = useState(false);
-  const [textFlyoutOpen, setTextFlyoutOpen] = useState(false);
-  const textHoldTimerRef = useRef<number | null>(null);
+  const [handMenuOpen, setHandMenuOpen] = useState(false);
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
 
   const [layout, setLayout] = useState<ToolbarLayout>(() => loadToolbarLayout());
@@ -200,13 +191,6 @@ export function BoardToolbar({
   const draggingRef = useRef(dragging);
   draggingRef.current = dragging;
 
-  const clearTextHold = useCallback(() => {
-    if (textHoldTimerRef.current != null) {
-      window.clearTimeout(textHoldTimerRef.current);
-      textHoldTimerRef.current = null;
-    }
-  }, []);
-
   const clearDragHold = useCallback(() => {
     if (dragHoldTimerRef.current != null) {
       window.clearTimeout(dragHoldTimerRef.current);
@@ -214,21 +198,20 @@ export function BoardToolbar({
     }
   }, []);
 
-  useEffect(() => clearTextHold, [clearTextHold]);
   useEffect(() => clearDragHold, [clearDragHold]);
 
-  // A press anywhere else closes the text / shape flyouts.
+  // A press anywhere else closes the hand / shape flyouts.
   useEffect(() => {
-    if (!textFlyoutOpen && !shapeMenuOpen) return;
+    if (!handMenuOpen && !shapeMenuOpen) return;
     const onDown = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && toolbarRootRef.current?.contains(target)) return;
-      setTextFlyoutOpen(false);
+      setHandMenuOpen(false);
       setShapeMenuOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setTextFlyoutOpen(false);
+        setHandMenuOpen(false);
         setShapeMenuOpen(false);
       }
     };
@@ -238,7 +221,7 @@ export function BoardToolbar({
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [textFlyoutOpen, shapeMenuOpen]);
+  }, [handMenuOpen, shapeMenuOpen]);
 
   // Read through a ref so an inline callback cannot rebuild the observer on
   // every render.
@@ -317,7 +300,7 @@ export function BoardToolbar({
       setDragging(true);
       setDocking(false);
       setShapeMenuOpen(false);
-      setTextFlyoutOpen(false);
+      setHandMenuOpen(false);
       setHelpOpen(false);
       dragRef.current = {
         pointerId,
@@ -442,30 +425,20 @@ export function BoardToolbar({
     if (shapesOpen) onToggleShapes();
     if (captureMenuOpen) onToggleCaptureMenu();
     setShapeMenuOpen(false);
-    setTextFlyoutOpen(false);
+    setHandMenuOpen(false);
+    if (tool === "text") onTextMode("plain");
     onPick(tool);
   };
 
-  const pickTextVariant = (mode: "plain" | "code") => {
-    clearTextHold();
-    setTextFlyoutOpen(false);
-    if (shapesOpen) onToggleShapes();
-    if (captureMenuOpen) onToggleCaptureMenu();
-    setShapeMenuOpen(false);
-    onTextMode(mode);
-  };
+  const shapeToolActive =
+    shapesOpen ||
+    active === "rectangle" ||
+    active === "ellipse" ||
+    active === "arrow" ||
+    active === "text";
 
-  const onTextToolClick = () => {
-    clearTextHold();
-    if (active === "text" && !shapesOpen) {
-      setTextFlyoutOpen((open) => !open);
-      return;
-    }
-    pickTextVariant(textMode);
-    setTextFlyoutOpen(true);
-  };
-
-  const shapeToolActive = SHAPE_TOOLS.some((entry) => entry.tool === active);
+  const handToolActive = active === "hand" || active === "selection";
+  const handGlyph = active === "selection" ? "⬚" : "✋";
 
   const renderToolButton = (
     tool: ToolName,
@@ -535,76 +508,57 @@ export function BoardToolbar({
         >
           <span className="lc-toolbar-grip-dots" aria-hidden />
         </button>
-        {TOOLS.map(({ tool, label, hint, icon }) =>
-          tool === "text" ? (
-            <div key="text" className="lc-text-wrap">
-              <button
-                type="button"
-                className={
-                  active === "text" && !shapesOpen
-                    ? "lc-tool lc-tool-active"
-                    : "lc-tool"
-                }
-                aria-label={
-                  textMode === "code"
-                    ? "Code note — click for Text / Code"
-                    : "Text — click for Text / Code"
-                }
-                title={
-                  textMode === "code"
-                    ? "Code note (monospace on canvas) — click for Text / Code"
-                    : "Text — click for Text / Code"
-                }
-                aria-pressed={active === "text" && !shapesOpen}
-                aria-haspopup="menu"
-                aria-expanded={textFlyoutOpen}
-                onClick={onTextToolClick}
-                onPointerDown={() => {
-                  clearTextHold();
-                  textHoldTimerRef.current = window.setTimeout(() => {
-                    textHoldTimerRef.current = null;
-                    setShapeMenuOpen(false);
-                    setTextFlyoutOpen(true);
-                  }, TEXT_HOLD_MS);
-                }}
-                onPointerUp={clearTextHold}
-                onPointerCancel={clearTextHold}
-              >
-                <span className="lc-tool-emoji" aria-hidden>
-                  {textMode === "code" ? "</>" : "T"}
-                </span>
-              </button>
-              {textFlyoutOpen && (
-                <div className="lc-text-flyout" role="menu" aria-label="Text mode">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={textMode === "plain" ? "is-active" : undefined}
-                    onClick={() => pickTextVariant("plain")}
-                  >
-                    <span className="lc-text-flyout-glyph" aria-hidden>
-                      T
-                    </span>
-                    Text
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={textMode === "code" ? "is-active" : undefined}
-                    onClick={() => pickTextVariant("code")}
-                  >
-                    <span className="lc-text-flyout-glyph" aria-hidden>
-                      {"</>"}
-                    </span>
-                    Code note
-                    <span className="lc-muted lc-text-flyout-sub">Monospace on canvas</span>
-                  </button>
-                </div>
-              )}
+        <div className="lc-hand-wrap">
+          <button
+            type="button"
+            className={
+              handToolActive && !shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"
+            }
+            aria-label={
+              active === "selection"
+                ? "Select — tap for Hand / Select"
+                : "Pan — tap for Hand / Select"
+            }
+            title={
+              active === "selection"
+                ? "Select — tap for Hand / Select"
+                : "Pan — tap for Hand / Select"
+            }
+            aria-pressed={handToolActive && !shapesOpen}
+            aria-haspopup="menu"
+            aria-expanded={handMenuOpen}
+            onClick={() => {
+              setShapeMenuOpen(false);
+              setHandMenuOpen((open) => !open);
+            }}
+          >
+            <span className="lc-tool-emoji" aria-hidden>
+              {handGlyph}
+            </span>
+          </button>
+          {handMenuOpen && (
+            <div className="lc-shape-flyout" role="menu" aria-label="Hand tools">
+              {HAND_TOOLS.map(({ tool, label, glyph, hint }) => (
+                <button
+                  key={tool}
+                  type="button"
+                  role="menuitem"
+                  className={tool === active ? "is-active" : undefined}
+                  onClick={() => pickTool(tool)}
+                >
+                  <span className="lc-shape-flyout-glyph" aria-hidden>
+                    {glyph}
+                  </span>
+                  {label}
+                  <span className="lc-muted lc-text-flyout-sub">{hint}</span>
+                </button>
+              ))}
             </div>
-          ) : (
-            renderToolButton(tool, label, hint, icon)
-          ),
+          )}
+        </div>
+
+        {TOOLS.map(({ tool, label, hint, icon }) =>
+          renderToolButton(tool, label, hint, icon),
         )}
 
         <div className="lc-tool-sep" />
@@ -616,11 +570,12 @@ export function BoardToolbar({
               shapeMenuOpen || shapesOpen || shapeToolActive ? "lc-tool lc-tool-active" : "lc-tool"
             }
             aria-label="Shapes"
-            title="Shapes"
+            title="Shapes — Square, Circle, Arrow, Text box"
             aria-expanded={shapeMenuOpen}
             aria-haspopup="menu"
             onClick={() => {
               if (shapesOpen) onToggleShapes();
+              setHandMenuOpen(false);
               setShapeMenuOpen((open) => !open);
             }}
           >
@@ -632,7 +587,7 @@ export function BoardToolbar({
             <div className="lc-shape-flyout" role="menu" aria-label="Shapes">
               {SHAPE_TOOLS.map(({ tool, label, glyph }) => (
                 <button
-                  key={tool}
+                  key={`${tool}-${label}`}
                   type="button"
                   role="menuitem"
                   className={tool === active ? "is-active" : undefined}

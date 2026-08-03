@@ -3,5 +3,8 @@
   "identifier": "default",
   "description": "Everything the whiteboard window needs. The daemon is reached through this crate's own commands, so no HTTP-scope permission is required.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:path:default"
+  ]
 }

@@ -18,7 +18,10 @@ import {
 } from "../util/inkPressureClip";
 import {
   loadAutoSaveCaptures,
+  loadCaptureDestination,
   saveAutoSaveCaptures,
+  saveCaptureDestination,
+  type CaptureDestination,
 } from "../util/capturePrefs";
 import {
   loadOfflineMergePolicy,
@@ -126,6 +129,7 @@ function emptyConfig(): LcConfig {
 interface DevicePrefs {
   handedness: InkHandedness;
   autoSaveCaptures: boolean;
+  captureDestination: CaptureDestination;
   offlineMerge: OfflineMergePolicy;
   pressureClip: number;
 }
@@ -134,6 +138,7 @@ function loadDevicePrefs(): DevicePrefs {
   return {
     handedness: loadInkHandedness(),
     autoSaveCaptures: loadAutoSaveCaptures(),
+    captureDestination: loadCaptureDestination(),
     offlineMerge: loadOfflineMergePolicy(),
     pressureClip: loadInkPressureClip(),
   };
@@ -143,6 +148,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
   return (
     a.handedness === b.handedness &&
     a.autoSaveCaptures === b.autoSaveCaptures &&
+    a.captureDestination === b.captureDestination &&
     a.offlineMerge === b.offlineMerge &&
     a.pressureClip === b.pressureClip
   );
@@ -178,6 +184,8 @@ export function SettingsModal({
   const [draft, setDraft] = useState<LcConfig>(emptyConfig);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Separate from `busy` so a slow/hung GET /config cannot leave Save stuck disabled. */
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [providerFocus, setProviderFocus] = useState<"local" | "ollama" | "openai">("local");
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
@@ -189,6 +197,9 @@ export function SettingsModal({
   } | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [autoSaveCaptures, setAutoSaveCaptures] = useState(() => loadAutoSaveCaptures());
+  const [captureDestination, setCaptureDestination] = useState<CaptureDestination>(() =>
+    loadCaptureDestination(),
+  );
   const [offlineMerge, setOfflineMerge] = useState<OfflineMergePolicy>(() =>
     loadOfflineMergePolicy(),
   );
@@ -274,6 +285,7 @@ export function SettingsModal({
     const prefs = loadDevicePrefs();
     setHandedness(prefs.handedness);
     setAutoSaveCaptures(prefs.autoSaveCaptures);
+    setCaptureDestination(prefs.captureDestination);
     setOfflineMerge(prefs.offlineMerge);
     setPressureClip(prefs.pressureClip);
     setBaselinePrefs(prefs);
@@ -320,7 +332,13 @@ export function SettingsModal({
 
   if (!open) return null;
 
-  const draftPrefs: DevicePrefs = { handedness, autoSaveCaptures, offlineMerge, pressureClip };
+  const draftPrefs: DevicePrefs = {
+    handedness,
+    autoSaveCaptures,
+    captureDestination,
+    offlineMerge,
+    pressureClip,
+  };
   const dirty =
     !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
 
@@ -338,27 +356,41 @@ export function SettingsModal({
       onClose();
       return;
     }
-    setBusy("saving…");
+    setSaving(true);
     setError(null);
+    const prefsDirty = !prefsEqual(draftPrefs, baselinePrefs);
+    const configDirty = !configEqual(draft, baselineConfig);
     try {
-      const saved = await client.putConfig(draft);
-      setDraft(saved);
-      setBaselineConfig(saved);
-      saveInkHandedness(handedness);
-      saveAutoSaveCaptures(autoSaveCaptures);
-      saveOfflineMergePolicy(offlineMerge);
-      saveInkPressureClip(pressureClip);
-      setBaselinePrefs({ handedness, autoSaveCaptures, offlineMerge, pressureClip });
-      window.dispatchEvent(
-        new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
-      );
-      window.dispatchEvent(new CustomEvent("lc-ink-pressure-clip"));
+      // Device prefs never need the daemon — persist them even if PUT /config fails.
+      if (prefsDirty) {
+        saveInkHandedness(handedness);
+        saveAutoSaveCaptures(autoSaveCaptures);
+        saveCaptureDestination(captureDestination);
+        saveOfflineMergePolicy(offlineMerge);
+        saveInkPressureClip(pressureClip);
+        setBaselinePrefs({
+          handedness,
+          autoSaveCaptures,
+          captureDestination,
+          offlineMerge,
+          pressureClip,
+        });
+        window.dispatchEvent(
+          new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
+        );
+        window.dispatchEvent(new CustomEvent("lc-ink-pressure-clip"));
+      }
+      if (configDirty) {
+        const saved = await client.putConfig(draft);
+        setDraft(saved);
+        setBaselineConfig(saved);
+      }
       onSaved?.();
-      setBusy(null);
+      setSaving(false);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setBusy(null);
+      setSaving(false);
     }
   };
 
@@ -541,9 +573,8 @@ export function SettingsModal({
 
               <div className="lc-settings-subhead">Screen captures</div>
               <p className="lc-settings-hint">
-                When you capture the board (entire or a region), also save a PNG to this device.
-                Uses the share sheet on phones, or a download on desktop. Saved on this device
-                only.
+                When you capture the board (entire or a region), also save a PNG on this device.
+                Default destination is Photos. Saved on this device only.
               </p>
               <div
                 className="lc-settings-choice"
@@ -581,6 +612,64 @@ export function SettingsModal({
                   <span className="lc-muted">Place the capture on the board; do not save a file.</span>
                 </button>
               </div>
+
+              {autoSaveCaptures && (
+                <>
+                  <div className="lc-settings-subhead">Capture save location</div>
+                  <div
+                    className="lc-settings-choice"
+                    role="radiogroup"
+                    aria-label="Capture save location"
+                  >
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={captureDestination === "photos"}
+                      className={
+                        captureDestination === "photos"
+                          ? "lc-settings-choice-option is-active"
+                          : "lc-settings-choice-option"
+                      }
+                      onClick={() => setCaptureDestination("photos")}
+                    >
+                      <strong>Device photos</strong>
+                      <span className="lc-muted">
+                        Pictures library / Photos app (Pictures/lc). Default.
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={captureDestination === "downloads"}
+                      className={
+                        captureDestination === "downloads"
+                          ? "lc-settings-choice-option is-active"
+                          : "lc-settings-choice-option"
+                      }
+                      onClick={() => setCaptureDestination("downloads")}
+                    >
+                      <strong>Downloads</strong>
+                      <span className="lc-muted">Write a PNG into the Downloads folder.</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={captureDestination === "share"}
+                      className={
+                        captureDestination === "share"
+                          ? "lc-settings-choice-option is-active"
+                          : "lc-settings-choice-option"
+                      }
+                      onClick={() => setCaptureDestination("share")}
+                    >
+                      <strong>Share sheet</strong>
+                      <span className="lc-muted">
+                        Ask each time (share on phone, download link on desktop).
+                      </span>
+                    </button>
+                  </div>
+                </>
+              )}
 
               <div className="lc-settings-subhead">Pressure clip</div>
               <p className="lc-settings-hint">
@@ -965,10 +1054,10 @@ export function SettingsModal({
           <button
             type="button"
             className="lc-primary"
-            disabled={!dirty || !!busy}
+            disabled={!dirty || saving}
             onClick={() => void save()}
           >
-            Save
+            {saving ? "Saving…" : "Save"}
           </button>
         </div>
       </div>
