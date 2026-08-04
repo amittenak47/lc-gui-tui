@@ -3359,6 +3359,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         originalText?: string;
         autoResize?: boolean;
         isDeleted?: boolean;
+        fontFamily?: number;
+        lineHeight?: number;
+        version?: number;
+        versionNonce?: number;
         customData?: { lcRegion?: string; lcVizId?: string; lcRegionFrame?: boolean } | null;
         [key: string]: unknown;
       }>;

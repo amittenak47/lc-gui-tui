@@ -15,6 +15,9 @@ node_modules/
 *.tsbuildinfo
 vite.config.ts.timestamp-*
 
+# --- Local problem corpora (downloaded JSON/JSONL; not versioned) ---
+/data/
+
 # --- Generated practice workspaces ---
 # Default workspace is ~/lc-workspace; on Windows a mistaken path can create this folder:
 $HOME/

@@ -12,11 +12,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
-    "android:init": "tauri android init && node scripts/android-overlay.mjs",
+    "android:init": "tauri android init && node scripts/android-overlay.mjs && npm run icons:sync",
     "android:overlay": "node scripts/android-overlay.mjs",
-    "android:dev": "node scripts/android-overlay.mjs && tauri android dev",
-    "android:apk": "node scripts/android-overlay.mjs && tauri android build --apk --debug",
-    "android:apk:release": "node scripts/android-overlay.mjs && tauri android build --apk",
+    "android:dev": "node scripts/android-overlay.mjs && npm run icons:sync && tauri android dev",
+    "android:apk": "node scripts/android-overlay.mjs && npm run icons:sync && tauri android build --apk --debug",
+    "android:apk:release": "node scripts/android-overlay.mjs && npm run icons:sync && tauri android build --apk",
     "icons:sync": "tauri icon ../docs/icons/tauri.manifest.json"
   },
   "dependencies": {
