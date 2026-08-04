@@ -79,6 +79,7 @@ import {
 } from "./pageView";
 import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
+import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
@@ -755,6 +756,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   mobileRef.current = mobile;
   const [activeTool, setActiveTool] = useState<ToolName>("hand");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
   /** Plain prose vs monospace “code note” for the Text tool. */
   const [textMode, setTextMode] = useState<"plain" | "code">("plain");
   const textModeRef = useRef(textMode);
@@ -763,6 +766,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkColor, setInkColor] = useState(() =>
     resolveInkColor(themeId, inkPrefsRef.current.inkColor),
   );
+  const inkColorRef = useRef(inkColor);
+  inkColorRef.current = inkColor;
   const [penStrokeWidth, setPenStrokeWidth] = useState(() => inkPrefsRef.current.penWidth);
   const [eraserStrokeWidth, setEraserStrokeWidth] = useState(() => inkPrefsRef.current.eraserWidth);
   const [inkFullness, setInkFullnessState] = useState(() => inkPrefsRef.current.inkFullness);
@@ -806,6 +811,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     () => inkPrefsRef.current.pressureSensitive,
   );
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
+  const textPlaceGhostRef = useRef<TextPlaceGhostHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [captureMenuOpen, setCaptureMenuOpen] = useState(false);
@@ -891,14 +897,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** Read by the pointer listeners, which must not re-bind on every tool change. */
   const activeToolRef = useRef<ToolName>(activeTool);
   activeToolRef.current = activeTool;
-  /** True while a text tap is being replayed, so it isn't intercepted again. */
-  const replayingTextTapRef = useRef(false);
-  /** Where a press landed while an empty text box was open, pending its replay. */
-  const pendingTextTapRef = useRef<{
-    clientX: number;
-    clientY: number;
-    pointerType: string;
-  } | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -958,95 +956,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.removeEventListener("keydown", guard, true);
       window.removeEventListener("keypress", guard, true);
       window.removeEventListener("keyup", guard, true);
-    };
-  }, [interactive]);
-
-  /**
-   * Placing the next text box in one tap.
-   *
-   * Excalidraw refuses to create a text element while another is being edited —
-   * `handleTextOnPointerDown` returns early with "clicking outside should only
-   * finalize it, not create another". With a locked text tool that costs two
-   * taps for every box after the first: one to throw the empty box away, one to
-   * place the new one. On a tablet that reads as the tool not working.
-   *
-   * So the press is intercepted while an *empty* box is open: commit it, then
-   * replay the same press at the same point once Excalidraw has cleared its
-   * editing state. A box with text in it is left alone — that gesture already
-   * commits and hands back to the hand tool, which is what it should do.
-   */
-  useEffect(() => {
-    if (!interactive) return;
-    const root = boardRef.current;
-    if (!root) return;
-
-    const onPointerDown = (event: PointerEvent) => {
-      pendingTextTapRef.current = null;
-      if (replayingTextTapRef.current) return;
-      if (activeToolRef.current !== "text") return;
-      const editable = document.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
-      if (!editable || event.target === editable) return;
-      if (editable.value.trim().length > 0) return;
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (!target.closest(".excalidraw")) return;
-      if (
-        target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager",
-        )
-      ) {
-        return;
-      }
-
-      // The press itself is left alone — it is what commits (and, being empty,
-      // deletes) the open box. Only the placement Excalidraw refuses to do is
-      // added, once its own gesture has finished.
-      pendingTextTapRef.current = {
-        clientX: event.clientX,
-        clientY: event.clientY,
-        pointerType: event.pointerType || "mouse",
-      };
-    };
-
-    const onPointerUp = () => {
-      const tap = pendingTextTapRef.current;
-      pendingTextTapRef.current = null;
-      if (!tap || activeToolRef.current !== "text") return;
-
-      const replay = () => {
-        replayingTextTapRef.current = false;
-        // Excalidraw commits the empty box on this pointerup; if something kept
-        // it open, replaying would only be refused again.
-        if (document.querySelector("textarea.excalidraw-wysiwyg")) return;
-        const canvas =
-          root.querySelector("canvas.excalidraw__canvas.interactive") ??
-          root.querySelector("canvas.excalidraw__canvas");
-        if (!(canvas instanceof Element)) return;
-        const init: PointerEventInit = {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          clientX: tap.clientX,
-          clientY: tap.clientY,
-          pointerId: 1,
-          pointerType: tap.pointerType,
-          isPrimary: true,
-          button: 0,
-        };
-        canvas.dispatchEvent(new PointerEvent("pointerdown", { ...init, buttons: 1 }));
-        canvas.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
-      };
-
-      replayingTextTapRef.current = true;
-      // Two frames: Excalidraw's submit runs through React state first.
-      window.requestAnimationFrame(() => window.requestAnimationFrame(replay));
-    };
-
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("pointerup", onPointerUp, true);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("pointerup", onPointerUp, true);
     };
   }, [interactive]);
 
@@ -1519,6 +1428,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // The brush node unmounts with the tool; hiding it here keeps a stale ring
     // off the canvas for the frame between the click and the unmount.
     if (tool !== "eraser") eraserBrushRef.current?.setVisible(false);
+    if (tool !== "text") textPlaceGhostRef.current?.setVisible(false);
 
     // Leaving the text tool: drop empty placeholders left from click-around.
     if (tool !== "text" && activeTool === "text") {
@@ -1892,6 +1802,329 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     },
     [],
   );
+
+  /**
+   * Paint-like text placement — we own the gesture.
+   *
+   * Excalidraw refuses to create text while another box is being edited, so a
+   * locked text tool costs two taps after the first. Instead: capture pointer,
+   * show a selection-style rubber-band, insert a text element, then open the
+   * wysiwyg with a double-click at its centre.
+   */
+  useEffect(() => {
+    if (!interactive) return;
+    const root = boardRef.current;
+    if (!root) return;
+
+    type Drag = {
+      originClientX: number;
+      originClientY: number;
+      currentClientX: number;
+      currentClientY: number;
+      pointerId: number;
+    };
+    let drag: Drag | null = null;
+    let frame = 0;
+
+    const sceneFromClient = (clientX: number, clientY: number) => {
+      const state = apiRef.current?.getAppState() as
+        | {
+            zoom?: { value?: number };
+            scrollX?: number;
+            scrollY?: number;
+            offsetLeft?: number;
+            offsetTop?: number;
+          }
+        | undefined;
+      const zoom = state?.zoom?.value ?? 1;
+      return {
+        x: (clientX - (state?.offsetLeft ?? 0)) / zoom - (state?.scrollX ?? 0),
+        y: (clientY - (state?.offsetTop ?? 0)) / zoom - (state?.scrollY ?? 0),
+        zoom,
+      };
+    };
+
+    const boardPoint = (clientX: number, clientY: number) => {
+      const boardRect = root.getBoundingClientRect();
+      return { x: clientX - boardRect.left, y: clientY - boardRect.top };
+    };
+
+    const paintGhost = (d: Drag) => {
+      const ghost = textPlaceGhostRef.current;
+      if (!ghost) return;
+      const a = boardPoint(d.originClientX, d.originClientY);
+      const b = boardPoint(d.currentClientX, d.currentClientY);
+      ghost.setSize(Math.max(Math.abs(b.x - a.x), 8), Math.max(Math.abs(b.y - a.y), 8));
+      ghost.move(Math.min(a.x, b.x), Math.min(a.y, b.y));
+      ghost.setVisible(true);
+    };
+
+    const hideGhost = () => {
+      textPlaceGhostRef.current?.setVisible(false);
+    };
+
+    const cullEmptyStudentText = () => {
+      const api = apiRef.current;
+      if (!api) return;
+      const current = api.getSceneElements() as Array<{
+        id: string;
+        type: string;
+        text?: string;
+        originalText?: string;
+        isDeleted?: boolean;
+        customData?: { lcRegion?: string; lcVizId?: string } | null;
+        [key: string]: unknown;
+      }>;
+      let changed = false;
+      const next = current.map((el) => {
+        if (el.isDeleted || el.type !== "text") return el;
+        if (el.customData?.lcRegion || el.customData?.lcVizId) return el;
+        if ((el.originalText ?? el.text ?? "").trim().length > 0) return el;
+        changed = true;
+        return { ...el, isDeleted: true };
+      });
+      if (!changed) return;
+      api.updateScene({
+        elements: next,
+        appState: { editingTextElement: null, selectedElementIds: {} },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    };
+
+    const openEditorAt = (clientX: number, clientY: number) => {
+      const canvas =
+        root.querySelector("canvas.excalidraw__canvas.interactive") ??
+        root.querySelector("canvas.excalidraw__canvas");
+      if (!(canvas instanceof Element)) return;
+      canvas.dispatchEvent(
+        new MouseEvent("dblclick", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX,
+          clientY,
+          button: 0,
+          detail: 2,
+        }),
+      );
+    };
+
+    const placeText = (d: Drag) => {
+      const api = apiRef.current;
+      if (!api) return;
+      cullEmptyStudentText();
+
+      const a = sceneFromClient(d.originClientX, d.originClientY);
+      const b = sceneFromClient(d.currentClientX, d.currentClientY);
+      const zoom = a.zoom || 1;
+      const screenFont = Math.max(12, fontSizeRef.current * zoom);
+      const minW = Math.max(screenFont * 8, 96) / zoom;
+      const minH = Math.max(screenFont * 1.35, 28) / zoom;
+
+      const sceneLeft = Math.min(a.x, b.x);
+      const sceneTop = Math.min(a.y, b.y);
+      let sceneW = Math.abs(b.x - a.x);
+      let sceneH = Math.abs(b.y - a.y);
+      const tapped = sceneW < 12 / zoom && sceneH < 12 / zoom;
+      if (tapped) {
+        sceneW = minW;
+        sceneH = minH;
+      } else {
+        sceneW = Math.max(sceneW, minW * 0.35);
+        sceneH = Math.max(sceneH, minH);
+      }
+
+      const fontFamily = textModeRef.current === "code" ? FONT_CODE : FONT_UI;
+      const id = `lc-note-${Date.now().toString(36)}`;
+      const skeletons: Skeleton[] = [
+        {
+          id,
+          type: "text",
+          x: sceneLeft,
+          y: sceneTop,
+          width: sceneW,
+          height: sceneH,
+          text: "\u00a0",
+          fontSize: fontSizeRef.current,
+          fontFamily,
+          lineHeight: defaultLineHeight(fontFamily),
+          strokeColor: inkColorRef.current,
+          textAlign: "left",
+          verticalAlign: "top",
+          autoResize: tapped,
+          roughness: 0,
+        },
+      ];
+      const created = convert(skeletons, { regenerateIds: false }) as Array<{
+        id: string;
+        type?: string;
+        [key: string]: unknown;
+      }>;
+      if (created.length === 0) return;
+      const textEl = created[0];
+
+      const live = api.getSceneElements() as Array<{
+        id: string;
+        isDeleted?: boolean;
+        [key: string]: unknown;
+      }>;
+      api.updateScene({
+        elements: [...live.filter((el) => !el.isDeleted), ...created],
+        appState: {
+          selectedElementIds: { [textEl.id]: true },
+          editingTextElement: textEl,
+        },
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+
+      const editX = tapped ? d.originClientX + (minW * zoom) / 4 : (d.originClientX + d.currentClientX) / 2;
+      const editY = tapped ? d.originClientY + (minH * zoom) / 4 : (d.originClientY + d.currentClientY) / 2;
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          if (!document.querySelector("textarea.excalidraw-wysiwyg")) {
+            openEditorAt(editX, editY);
+          }
+          // If Excalidraw still didn't open an editor, leave the box selected.
+        });
+      });
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (activeToolRef.current !== "text") return;
+      if (event.button !== 0 && event.pointerType === "mouse") return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash")) {
+        return;
+      }
+      if (target instanceof HTMLTextAreaElement && target.classList.contains("excalidraw-wysiwyg")) {
+        return;
+      }
+      if (!target.closest(".excalidraw, .lc-board")) return;
+
+      const editable = document.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
+      if (editable && editable.value.trim().length > 0) {
+        editable.blur();
+        hideGhost();
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+
+      if (editable) editable.blur();
+      cullEmptyStudentText();
+
+      drag = {
+        originClientX: event.clientX,
+        originClientY: event.clientY,
+        currentClientX: event.clientX,
+        currentClientY: event.clientY,
+        pointerId: event.pointerId,
+      };
+      paintGhost(drag);
+      try {
+        root.setPointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (activeToolRef.current !== "text") return;
+
+      if (!drag) {
+        if (document.querySelector("textarea.excalidraw-wysiwyg")) {
+          hideGhost();
+          return;
+        }
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager")
+        ) {
+          hideGhost();
+          return;
+        }
+        const hitCanvas =
+          root.querySelector("canvas.excalidraw__canvas.interactive") ??
+          root.querySelector("canvas.excalidraw__canvas");
+        if (!(hitCanvas instanceof HTMLCanvasElement)) return;
+        const rect = hitCanvas.getBoundingClientRect();
+        const inside =
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom;
+        if (!inside) {
+          hideGhost();
+          return;
+        }
+        const { zoom } = sceneFromClient(event.clientX, event.clientY);
+        brushZoomRef.current = zoom;
+        const screenFont = Math.max(12, fontSizeRef.current * zoom);
+        const ghost = textPlaceGhostRef.current;
+        if (!ghost) return;
+        const p = boardPoint(event.clientX, event.clientY);
+        ghost.setSize(Math.max(screenFont * 8, 96), Math.max(screenFont * 1.35, 28));
+        ghost.move(p.x, p.y);
+        ghost.setVisible(true);
+        return;
+      }
+
+      if (event.pointerId !== drag.pointerId) return;
+      drag = {
+        ...drag,
+        currentClientX: event.clientX,
+        currentClientY: event.clientY,
+      };
+      if (!frame) {
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (drag) paintGhost(drag);
+        });
+      }
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      const finished = {
+        ...drag,
+        currentClientX: event.clientX,
+        currentClientY: event.clientY,
+      };
+      drag = null;
+      try {
+        root.releasePointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      hideGhost();
+      placeText(finished);
+    };
+
+    const onPointerCancel = (event: PointerEvent) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      drag = null;
+      hideGhost();
+    };
+
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointermove", onPointerMove, true);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerCancel, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointermove", onPointerMove, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerCancel, true);
+      if (frame) cancelAnimationFrame(frame);
+      hideGhost();
+    };
+  }, [convert, interactive]);
 
   const setFontSize = useCallback((size: number) => {
     const clamped = Math.min(TEXT_FONT_MAX, Math.max(TEXT_FONT_MIN, Math.round(size)));
@@ -3755,6 +3988,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         initialData={initialData}
         UIOptions={UI_OPTIONS}
       />
+      {interactive && activeTool === "text" && <TextPlaceGhost ref={textPlaceGhostRef} />}
       {interactive && stampTrash && (
         <button
           type="button"
