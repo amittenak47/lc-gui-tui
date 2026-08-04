@@ -46,6 +46,8 @@ interface Totals {
   latencyCount: number;
   maxLatencyMs: number;
   last: InkStrokeMetrics | null;
+  /** Pointer-path decisions that produced no stroke, counted by reason. */
+  notes: Map<string, number>;
 }
 
 function readEnabled(): boolean {
@@ -67,6 +69,7 @@ const totals: Totals = {
   latencyCount: 0,
   maxLatencyMs: 0,
   last: null,
+  notes: new Map<string, number>(),
 };
 
 let startedAt = 0;
@@ -87,6 +90,25 @@ export const inkMetrics = {
     latencySum = 0;
     latencyCount = 0;
     maxLatency = 0;
+  },
+
+  /**
+   * A `pointerdown` that produced no stroke, or a stroke that had to take a
+   * degraded path — recorded by reason.
+   *
+   * Every one of these was a silent `return` before, which is exactly the shape
+   * of "I wrote a letter and nothing happened": there was no way, from outside,
+   * to tell a dropped press from one that drew nothing visible. Now the reason
+   * lands in the console and on `__lcInkMetrics.summary().notes`, so the two
+   * cases can be told apart. `second-pointer` is a resting hand being kept out
+   * of an open stroke and is expected while writing; `no-viewport`,
+   * `off-canvas`, `no-capture` and `orphan-commit` are not.
+   */
+  note(reason: string): void {
+    if (!enabled) return;
+    totals.notes.set(reason, (totals.notes.get(reason) ?? 0) + 1);
+    // eslint-disable-next-line no-console
+    console.info(`[ink] ${reason}`);
   },
 
   /** One `pointermove` carrying `sampleCount` pointer samples. */
@@ -159,6 +181,7 @@ export const inkMetrics = {
           : 0,
       maxLatencyMs: Math.round(totals.maxLatencyMs * 100) / 100,
       last: totals.last,
+      notes: Object.fromEntries(totals.notes),
     };
   },
 };

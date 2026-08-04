@@ -100,6 +100,21 @@ function cloneOps(ops: readonly InkOp[]): InkOp[] {
   return ops.map((op) => ({ ...op, points: [...op.points] }));
 }
 
+/**
+ * Remember *which* ops were on the page, not a copy of every point on it.
+ *
+ * A committed op is never written to again — only `liveRef` is pushed to, and
+ * the lift hands its array straight over — so an undo step only has to hold the
+ * list. Deep-cloning it meant every pen lift copied every stamp on the board,
+ * which is a cost that grows with the page: the fortieth letter cloned
+ * thirty-nine strokes' worth of points, and up to forty of those snapshots were
+ * kept alive at once. That is the pause after the pen comes up, and the reason
+ * it got worse the longer you wrote.
+ */
+function snapshotOps(ops: readonly InkOp[]): InkOp[] {
+  return [...ops];
+}
+
 export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
   function RasterInkLayer(
     {
@@ -128,6 +143,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     /** Next fromIndex for {@link applyInkOpFrom} — advances as live ink is painted. */
     const liveDrawnIndexRef = useRef(0);
     const drawingRef = useRef(false);
+    /**
+     * The one pointer the open stroke belongs to.
+     *
+     * Everything on the layer used to answer to any pointer id at all, which is
+     * what a resting palm or a second finger turns into with palm reject off: a
+     * `pointerdown` that ended the letter under the pen, `pointermove`s that
+     * dragged the live stroke off to wherever the hand was, and a `pointerup`
+     * that committed the whole mess. One writer at a time — a stroke is owned by
+     * the pointer that started it until that pointer lifts.
+     */
+    const activePointerRef = useRef<number | null>(null);
     const lastPointRef = useRef<ScenePoint | null>(null);
     /**
      * Where the pen actually was, before live smoothing pulled the nib off it.
@@ -424,7 +450,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const commitLive = useCallback(() => {
       const live = liveRef.current;
       if (!live) return;
-      undoRef.current.push(cloneOps(opsRef.current));
+      undoRef.current.push(snapshotOps(opsRef.current));
       // Cap undo depth — each snapshot clones every point, and erase stamps are dense.
       if (undoRef.current.length > 40) {
         undoRef.current.splice(0, undoRef.current.length - 40);
@@ -479,7 +505,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       () => ({
         clear() {
           if (opsRef.current.length === 0) return;
-          undoRef.current.push(cloneOps(opsRef.current));
+          undoRef.current.push(snapshotOps(opsRef.current));
           redoRef.current = [];
           opsRef.current = [];
           liveRef.current = null;
@@ -490,7 +516,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         },
         undo() {
           if (undoRef.current.length === 0) return false;
-          redoRef.current.push(cloneOps(opsRef.current));
+          redoRef.current.push(snapshotOps(opsRef.current));
           opsRef.current = undoRef.current.pop() ?? [];
           liveRef.current = null;
           liveDrawnIndexRef.current = 0;
@@ -501,7 +527,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         },
         redo() {
           if (redoRef.current.length === 0) return false;
-          undoRef.current.push(cloneOps(opsRef.current));
+          undoRef.current.push(snapshotOps(opsRef.current));
           opsRef.current = redoRef.current.pop() ?? [];
           liveRef.current = null;
           liveDrawnIndexRef.current = 0;
@@ -566,6 +592,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const canvas = canvasRef.current;
       if (!canvas) return;
 
+      /** Window listeners are up because `setPointerCapture` was refused. */
+      let windowFallback = false;
+      /** Last move consumed, so the fallback and the canvas cannot double-stamp. */
+      let lastHandledMove: PointerEvent | null = null;
+
       /**
        * Land the nib where the pen actually lifted.
        *
@@ -596,41 +627,84 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       };
 
       const begin = (event: PointerEvent) => {
-        if (!toolRef.current) return;
+        if (!toolRef.current) {
+          inkMetrics.note("no-tool");
+          return;
+        }
         if (onStylusAccessoryRef.current?.(event)) {
+          inkMetrics.note("accessory");
           event.preventDefault();
           event.stopPropagation();
           return;
         }
         // Primary tip only for drawing. Barrel / eraser tip are accessory.
-        if (event.button !== 0) return;
+        if (event.button !== 0) {
+          inkMetrics.note("not-primary");
+          return;
+        }
         const viewport = getViewportRef.current();
-        if (!viewport || !isCanvasTarget(event.target, canvas)) return;
+        if (!viewport) {
+          inkMetrics.note("no-viewport");
+          return;
+        }
+        if (!isCanvasTarget(event.target, canvas)) {
+          inkMetrics.note("off-canvas");
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
 
-        /*
-         * A stroke that never got its pointerup.
-         *
-         * It happens: a stylus that leaves proximity mid-flick, a capture the
-         * compositor takes away, an app switch. The old code walked straight
-         * past it and overwrote `liveRef`, which threw the stroke away —
-         * painted on the overlay, in no op, gone at the next repaint. That is
-         * the letter that "randomly" fails to appear. Close it out first; a
-         * stroke the writer finished belongs on the page either way.
-         */
         if (drawingRef.current) {
+          /*
+           * A second pointer while the pen is still down.
+           *
+           * With palm reject off this is a resting hand, not a new stroke. The
+           * pointer that owns the stroke is the one holding capture, so ask:
+           * if it still has it, the nib is still on the paper and this touch
+           * has no business ending the letter under it.
+           */
+          const active = activePointerRef.current;
+          if (
+            active !== null &&
+            active !== event.pointerId &&
+            canvas.hasPointerCapture(active)
+          ) {
+            inkMetrics.note("second-pointer");
+            return;
+          }
+          /*
+           * A stroke that never got its pointerup.
+           *
+           * It happens: a stylus that leaves proximity mid-flick, a capture the
+           * compositor takes away, an app switch. The old code walked straight
+           * past it and overwrote `liveRef`, which threw the stroke away —
+           * painted on the overlay, in no op, gone at the next repaint. That is
+           * the letter that "randomly" fails to appear. Close it out first; a
+           * stroke the writer finished belongs on the page either way.
+           */
+          inkMetrics.note("orphan-commit");
           drawingRef.current = false;
+          activePointerRef.current = null;
           settleLiveTip();
           strokeViewRef.current = null;
           strokeBoxRef.current = null;
           strokeRectRef.current = null;
+          detachWindowFallback();
           commitLiveRef.current();
         }
         try {
           canvas.setPointerCapture(event.pointerId);
+          detachWindowFallback();
         } catch {
-          /* ignore */
+          /*
+           * Capture refused. Without it the moves stop arriving the moment the
+           * nib crosses the edge of the overlay, and the stroke strands
+           * half-drawn — the swallowed failure was invisible from the outside.
+           * Follow the pointer on the window for the length of this stroke
+           * instead of quietly writing off everything past the edge.
+           */
+          inkMetrics.note("no-capture");
+          attachWindowFallback();
         }
         // Freeze camera + CSS box for the whole stroke before the first paint.
         // Align once here — never again on move (DOM writes mid-glyph hitch).
@@ -713,10 +787,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           painted.height === cssH;
         if (!reusable) repaintRef.current();
         drawingRef.current = true;
+        activePointerRef.current = event.pointerId;
       };
 
       const move = (event: PointerEvent) => {
         if (!drawingRef.current) return;
+        // A palm dragging across the layer is not this stroke.
+        if (event.pointerId !== activePointerRef.current) return;
+        // With the window fallback up, a move over the overlay reaches both
+        // listeners; the first one to see it owns it.
+        if (event === lastHandledMove) return;
+        lastHandledMove = event;
         const strokeView = strokeViewRef.current;
         const rect = strokeRectRef.current;
         if (!strokeView || !rect) return;
@@ -840,11 +921,15 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
       const end = (event: PointerEvent) => {
         if (!drawingRef.current) return;
+        // A palm lifting off is not the pen lifting off.
+        if (event.pointerId !== activePointerRef.current) return;
         drawingRef.current = false;
+        activePointerRef.current = null;
         settleLiveTip();
         strokeViewRef.current = null;
         strokeBoxRef.current = null;
         strokeRectRef.current = null;
+        detachWindowFallback();
         try {
           canvas.releasePointerCapture(event.pointerId);
         } catch {
@@ -853,6 +938,29 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         commitLiveRef.current();
         inkMetrics.end();
       };
+
+      /*
+       * Stand-in for pointer capture when the platform would not give it.
+       *
+       * Only up while a stroke is open, and gated on the owning pointer id like
+       * everything else, so it cannot pick up a stray gesture elsewhere on the
+       * page.
+       */
+      function attachWindowFallback(): void {
+        if (windowFallback) return;
+        windowFallback = true;
+        window.addEventListener("pointermove", move, true);
+        window.addEventListener("pointerup", end, true);
+        window.addEventListener("pointercancel", end, true);
+      }
+
+      function detachWindowFallback(): void {
+        if (!windowFallback) return;
+        windowFallback = false;
+        window.removeEventListener("pointermove", move, true);
+        window.removeEventListener("pointerup", end, true);
+        window.removeEventListener("pointercancel", end, true);
+      }
 
       canvas.addEventListener("pointerdown", begin, true);
       canvas.addEventListener("pointermove", move, true);
@@ -869,6 +977,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         canvas.removeEventListener("pointerup", end, true);
         canvas.removeEventListener("pointercancel", end, true);
         canvas.removeEventListener("lostpointercapture", end, true);
+        detachWindowFallback();
       };
       // Tool is read via toolRef — never rebind listeners when pen↔eraser flips.
       // Paint callbacks stay on refs so a Board re-render never drops capture.
