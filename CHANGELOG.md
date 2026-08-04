@@ -6,6 +6,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — one hand on the page at a time
+
+- **A resting hand no longer wrecks the letter under the pen.** The ink layer
+  answered to any pointer at all, and with palm reject off a tablet reports the
+  heel of your hand as one. So a palm landing mid-word ended the stroke the nib
+  was still writing and committed it where it stood; the palm's moves then
+  dragged the live stroke off across the page; and the palm lifting committed
+  that. One touch could produce all three symptoms at once — a letter that
+  stops short, one that has a stray line through it, and one that never seems
+  to register. A stroke now belongs to the pointer that started it until that
+  pointer lifts, and everything else is ignored while it is down. The
+  stranded-stroke recovery still runs — it just asks first whether the pen is
+  genuinely gone (has it lost capture?) rather than assuming the second touch
+  means it is.
+- **The pause after every pen lift, and why it grew.** Committing a stroke took
+  an undo snapshot, and the snapshot deep-copied every point of every op on the
+  page. A stroke is stamped several times per line width, so a page of writing
+  is tens of thousands of points, and all of them were copied on every single
+  lift — the fortieth letter copying thirty-nine strokes' worth, with up to
+  forty such copies kept alive at once. Nothing ever writes to a committed
+  stroke, so the snapshot only ever had to remember *which* ops were on the
+  page. It now does, and the lift costs the same on a full page as on an empty
+  one.
+- **`setPointerCapture` failing is no longer silent.** It was caught and
+  discarded, which meant the layer carried on as though it had capture: the
+  moment the nib crossed the edge of the overlay the moves stopped arriving and
+  the rest of the stroke was written to nothing. If capture is refused the
+  pointer is now followed on the window for the length of that stroke instead.
+- **A smoothed stroke keeps the pace it was written at.** The corner cutter
+  built its new points from position and pressure only, so every interior point
+  of a speed-ink stroke lost its slowness on the lift and fell back to a neutral
+  pace. The stroke was laid down with its swells and starves and then flattened
+  to an even line the instant the pen came up — the letter changing shape under
+  your hand. Pace now rides through the filter the way pressure does.
+- **Erasing no longer forces a layout per pointer sample.** The brush ring
+  hit-tested the pointer against the canvas box on every event — two
+  `getBoundingClientRect()` calls, flushing style and layout for the whole
+  board, ahead of the animation frame that was supposed to be batching the
+  work. This is the same fault the pen's move handler had; the ring now does
+  its reading once a frame, inside the frame.
+- **A press that draws nothing says why.** Six early returns in the pointer path
+  each ended a `pointerdown` silently, so a letter that failed to appear looked
+  identical to one that was never pressed. With `lc.ink.metrics` on, each one
+  now logs its reason and counts on `__lcInkMetrics.summary().notes`.
+
 ### Fixed — writing that stays as fast as it started
 
 - **The pen stops getting slower the more you write.** This was the "smooth for
