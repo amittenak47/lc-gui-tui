@@ -1,0 +1,516 @@
+/**
+ * Map-style tile cache for the raster ink layer.
+ *
+ * The layer used to keep one viewport-sized "bake" of every committed op. That
+ * bake was keyed on zoom and canvas size but not on scroll, so panning slid it
+ * under a CSS translate and the board went blank wherever the translate exposed
+ * ground the bake never covered — then the whole scene replayed in one blocking
+ * go when you let go. Zooming was worse: zoom is in the key, so every frame of
+ * a pinch or a smooth zoom replayed every stroke on the page before it could
+ * paint.
+ *
+ * Tiles fix both. Ink is rasterised into fixed squares of scene space, cached
+ * per zoom level, and the visible ones are blitted every frame. Panning reuses
+ * tiles it has and rasterises only the newly exposed ones; zooming blits the
+ * tiles it already has, scaled, and sharpens them in the background. Nothing
+ * ever replays the whole page to put one frame on screen.
+ *
+ * Rasterising is budgeted per frame and continues across frames, so a board
+ * with a lot of writing on it degrades into "sharpens a moment later" rather
+ * than "stops responding".
+ */
+
+import {
+  applyInkOp,
+  inkLineWidth,
+  setInkSceneTransform,
+  type InkOp,
+  type SceneBounds,
+  type ViewportTransform,
+} from "./rasterInk";
+
+/** Tile edge in device pixels. */
+export const TILE_PX = 384;
+
+/**
+ * Zoom levels tiles are rasterised at, as steps of the exponent of two.
+ *
+ * Half-steps mean the worst-case resample between a tile and the screen is
+ * √2 — visible as a touch of softness mid-gesture, gone as soon as the
+ * background pass catches up. Whole steps would double that; quarter steps
+ * would re-rasterise the page twice as often for a difference nobody sees.
+ */
+export const LEVEL_STEP = 0.5;
+
+/** Milliseconds of rasterising allowed inside one `draw` call. */
+export const DRAW_BUDGET_MS = 5;
+/** And inside a background catch-up frame, where nothing is waiting on us. */
+export const IDLE_BUDGET_MS = 8;
+
+/**
+ * Cache ceiling, as a multiple of the visible tile count.
+ *
+ * Enough to hold a screen, the ring around it a pan is about to reach, and the
+ * level a zoom just came from. Past that it is memory spent on ground the user
+ * has left.
+ */
+export const TILE_BUDGET_FACTOR = 3.5;
+export const TILE_BUDGET_MIN = 24;
+export const TILE_BUDGET_MAX = 160;
+
+export interface TileRange {
+  minTx: number;
+  minTy: number;
+  maxTx: number;
+  maxTy: number;
+}
+
+/** Rasterisation level for a screen scale, snapped to the level ladder. */
+export function pickRenderLevel(pixelScale: number): number {
+  const safe = Math.max(pixelScale, 1e-6);
+  return Math.round(Math.log2(safe) / LEVEL_STEP) * LEVEL_STEP;
+}
+
+/** Device pixels per scene unit that a level rasterises at. */
+export function levelScale(level: number): number {
+  return 2 ** level;
+}
+
+/** Scene-space edge of one tile at a level. */
+export function tileSceneSize(level: number, tilePx = TILE_PX): number {
+  return tilePx / levelScale(level);
+}
+
+export function tileRangeFor(view: SceneBounds, tileScene: number): TileRange {
+  return {
+    minTx: Math.floor(view.minX / tileScene),
+    minTy: Math.floor(view.minY / tileScene),
+    maxTx: Math.floor((view.maxX - 1e-9) / tileScene),
+    maxTy: Math.floor((view.maxY - 1e-9) / tileScene),
+  };
+}
+
+/** Scene rect the viewport shows. */
+export function viewportSceneBounds(viewport: ViewportTransform): SceneBounds {
+  const zoom = viewport.zoom || 1;
+  return {
+    minX: -viewport.scrollX,
+    minY: -viewport.scrollY,
+    maxX: -viewport.scrollX + viewport.width / zoom,
+    maxY: -viewport.scrollY + viewport.height / zoom,
+  };
+}
+
+export function boundsOverlap(a: SceneBounds, b: SceneBounds): boolean {
+  return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY;
+}
+
+export function intersectBounds(a: SceneBounds, b: SceneBounds): SceneBounds | null {
+  const box = {
+    minX: Math.max(a.minX, b.minX),
+    minY: Math.max(a.minY, b.minY),
+    maxX: Math.min(a.maxX, b.maxX),
+    maxY: Math.min(a.maxY, b.maxY),
+  };
+  if (box.maxX <= box.minX || box.maxY <= box.minY) return null;
+  return box;
+}
+
+/**
+ * Scene box one op touches, padded by half the widest line it can carry.
+ *
+ * Cached per op: it never changes once committed, and every tile that has to
+ * decide whether to replay the op asks for it again.
+ */
+const opBoundsCache = new WeakMap<InkOp, SceneBounds>();
+
+export function inkOpBounds(op: InkOp): SceneBounds {
+  const cached = opBoundsCache.get(op);
+  if (cached) return cached;
+  const pad =
+    op.kind === "erase"
+      ? op.radius
+      : // Full press spreads the nib; the pressure-off case is the same number.
+        inkLineWidth(op.baseWidth, 1, op.pressureSensitive) / 2;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const point of op.points) {
+    if (point.x < minX) minX = point.x;
+    if (point.y < minY) minY = point.y;
+    if (point.x > maxX) maxX = point.x;
+    if (point.y > maxY) maxY = point.y;
+  }
+  const bounds: SceneBounds =
+    minX === Infinity
+      ? { minX: 0, minY: 0, maxX: 0, maxY: 0 }
+      : { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+  opBoundsCache.set(op, bounds);
+  return bounds;
+}
+
+interface Tile {
+  key: string;
+  level: number;
+  tx: number;
+  ty: number;
+  canvas: HTMLCanvasElement;
+  /** Draw-call counter when this tile was last blitted, for eviction. */
+  usedAt: number;
+  /** True once anything was rasterised into it. */
+  painted: boolean;
+}
+
+function tileKey(level: number, tx: number, ty: number): string {
+  return `${level}|${tx}|${ty}`;
+}
+
+export interface InkTileCacheOptions {
+  tilePx?: number;
+  /** Called when a background pass finished tiles the last draw could not. */
+  onTilesReady?: () => void;
+  /** Injectable for tests; defaults to a detached canvas element. */
+  createCanvas?: (width: number, height: number) => HTMLCanvasElement;
+  /** Injectable for tests. */
+  now?: () => number;
+  /** Injectable for tests. */
+  schedule?: (callback: () => void) => number;
+  cancel?: (handle: number) => void;
+}
+
+interface PendingTile {
+  level: number;
+  tx: number;
+  ty: number;
+}
+
+export class InkTileCache {
+  private ops: InkOp[] = [];
+  private readonly tiles = new Map<string, Tile>();
+  private readonly tilePx: number;
+  private readonly onTilesReady?: () => void;
+  private readonly createCanvas: (width: number, height: number) => HTMLCanvasElement;
+  private readonly now: () => number;
+  private readonly schedule: (callback: () => void) => number;
+  private readonly cancel: (handle: number) => void;
+
+  private clip: SceneBounds | null = null;
+  private drawCount = 0;
+  private budget = TILE_BUDGET_MIN;
+  private pending: PendingTile[] = [];
+  private idleHandle = 0;
+  /**
+   * Last level that had every visible tile ready, used to fill holes while a
+   * new level rasterises. Without it a zoom flashes blank squares.
+   */
+  private fallbackLevel: number | null = null;
+
+  constructor(options: InkTileCacheOptions = {}) {
+    this.tilePx = options.tilePx ?? TILE_PX;
+    this.onTilesReady = options.onTilesReady;
+    this.createCanvas =
+      options.createCanvas ??
+      ((width, height) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        return canvas;
+      });
+    this.now = options.now ?? (() => performance.now());
+    this.schedule =
+      options.schedule ?? ((callback) => requestAnimationFrame(callback));
+    this.cancel = options.cancel ?? ((handle) => cancelAnimationFrame(handle));
+  }
+
+  /** Replace the committed history — notebook restore, undo, clear. */
+  setOps(ops: readonly InkOp[]): void {
+    this.ops = [...ops];
+    this.invalidate();
+  }
+
+  /**
+   * Add one just-committed op, dropping only the tiles it lands on.
+   *
+   * This is what keeps writing cheap on a full page: a new stroke costs the two
+   * or three tiles under it, not the page.
+   */
+  appendOp(op: InkOp): void {
+    this.ops.push(op);
+    const bounds = inkOpBounds(op);
+    for (const [key, tile] of this.tiles) {
+      if (boundsOverlap(bounds, this.tileBounds(tile.level, tile.tx, tile.ty))) {
+        this.tiles.delete(key);
+      }
+    }
+  }
+
+  /** Page turn — the clip box is baked into the tiles, so they all go. */
+  setClip(clip: SceneBounds | null): void {
+    const same =
+      (clip === null && this.clip === null) ||
+      (clip !== null &&
+        this.clip !== null &&
+        clip.minX === this.clip.minX &&
+        clip.minY === this.clip.minY &&
+        clip.maxX === this.clip.maxX &&
+        clip.maxY === this.clip.maxY);
+    if (same) return;
+    this.clip = clip;
+    this.invalidate();
+  }
+
+  invalidate(): void {
+    this.tiles.clear();
+    this.pending = [];
+    this.fallbackLevel = null;
+    if (this.idleHandle) {
+      this.cancel(this.idleHandle);
+      this.idleHandle = 0;
+    }
+  }
+
+  dispose(): void {
+    this.invalidate();
+    this.ops = [];
+  }
+
+  /** Tiles currently held — for tests and for the metrics readout. */
+  get size(): number {
+    return this.tiles.size;
+  }
+
+  /** True while the last draw left tiles to rasterise in the background. */
+  get settled(): boolean {
+    return this.pending.length === 0;
+  }
+
+  private tileBounds(level: number, tx: number, ty: number): SceneBounds {
+    const size = tileSceneSize(level, this.tilePx);
+    return {
+      minX: tx * size,
+      minY: ty * size,
+      maxX: (tx + 1) * size,
+      maxY: (ty + 1) * size,
+    };
+  }
+
+  private renderTile(level: number, tx: number, ty: number): Tile | null {
+    const key = tileKey(level, tx, ty);
+    const existing = this.tiles.get(key);
+    if (existing) return existing;
+
+    const canvas = this.createCanvas(this.tilePx, this.tilePx);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    const bounds = this.tileBounds(level, tx, ty);
+    const scale = levelScale(level);
+    const tile: Tile = {
+      key,
+      level,
+      tx,
+      ty,
+      canvas,
+      usedAt: this.drawCount,
+      painted: true,
+    };
+
+    const paintable = this.clip ? intersectBounds(bounds, this.clip) : bounds;
+    if (paintable) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, this.tilePx, this.tilePx);
+      // Scene → tile pixels: the tile's top-left is the origin.
+      ctx.setTransform(scale, 0, 0, scale, -bounds.minX * scale, -bounds.minY * scale);
+      if (this.clip) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(
+          this.clip.minX,
+          this.clip.minY,
+          this.clip.maxX - this.clip.minX,
+          this.clip.maxY - this.clip.minY,
+        );
+        ctx.clip();
+      }
+      // Chronological, so a stroke drawn after an erase survives it. Ops that
+      // miss the tile are skipped: an erase outside it cannot reach in.
+      for (const op of this.ops) {
+        if (!boundsOverlap(inkOpBounds(op), bounds)) continue;
+        applyInkOp(ctx, op, scale);
+      }
+      if (this.clip) ctx.restore();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
+    this.tiles.set(key, tile);
+    return tile;
+  }
+
+  private evict(): void {
+    if (this.tiles.size <= this.budget) return;
+    const bySeen = [...this.tiles.values()].sort((a, b) => a.usedAt - b.usedAt);
+    const drop = this.tiles.size - this.budget;
+    for (let i = 0; i < drop; i++) {
+      this.tiles.delete(bySeen[i].key);
+    }
+  }
+
+  private runPending(): void {
+    this.idleHandle = 0;
+    if (this.pending.length === 0) return;
+    const deadline = this.now() + IDLE_BUDGET_MS;
+    while (this.pending.length > 0 && this.now() < deadline) {
+      const next = this.pending.shift()!;
+      this.renderTile(next.level, next.tx, next.ty);
+    }
+    this.evict();
+    if (this.pending.length > 0) {
+      this.idleHandle = this.schedule(() => this.runPending());
+    }
+    this.onTilesReady?.();
+  }
+
+  /**
+   * Blit the visible ink onto `ctx`, which must be in device-pixel space with
+   * the identity transform. Rasterises what it can afford and schedules the rest.
+   */
+  draw(
+    ctx: CanvasRenderingContext2D,
+    viewport: ViewportTransform,
+    dpr: number,
+  ): void {
+    this.drawCount += 1;
+    const zoom = viewport.zoom || 1;
+    const pixelScale = zoom * dpr;
+    const level = pickRenderLevel(pixelScale);
+    const tileScene = tileSceneSize(level, this.tilePx);
+
+    const view = viewportSceneBounds(viewport);
+    const visible = this.clip ? intersectBounds(view, this.clip) : view;
+    if (!visible) {
+      this.pending = [];
+      return;
+    }
+
+    const range = tileRangeFor(visible, tileScene);
+    const across = range.maxTx - range.minTx + 1;
+    const down = range.maxTy - range.minTy + 1;
+    this.budget = Math.min(
+      TILE_BUDGET_MAX,
+      Math.max(TILE_BUDGET_MIN, Math.ceil(across * down * TILE_BUDGET_FACTOR)),
+    );
+
+    // Scene → device pixels on the destination canvas.
+    const toDeviceX = (sceneX: number) => (sceneX + viewport.scrollX) * pixelScale;
+    const toDeviceY = (sceneY: number) => (sceneY + viewport.scrollY) * pixelScale;
+
+    const deadline = this.now() + DRAW_BUDGET_MS;
+    const missed: PendingTile[] = [];
+    let complete = true;
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+
+    for (let ty = range.minTy; ty <= range.maxTy; ty++) {
+      for (let tx = range.minTx; tx <= range.maxTx; tx++) {
+        const bounds = this.tileBounds(level, tx, ty);
+        const key = tileKey(level, tx, ty);
+        let tile = this.tiles.get(key);
+        if (!tile && this.now() < deadline) {
+          tile = this.renderTile(level, tx, ty) ?? undefined;
+        }
+        if (!tile) {
+          complete = false;
+          missed.push({ level, tx, ty });
+          this.blitFallback(ctx, bounds, toDeviceX, toDeviceY, level);
+          continue;
+        }
+        tile.usedAt = this.drawCount;
+        const dx = toDeviceX(bounds.minX);
+        const dy = toDeviceY(bounds.minY);
+        const size = tileScene * pixelScale;
+        ctx.drawImage(tile.canvas, dx, dy, size, size);
+      }
+    }
+
+    if (complete) {
+      this.fallbackLevel = level;
+    }
+    this.pending = missed;
+    this.evict();
+    if (missed.length > 0 && this.idleHandle === 0) {
+      this.idleHandle = this.schedule(() => this.runPending());
+    }
+  }
+
+  /**
+   * Fill a not-yet-rasterised square from whatever level is already cached.
+   *
+   * Blurry for a frame or two beats a hole. This is the whole reason a zoom
+   * stays continuous on a busy page.
+   */
+  private blitFallback(
+    ctx: CanvasRenderingContext2D,
+    bounds: SceneBounds,
+    toDeviceX: (x: number) => number,
+    toDeviceY: (y: number) => number,
+    level: number,
+  ): void {
+    const from = this.fallbackLevel;
+    if (from === null || from === level) return;
+    const size = tileSceneSize(from, this.tilePx);
+    const minTx = Math.floor(bounds.minX / size);
+    const maxTx = Math.floor((bounds.maxX - 1e-9) / size);
+    const minTy = Math.floor(bounds.minY / size);
+    const maxTy = Math.floor((bounds.maxY - 1e-9) / size);
+    for (let ty = minTy; ty <= maxTy; ty++) {
+      for (let tx = minTx; tx <= maxTx; tx++) {
+        const tile = this.tiles.get(tileKey(from, tx, ty));
+        if (!tile) continue;
+        const src = this.tileBounds(from, tx, ty);
+        const box = intersectBounds(src, bounds);
+        if (!box) continue;
+        const srcScale = this.tilePx / size;
+        ctx.drawImage(
+          tile.canvas,
+          (box.minX - src.minX) * srcScale,
+          (box.minY - src.minY) * srcScale,
+          (box.maxX - box.minX) * srcScale,
+          (box.maxY - box.minY) * srcScale,
+          toDeviceX(box.minX),
+          toDeviceY(box.minY),
+          toDeviceX(box.maxX) - toDeviceX(box.minX),
+          toDeviceY(box.maxY) - toDeviceY(box.minY),
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Paint a live, in-progress op straight onto the overlay.
+ *
+ * Live ink never goes through a tile: the stroke is still growing and the
+ * pointer is waiting on it. Tiles only ever hold committed history.
+ */
+export function paintLiveOp(
+  ctx: CanvasRenderingContext2D,
+  op: InkOp,
+  viewport: ViewportTransform,
+  dpr: number,
+  clip: SceneBounds | null,
+): void {
+  setInkSceneTransform(ctx, viewport, dpr);
+  if (clip) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+    ctx.clip();
+    applyInkOp(ctx, op, viewport.zoom * dpr);
+    ctx.restore();
+  } else {
+    applyInkOp(ctx, op, viewport.zoom * dpr);
+  }
+}

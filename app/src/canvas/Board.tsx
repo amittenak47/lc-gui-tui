@@ -3988,7 +3988,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 }
                 lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
               }
-              // CSS-translate the baked ink during pan — rebuild only on zoom/size/ops.
+              // Reblit the ink tiles for the new camera. Fires on zoom as well
+              // as scroll, which is what keeps a smooth zoom smooth.
               if (!rasterInkRef.current?.isDrawing()) {
                 rasterInkRef.current?.syncCamera();
               }
