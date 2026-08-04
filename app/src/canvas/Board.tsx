@@ -713,6 +713,16 @@ export interface BoardProps {
    * and the hand both reach the canvas through it.
    */
   pageContent?: ReactNode;
+  /**
+   * Let {@link pageContent} show through the canvas.
+   *
+   * Excalidraw paints an opaque viewport background, which would bury the
+   * markdown underneath it completely — the document layer is below the canvas
+   * so that shapes and text draw *over* the words, and that only works if the
+   * canvas has nothing of its own to draw first. The board's own surface colour
+   * comes from the wrapper instead, so the page still reads as paper.
+   */
+  transparentCanvas?: boolean;
   /** Show lined-paper toggle in the map chrome. */
   linedPaperToggle?: boolean;
   /** Show S/M/L reading size (problem boards on mobile — not scratchpad). */
@@ -770,6 +780,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     bottomCenter = null,
     pageTitle = null,
     pageContent = null,
+    transparentCanvas = false,
     linedPaperToggle = false,
     showReadingSize = false,
     coachFold = null,
@@ -818,6 +829,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const lastContentSlotRef = useRef<typeof contentSlot>(null);
   const pageContentRef = useRef<ReactNode>(pageContent);
   pageContentRef.current = pageContent;
+  const transparentCanvasRef = useRef(transparentCanvas);
+  transparentCanvasRef.current = transparentCanvas;
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
@@ -2362,7 +2375,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     api.updateScene({
       appState: {
-        viewBackgroundColor: theme.background,
+        viewBackgroundColor: transparentCanvasRef.current ? "transparent" : theme.background,
         currentItemStrokeColor: ink,
       },
       ...(recolored
@@ -2919,6 +2932,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     reportContentSlot();
   }, [pageContent, reportContentSlot]);
+
+  // Entering or leaving md-ink flips the canvas between opaque and see-through
+  // after the theme has already been applied, so it needs its own push.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    api.updateScene({
+      appState: {
+        viewBackgroundColor: transparentCanvas
+          ? "transparent"
+          : (BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0])
+              .background,
+      },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+  }, [transparentCanvas, themeId]);
 
   useEffect(() => {
     reportTitleSlot();
@@ -3980,7 +4009,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const recolored = recolorTemplateElements(scene, dark);
         api.updateScene({
           appState: {
-            viewBackgroundColor: theme.background,
+            viewBackgroundColor: transparentCanvasRef.current ? "transparent" : theme.background,
             currentItemStrokeColor: ink,
           },
           ...(recolored
@@ -4008,7 +4037,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const prefs = inkPrefsRef.current;
       return {
         appState: {
-          viewBackgroundColor: theme.background,
+          viewBackgroundColor: transparentCanvas ? "transparent" : theme.background,
           currentItemStrokeColor: resolveInkColor(themeId, prefs.inkColor),
           currentItemStrokeWidth: prefs.penWidth,
           currentItemRoughness: 1,
@@ -4023,13 +4052,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         scrollToContent: false,
       };
     },
-    [theme.background, themeId],
+    [theme.background, themeId, transparentCanvas],
   );
 
   return (
     <div
       ref={boardRef}
-      className={interactive ? "lc-board" : "lc-board lc-board-idle"}
+      className={[
+        "lc-board",
+        !interactive && "lc-board-idle",
+        // The canvas is see-through in this mode, so the paper colour has to
+        // come from somewhere — here, under everything, including the markdown.
+        transparentCanvas && "lc-board-paper",
+      ]
+        .filter(Boolean)
+        .join(" ")}
     >
       {/*
         The markdown page, under everything.

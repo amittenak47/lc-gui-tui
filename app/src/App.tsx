@@ -93,6 +93,7 @@ import {
   buildMdInkTemplate,
   mdInkPageHeight,
   MD_INK_DATASET,
+  MD_INK_REGION,
   MD_INK_TASK_ID,
 } from "./templates/mdInk";
 import { pickMarkdownFile } from "./util/mdInkFs";
@@ -967,7 +968,7 @@ export function App() {
   );
 
   const syncSolution = useCallback(async () => {
-    if (!problem || isScratchpad(problem)) return;
+    if (!problem || isLocalPad(problem)) return;
     await client.putSolution(problem.task_id, pseudocodeRef.current, problem.dataset);
   }, [client, problem]);
 
@@ -2381,6 +2382,7 @@ export function App() {
     const timer = window.setTimeout(() => {
       if (agentSaveSuspendedRef.current) return;
       const agent = persistableCoachMessages(coachMessages);
+      if (isMdInk(problem)) return;
       if (isScratchpad(problem)) {
         // Board autosave only writes when the scene + ink fingerprint moves, so
         // a chat-only exchange would otherwise be lost. Write the notebook with
@@ -2866,11 +2868,11 @@ export function App() {
                 onClick={() => leaveProblem(returnToBrowse)}
               >
                 <span className="lc-label-long">
-                  {isScratchpad(problem) ? "← Home" : "← Problems"}
+                  {isLocalPad(problem) ? "← Home" : "← Problems"}
                 </span>
                 <span className="lc-label-short">←</span>
               </button>
-              {!isScratchpad(problem) ? (
+              {!isLocalPad(problem) ? (
               <div className="lc-problem-nav" role="group" aria-label="Problem">
                 <button
                   type="button"
@@ -2956,7 +2958,7 @@ export function App() {
         </div>
 
         <div className="lc-header-center">
-          {problem && !isScratchpad(problem) && (
+          {problem && !isLocalPad(problem) && (
             <div className="lc-actions">
               <button
                 type="button"
@@ -3212,19 +3214,23 @@ export function App() {
             onReadingSizeChange={setReadingSize}
             interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
             onCodeSlot={onCodeSlot}
-            linedPaperToggle={Boolean(problem)}
-            showReadingSize={Boolean(problem && !isScratchpad(problem) && mobile)}
+            transparentCanvas={Boolean(problem && isMdInk(problem))}
+            // Ruled lines under somebody else's typography would be noise.
+            linedPaperToggle={Boolean(problem) && !isMdInk(problem)}
+            showReadingSize={Boolean(problem && !isLocalPad(problem) && mobile)}
             mobileRegion={
               problem
                 ? isScratchpad(problem)
                   ? scratchPageId(scratchPageIndex)
-                  : mobile
-                    ? activeRegion
-                    : null
+                  : isMdInk(problem)
+                    ? MD_INK_REGION
+                    : mobile
+                      ? activeRegion
+                      : null
                 : null
             }
             bottomCenter={
-              problem && !isScratchpad(problem) && mobile ? (
+              problem && !isLocalPad(problem) && mobile ? (
                 <RegionPager
                   active={activeRegion}
                   onPick={setActiveRegion}
@@ -3297,7 +3303,7 @@ export function App() {
           )}
           {/* Monaco docks into the code frame — and on mobile that frame only
               exists on its own page, so the dock is mounted nowhere else. */}
-          {problem && !isScratchpad(problem) && (!mobile || activeRegion === "code") && (() => {
+          {problem && !isLocalPad(problem) && (!mobile || activeRegion === "code") && (() => {
             const slot = codeSlot ?? lastCodeSlotRef.current;
             if (!slot || slot.width <= 24 || slot.height <= 24) return null;
             const visible = Boolean(codeSlot);

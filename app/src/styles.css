@@ -2022,6 +2022,12 @@ input[type="checkbox"] {
  * transparent) and well beneath the raster ink at 3. `pointer-events: none` is
  * the lock: the pen and the hand both reach the canvas straight through it.
  */
+/* Paper for a board whose canvas has been made transparent — see Board's
+ * `transparentCanvas`. Excalidraw would otherwise paint over the markdown. */
+.lc-board-paper {
+  background: var(--board-paper, var(--surface, var(--bg)));
+}
+
 .lc-page-content-slot {
   position: absolute;
   z-index: 1;
