@@ -60,6 +60,15 @@ export interface RasterInkHandle {
   /** End of a pan, flick or zoom. Same work; kept apart for the call sites. */
   commitCamera(): void;
   /**
+   * A camera gesture opened or settled.
+   *
+   * Bracketing the gesture is what lets the frames inside it be cheap: the tile
+   * level is pinned so a zoom cannot invalidate the screen mid-animation, and
+   * the rasterising budget drops to a sliver. Unbracketed, every frame is
+   * entitled to 5ms of tile building for a camera that has already moved on.
+   */
+  setCameraMoving(moving: boolean): void;
+  /**
    * Committed ops, for the recognizer and the PNG export. The in-progress op is
    * left out — the pen is still down, so there is no stroke to read yet.
    */
@@ -190,6 +199,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * anything to learn from asking again.
      */
     const strokeRectRef = useRef<DOMRect | null>(null);
+    /**
+     * The overlay's CSS box, as last measured against the Excalidraw canvas.
+     *
+     * `alignToExcalidraw` reads two `getBoundingClientRect()`s, which is a
+     * forced synchronous layout of the whole board. That ran on every camera
+     * frame — a pan at 90Hz laid out the board, Excalidraw and toolbars ninety
+     * times a second to re-learn a number that only a resize can change. Cached
+     * here and dropped by the resize observer below.
+     */
+    const alignedBoxRef = useRef<{ width: number; height: number } | null>(null);
     /**
      * A background tile pass finished while the pen was down, so the overlay is
      * a frame behind the cache. Repaint once the stroke is off the paper.
@@ -372,7 +391,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const box = strokeBoxRef.current;
       const viewport = frozen ?? getViewport();
       if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
-      const excalRect = frozen && box ? box : alignToExcalidraw(canvas);
+      let excalRect = frozen && box ? box : alignedBoxRef.current;
+      if (!excalRect) {
+        excalRect = alignToExcalidraw(canvas);
+        if (!frozen) alignedBoxRef.current = excalRect;
+      }
       paintFrame(viewport, excalRect?.width ?? viewport.width, excalRect?.height ?? viewport.height);
     }, [alignToExcalidraw, getViewport, paintFrame]);
 
@@ -388,18 +411,74 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * newly exposed ground blank until the gesture ended and then replayed the
      * whole page in one blocking go.
      */
-    const syncCamera = useCallback(() => {
+    const paintCamera = useCallback(() => {
       if (drawingRef.current) return;
       const canvas = canvasRef.current;
       const viewport = getViewport();
       if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
       canvas.style.transform = "";
-      const excalRect = alignToExcalidraw(canvas);
+      const excalRect = alignedBoxRef.current ?? alignToExcalidraw(canvas);
+      alignedBoxRef.current = excalRect;
       paintFrame(viewport, excalRect?.width ?? viewport.width, excalRect?.height ?? viewport.height);
     }, [alignToExcalidraw, getViewport, paintFrame]);
 
-    /** End of a pan or zoom. Same work — kept apart for the call sites. */
-    const commitCamera = syncCamera;
+    /** A camera repaint owed to the next frame, if one is already booked. */
+    const cameraFrameRef = useRef(0);
+
+    /**
+     * Camera moved — repaint, but no more than once a frame.
+     *
+     * The screen cannot show two cameras in one frame, so painting twice for
+     * one is a whole wasted clear-and-blit. It happened routinely: the bounds
+     * clamp answers a scroll event with `updateScene`, which raises another
+     * scroll event, and both used to repaint. Coalescing also means the paint
+     * lands inside the frame's own rAF, after the scroll handlers are done,
+     * rather than in the middle of one.
+     */
+    const syncCamera = useCallback(() => {
+      if (drawingRef.current || cameraFrameRef.current) return;
+      cameraFrameRef.current = requestAnimationFrame(() => {
+        cameraFrameRef.current = 0;
+        paintCamera();
+      });
+    }, [paintCamera]);
+
+    /**
+     * End of a pan or zoom: unpin the tile level, then paint one honest frame.
+     *
+     * The order matters. Releasing first is what makes this the frame that
+     * re-levels and starts rasterising at full budget, so the softness a
+     * pinned gesture traded for smoothness is paid back the moment it ends.
+     */
+    const commitCamera = useCallback(() => {
+      tilesRef.current?.setMoving(false);
+      // The settle paints now rather than next frame: a coalesced repaint would
+      // still be carrying the pinned level's softness for one more frame, and
+      // this is the frame the writer is looking at when they let go.
+      if (cameraFrameRef.current) {
+        cancelAnimationFrame(cameraFrameRef.current);
+        cameraFrameRef.current = 0;
+      }
+      paintCamera();
+    }, [paintCamera]);
+
+    const setCameraMoving = useCallback(
+      (moving: boolean) => {
+        if (moving) {
+          // Re-measuring is a forced layout, and a gesture is the worst moment
+          // for one. The box cannot change mid-pan anyway — only a resize moves
+          // it, and that invalidates this itself.
+          const canvas = canvasRef.current;
+          if (canvas && !alignedBoxRef.current) {
+            alignedBoxRef.current = alignToExcalidraw(canvas);
+          }
+          ensureTiles().setMoving(true);
+          return;
+        }
+        commitCamera();
+      },
+      [alignToExcalidraw, commitCamera, ensureTiles],
+    );
 
     const invalidateTiles = useCallback(() => {
       ensureTiles().setOps(opsRef.current);
@@ -475,8 +554,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       // In live mode the filter already ran under the nib; running it again on
       // the lift would move ink the writer has already watched settle.
       const smoothing = smoothingModeRef.current === "live" ? 0 : smoothingRef.current;
+      // Unconditional for a pen stroke, even at zero smoothing: below the
+      // requested tolerance sits a storage floor that thins the stamp chain
+      // without moving the line — see SIMPLIFY_STORAGE_FRACTION. The eraser is
+      // left alone, its stamps being a coverage mask rather than a path.
       const committed =
-        live.kind === "draw" && smoothing > 0
+        live.kind === "draw"
           ? {
               ...live,
               points: smoothInkPoints(
@@ -571,9 +654,30 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         repaint,
         syncCamera,
         commitCamera,
+        setCameraMoving,
       }),
-      [commitCamera, invalidateTiles, onChange, repaint, syncCamera],
+      [commitCamera, invalidateTiles, onChange, repaint, setCameraMoving, syncCamera],
     );
+
+    /**
+     * Drop the cached box when the board actually resizes.
+     *
+     * Rotation, the keyboard opening, a dock appearing — all of them move the
+     * Excalidraw canvas, and none of them go through a camera event. Watching
+     * for it is what makes it safe never to re-measure on a pan.
+     */
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      const board = canvas?.parentElement;
+      if (!board || typeof ResizeObserver !== "function") return;
+      const observer = new ResizeObserver(() => {
+        alignedBoxRef.current = null;
+        if (drawingRef.current) return;
+        repaintRef.current();
+      });
+      observer.observe(board);
+      return () => observer.disconnect();
+    }, []);
 
     // The clip is compared inside the cache, which drops its tiles only when the
     // page actually changed — repainting on every render is just a blit.
@@ -718,6 +822,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         // Freeze camera + CSS box for the whole stroke before the first paint.
         // Align once here — never again on move (DOM writes mid-glyph hitch).
         const excalRect = alignToExcalidraw(canvas);
+        alignedBoxRef.current = excalRect;
         const cssW = excalRect?.width ?? viewport.width;
         const cssH = excalRect?.height ?? viewport.height;
         const strokeView: ViewportTransform = {

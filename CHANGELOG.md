@@ -6,6 +6,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — you can see what zoom you are at
+
+- **A zoom readout in the middle of the board.** Zooming a page of handwriting
+  gives the eye nothing to judge scale by: the ink grows and shrinks, but there
+  is no ruler and no chrome, so "how far in am I" had no answer without looking
+  away at the toolbar. A translucent pill now names the level where the eye
+  already is and fades out shortly after the gesture stops. It is written
+  imperatively — one text node, one class — because a readout driven by React
+  state would have re-rendered the whole board on every frame of a zoom, making
+  it part of the problem below.
+
+### Fixed — zoom and pan on a page with writing on it
+
+- **A held zoom button no longer stutters.** Every frame of a zoom was paying
+  for: two `getBoundingClientRect()` calls to re-measure a box only a resize can
+  move, a React re-render of the board and its toolbar to update the zoom
+  percentage, a duplicate code-slot report, and up to 5ms of ink-tile
+  rasterisation for a camera that had already moved on. Worse, a zoom crosses a
+  tile level every √2, and crossing one invalidates every visible square at
+  once — so the frames that stuttered hardest were the ones where the whole
+  screen wanted rebuilding mid-animation. The box is now measured once and
+  re-measured only when the board actually resizes, the percentage reaches React
+  only after the gesture settles, and a gesture pins the tile level it opened on
+  so its frames are pure blits. The settle re-levels and the background pass
+  sharpens. The pin yields if the zoom runs more than an octave from it, where
+  holding on would cost more squares than it saves.
+
+- **Panning a written page is a blit again.** The same per-frame measuring and
+  rasterising sat on the pan path, and camera repaints were not coalesced: the
+  bounds clamp answers a scroll event with `updateScene`, which raises another
+  scroll event, and both repainted — two full clear-and-blits for one frame the
+  screen can only show once. Repaints now land at most once per frame.
+
+- **A flick coasts instead of springing back.** The inertia integrated velocity
+  into the clamp every frame, so a coast that reached a boundary was thrown out
+  and yanked back sixty times a second — the bounce. On an axis whose content
+  fits the viewport the clamp does not return the edge but the *centre*, which
+  is why a flick there looked like it reverted to where it started: it was being
+  re-centred on every frame of the coast. An axis that the clamp refuses to move
+  now stops coasting, and the coast no longer double-clamps against the scroll
+  handler.
+
+- **Committed strokes are thinned even with smoothing off.** A stroke is stored
+  as the stamp chain the move path builds — points a fraction of a nib apart,
+  dense for stamping and pure overhead once the stroke is a polyline. The
+  Ramer–Douglas–Peucker pass that would have thinned them only ran when the
+  writer had asked for smoothing, so smoothing-off and live-smoothing pages
+  carried every stamp forever. There is now a storage floor well under the line
+  — a fifteenth of a nib, far below the smoothing tolerance — that runs
+  regardless. It is paid once at the lift and refunded on every tile
+  rasterisation for the life of the page.
+
 ### Changed — the ink log now says where the delay was
 
 - **`[ink]` stroke lines carry `stale`, `gap` and `frame` alongside `paint`.**

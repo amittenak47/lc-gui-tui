@@ -79,6 +79,7 @@ import {
 } from "./pageView";
 import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
+import { ZoomIndicator, type ZoomIndicatorHandle } from "./ZoomIndicator";
 import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
 import {
   minTextBox,
@@ -830,6 +831,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     () => inkPrefsRef.current.pressureSensitive,
   );
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
+  const zoomIndicatorRef = useRef<ZoomIndicatorHandle | null>(null);
+  /**
+   * Settle the toolbar's copy of the zoom well after the pill has it.
+   *
+   * The pill is written every frame because it is one text node; `zoomPct` is
+   * React state that re-renders Board and its toolbar, and doing *that* per
+   * frame was a real part of why holding a zoom button stuttered. The number
+   * only has to be right once the gesture stops.
+   */
+  const zoomPctSettleRef = useRef<number>(0);
+  /** Last level the pill was raised for, so panning cannot keep it awake. */
+  const lastZoomPctRef = useRef<number>(100);
   const textPlaceGhostRef = useRef<TextPlaceGhostHandle | null>(null);
   const captureFeedbackRef = useRef<CaptureFeedbackHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
@@ -1643,24 +1656,46 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       let scrollY = state.scrollY ?? 0;
       const zoom = state.zoom?.value ?? 1;
 
+      const settle = () => {
+        inertiaFrameRef.current = 0;
+        api.updateScene({
+          appState: { scrollX, scrollY },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        rasterInkRef.current?.setCameraMoving(false);
+        scheduleSlotReports();
+      };
+
       const step = (now: number) => {
         const dt = Math.min(34, Math.max(1, now - last));
         last = now;
-        scrollX += velX * dt;
-        scrollY += velY * dt;
-        const clamped = clampPanScroll(scrollX, scrollY, zoom);
+        const wantX = scrollX + velX * dt;
+        const wantY = scrollY + velY * dt;
+        const clamped = clampPanScroll(wantX, wantY, zoom);
+        /*
+         * An axis that would not go where the coast asked is done coasting.
+         *
+         * This used to keep integrating velocity into a wall: every frame the
+         * coast asked for ground the clamp refuses, the clamp answered with the
+         * edge — or, on an axis whose content fits the viewport, with the
+         * centred position, which is not the edge but the middle. So the flick
+         * threw the view out and the clamp yanked it back, once per frame, for
+         * as long as the friction took to die. That is the bounce, and on a
+         * fitted axis it is also why a flick looked like it reverted: it was
+         * being re-centred sixty times a second.
+         *
+         * Stopping the axis at the boundary is the whole fix. It also ends the
+         * coast honestly — a flick into a wall should stop at the wall, not
+         * spend a second pretending it is still moving.
+         */
+        if (Math.abs(clamped.scrollX - wantX) > 0.05) velX = 0;
+        if (Math.abs(clamped.scrollY - wantY) > 0.05) velY = 0;
         scrollX = clamped.scrollX;
         scrollY = clamped.scrollY;
         velX *= Math.exp(-PAN_FRICTION * dt);
         velY *= Math.exp(-PAN_FRICTION * dt);
         if (Math.abs(velX) < PAN_REST_SPEED && Math.abs(velY) < PAN_REST_SPEED) {
-          inertiaFrameRef.current = 0;
-          api.updateScene({
-            appState: { scrollX, scrollY },
-            captureUpdate: CaptureUpdateAction.NEVER,
-          });
-          rasterInkRef.current?.commitCamera();
-          scheduleSlotReports();
+          settle();
           return;
         }
         api.updateScene({
@@ -1671,6 +1706,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         scheduleSlotReports();
         inertiaFrameRef.current = requestAnimationFrame(step);
       };
+      rasterInkRef.current?.setCameraMoving(true);
       inertiaFrameRef.current = requestAnimationFrame(step);
     };
 
@@ -1680,6 +1716,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!isHandPanTarget(event.target)) return;
       stopPanInertia();
       handPanningRef.current = true;
+      rasterInkRef.current?.setCameraMoving(true);
       panVelocityRef.current = { x: 0, y: 0 };
       const api = apiRef.current;
       const now = performance.now();
@@ -1698,18 +1735,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onPointerUp = (event: PointerEvent) => {
       if (!handPanningRef.current) return;
       handPanningRef.current = false;
-      if (activeToolRef.current !== "hand") return;
+      if (activeToolRef.current !== "hand") {
+        rasterInkRef.current?.setCameraMoving(false);
+        return;
+      }
       if (!isHandPanTarget(event.target)) {
-        rasterInkRef.current?.commitCamera();
+        rasterInkRef.current?.setCameraMoving(false);
         return;
       }
       const vel = panVelocityRef.current;
       const speed = Math.hypot(vel.x, vel.y);
+      // The lift is not the settle when the view is still coasting — leave the
+      // level pinned and let the coast's own settle release it.
       if (speed >= PAN_FLICK_MIN) {
         startPanInertia(vel.x, vel.y);
         return;
       }
-      rasterInkRef.current?.commitCamera();
+      rasterInkRef.current?.setCameraMoving(false);
     };
 
     root.addEventListener("pointerdown", onPointerDown, true);
@@ -1726,7 +1768,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     stopPanInertia();
     handPanningRef.current = false;
-    rasterInkRef.current?.commitCamera();
+    rasterInkRef.current?.setCameraMoving(false);
   }, [activeTool, stopPanInertia]);
 
   const inkToolActive = activeTool === "freedraw" || activeTool === "eraser";
@@ -2283,6 +2325,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   }, []);
 
+  /**
+   * Push a zoom level to the pill now and to React once the gesture stops.
+   *
+   * Safe to call on every frame of an animated zoom — see the note on
+   * {@link zoomPctSettleRef} for why the two go at different speeds.
+   */
+  const showZoom = useCallback((pct: number) => {
+    zoomIndicatorRef.current?.show(pct);
+    if (zoomPctSettleRef.current) window.clearTimeout(zoomPctSettleRef.current);
+    zoomPctSettleRef.current = window.setTimeout(() => {
+      zoomPctSettleRef.current = 0;
+      setZoomPct((current) => (current === pct ? current : pct));
+    }, 140);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (zoomPctSettleRef.current) window.clearTimeout(zoomPctSettleRef.current);
+    },
+    [],
+  );
+
   const applyZoomAtViewport = useCallback(
     (next: number, viewportX: number, viewportY: number) => {
       userAdjustedCameraRef.current = true;
@@ -2332,10 +2396,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         appState,
         captureUpdate: CaptureUpdateAction.NEVER,
       });
-      setZoomPct(Math.round(clamped * 100));
-      requestAnimationFrame(reportCodeSlot);
+      showZoom(Math.round(clamped * 100));
     },
-    [getZoomFloor, mobile, reportCodeSlot],
+    [getZoomFloor, mobile, showZoom],
   );
 
   const interpolateZoomAnim = useCallback((): number | null => {
@@ -2357,6 +2420,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     } else {
       applyZoomAtViewport(anim.to, x, y);
       zoomAnimRef.current = null;
+      // The last frame of the last retarget: re-level the tiles and let the
+      // background pass sharpen what the animation blitted soft.
+      rasterInkRef.current?.setCameraMoving(false);
     }
   }, [applyZoomAtViewport, getBoardCenter]);
 
@@ -2384,6 +2450,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         start: performance.now(),
         rafId: null,
       };
+      // Idempotent, so a held button retargeting every 220ms does not restart
+      // the pin — the level stays held across the whole run of presses.
+      rasterInkRef.current?.setCameraMoving(true);
       runZoomAnimFrame();
     },
     [getZoomFloor, interpolateZoomAnim, readZoom, runZoomAnimFrame],
@@ -2508,13 +2577,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         appState,
         captureUpdate: CaptureUpdateAction.NEVER,
       });
-      setZoomPct(Math.round(nextZoom * 100));
+      showZoom(Math.round(nextZoom * 100));
       requestAnimationFrame(reportCodeSlot);
     };
 
     root.addEventListener("wheel", onWheel, { capture: true, passive: false });
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
-  }, [interactive, mobile, reportCodeSlot]);
+  }, [interactive, mobile, reportCodeSlot, showZoom]);
 
   type FitMode = "frame" | "camera" | "both";
 
@@ -4020,6 +4089,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         </>
       )}
       {interactive && activeTool === "eraser" && <EraserBrush ref={eraserBrushRef} />}
+      {interactive && <ZoomIndicator ref={zoomIndicatorRef} />}
       <RasterInkLayer
         ref={rasterInkRef}
         enabled={interactive}
@@ -4051,8 +4121,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           scrollUnsubRef.current?.();
           scrollUnsubRef.current =
             apiRef.current.onScrollChange?.((scrollX, scrollY, zoom) => {
+              // Fires on pan as well as zoom, so only a *changed* level counts
+              // as zooming. Otherwise every pan frame would restart the pill's
+              // fade and hold it on screen for the whole gesture.
               const pct = Math.round(zoom.value * 100);
-              setZoomPct((current) => (current === pct ? current : pct));
+              if (lastZoomPctRef.current !== pct) {
+                lastZoomPctRef.current = pct;
+                showZoom(pct);
+              }
               if (
                 activeToolRef.current === "hand" &&
                 handPanningRef.current &&
@@ -4082,7 +4158,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               if (!fittingCameraRef.current && !clampingScrollRef.current) {
                 userAdjustedCameraRef.current = true;
               }
-              if (!mobileRef.current || mobileRegionRef.current == null || clampingScrollRef.current) {
+              // The inertia step clamps every frame against the same bounds.
+              // Clamping again here only lands a second `updateScene` on top of
+              // the coast's own, which is the fight that made a flick judder.
+              if (
+                !mobileRef.current ||
+                mobileRegionRef.current == null ||
+                clampingScrollRef.current ||
+                inertiaFrameRef.current !== 0
+              ) {
                 return;
               }
               const bounds = pageBoundsRef.current;

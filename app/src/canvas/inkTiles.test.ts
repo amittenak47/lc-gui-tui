@@ -235,6 +235,74 @@ describe("InkTileCache", () => {
     expect(exposed).toBeLessThan(afterFirst);
   });
 
+  it("rasterises nothing new while the camera is moving", () => {
+    const { cache, canvases } = makeCache();
+    cache.setOps([draw([0, 0], [700, 500])]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    const afterFirst = canvases.created.length;
+
+    // A zoom past √2 lands on the next level, where nothing is cached. Under a
+    // gesture that must not turn into a screenful of fresh rasterisation.
+    cache.setMoving(true);
+    cache.draw(ctx, screen(1.5), 1);
+    expect(canvases.created.length).toBe(afterFirst);
+  });
+
+  it("still covers the screen from the pinned level while moving", () => {
+    const { cache } = makeCache();
+    cache.setOps([draw([0, 0], [700, 500])]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+
+    cache.setMoving(true);
+    const { ctx: moving, blits } = destinationContext();
+    cache.draw(moving, screen(1.5), 1);
+    // Cheap is not the same as blank: every visible square is still blitted,
+    // from the level the gesture opened on.
+    expect(blits.length).toBeGreaterThan(0);
+  });
+
+  it("re-levels on the settle", () => {
+    const { cache, canvases } = makeCache();
+    cache.setOps([draw([0, 0], [700, 500])]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    cache.setMoving(true);
+    cache.draw(ctx, screen(1.5), 1);
+    const afterGesture = canvases.created.length;
+
+    cache.setMoving(false);
+    cache.draw(ctx, screen(1.5), 1);
+    // The softness the gesture traded for smoothness is paid back at the lift.
+    expect(canvases.created.length).toBeGreaterThan(afterGesture);
+  });
+
+  it("gives up the pin when the zoom runs away from it", () => {
+    const { cache, canvases } = makeCache();
+    cache.setOps([draw([0, 0], [700, 500])]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    cache.setMoving(true);
+    const afterFirst = canvases.created.length;
+
+    // Far enough out that holding level 0 would want a screenful of squares
+    // per octave. Re-levelling is the cheaper answer and the pin yields.
+    cache.draw(ctx, screen(0.2), 1);
+    expect(canvases.created.length).toBeGreaterThan(afterFirst);
+  });
+
+  it("takes the normal ladder when a gesture opens on an uncached level", () => {
+    const { cache, canvases } = makeCache();
+    cache.setOps([draw([0, 0], [700, 500])]);
+    const { ctx } = destinationContext();
+    // Moving from the very first frame: there is no cached level to pin to, so
+    // pinning would buy a blit of nothing.
+    cache.setMoving(true);
+    cache.draw(ctx, screen(1), 1);
+    expect(canvases.created.length).toBeGreaterThan(0);
+  });
+
   it("keeps drawing while a zoom crosses a level, without a blank frame", () => {
     const { cache } = makeCache();
     cache.setOps([draw([0, 0], [700, 500])]);

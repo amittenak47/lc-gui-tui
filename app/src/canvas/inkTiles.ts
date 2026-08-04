@@ -46,6 +46,26 @@ export const LEVEL_STEP = 0.5;
 export const DRAW_BUDGET_MS = 5;
 /** And inside a background catch-up frame, where nothing is waiting on us. */
 export const IDLE_BUDGET_MS = 8;
+/**
+ * And inside a frame of a moving camera, where the next one is already due.
+ *
+ * A pan or zoom frame is not a good moment to build anything. The gesture is
+ * still running, so whatever gets rasterised now is for a camera that has
+ * already moved on, and the 5ms it costs comes out of a budget that Excalidraw
+ * is also drawing a whole scene from. Fall back to the cached levels instead —
+ * a frame or two of softness during motion is invisible next to the stutter of
+ * paying for sharpness on every one of them.
+ */
+export const MOVING_BUDGET_MS = 1;
+
+/**
+ * How far, in levels, a gesture may drift from the level it pinned.
+ *
+ * One octave: at the far end of it a screen costs four times the squares it
+ * would at the right level, which is still a blit and still cheaper than
+ * rasterising them. Past that the arithmetic turns over.
+ */
+export const MAX_PIN_DRIFT = 1;
 
 /**
  * Cache ceiling, as a multiple of the visible tile count.
@@ -201,6 +221,22 @@ export class InkTileCache {
   private budget = TILE_BUDGET_MIN;
   private pending: PendingTile[] = [];
   private idleHandle = 0;
+  /** True between the start of a camera gesture and its settle. */
+  private moving = false;
+  /**
+   * The level being drawn at, pinned for the duration of a gesture.
+   *
+   * A zoom crosses a level boundary every √2, and crossing one invalidates
+   * every visible square at once: the new level has nothing cached, so a
+   * screenful of tiles all want rasterising inside the same frame that the
+   * zoom is already animating. Pinning holds the gesture on the level it
+   * started from — the tiles are all cached, so every frame is pure blit, and
+   * the resample is the same one `blitFallback` would have done anyway. The
+   * settle re-levels and the background pass sharpens it.
+   */
+  private pinnedLevel: number | null = null;
+  /** Level the last `draw` resolved to — what a gesture opening now would pin. */
+  private lastLevel: number | null = null;
 
   constructor(options: InkTileCacheOptions = {}) {
     this.tilePx = options.tilePx ?? TILE_PX;
@@ -217,6 +253,26 @@ export class InkTileCache {
     this.schedule =
       options.schedule ?? ((callback) => requestAnimationFrame(callback));
     this.cancel = options.cancel ?? ((handle) => cancelAnimationFrame(handle));
+  }
+
+  /**
+   * A camera gesture started or settled.
+   *
+   * While moving, `draw` blits and little else: the level is pinned to the one
+   * the gesture began on, and the rasterising budget drops to
+   * {@link MOVING_BUDGET_MS}. The settle releases both and leaves the
+   * background pass to bring the page back to full sharpness.
+   */
+  setMoving(moving: boolean): void {
+    if (this.moving === moving) return;
+    this.moving = moving;
+    // Pinned at the open, not on the first frame inside: by then the camera has
+    // already moved and the level it wants is the uncached one we are trying to
+    // avoid. The level to hold is the one the last still frame drew.
+    this.pinnedLevel =
+      moving && this.lastLevel !== null && this.hasLevel(this.lastLevel)
+        ? this.lastLevel
+        : null;
   }
 
   /** Replace the committed history — notebook restore, undo, clear. */
@@ -394,7 +450,10 @@ export class InkTileCache {
   private runPending(): void {
     this.idleHandle = 0;
     if (this.pending.length === 0) return;
-    const deadline = this.now() + IDLE_BUDGET_MS;
+    // "Idle" is a lie while a gesture is running — this pass shares the frame
+    // with it. Keep filling ground in, but a sliver at a time.
+    const deadline =
+      this.now() + (this.moving ? MOVING_BUDGET_MS : IDLE_BUDGET_MS);
     while (this.pending.length > 0 && this.now() < deadline) {
       const next = this.pending.shift()!;
       this.renderTile(next.level, next.tx, next.ty);
@@ -418,7 +477,21 @@ export class InkTileCache {
     this.drawCount += 1;
     const zoom = viewport.zoom || 1;
     const pixelScale = zoom * dpr;
-    const level = pickRenderLevel(pixelScale);
+    const wanted = pickRenderLevel(pixelScale);
+    let level = wanted;
+    if (this.moving && this.pinnedLevel !== null) {
+      // Hold the gesture's level, but not past the point where holding it is
+      // the more expensive answer. A tile covers a fixed span of *scene*, so
+      // every octave the camera zooms out past the pinned level quadruples the
+      // squares a screen needs — cheaper, eventually, to just re-level.
+      const drift = Math.abs(this.pinnedLevel - wanted);
+      if (drift <= MAX_PIN_DRIFT) {
+        level = this.pinnedLevel;
+      } else {
+        this.pinnedLevel = wanted;
+      }
+    }
+    this.lastLevel = level;
     const tileScene = tileSceneSize(level, this.tilePx);
 
     const view = viewportSceneBounds(viewport);
@@ -440,7 +513,8 @@ export class InkTileCache {
     const toDeviceX = (sceneX: number) => (sceneX + viewport.scrollX) * pixelScale;
     const toDeviceY = (sceneY: number) => (sceneY + viewport.scrollY) * pixelScale;
 
-    const deadline = this.now() + DRAW_BUDGET_MS;
+    const deadline =
+      this.now() + (this.moving ? MOVING_BUDGET_MS : DRAW_BUDGET_MS);
     const missed: PendingTile[] = [];
     // Worked out on the first miss, if there is one, and reused for the rest.
     let fallbacks: number[] | null = null;
@@ -496,6 +570,14 @@ export class InkTileCache {
    * so the stand-in is as sharp as the cache can make it — breaking ties toward
    * the finer one.
    */
+  /** Whether anything is cached at a level — i.e. whether pinning to it buys a blit. */
+  private hasLevel(level: number): boolean {
+    for (const tile of this.tiles.values()) {
+      if (tile.level === level) return true;
+    }
+    return false;
+  }
+
   private fallbackLevels(level: number): number[] {
     const levels = new Set<number>();
     for (const tile of this.tiles.values()) {

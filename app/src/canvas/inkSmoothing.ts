@@ -89,6 +89,29 @@ export function liveSmoothingWeight(dtMs: number, tauMs: number): number {
  */
 export const SIMPLIFY_MAX_FRACTION = 0.5;
 
+/**
+ * Tolerance every committed stroke is thinned at, as a fraction of nib width,
+ * whatever the smoothing setting says.
+ *
+ * A stroke is not stored as the samples the pen gave: the move path stamps
+ * along each segment at a fraction of the line width, so what lands in the op
+ * is a dense chain of points a small part of a nib apart. That density is for
+ * the *stamping*, and once the stroke is committed nothing needs it — the
+ * committed path is drawn as a polyline, and points closer together than a
+ * fifteenth of the nib cannot move a pixel of it.
+ *
+ * They do cost, though, every time a tile is rasterised: a zoom that crosses a
+ * level replays every op that touches every visible square, and a replay is
+ * linear in points. Thinning at commit is paid once and refunded on every
+ * rasterisation for the life of the page.
+ *
+ * Deliberately far under {@link SIMPLIFY_MAX_FRACTION}. That one is a
+ * *smoothing* tolerance the writer asked for and can see; this one is a storage
+ * tolerance they must not be able to see, which is why it survives a smoothing
+ * setting of zero.
+ */
+export const SIMPLIFY_STORAGE_FRACTION = 1 / 15;
+
 /** Corner-cutting passes at full strength. */
 export const MAX_ROUNDING_PASSES = 3;
 
@@ -226,9 +249,15 @@ export function smoothInkPoints(
   nibWidth: number,
 ): ScenePoint[] {
   const amount = Math.max(0, Math.min(1, strength));
-  if (amount <= 0 || points.length < 3) return [...points];
+  if (points.length < 3) return [...points];
 
-  const tolerance = Math.max(nibWidth, 1e-6) * SIMPLIFY_MAX_FRACTION * amount;
+  const width = Math.max(nibWidth, 1e-6);
+  // Never below the storage floor: a stroke committed with smoothing off is
+  // still a stamp chain that nobody needs at stamp density.
+  const tolerance = Math.max(
+    width * SIMPLIFY_STORAGE_FRACTION,
+    width * SIMPLIFY_MAX_FRACTION * amount,
+  );
   let out = simplifyInkPoints(points, tolerance);
   for (let pass = roundingPasses(amount); pass > 0; pass--) {
     out = roundInkCorners(out);
