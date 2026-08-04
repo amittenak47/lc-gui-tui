@@ -34,6 +34,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   **Discard only ever throws away annotations.** The file on disk is opened
   read-only and nothing in this feature can write to it.
 
+  **Reading and annotating are a toggle**, sitting with the eye and the
+  lined-paper switch in the map chrome and wearing the same card. A board built
+  for a one-page problem gives you free 2D pan and wheel-to-zoom, which is right
+  for something you are sketching on and wrong for something you are reading
+  down — every scroll of a trackpad would rescale the words. Reading mode makes
+  the wheel scroll and keeps a drag in its column, so you cannot wander sideways
+  off the text; Ctrl/Cmd+wheel still zooms, and the pen still draws, so nothing
+  is taken away. A document opens in reading mode, because you opened it to read
+  it.
+
   Not in v1: editing the markdown, multipage documents, the coach, and writing
   the annotation sidecar to disk automatically — `exportMdInkSidecar` produces
   the `.lc-ink.json` on request so an annotation set is never trapped in one

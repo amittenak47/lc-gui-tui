@@ -3215,6 +3215,7 @@ export function App() {
             interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
             onCodeSlot={onCodeSlot}
             transparentCanvas={Boolean(problem && isMdInk(problem))}
+            scrollModeToggle={Boolean(problem && isMdInk(problem))}
             // Ruled lines under somebody else's typography would be noise.
             linedPaperToggle={Boolean(problem) && !isMdInk(problem)}
             showReadingSize={Boolean(problem && !isLocalPad(problem) && mobile)}
