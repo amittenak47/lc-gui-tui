@@ -8,9 +8,14 @@ import {
   hasStylusPressure,
   inkLineWidth,
   inkOpsBounds,
+  inkPressureAlpha,
+  inkReservoirAlpha,
   inkStrokeAlpha,
+  inkStrokeRuns,
   inkStrokeStyle,
   inkStrokesFromOps,
+  INK_DRY_FLOOR,
+  INK_PRESSURE_FLOOR,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
   INK_WIDTH_SPREAD,
@@ -64,15 +69,51 @@ describe("rasterInk sizing", () => {
     expect(inkLineWidth(2, 0.5, true)).toBeLessThan(inkLineWidth(2, 1, true));
   });
 
-  it("modulates opacity via fullness, not width", () => {
-    expect(inkStrokeAlpha(0.8, 0, false)).toBe(0.8);
-    expect(inkStrokeAlpha(0.8, 0.5, true)).toBeCloseTo(0.4);
-    expect(inkStrokeAlpha(0.8, 1, true)).toBeCloseTo(0.8);
-  });
-
   it("stamps denser under pressure than at constant width", () => {
     expect(INK_STEP_FACTOR_PRESSURE).toBeLessThan(INK_STEP_FACTOR);
     expect(INK_STEP_FACTOR_PRESSURE).toBeGreaterThan(0);
+  });
+});
+
+describe("ink reservoir", () => {
+  it("starts every stroke at a full nib, whatever the dial says", () => {
+    expect(inkReservoirAlpha(0, 1)).toBeCloseTo(1);
+    expect(inkReservoirAlpha(0, 0.2)).toBeCloseTo(1);
+    expect(inkReservoirAlpha(0, 0)).toBeCloseTo(1);
+  });
+
+  it("fades along the stroke, never below the readable floor", () => {
+    const dial = 0.4;
+    const early = inkReservoirAlpha(5, dial);
+    const late = inkReservoirAlpha(200, dial);
+    expect(late).toBeLessThan(early);
+    expect(late).toBeGreaterThanOrEqual(INK_DRY_FLOOR);
+    expect(inkReservoirAlpha(1e9, dial)).toBeCloseTo(INK_DRY_FLOOR);
+  });
+
+  it("makes a fuller dial last longer at the same distance", () => {
+    expect(inkReservoirAlpha(60, 0.9)).toBeGreaterThan(inkReservoirAlpha(60, 0.3));
+    expect(inkReservoirAlpha(60, 0.3)).toBeGreaterThan(inkReservoirAlpha(60, 0));
+  });
+
+  it("holds a full dial solid across any stroke someone would actually write", () => {
+    // 400 nib widths is a long line of handwriting at the tip it was set with.
+    expect(inkReservoirAlpha(400, 1)).toBeGreaterThan(0.9);
+  });
+
+  it("keeps a light touch light but present", () => {
+    expect(inkPressureAlpha(0)).toBeCloseTo(INK_PRESSURE_FLOOR);
+    expect(inkPressureAlpha(1)).toBeCloseTo(1);
+    expect(inkPressureAlpha(0.5)).toBeGreaterThan(INK_PRESSURE_FLOOR);
+  });
+
+  it("combines charge and pressure into the sample alpha", () => {
+    expect(inkStrokeAlpha(1, 0, false, 0)).toBeCloseTo(1);
+    expect(inkStrokeAlpha(1, 1, true, 0)).toBeCloseTo(1);
+    expect(inkStrokeAlpha(1, 0, true, 0)).toBeCloseTo(INK_PRESSURE_FLOOR);
+    expect(inkStrokeAlpha(0.3, 1, true, 90)).toBeLessThan(
+      inkStrokeAlpha(0.3, 1, true, 0),
+    );
   });
 });
 
@@ -87,15 +128,105 @@ describe("rasterInk pressure", () => {
   });
 
   it("combines width and alpha for one sample", () => {
+    // No stylus pressure: the tip keeps its geometry and the nib is still full.
     const mouse = inkStrokeStyle(2, 0.75, NO_PRESSURE, 1, true);
     expect(mouse.lineWidth).toBeCloseTo(inkLineWidth(2, 0, false));
-    expect(mouse.alpha).toBe(0.75);
+    expect(mouse.alpha).toBeCloseTo(1);
 
     const light = inkStrokeStyle(2, 0.8, 0.25, 1, true);
-    expect(light.alpha).toBeCloseTo(0.2);
-    expect(light.lineWidth).toBeLessThan(
-      inkStrokeStyle(2, 0.8, 1, 1, true).lineWidth,
-    );
+    const firm = inkStrokeStyle(2, 0.8, 1, 1, true);
+    expect(light.alpha).toBeLessThan(firm.alpha);
+    expect(light.alpha).toBeGreaterThanOrEqual(INK_PRESSURE_FLOOR);
+    expect(light.lineWidth).toBeLessThan(firm.lineWidth);
+  });
+});
+
+describe("inkStrokeRuns", () => {
+  function stroke(points: ScenePoint[], overrides: Partial<InkOp> = {}): InkOp {
+    return {
+      kind: "draw",
+      color: "#000",
+      baseWidth: 2,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      points,
+      ...overrides,
+    } as InkOp;
+  }
+
+  it("lays a constant stroke down as a single path", () => {
+    const long = Array.from({ length: 400 }, (_, i) => ({
+      x: i,
+      y: 0,
+      pressure: NO_PRESSURE,
+    }));
+    const runs = inkStrokeRuns(stroke(long) as never);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ start: 0, end: 399 });
+  });
+
+  it("covers every segment with no gap between runs", () => {
+    const pressures = Array.from({ length: 120 }, (_, i) => ({
+      x: i * 3,
+      y: 0,
+      pressure: 0.05 + (i / 119) * 0.95,
+    }));
+    const op = stroke(pressures, { pressureSensitive: true }) as never;
+    const runs = inkStrokeRuns(op);
+    expect(runs.length).toBeGreaterThan(1);
+    expect(runs[0].start).toBe(0);
+    expect(runs[runs.length - 1].end).toBe(119);
+    for (let i = 1; i < runs.length; i++) {
+      // Consecutive runs share a point, so the polylines meet exactly.
+      expect(runs[i].start).toBe(runs[i - 1].end);
+    }
+  });
+
+  it("stays far cheaper than one path per segment", () => {
+    // Pressure as a hand actually delivers it after smoothing: a slow swell
+    // over the stroke, not per-sample noise.
+    const pressures = Array.from({ length: 600 }, (_, i) => ({
+      x: i,
+      y: Math.sin(i / 60) * 20,
+      pressure: 0.45 + Math.sin(i / 190) * 0.3,
+    }));
+    const runs = inkStrokeRuns(stroke(pressures, { pressureSensitive: true }) as never);
+    expect(runs.length).toBeLessThan(60);
+  });
+
+  it("resumes from a point index for the live tail", () => {
+    const points = Array.from({ length: 50 }, (_, i) => ({
+      x: i,
+      y: 0,
+      pressure: NO_PRESSURE,
+    }));
+    const runs = inkStrokeRuns(stroke(points) as never, 30);
+    expect(runs[0].start).toBe(30);
+    expect(runs[runs.length - 1].end).toBe(49);
+  });
+
+  it("fades a long stroke on a low dial", () => {
+    const points = Array.from({ length: 300 }, (_, i) => ({
+      x: i * 4,
+      y: 0,
+      pressure: NO_PRESSURE,
+    }));
+    const runs = inkStrokeRuns(stroke(points, { maxFullness: 0.15 }) as never);
+    expect(runs.length).toBeGreaterThan(1);
+    expect(runs[runs.length - 1].alpha).toBeLessThan(runs[0].alpha);
+    expect(runs[runs.length - 1].alpha).toBeGreaterThanOrEqual(INK_DRY_FLOOR);
+  });
+
+  it("holds a full dial solid over the same stroke", () => {
+    const points = Array.from({ length: 300 }, (_, i) => ({
+      x: i * 4,
+      y: 0,
+      pressure: NO_PRESSURE,
+    }));
+    const runs = inkStrokeRuns(stroke(points, { maxFullness: 1 }) as never);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].alpha).toBeGreaterThan(0.95);
   });
 });
 

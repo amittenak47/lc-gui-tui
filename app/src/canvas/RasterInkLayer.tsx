@@ -251,10 +251,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             clipBox.maxY - clipBox.minY,
           );
           bakeCtx.clip();
-          applyInkOp(bakeCtx, op);
+          applyInkOp(bakeCtx, op, viewport.zoom * dpr);
           bakeCtx.restore();
         } else {
-          applyInkOp(bakeCtx, op);
+          applyInkOp(bakeCtx, op, viewport.zoom * dpr);
         }
       },
       [rebuildBake],
@@ -300,10 +300,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               clipBox.maxY - clipBox.minY,
             );
             ctx.clip();
-            applyInkOp(ctx, live);
+            applyInkOp(ctx, live, view.zoom * dpr);
             ctx.restore();
           } else {
-            applyInkOp(ctx, live);
+            applyInkOp(ctx, live, view.zoom * dpr);
           }
           liveDrawnIndexRef.current =
             live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
@@ -413,10 +413,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             clipBox.maxY - clipBox.minY,
           );
           ctx.clip();
-          applyInkOp(ctx, live);
+          applyInkOp(ctx, live, view.zoom * dpr);
           ctx.restore();
         } else {
-          applyInkOp(ctx, live);
+          applyInkOp(ctx, live, view.zoom * dpr);
         }
         liveDrawnIndexRef.current =
           live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
@@ -479,10 +479,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           clipBox.maxY - clipBox.minY,
         );
         ctx.clip();
-        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from);
+        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from, view.zoom * dpr);
         ctx.restore();
       } else {
-        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from);
+        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from, view.zoom * dpr);
       }
     }, [ensureBake, repaint]);
 
