@@ -723,6 +723,15 @@ export interface BoardProps {
    * comes from the wrapper instead, so the page still reads as paper.
    */
   transparentCanvas?: boolean;
+  /**
+   * Offer the read/annotate toggle in the map chrome — Markdown Ink.
+   *
+   * A long document is something you read down, not something you fly around,
+   * and a board built for a one-page problem gives you free 2D pan and
+   * wheel-to-zoom. Reading mode turns the board into a page: the wheel scrolls
+   * instead of zooming, and a drag cannot wander sideways off the column.
+   */
+  scrollModeToggle?: boolean;
   /** Show lined-paper toggle in the map chrome. */
   linedPaperToggle?: boolean;
   /** Show S/M/L reading size (problem boards on mobile — not scratchpad). */
@@ -781,6 +790,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     pageTitle = null,
     pageContent = null,
     transparentCanvas = false,
+    scrollModeToggle = false,
     linedPaperToggle = false,
     showReadingSize = false,
     coachFold = null,
@@ -831,6 +841,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   pageContentRef.current = pageContent;
   const transparentCanvasRef = useRef(transparentCanvas);
   transparentCanvasRef.current = transparentCanvas;
+  /** Reading mode: wheel scrolls, drags stay in the column. */
+  const [scrollMode, setScrollMode] = useState(false);
+  const scrollModeRef = useRef(scrollMode);
+  scrollModeRef.current = scrollMode;
+  /**
+   * Horizontal scroll the current drag is pinned to.
+   *
+   * Excalidraw's hand tool owns the drag and pans in two dimensions, so the
+   * column is held by putting `scrollX` back rather than by stopping it moving.
+   * Captured at pointerdown: a reader who has panned sideways to see a wide
+   * code block should stay where they put themselves, not be snapped to a
+   * margin the moment they scroll down.
+   */
+  const lockedScrollXRef = useRef<number | null>(null);
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
@@ -1797,6 +1821,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       stopPanInertia();
       handPanningRef.current = true;
       rasterInkRef.current?.setCameraMoving(true);
+      lockedScrollXRef.current = null;
       panVelocityRef.current = { x: 0, y: 0 };
       const api = apiRef.current;
       const now = performance.now();
@@ -1807,6 +1832,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           y: state.scrollY ?? 0,
           t: now,
         };
+        if (scrollModeRef.current) lockedScrollXRef.current = state.scrollX ?? 0;
       } else {
         lastPanScrollRef.current = { x: 0, y: 0, t: now };
       }
@@ -1823,7 +1849,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         rasterInkRef.current?.setCameraMoving(false);
         return;
       }
-      const vel = panVelocityRef.current;
+      const vel = scrollModeRef.current
+        ? { x: 0, y: panVelocityRef.current.y }
+        : panVelocityRef.current;
       const speed = Math.hypot(vel.x, vel.y);
       // The lift is not the settle when the view is still coasting — leave the
       // level pinned and let the coast's own settle release it.
@@ -2596,6 +2624,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return;
       }
 
+      /*
+       * Reading mode: the wheel reads the page instead of resizing it.
+       *
+       * Wheel-to-zoom is right for a one-page problem you are sketching on and
+       * wrong for a document you are reading down — every scroll of a trackpad
+       * would rescale the words. Ctrl/Cmd+wheel still zooms, which is what every
+       * other document surface does, so the gesture is not lost, just demoted.
+       */
+      if (scrollModeRef.current && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        userAdjustedCameraRef.current = true;
+        const next = clampPanScroll(
+          state.scrollX ?? 0,
+          (state.scrollY ?? 0) - event.deltaY / zoom,
+          zoom,
+        );
+        api.updateScene({
+          appState: { scrollY: next.scrollY },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
 
@@ -2663,7 +2715,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     root.addEventListener("wheel", onWheel, { capture: true, passive: false });
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
-  }, [interactive, mobile, reportCodeSlot, showZoom]);
+  }, [clampPanScroll, interactive, mobile, reportCodeSlot, showZoom]);
 
   type FitMode = "frame" | "camera" | "both";
 
@@ -2932,6 +2984,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     reportContentSlot();
   }, [pageContent, reportContentSlot]);
+
+  // A toggle mid-gesture must not leave a stale pin behind.
+  useEffect(() => {
+    if (!scrollMode) lockedScrollXRef.current = null;
+  }, [scrollMode]);
+
+  /*
+   * A document opens in reading mode, and a board without one is never in it.
+   *
+   * You open a file to read it; annotating comes after. Reading mode does not
+   * take the pen away — it only changes what the wheel and a sideways drag do —
+   * so starting there costs an annotator one tap and saves every reader from
+   * rescaling the words on their first scroll.
+   */
+  useEffect(() => {
+    setScrollMode(scrollModeToggle);
+  }, [scrollModeToggle]);
 
   // Entering or leaving md-ink flips the canvas between opaque and see-through
   // after the theme has already been applied, so it needs its own push.
@@ -4203,6 +4272,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 >
                   <EyeIcon closed={mapChromeHidden} />
                 </button>
+                {!mapChromeHidden && scrollModeToggle && (
+                  <button
+                    type="button"
+                    className={
+                      scrollMode ? "lc-scroll-toggle is-active" : "lc-scroll-toggle"
+                    }
+                    aria-pressed={scrollMode}
+                    aria-label={scrollMode ? "Reading: wheel scrolls" : "Annotating: wheel zooms"}
+                    title={
+                      scrollMode
+                        ? "Reading — wheel scrolls the page"
+                        : "Annotating — wheel zooms, drag pans freely"
+                    }
+                    onClick={() => setScrollMode((current) => !current)}
+                  >
+                    <ScrollModeIcon reading={scrollMode} />
+                  </button>
+                )}
                 {!mapChromeHidden && linedPaperToggle && (
                   <button
                     type="button"
@@ -4283,6 +4370,34 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 lastZoomPctRef.current = pct;
                 showZoom(pct);
               }
+
+              /*
+               * Hold the column while a reading-mode drag is running.
+               *
+               * The hand tool is Excalidraw's and pans in two dimensions, so
+               * the lock is a correction rather than a restraint: put `scrollX`
+               * back where the drag started. Only during the drag — a zoom or a
+               * fit moves the column legitimately, and the correction is
+               * sub-pixel on any drag that is mostly vertical, which in reading
+               * mode is all of them.
+               */
+              if (
+                scrollModeRef.current &&
+                handPanningRef.current &&
+                !clampingScrollRef.current &&
+                lockedScrollXRef.current !== null &&
+                Math.abs(scrollX - lockedScrollXRef.current) > 0.05
+              ) {
+                clampingScrollRef.current = true;
+                apiRef.current?.updateScene({
+                  appState: { scrollX: lockedScrollXRef.current },
+                  captureUpdate: CaptureUpdateAction.NEVER,
+                });
+                requestAnimationFrame(() => {
+                  clampingScrollRef.current = false;
+                });
+              }
+
               if (
                 activeToolRef.current === "hand" &&
                 handPanningRef.current &&
@@ -4484,6 +4599,43 @@ function EyeIcon({ closed = false }: { closed?: boolean }) {
     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
       <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+/**
+ * Reading vs annotating, in the shape of the eye beside it.
+ *
+ * Reading is a page with a scroll arrow down its side; annotating is the same
+ * page with a nib on it. Same 24-grid, same stroke weight as {@link EyeIcon},
+ * so the two read as one row of toggles rather than two decisions.
+ */
+function ScrollModeIcon({ reading = false }: { reading?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 3h9l4 4v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      {reading ? (
+        <>
+          <path d="M12 9v7" />
+          <path d="M9.4 13.4 12 16l2.6-2.6" />
+        </>
+      ) : (
+        <>
+          <path d="M8 16.5 15 9.5" />
+          <path d="M13.2 7.8 15.6 5.4a1.2 1.2 0 0 1 1.7 1.7l-2.4 2.4z" />
+          <path d="M8 16.5 7.2 18.3l1.8-.8" />
+        </>
+      )}
     </svg>
   );
 }
