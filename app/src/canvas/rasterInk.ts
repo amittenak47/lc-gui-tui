@@ -504,26 +504,6 @@ export function setInkSceneTransform(
   );
 }
 
-/**
- * Key for whether a baked ink bitmap still matches zoom, size, and clip.
- *
- * Scroll is excluded — pan applies a CSS translate on the overlay until the
- * gesture ends, then the bake is rebuilt at the new scroll. Including scroll
- * here forced a full replay of every op on each pan frame.
- */
-export function inkBakeKey(
-  viewport: ViewportTransform,
-  dpr: number,
-  cssW: number,
-  cssH: number,
-  clip: SceneBounds | null,
-): string {
-  const clipPart = clip
-    ? `${clip.minX},${clip.minY},${clip.maxX},${clip.maxY}`
-    : "-";
-  return [cssW, cssH, dpr, viewport.zoom, clipPart].join("|");
-}
-
 /** Repaint the full ink bitmap from committed ops + an in-progress op. */
 export function paintRasterInk(
   ctx: CanvasRenderingContext2D,
