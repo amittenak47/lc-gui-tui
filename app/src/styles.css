@@ -841,6 +841,135 @@ input[type="checkbox"] {
   pointer-events: none;
 }
 
+/* ------------------------------------------------------- capture feedback --- */
+
+/* Countdown, shutter and result. Above the region overlay (60) and the toolbar
+ * island (55) — the whole point is that it is the thing you are looking at. */
+.lc-capture-countdown {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: color-mix(in srgb, #000 26%, transparent);
+  backdrop-filter: blur(1.5px);
+  touch-action: none;
+  cursor: pointer;
+  outline: none;
+}
+
+.lc-capture-countdown-ring {
+  width: 108px;
+  height: 108px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 3px solid color-mix(in srgb, #fff 78%, transparent);
+  background: color-mix(in srgb, #000 34%, transparent);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 35%);
+  animation: lc-capture-tick 1s ease-out infinite;
+}
+
+.lc-capture-countdown-number {
+  font-size: 46px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.lc-capture-countdown-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 6px rgb(0 0 0 / 50%);
+}
+
+.lc-capture-countdown-hint {
+  font-size: 12px;
+  color: color-mix(in srgb, #fff 78%, transparent);
+}
+
+/* One pulse per second, so the ring reads as a clock rather than decoration. */
+@keyframes lc-capture-tick {
+  0% {
+    transform: scale(1);
+  }
+  18% {
+    transform: scale(1.07);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.lc-capture-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 82;
+  pointer-events: none;
+  background: #fff;
+  animation: lc-capture-shutter 220ms ease-out forwards;
+}
+
+@keyframes lc-capture-shutter {
+  0% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.lc-capture-toast {
+  position: absolute;
+  z-index: 81;
+  left: 50%;
+  bottom: calc(var(--lc-safe-bottom, 0px) + 84px);
+  transform: translateX(-50%);
+  max-width: min(88%, 520px);
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--chrome-edge);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  /* A path can be long; wrap rather than run off a tablet's edge. */
+  overflow-wrap: anywhere;
+  text-align: center;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+  pointer-events: none;
+  animation: lc-capture-toast-in 180ms ease-out;
+}
+
+.lc-capture-toast.is-error {
+  border-color: color-mix(in srgb, var(--bad) 55%, var(--chrome-edge));
+  color: var(--bad);
+}
+
+@keyframes lc-capture-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-capture-countdown-ring,
+  .lc-capture-toast {
+    animation: none;
+  }
+}
+
 .lc-pressure-icon {
   display: block;
 }

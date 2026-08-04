@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Only the one cache subdirectory `share_png` writes into is exposed. Anything
+  broader would hand every reader of a shared capture the run of the app cache.
+-->
+<paths>
+    <cache-path name="lc-shares" path="shares/" />
+</paths>

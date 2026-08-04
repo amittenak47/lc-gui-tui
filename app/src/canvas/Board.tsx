@@ -93,7 +93,13 @@ import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing } from "../util/inkSmoothingPref";
-import { loadAutoSaveCaptures, saveCaptureToDevice } from "../util/capturePrefs";
+import {
+  describeCaptureResult,
+  loadAutoSaveCaptures,
+  loadCaptureCountdown,
+  saveCaptureToDevice,
+} from "../util/capturePrefs";
+import { CaptureFeedback, type CaptureFeedbackHandle } from "./CaptureFeedback";
 import { loadInkToolPrefs, saveInkToolPrefs } from "../util/inkToolPrefs";
 import { useRepeatPress } from "../util/useRepeatPress";
 import {
@@ -822,6 +828,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
   const textPlaceGhostRef = useRef<TextPlaceGhostHandle | null>(null);
+  const captureFeedbackRef = useRef<CaptureFeedbackHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [captureMenuOpen, setCaptureMenuOpen] = useState(false);
@@ -2988,12 +2995,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [insertImageFromDataURL],
   );
 
-  const maybeAutoSaveCapture = useCallback(async (blob: Blob) => {
-    if (!loadAutoSaveCaptures()) return;
+  /**
+   * Save the PNG and say what happened.
+   *
+   * Every capture reports now, whether or not a file was written: "Added to the
+   * board" is still an outcome, and it is the one the student sees when
+   * auto-save is off. Silence used to be the only feedback either way.
+   */
+  const reportCapture = useCallback(async (blob: Blob) => {
+    if (!loadAutoSaveCaptures()) {
+      captureFeedbackRef.current?.toast("Added to the board");
+      return;
+    }
     try {
-      await saveCaptureToDevice(blob);
-    } catch {
-      /* best-effort — board image still placed */
+      const result = await saveCaptureToDevice(blob);
+      captureFeedbackRef.current?.toast(
+        describeCaptureResult(result),
+        result.outcome === "failed" ? "error" : "ok",
+      );
+    } catch (cause) {
+      captureFeedbackRef.current?.toast(`Could not save — ${String(cause)}`, "error");
     }
   }, []);
 
@@ -3001,12 +3022,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const api = apiRef.current;
     if (!api) return;
     setCaptureMenuOpen(false);
+    const feedback = captureFeedbackRef.current;
+    // Countdown first, so whatever is mid-thought has a moment to settle and the
+    // shot is not a surprise. Zero seconds shoots straight through.
+    if (feedback && !(await feedback.countdown(loadCaptureCountdown(), "Capturing board"))) {
+      return;
+    }
+    feedback?.flash();
     const blob = await exportBoardBlob(api, rasterInkRef.current?.getOps() ?? []);
-    if (!blob || blob.size === 0) return;
+    if (!blob || blob.size === 0) {
+      feedback?.toast("Nothing to capture", "error");
+      return;
+    }
     const dataURL = await blobToDataURL(blob);
     await insertImageFromDataURL(dataURL, "image/png");
-    await maybeAutoSaveCapture(blob);
-  }, [insertImageFromDataURL, maybeAutoSaveCapture]);
+    await reportCapture(blob);
+  }, [insertImageFromDataURL, reportCapture]);
 
   const beginRegionCapture = useCallback(() => {
     setCaptureMenuOpen(false);
@@ -3042,18 +3073,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const y = Math.min(a.y, b.y);
       const width = Math.abs(b.x - a.x);
       const height = Math.abs(b.y - a.y);
-      if (width < 8 || height < 8) return;
+      if (width < 8 || height < 8) {
+        captureFeedbackRef.current?.toast("Region too small to capture", "error");
+        return;
+      }
+      const feedback = captureFeedbackRef.current;
+      // Same ceremony as the full board: the region is already drawn, so the
+      // countdown is the cue that the shot is coming.
+      if (feedback && !(await feedback.countdown(loadCaptureCountdown(), "Capturing region"))) {
+        return;
+      }
+      feedback?.flash();
       const blob = await exportSceneFrameBlob(
         api,
         rasterInkRef.current?.getOps() ?? [],
         { x, y, width, height },
       );
-      if (!blob || blob.size === 0) return;
+      if (!blob || blob.size === 0) {
+        feedback?.toast("Nothing to capture", "error");
+        return;
+      }
       const dataURL = await blobToDataURL(blob);
       await insertImageFromDataURL(dataURL, "image/png", { x, y, width, height });
-      await maybeAutoSaveCapture(blob);
+      await reportCapture(blob);
     },
-    [clientToScene, insertImageFromDataURL, maybeAutoSaveCapture],
+    [clientToScene, insertImageFromDataURL, reportCapture],
   );
 
 
@@ -4094,6 +4138,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           </svg>
         </button>
       )}
+      {interactive && <CaptureFeedback ref={captureFeedbackRef} />}
+
       {interactive && captureArmed && (
         <div
           className="lc-capture-overlay"

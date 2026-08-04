@@ -1,4 +1,5 @@
-//! Save PNG bytes into the system Photos / Pictures library (Android MediaStore).
+//! Save PNG bytes into the system Photos / Pictures library (Android MediaStore),
+//! and hand one to the Android share sheet.
 //! Desktop falls back to the Pictures folder via the host `save_png_bytes` command.
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,12 @@ struct SaveArgs {
     filename: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ShareArgs {
+    png_base64: String,
+    filename: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct SaveResponse {
     uri: String,
@@ -45,6 +52,21 @@ impl<R: Runtime> GallerySave<R> {
         let response = self.0.run_mobile_plugin::<SaveResponse>(
             "save_png",
             SaveArgs {
+                png_base64,
+                filename: filename.to_string(),
+            },
+        )?;
+        Ok(response.uri)
+    }
+
+    /// Hand a PNG to the system share sheet. Returns the `content://` URI the
+    /// chooser was given.
+    pub fn share_png(&self, png_bytes: &[u8], filename: &str) -> Result<String> {
+        use base64::Engine;
+        let png_base64 = base64::engine::general_purpose::STANDARD.encode(png_bytes);
+        let response = self.0.run_mobile_plugin::<SaveResponse>(
+            "share_png",
+            ShareArgs {
                 png_base64,
                 filename: filename.to_string(),
             },

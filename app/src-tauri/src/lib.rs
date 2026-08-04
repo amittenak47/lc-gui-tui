@@ -9,6 +9,7 @@ pub fn run() {
     let builder = tauri::Builder::default().invoke_handler(tauri::generate_handler![
         lc_client::lc_request,
         capture_save::save_png_bytes,
+        capture_save::share_png_bytes,
         ink_available,
     ]);
 
