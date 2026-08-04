@@ -19,6 +19,7 @@ import {
   applyInkOpFrom,
   eraserSceneRadius,
   hasStylusPressure,
+  inkLineWidth,
   inkStrokeStyle,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
@@ -32,6 +33,7 @@ import {
   type ViewportTransform,
 } from "./rasterInk";
 import { InkTileCache, paintLiveOp } from "./inkTiles";
+import { smoothInkPoints } from "./inkSmoothing";
 import { inkMetrics } from "./inkMetrics";
 
 export interface RasterInkHandle {
@@ -65,6 +67,11 @@ export interface RasterInkLayerProps {
   inkFullness: number;
   pressureClip: number;
   pressureSensitive: boolean;
+  /**
+   * Vector smoothing strength (0–1) applied when the pen lifts. 0 keeps the
+   * raw samples.
+   */
+  smoothing?: number;
   getViewport: () => ViewportTransform | null;
   /**
    * Scene box the ink is allowed to show inside — the open page on a tablet,
@@ -93,6 +100,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       inkFullness,
       pressureClip,
       pressureSensitive,
+      smoothing = 0,
       getViewport,
       clip = null,
       onChange,
@@ -141,6 +149,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     pressureClipRef.current = pressureClip;
     const pressureSensitiveRef = useRef(pressureSensitive);
     pressureSensitiveRef.current = pressureSensitive;
+    const smoothingRef = useRef(smoothing);
+    smoothingRef.current = smoothing;
     const toolRef = useRef(tool);
     toolRef.current = tool;
 
@@ -343,14 +353,38 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         undoRef.current.splice(0, undoRef.current.length - 40);
       }
       redoRef.current = [];
-      opsRef.current = [...opsRef.current, live];
+
+      /*
+       * Smooth the pen stroke now that it is finished.
+       *
+       * On commit rather than per sample: smoothing a live stroke means lagging
+       * the tip behind the nib, and ink that trails the pen is worse than ink
+       * that wobbles. Waiting for the lift buys a symmetric filter with no
+       * latency at all, at the cost of a settle nobody notices at the default
+       * strength. The eraser is left alone — its stamps are a coverage mask,
+       * not a line, and rounding them would leave crumbs behind.
+       */
+      const smoothing = smoothingRef.current;
+      const committed =
+        live.kind === "draw" && smoothing > 0
+          ? {
+              ...live,
+              points: smoothInkPoints(
+                live.points,
+                smoothing,
+                inkLineWidth(live.baseWidth, 0, false),
+              ),
+            }
+          : live;
+
+      opsRef.current = [...opsRef.current, committed];
       liveRef.current = null;
       liveDrawnIndexRef.current = 0;
       lastPointRef.current = null;
 
       // Only the tiles the stroke landed on are dropped, so committing on a
       // full page costs the same as committing on an empty one.
-      ensureTiles().appendOp(live);
+      ensureTiles().appendOp(committed);
       repaint();
       onChange?.();
     }, [ensureTiles, onChange, repaint]);

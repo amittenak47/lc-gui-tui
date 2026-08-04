@@ -92,6 +92,7 @@ import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
+import { loadInkSmoothing } from "../util/inkSmoothingPref";
 import { loadAutoSaveCaptures, saveCaptureToDevice } from "../util/capturePrefs";
 import { loadInkToolPrefs, saveInkToolPrefs } from "../util/inkToolPrefs";
 import { useRepeatPress } from "../util/useRepeatPress";
@@ -782,6 +783,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const strokeWidth = activeTool === "eraser" ? eraserStrokeWidth : penStrokeWidth;
   const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
+  const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
   const [stampTrash, setStampTrash] = useState<{
     left: number;
     top: number;
@@ -1518,6 +1520,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onClip = () => setPressureClip(loadInkPressureClip());
     window.addEventListener("lc-ink-pressure-clip", onClip);
     return () => window.removeEventListener("lc-ink-pressure-clip", onClip);
+  }, []);
+
+  useEffect(() => {
+    const onSmoothing = () => setInkSmoothing(loadInkSmoothing());
+    window.addEventListener("lc-ink-smoothing", onSmoothing);
+    return () => window.removeEventListener("lc-ink-smoothing", onSmoothing);
   }, []);
 
   const deleteSelectedStamps = useCallback(() => {
@@ -3954,6 +3962,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         inkColor={inkColor}
         inkFullness={inkFullness}
         pressureClip={pressureClip}
+        smoothing={inkSmoothing}
         pressureSensitive={pressureSensitive}
         getViewport={getViewport}
         clip={inkClip}
