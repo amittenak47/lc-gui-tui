@@ -6,6 +6,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — captures you can see happen
+
+- **Countdown, shutter, and a toast that names the file.** A capture used to be
+  silent: the board froze for a beat, an image appeared, and where the PNG went
+  — if one was written at all — was something you went and looked for. There is
+  now a countdown you can tap through (Settings → Personalise → Capture
+  countdown, off / 3s / 5s), a shutter flash at the moment of the export, and a
+  toast reading out the real save path. Region capture behaves the same as the
+  whole board, and "Added to the board" is reported too, for when auto-save is
+  off.
+- **Share actually shares.** It could not before: `navigator.share` is gated on
+  a secure context and this WebView is served over cleartext http so the LAN
+  daemon stays reachable, so the API was simply undefined. Sharing is now a
+  native Android intent, through the plugin that already writes to MediaStore —
+  a cache file behind a FileProvider, so sharing does not also leave a copy in
+  the gallery. Off Android the app saves to Photos and says where instead.
+- **A capture folder you pick.** A new save destination taking an absolute path
+  (with `~`), alongside Photos and Downloads. Desktop already wrote to
+  `Pictures/lc`; what was missing was any sign that it had.
+
+### Fixed — board chrome
+
+- **The capture menu matches the shapes menu.** It had a box of its own, and
+  was never wired into the press-outside/Escape dismissal, so it stayed open
+  behind the next stroke.
+- **Hand/Select loses its captions.** Two entries with a line of prose each made
+  the flyout twice the height of the shapes one; the descriptions are tooltips.
+- **The chrome eye gets its card back.** It carried `lc-map-btn` as well as its
+  own class, and the former is declared later in the stylesheet — so a
+  transparent background and squared corners won.
+- **Reset stops flashing the authored layout.** It seeded the template and
+  fitted the camera a frame later, so the old size painted once before the
+  resize. Both now land in the same paint.
+
 ### Changed — the pen rewritten around tiles, runs, and a nib that dries
 
 - **Pan and zoom stop stalling on a full page.** Committed ink used to sit in
