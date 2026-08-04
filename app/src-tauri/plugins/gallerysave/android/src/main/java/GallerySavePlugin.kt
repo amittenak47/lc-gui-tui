@@ -92,7 +92,7 @@ class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
 
             val uri = FileProvider.getUriForFile(
                 activity,
-                "${activity.packageName}.lcshare",
+                "${activity.packageName}.fileprovider",
                 file,
             )
             val send = Intent(Intent.ACTION_SEND).apply {
