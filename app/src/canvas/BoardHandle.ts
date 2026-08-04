@@ -85,6 +85,14 @@ export interface BoardHandle {
   getInkStrokes(): InkStroke[];
   /** Committed raster ink ops — for ambient/review fingerprints. */
   getInkOpCount(): number;
+  /**
+   * The pen or eraser tip is on the paper right now.
+   *
+   * For callers that do expensive work on a timer: serialising the board means
+   * walking every ink point on the page, and doing that under the nib is felt
+   * as the stroke stopping. Wait for the lift.
+   */
+  isInking(): boolean;
   /** Replace raster ink (notebook restore after the ink layer has mounted). */
   setInkOps(ops: InkOp[]): void;
   setTool(tool: ToolName): void;

@@ -8,6 +8,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed — one hand on the page at a time
 
+- **The autosave no longer lands in the middle of a letter.** Board persistence
+  runs on a three-second timer, and saving means walking every element and every
+  ink point on the page and handing the lot to `JSON.stringify` on the main
+  thread — out to the daemon for a problem, into `localStorage` for a
+  scratchpad, where the write itself blocks. On a timer that cost lands wherever
+  it lands, and every so often that is under the nib: the stroke stops partway
+  through and the next letter feels like it is catching up. It reads as random,
+  but it is not — a long stroke takes longer to write, so the tick is likelier
+  to land inside an "e" or a "p" than inside an "i", and the cost grows with
+  everything already on the page. The save now waits for a gap in the writing:
+  never with the tip down, and not between letters either, with a ceiling so a
+  long unbroken burst still gets written out.
+
 - **A letter that disappears when you lift the pen, and comes back a letter
   later.** A square the frame budget could not rasterise falls back to a cached
   zoom level so the writer sees something soft rather than a hole. The level it

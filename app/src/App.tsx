@@ -704,6 +704,10 @@ export function App() {
 
   // Debounced board persistence — skip when scene + ink fingerprint is unchanged.
   const lastSavedHashRef = useRef<number | null>(null);
+  /** Ink op count at the previous tick, for "is the hand still moving?". */
+  const lastTickInkOpsRef = useRef(-1);
+  /** Ticks deferred in a row because writing was still going on. */
+  const deferredSavesRef = useRef(0);
   useEffect(() => {
     if (!problem) return;
     const timer = window.setInterval(() => {
@@ -712,7 +716,38 @@ export function App() {
       const elements = board.getElements();
       const inkOps = board.getInkOpCount();
       const hash = sceneFingerprint(elements, inkOps);
-      if (lastSavedHashRef.current === hash) return;
+      if (lastSavedHashRef.current === hash) {
+        lastTickInkOpsRef.current = inkOps;
+        return;
+      }
+
+      /*
+       * Not while they are writing.
+       *
+       * Saving walks every element and every ink point on the page and hands
+       * the lot to `JSON.stringify` on the main thread — the board goes on the
+       * wire, and the scratchpad goes to `localStorage`, which is a blocking
+       * write. On a timer that cost lands wherever it lands, and every so often
+       * that is under the nib: the stroke stops dead partway through a letter
+       * and the next one feels like it is catching up. It reads as random, but
+       * it is not — a long stroke takes longer, so the tick is likelier to
+       * land inside an "e" or a "p" than inside an "i".
+       *
+       * So wait for a gap in the writing. The tip being down is the obvious
+       * one; the op count still moving means the pen is between letters, which
+       * is a gap far too short to spend on this. A ceiling keeps a long unbroken
+       * burst from going unsaved indefinitely, and even a forced save waits for
+       * the tip to come off the paper.
+       */
+      const stillWriting =
+        lastTickInkOpsRef.current !== inkOps || board.isInking();
+      lastTickInkOpsRef.current = inkOps;
+      if (board.isInking() || (stillWriting && deferredSavesRef.current < 4)) {
+        deferredSavesRef.current += 1;
+        return;
+      }
+      deferredSavesRef.current = 0;
+
       const blob = board.saveBoard();
       dirtyRef.current = true;
       if (isScratchpad(problem)) {
