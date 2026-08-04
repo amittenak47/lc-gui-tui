@@ -154,6 +154,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * the pointer that started it until that pointer lifts.
      */
     const activePointerRef = useRef<number | null>(null);
+    /**
+     * Close an open stroke without committing it. Filled in by the pointer
+     * effect, which owns the capture and the window fallback.
+     */
+    const abandonStrokeRef = useRef<() => void>(() => {});
     const lastPointRef = useRef<ScenePoint | null>(null);
     /**
      * Where the pen actually was, before live smoothing pulled the nib off it.
@@ -504,6 +509,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       ref,
       () => ({
         clear() {
+          abandonStrokeRef.current();
           if (opsRef.current.length === 0) return;
           undoRef.current.push(snapshotOps(opsRef.current));
           redoRef.current = [];
@@ -515,6 +521,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           onChange?.();
         },
         undo() {
+          abandonStrokeRef.current();
           if (undoRef.current.length === 0) return false;
           redoRef.current.push(snapshotOps(opsRef.current));
           opsRef.current = undoRef.current.pop() ?? [];
@@ -526,6 +533,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           return true;
         },
         redo() {
+          abandonStrokeRef.current();
           if (redoRef.current.length === 0) return false;
           undoRef.current.push(snapshotOps(opsRef.current));
           opsRef.current = redoRef.current.pop() ?? [];
@@ -551,6 +559,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           return [...opsRef.current];
         },
         setOps(ops) {
+          abandonStrokeRef.current();
           opsRef.current = cloneOps(ops);
           undoRef.current = [];
           redoRef.current = [];
@@ -962,6 +971,33 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         window.removeEventListener("pointercancel", end, true);
       }
 
+      /*
+       * Throw away whatever the pen is in the middle of, and leave the layer in
+       * a state where the next sample means something.
+       *
+       * `clear`, `undo`, `redo` and a notebook restore all null `liveRef` out
+       * from under an open stroke. That is not "no stroke in progress" — it is
+       * a stroke whose op has gone while `drawingRef` still says the nib is
+       * down, and the difference is a whole letter: every `pointermove` after
+       * it falls out at `if (!live) return`, so the rest of the stroke is
+       * painted nowhere and recorded nowhere, and the lift commits nothing at
+       * all. Nothing tells the writer; the letter is simply not there. Ending
+       * the stroke properly costs the part already drawn — which is what those
+       * four were asking for anyway — and keeps the next one honest.
+       */
+      abandonStrokeRef.current = () => {
+        if (!drawingRef.current) return;
+        inkMetrics.note("stroke-abandoned");
+        drawingRef.current = false;
+        activePointerRef.current = null;
+        strokeViewRef.current = null;
+        strokeBoxRef.current = null;
+        strokeRectRef.current = null;
+        lastPointRef.current = null;
+        rawPointRef.current = null;
+        detachWindowFallback();
+      };
+
       canvas.addEventListener("pointerdown", begin, true);
       canvas.addEventListener("pointermove", move, true);
       canvas.addEventListener("pointerup", end, true);
@@ -978,6 +1014,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         canvas.removeEventListener("pointercancel", end, true);
         canvas.removeEventListener("lostpointercapture", end, true);
         detachWindowFallback();
+        abandonStrokeRef.current = () => {};
       };
       // Tool is read via toolRef — never rebind listeners when pen↔eraser flips.
       // Paint callbacks stay on refs so a Board re-render never drops capture.
