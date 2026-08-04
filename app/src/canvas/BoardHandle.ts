@@ -113,6 +113,16 @@ export interface BoardHandle {
    * No-op helper for problem boards — callers should only use this in scratchpad.
    */
   appendScratchPage(skeletons: Skeleton[]): number;
+  /**
+   * Grow the Markdown Ink page frame to a measured document height.
+   *
+   * Patches the one frame element in place rather than re-seeding the template:
+   * re-seeding would take the annotations with it, and the whole point of the
+   * frame growing is that there is ink on the part of it that already exists.
+   * A no-op when the height has not meaningfully changed, since the measure
+   * fires on every font and layout settle.
+   */
+  setMdInkPageHeight(height: number): void;
   /** Fit after layout has settled (double rAF + short delays). Resolves when
    * the final fit has been applied — call while the board is still hidden.
    */
