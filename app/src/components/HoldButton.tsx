@@ -50,6 +50,11 @@ export interface HoldButtonProps {
   trackProgress?: number;
   /** Shimmer fill while total is unknown. */
   fillIndeterminate?: boolean;
+  /** Custom-tooltip text, for hold buttons that sit in a toolbar. */
+  dataTip?: string;
+  dataTipPlacement?: "top" | "bottom" | "left" | "right";
+  /** Reflected as `aria-pressed`, for a hold button that toggles a mode. */
+  pressed?: boolean;
 }
 
 export function HoldButton({
@@ -64,6 +69,9 @@ export function HoldButton({
   resetKey,
   trackProgress = 0,
   fillIndeterminate = false,
+  dataTip,
+  dataTipPlacement,
+  pressed,
 }: HoldButtonProps) {
   const [holdProgress, setHoldProgress] = useState(0);
   const holdingRef = useRef(false);
@@ -169,6 +177,9 @@ export function HoldButton({
         (onTap ? `${label}: tap to edit, hold to confirm` : `Hold to confirm: ${label}`)
       }
       aria-busy={fillIndeterminate || (trackProgress > 0 && trackProgress < 1)}
+      aria-pressed={pressed}
+      data-tip={dataTip}
+      data-tip-placement={dataTipPlacement}
       onPointerDown={(event) => {
         event.preventDefault();
         (event.currentTarget as HTMLButtonElement).setPointerCapture(event.pointerId);

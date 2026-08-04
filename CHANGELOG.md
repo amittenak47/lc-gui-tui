@@ -6,6 +6,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Discard now discards
+
+- **The scratchpad's Discard button did nothing, and Save could not be
+  disproved.** The board autosaves every three seconds, so by the time anyone
+  reached the leave dialog their writing was already committed to the notebook
+  library — and Discard then simply navigated away, leaving intact exactly what
+  it offered to throw out. Save looked like it worked for the same reason: the
+  autosave had already done it, whichever button you pressed. A session now
+  records what the library held when the notebook opened, and Discard restores
+  it — putting the entry back byte for byte, or deleting the notebook outright
+  when the session opened blank and the autosave is the only reason it exists.
+  Restoring keeps the original timestamp, so a discarded session does not leave
+  a notebook sitting at the top of the library looking freshly worked on. An
+  explicit Save re-baselines, so discarding later rolls back to the save rather
+  than past it. The autosave keeps its real job — surviving a crash or a closed
+  lid — without deciding what the writer meant to keep.
+
+- **A blank notebook no longer joins the library on its own.** The first
+  autosave tick of a fresh scratchpad had nothing to write but the empty
+  template and wrote it anyway, so opening the scratchpad and changing your
+  mind left a permanent entry three seconds later. There is nothing to protect
+  there — a crash on a blank page loses a blank page — so untouched notebooks
+  are now skipped.
+
+- **Two notebooks created in the same millisecond no longer collide.** Ids came
+  from the clock alone, so the second notebook took the first one's id and
+  overwrote it: the library losing an entry where it should have gained one.
+
+### Changed — getting in and out of the scratchpad
+
+- **The paper icon is tap for a new notebook, hold for the library.** Starting
+  to write is the common case by a wide margin and it was behind a dialog whose
+  other option nobody wanted most of the time. The hold fills like every other
+  hold in the app.
+
+- **Leaving an untouched notebook no longer asks.** A notebook nobody wrote in
+  is not a decision worth interrupting for: the exit leaves straight away and
+  takes the autosave's placeholder with it. Anything written still gets the
+  menu, and the exit control stays a tap.
+
+- **A saved notebook is one row with the bin inside it.** The delete button was
+  a second, unlabelled card sitting beside the entry, with nothing to say which
+  notebook it would remove. The row is now the entry — the load target fills
+  everything the bin leaves, so the big easy thing to hit is the one you meant
+  and the destructive one is tucked in the corner behind its own hairline edge.
+
 ### Added — you can see what zoom you are at
 
 - **A zoom readout in the middle of the board.** Zooming a page of handwriting

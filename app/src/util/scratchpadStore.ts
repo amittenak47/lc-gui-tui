@@ -67,6 +67,24 @@ export function getScratchNotebook(id: string): ScratchNotebook | null {
   return readLibrary().find((entry) => entry.id === id) ?? null;
 }
 
+/**
+ * An id no notebook in the library is using.
+ *
+ * The clock alone was not enough. A millisecond is a long time to a `localStorage`
+ * write but not to two of them, and two notebooks created inside the same one
+ * got the same id — so the second silently overwrote the first, and the library
+ * quietly lost a notebook instead of gaining one. Rare by hand, routine when
+ * anything creates notebooks in a loop.
+ */
+function freshId(library: readonly ScratchNotebook[], now: number): string {
+  const base = `scratch-${now.toString(36)}`;
+  if (!library.some((entry) => entry.id === base)) return base;
+  for (let suffix = 1; ; suffix += 1) {
+    const candidate = `${base}-${suffix.toString(36)}`;
+    if (!library.some((entry) => entry.id === candidate)) return candidate;
+  }
+}
+
 export function saveScratchNotebook(input: {
   id?: string;
   title?: string;
@@ -76,7 +94,7 @@ export function saveScratchNotebook(input: {
 }): ScratchNotebook {
   const library = readLibrary();
   const now = Date.now();
-  const id = input.id ?? `scratch-${now.toString(36)}`;
+  const id = input.id ?? freshId(library, now);
   const existing = library.find((entry) => entry.id === id);
   if (!existing && library.length >= SCRATCHPAD_LIBRARY_LIMIT) {
     throw new ScratchpadLibraryFullError(
@@ -110,6 +128,21 @@ export function saveScratchNotebook(input: {
 
 export function deleteScratchNotebook(id: string): void {
   writeLibrary(readLibrary().filter((entry) => entry.id !== id));
+}
+
+/**
+ * Put a notebook back exactly as it was, for Discard.
+ *
+ * Not {@link saveScratchNotebook}: that one is a *save*, so it stamps a new
+ * `updatedAt` and enforces the library limit. Neither is right here. Discard
+ * has to leave no trace of the session — including in the sort order, where a
+ * freshened timestamp would jump a notebook to the top of the library that the
+ * writer just said they did not want to keep. The limit cannot bite either,
+ * since this only ever restores an entry that was already in the library.
+ */
+export function restoreScratchNotebook(entry: ScratchNotebook): void {
+  const without = readLibrary().filter((existing) => existing.id !== entry.id);
+  writeLibrary([entry, ...without]);
 }
 
 /** Migrate the pre-library single-slot keys if present. */

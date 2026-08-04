@@ -4670,6 +4670,32 @@ button.lc-row-selected:hover:not(:disabled) {
   touch-action: none;
 }
 
+/*
+ * A hold button wearing an icon button's clothes.
+ *
+ * Beats `.lc-hold-reveal`'s pill sizing so the paper icon in the header keeps
+ * the same box as the plain `.lc-icon` buttons beside it — the tap/hold split
+ * should be something you discover by holding, not a control that announces
+ * itself by being a different shape from its neighbours.
+ */
+.lc-hold-reveal.lc-hold-icon {
+  min-width: 0;
+  padding: 0;
+  font-weight: inherit;
+  color: inherit;
+  background: transparent;
+}
+
+.lc-hold-reveal.lc-hold-icon .lc-hold-reveal-fill {
+  background: color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+.lc-hold-reveal.lc-hold-icon .lc-hold-reveal-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Beat `.lc-hold-reveal` — transparent Select-style chip with a red edge. */
 .lc-hold-reveal.lc-offline-chip {
   min-width: 0;
@@ -6276,38 +6302,84 @@ button.lc-row-selected:hover:not(:disabled) {
   color: var(--ink);
 }
 
-.lc-scratch-load-row {
+/*
+ * A saved-notebook row is one card with the trash inside it.
+ *
+ * The card's edge and surface live here rather than on the hold button, so the
+ * delete control reads as part of the entry it deletes instead of as a second,
+ * unlabelled card sitting next to it. The hold target takes the whole
+ * remainder of the row — the entry is the big, easy thing to hit, and the
+ * destructive one is the small thing tucked in the corner.
+ */
+.lc-scratch-load-entry {
   display: flex;
   flex-direction: row;
   align-items: stretch;
-  gap: 6px;
+  width: 100%;
+  border: 1px solid var(--border, rgb(127 127 127 / 25%));
+  border-radius: 10px;
+  background: var(--surface, var(--bg));
+  overflow: hidden;
+  transition: border-color 120ms ease-out;
 }
 
-.lc-scratch-load-row .lc-scratch-load-hold {
+.lc-scratch-load-entry:hover:has(.lc-scratch-load-hold:hover:not(:disabled)) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border, transparent));
+}
+
+.lc-scratch-load-entry:hover:has(.lc-scratch-load-trash:hover:not(:disabled)) {
+  border-color: color-mix(in srgb, var(--bad, #b91c1c) 50%, var(--border, transparent));
+}
+
+/* The hold fill is clipped by the card, so the button carries no edge itself. */
+.lc-hold-reveal.lc-scratch-load-hold {
   flex: 1 1 auto;
   min-width: 0;
+  display: block;
+  padding: 12px 14px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 400;
+  text-align: left;
+}
+
+.lc-scratch-load-hold .lc-hold-reveal-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.lc-scratch-load-hold strong {
+  font-size: 13.5px;
 }
 
 .lc-scratch-load-trash {
   flex: 0 0 auto;
-  width: 42px;
-  min-height: 42px;
+  align-self: stretch;
+  width: 46px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--chrome-edge);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--ink);
-  font-size: 16px;
+  border: none;
+  /* The only edge inside the card: a hairline the thumb can aim off. */
+  border-left: 1px solid var(--border, rgb(127 127 127 / 25%));
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--ink) 55%, transparent);
   line-height: 1;
   cursor: pointer;
+  transition:
+    background-color 120ms ease-out,
+    color 120ms ease-out;
 }
 
 .lc-scratch-load-trash:hover:not(:disabled) {
-  background: color-mix(in srgb, #b91c1c 12%, var(--surface));
-  border-color: color-mix(in srgb, #b91c1c 40%, var(--chrome-edge));
+  background: color-mix(in srgb, var(--bad, #b91c1c) 14%, transparent);
+  color: var(--bad, #b91c1c);
 }
 
 .lc-scratch-load-trash:disabled {

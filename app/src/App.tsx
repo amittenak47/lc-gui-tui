@@ -88,13 +88,16 @@ import { splitProblemKey } from "./util/datasetKey";
 import { isMobileViewport, useIsMobile } from "./util/mobile";
 import { installSafeAreaInsets } from "./util/safeArea";
 import {
+  deleteScratchNotebook,
   getScratchNotebook,
   migrateLegacyScratchpad,
+  restoreScratchNotebook,
   saveScratchNotebook,
   ScratchpadLibraryFullError,
   SCRATCHPAD_PAGE_LIMIT,
   scratchLibraryCount,
   SCRATCHPAD_LIBRARY_LIMIT,
+  type ScratchNotebook,
 } from "./util/scratchpadStore";
 import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
@@ -159,6 +162,30 @@ export function App() {
   const [scratchEntryOpen, setScratchEntryOpen] = useState(false);
   const [scratchLibOpen, setScratchLibOpen] = useState(false);
   const scratchLibResumeRef = useRef<(() => void) | null>(null);
+  /**
+   * What the library held for this notebook when the session opened.
+   *
+   * Discard used to be a lie. The board autosaves every three seconds, so by
+   * the time anyone reached the leave dialog their work was already committed
+   * to the library — and "Discard" then did nothing but navigate away, leaving
+   * exactly what it claimed to throw out. Which also meant Save was
+   * unfalsifiable: it looked like it worked because the autosave had already
+   * done it.
+   *
+   * Keeping the entry point state is what makes both honest. Discard restores
+   * this, and a notebook that was not in the library when the session opened is
+   * restored by deleting it. The autosave keeps its real job — surviving a
+   * crash or a killed tab — without deciding what the writer meant to keep.
+   */
+  const scratchBaselineRef = useRef<{ id: string | null; entry: ScratchNotebook | null }>({
+    id: null,
+    entry: null,
+  });
+  /**
+   * Fingerprint of the notebook as it was opened, for "did they write
+   * anything?". Compared against the live board — see {@link scratchUntouched}.
+   */
+  const scratchPristineHashRef = useRef<number | null>(null);
   const [pairing, setPairing] = useState<Pairing>(() => loadPairing());
   const [pairingEditing, setPairingEditing] = useState(false);
   const client = useMemo(() => new LcClient(pairing), [pairing]);
@@ -748,6 +775,22 @@ export function App() {
       }
       deferredSavesRef.current = 0;
 
+      if (isScratchpad(problem)) {
+        /*
+         * Don't put an untouched notebook in the library.
+         *
+         * The first tick of a fresh scratchpad has nothing to save but the
+         * blank template, and saving it anyway was how the library filled up
+         * with empty notebooks nobody asked for — open the scratchpad, change
+         * your mind, and three seconds later it is a permanent entry. There is
+         * also nothing to protect: a crash here loses a blank page.
+         */
+        if (scratchPristineHashRef.current === hash) {
+          lastSavedHashRef.current = hash;
+          return;
+        }
+      }
+
       const blob = board.saveBoard();
       dirtyRef.current = true;
       if (isScratchpad(problem)) {
@@ -1113,7 +1156,15 @@ export function App() {
           boardRef.current?.seedTemplate(skeletons);
           setScratchPageCount(1);
           setScratchNotebookId(null);
+          notebookId = null;
         }
+
+        // A blank notebook has no baseline, and that is the point: discarding
+        // one means deleting whatever the autosave went on to create for it.
+        scratchBaselineRef.current = {
+          id: restored ? notebookId : null,
+          entry: restored && notebookId ? getScratchNotebook(notebookId) : null,
+        };
 
         boardRef.current?.applyThemeInk(themeId);
         boardRef.current?.stripCoachViz();
@@ -1126,6 +1177,16 @@ export function App() {
           if (notebook && Array.isArray(notebook.board.ink)) {
             boardRef.current?.setInkOps(notebook.board.ink);
           }
+        }
+
+        // Taken after the template and any restored ink have landed, so it is
+        // the notebook as the writer first sees it. Anything that moves this
+        // number from here is something they did.
+        {
+          const board = boardRef.current;
+          scratchPristineHashRef.current = board
+            ? sceneFingerprint(board.getElements(), board.getInkOpCount())
+            : null;
         }
 
         setBoardPreparing(false);
@@ -2263,14 +2324,75 @@ export function App() {
    * decision worth interrupting for. `AttemptDialog` explains which of the two
    * questions is being asked.
    */
+  /**
+   * Nothing has happened to this notebook since it opened.
+   *
+   * The fingerprint covers the scene and the ink op count together, so it
+   * catches a stray stroke as readily as a page added and left blank. Without
+   * a pristine hash — a notebook opened before this ran, say — the honest
+   * answer is "assume they did something" and show the menu.
+   */
+  const scratchUntouched = useCallback(() => {
+    const board = boardRef.current;
+    const pristine = scratchPristineHashRef.current;
+    if (!board || pristine === null) return false;
+    return sceneFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
+  }, []);
+
+  /**
+   * Undo everything this session committed to the library.
+   *
+   * Restores the entry the session opened on, or deletes the notebook outright
+   * when it opened blank — the autosave will have created one by now, and that
+   * entry exists only because the writer was mid-session, not because they
+   * asked for it.
+   */
+  /**
+   * Treat what is in the library now as the thing to fall back to.
+   *
+   * Called after an explicit Save, so that a Discard later in the same session
+   * rolls back to the save rather than past it. Without this, saving from the
+   * scratchpad menu and then discarding on the way out would have thrown away
+   * the save the writer had just asked for — the worst possible reading of a
+   * button labelled Discard.
+   */
+  const rebaselineScratchSession = useCallback((id: string) => {
+    scratchBaselineRef.current = { id, entry: getScratchNotebook(id) };
+  }, []);
+
+  const discardScratchSession = useCallback(() => {
+    const baseline = scratchBaselineRef.current;
+    if (baseline.entry && baseline.id) {
+      restoreScratchNotebook(baseline.entry);
+    } else if (scratchNotebookId) {
+      deleteScratchNotebook(scratchNotebookId);
+    }
+    scratchBaselineRef.current = { id: null, entry: null };
+    scratchPristineHashRef.current = null;
+    setScratchNotebookId(null);
+  }, [scratchNotebookId]);
+
   const leaveProblem = useCallback(
     (next: () => void) => {
       if (!problem) {
         next();
         return;
       }
-      // Scratchpad always offers save / discard / load.
-      if (!isScratchpad(problem) && !dirtyRef.current) {
+      if (isScratchpad(problem)) {
+        // A notebook nobody wrote in is not a decision worth interrupting for.
+        // Leave straight away and take the autosave's placeholder with us.
+        if (scratchUntouched()) {
+          boardSaveSuspendedRef.current = true;
+          discardScratchSession();
+          next();
+          return;
+        }
+        setLeavingError(null);
+        setLeavingPhase("open");
+        setLeaving({ run: next });
+        return;
+      }
+      if (!dirtyRef.current) {
         next();
         return;
       }
@@ -2278,7 +2400,7 @@ export function App() {
       setLeavingPhase("open");
       setLeaving({ run: next });
     },
-    [problem],
+    [discardScratchSession, problem, scratchUntouched],
   );
 
   const resolveLeave = useCallback(
@@ -2316,6 +2438,7 @@ export function App() {
                   pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
                 });
                 setScratchNotebookId(saved.id);
+                rebaselineScratchSession(saved.id);
               } catch (cause) {
                 if (cause instanceof ScratchpadLibraryFullError) {
                   await dismissDialog();
@@ -2332,6 +2455,11 @@ export function App() {
                 throw cause;
               }
             }
+            setNotice("Notebook saved.");
+          } else {
+            // The autosave has been committing to the library all along, so
+            // discarding is real work, not a skipped save.
+            discardScratchSession();
           }
           await dismissDialog();
           setLeavingPending(false);
@@ -2380,6 +2508,8 @@ export function App() {
     },
     [
       client,
+      discardScratchSession,
+      rebaselineScratchSession,
       problem,
       leaving,
       leavingPending,
@@ -2564,16 +2694,21 @@ export function App() {
         </div>
 
         <div className="lc-header-right">
-          {/* Paper icon opens the scratchpad load / new menu. */}
+          {/*
+            Paper icon: tap for a blank notebook, hold for the library.
+            Starting to write is the common case by a wide margin, and it was
+            behind a dialog whose other option nobody wanted most of the time.
+          */}
           {!problem && (
-            <button
-              type="button"
-              className="lc-icon lc-tip-target"
-              aria-label="Scratchpad"
-              data-tip="Scratchpad — open load / new"
-              data-tip-placement="bottom"
+            <HoldButton
+              label="Scratchpad"
+              ariaLabel="Scratchpad: tap for a new notebook, hold to open the library"
+              className="lc-icon lc-tip-target lc-hold-icon"
+              dataTip="Scratchpad — tap for new, hold to load"
+              dataTipPlacement="bottom"
               disabled={busy !== null}
-              onClick={() => setScratchEntryOpen(true)}
+              onTap={() => void openScratchpad({ fresh: true })}
+              onConfirm={() => setScratchEntryOpen(true)}
             >
               <svg
                 className="lc-icon-svg"
@@ -2592,7 +2727,7 @@ export function App() {
                 <path d="M8 13h8" />
                 <path d="M8 17h5" />
               </svg>
-            </button>
+            </HoldButton>
           )}
           {problem && isScratchpad(problem) && (
             <button
@@ -2982,6 +3117,8 @@ export function App() {
                   ),
                 });
                 setScratchNotebookId(saved.id);
+                // Discard now rolls back to this save, not past it.
+                rebaselineScratchSession(saved.id);
                 setNotice(`Saved “${saved.title}”.`);
               } catch (cause) {
                 if (cause instanceof ScratchpadLibraryFullError) {

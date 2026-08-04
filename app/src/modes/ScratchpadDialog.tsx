@@ -89,9 +89,9 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
           <h2>{isLeave ? "Leave scratchpad?" : "Scratchpad"}</h2>
           <p className="lc-muted">
             {pickingLoad
-              ? "Pick a saved notebook — trash removes it."
+              ? "Hold an entry to open it. The bin deletes it."
               : isLeave
-                ? "Hold to confirm."
+                ? "Discard undoes everything written since this notebook was opened. Hold to confirm."
                 : allowSave
                   ? "Save this notebook, load another, or start blank."
                   : "Start blank or load a saved notebook."}
@@ -106,11 +106,20 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
               {notebooks.length === 0 && (
                 <p className="lc-muted">No saved notebooks yet.</p>
               )}
+              {/*
+                The row *is* the entry: it carries the card's edge and fill,
+                and the trash sits inside it rather than beside it. Two
+                separate cards read as two separate things, and the one on the
+                right had no label to say which notebook it would delete. A
+                button cannot legally nest inside a button, so the entry's own
+                surface is the row and the hold target fills what the trash
+                leaves.
+              */}
               {notebooks.map((entry) => (
-                <div key={entry.id} className="lc-scratch-load-row">
+                <div key={entry.id} className="lc-scratch-load-entry">
                   <HoldButton
                     label={`Load ${entry.title}`}
-                    className="lc-hold-choice lc-scratch-load-hold"
+                    className="lc-scratch-load-hold"
                     disabled={locked}
                     onConfirm={() => props.onChoose("load", entry.id)}
                     resetKey={error}
@@ -125,11 +134,26 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                     type="button"
                     className="lc-scratch-load-trash"
                     aria-label={`Delete ${entry.title}`}
-                    title="Delete notebook"
+                    title={`Delete ${entry.title}`}
                     disabled={locked}
                     onClick={() => removeNotebook(entry.id)}
                   >
-                    🗑
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="15"
+                      height="15"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.75"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M4 6h16" />
+                      <path d="M9 6V4h6v2" />
+                      <path d="M6 6l1 14h10l1-14" />
+                      <path d="M10 10v7M14 10v7" />
+                    </svg>
                   </button>
                 </div>
               ))}
