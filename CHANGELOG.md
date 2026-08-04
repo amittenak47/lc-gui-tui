@@ -8,6 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed — one hand on the page at a time
 
+- **A letter that disappears when you lift the pen, and comes back a letter
+  later.** A square the frame budget could not rasterise falls back to a cached
+  zoom level so the writer sees something soft rather than a hole. The level it
+  fell back to was the last one at which *every* visible tile was ready — which
+  is the wrong answer precisely when it is needed, because after a few complete
+  frames that is the level you are already on, and a fallback from a level to
+  itself is refused. The square was left empty. Empty is not "a bit blurry":
+  the overlay is cleared before the blit, so an unfilled square is committed
+  ink missing from the screen. Lift the pen, the commit repaints, one square
+  misses, and the letter you just wrote is gone until the next lift repaints it
+  back. It now falls back to whatever is actually cached, nearest level first.
+- **A stroke no longer evaporates when the page is replaced under it.**
+  `clear`, `undo`, `redo` and a notebook restore each dropped the in-progress
+  stroke's op without telling the pointer path the stroke was over. Every
+  sample after that went nowhere and the lift committed nothing — the letter
+  absent, with nothing on screen or in the log to say why.
+
 - **A resting hand no longer wrecks the letter under the pen.** The ink layer
   answered to any pointer at all, and with palm reject off a tablet reports the
   heel of your hand as one. So a palm landing mid-word ended the stroke the nib
