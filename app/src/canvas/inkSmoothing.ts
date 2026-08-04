@@ -15,7 +15,7 @@
  * stroke never shortens or drifts off what it was written against.
  */
 
-import type { ScenePoint } from "./rasterInk";
+import { INK_SLOWNESS_NEUTRAL, type ScenePoint } from "./rasterInk";
 
 export const INK_SMOOTHING_DEFAULT = 0.35;
 
@@ -175,20 +175,8 @@ export function roundInkCorners(points: readonly ScenePoint[]): ScenePoint[] {
   for (let index = 0; index < points.length - 1; index++) {
     const a = points[index];
     const b = points[index + 1];
-    if (index > 0) {
-      out.push({
-        x: a.x * 0.75 + b.x * 0.25,
-        y: a.y * 0.75 + b.y * 0.25,
-        pressure: blendPressure(a.pressure, b.pressure, 0.25),
-      });
-    }
-    if (index < points.length - 2) {
-      out.push({
-        x: a.x * 0.25 + b.x * 0.75,
-        y: a.y * 0.25 + b.y * 0.75,
-        pressure: blendPressure(a.pressure, b.pressure, 0.75),
-      });
-    }
+    if (index > 0) out.push(blendPoint(a, b, 0.25));
+    if (index < points.length - 2) out.push(blendPoint(a, b, 0.75));
   }
   out.push(points[points.length - 1]);
   return out;
@@ -201,6 +189,31 @@ export function roundInkCorners(points: readonly ScenePoint[]): ScenePoint[] {
 function blendPressure(from: number, to: number, t: number): number {
   if (from < 0 || to < 0) return t < 0.5 ? from : to;
   return from + (to - from) * t;
+}
+
+/**
+ * A point `t` of the way along a segment, carrying everything the samples do.
+ *
+ * The corner cutter used to build its two new points out of x, y and pressure
+ * alone, which quietly dropped `slowness` from every interior point of a
+ * smoothed stroke. Slowness is what speed ink reads for width and alpha, and a
+ * missing one falls back to {@link INK_SLOWNESS_NEUTRAL} — so a stroke written
+ * with speed ink on was laid down with its pace and then flattened to an even
+ * one the instant the pen lifted, which reads as the letter changing shape
+ * under your hand. Like pressure, it is only carried when the stroke has it.
+ */
+function blendPoint(from: ScenePoint, to: ScenePoint, t: number): ScenePoint {
+  const point: ScenePoint = {
+    x: from.x + (to.x - from.x) * t,
+    y: from.y + (to.y - from.y) * t,
+    pressure: blendPressure(from.pressure, to.pressure, t),
+  };
+  if (from.slowness !== undefined || to.slowness !== undefined) {
+    const a = from.slowness ?? INK_SLOWNESS_NEUTRAL;
+    const b = to.slowness ?? INK_SLOWNESS_NEUTRAL;
+    point.slowness = a + (b - a) * t;
+  }
+  return point;
 }
 
 /**

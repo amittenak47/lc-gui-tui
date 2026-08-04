@@ -128,6 +128,27 @@ describe("roundInkCorners", () => {
   it("leaves a two-point stroke alone", () => {
     expect(roundInkCorners(path([0, 0], [5, 5]))).toEqual(path([0, 0], [5, 5]));
   });
+
+  it("carries slowness onto the points it cuts in", () => {
+    const out = roundInkCorners([
+      { x: 0, y: 0, pressure: NO_PRESSURE, slowness: 0.2 },
+      { x: 10, y: 0, pressure: NO_PRESSURE, slowness: 0.8 },
+      { x: 20, y: 0, pressure: NO_PRESSURE, slowness: 0.8 },
+    ]);
+    // Every point keeps a pace: without one, speed ink reads the neutral
+    // fallback and the whole stroke flattens to an even width on the lift.
+    for (const point of out) {
+      expect(point.slowness).toBeGreaterThan(0);
+    }
+    expect(out[0].slowness).toBe(0.2);
+    expect(out[out.length - 1].slowness).toBe(0.8);
+  });
+
+  it("leaves a stroke written without speed ink unpaced", () => {
+    for (const point of roundInkCorners(path([0, 0], [10, 0], [10, 10]))) {
+      expect(point.slowness).toBeUndefined();
+    }
+  });
 });
 
 describe("smoothInkPoints", () => {
