@@ -23,6 +23,75 @@ export const NO_PRESSURE = -1;
 /** Mild nib spread at full press — width stays mostly from the tip wheel. */
 export const INK_WIDTH_SPREAD = 0.12;
 
+/* ------------------------------------------------------------------ ink --- */
+
+/**
+ * How the ink dial behaves: a nib charge that drains as you write, not a flat
+ * opacity over the whole stroke.
+ *
+ * Flat opacity was wrong twice over. It read as a uniformly grey line rather
+ * than ink, and because a stroke used to be painted as a chain of overlapping
+ * round-capped segments, each overlap composited again — so a "50%" stroke came
+ * out near-solid down the middle with a wide soft halo on both edges. That halo
+ * is what made the thinnest nib look blunt instead of like fresh lead.
+ *
+ * Now every stroke starts full and fades with how far it has written, and the
+ * dial sets how long the charge lasts. Lifting the pen ends the op, so the next
+ * stroke starts full again — the pen goes back in the ink.
+ */
+
+/** Ink never runs dry enough to be unreadable. */
+export const INK_DRY_FLOOR = 0.34;
+
+/**
+ * Nib-widths of writing an empty dial lasts, and how sharply the dial buys more.
+ *
+ * Distance is in nib widths rather than scene units so a fat marker and a fine
+ * liner drain over the same amount of *writing*, not the same geometric length.
+ * Capacity is `MIN / (1 - dial)^EXPONENT`, which runs to infinity as the dial
+ * reaches full — so "100%" means a nib that does not dry, exactly, with no
+ * special case and no residual fade to split a stroke into pieces over.
+ */
+export const INK_CAPACITY_MIN = 14;
+export const INK_CAPACITY_EXPONENT = 2;
+
+/**
+ * Floor on pressure's share of the deposit.
+ *
+ * Pressure used to scale alpha all the way to zero, so the light in-and-out
+ * ends of a fast stroke faded to nothing and the stroke read as broken. A light
+ * touch should be lighter, not absent.
+ */
+export const INK_PRESSURE_FLOOR = 0.45;
+
+/**
+ * Smallest width, in device pixels, a stroke is allowed to rasterise at.
+ *
+ * Below about a pixel the antialiaser spreads the line over two rows at partial
+ * coverage and the ink turns grey and furry — the "not sharp" complaint at the
+ * thinnest tip, and what makes writing wash out as you zoom away from it. Round
+ * the geometry up to a hairline instead and let it stay black.
+ */
+export const INK_MIN_DEVICE_PX = 1.15;
+
+/** Charge left after `consumed` nib-widths, for a dial at `fullness`. */
+export function inkReservoirAlpha(consumed: number, fullness: number): number {
+  const dial = Math.max(0, Math.min(1, fullness));
+  // Superlinear, so the top of the dial buys orders of magnitude more writing
+  // than the bottom — linear here spent most of the travel on strokes nobody
+  // writes that long. At the very top this is Infinity and the term below is
+  // exactly 1.
+  const capacity = INK_CAPACITY_MIN / (1 - dial) ** INK_CAPACITY_EXPONENT;
+  const left = Math.exp(-Math.max(0, consumed) / capacity);
+  return INK_DRY_FLOOR + (1 - INK_DRY_FLOOR) * left;
+}
+
+/** Pressure's share of the deposit — lighter, never invisible. */
+export function inkPressureAlpha(pNorm: number): number {
+  const p = Math.max(0, Math.min(1, pNorm));
+  return INK_PRESSURE_FLOOR + (1 - INK_PRESSURE_FLOOR) * p;
+}
+
 export interface ScenePoint {
   x: number;
   y: number;
@@ -82,15 +151,19 @@ export function inkLineWidth(
   return base * spread;
 }
 
-/** Stroke opacity — fullness via alpha; stylus maps 0..maxFullness. */
+/**
+ * Ink laid down at one sample: the nib's charge, dimmed by how light the touch
+ * is. `consumed` is how far into the stroke the sample sits, in nib widths.
+ */
 export function inkStrokeAlpha(
   maxFullness: number,
   pNorm: number,
   pressureSensitive: boolean,
+  consumed = 0,
 ): number {
-  const ceiling = Math.max(0, Math.min(1, maxFullness));
-  if (!pressureSensitive) return ceiling;
-  return ceiling * Math.max(0, Math.min(1, pNorm));
+  const charge = inkReservoirAlpha(consumed, maxFullness);
+  if (!pressureSensitive) return charge;
+  return charge * inkPressureAlpha(pNorm);
 }
 
 export interface InkStrokeStyle {
@@ -105,27 +178,31 @@ export function inkStrokeStyle(
   pressure: number,
   pressureClip: number,
   pressureSensitive: boolean,
+  consumed = 0,
 ): InkStrokeStyle {
   const stylus = pressureSensitive && hasStylusPressure(pressure);
   const pNorm = stylus ? normalizePressure(pressure, pressureClip) : 0;
   return {
     lineWidth: inkLineWidth(baseWidth, pNorm, stylus),
-    alpha: inkStrokeAlpha(maxFullness, pNorm, stylus),
+    alpha: inkStrokeAlpha(maxFullness, pNorm, stylus, consumed),
   };
 }
 
 /**
  * Stamp spacing along a segment, as a fraction of the current line width.
  *
- * A stroke is a chain of round-capped segments, so the spacing decides how the
- * edge reads. At a constant width, 0.35 is invisible. Under pressure the width
- * changes between samples, and at 0.35 consecutive caps step the edge instead
- * of tapering it — visible as a scalloped stroke on a fast, light flick. Denser
- * stamps cost strictly linear paint time, which the coalesced batch already
- * amortises into one paint per frame.
+ * These used to be tiny — a stroke was a chain of round-capped segments, and
+ * anything sparser than about a third of a width left the edge visibly
+ * scalloped on a fast flick. A stroke is now one polyline with round joins, so
+ * spacing no longer decides how the edge reads; it only sets how finely the
+ * width may taper between two pointer samples. That buys back roughly three
+ * quarters of the points, which every full replay, every export and every saved
+ * board pays for.
+ *
+ * Pressure strokes still stamp denser, since their width is what moves.
  */
-export const INK_STEP_FACTOR = 0.35;
-export const INK_STEP_FACTOR_PRESSURE = 0.2;
+export const INK_STEP_FACTOR = 1.1;
+export const INK_STEP_FACTOR_PRESSURE = 0.55;
 
 /**
  * EMA weight for stylus pressure.
@@ -178,35 +255,179 @@ export function stampAlongSegment(
   return out;
 }
 
+/* --------------------------------------------------------------- runs --- */
+
+/**
+ * Ink used, in nib widths, at each point of a stroke.
+ *
+ * Append-only and cached per op, because tile re-renders and the live tail both
+ * walk the same stroke repeatedly and the reservoir needs a running total. Nib
+ * widths rather than scene units so a marker and a liner drain over the same
+ * amount of writing rather than the same geometric length.
+ */
+const consumedCache = new WeakMap<InkDrawOp, number[]>();
+
+function nibWidth(op: InkDrawOp): number {
+  return Math.max(inkLineWidth(op.baseWidth, 0, false), 1e-6);
+}
+
+function consumedFor(op: InkDrawOp): number[] {
+  let acc = consumedCache.get(op);
+  if (!acc) {
+    acc = [0];
+    consumedCache.set(op, acc);
+  }
+  const points = op.points;
+  // Undo hands back a different array; a shortened stroke invalidates the tail.
+  if (acc.length > points.length) acc.length = Math.max(1, points.length);
+  const nib = nibWidth(op);
+  for (let index = acc.length; index < points.length; index++) {
+    const prev = points[index - 1];
+    const next = points[index];
+    acc.push(acc[index - 1] + Math.hypot(next.x - prev.x, next.y - prev.y) / nib);
+  }
+  return acc;
+}
+
+/** A stretch of a stroke that can be laid down in one canvas path. */
+export interface InkStrokeRun {
+  /** First point index, inclusive. */
+  start: number;
+  /** Last point index, inclusive — the next run starts here, so nothing gaps. */
+  end: number;
+  lineWidth: number;
+  alpha: number;
+}
+
+/**
+ * Width and alpha buckets a run is allowed to span.
+ *
+ * Everything downstream hangs off these. Painting each segment on its own was
+ * O(points) canvas submissions for a stroke that is one shape, and — worse —
+ * consecutive round caps overlap, so at any alpha below 1 every overlap
+ * composited again and the line came out solid in the middle with a soft halo
+ * around it. Grouped into runs, a whole constant-width stroke is a single
+ * `stroke()`: one coverage mask, one composite, exact alpha, crisp edges.
+ *
+ * The buckets are fine enough that the steps are invisible and coarse enough
+ * that a pressure stroke lands in tens of runs rather than hundreds.
+ */
+const RUN_WIDTH_QUANTUM = 0.06;
+const RUN_ALPHA_QUANTUM = 1 / 48;
+
+/** Split a stroke into paintable runs, starting at `fromIndex`. */
+export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
+  const points = op.points;
+  const runs: InkStrokeRun[] = [];
+  if (points.length < 2) return runs;
+
+  const consumed = consumedFor(op);
+  const maxFullness = op.maxFullness ?? 1;
+  const pressureClip = op.pressureClip ?? 1;
+  const widthQuantum = nibWidth(op) * RUN_WIDTH_QUANTUM;
+
+  const styleAt = (index: number) =>
+    inkStrokeStyle(
+      op.baseWidth,
+      maxFullness,
+      points[index].pressure,
+      pressureClip,
+      op.pressureSensitive,
+      consumed[index] ?? 0,
+    );
+
+  let start = Math.max(0, Math.min(fromIndex, points.length - 2));
+  let style = styleAt(start);
+  let bucketW = Math.round(style.lineWidth / widthQuantum);
+  let bucketA = Math.round(style.alpha / RUN_ALPHA_QUANTUM);
+  let sumWidth = style.lineWidth;
+  let sumAlpha = style.alpha;
+  let count = 1;
+
+  for (let index = start + 1; index < points.length; index++) {
+    const next = styleAt(index);
+    const nextW = Math.round(next.lineWidth / widthQuantum);
+    const nextA = Math.round(next.alpha / RUN_ALPHA_QUANTUM);
+    if (nextW !== bucketW || nextA !== bucketA) {
+      runs.push({ start, end: index, lineWidth: sumWidth / count, alpha: sumAlpha / count });
+      start = index;
+      bucketW = nextW;
+      bucketA = nextA;
+      sumWidth = next.lineWidth;
+      sumAlpha = next.alpha;
+      count = 1;
+      continue;
+    }
+    sumWidth += next.lineWidth;
+    sumAlpha += next.alpha;
+    count += 1;
+  }
+  if (start < points.length - 1) {
+    runs.push({
+      start,
+      end: points.length - 1,
+      lineWidth: sumWidth / count,
+      alpha: sumAlpha / count,
+    });
+  }
+  return runs;
+}
+
+/**
+ * Geometric width, floored so a thin nib still rasterises as a hairline.
+ *
+ * `pixelScale` is device pixels per scene unit; 0 means the caller does not
+ * know it and no floor is applied.
+ */
+function paintedWidth(lineWidth: number, pixelScale: number): number {
+  if (pixelScale <= 0) return lineWidth;
+  return Math.max(lineWidth, INK_MIN_DEVICE_PX / pixelScale);
+}
+
 function drawStrokeFrom(
   ctx: CanvasRenderingContext2D,
   op: InkDrawOp,
   fromIndex: number,
+  pixelScale: number,
 ): void {
-  if (op.points.length < 2) return;
-  const start = Math.max(1, fromIndex + 1);
-  if (start >= op.points.length) return;
+  const points = op.points;
+  if (points.length === 0) return;
+
   ctx.globalCompositeOperation = "source-over";
   ctx.strokeStyle = op.color;
+  ctx.fillStyle = op.color;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (let index = start; index < op.points.length; index++) {
-    const prev = op.points[index - 1];
-    const next = op.points[index];
-    const maxFullness = op.maxFullness ?? 1;
-    const pressureClip = op.pressureClip ?? 1;
+
+  // A tap is a dot — dotting an "i" used to draw nothing at all.
+  if (points.length === 1) {
+    if (fromIndex > 0) return;
     const style = inkStrokeStyle(
       op.baseWidth,
-      maxFullness,
-      prev.pressure,
-      pressureClip,
+      op.maxFullness ?? 1,
+      points[0].pressure,
+      op.pressureClip ?? 1,
       op.pressureSensitive,
+      0,
     );
-    ctx.lineWidth = style.lineWidth;
     ctx.globalAlpha = style.alpha;
     ctx.beginPath();
-    ctx.moveTo(prev.x, prev.y);
-    ctx.lineTo(next.x, next.y);
+    ctx.arc(points[0].x, points[0].y, paintedWidth(style.lineWidth, pixelScale) / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  const start = Math.max(0, fromIndex);
+  if (start >= points.length - 1) return;
+  for (const run of inkStrokeRuns(op, start)) {
+    ctx.lineWidth = paintedWidth(run.lineWidth, pixelScale);
+    ctx.globalAlpha = run.alpha;
+    ctx.beginPath();
+    ctx.moveTo(points[run.start].x, points[run.start].y);
+    for (let index = run.start + 1; index <= run.end; index++) {
+      ctx.lineTo(points[index].x, points[index].y);
+    }
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
@@ -221,26 +442,27 @@ function eraseStampsFrom(
   if (start >= op.points.length) return;
   ctx.globalCompositeOperation = "destination-out";
   ctx.fillStyle = "rgba(0,0,0,1)";
+  ctx.globalAlpha = 1;
+  // One path for the whole rub-out. Erase stamps are laid down every fraction
+  // of a radius, so a single wipe is thousands of them; filling each on its own
+  // was the reason a page with one erase on it replayed slowly forever after.
+  ctx.beginPath();
   for (let index = start; index < op.points.length; index++) {
     const point = op.points[index];
-    ctx.beginPath();
+    ctx.moveTo(point.x + op.radius, point.y);
     ctx.arc(point.x, point.y, op.radius, 0, Math.PI * 2);
-    ctx.fill();
   }
-}
-
-function drawStroke(ctx: CanvasRenderingContext2D, op: InkDrawOp): void {
-  drawStrokeFrom(ctx, op, 0);
-}
-
-function eraseStamps(ctx: CanvasRenderingContext2D, op: InkEraseOp): void {
-  eraseStampsFrom(ctx, op, 0);
+  ctx.fill();
 }
 
 /** Apply one committed or live op in scene space (caller sets the transform). */
-export function applyInkOp(ctx: CanvasRenderingContext2D, op: InkOp): void {
-  if (op.kind === "draw") drawStroke(ctx, op);
-  else eraseStamps(ctx, op);
+export function applyInkOp(
+  ctx: CanvasRenderingContext2D,
+  op: InkOp,
+  pixelScale = 0,
+): void {
+  if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, pixelScale);
+  else eraseStampsFrom(ctx, op, 0);
   ctx.globalCompositeOperation = "source-over";
 }
 
@@ -253,9 +475,10 @@ export function applyInkOpFrom(
   ctx: CanvasRenderingContext2D,
   op: InkOp,
   fromIndex: number,
+  pixelScale = 0,
 ): number {
   if (op.kind === "draw") {
-    drawStrokeFrom(ctx, op, fromIndex);
+    drawStrokeFrom(ctx, op, fromIndex, pixelScale);
     ctx.globalCompositeOperation = "source-over";
     return Math.max(fromIndex, op.points.length - 1);
   }
@@ -330,12 +553,13 @@ export function paintRasterInk(
     ctx.clip();
   }
 
+  const pixelScale = viewport.zoom * dpr;
   for (const op of ops) {
-    applyInkOp(ctx, op);
+    applyInkOp(ctx, op, pixelScale);
   }
 
   if (liveOp) {
-    applyInkOp(ctx, liveOp);
+    applyInkOp(ctx, liveOp, pixelScale);
   }
 
   ctx.globalCompositeOperation = "source-over";
@@ -411,8 +635,8 @@ export function paintInkAtScale(
   // Chronological order: a pen stroke drawn *after* an erase must survive.
   // Applying every erase after every draw punched holes through later ink.
   for (const op of ops) {
-    if (op.kind === "draw") drawStroke(ctx, op);
-    else eraseStamps(ctx, op);
+    if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, scale);
+    else eraseStampsFrom(ctx, op, 0);
   }
   ctx.globalCompositeOperation = "source-over";
   ctx.setTransform(1, 0, 0, 1, 0, 0);
