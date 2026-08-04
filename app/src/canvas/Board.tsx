@@ -80,6 +80,14 @@ import {
 import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
+import {
+  minTextBox,
+  textClientFromScene,
+  textEditorAnchor,
+  textPlaceRect,
+  TEXT_TAP_SLOP_PX,
+  type TextPlaceViewport,
+} from "./textPlacement";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
@@ -1400,9 +1408,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcEraser", locked: false });
       apiRef.current?.setCursor?.(eraserCanvasCursorCss());
     } else if (tool === "text") {
-      // Locked keeps Excalidraw on the text tool after a click — otherwise it
-      // flips to selection and the crosshair dies before you can place again.
-      // Do not resetCursor here: setActiveTool already sets the text crosshair.
+      // Excalidraw stays on `selection` while our Text tool is up. Its own text
+      // tool cannot place a second box without a spare tap, and its
+      // double-click — the only way to open the editor on a box we placed —
+      // refuses to run under any other tool. The placement effect owns the
+      // gesture; upstream only ever sees the hand-off.
       const zoom =
         (apiRef.current?.getAppState() as { zoom?: { value?: number } } | undefined)?.zoom
           ?.value ?? 1;
@@ -1414,12 +1424,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       apiRef.current?.updateScene({
         appState: {
           currentItemFontSize: size,
-          // Paint-like: single tap opens the editor (not drag-to-size).
           currentItemAutoResize: true,
         },
         captureUpdate: CaptureUpdateAction.NEVER,
       });
-      apiRef.current?.setActiveTool({ type: "text", locked: true });
+      apiRef.current?.setActiveTool({ type: "selection" });
+      apiRef.current?.setCursor?.("text");
       applyTextModeToAppState(textModeRef.current);
     } else {
       apiRef.current?.setActiveTool({ type: tool, locked: false });
@@ -1804,12 +1814,29 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
 
   /**
-   * Paint-like text placement — we own the gesture.
+   * Text placement — our gesture, Excalidraw's editor.
    *
-   * Excalidraw refuses to create text while another box is being edited, so a
-   * locked text tool costs two taps after the first. Instead: capture pointer,
-   * show a selection-style rubber-band, insert a text element, then open the
-   * wysiwyg with a double-click at its centre.
+   * Two upstream rules fight a locked text tool on a tablet.
+   * `handleTextOnPointerDown` returns early while `editingTextElement` is set,
+   * so every box after the first costs two taps: one to commit, one to place.
+   * And `handleCanvasDoubleClick` — the one entry point that will open the
+   * wysiwyg on an element we placed ourselves — bails unless the active tool is
+   * `selection`. Dispatching a double-click while Excalidraw sat on the text
+   * tool was therefore a no-op: the box appeared, the editor never did, and the
+   * soft keyboard never came up.
+   *
+   * So Excalidraw stays on `selection` for as long as our Text tool is up, we
+   * own the pointer gesture, insert the element, select it, then hand over with
+   * a double-click inside it. Upstream sees a selected text element, treats it
+   * as existing, and opens and focuses its textarea. That focus lands inside
+   * the pointerup's user-activation window, which is what makes Android raise
+   * the keyboard.
+   *
+   * Nothing here replays pointer events. The previous attempt did, and
+   * `handleCanvasPointerDown` calls `setPointerCapture` with the id it is
+   * given — a synthetic id belongs to no active pointer, so it threw and took
+   * the placement down with it. That is why replay worked on a mouse and never
+   * on a tablet.
    */
   useEffect(() => {
     if (!interactive) return;
@@ -1817,16 +1844,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!root) return;
 
     type Drag = {
-      originClientX: number;
-      originClientY: number;
-      currentClientX: number;
-      currentClientY: number;
+      origin: { x: number; y: number };
+      current: { x: number; y: number };
       pointerId: number;
     };
     let drag: Drag | null = null;
     let frame = 0;
+    /** rAF id of an in-flight hand-off, so a fast second tap cancels the first. */
+    let handoff = 0;
 
-    const sceneFromClient = (clientX: number, clientY: number) => {
+    const readViewport = (): TextPlaceViewport => {
       const state = apiRef.current?.getAppState() as
         | {
             zoom?: { value?: number };
@@ -1836,11 +1863,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             offsetTop?: number;
           }
         | undefined;
-      const zoom = state?.zoom?.value ?? 1;
       return {
-        x: (clientX - (state?.offsetLeft ?? 0)) / zoom - (state?.scrollX ?? 0),
-        y: (clientY - (state?.offsetTop ?? 0)) / zoom - (state?.scrollY ?? 0),
-        zoom,
+        zoom: state?.zoom?.value ?? 1,
+        scrollX: state?.scrollX ?? 0,
+        scrollY: state?.scrollY ?? 0,
+        offsetLeft: state?.offsetLeft ?? 0,
+        offsetTop: state?.offsetTop ?? 0,
       };
     };
 
@@ -1849,13 +1877,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return { x: clientX - boardRect.left, y: clientY - boardRect.top };
     };
 
+    const openEditable = () =>
+      document.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
+
+    const interactiveCanvas = () =>
+      root.querySelector("canvas.excalidraw__canvas.interactive") ??
+      root.querySelector("canvas.excalidraw__canvas");
+
     const paintGhost = (d: Drag) => {
       const ghost = textPlaceGhostRef.current;
       if (!ghost) return;
-      const a = boardPoint(d.originClientX, d.originClientY);
-      const b = boardPoint(d.currentClientX, d.currentClientY);
-      ghost.setSize(Math.max(Math.abs(b.x - a.x), 8), Math.max(Math.abs(b.y - a.y), 8));
-      ghost.move(Math.min(a.x, b.x), Math.min(a.y, b.y));
+      const a = boardPoint(d.origin.x, d.origin.y);
+      const b = boardPoint(d.current.x, d.current.y);
+      const viewport = readViewport();
+      const min = minTextBox(fontSizeRef.current, viewport.zoom);
+      const dragged =
+        Math.abs(d.current.x - d.origin.x) > TEXT_TAP_SLOP_PX ||
+        Math.abs(d.current.y - d.origin.y) > TEXT_TAP_SLOP_PX;
+      if (dragged) {
+        ghost.setSize(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+        ghost.move(Math.min(a.x, b.x), Math.min(a.y, b.y));
+      } else {
+        // Preview the box a release would actually drop, not a dot.
+        ghost.setSize(min.width * viewport.zoom, min.height * viewport.zoom);
+        ghost.move(a.x, a.y);
+      }
       ghost.setVisible(true);
     };
 
@@ -1863,6 +1909,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       textPlaceGhostRef.current?.setVisible(false);
     };
 
+    /**
+     * Drop the student's blank text boxes.
+     *
+     * Placing leaves an empty element behind whenever the editor is dismissed
+     * without typing, and they are invisible but selectable. Template text is
+     * tagged and never touched.
+     */
     const cullEmptyStudentText = () => {
       const api = apiRef.current;
       if (!api) return;
@@ -1886,80 +1939,61 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!changed) return;
       api.updateScene({
         elements: next,
-        appState: { editingTextElement: null, selectedElementIds: {} },
+        appState: { selectedElementIds: {} },
         captureUpdate: CaptureUpdateAction.NEVER,
       });
     };
 
-    const openEditorAt = (clientX: number, clientY: number) => {
-      const canvas =
-        root.querySelector("canvas.excalidraw__canvas.interactive") ??
-        root.querySelector("canvas.excalidraw__canvas");
-      if (!(canvas instanceof Element)) return;
-      canvas.dispatchEvent(
-        new MouseEvent("dblclick", {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          clientX,
-          clientY,
-          button: 0,
-          detail: 2,
-        }),
-      );
+    /** Run `task` once the open editor has committed itself, or give up. */
+    const afterEditorCloses = (task: () => void, framesLeft = 24) => {
+      if (!openEditable()) {
+        task();
+        return;
+      }
+      if (framesLeft <= 0) {
+        // The editor is wedged open. Blurring is the last thing that reliably
+        // commits it; placing on top of it would only be refused.
+        openEditable()?.blur();
+        handoff = requestAnimationFrame(() => {
+          handoff = 0;
+          task();
+        });
+        return;
+      }
+      handoff = requestAnimationFrame(() => {
+        handoff = 0;
+        afterEditorCloses(task, framesLeft - 1);
+      });
     };
 
     const placeText = (d: Drag) => {
       const api = apiRef.current;
       if (!api) return;
-      cullEmptyStudentText();
 
-      const a = sceneFromClient(d.originClientX, d.originClientY);
-      const b = sceneFromClient(d.currentClientX, d.currentClientY);
-      const zoom = a.zoom || 1;
-      const screenFont = Math.max(12, fontSizeRef.current * zoom);
-      const minW = Math.max(screenFont * 8, 96) / zoom;
-      const minH = Math.max(screenFont * 1.35, 28) / zoom;
-
-      const sceneLeft = Math.min(a.x, b.x);
-      const sceneTop = Math.min(a.y, b.y);
-      let sceneW = Math.abs(b.x - a.x);
-      let sceneH = Math.abs(b.y - a.y);
-      const tapped = sceneW < 12 / zoom && sceneH < 12 / zoom;
-      if (tapped) {
-        sceneW = minW;
-        sceneH = minH;
-      } else {
-        sceneW = Math.max(sceneW, minW * 0.35);
-        sceneH = Math.max(sceneH, minH);
-      }
-
+      const viewport = readViewport();
+      const rect = textPlaceRect(d.origin, d.current, viewport, fontSizeRef.current);
       const fontFamily = textModeRef.current === "code" ? FONT_CODE : FONT_UI;
-      const id = `lc-note-${Date.now().toString(36)}`;
       const skeletons: Skeleton[] = [
         {
-          id,
           type: "text",
-          x: sceneLeft,
-          y: sceneTop,
-          width: sceneW,
-          height: sceneH,
-          text: "\u00a0",
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          // Empty, not a placeholder character: whatever is here is what the
+          // student has to backspace over before they can type.
+          text: "",
           fontSize: fontSizeRef.current,
           fontFamily,
           lineHeight: defaultLineHeight(fontFamily),
           strokeColor: inkColorRef.current,
           textAlign: "left",
           verticalAlign: "top",
-          autoResize: tapped,
+          autoResize: rect.autoResize,
           roughness: 0,
         },
       ];
-      const created = convert(skeletons, { regenerateIds: false }) as Array<{
-        id: string;
-        type?: string;
-        [key: string]: unknown;
-      }>;
+      const created = convert(skeletons) as Array<{ id: string; [key: string]: unknown }>;
       if (created.length === 0) return;
       const textEl = created[0];
 
@@ -1971,20 +2005,47 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       api.updateScene({
         elements: [...live.filter((el) => !el.isDeleted), ...created],
         appState: {
+          // Selecting it is what makes the hand-off unambiguous: `startTextEditing`
+          // prefers the single selected text element over whatever the pointer
+          // happens to be over, so the double-click cannot bind our note into a
+          // region rectangle underneath it.
           selectedElementIds: { [textEl.id]: true },
-          editingTextElement: textEl,
+          selectedGroupIds: {},
+          editingGroupId: null,
         },
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
 
-      const editX = tapped ? d.originClientX + (minW * zoom) / 4 : (d.originClientX + d.currentClientX) / 2;
-      const editY = tapped ? d.originClientY + (minH * zoom) / 4 : (d.originClientY + d.currentClientY) / 2;
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          if (!document.querySelector("textarea.excalidraw-wysiwyg")) {
-            openEditorAt(editX, editY);
+      // Next frame: the selection has to be in Excalidraw's state before the
+      // double-click reads it back.
+      handoff = requestAnimationFrame(() => {
+        handoff = 0;
+        const canvas = interactiveCanvas();
+        if (!(canvas instanceof Element)) return;
+        const anchor = textEditorAnchor(rect);
+        const at = textClientFromScene(anchor.x, anchor.y, readViewport());
+        canvas.dispatchEvent(
+          new MouseEvent("dblclick", {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            clientX: at.x,
+            clientY: at.y,
+            button: 0,
+            detail: 2,
+          }),
+        );
+        // A tablet keyboard sometimes needs the focus asserted again after
+        // Excalidraw's own deferred focus; harmless when it is already focused.
+        handoff = requestAnimationFrame(() => {
+          handoff = 0;
+          const editable = openEditable();
+          if (editable) {
+            if (document.activeElement !== editable) editable.focus();
+            return;
           }
-          // If Excalidraw still didn't open an editor, leave the box selected.
+          // Editor refused to open — do not leave an invisible box behind.
+          cullEmptyStudentText();
         });
       });
     };
@@ -1994,35 +2055,39 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (event.button !== 0 && event.pointerType === "mouse") return;
       const target = event.target;
       if (!(target instanceof Element)) return;
-      if (target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash")) {
+      if (
+        target.closest(
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
+        )
+      ) {
         return;
       }
-      if (target instanceof HTMLTextAreaElement && target.classList.contains("excalidraw-wysiwyg")) {
+      // Presses inside the open editor belong to the editor.
+      if (target.closest("textarea.excalidraw-wysiwyg, .excalidraw-textEditorContainer")) {
         return;
       }
       if (!target.closest(".excalidraw, .lc-board")) return;
 
-      const editable = document.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
-      if (editable && editable.value.trim().length > 0) {
-        editable.blur();
-        hideGhost();
-        return;
+      if (handoff) {
+        cancelAnimationFrame(handoff);
+        handoff = 0;
       }
 
-      event.preventDefault();
+      /*
+       * `stopPropagation`, never `stopImmediatePropagation` or `preventDefault`.
+       *
+       * Excalidraw's own canvas handlers hang off the React root below us, so
+       * stopping propagation is enough to keep the selection tool out of the
+       * way. The open editor's commit-on-outside-press listener is on `window`
+       * like ours, so `stopImmediatePropagation` would silence it and the box
+       * would never commit. And `preventDefault` on a touch pointerdown is what
+       * costs you the soft keyboard on Android.
+       */
       event.stopPropagation();
-      if (typeof event.stopImmediatePropagation === "function") {
-        event.stopImmediatePropagation();
-      }
-
-      if (editable) editable.blur();
-      cullEmptyStudentText();
 
       drag = {
-        originClientX: event.clientX,
-        originClientY: event.clientY,
-        currentClientX: event.clientX,
-        currentClientY: event.clientY,
+        origin: { x: event.clientX, y: event.clientY },
+        current: { x: event.clientX, y: event.clientY },
         pointerId: event.pointerId,
       };
       paintGhost(drag);
@@ -2037,7 +2102,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (activeToolRef.current !== "text") return;
 
       if (!drag) {
-        if (document.querySelector("textarea.excalidraw-wysiwyg")) {
+        // Hover preview — only meaningful with a mouse or a hovering stylus.
+        if (openEditable()) {
           hideGhost();
           return;
         }
@@ -2049,38 +2115,33 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           hideGhost();
           return;
         }
-        const hitCanvas =
-          root.querySelector("canvas.excalidraw__canvas.interactive") ??
-          root.querySelector("canvas.excalidraw__canvas");
+        const hitCanvas = interactiveCanvas();
         if (!(hitCanvas instanceof HTMLCanvasElement)) return;
-        const rect = hitCanvas.getBoundingClientRect();
-        const inside =
-          event.clientX >= rect.left &&
-          event.clientX <= rect.right &&
-          event.clientY >= rect.top &&
-          event.clientY <= rect.bottom;
-        if (!inside) {
+        const canvasRect = hitCanvas.getBoundingClientRect();
+        if (
+          event.clientX < canvasRect.left ||
+          event.clientX > canvasRect.right ||
+          event.clientY < canvasRect.top ||
+          event.clientY > canvasRect.bottom
+        ) {
           hideGhost();
           return;
         }
-        const { zoom } = sceneFromClient(event.clientX, event.clientY);
-        brushZoomRef.current = zoom;
-        const screenFont = Math.max(12, fontSizeRef.current * zoom);
+        const viewport = readViewport();
+        brushZoomRef.current = viewport.zoom;
         const ghost = textPlaceGhostRef.current;
         if (!ghost) return;
+        const min = minTextBox(fontSizeRef.current, viewport.zoom);
         const p = boardPoint(event.clientX, event.clientY);
-        ghost.setSize(Math.max(screenFont * 8, 96), Math.max(screenFont * 1.35, 28));
+        ghost.setSize(min.width * viewport.zoom, min.height * viewport.zoom);
         ghost.move(p.x, p.y);
         ghost.setVisible(true);
         return;
       }
 
       if (event.pointerId !== drag.pointerId) return;
-      drag = {
-        ...drag,
-        currentClientX: event.clientX,
-        currentClientY: event.clientY,
-      };
+      event.stopPropagation();
+      drag = { ...drag, current: { x: event.clientX, y: event.clientY } };
       if (!frame) {
         frame = requestAnimationFrame(() => {
           frame = 0;
@@ -2091,19 +2152,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     const onPointerUp = (event: PointerEvent) => {
       if (!drag || event.pointerId !== drag.pointerId) return;
-      const finished = {
-        ...drag,
-        currentClientX: event.clientX,
-        currentClientY: event.clientY,
-      };
+      const finished: Drag = { ...drag, current: { x: event.clientX, y: event.clientY } };
       drag = null;
+      event.stopPropagation();
       try {
         root.releasePointerCapture(event.pointerId);
       } catch {
         /* ignore */
       }
       hideGhost();
-      placeText(finished);
+      // The open editor commits itself one frame after our pointerdown; placing
+      // before that lands the new box in a scene it is about to rewrite.
+      afterEditorCloses(() => {
+        cullEmptyStudentText();
+        placeText(finished);
+      });
     };
 
     const onPointerCancel = (event: PointerEvent) => {
@@ -2122,6 +2185,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.removeEventListener("pointerup", onPointerUp, true);
       window.removeEventListener("pointercancel", onPointerCancel, true);
       if (frame) cancelAnimationFrame(frame);
+      if (handoff) cancelAnimationFrame(handoff);
       hideGhost();
     };
   }, [convert, interactive]);
@@ -3287,19 +3351,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (viaEnter || finishedText.length > 0) {
           setTool("hand");
         } else {
-          // Do NOT re-set the tool here. Clicking away from an empty box *is*
-          // the click that places the next one, and re-entering the text tool
-          // mid-gesture threw away the element Excalidraw had just started —
-          // which is why placing used to cost two clicks. The tool is locked,
-          // so it stays on text by itself; this only recovers the case where
-          // Excalidraw dropped it, checked a frame later when the gesture is
-          // over.
+          // Stay on the Text tool: dismissing an empty box is usually the press
+          // that places the next one. Nothing to re-arm — our own gesture owns
+          // placement and Excalidraw is meant to sit on `selection` throughout.
+          // Only the caret Excalidraw resets on submit has to be put back.
           window.requestAnimationFrame(() => {
-            const state = apiRef.current?.getAppState() as
-              | { activeTool?: { type?: string; locked?: boolean } }
-              | undefined;
-            if (state?.activeTool?.type === "text") return;
-            apiRef.current?.setActiveTool({ type: "text", locked: true });
+            if (activeToolRef.current !== "text") return;
+            apiRef.current?.setCursor?.("text");
           });
         }
       }
