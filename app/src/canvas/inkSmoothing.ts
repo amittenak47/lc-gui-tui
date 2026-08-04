@@ -19,6 +19,67 @@ import type { ScenePoint } from "./rasterInk";
 
 export const INK_SMOOTHING_DEFAULT = 0.35;
 
+/** When the strength dial is applied: on the lift, or under the nib. */
+export type InkSmoothingMode = "lift" | "live";
+
+export const INK_SMOOTHING_MODE_DEFAULT: InkSmoothingMode = "lift";
+
+/* ---------------------------------------------------------------- live --- */
+
+/**
+ * Live smoothing: the ink chases the pen instead of tracing it.
+ *
+ * This is the other way to do it, and the one Concepts uses. Each sample pulls
+ * the nib a fraction of the way towards where the pen actually is, so the line
+ * is smooth as it is laid down rather than tidied afterwards. What it costs is
+ * lag, and lag is not free: pull hard enough and a tight loop never closes,
+ * because the nib is still climbing into the bowl of the "e" when the hand has
+ * already come back down the other side. That is the failure mode to design
+ * against, not a bug to fix — the filter cannot both round a corner off and
+ * arrive at it.
+ *
+ * Two choices keep it usable across the whole dial rather than the bottom half:
+ *
+ * The pull is a *time* constant, not a per-sample weight. A per-sample weight
+ * means a 240 Hz stylus is filtered four times as hard as a 60 Hz mouse over
+ * the same stretch of paper, so the dial means something different on every
+ * device — and on a fast pen it means far more than the number suggests.
+ * Converting through `1 - e^(-dt/tau)` makes the dial a promise about
+ * milliseconds of lag, which is the thing the hand actually feels.
+ *
+ * And the top of the dial is 30 ms, which is about two frames. Deliberately
+ * short of the range where loops start closing up: the dial should trade
+ * steadiness for lag across its travel, not run off a cliff partway up.
+ */
+export const LIVE_SMOOTHING_MAX_TAU_MS = 30;
+
+/**
+ * Sample gaps outside this are not information about the hand.
+ *
+ * Under a millisecond is two coalesced samples sharing a clock tick, and past
+ * a couple of frames the pen has been somewhere the app never saw — chasing
+ * that slowly would leave the ink visibly behind the nib.
+ */
+const LIVE_SMOOTHING_MIN_DT_MS = 1;
+const LIVE_SMOOTHING_MAX_DT_MS = 32;
+
+/** Time constant, in ms, for a strength on the 0–1 dial. */
+export function liveSmoothingTau(strength: number): number {
+  return Math.max(0, Math.min(1, strength)) * LIVE_SMOOTHING_MAX_TAU_MS;
+}
+
+/**
+ * How far to move the nib toward the pen for a sample `dtMs` after the last.
+ * 1 is "straight there" — what a strength of zero and an old sample both mean.
+ */
+export function liveSmoothingWeight(dtMs: number, tauMs: number): number {
+  if (tauMs <= 0) return 1;
+  const dt = Number.isFinite(dtMs)
+    ? Math.max(LIVE_SMOOTHING_MIN_DT_MS, Math.min(LIVE_SMOOTHING_MAX_DT_MS, dtMs))
+    : LIVE_SMOOTHING_MAX_DT_MS;
+  return 1 - Math.exp(-dt / tauMs);
+}
+
 /**
  * Hardest the simplifier may cut, as a fraction of nib width.
  *

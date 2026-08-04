@@ -92,7 +92,8 @@ import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
-import { loadInkSmoothing } from "../util/inkSmoothingPref";
+import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
+import { loadInkSpeed } from "../util/inkSpeedPref";
 import {
   describeCaptureResult,
   loadAutoSaveCaptures,
@@ -790,6 +791,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
   const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
+  const [inkSmoothingMode, setInkSmoothingMode] = useState(() => loadInkSmoothingMode());
+  const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
   const [stampTrash, setStampTrash] = useState<{
     left: number;
     top: number;
@@ -1530,9 +1533,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   useEffect(() => {
-    const onSmoothing = () => setInkSmoothing(loadInkSmoothing());
+    const onSmoothing = () => {
+      setInkSmoothing(loadInkSmoothing());
+      setInkSmoothingMode(loadInkSmoothingMode());
+    };
     window.addEventListener("lc-ink-smoothing", onSmoothing);
     return () => window.removeEventListener("lc-ink-smoothing", onSmoothing);
+  }, []);
+
+  useEffect(() => {
+    const onSpeed = () => setInkSpeed(loadInkSpeed());
+    window.addEventListener("lc-ink-speed", onSpeed);
+    return () => window.removeEventListener("lc-ink-speed", onSpeed);
   }, []);
 
   const deleteSelectedStamps = useCallback(() => {
@@ -4015,6 +4027,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         inkFullness={inkFullness}
         pressureClip={pressureClip}
         smoothing={inkSmoothing}
+        smoothingMode={inkSmoothingMode}
+        speedInk={inkSpeed}
         pressureSensitive={pressureSensitive}
         getViewport={getViewport}
         clip={inkClip}

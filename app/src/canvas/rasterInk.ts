@@ -51,8 +51,18 @@ export const INK_DRY_FLOOR = 0.34;
  * Capacity is `MIN / (1 - dial)^EXPONENT`, which runs to infinity as the dial
  * reaches full — so "100%" means a nib that does not dry, exactly, with no
  * special case and no residual fade to split a stroke into pieces over.
+ *
+ * The floor used to be 14 nib widths, which is a *quarter of a letter* at the
+ * default tip: the whole bottom half of the dial dried out before the first
+ * character was finished, so the dial read as "broken" rather than as "dry".
+ *
+ * A letter is roughly 50–130 nib widths of pen travel and a line is a couple of
+ * thousand, so the range worth spending the dial on is words and lines, not
+ * letters. At 150 the empty end fades out over a word — dry enough to be a
+ * deliberate look rather than a fault — the middle lasts a line, three-quarters
+ * lasts several, and the top does not dry at all.
  */
-export const INK_CAPACITY_MIN = 14;
+export const INK_CAPACITY_MIN = 150;
 export const INK_CAPACITY_EXPONENT = 2;
 
 /**
@@ -92,10 +102,92 @@ export function inkPressureAlpha(pNorm: number): number {
   return INK_PRESSURE_FLOOR + (1 - INK_PRESSURE_FLOOR) * p;
 }
 
+/* --------------------------------------------------------------- speed --- */
+
+/**
+ * Speed ink: a nib that is dragging lays down more than one that is flicking.
+ *
+ * Real ink pools where the pen dwells and starves where it runs, and that is
+ * most of what separates handwriting from a plotter trace — pressure alone
+ * cannot do it, because a hand presses hardest at the *start* of a stroke and
+ * writes fastest through the middle.
+ *
+ * The stored quantity is slowness, not speed: 0 is flat out, 1 is stopped, and
+ * {@link INK_SLOWNESS_NEUTRAL} is an ordinary writing pace that comes out
+ * exactly as it would with the feature off. Slowness is normalised at capture
+ * time and carried on the point, so a replay, a tile re-render and a PNG export
+ * all reproduce the stroke that was actually written — there are no timestamps
+ * to preserve and nothing to recompute.
+ */
+
+/** Pace that leaves the nib unchanged — the midpoint of the range. */
+export const INK_SLOWNESS_NEUTRAL = 0.5;
+
+/**
+ * Hand speed, in CSS pixels per millisecond, that reads as an ordinary pace.
+ *
+ * Measured on screen rather than in scene units, so zooming the board in does
+ * not turn every stroke into a "slow" one. Comfortable handwriting runs around
+ * 1–1.5 px/ms; a deliberate serif is well under that and a struck-through line
+ * is several times it.
+ */
+export const INK_SPEED_NEUTRAL_PX_MS = 1.2;
+
+/**
+ * How far the extremes of pace may push the nib, at full strength.
+ *
+ * Width carries most of it. Alpha alone would be invisible at the default ink
+ * dial, which never dries — and width is what the eye reads as "more ink"
+ * anyway.
+ */
+export const INK_SPEED_WIDTH_RANGE = 0.35;
+export const INK_SPEED_ALPHA_RANGE = 0.3;
+
+/**
+ * EMA weight for hand speed.
+ *
+ * Speed is a difference of two noisy positions over a difference of two clocks,
+ * so it is far noisier than pressure and gets filtered harder. Unfiltered, a
+ * stroke's width shimmers with the sample jitter rather than with the hand.
+ */
+export const SPEED_SMOOTHING = 0.25;
+
+/** Normalise a screen-space pace into the 0 (flat out) – 1 (stopped) range. */
+export function inkSlowness(pxPerMs: number): number {
+  if (!Number.isFinite(pxPerMs) || pxPerMs <= 0) return 1;
+  return INK_SPEED_NEUTRAL_PX_MS / (INK_SPEED_NEUTRAL_PX_MS + pxPerMs);
+}
+
+export function smoothSpeed(previous: number, sample: number): number {
+  return previous + (sample - previous) * SPEED_SMOOTHING;
+}
+
+/** Multiplier either side of 1: above when the nib drags, below when it flicks. */
+function speedGain(slowness: number, strength: number, range: number): number {
+  const amount = Math.max(0, Math.min(1, strength));
+  if (amount <= 0) return 1;
+  const slow = Math.max(0, Math.min(1, slowness));
+  return 1 + range * amount * (slow - INK_SLOWNESS_NEUTRAL) * 2;
+}
+
+export function inkSpeedWidthGain(slowness: number, strength: number): number {
+  return speedGain(slowness, strength, INK_SPEED_WIDTH_RANGE);
+}
+
+export function inkSpeedAlphaGain(slowness: number, strength: number): number {
+  return speedGain(slowness, strength, INK_SPEED_ALPHA_RANGE);
+}
+
 export interface ScenePoint {
   x: number;
   y: number;
   pressure: number;
+  /**
+   * How slowly the nib was moving here — 0 flat out, 1 stopped, absent on
+   * strokes written before speed ink existed (read as
+   * {@link INK_SLOWNESS_NEUTRAL}).
+   */
+  slowness?: number;
 }
 
 export interface ViewportTransform {
@@ -117,6 +209,8 @@ export interface InkDrawOp {
   /** Device pressure-clip when the stroke was drawn (0.3–1). */
   pressureClip: number;
   pressureSensitive: boolean;
+  /** Speed-ink strength the stroke was written with (0–1); absent means off. */
+  speedInk?: number;
   points: ScenePoint[];
 }
 
@@ -151,31 +245,47 @@ export function normalizePressure(raw: number, clip: number): number {
 export const INK_TIP_MIN = 0.9;
 export const INK_TIP_STEP = 1.35;
 
-/** Scene-unit line width from tip geometry; mild spread when stylus pressure is active. */
+/**
+ * Scene-unit line width from tip geometry; mild spread when stylus pressure is
+ * active, and a swell or a starve when speed ink is on.
+ *
+ * The two trailing arguments default to "speed ink off", so every caller that
+ * only wants the nib's plain geometry — the reservoir's distance scale, the
+ * smoothing tolerance, the export bounds — reads it unchanged.
+ */
 export function inkLineWidth(
   baseWidth: number,
   pNorm: number,
   pressureSensitive = false,
+  slowness = INK_SLOWNESS_NEUTRAL,
+  speedInk = 0,
 ): number {
   const base = Math.max(INK_TIP_MIN, INK_TIP_MIN + (baseWidth - 1) * INK_TIP_STEP);
-  if (!pressureSensitive) return base;
+  const paced = base * inkSpeedWidthGain(slowness, speedInk);
+  if (!pressureSensitive) return paced;
   const spread = 1 + INK_WIDTH_SPREAD * Math.max(0, Math.min(1, pNorm));
-  return base * spread;
+  return paced * spread;
 }
 
 /**
  * Ink laid down at one sample: the nib's charge, dimmed by how light the touch
- * is. `consumed` is how far into the stroke the sample sits, in nib widths.
+ * is and by how fast it is travelling. `consumed` is how far into the stroke
+ * the sample sits, in nib widths.
  */
 export function inkStrokeAlpha(
   maxFullness: number,
   pNorm: number,
   pressureSensitive: boolean,
   consumed = 0,
+  slowness = INK_SLOWNESS_NEUTRAL,
+  speedInk = 0,
 ): number {
   const charge = inkReservoirAlpha(consumed, maxFullness);
-  if (!pressureSensitive) return charge;
-  return charge * inkPressureAlpha(pNorm);
+  const paced = charge * inkSpeedAlphaGain(slowness, speedInk);
+  // A dawdling nib on a full dial would otherwise ask for more than opaque.
+  const deposit = Math.min(1, paced);
+  if (!pressureSensitive) return deposit;
+  return deposit * inkPressureAlpha(pNorm);
 }
 
 export interface InkStrokeStyle {
@@ -191,12 +301,14 @@ export function inkStrokeStyle(
   pressureClip: number,
   pressureSensitive: boolean,
   consumed = 0,
+  slowness = INK_SLOWNESS_NEUTRAL,
+  speedInk = 0,
 ): InkStrokeStyle {
   const stylus = pressureSensitive && hasStylusPressure(pressure);
   const pNorm = stylus ? normalizePressure(pressure, pressureClip) : 0;
   return {
-    lineWidth: inkLineWidth(baseWidth, pNorm, stylus),
-    alpha: inkStrokeAlpha(maxFullness, pNorm, stylus, consumed),
+    lineWidth: inkLineWidth(baseWidth, pNorm, stylus, slowness, speedInk),
+    alpha: inkStrokeAlpha(maxFullness, pNorm, stylus, consumed, slowness, speedInk),
   };
 }
 
@@ -256,13 +368,22 @@ export function stampAlongSegment(
   if (dist < step) return [to];
   const count = Math.ceil(dist / step);
   const out: ScenePoint[] = [];
+  const fromSlow = from.slowness;
+  const toSlow = to.slowness;
+  // Only carry slowness when the stroke has it, so a stroke written with speed
+  // ink off stays byte-for-byte what it was.
+  const paced = fromSlow !== undefined || toSlow !== undefined;
+  const slowA = fromSlow ?? INK_SLOWNESS_NEUTRAL;
+  const slowB = toSlow ?? INK_SLOWNESS_NEUTRAL;
   for (let index = 1; index <= count; index++) {
     const t = index / count;
-    out.push({
+    const point: ScenePoint = {
       x: from.x + (to.x - from.x) * t,
       y: from.y + (to.y - from.y) * t,
       pressure: from.pressure + (to.pressure - from.pressure) * t,
-    });
+    };
+    if (paced) point.slowness = slowA + (slowB - slowA) * t;
+    out.push(point);
   }
   return out;
 }
@@ -336,6 +457,7 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
   const consumed = consumedFor(op);
   const maxFullness = op.maxFullness ?? 1;
   const pressureClip = op.pressureClip ?? 1;
+  const speedInk = op.speedInk ?? 0;
   const widthQuantum = nibWidth(op) * RUN_WIDTH_QUANTUM;
 
   const styleAt = (index: number) =>
@@ -346,6 +468,8 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
       pressureClip,
       op.pressureSensitive,
       consumed[index] ?? 0,
+      points[index].slowness ?? INK_SLOWNESS_NEUTRAL,
+      speedInk,
     );
 
   let start = Math.max(0, Math.min(fromIndex, points.length - 2));
@@ -421,6 +545,8 @@ function drawStrokeFrom(
       op.pressureClip ?? 1,
       op.pressureSensitive,
       0,
+      points[0].slowness ?? INK_SLOWNESS_NEUTRAL,
+      op.speedInk ?? 0,
     );
     ctx.globalAlpha = style.alpha;
     ctx.beginPath();
@@ -595,7 +721,17 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
     if (op.kind !== "draw") continue;
     const maxFullness = op.maxFullness ?? 1;
     const pressureClip = op.pressureClip ?? 1;
-    const style = inkStrokeStyle(op.baseWidth, maxFullness, 1, pressureClip, op.pressureSensitive);
+    // Full press at a standstill — the widest this nib can ever have been.
+    const style = inkStrokeStyle(
+      op.baseWidth,
+      maxFullness,
+      1,
+      pressureClip,
+      op.pressureSensitive,
+      0,
+      1,
+      op.speedInk ?? 0,
+    );
     const half = style.lineWidth / 2;
     for (const point of op.points) {
       bounds = unionSceneBounds(bounds, {

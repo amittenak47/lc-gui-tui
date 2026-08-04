@@ -13,8 +13,14 @@ import {
   inkStrokeAlpha,
   inkStrokeRuns,
   inkStrokeStyle,
+  inkSlowness,
+  inkSpeedAlphaGain,
+  inkSpeedWidthGain,
   inkStrokesFromOps,
   INK_DRY_FLOOR,
+  INK_SLOWNESS_NEUTRAL,
+  INK_SPEED_NEUTRAL_PX_MS,
+  INK_SPEED_WIDTH_RANGE,
   INK_PRESSURE_FLOOR,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
@@ -27,6 +33,7 @@ import {
   scenePointFromCanvasPixel,
   scenePointFromPointer,
   smoothPressure,
+  stampAlongSegment,
   STROKE_WIDTH_MAX,
   STROKE_WIDTH_MIN,
   unionSceneBounds,
@@ -118,6 +125,32 @@ describe("ink reservoir", () => {
     expect(inkReservoirAlpha(400, 1)).toBeGreaterThan(0.9);
   });
 
+  // Distances in nib widths of pen travel: a letter is roughly 50-130 and a
+  // line of handwriting a couple of thousand.
+  const LETTER = 60;
+  const WORD = 400;
+  const LINE = 2400;
+  /** Half of the way from a full nib to a dry one. */
+  const HALF_SPENT = INK_DRY_FLOOR + (1 - INK_DRY_FLOOR) / 2;
+
+  it("does not dry out inside the first letter, even on an empty dial", () => {
+    // The regression this guards: the floor used to be a quarter of a letter,
+    // so the whole bottom of the dial quit partway into the first character.
+    expect(inkReservoirAlpha(LETTER, 0)).toBeGreaterThan(HALF_SPENT);
+  });
+
+  it("spends the empty end of the dial over a word, and the middle over a line", () => {
+    // Still a dry pen — that is what the bottom of the dial is for.
+    expect(inkReservoirAlpha(WORD, 0)).toBeLessThan(HALF_SPENT);
+    // The middle carries a word comfortably and gives out across a line.
+    expect(inkReservoirAlpha(WORD, 0.5)).toBeGreaterThan(HALF_SPENT);
+    expect(inkReservoirAlpha(LINE, 0.5)).toBeLessThan(HALF_SPENT);
+    // Past the middle it fades across a line rather than within a word, and by
+    // the top of the dial a whole line barely touches the charge.
+    expect(inkReservoirAlpha(WORD, 0.75)).toBeGreaterThan(0.85);
+    expect(inkReservoirAlpha(LINE, 0.9)).toBeGreaterThan(HALF_SPENT);
+  });
+
   it("keeps a light touch light but present", () => {
     expect(inkPressureAlpha(0)).toBeCloseTo(INK_PRESSURE_FLOOR);
     expect(inkPressureAlpha(1)).toBeCloseTo(1);
@@ -131,6 +164,93 @@ describe("ink reservoir", () => {
     expect(inkStrokeAlpha(0.3, 1, true, 90)).toBeLessThan(
       inkStrokeAlpha(0.3, 1, true, 0),
     );
+  });
+});
+
+describe("speed ink", () => {
+  it("reads an ordinary pace as neutral, and the extremes as the extremes", () => {
+    expect(inkSlowness(INK_SPEED_NEUTRAL_PX_MS)).toBeCloseTo(INK_SLOWNESS_NEUTRAL);
+    expect(inkSlowness(0)).toBe(1);
+    expect(inkSlowness(50)).toBeLessThan(0.1);
+    // A pen that is barely moving is at the top of the range, not past it.
+    expect(inkSlowness(1e-6)).toBeLessThanOrEqual(1);
+  });
+
+  it("does nothing at all when the dial is off", () => {
+    for (const slowness of [0, 0.25, 0.5, 0.75, 1]) {
+      expect(inkSpeedWidthGain(slowness, 0)).toBe(1);
+      expect(inkSpeedAlphaGain(slowness, 0)).toBe(1);
+    }
+    expect(inkLineWidth(2, 0, false, 1, 0)).toBeCloseTo(inkLineWidth(2, 0, false));
+  });
+
+  it("swells a dawdling nib and starves a flicking one", () => {
+    const dawdle = inkLineWidth(2, 0, false, 1, 1);
+    const normal = inkLineWidth(2, 0, false, INK_SLOWNESS_NEUTRAL, 1);
+    const flick = inkLineWidth(2, 0, false, 0, 1);
+    expect(dawdle).toBeGreaterThan(normal);
+    expect(normal).toBeGreaterThan(flick);
+    // A neutral pace is exactly the pen you would have had with this off.
+    expect(normal).toBeCloseTo(inkLineWidth(2, 0, false));
+    expect(dawdle).toBeCloseTo(inkLineWidth(2, 0, false) * (1 + INK_SPEED_WIDTH_RANGE));
+  });
+
+  it("scales the whole effect with the dial", () => {
+    const base = inkLineWidth(2, 0, false);
+    const half = inkLineWidth(2, 0, false, 1, 0.5);
+    const full = inkLineWidth(2, 0, false, 1, 1);
+    expect(half).toBeGreaterThan(base);
+    expect(half).toBeLessThan(full);
+  });
+
+  it("never asks for more than opaque ink on a full dial", () => {
+    expect(inkStrokeAlpha(1, 0, false, 0, 1, 1)).toBeLessThanOrEqual(1);
+    expect(inkStrokeAlpha(1, 0, false, 0, 1, 1)).toBeCloseTo(1);
+  });
+
+  it("darkens a slow stroke once the nib has drained a little", () => {
+    const drained = 200;
+    const slow = inkStrokeAlpha(0.4, 0, false, drained, 1, 1);
+    const fast = inkStrokeAlpha(0.4, 0, false, drained, 0, 1);
+    expect(slow).toBeGreaterThan(fast);
+  });
+
+  it("carries slowness through interpolated stamps", () => {
+    const stamps = stampAlongSegment(
+      { x: 0, y: 0, pressure: NO_PRESSURE, slowness: 0 },
+      { x: 10, y: 0, pressure: NO_PRESSURE, slowness: 1 },
+      1,
+    );
+    expect(stamps.length).toBeGreaterThan(1);
+    expect(stamps[stamps.length - 1].slowness).toBeCloseTo(1);
+    for (let i = 1; i < stamps.length; i++) {
+      expect(stamps[i].slowness!).toBeGreaterThan(stamps[i - 1].slowness!);
+    }
+  });
+
+  it("leaves a stroke without speed ink exactly as it was", () => {
+    const stamps = stampAlongSegment(
+      { x: 0, y: 0, pressure: NO_PRESSURE },
+      { x: 10, y: 0, pressure: NO_PRESSURE },
+      1,
+    );
+    for (const stamp of stamps) {
+      expect(stamp.slowness).toBeUndefined();
+    }
+  });
+
+  it("pads the export box for the widest the nib can swell to", () => {
+    const points = [
+      { x: 0, y: 0, pressure: NO_PRESSURE, slowness: 1 },
+      { x: 20, y: 0, pressure: NO_PRESSURE, slowness: 1 },
+    ];
+    const plain = inkOpsBounds([
+      { kind: "draw", color: "#000", baseWidth: 2, maxFullness: 1, pressureClip: 1, pressureSensitive: false, points },
+    ])!;
+    const paced = inkOpsBounds([
+      { kind: "draw", color: "#000", baseWidth: 2, maxFullness: 1, pressureClip: 1, pressureSensitive: false, speedInk: 1, points },
+    ])!;
+    expect(paced.maxY).toBeGreaterThan(plain.maxY);
   });
 });
 

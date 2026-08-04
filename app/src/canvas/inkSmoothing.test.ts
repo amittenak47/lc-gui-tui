@@ -4,7 +4,10 @@ import {
   roundInkCorners,
   simplifyInkPoints,
   smoothInkPoints,
+  liveSmoothingTau,
+  liveSmoothingWeight,
   INK_SMOOTHING_DEFAULT,
+  LIVE_SMOOTHING_MAX_TAU_MS,
   SIMPLIFY_MAX_FRACTION,
 } from "./inkSmoothing";
 import { NO_PRESSURE, type ScenePoint } from "./rasterInk";
@@ -190,3 +193,52 @@ function distanceToSegment(p: ScenePoint, a: ScenePoint, b: ScenePoint): number 
   const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
+
+describe("live smoothing", () => {
+  it("goes straight to the pen when the dial is off", () => {
+    expect(liveSmoothingTau(0)).toBe(0);
+    expect(liveSmoothingWeight(8, liveSmoothingTau(0))).toBe(1);
+  });
+
+  it("pulls harder the longer it has been since the last sample", () => {
+    const tau = liveSmoothingTau(1);
+    expect(liveSmoothingWeight(4, tau)).toBeLessThan(liveSmoothingWeight(16, tau));
+    // Always some progress toward the pen, and never past it.
+    for (const dt of [0, 1, 4, 16, 100]) {
+      const w = liveSmoothingWeight(dt, tau);
+      expect(w).toBeGreaterThan(0);
+      expect(w).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("lags the same in milliseconds whatever the pen's report rate", () => {
+    const tau = liveSmoothingTau(0.6);
+    // Chase a pen sitting 100 units away for 32ms, once at 60Hz and once at
+    // 240Hz. A per-sample weight would filter the fast pen four times harder;
+    // a time constant lands them in the same place.
+    const chase = (dt: number, steps: number) => {
+      let nib = 0;
+      for (let i = 0; i < steps; i++) {
+        nib += (100 - nib) * liveSmoothingWeight(dt, tau);
+      }
+      return nib;
+    };
+    expect(chase(16, 2)).toBeCloseTo(chase(4, 8), 5);
+  });
+
+  it("keeps the top of the dial inside the range a loop survives", () => {
+    // Concepts-style live smoothing stops being writable well before its dial
+    // runs out — a tight "e" never closes. Two frames of lag is the budget.
+    expect(LIVE_SMOOTHING_MAX_TAU_MS).toBeLessThanOrEqual(34);
+    expect(liveSmoothingTau(1)).toBe(LIVE_SMOOTHING_MAX_TAU_MS);
+  });
+
+  it("treats a stale or nonsense gap as a catch-up, not a stall", () => {
+    const tau = liveSmoothingTau(1);
+    // Coalesced samples can share a clock tick; the nib must still move.
+    expect(liveSmoothingWeight(0, tau)).toBeGreaterThan(0);
+    // And after a long gap the pen is far away — close most of it at once.
+    expect(liveSmoothingWeight(500, tau)).toBeGreaterThan(0.6);
+    expect(liveSmoothingWeight(Number.NaN, tau)).toBeGreaterThan(0.6);
+  });
+});

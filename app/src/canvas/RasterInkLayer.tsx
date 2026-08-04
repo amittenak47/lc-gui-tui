@@ -20,20 +20,29 @@ import {
   eraserSceneRadius,
   hasStylusPressure,
   inkLineWidth,
+  inkSlowness,
   inkStrokeStyle,
+  INK_SLOWNESS_NEUTRAL,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
   NO_PRESSURE,
   scenePointFromPointer,
   setInkSceneTransform,
   smoothPressure,
+  smoothSpeed,
   stampAlongSegment,
   type InkOp,
+  type ScenePoint,
   type SceneBounds,
   type ViewportTransform,
 } from "./rasterInk";
 import { InkTileCache, paintLiveOp } from "./inkTiles";
-import { smoothInkPoints } from "./inkSmoothing";
+import {
+  liveSmoothingTau,
+  liveSmoothingWeight,
+  smoothInkPoints,
+  type InkSmoothingMode,
+} from "./inkSmoothing";
 import { inkMetrics } from "./inkMetrics";
 
 export interface RasterInkHandle {
@@ -67,11 +76,12 @@ export interface RasterInkLayerProps {
   inkFullness: number;
   pressureClip: number;
   pressureSensitive: boolean;
-  /**
-   * Vector smoothing strength (0–1) applied when the pen lifts. 0 keeps the
-   * raw samples.
-   */
+  /** Vector smoothing strength (0–1). 0 keeps the raw samples. */
   smoothing?: number;
+  /** Whether {@link smoothing} is applied on the lift or under the nib. */
+  smoothingMode?: InkSmoothingMode;
+  /** Speed-ink strength (0–1): a slow nib lays down more than a fast one. */
+  speedInk?: number;
   getViewport: () => ViewportTransform | null;
   /**
    * Scene box the ink is allowed to show inside — the open page on a tablet,
@@ -101,6 +111,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       pressureClip,
       pressureSensitive,
       smoothing = 0,
+      smoothingMode = "lift",
+      speedInk = 0,
       getViewport,
       clip = null,
       onChange,
@@ -116,9 +128,18 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     /** Next fromIndex for {@link applyInkOpFrom} — advances as live ink is painted. */
     const liveDrawnIndexRef = useRef(0);
     const drawingRef = useRef(false);
-    const lastPointRef = useRef<ReturnType<typeof scenePointFromPointer> | null>(null);
+    const lastPointRef = useRef<ScenePoint | null>(null);
+    /**
+     * Where the pen actually was, before live smoothing pulled the nib off it.
+     * Speed is measured against this, and the lift settles onto it.
+     */
+    const rawPointRef = useRef<ScenePoint | null>(null);
     /** Running EMA of raw stylus pressure for the live stroke — see smoothPressure. */
     const smoothedPressureRef = useRef(0);
+    /** Running EMA of hand speed in CSS px/ms — see smoothSpeed. */
+    const smoothedSpeedRef = useRef(0);
+    /** `event.timeStamp` of the last sample consumed, for speed and live smoothing. */
+    const lastSampleTimeRef = useRef(0);
     /**
      * Viewport + CSS box frozen at pointerdown for the whole stroke.
      *
@@ -128,6 +149,36 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      */
     const strokeViewRef = useRef<ViewportTransform | null>(null);
     const strokeBoxRef = useRef<{ width: number; height: number } | null>(null);
+    /**
+     * The canvas rect, read once at pointerdown and reused for every sample.
+     *
+     * `getBoundingClientRect()` flushes style and layout, and this used to run
+     * inside `pointermove` — a forced synchronous layout of the whole board,
+     * Excalidraw and toolbars included, on every single input event. The box is
+     * frozen for the stroke anyway (see `strokeBoxRef`), so there was never
+     * anything to learn from asking again.
+     */
+    const strokeRectRef = useRef<DOMRect | null>(null);
+    /**
+     * A background tile pass finished while the pen was down, so the overlay is
+     * a frame behind the cache. Repaint once the stroke is off the paper.
+     */
+    const tilesDirtyRef = useRef(false);
+    /**
+     * What `paintFrame` last put on the overlay, so a pointerdown that changes
+     * nothing can skip the blit instead of paying for it at the worst moment.
+     */
+    const paintedViewRef = useRef<{
+      zoom: number;
+      scrollX: number;
+      scrollY: number;
+      width: number;
+      height: number;
+      ops: number;
+      clip: SceneBounds | null;
+      live: boolean;
+      settled: boolean;
+    } | null>(null);
     // Read through a ref so a page turn doesn't rebuild `repaint` and with it
     // every pointer listener on the layer.
     const clipRef = useRef<SceneBounds | null>(clip);
@@ -151,6 +202,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     pressureSensitiveRef.current = pressureSensitive;
     const smoothingRef = useRef(smoothing);
     smoothingRef.current = smoothing;
+    const smoothingModeRef = useRef(smoothingMode);
+    smoothingModeRef.current = smoothingMode;
+    const speedInkRef = useRef(speedInk);
+    speedInkRef.current = speedInk;
     const toolRef = useRef(tool);
     toolRef.current = tool;
 
@@ -192,7 +247,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           // A background pass finished squares the last frame could not afford;
           // put them on screen without waiting for the next camera event.
           onTilesReady: () => {
-            if (drawingRef.current) return;
+            // Mid-stroke this used to be dropped on the floor, and with it the
+            // only chance those squares had to reach the screen: the live path
+            // paints the new tail and nothing else, so ink that was ready but
+            // unblitted stayed invisible for as long as the pen kept writing.
+            // Owe the repaint instead of skipping it — the lift is a moment
+            // later and costs nothing, where a blit mid-glyph would hitch.
+            if (drawingRef.current) {
+              tilesDirtyRef.current = true;
+              return;
+            }
             repaintRef.current();
           },
         });
@@ -252,6 +316,19 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           liveDrawnIndexRef.current = 0;
         }
         ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+        tilesDirtyRef.current = false;
+        paintedViewRef.current = {
+          zoom: viewport.zoom,
+          scrollX: viewport.scrollX,
+          scrollY: viewport.scrollY,
+          width: cssW,
+          height: cssH,
+          ops: opsRef.current.length,
+          clip: clipRef.current,
+          live: live !== null,
+          settled: tiles.settled,
+        };
       },
       [ensureTiles, sizeCanvas],
     );
@@ -364,7 +441,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
        * strength. The eraser is left alone — its stamps are a coverage mask,
        * not a line, and rounding them would leave crumbs behind.
        */
-      const smoothing = smoothingRef.current;
+      // In live mode the filter already ran under the nib; running it again on
+      // the lift would move ink the writer has already watched settle.
+      const smoothing = smoothingModeRef.current === "live" ? 0 : smoothingRef.current;
       const committed =
         live.kind === "draw" && smoothing > 0
           ? {
@@ -381,6 +460,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       liveRef.current = null;
       liveDrawnIndexRef.current = 0;
       lastPointRef.current = null;
+      rawPointRef.current = null;
 
       // Only the tiles the stroke landed on are dropped, so committing on a
       // full page costs the same as committing on an empty one.
@@ -486,6 +566,35 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const canvas = canvasRef.current;
       if (!canvas) return;
 
+      /**
+       * Land the nib where the pen actually lifted.
+       *
+       * Live smoothing leaves the ink a fraction of a time constant behind the
+       * hand, so without this every stroke stops just short of where it was
+       * drawn — a descender that never reaches the line, a cross that misses
+       * its stem. The tail is at most a couple of frames of travel.
+       */
+      const settleLiveTip = () => {
+        const live = liveRef.current;
+        const last = lastPointRef.current;
+        const raw = rawPointRef.current;
+        if (!live || live.kind !== "draw" || !last || !raw) return;
+        if (Math.hypot(raw.x - last.x, raw.y - last.y) < 1e-3) return;
+        const style = inkStrokeStyle(
+          live.baseWidth,
+          live.maxFullness,
+          raw.pressure,
+          live.pressureClip,
+          live.pressureSensitive,
+          0,
+          raw.slowness ?? INK_SLOWNESS_NEUTRAL,
+          live.speedInk ?? 0,
+        );
+        const step = Math.max(style.lineWidth * INK_STEP_FACTOR_PRESSURE, 0.5);
+        live.points.push(...stampAlongSegment(last, raw, step));
+        lastPointRef.current = raw;
+      };
+
       const begin = (event: PointerEvent) => {
         if (!toolRef.current) return;
         if (onStylusAccessoryRef.current?.(event)) {
@@ -499,6 +608,25 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (!viewport || !isCanvasTarget(event.target, canvas)) return;
         event.preventDefault();
         event.stopPropagation();
+
+        /*
+         * A stroke that never got its pointerup.
+         *
+         * It happens: a stylus that leaves proximity mid-flick, a capture the
+         * compositor takes away, an app switch. The old code walked straight
+         * past it and overwrote `liveRef`, which threw the stroke away —
+         * painted on the overlay, in no op, gone at the next repaint. That is
+         * the letter that "randomly" fails to appear. Close it out first; a
+         * stroke the writer finished belongs on the page either way.
+         */
+        if (drawingRef.current) {
+          drawingRef.current = false;
+          settleLiveTip();
+          strokeViewRef.current = null;
+          strokeBoxRef.current = null;
+          strokeRectRef.current = null;
+          commitLiveRef.current();
+        }
         try {
           canvas.setPointerCapture(event.pointerId);
         } catch {
@@ -518,6 +646,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         strokeBoxRef.current = { width: cssW, height: cssH };
 
         const rect = canvas.getBoundingClientRect();
+        strokeRectRef.current = rect;
         const point = scenePointFromPointer(
           event.clientX,
           event.clientY,
@@ -526,8 +655,15 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           event.pressure,
           event.pointerType,
         );
+        const speed = speedInkRef.current;
+        // Start at the neutral pace rather than at rest: the nib has no history
+        // yet, and seeding it "stopped" would open every stroke with a blob.
+        if (speed > 0) point.slowness = INK_SLOWNESS_NEUTRAL;
         lastPointRef.current = point;
+        rawPointRef.current = point;
         smoothedPressureRef.current = hasStylusPressure(point.pressure) ? point.pressure : 0;
+        smoothedSpeedRef.current = 0;
+        lastSampleTimeRef.current = event.timeStamp;
         inkMetrics.begin();
         const width = strokeWidthRef.current;
         const activeTool = toolRef.current;
@@ -539,6 +675,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             maxFullness: inkFullnessRef.current,
             pressureClip: pressureClipRef.current,
             pressureSensitive: pressureSensitiveRef.current,
+            speedInk: speed,
             points: [point],
           };
           liveDrawnIndexRef.current = 0;
@@ -550,20 +687,42 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           };
           liveDrawnIndexRef.current = 0;
         }
-        // Full blit under the frozen view while drawingRef is still false so
-        // scroll/resize guards do not skip this first paint.
-        repaintRef.current();
+        /*
+         * Blit the committed page under the frozen view, unless the last frame
+         * already is that.
+         *
+         * The repaint is here so the overlay is known-good before the first
+         * sample lands — but between two letters nothing has moved, and the
+         * pixels on screen are already the answer. Redoing the blit anyway put
+         * a full tile pass at the one instant the hand is most sensitive to it:
+         * the moment the nib touches down. `drawingRef` is still false so the
+         * scroll/resize guards cannot skip this when it *is* needed.
+         */
+        const painted = paintedViewRef.current;
+        const reusable =
+          painted !== null &&
+          !tilesDirtyRef.current &&
+          painted.settled &&
+          !painted.live &&
+          painted.ops === opsRef.current.length &&
+          painted.clip === clipRef.current &&
+          painted.zoom === strokeView.zoom &&
+          painted.scrollX === strokeView.scrollX &&
+          painted.scrollY === strokeView.scrollY &&
+          painted.width === cssW &&
+          painted.height === cssH;
+        if (!reusable) repaintRef.current();
         drawingRef.current = true;
       };
 
       const move = (event: PointerEvent) => {
         if (!drawingRef.current) return;
         const strokeView = strokeViewRef.current;
-        if (!strokeView) return;
+        const rect = strokeRectRef.current;
+        if (!strokeView || !rect) return;
         event.preventDefault();
         const live = liveRef.current;
         if (!live) return;
-        const rect = canvas.getBoundingClientRect();
 
         /*
          * Every sample the browser buffered since the last frame, in order.
@@ -583,10 +742,20 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const pressureSensitive = live.kind === "draw" && live.pressureSensitive;
         const maxFullness = live.kind === "draw" ? live.maxFullness : 1;
         const pressureClip = live.kind === "draw" ? live.pressureClip : 1;
+        const speedInk = live.kind === "draw" ? (live.speedInk ?? 0) : 0;
+        // Live smoothing is a pen thing. The eraser's stamps are a coverage
+        // mask, and lagging them behind the hand only leaves crumbs.
+        const tau =
+          live.kind === "draw" && smoothingModeRef.current === "live"
+            ? liveSmoothingTau(smoothingRef.current)
+            : 0;
+        const zoom = strokeView.zoom || 1;
+
         for (const sample of batch) {
           const last = lastPointRef.current;
-          if (!last) break;
-          const point = scenePointFromPointer(
+          const rawLast = rawPointRef.current;
+          if (!last || !rawLast) break;
+          const raw = scenePointFromPointer(
             sample.clientX,
             sample.clientY,
             rect,
@@ -594,17 +763,49 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             sample.pressure,
             sample.pointerType,
           );
-          if (pressureSensitive && hasStylusPressure(point.pressure)) {
+          const dt = sample.timeStamp - lastSampleTimeRef.current;
+          lastSampleTimeRef.current = sample.timeStamp;
+
+          if (pressureSensitive && hasStylusPressure(raw.pressure)) {
             // Filter pressure, not position: smoothing the path would lag the
             // tip, but width has no business tracking sample noise.
             smoothedPressureRef.current = smoothPressure(
               smoothedPressureRef.current,
-              point.pressure,
+              raw.pressure,
             );
-            point.pressure = smoothedPressureRef.current;
+            raw.pressure = smoothedPressureRef.current;
           } else {
-            point.pressure = NO_PRESSURE;
+            raw.pressure = NO_PRESSURE;
           }
+
+          if (speedInk > 0) {
+            // Screen distance over wall time. Scene units would make the same
+            // hand read as "slow" simply because the board is zoomed in.
+            const travelled =
+              Math.hypot(raw.x - rawLast.x, raw.y - rawLast.y) * zoom;
+            if (dt > 0) {
+              smoothedSpeedRef.current = smoothSpeed(
+                smoothedSpeedRef.current,
+                travelled / dt,
+              );
+            }
+            raw.slowness = inkSlowness(smoothedSpeedRef.current);
+          }
+          rawPointRef.current = raw;
+
+          // Under live smoothing the nib chases the pen rather than tracing it.
+          // Pressure and slowness are the hand's, and ride along unfiltered —
+          // only the path lags.
+          let point = raw;
+          if (tau > 0) {
+            const weight = liveSmoothingWeight(dt, tau);
+            point = {
+              ...raw,
+              x: last.x + (raw.x - last.x) * weight,
+              y: last.y + (raw.y - last.y) * weight,
+            };
+          }
+
           const step =
             live.kind === "erase"
               ? Math.max(live.radius * 0.45, 0.5)
@@ -615,12 +816,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                     point.pressure,
                     pressureClip,
                     pressureSensitive,
+                    0,
+                    point.slowness ?? INK_SLOWNESS_NEUTRAL,
+                    speedInk,
                   );
+                  // Speed ink moves the width too, so it stamps as finely as a
+                  // pressure stroke does — the taper is the whole point.
+                  const dense =
+                    speedInk > 0 ||
+                    (pressureSensitive && hasStylusPressure(point.pressure));
                   return Math.max(
-                    style.lineWidth *
-                      (pressureSensitive && hasStylusPressure(point.pressure)
-                        ? INK_STEP_FACTOR_PRESSURE
-                        : INK_STEP_FACTOR),
+                    style.lineWidth * (dense ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
                     0.5,
                   );
                 })();
@@ -635,8 +841,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const end = (event: PointerEvent) => {
         if (!drawingRef.current) return;
         drawingRef.current = false;
+        settleLiveTip();
         strokeViewRef.current = null;
         strokeBoxRef.current = null;
+        strokeRectRef.current = null;
         try {
           canvas.releasePointerCapture(event.pointerId);
         } catch {
@@ -650,11 +858,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       canvas.addEventListener("pointermove", move, true);
       canvas.addEventListener("pointerup", end, true);
       canvas.addEventListener("pointercancel", end, true);
+      // Capture taken away mid-stroke — an app switch, a system gesture. Without
+      // this the moves stop arriving and the stroke is stranded, unpainted and
+      // uncommitted, until the next pointerdown notices. `end` is a no-op on the
+      // release we do ourselves, since it clears `drawingRef` first.
+      canvas.addEventListener("lostpointercapture", end, true);
       return () => {
         canvas.removeEventListener("pointerdown", begin, true);
         canvas.removeEventListener("pointermove", move, true);
         canvas.removeEventListener("pointerup", end, true);
         canvas.removeEventListener("pointercancel", end, true);
+        canvas.removeEventListener("lostpointercapture", end, true);
       };
       // Tool is read via toolRef — never rebind listeners when pen↔eraser flips.
       // Paint callbacks stay on refs so a Board re-render never drops capture.

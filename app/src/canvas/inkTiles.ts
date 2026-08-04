@@ -130,8 +130,9 @@ export function inkOpBounds(op: InkOp): SceneBounds {
   const pad =
     op.kind === "erase"
       ? op.radius
-      : // Full press spreads the nib; the pressure-off case is the same number.
-        inkLineWidth(op.baseWidth, 1, op.pressureSensitive) / 2;
+      : // Full press at a standstill spreads the nib as far as it goes; with
+        // pressure and speed ink both off this is the same number it always was.
+        inkLineWidth(op.baseWidth, 1, op.pressureSensitive, 1, op.speedInk ?? 0) / 2;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -230,19 +231,59 @@ export class InkTileCache {
   }
 
   /**
-   * Add one just-committed op, dropping only the tiles it lands on.
+   * Add one just-committed op by drawing it *into* the tiles it lands on.
    *
-   * This is what keeps writing cheap on a full page: a new stroke costs the two
-   * or three tiles under it, not the page.
+   * This is the difference between writing staying cheap and writing getting
+   * slower the more of it there is. Committing used to drop every tile the new
+   * stroke touched, and the repaint that followed rebuilt them by replaying
+   * every op those tiles overlap — so the tenth letter in a square replayed
+   * nine strokes, the fortieth replayed thirty-nine, and the pen-lift hitch
+   * grew without bound across a page. That is the "smooth for a few letters,
+   * then it starts lagging" that the tiling was supposed to have fixed.
+   *
+   * Nothing about a freshly committed op requires a rebuild: it is chronologically
+   * last, so compositing it over what the tile already holds is exactly what a
+   * replay would have produced — including an erase, which is `destination-out`
+   * against the tile's own pixels either way. Cost is one stroke per tile,
+   * independent of what is already written there.
    */
   appendOp(op: InkOp): void {
     this.ops.push(op);
     const bounds = inkOpBounds(op);
-    for (const [key, tile] of this.tiles) {
-      if (boundsOverlap(bounds, this.tileBounds(tile.level, tile.tx, tile.ty))) {
-        this.tiles.delete(key);
-      }
+    for (const tile of [...this.tiles.values()]) {
+      const box = this.tileBounds(tile.level, tile.tx, tile.ty);
+      if (!boundsOverlap(bounds, box)) continue;
+      this.paintOpIntoTile(tile, op, box);
     }
+  }
+
+  /** Composite one op onto a tile that is already rasterised. */
+  private paintOpIntoTile(tile: Tile, op: InkOp, bounds: SceneBounds): void {
+    const ctx = tile.canvas.getContext("2d");
+    if (!ctx) {
+      // Nothing sane to composite onto — fall back to the old behaviour and
+      // let the tile rasterise from scratch next time it is asked for.
+      this.tiles.delete(tile.key);
+      return;
+    }
+    const paintable = this.clip ? intersectBounds(bounds, this.clip) : bounds;
+    if (!paintable) return;
+    const scale = levelScale(tile.level);
+    ctx.setTransform(scale, 0, 0, scale, -bounds.minX * scale, -bounds.minY * scale);
+    if (this.clip) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(
+        this.clip.minX,
+        this.clip.minY,
+        this.clip.maxX - this.clip.minX,
+        this.clip.maxY - this.clip.minY,
+      );
+      ctx.clip();
+    }
+    applyInkOp(ctx, op, scale);
+    if (this.clip) ctx.restore();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
   /** Page turn — the clip box is baked into the tiles, so they all go. */

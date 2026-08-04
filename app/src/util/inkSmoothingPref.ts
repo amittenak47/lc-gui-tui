@@ -1,8 +1,13 @@
-/** Device-local preference: how hard to smooth a stroke when the pen lifts. */
+/** Device-local preference: how hard to smooth a stroke, and when to do it. */
 
-import { INK_SMOOTHING_DEFAULT } from "../canvas/inkSmoothing";
+import {
+  INK_SMOOTHING_DEFAULT,
+  INK_SMOOTHING_MODE_DEFAULT,
+  type InkSmoothingMode,
+} from "../canvas/inkSmoothing";
 
 const KEY = "lc.inkSmoothing";
+const MODE_KEY = "lc.inkSmoothingMode";
 
 export const INK_SMOOTHING_MIN = 0;
 export const INK_SMOOTHING_MAX = 1;
@@ -39,4 +44,20 @@ export function smoothingToPercent(value: number): number {
   return Math.round(clamp(value) * 100);
 }
 
-export { INK_SMOOTHING_DEFAULT };
+export function loadInkSmoothingMode(): InkSmoothingMode {
+  try {
+    return localStorage.getItem(MODE_KEY) === "live" ? "live" : INK_SMOOTHING_MODE_DEFAULT;
+  } catch {
+    return INK_SMOOTHING_MODE_DEFAULT;
+  }
+}
+
+export function saveInkSmoothingMode(mode: InkSmoothingMode): void {
+  try {
+    localStorage.setItem(MODE_KEY, mode);
+  } catch {
+    /* private browsing */
+  }
+}
+
+export { INK_SMOOTHING_DEFAULT, INK_SMOOTHING_MODE_DEFAULT, type InkSmoothingMode };

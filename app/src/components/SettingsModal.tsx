@@ -18,10 +18,19 @@ import {
 } from "../util/inkPressureClip";
 import {
   loadInkSmoothing,
+  loadInkSmoothingMode,
   saveInkSmoothing,
+  saveInkSmoothingMode,
   smoothingFromPercent,
   smoothingToPercent,
+  type InkSmoothingMode,
 } from "../util/inkSmoothingPref";
+import {
+  loadInkSpeed,
+  saveInkSpeed,
+  speedInkFromPercent,
+  speedInkToPercent,
+} from "../util/inkSpeedPref";
 import {
   loadAutoSaveCaptures,
   CAPTURE_COUNTDOWN_CHOICES,
@@ -146,6 +155,8 @@ interface DevicePrefs {
   offlineMerge: OfflineMergePolicy;
   pressureClip: number;
   inkSmoothing: number;
+  inkSmoothingMode: InkSmoothingMode;
+  inkSpeed: number;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -158,6 +169,8 @@ function loadDevicePrefs(): DevicePrefs {
     offlineMerge: loadOfflineMergePolicy(),
     pressureClip: loadInkPressureClip(),
     inkSmoothing: loadInkSmoothing(),
+    inkSmoothingMode: loadInkSmoothingMode(),
+    inkSpeed: loadInkSpeed(),
   };
 }
 
@@ -170,7 +183,9 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.captureCountdown === b.captureCountdown &&
     a.offlineMerge === b.offlineMerge &&
     a.pressureClip === b.pressureClip &&
-    a.inkSmoothing === b.inkSmoothing
+    a.inkSmoothing === b.inkSmoothing &&
+    a.inkSmoothingMode === b.inkSmoothingMode &&
+    a.inkSpeed === b.inkSpeed
   );
 }
 
@@ -227,6 +242,10 @@ export function SettingsModal({
   );
   const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
   const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
+  const [inkSmoothingMode, setInkSmoothingMode] = useState<InkSmoothingMode>(() =>
+    loadInkSmoothingMode(),
+  );
+  const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
   /** Last saved config + device prefs — Cancel restores these; Save advances them. */
   const [baselineConfig, setBaselineConfig] = useState<LcConfig>(emptyConfig);
   const [baselinePrefs, setBaselinePrefs] = useState<DevicePrefs>(loadDevicePrefs);
@@ -314,6 +333,8 @@ export function SettingsModal({
     setOfflineMerge(prefs.offlineMerge);
     setPressureClip(prefs.pressureClip);
     setInkSmoothing(prefs.inkSmoothing);
+    setInkSmoothingMode(prefs.inkSmoothingMode);
+    setInkSpeed(prefs.inkSpeed);
     setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     void offlinePackMeta().then((meta) => {
@@ -367,6 +388,8 @@ export function SettingsModal({
     offlineMerge,
     pressureClip,
     inkSmoothing,
+    inkSmoothingMode,
+    inkSpeed,
   };
   const dirty =
     !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
@@ -400,12 +423,15 @@ export function SettingsModal({
         saveOfflineMergePolicy(offlineMerge);
         saveInkPressureClip(pressureClip);
         saveInkSmoothing(inkSmoothing);
+        saveInkSmoothingMode(inkSmoothingMode);
+        saveInkSpeed(inkSpeed);
         setBaselinePrefs(draftPrefs);
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
         );
         window.dispatchEvent(new CustomEvent("lc-ink-pressure-clip"));
         window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
+        window.dispatchEvent(new CustomEvent("lc-ink-speed"));
       }
       if (configDirty) {
         const saved = await client.putConfig(draft);
@@ -792,12 +818,36 @@ export function SettingsModal({
                 ))}
               </div>
 
+              <div className="lc-settings-subhead">Speed ink</div>
+              <p className="lc-settings-hint">
+                Let the pace of your hand change what the nib leaves behind — ink pools
+                where you dwell and thins out where you run, the way it does on paper.
+                Off leaves the stroke the same weight however fast you write. Saved on
+                this device only.
+              </p>
+              <div className="lc-settings-slider">
+                <input
+                  type="range"
+                  className="lc-settings-slider-input"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={speedInkToPercent(inkSpeed)}
+                  aria-label="Speed ink"
+                  onChange={(event) =>
+                    setInkSpeed(speedInkFromPercent(Number(event.target.value)))
+                  }
+                />
+                <span className="lc-settings-slider-value">
+                  {speedInkToPercent(inkSpeed) === 0 ? "Off" : `${speedInkToPercent(inkSpeed)}%`}
+                </span>
+              </div>
+
               <div className="lc-settings-subhead">Stroke smoothing</div>
               <p className="lc-settings-hint">
-                How much of the shake to take out of a pen stroke. It is applied when
-                you lift the pen, so the ink never lags the nib while you write. Higher
-                steadies a shaky hand; lower keeps every kink you actually drew. Saved on
-                this device only.
+                How much of the shake to take out of a pen stroke. Higher steadies a
+                shaky hand; lower keeps every kink you actually drew. Saved on this
+                device only.
               </p>
               <div className="lc-settings-slider">
                 <input
@@ -818,6 +868,45 @@ export function SettingsModal({
                     : `${smoothingToPercent(inkSmoothing)}%`}
                 </span>
               </div>
+
+              {smoothingToPercent(inkSmoothing) > 0 && (
+                <>
+                  <p className="lc-settings-hint">
+                    When it is applied. <strong>On the lift</strong> tidies the stroke once
+                    you finish it, so the ink is always exactly under the nib as you write.
+                    <strong> While you write</strong> smooths as it goes, which looks
+                    steadier in the moment but leaves the ink trailing your hand — and the
+                    harder it pulls, the more a tight loop like an “e” closes up on itself.
+                  </p>
+                  <div
+                    className="lc-settings-choice lc-settings-choice-compact"
+                    role="radiogroup"
+                    aria-label="When to smooth"
+                  >
+                    {(
+                      [
+                        ["lift", "On the lift"],
+                        ["live", "While you write"],
+                      ] as Array<[InkSmoothingMode, string]>
+                    ).map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={inkSmoothingMode === mode}
+                        className={
+                          inkSmoothingMode === mode
+                            ? "lc-settings-choice-option is-active"
+                            : "lc-settings-choice-option"
+                        }
+                        onClick={() => setInkSmoothingMode(mode)}
+                      >
+                        <strong>{label}</strong>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
 
               <div className="lc-settings-subhead">When a case fails</div>
               <div className="lc-settings-choice" role="radiogroup" aria-label="Test run mode">

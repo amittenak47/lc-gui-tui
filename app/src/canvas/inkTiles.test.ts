@@ -246,14 +246,69 @@ describe("InkTileCache", () => {
     expect(blits.length).toBeGreaterThan(0);
   });
 
-  it("drops only the tiles a committed stroke lands on", () => {
-    const { cache } = makeCache();
+  it("draws a committed stroke into its tiles instead of dropping them", () => {
+    const { cache, canvases } = makeCache();
     cache.setOps([draw([0, 0], [10, 10])]);
     const { ctx } = destinationContext();
     cache.draw(ctx, screen(1), 1);
     const before = cache.size;
+    // The tile the stroke lands on — the one that had to stroke something.
+    const landed = canvases.created.find((tile) => tile.ops.includes("stroke"));
+    expect(landed).toBeDefined();
+    const strokesBefore = landed!.ops.filter((op) => op === "stroke").length;
+
     cache.appendOp(draw([5, 5], [20, 20]));
-    expect(cache.size).toBe(before - 1);
+
+    // Nothing is thrown away, and the new stroke went straight onto the tile.
+    expect(cache.size).toBe(before);
+    expect(landed!.ops.filter((op) => op === "stroke").length).toBeGreaterThan(
+      strokesBefore,
+    );
+    // Compositing, not rebuilding: the tile was never cleared and replayed.
+    expect(landed!.ops.lastIndexOf("clearRect")).toBeLessThan(
+      landed!.ops.lastIndexOf("stroke"),
+    );
+  });
+
+  it("costs the same to commit onto a full tile as onto an empty one", () => {
+    const busy = makeCache();
+    const empty = makeCache();
+    // Fifty strokes stacked in one square — the state a page of writing reaches.
+    const crowd = Array.from({ length: 50 }, (_, i) =>
+      draw([i, 0], [i, 40]),
+    );
+    busy.cache.setOps(crowd);
+    empty.cache.setOps([]);
+    busy.cache.draw(destinationContext().ctx, screen(1), 1);
+    empty.cache.draw(destinationContext().ctx, screen(1), 1);
+
+    const drawnIn = (created: Array<{ ops: string[] }>) =>
+      created.reduce((sum, tile) => sum + tile.ops.filter((op) => op === "stroke").length, 0);
+    const busyBefore = drawnIn(busy.canvases.created);
+    const emptyBefore = drawnIn(empty.canvases.created);
+
+    const stroke = draw([10, 10], [30, 30]);
+    busy.cache.appendOp(stroke);
+    empty.cache.appendOp(stroke);
+
+    // The whole point: a commit replays the one new stroke, not the fifty it
+    // happens to be sitting on top of.
+    expect(drawnIn(busy.canvases.created) - busyBefore).toBe(
+      drawnIn(empty.canvases.created) - emptyBefore,
+    );
+  });
+
+  it("keeps an erase committed after a stroke punching through it", () => {
+    const { cache, canvases } = makeCache();
+    cache.setOps([draw([0, 0], [40, 40])]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    const landed = canvases.created.find((tile) => tile.ops.includes("stroke"))!;
+    const fillsBefore = landed.ops.filter((op) => op === "fill").length;
+    cache.appendOp(erase(6, [20, 20]));
+    // `destination-out` against the tile's own pixels is what a replay would
+    // have done too, so the rub-out composites in the same as a stroke does.
+    expect(landed.ops.filter((op) => op === "fill").length).toBeGreaterThan(fillsBefore);
   });
 
   it("throws everything away when the page clip changes", () => {

@@ -6,6 +6,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — writing that stays as fast as it started
+
+- **The pen stops getting slower the more you write.** This was the "smooth for
+  a few letters, then it starts lagging" one, and it was in the commit rather
+  than in the drawing. Lifting the pen dropped every cached tile the new stroke
+  touched, and the repaint that followed rebuilt them by replaying every stroke
+  those tiles overlap — so the tenth letter in a square replayed nine, the
+  fortieth replayed thirty-nine, and the hitch grew without bound across a page.
+  A freshly committed stroke is chronologically last, so it is now composited
+  straight onto the tiles instead: one stroke's work, whatever is already
+  written underneath it.
+- **Strokes stop going missing.** Two causes, both of them real. When that
+  rebuild blew its 5 ms frame budget the tile blitted empty, and the background
+  pass that finished it was thrown away if the pen was already back down — so a
+  letter could sit invisible for as long as you kept writing. And a stroke whose
+  `pointerup` never arrived — a stylus leaving proximity, a capture taken by the
+  system — was silently overwritten by the next `pointerdown` instead of being
+  committed. Both are now closed out; `lostpointercapture` ends a stroke too.
+- **A forced layout on every pointer sample.** The move handler called
+  `getBoundingClientRect()` on the ink canvas per event, flushing style and
+  layout for the whole board — Excalidraw and toolbars included — before it
+  could draw. The box is frozen for the stroke anyway, so it is now read once at
+  `pointerdown`.
+- **A full tile blit at the exact moment the nib lands.** Every `pointerdown`
+  repainted the committed page under the frozen camera. Between two letters
+  nothing has moved and the pixels on screen are already the answer, so that
+  frame is now skipped unless something actually changed.
+
+### Added — two ways to make the ink yours
+
+- **Speed ink** (Settings → Personalise). A slow nib lays down more than a fast
+  one: ink pools where you dwell and thins where you run. Pressure cannot do
+  this on its own — a hand presses hardest at the *start* of a stroke and writes
+  fastest through the middle. Off by default; the pace is normalised on screen,
+  so zooming in does not turn every stroke into a slow one, and it is stored on
+  the point, so a replay, an export and a re-render all reproduce what was
+  written.
+- **Smoothing while you write.** The strength dial now has a *when*: on the lift
+  (unchanged, and still the default) or under the nib. Live smoothing looks
+  steadier in the moment and costs lag — pull hard enough and a tight loop like
+  an "e" closes up on itself, because the nib is still climbing into the bowl
+  when the hand has come back down. Two things keep the whole dial usable rather
+  than just its bottom half: the pull is a time constant rather than a
+  per-sample weight, so a 240 Hz stylus and a 60 Hz mouse are filtered the same
+  amount over the same stretch of paper; and the top of the dial is two frames
+  of lag, deliberately short of where loops start closing. The lift lands the
+  nib where the pen actually left the page.
+
+### Changed — a nib that lasts a word, not a letter
+
+- **Ink fullness reaches much further before it dries.** An empty dial was 14
+  nib widths of writing, which is about a quarter of a letter — so the whole
+  bottom of the dial gave out inside the first character and read as broken
+  rather than as dry. The base is now 150: the empty end fades over a word, the
+  middle over a line, three-quarters over several, and the top still does not
+  dry at all. The default (100%) is unchanged.
+
+
 ### Added — captures you can see happen
 
 - **Countdown, shutter, and a toast that names the file.** A capture used to be
