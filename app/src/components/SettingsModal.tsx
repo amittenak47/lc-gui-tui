@@ -24,7 +24,12 @@ import {
 } from "../util/inkSmoothingPref";
 import {
   loadAutoSaveCaptures,
+  CAPTURE_COUNTDOWN_CHOICES,
+  loadCaptureCountdown,
   loadCaptureDestination,
+  loadCaptureFolder,
+  saveCaptureCountdown,
+  saveCaptureFolder,
   saveAutoSaveCaptures,
   saveCaptureDestination,
   type CaptureDestination,
@@ -136,6 +141,8 @@ interface DevicePrefs {
   handedness: InkHandedness;
   autoSaveCaptures: boolean;
   captureDestination: CaptureDestination;
+  captureFolder: string;
+  captureCountdown: number;
   offlineMerge: OfflineMergePolicy;
   pressureClip: number;
   inkSmoothing: number;
@@ -146,6 +153,8 @@ function loadDevicePrefs(): DevicePrefs {
     handedness: loadInkHandedness(),
     autoSaveCaptures: loadAutoSaveCaptures(),
     captureDestination: loadCaptureDestination(),
+    captureFolder: loadCaptureFolder(),
+    captureCountdown: loadCaptureCountdown(),
     offlineMerge: loadOfflineMergePolicy(),
     pressureClip: loadInkPressureClip(),
     inkSmoothing: loadInkSmoothing(),
@@ -157,6 +166,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.handedness === b.handedness &&
     a.autoSaveCaptures === b.autoSaveCaptures &&
     a.captureDestination === b.captureDestination &&
+    a.captureFolder === b.captureFolder &&
+    a.captureCountdown === b.captureCountdown &&
     a.offlineMerge === b.offlineMerge &&
     a.pressureClip === b.pressureClip &&
     a.inkSmoothing === b.inkSmoothing
@@ -209,6 +220,8 @@ export function SettingsModal({
   const [captureDestination, setCaptureDestination] = useState<CaptureDestination>(() =>
     loadCaptureDestination(),
   );
+  const [captureFolder, setCaptureFolder] = useState(() => loadCaptureFolder());
+  const [captureCountdown, setCaptureCountdown] = useState(() => loadCaptureCountdown());
   const [offlineMerge, setOfflineMerge] = useState<OfflineMergePolicy>(() =>
     loadOfflineMergePolicy(),
   );
@@ -296,6 +309,8 @@ export function SettingsModal({
     setHandedness(prefs.handedness);
     setAutoSaveCaptures(prefs.autoSaveCaptures);
     setCaptureDestination(prefs.captureDestination);
+    setCaptureFolder(prefs.captureFolder);
+    setCaptureCountdown(prefs.captureCountdown);
     setOfflineMerge(prefs.offlineMerge);
     setPressureClip(prefs.pressureClip);
     setInkSmoothing(prefs.inkSmoothing);
@@ -347,6 +362,8 @@ export function SettingsModal({
     handedness,
     autoSaveCaptures,
     captureDestination,
+    captureFolder,
+    captureCountdown,
     offlineMerge,
     pressureClip,
     inkSmoothing,
@@ -378,17 +395,12 @@ export function SettingsModal({
         saveInkHandedness(handedness);
         saveAutoSaveCaptures(autoSaveCaptures);
         saveCaptureDestination(captureDestination);
+        saveCaptureFolder(captureFolder);
+        saveCaptureCountdown(captureCountdown);
         saveOfflineMergePolicy(offlineMerge);
         saveInkPressureClip(pressureClip);
         saveInkSmoothing(inkSmoothing);
-        setBaselinePrefs({
-          handedness,
-          autoSaveCaptures,
-          captureDestination,
-          offlineMerge,
-          pressureClip,
-          inkSmoothing,
-        });
+        setBaselinePrefs(draftPrefs);
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
         );
@@ -669,6 +681,22 @@ export function SettingsModal({
                     <button
                       type="button"
                       role="radio"
+                      aria-checked={captureDestination === "folder"}
+                      className={
+                        captureDestination === "folder"
+                          ? "lc-settings-choice-option is-active"
+                          : "lc-settings-choice-option"
+                      }
+                      onClick={() => setCaptureDestination("folder")}
+                    >
+                      <strong>A folder you pick</strong>
+                      <span className="lc-muted">
+                        Write PNGs into a directory you name below. Desktop app only.
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
                       aria-checked={captureDestination === "share"}
                       className={
                         captureDestination === "share"
@@ -679,9 +707,58 @@ export function SettingsModal({
                     >
                       <strong>Share sheet</strong>
                       <span className="lc-muted">
-                        Ask each time (share on phone, download link on desktop).
+                        Android only — hands the PNG to the system chooser. Elsewhere it
+                        saves to Photos and tells you where.
                       </span>
                     </button>
+                  </div>
+
+                  {captureDestination === "folder" && (
+                    <>
+                      <p className="lc-settings-hint">
+                        Absolute path. <code>~</code> works. The folder is created if it
+                        does not exist; if the write fails the capture falls back to a
+                        download and the toast says so.
+                      </p>
+                      <input
+                        type="text"
+                        value={captureFolder}
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        placeholder="~/Pictures/lc-board"
+                        aria-label="Capture folder"
+                        onChange={(event) => setCaptureFolder(event.target.value)}
+                      />
+                    </>
+                  )}
+
+                  <div className="lc-settings-subhead">Capture countdown</div>
+                  <p className="lc-settings-hint">
+                    Seconds between pressing the shutter and the shot, so you can get out
+                    of your own way. Tapping the countdown shoots immediately.
+                  </p>
+                  <div
+                    className="lc-settings-choice lc-settings-choice-compact"
+                    role="radiogroup"
+                    aria-label="Capture countdown"
+                  >
+                    {CAPTURE_COUNTDOWN_CHOICES.map((seconds) => (
+                      <button
+                        key={seconds}
+                        type="button"
+                        role="radio"
+                        aria-checked={captureCountdown === seconds}
+                        className={
+                          captureCountdown === seconds
+                            ? "lc-settings-choice-option is-active"
+                            : "lc-settings-choice-option"
+                        }
+                        onClick={() => setCaptureCountdown(seconds)}
+                      >
+                        <strong>{seconds === 0 ? "Off" : `${seconds}s`}</strong>
+                      </button>
+                    ))}
                   </div>
                 </>
               )}

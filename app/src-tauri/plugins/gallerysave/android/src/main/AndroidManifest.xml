@@ -1,4 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- MediaStore insert on API 29+ needs no storage permission for app-owned images. -->
+    <application>
+        <!--
+          Share sheet source. ACTION_SEND may only carry a URI another app is
+          allowed to read, and a `file://` one throws FileUriExposedException on
+          API 24+. The authority is suffixed off the host app's id so this
+          library can merge into any build without colliding.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.lcshare"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/lc_share_paths" />
+        </provider>
+    </application>
 </manifest>
