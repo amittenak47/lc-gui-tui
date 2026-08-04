@@ -20,7 +20,7 @@ On the tablet: **Settings → About → tap Build number 7×** → Developer opt
 ## 2. One-time project setup
 
 ```cmd
-cd ***\lc_harness\lc\app
+cd <repo>\app
 npm install
 npm run android:init
 ```
@@ -49,7 +49,7 @@ npm run android:init
 1. **Settings → System → About → Advanced system settings**
 2. **Environment Variables**
 3. Under **User variables**:
-   - `ANDROID_HOME` = `***\AppData\Local\Android\Sdk`
+   - `ANDROID_HOME` = `%LOCALAPPDATA%\Android\Sdk`
    - Edit **Path** → **New** → add:
      - `%LOCALAPPDATA%\Android\Sdk\platform-tools`
      - `%LOCALAPPDATA%\Android\Sdk\emulator`
@@ -94,7 +94,7 @@ for %P in ("%PATH:;=";"%") do @echo %~P
 All npm commands below run from **`app\`** (not the repo root).
 
 ```cmd
-cd ***\lc_harness\lc\app
+cd <repo>\app
 adb devices
 npm run android:dev
 ```
@@ -108,7 +108,7 @@ app\scripts\android-dev.cmd <your-device-serial>
 Or with one tablet plugged in, no serial needed:
 
 ```cmd
-cd ***\lc_harness\lc\app
+cd <repo>\app
 npm run android:dev
 ```
 **Common error:** `Port 1420 is already in use` — a previous `android:dev` is still running. Ctrl+C it, or:
@@ -129,7 +129,7 @@ taskkill /PID <pid> /F
 ### Option B — APK file (simpler)
 
 ```cmd
-cd ***\lc_harness\lc\app
+cd <repo>\app
 npm run android:apk
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
 ```
@@ -150,7 +150,7 @@ adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-u
 On the PC (repo root, **not** WSL for LAN pairing):
 
 ```cmd
-cd ***\lc_harness\lc
+cd <repo>
 cargo run --release -- serve --lan
 ```
 
@@ -186,7 +186,7 @@ Tablet app  ──HTTP──►  lc serve on PC (:7878)  ──►  Ollama / Ope
 The Android WebView blocks cleartext HTTP unless the network overlay is applied. Rebuild the APK after pulling fixes:
 
 ```cmd
-cd ***\lc_harness\lc\app
+cd <repo>\app
 npm run android:overlay
 npm run android:apk
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
@@ -203,10 +203,10 @@ http://<pc-ip>:7878/health
 ## 6. Run desktop (optional, for mouse testing)
 
 ```cmd
-cd ***\lc_harness\lc
+cd <repo>
 cargo run --release -- serve --port 7878
 
-cd ***\lc_harness\lc\app
+cd <repo>\app
 npm run tauri dev
 ```
 
