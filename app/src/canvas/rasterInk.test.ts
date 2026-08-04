@@ -317,6 +317,19 @@ describe("inkStrokesFromOps", () => {
     expect(rubbed).toEqual([]);
   });
 
+  it("scales with the board rather than the square of it", () => {
+    // One index over every stamp, not one per stroke: 400 strokes against 400
+    // erases used to be 160k bucket rebuilds.
+    const many: InkOp[] = [];
+    for (let i = 0; i < 400; i++) {
+      many.push(draw([i * 20, 0], [i * 20 + 10, 0]));
+      many.push(erase(3, [i * 20 + 400, 400]));
+    }
+    const started = Date.now();
+    expect(inkStrokesFromOps(many)).toHaveLength(400);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
   it("splits a stroke the eraser cut in half", () => {
     const stroke = draw([0, 0], [20, 0], [40, 0], [60, 0], [80, 0]);
     expect(inkStrokesFromOps([stroke, erase(5, [40, 0])])).toEqual([

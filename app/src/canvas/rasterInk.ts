@@ -691,12 +691,16 @@ export function inkStrokesFromOps(ops: readonly InkOp[]): InkStroke[] {
     run = [];
   };
 
+  // One index over every erase stamp on the board, queried per draw op. It used
+  // to be rebuilt from `ops.slice(i + 1)` inside the loop, which made submitting
+  // a page quadratic in the number of strokes on it.
+  const erasedAfter = eraseLookup(ops);
+
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i];
     if (op.kind !== "draw") continue;
-    const isErased = eraseLookup(ops.slice(i + 1));
     for (const point of op.points) {
-      if (isErased(point)) {
+      if (erasedAfter(point, i)) {
         endRun();
         continue;
       }
@@ -712,31 +716,37 @@ export function inkStrokesFromOps(ops: readonly InkOp[]): InkStroke[] {
 }
 
 /**
- * Point-in-any-erase-stamp test, bucketed by the widest eraser radius so a long
- * rub-out doesn't turn recognition into a quadratic scan. Cells are that radius
- * wide, so every stamp that can cover a point lives in one of the nine cells
- * around it.
+ * Point-in-a-later-erase-stamp test, bucketed by the widest eraser radius so a
+ * long rub-out doesn't turn recognition into a quadratic scan. Cells are that
+ * radius wide, so every stamp that can cover a point lives in one of the nine
+ * cells around it.
+ *
+ * Stamps carry the index of the op they came from: only an erase *after* a
+ * stroke removes its points, matching what the tiles paint.
  */
-function eraseLookup(ops: readonly InkOp[]): (point: ScenePoint) => boolean {
+function eraseLookup(
+  ops: readonly InkOp[],
+): (point: ScenePoint, afterIndex: number) => boolean {
   let cell = 0;
   for (const op of ops) {
     if (op.kind === "erase") cell = Math.max(cell, op.radius);
   }
   if (cell <= 0) return () => false;
 
-  const buckets = new Map<string, Array<{ x: number; y: number; r: number }>>();
-  for (const op of ops) {
+  const buckets = new Map<string, Array<{ x: number; y: number; r: number; op: number }>>();
+  for (let index = 0; index < ops.length; index++) {
+    const op = ops[index];
     if (op.kind !== "erase") continue;
     for (const point of op.points) {
       const key = `${Math.floor(point.x / cell)},${Math.floor(point.y / cell)}`;
-      const stamp = { x: point.x, y: point.y, r: op.radius };
+      const stamp = { x: point.x, y: point.y, r: op.radius, op: index };
       const bucket = buckets.get(key);
       if (bucket) bucket.push(stamp);
       else buckets.set(key, [stamp]);
     }
   }
 
-  return (point) => {
+  return (point, afterIndex) => {
     const cx = Math.floor(point.x / cell);
     const cy = Math.floor(point.y / cell);
     for (let dx = -1; dx <= 1; dx++) {
@@ -744,6 +754,7 @@ function eraseLookup(ops: readonly InkOp[]): (point: ScenePoint) => boolean {
         const bucket = buckets.get(`${cx + dx},${cy + dy}`);
         if (!bucket) continue;
         for (const stamp of bucket) {
+          if (stamp.op <= afterIndex) continue;
           if (Math.hypot(point.x - stamp.x, point.y - stamp.y) <= stamp.r) return true;
         }
       }
