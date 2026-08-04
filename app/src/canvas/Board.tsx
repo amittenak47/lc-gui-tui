@@ -3088,10 +3088,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       elements: sized as unknown[],
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
-    requestAnimationFrame(() => {
-      scheduleFitView();
-    });
-  }, [convert, scheduleFitView, themeId]);
+    /*
+     * Fit inside the same commit, not on the next frame.
+     *
+     * The seed skeletons are at their authored size, and the fit is what grows
+     * the page frame to the viewport and sets the camera. Deferring it by a
+     * frame let Excalidraw paint the authored layout once at the old camera —
+     * the snap-then-resize everyone sees. `updateScene` writes the elements
+     * synchronously and the camera is a state update, so doing both here lands
+     * them in one paint.
+     */
+    refitToViewport();
+    // Fonts and text metrics settle a beat later; these only nudge.
+    scheduleFitView();
+  }, [convert, refitToViewport, scheduleFitView, themeId]);
 
   const applyRegionLayout = useCallback(() => {
     const api = apiRef.current;
@@ -3897,9 +3907,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 <button
                   type="button"
                   className={
-                    mapChromeHidden
-                      ? "lc-map-btn lc-chrome-eye is-dimmed"
-                      : "lc-map-btn lc-chrome-eye"
+                    mapChromeHidden ? "lc-chrome-eye is-dimmed" : "lc-chrome-eye"
                   }
                   aria-pressed={!mapChromeHidden}
                   aria-label={mapChromeHidden ? "Show board chrome" : "Hide board chrome"}
