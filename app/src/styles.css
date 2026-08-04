@@ -6080,6 +6080,40 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 8px;
 }
 
+/* A dial where the choice rows would be a list of arbitrary percentages. Same
+ * card as `.lc-settings-choice-option` so the Personalise column reads as one
+ * stack of settings rather than a control bolted on. */
+.lc-settings-slider {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.lc-settings-slider-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.lc-settings-slider-value {
+  flex: 0 0 auto;
+  min-width: 3.2em;
+  text-align: right;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
 .lc-scratch-load-row {
   display: flex;
   flex-direction: row;

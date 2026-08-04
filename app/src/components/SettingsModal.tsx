@@ -17,6 +17,12 @@ import {
   saveInkPressureClip,
 } from "../util/inkPressureClip";
 import {
+  loadInkSmoothing,
+  saveInkSmoothing,
+  smoothingFromPercent,
+  smoothingToPercent,
+} from "../util/inkSmoothingPref";
+import {
   loadAutoSaveCaptures,
   loadCaptureDestination,
   saveAutoSaveCaptures,
@@ -132,6 +138,7 @@ interface DevicePrefs {
   captureDestination: CaptureDestination;
   offlineMerge: OfflineMergePolicy;
   pressureClip: number;
+  inkSmoothing: number;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -141,6 +148,7 @@ function loadDevicePrefs(): DevicePrefs {
     captureDestination: loadCaptureDestination(),
     offlineMerge: loadOfflineMergePolicy(),
     pressureClip: loadInkPressureClip(),
+    inkSmoothing: loadInkSmoothing(),
   };
 }
 
@@ -150,7 +158,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.autoSaveCaptures === b.autoSaveCaptures &&
     a.captureDestination === b.captureDestination &&
     a.offlineMerge === b.offlineMerge &&
-    a.pressureClip === b.pressureClip
+    a.pressureClip === b.pressureClip &&
+    a.inkSmoothing === b.inkSmoothing
   );
 }
 
@@ -204,6 +213,7 @@ export function SettingsModal({
     loadOfflineMergePolicy(),
   );
   const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
+  const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
   /** Last saved config + device prefs — Cancel restores these; Save advances them. */
   const [baselineConfig, setBaselineConfig] = useState<LcConfig>(emptyConfig);
   const [baselinePrefs, setBaselinePrefs] = useState<DevicePrefs>(loadDevicePrefs);
@@ -288,6 +298,7 @@ export function SettingsModal({
     setCaptureDestination(prefs.captureDestination);
     setOfflineMerge(prefs.offlineMerge);
     setPressureClip(prefs.pressureClip);
+    setInkSmoothing(prefs.inkSmoothing);
     setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     void offlinePackMeta().then((meta) => {
@@ -338,6 +349,7 @@ export function SettingsModal({
     captureDestination,
     offlineMerge,
     pressureClip,
+    inkSmoothing,
   };
   const dirty =
     !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
@@ -368,17 +380,20 @@ export function SettingsModal({
         saveCaptureDestination(captureDestination);
         saveOfflineMergePolicy(offlineMerge);
         saveInkPressureClip(pressureClip);
+        saveInkSmoothing(inkSmoothing);
         setBaselinePrefs({
           handedness,
           autoSaveCaptures,
           captureDestination,
           offlineMerge,
           pressureClip,
+          inkSmoothing,
         });
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
         );
         window.dispatchEvent(new CustomEvent("lc-ink-pressure-clip"));
+        window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
       }
       if (configDirty) {
         const saved = await client.putConfig(draft);
@@ -698,6 +713,33 @@ export function SettingsModal({
                     <strong>{percent}%</strong>
                   </button>
                 ))}
+              </div>
+
+              <div className="lc-settings-subhead">Stroke smoothing</div>
+              <p className="lc-settings-hint">
+                How much of the shake to take out of a pen stroke. It is applied when
+                you lift the pen, so the ink never lags the nib while you write. Higher
+                steadies a shaky hand; lower keeps every kink you actually drew. Saved on
+                this device only.
+              </p>
+              <div className="lc-settings-slider">
+                <input
+                  type="range"
+                  className="lc-settings-slider-input"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={smoothingToPercent(inkSmoothing)}
+                  aria-label="Stroke smoothing"
+                  onChange={(event) =>
+                    setInkSmoothing(smoothingFromPercent(Number(event.target.value)))
+                  }
+                />
+                <span className="lc-settings-slider-value">
+                  {smoothingToPercent(inkSmoothing) === 0
+                    ? "Off"
+                    : `${smoothingToPercent(inkSmoothing)}%`}
+                </span>
               </div>
 
               <div className="lc-settings-subhead">When a case fails</div>
