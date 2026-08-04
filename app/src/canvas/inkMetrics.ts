@@ -44,6 +44,10 @@
  *   here to "and then it was on screen". A large `frame` with a small `stale`
  *   means the ink was drawn on time and shown late, which is a compositor
  *   problem and not an input one.
+ *
+ * `gap` says the thread was gone; `blocked` says what took it, from the
+ * browser's own long-task reporting, and appears only on strokes that had one.
+ * Between them a stalled stroke names its own culprit.
  */
 
 export interface InkStrokeMetrics {
@@ -66,6 +70,12 @@ export interface InkStrokeMetrics {
   maxGapMs: number;
   /** Worst draw-calls-returned → next animation frame, ms. */
   maxFrameMs: number;
+  /** Long tasks (>50ms) that overlapped the stroke. */
+  longTasks: number;
+  /** How much of the stroke was spent inside those tasks, ms. */
+  blockedMs: number;
+  /** Duration of the worst of them, ms — the whole task, not just the overlap. */
+  maxLongTaskMs: number;
 }
 
 interface Totals {
@@ -79,9 +89,18 @@ interface Totals {
   maxSampleAgeMs: number;
   maxGapMs: number;
   maxFrameMs: number;
+  longTasks: number;
+  blockedMs: number;
+  maxLongTaskMs: number;
   last: InkStrokeMetrics | null;
   /** Pointer-path decisions that produced no stroke, counted by reason. */
   notes: Map<string, number>;
+}
+
+/** A task the browser reported as blocking, in `performance.now()` terms. */
+interface LongTask {
+  start: number;
+  end: number;
 }
 
 function readEnabled(): boolean {
@@ -105,6 +124,9 @@ const totals: Totals = {
   maxSampleAgeMs: 0,
   maxGapMs: 0,
   maxFrameMs: 0,
+  longTasks: 0,
+  blockedMs: 0,
+  maxLongTaskMs: 0,
   last: null,
   notes: new Map<string, number>(),
 };
@@ -123,6 +145,39 @@ let lastMoveAt = 0;
 /** One frame probe in flight at a time — the rest of the stroke's are the same frame. */
 let framePending = false;
 
+/**
+ * Long tasks seen recently, newest last.
+ *
+ * `gap` says the thread was gone; this says what took it. The browser only
+ * reports tasks over 50ms, which is the right threshold here — anything that
+ * costs a writer a frame at 90Hz and is worth naming is well past it.
+ */
+const longTaskLog: LongTask[] = [];
+/** Two strokes' worth of blocking is plenty of history to keep around. */
+const LONG_TASK_LOG_CAP = 64;
+let longTaskObserver: PerformanceObserver | null = null;
+
+function recordLongTasks(entries: PerformanceEntryList): void {
+  for (const entry of entries) {
+    longTaskLog.push({ start: entry.startTime, end: entry.startTime + entry.duration });
+  }
+  if (longTaskLog.length > LONG_TASK_LOG_CAP) {
+    longTaskLog.splice(0, longTaskLog.length - LONG_TASK_LOG_CAP);
+  }
+}
+
+function watchLongTasks(): void {
+  if (typeof PerformanceObserver !== "function") return;
+  try {
+    longTaskObserver = new PerformanceObserver((list) => recordLongTasks(list.getEntries()));
+    longTaskObserver.observe({ entryTypes: ["longtask"] });
+  } catch {
+    // Not every engine ships the entry type, and observing an unknown one
+    // throws. The rest of the numbers stand on their own without it.
+    longTaskObserver = null;
+  }
+}
+
 export const inkMetrics = {
   enabled,
 
@@ -138,6 +193,14 @@ export const inkMetrics = {
     maxSampleAge = 0;
     maxGap = 0;
     maxFrame = 0;
+    // Anything that finished before the pen touched down belongs to the last
+    // stroke, or to no stroke at all. Entries arrive in end order, so the
+    // expired ones are a prefix.
+    let expired = 0;
+    while (expired < longTaskLog.length && longTaskLog[expired].end < startedAt) {
+      expired += 1;
+    }
+    if (expired > 0) longTaskLog.splice(0, expired);
   },
 
   /**
@@ -216,9 +279,24 @@ export const inkMetrics = {
 
   end(): InkStrokeMetrics | null {
     if (!enabled || startedAt === 0) return null;
-    const durationMs = performance.now() - startedAt;
-    startedAt = 0;
+    const endedAt = performance.now();
+    const durationMs = endedAt - startedAt;
     const seconds = durationMs / 1000;
+
+    // A task that ended a moment ago may not have reached the callback yet, and
+    // the last one before the lift is the one most worth having.
+    recordLongTasks(longTaskObserver?.takeRecords() ?? []);
+    let longTasks = 0;
+    let blockedMs = 0;
+    let maxLongTaskMs = 0;
+    for (const task of longTaskLog) {
+      const overlap = Math.min(task.end, endedAt) - Math.max(task.start, startedAt);
+      if (overlap <= 0) continue;
+      longTasks += 1;
+      blockedMs += overlap;
+      maxLongTaskMs = Math.max(maxLongTaskMs, task.end - task.start);
+    }
+    startedAt = 0;
     const metrics: InkStrokeMetrics = {
       moves,
       samples,
@@ -232,6 +310,9 @@ export const inkMetrics = {
       maxSampleAgeMs: Math.round(maxSampleAge * 100) / 100,
       maxGapMs: Math.round(maxGap * 100) / 100,
       maxFrameMs: Math.round(maxFrame * 100) / 100,
+      longTasks,
+      blockedMs: Math.round(blockedMs * 100) / 100,
+      maxLongTaskMs: Math.round(maxLongTaskMs * 100) / 100,
     };
 
     totals.strokes += 1;
@@ -244,17 +325,27 @@ export const inkMetrics = {
     totals.maxSampleAgeMs = Math.max(totals.maxSampleAgeMs, maxSampleAge);
     totals.maxGapMs = Math.max(totals.maxGapMs, maxGap);
     totals.maxFrameMs = Math.max(totals.maxFrameMs, maxFrame);
+    totals.longTasks += longTasks;
+    totals.blockedMs += blockedMs;
+    totals.maxLongTaskMs = Math.max(totals.maxLongTaskMs, maxLongTaskMs);
     totals.last = metrics;
 
     // Strokes shorter than a flick are noise — the rates are meaningless.
     if (durationMs >= 150) {
+      // Only worth a column on the strokes that had any; a clean stroke's line
+      // is long enough already.
+      const blocked =
+        longTasks > 0
+          ? ` · blocked ${metrics.blockedMs}ms in ${longTasks} ` +
+            `task${longTasks === 1 ? "" : "s"} (${metrics.maxLongTaskMs}ms worst)`
+          : "";
       // eslint-disable-next-line no-console
       console.info(
         `[ink] ${metrics.moveHz} moves/s · ${metrics.sampleHz} samples/s ` +
           `(+${metrics.recovered} coalesced) · paint ${metrics.meanLatencyMs}ms mean, ` +
           `${metrics.maxLatencyMs}ms max · stale ${metrics.maxSampleAgeMs}ms max · ` +
-          `gap ${metrics.maxGapMs}ms max · frame ${metrics.maxFrameMs}ms max · ` +
-          `${metrics.durationMs}ms stroke`,
+          `gap ${metrics.maxGapMs}ms max · frame ${metrics.maxFrameMs}ms max` +
+          `${blocked} · ${metrics.durationMs}ms stroke`,
       );
     }
     return metrics;
@@ -276,6 +367,9 @@ export const inkMetrics = {
       maxSampleAgeMs: Math.round(totals.maxSampleAgeMs * 100) / 100,
       maxGapMs: Math.round(totals.maxGapMs * 100) / 100,
       maxFrameMs: Math.round(totals.maxFrameMs * 100) / 100,
+      longTasks: totals.longTasks,
+      blockedMs: Math.round(totals.blockedMs * 100) / 100,
+      maxLongTaskMs: Math.round(totals.maxLongTaskMs * 100) / 100,
       last: totals.last,
       notes: Object.fromEntries(totals.notes),
     };
@@ -284,4 +378,5 @@ export const inkMetrics = {
 
 if (enabled) {
   (window as unknown as { __lcInkMetrics: typeof inkMetrics }).__lcInkMetrics = inkMetrics;
+  watchLongTasks();
 }

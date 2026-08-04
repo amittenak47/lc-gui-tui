@@ -13,11 +13,34 @@ import type { inkMetrics as InkMetrics } from "./inkMetrics";
 const DOWN = 1000;
 let clock = DOWN;
 let frameCallback: ((time: number) => void) | null = null;
+let longTaskCallback: ((list: { getEntries(): PerformanceEntryList }) => void) | null = null;
+
+/** Feed the observer a long task, as `[start, duration]` relative to pointerdown. */
+function longTask(start: number, duration: number): void {
+  longTaskCallback?.({
+    getEntries: () =>
+      [{ startTime: DOWN + start, duration }] as unknown as PerformanceEntryList,
+  });
+}
 
 async function loadMetrics(enabled = true): Promise<typeof InkMetrics> {
   vi.resetModules();
   clock = DOWN;
   frameCallback = null;
+  longTaskCallback = null;
+  vi.stubGlobal(
+    "PerformanceObserver",
+    class {
+      constructor(cb: (list: { getEntries(): PerformanceEntryList }) => void) {
+        longTaskCallback = cb;
+      }
+      observe(): void {}
+      takeRecords(): PerformanceEntryList {
+        return [];
+      }
+      disconnect(): void {}
+    },
+  );
   vi.stubGlobal("window", {} as unknown as Window);
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => (enabled && key === "lc.ink.metrics" ? "1" : null),
@@ -116,6 +139,40 @@ describe("inkMetrics", () => {
     expect(stroke?.moves).toBe(5);
     expect(stroke?.samples).toBe(15);
     expect(stroke?.recovered).toBe(10);
+  });
+
+  it("charges the stroke only for the part of a long task that overlapped it", async () => {
+    const metrics = await loadMetrics();
+    metrics.begin();
+
+    // Straddles pointerdown: 60ms task, but only its last 20ms cost this stroke.
+    longTask(-40, 60);
+    // Squarely inside.
+    longTask(80, 70);
+    // Starts before the lift and runs past it — 10ms of the 90 belongs here.
+    longTask(190, 90);
+
+    clock = DOWN + 200;
+    const stroke = metrics.end();
+    expect(stroke?.longTasks).toBe(3);
+    expect(stroke?.blockedMs).toBe(100);
+    expect(stroke?.maxLongTaskMs).toBe(90);
+  });
+
+  it("ignores long tasks that fell between strokes", async () => {
+    const metrics = await loadMetrics();
+    metrics.begin();
+    clock = DOWN + 200;
+    metrics.end();
+
+    // Landed in the gap between one lift and the next touch.
+    longTask(220, 60);
+    clock = DOWN + 400;
+    metrics.begin();
+    clock = DOWN + 600;
+    const stroke = metrics.end();
+    expect(stroke?.longTasks).toBe(0);
+    expect(stroke?.blockedMs).toBe(0);
   });
 
   it("stays inert when the flag is off", async () => {

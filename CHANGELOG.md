@@ -27,6 +27,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   synchronous loop, so a higher count means more of the stroke was drawn, not
   that any of it was drawn later.
 
+- **A stalled stroke now names what stalled it.** `gap` says the thread was
+  gone; a `blocked` column says what took it, built from the browser's own
+  long-task reporting and charged to the stroke only for the overlap, so a task
+  that straddles pointerdown costs the stroke its tail rather than its whole
+  duration. It appears only on strokes that had one, which keeps the clean
+  lines readable and makes the bad ones obvious at a glance.
+
 ### Fixed — one hand on the page at a time
 
 - **The autosave no longer lands in the middle of a letter.** Board persistence
