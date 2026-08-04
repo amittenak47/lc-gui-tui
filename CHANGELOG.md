@@ -6,6 +6,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — the pen rewritten around tiles, runs, and a nib that dries
+
+- **Pan and zoom stop stalling on a full page.** Committed ink used to sit in
+  one viewport-sized bake keyed on zoom but not scroll. Panning slid it under a
+  CSS translate, so the ground the translate exposed was blank until you let go
+  and the whole page replayed at once; zooming replayed every stroke on the
+  board before it could paint a single frame. Ink is now rasterised into fixed
+  squares of scene space, cached per zoom level on a half-power-of-two ladder,
+  and the visible ones are blitted each frame — the way a map renders. Panning
+  reuses the tiles it has and rasterises only what it exposed. Zooming blits
+  the tiles it has, scaled, and sharpens them from a background pass, so a
+  level change is a moment of softness rather than a stall. Rasterising is
+  budgeted per frame and resumes across frames, and a tile only replays the
+  strokes whose bounds reach it. Committing a stroke drops the two or three
+  tiles under it, not the page.
+- **A stroke is painted as runs, not as one path per segment.** That was a
+  canvas submission per point, with a stamp every fifth of a line width. It was
+  also why ink looked soft: consecutive round caps overlap, so at any alpha
+  below 1 every overlap composited again and a stroke came out solid down the
+  middle with a wide halo on both edges. A constant-width stroke is now a
+  single `stroke()` — one coverage mask, one composite, exact alpha, crisp
+  edges. Erase stamps are one path per wipe instead of one fill per stamp.
+- **The Ink dial is a nib charge, not a flat opacity.** Every stroke starts
+  full and fades with how far it has written; lifting the pen dips it back in.
+  The dial sets how long the charge lasts, and at 100% the nib does not dry at
+  all. Pressure keeps a floor, so the light ends of a fast stroke stay on the
+  page instead of fading to nothing.
+- **The finest tip draws a hairline.** The width dial was a flat multiple, so
+  its bottom notch was nearly three device pixels on a retina panel. Tip `n` is
+  now `0.9 + (n - 1) × 1.35` scene units, and thin strokes get a device-pixel
+  floor so they stay black instead of greying out as you zoom away from them.
+- **A tap draws a dot.** Dotting an "i" used to draw nothing.
+
+### Added — stroke smoothing
+
+- **Settings → Personalise → Stroke smoothing.** A slider (default 35%, off at
+  0) for how much shake to take out of a pen stroke: drop the samples that
+  carry no shape, then round off what is left. It runs when the pen lifts, not
+  per sample, so the ink never lags the nib while you write. Capped so the
+  smoothed path stays inside the ink the raw one would have laid down.
+
+### Fixed — placing a text box on a tablet
+
+- **The keyboard opens.** Placing a note dropped a box and stopped there. The
+  hand-off to Excalidraw's editor was a synthetic double-click, which upstream
+  ignores unless the active tool is `selection` — ours sat on the locked text
+  tool, so the editor was never created. Excalidraw now stays on `selection`
+  while the Text tool is up: we place the element, select it, and double-click
+  inside it, which opens and focuses its textarea within the press's
+  user-activation window. Press-drag-release keeps the width you drew and
+  wraps; a tap gets a box that grows.
+
 ### Added — hand inertia, ink fullness, smooth zoom
 
 - **Hand-tool flick coast.** Release a pan flick and the board keeps sliding with
