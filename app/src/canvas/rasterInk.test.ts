@@ -18,6 +18,7 @@ import {
   INK_PRESSURE_FLOOR,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
+  INK_TIP_MIN,
   INK_WIDTH_SPREAD,
   NO_PRESSURE,
   normalizePressure,
@@ -26,6 +27,8 @@ import {
   scenePointFromCanvasPixel,
   scenePointFromPointer,
   smoothPressure,
+  STROKE_WIDTH_MAX,
+  STROKE_WIDTH_MIN,
   unionSceneBounds,
   type InkOp,
   type ScenePoint,
@@ -67,6 +70,20 @@ describe("rasterInk sizing", () => {
     expect(inkLineWidth(2, 0, true)).toBeCloseTo(base);
     expect(inkLineWidth(2, 1, true)).toBeCloseTo(base * (1 + INK_WIDTH_SPREAD));
     expect(inkLineWidth(2, 0.5, true)).toBeLessThan(inkLineWidth(2, 1, true));
+  });
+
+  it("gives the finest tip a hairline, and never a negative one", () => {
+    expect(inkLineWidth(STROKE_WIDTH_MIN, 0, false)).toBeCloseTo(INK_TIP_MIN);
+    expect(inkLineWidth(0, 0, false)).toBeCloseTo(INK_TIP_MIN);
+    expect(inkLineWidth(-5, 0, false)).toBeCloseTo(INK_TIP_MIN);
+  });
+
+  it("still spreads the dial evenly above the finest tip", () => {
+    const one = inkLineWidth(1, 0, false);
+    const two = inkLineWidth(2, 0, false);
+    const three = inkLineWidth(3, 0, false);
+    expect(two - one).toBeCloseTo(three - two);
+    expect(inkLineWidth(STROKE_WIDTH_MAX, 0, false)).toBeGreaterThan(40);
   });
 
   it("stamps denser under pressure than at constant width", () => {

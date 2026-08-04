@@ -139,13 +139,25 @@ export function normalizePressure(raw: number, clip: number): number {
   return Math.min(1, raw / c);
 }
 
+/**
+ * Scene units the finest tip draws at.
+ *
+ * The dial used to be a flat multiple, so its bottom notch was 1.35 units —
+ * nearly three device pixels on a retina panel at 1:1, which is a fineliner and
+ * not fresh lead. Shift the scale down instead of scaling it, so the bottom of
+ * the dial gets genuinely fine without squashing everything above it: a tip of
+ * `n` is `INK_TIP_MIN + (n - 1) * INK_TIP_STEP`.
+ */
+export const INK_TIP_MIN = 0.9;
+export const INK_TIP_STEP = 1.35;
+
 /** Scene-unit line width from tip geometry; mild spread when stylus pressure is active. */
 export function inkLineWidth(
   baseWidth: number,
   pNorm: number,
   pressureSensitive = false,
 ): number {
-  const base = baseWidth * 1.35;
+  const base = Math.max(INK_TIP_MIN, INK_TIP_MIN + (baseWidth - 1) * INK_TIP_STEP);
   if (!pressureSensitive) return base;
   const spread = 1 + INK_WIDTH_SPREAD * Math.max(0, Math.min(1, pNorm));
   return base * spread;
