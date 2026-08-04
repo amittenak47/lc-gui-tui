@@ -1744,17 +1744,41 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!root) return;
 
     let frame = 0;
-    let pending: { x: number; y: number; zoom: number } | null = null;
+    let pending: { clientX: number; clientY: number } | null = null;
     let visible = false;
 
+    // Everything that reads the DOM lives in here, not in the move handler.
+    // Hit-testing the pointer against the canvas box used to cost two
+    // `getBoundingClientRect()` calls per sample — a forced layout of the whole
+    // board on every event, ahead of the rAF that was supposed to be batching
+    // the work. Once a frame is as often as the answer can change, and inside
+    // rAF the reads come before this function's own style writes, so they are
+    // measuring a layout nobody has dirtied.
     const flush = () => {
       frame = 0;
       const next = pending;
       pending = null;
       const brush = eraserBrushRef.current;
       if (!brush || !next) return;
-      brush.setDiameter(eraserScreenRadius(strokeWidthRef.current, next.zoom) * 2);
-      brush.move(next.x, next.y);
+      const hitCanvas =
+        root.querySelector("canvas.lc-raster-ink") ??
+        root.querySelector("canvas.excalidraw__canvas");
+      if (!(hitCanvas instanceof HTMLCanvasElement)) return;
+      const rect = hitCanvas.getBoundingClientRect();
+      if (
+        next.clientX < rect.left ||
+        next.clientX > rect.right ||
+        next.clientY < rect.top ||
+        next.clientY > rect.bottom
+      ) {
+        hide();
+        return;
+      }
+      const boardRect = root.getBoundingClientRect();
+      const { zoom } = clientToScene(next.clientX, next.clientY);
+      brushZoomRef.current = zoom;
+      brush.setDiameter(eraserScreenRadius(strokeWidthRef.current, zoom) * 2);
+      brush.move(next.clientX - boardRect.left, next.clientY - boardRect.top);
       if (!visible) {
         visible = true;
         brush.setVisible(true);
@@ -1769,28 +1793,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
 
     const positionBrush = (event: PointerEvent) => {
-      const hitCanvas =
-        root.querySelector("canvas.lc-raster-ink") ??
-        root.querySelector("canvas.excalidraw__canvas");
-      if (!(hitCanvas instanceof HTMLCanvasElement)) return;
-      const rect = hitCanvas.getBoundingClientRect();
-      const inside =
-        event.clientX >= rect.left &&
-        event.clientX <= rect.right &&
-        event.clientY >= rect.top &&
-        event.clientY <= rect.bottom;
-      if (!inside) {
-        hide();
-        return;
-      }
-      const boardRect = root.getBoundingClientRect();
-      const { zoom } = clientToScene(event.clientX, event.clientY);
-      brushZoomRef.current = zoom;
-      pending = {
-        x: event.clientX - boardRect.left,
-        y: event.clientY - boardRect.top,
-        zoom,
-      };
+      pending = { clientX: event.clientX, clientY: event.clientY };
       if (!frame) frame = requestAnimationFrame(flush);
     };
 
