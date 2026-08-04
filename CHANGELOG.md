@@ -34,6 +34,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   nothing has moved and the pixels on screen are already the answer, so that
   frame is now skipped unless something actually changed.
 
+### Fixed — the size wheels reach their own ends
+
+- **The toolbar wheels land on their first and last value.** Pen, eraser, font
+  and ink all scroll to min and max perfectly well — the value was right, the
+  stroke was right — but the wheel never looked like it got there. At the bottom
+  of the range the selection band sat on `2` while `1` hung below it, and at the
+  top it sat on `99` with `100` half cut off above; the end of the range read as
+  unreachable. The wheel already pads the list with empty slots at both ends so
+  the ends can centre, and those pads were being emitted. They were collapsing.
+  Five 22px slots share a 44px window, so every slot is asked to shrink: one
+  with a number in it refuses, because its line box is its minimum height, but
+  an empty pad has nothing to hold it open and goes to zero. The stack lost a
+  slot's height at whichever end the pads were on, and slid up by exactly that
+  much. The slots no longer shrink, so min and max centre like any other value.
+
 ### Added — two ways to make the ink yours
 
 - **Speed ink** (Settings → Personalise). A slow nib lays down more than a fast

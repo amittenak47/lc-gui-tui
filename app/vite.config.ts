@@ -49,6 +49,13 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "scripts/**/*.test.mjs"],
+    include: [
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      // .mjs under src/ too: a test that needs `node:fs` has to stay out of the
+      // typechecked set, or @types/node's globals come with it.
+      "src/**/*.test.mjs",
+      "scripts/**/*.test.mjs",
+    ],
   },
 });

@@ -725,6 +725,13 @@ input[type="checkbox"] {
 }
 
 .lc-number-wheel-item {
+  /* The window is a 5-slot column in a 2-slot-tall box, so every item is asked
+     to shrink. A slot holding a number refuses (its line box is its min-content
+     height) but an empty pad slot has no content to stop it and collapses to 0.
+     That only happens at the ends of the range, where the pads live, which
+     pushed min/max out of the selection band. Hold every slot at its full
+     height so the stack stays symmetric and min/max centre like any other. */
+  flex: 0 0 22px;
   height: 22px;
   line-height: 22px;
   text-align: center;
