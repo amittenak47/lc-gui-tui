@@ -1,9 +1,10 @@
 /**
  * Annotation sets for markdown files — the library behind Markdown Ink.
  *
- * The markdown itself is never stored here and never modified: a document is
- * something the writer opened from disk, and this only holds what they drew on
- * top of it. Discarding an annotation session throws away ink, never the file.
+ * The file on disk is never written to. An entry holds the writer's ink and a
+ * *copy* of the markdown it was drawn over — the copy only so that an entry can
+ * be reopened from the library without hunting down the file again. Discarding
+ * a session throws away annotations; nothing in here can touch the original.
  *
  * Entries are keyed by a hash of the markdown's *content* rather than its path.
  * A path is not available at all through a browser file picker, and it is the
@@ -39,6 +40,16 @@ export interface MdInkDocMeta {
 }
 
 export interface MdInkDoc extends MdInkDocMeta {
+  /**
+   * The markdown itself, so an entry can be reopened without hunting for the
+   * file again.
+   *
+   * This is a copy of the writer's document, kept as the backdrop the ink was
+   * drawn on — not a claim of ownership over it and never written back to disk.
+   * Discard still only throws away annotations; the file on disk is untouched
+   * by anything in this module.
+   */
+  source: string;
   board: BoardBlob;
 }
 
@@ -71,6 +82,7 @@ function readLibrary(): MdInkDoc[] {
         entry &&
         typeof entry.id === "string" &&
         typeof entry.hash === "string" &&
+        typeof entry.source === "string" &&
         entry.board?.v === 1 &&
         Array.isArray(entry.board.elements),
     );
@@ -112,6 +124,7 @@ export function saveMdInkDoc(input: {
   id?: string;
   name: string;
   hash: string;
+  source: string;
   board: BoardBlob;
 }): MdInkDoc {
   const library = readLibrary();
@@ -133,6 +146,7 @@ export function saveMdInkDoc(input: {
     name: input.name.trim() || existing?.name || "Untitled.md",
     hash: input.hash,
     updatedAt: now,
+    source: input.source,
     board: input.board,
   };
   writeLibrary([next, ...library.filter((entry) => entry.id !== id)]);

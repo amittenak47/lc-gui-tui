@@ -3832,6 +3832,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       fitRegion: (regionId: RegionId | string) => {
         refitToViewport(regionId);
       },
+      setMdInkPageHeight: (height: number) => {
+        const api = apiRef.current;
+        if (!api || !Number.isFinite(height) || height < 1) return;
+        const current = api.getSceneElements() as SceneElementLike[];
+        const frame = current.find(
+          (el) => (el as { customData?: { lcMdInkFrame?: boolean } }).customData?.lcMdInkFrame,
+        ) as (SceneElementLike & { height?: number }) | undefined;
+        if (!frame) return;
+        // The measure re-fires on every font settle and layout pass; a whole
+        // scene update for a sub-pixel difference is not worth the repaint.
+        if (typeof frame.height === "number" && Math.abs(frame.height - height) < 1) return;
+        api.updateScene({
+          elements: current.map((el) =>
+            el === frame ? { ...(el as object), height, versionNonce: Math.random() * 2 ** 31 } : el,
+          ) as unknown[],
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        // The page just changed size, so the ink clip and the content slot are
+        // both measuring against a stale box.
+        requestAnimationFrame(() => {
+          syncPageVisibility();
+          scheduleSlotReports();
+        });
+      },
       appendScratchPage: (skeletons: Skeleton[]) => {
         const api = apiRef.current;
         if (!api || skeletons.length === 0) return 0;
