@@ -87,6 +87,7 @@ import { MOBILE_REGION_ORDER, REGIONS, type RegionId } from "./templates/regions
 import { splitProblemKey } from "./util/datasetKey";
 import { isMobileViewport, useIsMobile } from "./util/mobile";
 import { installSafeAreaInsets } from "./util/safeArea";
+import { MdInkDialog } from "./modes/MdInkDialog";
 import { MdInkDocument } from "./modes/MdInkDocument";
 import {
   buildMdInkTemplate,
@@ -2998,6 +2999,70 @@ export function App() {
 
         <div className="lc-header-right">
           {/*
+            Markdown icon, immediately left of the scratchpad's paper: tap picks
+            a file to annotate, hold opens the library. Same split as its
+            neighbour, since it is the same kind of thing.
+          */}
+          {!problem && (
+            <HoldButton
+              label="Markdown"
+              ariaLabel="Markdown Ink: tap to open a file, hold for recent documents"
+              className="lc-icon lc-tip-target lc-hold-icon"
+              dataTip="Markdown — tap to open, hold for recent"
+              dataTipPlacement="bottom"
+              disabled={busy !== null}
+              onTap={() => void pickAndOpenMdInk()}
+              onConfirm={() => setMdInkEntryOpen(true)}
+            >
+              <svg
+                className="lc-icon-svg"
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6" />
+                {/* An "M" and a down-arrow — the markdown mark, at icon scale. */}
+                <path d="M7 18v-5l2.2 2.6L11.4 13v5" />
+                <path d="M14.6 13v5M12.9 16.4l1.7 1.6 1.7-1.6" />
+              </svg>
+            </HoldButton>
+          )}
+          {problem && isMdInk(problem) && (
+            <button
+              type="button"
+              className="lc-icon lc-tip-target is-active"
+              aria-label="Markdown documents"
+              data-tip="Markdown — save / open"
+              data-tip-placement="bottom"
+              aria-pressed="true"
+              disabled={busy !== null}
+              onClick={() => setMdInkEntryOpen(true)}
+            >
+              <svg
+                className="lc-icon-svg lc-icon-svg-filled"
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="currentColor"
+                stroke="currentColor"
+                strokeWidth="1.25"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6" fill="none" />
+              </svg>
+            </button>
+          )}
+          {/*
             Paper icon: tap for a blank notebook, hold for the library.
             Starting to write is the common case by a wide margin, and it was
             behind a dialog whose other option nobody wanted most of the time.
@@ -3387,7 +3452,50 @@ export function App() {
         />
       )}
 
-      {leaving && problem && !isScratchpad(problem) && (
+      {leaving && problem && isMdInk(problem) && (
+        <MdInkDialog
+          mode="leave"
+          docName={mdInkSource?.name ?? "this document"}
+          pending={leavingPending}
+          exiting={leavingPhase === "exit"}
+          error={leavingError}
+          onChoose={(choice) => void resolveLeave(choice === "save")}
+          onCancel={() => {
+            if (leavingPending || leavingPhase === "exit") return;
+            setLeaving(null);
+            setLeavingError(null);
+          }}
+        />
+      )}
+
+      {mdInkEntryOpen && (
+        <MdInkDialog
+          mode="entry"
+          pending={busy !== null}
+          allowSave={Boolean(problem && isMdInk(problem))}
+          onChoose={(choice, docId) => {
+            setMdInkEntryOpen(false);
+            if (choice === "save") {
+              const saved = saveMdInkSession();
+              if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+              return;
+            }
+            if (choice === "recent" && docId) {
+              const entry = getMdInkDoc(docId);
+              if (!entry) {
+                setError("That document is no longer in the library.");
+                return;
+              }
+              void openMdInk({ name: entry.name, text: entry.source, docId: entry.id });
+              return;
+            }
+            void pickAndOpenMdInk();
+          }}
+          onCancel={() => setMdInkEntryOpen(false)}
+        />
+      )}
+
+      {leaving && problem && !isLocalPad(problem) && (
         <AttemptDialog
           taskId={problem.task_id}
           solved={attemptState?.solved ?? tests?.all_passed ?? false}
