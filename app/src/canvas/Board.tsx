@@ -704,6 +704,15 @@ export interface BoardProps {
    * squatting in the bottom bar next to the tools.
    */
   pageTitle?: ReactNode;
+  /**
+   * HTML laid onto the open page, under the canvas — the Markdown Ink document.
+   *
+   * Rides the camera in scene space: the board lays it out at the page's scene
+   * width and scales the whole thing by the zoom, so anything drawn over it
+   * stays on the words it was drawn on. It never takes a pointer, so the pen
+   * and the hand both reach the canvas through it.
+   */
+  pageContent?: ReactNode;
   /** Show lined-paper toggle in the map chrome. */
   linedPaperToggle?: boolean;
   /** Show S/M/L reading size (problem boards on mobile — not scratchpad). */
@@ -760,6 +769,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     mobileRegion = null,
     bottomCenter = null,
     pageTitle = null,
+    pageContent = null,
     linedPaperToggle = false,
     showReadingSize = false,
     coachFold = null,
@@ -799,6 +809,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     top: number;
     ids: string[];
   } | null>(null);
+  const [contentSlot, setContentSlot] = useState<{
+    left: number;
+    top: number;
+    sceneWidth: number;
+    zoom: number;
+  } | null>(null);
+  const lastContentSlotRef = useRef<typeof contentSlot>(null);
+  const pageContentRef = useRef<ReactNode>(pageContent);
+  pageContentRef.current = pageContent;
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
@@ -1203,6 +1222,53 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     setTitleSlot(next);
   }, []);
 
+  /**
+   * Project the open page onto the screen for the HTML content layer.
+   *
+   * Only the page origin and the zoom are reported — no width or height in
+   * screen pixels. The content is laid out once at the page's *scene* width and
+   * then scaled by the camera, which is the whole trick: one affine transform
+   * for the markdown, the same one the canvas uses for shapes and ink, so the
+   * three cannot drift apart at any zoom. Reporting a pixel width instead would
+   * have reflowed the text on every zoom frame and moved every word out from
+   * under the ink sitting on it.
+   */
+  const reportContentSlot = useCallback(() => {
+    const api = apiRef.current;
+    const bounds = pageBoundsRef.current;
+    if (!pageContentRef.current || !api || !bounds) {
+      if (lastContentSlotRef.current !== null) {
+        lastContentSlotRef.current = null;
+        setContentSlot(null);
+      }
+      return;
+    }
+    const state = api.getAppState() as {
+      scrollX?: number;
+      scrollY?: number;
+      zoom?: { value?: number };
+    };
+    const zoom = state.zoom?.value ?? 1;
+    const next = {
+      left: (bounds.minX + (state.scrollX ?? 0)) * zoom,
+      top: (bounds.minY + (state.scrollY ?? 0)) * zoom,
+      sceneWidth: Math.max(1, bounds.maxX - bounds.minX),
+      zoom,
+    };
+    const last = lastContentSlotRef.current;
+    if (
+      last &&
+      Math.abs(last.left - next.left) < 0.01 &&
+      Math.abs(last.top - next.top) < 0.01 &&
+      Math.abs(last.sceneWidth - next.sceneWidth) < 0.01 &&
+      Math.abs(last.zoom - next.zoom) < 1e-4
+    ) {
+      return;
+    }
+    lastContentSlotRef.current = next;
+    setContentSlot(next);
+  }, []);
+
   const reportLinedSlot = useCallback(() => {
     if (!linedPaperRef.current) {
       if (lastLinedSlotRef.current !== null) {
@@ -1327,8 +1393,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       reportCodeSlot();
       reportLinedSlot();
       reportTitleSlot();
+      reportContentSlot();
     });
-  }, [reportCodeSlot, reportLinedSlot, reportTitleSlot]);
+  }, [reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot]);
 
   const clampPanScroll = useCallback((scrollX: number, scrollY: number, zoom: number) => {
     if (!mobileRef.current || mobileRegionRef.current == null) {
@@ -2847,6 +2914,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     reportLinedSlot();
   }, [linedPaper, reportLinedSlot]);
 
+  // A document arriving (or the page frame growing under it) has to place the
+  // content layer before the first frame it is visible in.
+  useEffect(() => {
+    reportContentSlot();
+  }, [pageContent, reportContentSlot]);
+
   useEffect(() => {
     reportTitleSlot();
   }, [mobileRegion, interactive, reportTitleSlot]);
@@ -3934,6 +4007,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       ref={boardRef}
       className={interactive ? "lc-board" : "lc-board lc-board-idle"}
     >
+      {/*
+        The markdown page, under everything.
+        First in the DOM and on the lowest layer, so Excalidraw's shapes and the
+        raster ink both draw over it. It is scaled, never reflowed — see
+        `reportContentSlot`.
+      */}
+      {pageContent && contentSlot && (
+        <div
+          className="lc-page-content-slot"
+          aria-hidden
+          style={{
+            left: contentSlot.left,
+            top: contentSlot.top,
+            width: contentSlot.sceneWidth,
+            transform: `scale(${contentSlot.zoom})`,
+          }}
+        >
+          {pageContent}
+        </div>
+      )}
       {linedPaper && linedSlot && linedSlot.width > 8 && linedSlot.height > 8 && (
         <div
           className="lc-board-lined-overlay"

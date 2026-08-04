@@ -23,6 +23,9 @@
     "@excalidraw/excalidraw": "0.18.1",
     "@monaco-editor/react": "^4.7.0",
     "@tauri-apps/api": "^2",
+    "@types/dompurify": "^3.0.5",
+    "dompurify": "^3.4.13",
+    "marked": "^18.0.9",
     "monaco-editor": "^0.56.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
