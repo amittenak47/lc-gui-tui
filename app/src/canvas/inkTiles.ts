@@ -201,11 +201,6 @@ export class InkTileCache {
   private budget = TILE_BUDGET_MIN;
   private pending: PendingTile[] = [];
   private idleHandle = 0;
-  /**
-   * Last level that had every visible tile ready, used to fill holes while a
-   * new level rasterises. Without it a zoom flashes blank squares.
-   */
-  private fallbackLevel: number | null = null;
 
   constructor(options: InkTileCacheOptions = {}) {
     this.tilePx = options.tilePx ?? TILE_PX;
@@ -304,7 +299,6 @@ export class InkTileCache {
   invalidate(): void {
     this.tiles.clear();
     this.pending = [];
-    this.fallbackLevel = null;
     if (this.idleHandle) {
       this.cancel(this.idleHandle);
       this.idleHandle = 0;
@@ -448,7 +442,8 @@ export class InkTileCache {
 
     const deadline = this.now() + DRAW_BUDGET_MS;
     const missed: PendingTile[] = [];
-    let complete = true;
+    // Worked out on the first miss, if there is one, and reused for the rest.
+    let fallbacks: number[] | null = null;
 
     ctx.imageSmoothingEnabled = true;
     ctx.globalAlpha = 1;
@@ -463,9 +458,9 @@ export class InkTileCache {
           tile = this.renderTile(level, tx, ty) ?? undefined;
         }
         if (!tile) {
-          complete = false;
           missed.push({ level, tx, ty });
-          this.blitFallback(ctx, bounds, toDeviceX, toDeviceY, level);
+          if (fallbacks === null) fallbacks = this.fallbackLevels(level);
+          this.blitFallback(ctx, bounds, toDeviceX, toDeviceY, fallbacks);
           continue;
         }
         tile.usedAt = this.drawCount;
@@ -476,9 +471,6 @@ export class InkTileCache {
       }
     }
 
-    if (complete) {
-      this.fallbackLevel = level;
-    }
     this.pending = missed;
     this.evict();
     if (missed.length > 0 && this.idleHandle === 0) {
@@ -487,20 +479,63 @@ export class InkTileCache {
   }
 
   /**
+   * Levels that could stand in for `level`, sharpest-nearest first.
+   *
+   * This used to be a single remembered level: the last one at which every
+   * visible tile was ready. That answer is wrong exactly when it matters. Once
+   * a few frames complete at the level you are on, the remembered level *is*
+   * the level you are on — and a fallback from a level to itself is refused, so
+   * the next square that misses its budget is left as a hole. On an overlay
+   * that has just been cleared, a hole is not "a bit blurry", it is committed
+   * ink that is not on screen: the letter you just lifted the pen off vanishes,
+   * and stays gone until the deferred repaint at the next lift brings it back.
+   *
+   * The cache is sized to hold the level a zoom came from, so there is nearly
+   * always something to draw. Ask what is actually cached instead of
+   * remembering one answer, and prefer the nearest level — least resampling,
+   * so the stand-in is as sharp as the cache can make it — breaking ties toward
+   * the finer one.
+   */
+  private fallbackLevels(level: number): number[] {
+    const levels = new Set<number>();
+    for (const tile of this.tiles.values()) {
+      if (tile.level !== level) levels.add(tile.level);
+    }
+    return [...levels].sort(
+      (a, b) => Math.abs(a - level) - Math.abs(b - level) || b - a,
+    );
+  }
+
+  /**
    * Fill a not-yet-rasterised square from whatever level is already cached.
    *
    * Blurry for a frame or two beats a hole. This is the whole reason a zoom
-   * stays continuous on a busy page.
+   * stays continuous on a busy page, and why a freshly committed stroke stays
+   * on screen when the frame that should have drawn it ran out of budget — a
+   * just-appended op is composited into every cached tile it overlaps, at every
+   * level, so the stand-in carries it too.
    */
   private blitFallback(
     ctx: CanvasRenderingContext2D,
     bounds: SceneBounds,
     toDeviceX: (x: number) => number,
     toDeviceY: (y: number) => number,
-    level: number,
+    levels: readonly number[],
   ): void {
-    const from = this.fallbackLevel;
-    if (from === null || from === level) return;
+    for (const from of levels) {
+      if (this.blitFrom(ctx, bounds, toDeviceX, toDeviceY, from)) return;
+    }
+  }
+
+  /** Blit `bounds` out of one cached level. False if it held nothing to draw. */
+  private blitFrom(
+    ctx: CanvasRenderingContext2D,
+    bounds: SceneBounds,
+    toDeviceX: (x: number) => number,
+    toDeviceY: (y: number) => number,
+    from: number,
+  ): boolean {
+    let drew = false;
     const size = tileSceneSize(from, this.tilePx);
     const minTx = Math.floor(bounds.minX / size);
     const maxTx = Math.floor((bounds.maxX - 1e-9) / size);
@@ -525,8 +560,10 @@ export class InkTileCache {
           toDeviceX(box.maxX) - toDeviceX(box.minX),
           toDeviceY(box.maxY) - toDeviceY(box.minY),
         );
+        drew = true;
       }
     }
+    return drew;
   }
 }
 

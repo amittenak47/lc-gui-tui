@@ -380,6 +380,31 @@ describe("InkTileCache", () => {
     expect(cache.size).toBeLessThanOrEqual(24);
   });
 
+  it("fills a square it could not afford from another cached level", () => {
+    let clock = 0;
+    let tick = 0;
+    const { cache } = makeCache({ now: () => (clock += tick) });
+    cache.setOps([draw([0, 0], [900, 700])]);
+    const { ctx, blits } = destinationContext();
+
+    // Rasterise level 0, then level 1, both in full. The old code remembered
+    // only the last level that completed, so from here "the level to fall back
+    // to" was the level we are already on.
+    cache.draw(ctx, screen(1), 1);
+    cache.draw(ctx, screen(2), 1);
+    expect(cache.settled).toBe(true);
+
+    // Pan at the same zoom onto ground level 1 has never covered, with no
+    // budget left to rasterise any of it. Level 0 still holds that ground, so
+    // the squares must come back soft rather than empty — an empty one is
+    // committed ink missing from the screen.
+    tick = 1000;
+    blits.length = 0;
+    cache.draw(ctx, screen(2, -600, 0), 1);
+    expect(cache.settled).toBe(false);
+    expect(blits.length).toBeGreaterThan(0);
+  });
+
   it("skips ops that miss the tile", () => {
     const { cache, canvases } = makeCache();
     // One stroke in the top-left tile, one far off to the right.
