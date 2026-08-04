@@ -12,9 +12,13 @@ import {
 
 const KEY = "lc.inkToolPrefs.v1";
 
+export const INK_FULLNESS_DEFAULT = 1;
+
 export interface InkToolPrefs {
   penWidth: number;
   eraserWidth: number;
+  /** Max ink opacity/density (0–1). Mouse uses this as constant fullness. */
+  inkFullness: number;
   pressureSensitive: boolean;
   /** Last ink colour — validated against the current theme's swatches on load. */
   inkColor: string | null;
@@ -23,6 +27,7 @@ export interface InkToolPrefs {
 const DEFAULTS: InkToolPrefs = {
   penWidth: STROKE_WIDTH_DEFAULT,
   eraserWidth: STROKE_WIDTH_DEFAULT,
+  inkFullness: INK_FULLNESS_DEFAULT,
   pressureSensitive: true,
   inkColor: null,
 };
@@ -47,6 +52,11 @@ export function loadInkToolPrefs(): InkToolPrefs {
         typeof parsed.eraserWidth === "number" ? parsed.eraserWidth : DEFAULTS.eraserWidth,
         STROKE_WIDTH_MIN,
         ERASER_WIDTH_MAX,
+      ),
+      inkFullness: clamp(
+        typeof parsed.inkFullness === "number" ? parsed.inkFullness : DEFAULTS.inkFullness,
+        0,
+        1,
       ),
       pressureSensitive:
         typeof parsed.pressureSensitive === "boolean"

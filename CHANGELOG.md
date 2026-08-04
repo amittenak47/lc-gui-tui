@@ -6,6 +6,125 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — captures you can see happen
+
+- **Countdown, shutter, and a toast that names the file.** A capture used to be
+  silent: the board froze for a beat, an image appeared, and where the PNG went
+  — if one was written at all — was something you went and looked for. There is
+  now a countdown you can tap through (Settings → Personalise → Capture
+  countdown, off / 3s / 5s), a shutter flash at the moment of the export, and a
+  toast reading out the real save path. Region capture behaves the same as the
+  whole board, and "Added to the board" is reported too, for when auto-save is
+  off.
+- **Share actually shares.** It could not before: `navigator.share` is gated on
+  a secure context and this WebView is served over cleartext http so the LAN
+  daemon stays reachable, so the API was simply undefined. Sharing is now a
+  native Android intent, through the plugin that already writes to MediaStore —
+  a cache file behind a FileProvider, so sharing does not also leave a copy in
+  the gallery. Off Android the app saves to Photos and says where instead.
+- **A capture folder you pick.** A new save destination taking an absolute path
+  (with `~`), alongside Photos and Downloads. Desktop already wrote to
+  `Pictures/lc`; what was missing was any sign that it had.
+
+### Fixed — board chrome
+
+- **The capture menu matches the shapes menu.** It had a box of its own, and
+  was never wired into the press-outside/Escape dismissal, so it stayed open
+  behind the next stroke.
+- **Hand/Select loses its captions.** Two entries with a line of prose each made
+  the flyout twice the height of the shapes one; the descriptions are tooltips.
+- **The chrome eye gets its card back.** It carried `lc-map-btn` as well as its
+  own class, and the former is declared later in the stylesheet — so a
+  transparent background and squared corners won.
+- **Reset stops flashing the authored layout.** It seeded the template and
+  fitted the camera a frame later, so the old size painted once before the
+  resize. Both now land in the same paint.
+
+### Changed — the pen rewritten around tiles, runs, and a nib that dries
+
+- **Pan and zoom stop stalling on a full page.** Committed ink used to sit in
+  one viewport-sized bake keyed on zoom but not scroll. Panning slid it under a
+  CSS translate, so the ground the translate exposed was blank until you let go
+  and the whole page replayed at once; zooming replayed every stroke on the
+  board before it could paint a single frame. Ink is now rasterised into fixed
+  squares of scene space, cached per zoom level on a half-power-of-two ladder,
+  and the visible ones are blitted each frame — the way a map renders. Panning
+  reuses the tiles it has and rasterises only what it exposed. Zooming blits
+  the tiles it has, scaled, and sharpens them from a background pass, so a
+  level change is a moment of softness rather than a stall. Rasterising is
+  budgeted per frame and resumes across frames, and a tile only replays the
+  strokes whose bounds reach it. Committing a stroke drops the two or three
+  tiles under it, not the page.
+- **A stroke is painted as runs, not as one path per segment.** That was a
+  canvas submission per point, with a stamp every fifth of a line width. It was
+  also why ink looked soft: consecutive round caps overlap, so at any alpha
+  below 1 every overlap composited again and a stroke came out solid down the
+  middle with a wide halo on both edges. A constant-width stroke is now a
+  single `stroke()` — one coverage mask, one composite, exact alpha, crisp
+  edges. Erase stamps are one path per wipe instead of one fill per stamp.
+- **The Ink dial is a nib charge, not a flat opacity.** Every stroke starts
+  full and fades with how far it has written; lifting the pen dips it back in.
+  The dial sets how long the charge lasts, and at 100% the nib does not dry at
+  all. Pressure keeps a floor, so the light ends of a fast stroke stay on the
+  page instead of fading to nothing.
+- **The finest tip draws a hairline.** The width dial was a flat multiple, so
+  its bottom notch was nearly three device pixels on a retina panel. Tip `n` is
+  now `0.9 + (n - 1) × 1.35` scene units, and thin strokes get a device-pixel
+  floor so they stay black instead of greying out as you zoom away from them.
+- **A tap draws a dot.** Dotting an "i" used to draw nothing.
+
+### Added — stroke smoothing
+
+- **Settings → Personalise → Stroke smoothing.** A slider (default 35%, off at
+  0) for how much shake to take out of a pen stroke: drop the samples that
+  carry no shape, then round off what is left. It runs when the pen lifts, not
+  per sample, so the ink never lags the nib while you write. Capped so the
+  smoothed path stays inside the ink the raw one would have laid down.
+
+### Fixed — placing a text box on a tablet
+
+- **The keyboard opens.** Placing a note dropped a box and stopped there. The
+  hand-off to Excalidraw's editor was a synthetic double-click, which upstream
+  ignores unless the active tool is `selection` — ours sat on the locked text
+  tool, so the editor was never created. Excalidraw now stays on `selection`
+  while the Text tool is up: we place the element, select it, and double-click
+  inside it, which opens and focuses its textarea within the press's
+  user-activation window. Press-drag-release keeps the width you drew and
+  wraps; a tap gets a box that grows.
+
+### Added — hand inertia, ink fullness, smooth zoom
+
+- **Hand-tool flick coast.** Release a pan flick and the board keeps sliding with
+  friction instead of stopping dead.
+- **Ink tip vs fullness.** Stroke wheel is nib width; a new Ink dial is max
+  laydown (opacity). Stylus pressure drives fullness up to that ceiling, with
+  only mild width spread — not width∝pressure. Settings → Personalise →
+  Pressure clip (30–100%) remaps hardware press so you need not bury the tip.
+- **Faster pan with dense ink.** The ink bake no longer rebuilds every scroll
+  frame; the bitmap translates with the camera and recommits when pan settles.
+- **Smooth zoom buttons.** +/- retarget an eased zoom animation instead of
+  blocky 1.15× jumps.
+- **Stroke wheel coarse/fine.** Integer steps by default; hold and drag outward
+  for tenths (iPhone-scrub style). Strong flicks cover larger integer ranges.
+
+### Fixed — settings draft, chrome overlays, movable toolbar
+
+- **Settings save only on Save.** Personalise prefs (writing hand, capture
+  auto-save, offline merge) no longer write immediately. Save stays disabled
+  until something changes; Cancel / backdrop close drop the draft and keep the
+  previous values.
+- **Error / busy banners overlay the canvas.** They no longer sit in document
+  flow under the header, so showing a banner mid-stroke cannot resize
+  Excalidraw and scramble ink.
+- **Bottom tray stays above the board.** Map controls use a higher overlay
+  stack; hiding chrome lets the fitted page reclaim the bottom strip on mobile
+  the same way desktop already did.
+- **Coach sheet grab bar sits higher.** Peek and sheet lift clear Android's
+  home-gesture band so the handle is easier to catch.
+- **Toolbar docks and floats.** Long-press the grip, drag anywhere on the
+  workspace, drop near the bottom slot for a snap-home animation. Position
+  persists until you dock it again.
+
 ### Added — the coach shows its work, and stops changing its mind
 
 - **Stages arrive as they happen.** Ask, Review, Draw and Lazy run over the

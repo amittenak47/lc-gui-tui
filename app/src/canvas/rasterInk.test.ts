@@ -5,22 +5,41 @@ import {
   eraserSceneRadius,
   eraserScreenRadius,
   exportScaleFrom,
+  hasStylusPressure,
   inkLineWidth,
+  inkOpsBounds,
+  inkPressureAlpha,
+  inkReservoirAlpha,
+  inkStrokeAlpha,
+  inkStrokeRuns,
+  inkStrokeStyle,
+  inkStrokesFromOps,
+  INK_DRY_FLOOR,
+  INK_PRESSURE_FLOOR,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
-  inkOpsBounds,
-  inkStrokesFromOps,
+  INK_TIP_MIN,
+  INK_WIDTH_SPREAD,
+  NO_PRESSURE,
+  normalizePressure,
   paintInkAtScale,
+  pointerPressure,
   scenePointFromCanvasPixel,
   scenePointFromPointer,
   smoothPressure,
+  STROKE_WIDTH_MAX,
+  STROKE_WIDTH_MIN,
   unionSceneBounds,
   type InkOp,
   type ScenePoint,
 } from "./rasterInk";
 
 function points(...pairs: Array<[number, number]>): ScenePoint[] {
-  return pairs.map(([x, y]) => ({ x, y, pressure: 0.5 }));
+  return pairs.map(([x, y]) => ({ x, y, pressure: NO_PRESSURE }));
+}
+
+function stylusPoints(pressure: number, ...pairs: Array<[number, number]>): ScenePoint[] {
+  return pairs.map(([x, y]) => ({ x, y, pressure }));
 }
 
 function draw(...pairs: Array<[number, number]>): InkOp {
@@ -28,6 +47,8 @@ function draw(...pairs: Array<[number, number]>): InkOp {
     kind: "draw",
     color: "#000",
     baseWidth: 2,
+    maxFullness: 1,
+    pressureClip: 1,
     pressureSensitive: false,
     points: points(...pairs),
   };
@@ -44,15 +65,185 @@ describe("rasterInk sizing", () => {
     expect(eraserScreenRadius(2, 0.5)).toBe(1.75);
   });
 
-  it("honours stylus pressure for line width", () => {
-    expect(inkLineWidth(2, 0.5)).toBeLessThan(inkLineWidth(2, 0.9));
-    expect(inkLineWidth(2, 0.2)).toBeGreaterThan(0);
-    expect(inkLineWidth(2, 0.9, false)).toBe(inkLineWidth(2, 0.2, false));
+  it("keeps tip width stable; mild spread only under stylus pressure", () => {
+    const base = inkLineWidth(2, 0, false);
+    expect(inkLineWidth(2, 0, true)).toBeCloseTo(base);
+    expect(inkLineWidth(2, 1, true)).toBeCloseTo(base * (1 + INK_WIDTH_SPREAD));
+    expect(inkLineWidth(2, 0.5, true)).toBeLessThan(inkLineWidth(2, 1, true));
+  });
+
+  it("gives the finest tip a hairline, and never a negative one", () => {
+    expect(inkLineWidth(STROKE_WIDTH_MIN, 0, false)).toBeCloseTo(INK_TIP_MIN);
+    expect(inkLineWidth(0, 0, false)).toBeCloseTo(INK_TIP_MIN);
+    expect(inkLineWidth(-5, 0, false)).toBeCloseTo(INK_TIP_MIN);
+  });
+
+  it("still spreads the dial evenly above the finest tip", () => {
+    const one = inkLineWidth(1, 0, false);
+    const two = inkLineWidth(2, 0, false);
+    const three = inkLineWidth(3, 0, false);
+    expect(two - one).toBeCloseTo(three - two);
+    expect(inkLineWidth(STROKE_WIDTH_MAX, 0, false)).toBeGreaterThan(40);
   });
 
   it("stamps denser under pressure than at constant width", () => {
     expect(INK_STEP_FACTOR_PRESSURE).toBeLessThan(INK_STEP_FACTOR);
     expect(INK_STEP_FACTOR_PRESSURE).toBeGreaterThan(0);
+  });
+});
+
+describe("ink reservoir", () => {
+  it("starts every stroke at a full nib, whatever the dial says", () => {
+    expect(inkReservoirAlpha(0, 1)).toBeCloseTo(1);
+    expect(inkReservoirAlpha(0, 0.2)).toBeCloseTo(1);
+    expect(inkReservoirAlpha(0, 0)).toBeCloseTo(1);
+  });
+
+  it("fades along the stroke, never below the readable floor", () => {
+    const dial = 0.4;
+    const early = inkReservoirAlpha(5, dial);
+    const late = inkReservoirAlpha(200, dial);
+    expect(late).toBeLessThan(early);
+    expect(late).toBeGreaterThanOrEqual(INK_DRY_FLOOR);
+    expect(inkReservoirAlpha(1e9, dial)).toBeCloseTo(INK_DRY_FLOOR);
+  });
+
+  it("makes a fuller dial last longer at the same distance", () => {
+    expect(inkReservoirAlpha(60, 0.9)).toBeGreaterThan(inkReservoirAlpha(60, 0.3));
+    expect(inkReservoirAlpha(60, 0.3)).toBeGreaterThan(inkReservoirAlpha(60, 0));
+  });
+
+  it("holds a full dial solid across any stroke someone would actually write", () => {
+    // 400 nib widths is a long line of handwriting at the tip it was set with.
+    expect(inkReservoirAlpha(400, 1)).toBeGreaterThan(0.9);
+  });
+
+  it("keeps a light touch light but present", () => {
+    expect(inkPressureAlpha(0)).toBeCloseTo(INK_PRESSURE_FLOOR);
+    expect(inkPressureAlpha(1)).toBeCloseTo(1);
+    expect(inkPressureAlpha(0.5)).toBeGreaterThan(INK_PRESSURE_FLOOR);
+  });
+
+  it("combines charge and pressure into the sample alpha", () => {
+    expect(inkStrokeAlpha(1, 0, false, 0)).toBeCloseTo(1);
+    expect(inkStrokeAlpha(1, 1, true, 0)).toBeCloseTo(1);
+    expect(inkStrokeAlpha(1, 0, true, 0)).toBeCloseTo(INK_PRESSURE_FLOOR);
+    expect(inkStrokeAlpha(0.3, 1, true, 90)).toBeLessThan(
+      inkStrokeAlpha(0.3, 1, true, 0),
+    );
+  });
+});
+
+describe("rasterInk pressure", () => {
+  it("clips raw pressure to a personalise ceiling", () => {
+    expect(normalizePressure(0.5, 0.5)).toBe(1);
+    expect(normalizePressure(0.3, 1)).toBe(0.3);
+    expect(normalizePressure(0.9, 0.6)).toBe(1);
+    expect(hasStylusPressure(NO_PRESSURE)).toBe(false);
+    expect(pointerPressure(0.5, "mouse")).toBe(NO_PRESSURE);
+    expect(pointerPressure(0.4, "pen")).toBe(0.4);
+  });
+
+  it("combines width and alpha for one sample", () => {
+    // No stylus pressure: the tip keeps its geometry and the nib is still full.
+    const mouse = inkStrokeStyle(2, 0.75, NO_PRESSURE, 1, true);
+    expect(mouse.lineWidth).toBeCloseTo(inkLineWidth(2, 0, false));
+    expect(mouse.alpha).toBeCloseTo(1);
+
+    const light = inkStrokeStyle(2, 0.8, 0.25, 1, true);
+    const firm = inkStrokeStyle(2, 0.8, 1, 1, true);
+    expect(light.alpha).toBeLessThan(firm.alpha);
+    expect(light.alpha).toBeGreaterThanOrEqual(INK_PRESSURE_FLOOR);
+    expect(light.lineWidth).toBeLessThan(firm.lineWidth);
+  });
+});
+
+describe("inkStrokeRuns", () => {
+  function stroke(points: ScenePoint[], overrides: Partial<InkOp> = {}): InkOp {
+    return {
+      kind: "draw",
+      color: "#000",
+      baseWidth: 2,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      points,
+      ...overrides,
+    } as InkOp;
+  }
+
+  it("lays a constant stroke down as a single path", () => {
+    const long = Array.from({ length: 400 }, (_, i) => ({
+      x: i,
+      y: 0,
+      pressure: NO_PRESSURE,
+    }));
+    const runs = inkStrokeRuns(stroke(long) as never);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ start: 0, end: 399 });
+  });
+
+  it("covers every segment with no gap between runs", () => {
+    const pressures = Array.from({ length: 120 }, (_, i) => ({
+      x: i * 3,
+      y: 0,
+      pressure: 0.05 + (i / 119) * 0.95,
+    }));
+    const op = stroke(pressures, { pressureSensitive: true }) as never;
+    const runs = inkStrokeRuns(op);
+    expect(runs.length).toBeGreaterThan(1);
+    expect(runs[0].start).toBe(0);
+    expect(runs[runs.length - 1].end).toBe(119);
+    for (let i = 1; i < runs.length; i++) {
+      // Consecutive runs share a point, so the polylines meet exactly.
+      expect(runs[i].start).toBe(runs[i - 1].end);
+    }
+  });
+
+  it("stays far cheaper than one path per segment", () => {
+    // Pressure as a hand actually delivers it after smoothing: a slow swell
+    // over the stroke, not per-sample noise.
+    const pressures = Array.from({ length: 600 }, (_, i) => ({
+      x: i,
+      y: Math.sin(i / 60) * 20,
+      pressure: 0.45 + Math.sin(i / 190) * 0.3,
+    }));
+    const runs = inkStrokeRuns(stroke(pressures, { pressureSensitive: true }) as never);
+    expect(runs.length).toBeLessThan(60);
+  });
+
+  it("resumes from a point index for the live tail", () => {
+    const points = Array.from({ length: 50 }, (_, i) => ({
+      x: i,
+      y: 0,
+      pressure: NO_PRESSURE,
+    }));
+    const runs = inkStrokeRuns(stroke(points) as never, 30);
+    expect(runs[0].start).toBe(30);
+    expect(runs[runs.length - 1].end).toBe(49);
+  });
+
+  it("fades a long stroke on a low dial", () => {
+    const points = Array.from({ length: 300 }, (_, i) => ({
+      x: i * 4,
+      y: 0,
+      pressure: NO_PRESSURE,
+    }));
+    const runs = inkStrokeRuns(stroke(points, { maxFullness: 0.15 }) as never);
+    expect(runs.length).toBeGreaterThan(1);
+    expect(runs[runs.length - 1].alpha).toBeLessThan(runs[0].alpha);
+    expect(runs[runs.length - 1].alpha).toBeGreaterThanOrEqual(INK_DRY_FLOOR);
+  });
+
+  it("holds a full dial solid over the same stroke", () => {
+    const points = Array.from({ length: 300 }, (_, i) => ({
+      x: i * 4,
+      y: 0,
+      pressure: NO_PRESSURE,
+    }));
+    const runs = inkStrokeRuns(stroke(points, { maxFullness: 1 }) as never);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].alpha).toBeGreaterThan(0.95);
   });
 });
 
@@ -83,11 +274,18 @@ describe("rasterInk coordinates", () => {
     const rect = { left: 120, top: 80, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) };
     const clientX = 220;
     const clientY = 180;
-    const scene = scenePointFromPointer(clientX, clientY, rect, viewport, 0.5);
+    const scene = scenePointFromPointer(clientX, clientY, rect, viewport, 0.5, "mouse");
+    expect(scene.pressure).toBe(NO_PRESSURE);
     const localX = (scene.x + viewport.scrollX) * viewport.zoom;
     const localY = (scene.y + viewport.scrollY) * viewport.zoom;
     expect(localX).toBeCloseTo(clientX - rect.left);
     expect(localY).toBeCloseTo(clientY - rect.top);
+  });
+
+  it("keeps real stylus pressure on pen pointers", () => {
+    const rect = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) };
+    const scene = scenePointFromPointer(10, 10, rect, viewport, 0.65, "pen");
+    expect(scene.pressure).toBe(0.65);
   });
 
   it("matches excalidraw viewport formula when canvas aligns with the container", () => {
@@ -96,7 +294,7 @@ describe("rasterInk coordinates", () => {
     const rect = { left: offsetLeft, top: offsetTop, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) };
     const clientX = 300;
     const clientY = 250;
-    const scene = scenePointFromPointer(clientX, clientY, rect, viewport, 0.5);
+    const scene = scenePointFromPointer(clientX, clientY, rect, viewport, 0.5, "mouse");
     expect(scene.x).toBeCloseTo((clientX - offsetLeft) / viewport.zoom - viewport.scrollX);
     expect(scene.y).toBeCloseTo((clientY - offsetTop) / viewport.zoom - viewport.scrollY);
     const back = scenePointFromCanvasPixel(
@@ -123,8 +321,6 @@ describe("inkStrokesFromOps", () => {
   });
 
   it("thins out the stamps drawing lays down for smoothness", () => {
-    // Drawing stamps every fraction of a line width; the recognizer only needs
-    // the path, so sub-unit spacing is payload for nothing.
     const dense = draw([0, 0], [0.2, 0], [0.4, 0], [0.6, 0], [20, 0]);
     expect(inkStrokesFromOps([dense])).toEqual([
       { points: [{ x: 0, y: 0 }, { x: 20, y: 0 }] },
@@ -132,11 +328,23 @@ describe("inkStrokesFromOps", () => {
   });
 
   it("only later erases remove points from a stroke", () => {
-    // Chronological: erase-then-draw leaves the stroke; draw-then-erase clears it.
     const redrawn = inkStrokesFromOps([erase(5, [50, 0]), draw([0, 0], [50, 0])]);
     const rubbed = inkStrokesFromOps([draw([0, 0], [50, 0]), erase(5, [50, 0])]);
     expect(redrawn).toEqual([{ points: [{ x: 0, y: 0 }, { x: 50, y: 0 }] }]);
     expect(rubbed).toEqual([]);
+  });
+
+  it("scales with the board rather than the square of it", () => {
+    // One index over every stamp, not one per stroke: 400 strokes against 400
+    // erases used to be 160k bucket rebuilds.
+    const many: InkOp[] = [];
+    for (let i = 0; i < 400; i++) {
+      many.push(draw([i * 20, 0], [i * 20 + 10, 0]));
+      many.push(erase(3, [i * 20 + 400, 400]));
+    }
+    const started = Date.now();
+    expect(inkStrokesFromOps(many)).toHaveLength(400);
+    expect(Date.now() - started).toBeLessThan(500);
   });
 
   it("splits a stroke the eraser cut in half", () => {
@@ -148,8 +356,6 @@ describe("inkStrokesFromOps", () => {
   });
 
   it("drops runs too short to be a stroke", () => {
-    // A single surviving point is an eraser crumb; feeding it to ML Kit as a
-    // stroke only adds noise to recognized_text.
     expect(inkStrokesFromOps([draw([0, 0], [20, 0]), erase(5, [20, 0])])).toEqual([]);
   });
 });
@@ -157,8 +363,27 @@ describe("inkStrokesFromOps", () => {
 describe("ink bounds", () => {
   it("pads the drawn points by the widest line they could carry", () => {
     const bounds = inkOpsBounds([draw([0, 0], [10, 20])]);
-    const half = inkLineWidth(2, 1, false) / 2;
+    const half = inkLineWidth(2, 0, false) / 2;
     expect(bounds).toEqual({ minX: -half, minY: -half, maxX: 10 + half, maxY: 20 + half });
+  });
+
+  it("uses pressure spread for bounds when pressure-sensitive", () => {
+    const op: InkOp = {
+      kind: "draw",
+      color: "#000",
+      baseWidth: 2,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: true,
+      points: stylusPoints(1, [0, 0], [10, 20]),
+    };
+    const half = inkLineWidth(2, 1, true) / 2;
+    expect(inkOpsBounds([op])).toEqual({
+      minX: -half,
+      minY: -half,
+      maxX: 10 + half,
+      maxY: 20 + half,
+    });
   });
 
   it("reports nothing to composite when only erases were recorded", () => {
@@ -187,7 +412,6 @@ describe("exportScaleFrom", () => {
   });
 
   it("refuses a canvas that no longer matches the bounds", () => {
-    // Better an ink-less PNG than one with the handwriting in the wrong place.
     expect(exportScaleFrom(400, 100, bounds)).toBeNull();
     expect(exportScaleFrom(0, 0, bounds)).toBeNull();
     expect(exportScaleFrom(400, 200, { minX: 5, minY: 5, maxX: 5, maxY: 5 })).toBeNull();
@@ -198,7 +422,8 @@ describe("exportScaleFrom", () => {
 function recordingContext() {
   let transform = [1, 0, 0, 1, 0, 0];
   let composite = "source-over";
-  const strokes: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }> = [];
+  let alpha = 1;
+  const strokes: Array<{ from: { x: number; y: number }; to: { x: number; y: number }; alpha: number }> = [];
   const erased: Array<{ x: number; y: number; r: number; composite: string }> = [];
   let pen = { x: 0, y: 0 };
 
@@ -214,6 +439,12 @@ function recordingContext() {
     set globalCompositeOperation(value: string) {
       composite = value;
     },
+    get globalAlpha() {
+      return alpha;
+    },
+    set globalAlpha(value: number) {
+      alpha = value;
+    },
     strokeStyle: "",
     fillStyle: "",
     lineCap: "",
@@ -227,7 +458,7 @@ function recordingContext() {
       pen = map(x, y);
     },
     lineTo(x: number, y: number) {
-      strokes.push({ from: pen, to: map(x, y) });
+      strokes.push({ from: pen, to: map(x, y), alpha });
       pen = map(x, y);
     },
     stroke() {},
@@ -245,13 +476,12 @@ describe("paintInkAtScale", () => {
     const { ctx, strokes } = recordingContext();
     paintInkAtScale(ctx, [draw([110, 60], [130, 60])], { x: 100, y: 50 }, 2);
     expect(strokes).toEqual([
-      { from: { x: 20, y: 20 }, to: { x: 60, y: 20 } },
+      { from: { x: 20, y: 20 }, to: { x: 60, y: 20 }, alpha: 1 },
     ]);
   });
 
   it("applies erase and draw in chronological order", () => {
     const { ctx, erased, strokes } = recordingContext();
-    // Erase first, then draw — the later stroke must still be painted.
     paintInkAtScale(
       ctx,
       [erase(4, [110, 60]), draw([110, 60], [130, 60])],
@@ -270,7 +500,6 @@ describe("paintInkAtScale", () => {
       { x: 100, y: 50 },
       2,
     );
-    // One erase, two draws — in that order.
     expect(erased).toHaveLength(1);
     expect(strokes).toHaveLength(2);
   });
@@ -279,6 +508,7 @@ describe("paintInkAtScale", () => {
     const { ctx } = recordingContext();
     paintInkAtScale(ctx, [erase(4, [0, 0])], { x: 0, y: 0 }, 1);
     expect(ctx.globalCompositeOperation).toBe("source-over");
+    expect(ctx.globalAlpha).toBe(1);
   });
 });
 
@@ -288,8 +518,6 @@ describe("clampExportScale", () => {
   });
 
   it("shrinks to the cap when a far-flung stroke stretched the board", () => {
-    // A dot left behind after panning across the scene would otherwise ask for a
-    // canvas the browser refuses to allocate.
     const bounds = { minX: 0, minY: 0, maxX: 20000, maxY: 500 };
     const scale = clampExportScale(1, bounds, 1000);
     expect(scale).toBeCloseTo(0.05);

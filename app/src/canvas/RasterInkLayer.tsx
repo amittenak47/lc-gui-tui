@@ -1,10 +1,10 @@
 /**
  * Bitmap ink layer over Excalidraw — pen draws pixels; eraser clears them.
  *
- * Committed ink is baked into an offscreen canvas. Live strokes paint on top of
- * that bake. Without baking, every pointer move replayed every erase stamp from
- * history (dense destination-out arcs), so a one-character erase made later
- * pen strokes feel like a leak.
+ * Committed ink lives in a scene-space tile cache (see {@link InkTileCache}), so
+ * a camera move is a handful of blits rather than a replay of the page. The
+ * stroke under the pen is never tiled: it paints straight onto the overlay,
+ * incrementally, so nothing stands between a pointer sample and a pixel.
  */
 
 import {
@@ -16,14 +16,14 @@ import {
 } from "react";
 
 import {
-  applyInkOp,
   applyInkOpFrom,
   eraserSceneRadius,
-  inkBakeKey,
+  hasStylusPressure,
   inkLineWidth,
+  inkStrokeStyle,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
-  paintRasterInk,
+  NO_PRESSURE,
   scenePointFromPointer,
   setInkSceneTransform,
   smoothPressure,
@@ -32,6 +32,8 @@ import {
   type SceneBounds,
   type ViewportTransform,
 } from "./rasterInk";
+import { InkTileCache, paintLiveOp } from "./inkTiles";
+import { smoothInkPoints } from "./inkSmoothing";
 import { inkMetrics } from "./inkMetrics";
 
 export interface RasterInkHandle {
@@ -44,6 +46,10 @@ export interface RasterInkHandle {
   /** Pen/eraser tip is down — skip camera/repaint work that would cut the stroke. */
   isDrawing(): boolean;
   repaint(): void;
+  /** Camera moved — reblit the visible tiles and rasterise what is exposed. */
+  syncCamera(): void;
+  /** End of a pan, flick or zoom. Same work; kept apart for the call sites. */
+  commitCamera(): void;
   /**
    * Committed ops, for the recognizer and the PNG export. The in-progress op is
    * left out — the pen is still down, so there is no stroke to read yet.
@@ -58,7 +64,14 @@ export interface RasterInkLayerProps {
   tool: "pen" | "eraser" | null;
   strokeWidth: number;
   inkColor: string;
+  inkFullness: number;
+  pressureClip: number;
   pressureSensitive: boolean;
+  /**
+   * Vector smoothing strength (0–1) applied when the pen lifts. 0 keeps the
+   * raw samples.
+   */
+  smoothing?: number;
   getViewport: () => ViewportTransform | null;
   /**
    * Scene box the ink is allowed to show inside — the open page on a tablet,
@@ -84,7 +97,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       tool,
       strokeWidth,
       inkColor,
+      inkFullness,
+      pressureClip,
       pressureSensitive,
+      smoothing = 0,
       getViewport,
       clip = null,
       onChange,
@@ -93,8 +109,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
-    const bakeRef = useRef<HTMLCanvasElement | null>(null);
-    const bakeKeyRef = useRef<string>("");
     const opsRef = useRef<InkOp[]>([]);
     const undoRef = useRef<InkOp[][]>([]);
     const redoRef = useRef<InkOp[][]>([]);
@@ -103,12 +117,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const liveDrawnIndexRef = useRef(0);
     const drawingRef = useRef(false);
     const lastPointRef = useRef<ReturnType<typeof scenePointFromPointer> | null>(null);
-    /** Running EMA of stylus pressure for the live stroke — see smoothPressure. */
-    const smoothedPressureRef = useRef(0.5);
+    /** Running EMA of raw stylus pressure for the live stroke — see smoothPressure. */
+    const smoothedPressureRef = useRef(0);
     /**
      * Viewport + CSS box frozen at pointerdown for the whole stroke.
      *
-     * Mid-stroke scroll/zoom used to change `inkBakeKey` and force a full
+     * Mid-stroke scroll/zoom used to invalidate the bake and force a full
      * `repaint()` on every move — that hitch is what cuts a letter like "g"
      * short. Keep mapping and incremental paint on the stroke-start frame.
      */
@@ -129,8 +143,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     inkColorRef.current = inkColor;
     const strokeWidthRef = useRef(strokeWidth);
     strokeWidthRef.current = strokeWidth;
+    const inkFullnessRef = useRef(inkFullness);
+    inkFullnessRef.current = inkFullness;
+    const pressureClipRef = useRef(pressureClip);
+    pressureClipRef.current = pressureClip;
     const pressureSensitiveRef = useRef(pressureSensitive);
     pressureSensitiveRef.current = pressureSensitive;
+    const smoothingRef = useRef(smoothing);
+    smoothingRef.current = smoothing;
     const toolRef = useRef(tool);
     toolRef.current = tool;
 
@@ -161,90 +181,82 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       return { width, height };
     }, []);
 
-    const rebuildBake = useCallback(
-      (
-        viewport: ViewportTransform,
-        dpr: number,
-        cssW: number,
-        cssH: number,
-        key: string,
-      ) => {
-        let bake = bakeRef.current;
-        if (!bake) {
-          bake = document.createElement("canvas");
-          bakeRef.current = bake;
-        }
+    /**
+     * Committed ink, tiled per zoom level. Live ink never enters it — see
+     * {@link paintLiveIncremental}.
+     */
+    const tilesRef = useRef<InkTileCache | null>(null);
+    const ensureTiles = useCallback(() => {
+      if (!tilesRef.current) {
+        tilesRef.current = new InkTileCache({
+          // A background pass finished squares the last frame could not afford;
+          // put them on screen without waiting for the next camera event.
+          onTilesReady: () => {
+            if (drawingRef.current) return;
+            repaintRef.current();
+          },
+        });
+        tilesRef.current.setOps(opsRef.current);
+      }
+      return tilesRef.current;
+    }, []);
+
+    /** Match the backing store to the CSS box, on whole device pixels. */
+    const sizeCanvas = useCallback(
+      (canvas: HTMLCanvasElement, cssW: number, cssH: number, dpr: number) => {
         const pixelW = Math.max(1, Math.round(cssW * dpr));
         const pixelH = Math.max(1, Math.round(cssH * dpr));
-        if (bake.width !== pixelW || bake.height !== pixelH) {
-          bake.width = pixelW;
-          bake.height = pixelH;
+        if (canvas.width !== pixelW || canvas.height !== pixelH) {
+          canvas.width = pixelW;
+          canvas.height = pixelH;
+          // Whole device pixels, same as alignToExcalidraw — see the note there.
+          canvas.style.width = `${pixelW / dpr}px`;
+          canvas.style.height = `${pixelH / dpr}px`;
         }
-        const bakeCtx = bake.getContext("2d");
-        if (!bakeCtx) return null;
-        // paintRasterInk uses viewport.width/height for the clear — keep those
-        // aligned with the CSS box we sized the bake to.
-        const bakeViewport: ViewportTransform = {
-          ...viewport,
-          width: cssW,
-          height: cssH,
-        };
-        paintRasterInk(bakeCtx, bakeViewport, opsRef.current, null, dpr, clipRef.current);
-        bakeKeyRef.current = key;
-        return bake;
+        return { pixelW, pixelH };
       },
       [],
     );
 
-    const ensureBake = useCallback(
-      (viewport: ViewportTransform, dpr: number, cssW: number, cssH: number) => {
-        const key = inkBakeKey(viewport, dpr, cssW, cssH, clipRef.current);
-        if (bakeRef.current && bakeKeyRef.current === key) {
-          return bakeRef.current;
-        }
-        return rebuildBake(viewport, dpr, cssW, cssH, key);
-      },
-      [rebuildBake],
-    );
+    /**
+     * Blit committed tiles for the current camera, then the live stroke on top.
+     *
+     * Cheap enough to call every pan and zoom frame: it is a handful of
+     * `drawImage` calls plus whatever rasterising fits in one frame's budget.
+     * Nothing here replays the page.
+     */
+    const paintFrame = useCallback(
+      (viewport: ViewportTransform, cssW: number, cssH: number) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        const dpr = window.devicePixelRatio || 1;
+        const { pixelW, pixelH } = sizeCanvas(canvas, cssW, cssH, dpr);
+        const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
 
-    /** Append a just-committed op onto the bake without replaying history. */
-    const stampOntoBake = useCallback(
-      (op: InkOp, viewport: ViewportTransform, dpr: number, cssW: number, cssH: number) => {
-        const key = inkBakeKey(viewport, dpr, cssW, cssH, clipRef.current);
-        // Bake already rebuilt from ops that include this op — do not stamp again.
-        if (!bakeRef.current || bakeKeyRef.current !== key) {
-          rebuildBake(viewport, dpr, cssW, cssH, key);
-          return;
-        }
-        const bake = bakeRef.current;
-        const bakeCtx = bake.getContext("2d");
-        if (!bakeCtx) return;
-        setInkSceneTransform(bakeCtx, viewport, dpr);
-        const clipBox = clipRef.current;
-        if (clipBox) {
-          bakeCtx.save();
-          bakeCtx.beginPath();
-          bakeCtx.rect(
-            clipBox.minX,
-            clipBox.minY,
-            clipBox.maxX - clipBox.minX,
-            clipBox.maxY - clipBox.minY,
-          );
-          bakeCtx.clip();
-          applyInkOp(bakeCtx, op);
-          bakeCtx.restore();
+        const tiles = ensureTiles();
+        tiles.setClip(clipRef.current);
+
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, pixelW, pixelH);
+        tiles.draw(ctx, view, dpr);
+
+        const live = liveRef.current;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        if (live) {
+          paintLiveOp(ctx, live, view, dpr, clipRef.current);
+          liveDrawnIndexRef.current =
+            live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
         } else {
-          applyInkOp(bakeCtx, op);
+          liveDrawnIndexRef.current = 0;
         }
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
       },
-      [rebuildBake],
+      [ensureTiles, sizeCanvas],
     );
 
-    const invalidateBake = useCallback(() => {
-      bakeKeyRef.current = "";
-    }, []);
-
-    /** Full rebuild: clear, blit bake, replay entire live op. Used on pan/zoom/undo. */
+    /** Full repaint of the overlay at the current (or frozen) camera. */
     const repaint = useCallback(() => {
       const canvas = canvasRef.current;
       // Prefer the stroke-start frame while a gesture is open (or just set up).
@@ -253,59 +265,42 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const viewport = frozen ?? getViewport();
       if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
       const excalRect = frozen && box ? box : alignToExcalidraw(canvas);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const dpr = window.devicePixelRatio || 1;
-      const cssW = excalRect?.width ?? viewport.width;
-      const cssH = excalRect?.height ?? viewport.height;
-      const pixelW = Math.round(cssW * dpr);
-      const pixelH = Math.round(cssH * dpr);
-      if (canvas.width !== pixelW || canvas.height !== pixelH) {
-        canvas.width = pixelW;
-        canvas.height = pixelH;
-        // Whole device pixels, same as alignToExcalidraw — see the note there.
-        canvas.style.width = `${pixelW / dpr}px`;
-        canvas.style.height = `${pixelH / dpr}px`;
-      }
+      paintFrame(viewport, excalRect?.width ?? viewport.width, excalRect?.height ?? viewport.height);
+    }, [alignToExcalidraw, getViewport, paintFrame]);
 
-      const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
-      const bake = ensureBake(view, dpr, cssW, cssH);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (bake) {
-        ctx.drawImage(bake, 0, 0);
-      }
-
-      const live = liveRef.current;
-      if (live) {
-        setInkSceneTransform(ctx, view, dpr);
-        const clipBox = clipRef.current;
-        if (clipBox) {
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(
-            clipBox.minX,
-            clipBox.minY,
-            clipBox.maxX - clipBox.minX,
-            clipBox.maxY - clipBox.minY,
-          );
-          ctx.clip();
-          applyInkOp(ctx, live);
-          ctx.restore();
-        } else {
-          applyInkOp(ctx, live);
-        }
-        liveDrawnIndexRef.current =
-          live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
-      } else {
-        liveDrawnIndexRef.current = 0;
-      }
-    }, [alignToExcalidraw, ensureBake, getViewport]);
+    const repaintRef = useRef(repaint);
+    repaintRef.current = repaint;
 
     /**
-     * Hot path: paint only new live segments/stamps without clearing or
-     * re-blitting the bake. Uses the stroke-start viewport so a camera jitter
-     * cannot force a full rebuild mid-glyph.
+     * Camera moved. There is nothing cheaper to do than repaint now: tiles the
+     * pan or zoom already covered are a blit, and the ones it exposed are
+     * rasterised inside a frame budget rather than all at once.
+     *
+     * This replaced a CSS translate of a viewport-sized bake, which left the
+     * newly exposed ground blank until the gesture ended and then replayed the
+     * whole page in one blocking go.
+     */
+    const syncCamera = useCallback(() => {
+      if (drawingRef.current) return;
+      const canvas = canvasRef.current;
+      const viewport = getViewport();
+      if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
+      canvas.style.transform = "";
+      const excalRect = alignToExcalidraw(canvas);
+      paintFrame(viewport, excalRect?.width ?? viewport.width, excalRect?.height ?? viewport.height);
+    }, [alignToExcalidraw, getViewport, paintFrame]);
+
+    /** End of a pan or zoom. Same work — kept apart for the call sites. */
+    const commitCamera = syncCamera;
+
+    const invalidateTiles = useCallback(() => {
+      ensureTiles().setOps(opsRef.current);
+    }, [ensureTiles]);
+
+    /**
+     * Hot path: paint only new live segments without clearing or re-blitting.
+     * Uses the stroke-start viewport so a camera jitter cannot force a full
+     * repaint mid-glyph.
      */
     const paintLiveIncremental = useCallback(() => {
       const canvas = canvasRef.current;
@@ -316,36 +311,21 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       const dpr = window.devicePixelRatio || 1;
-      const cssW = box.width;
-      const cssH = box.height;
-      const key = inkBakeKey(view, dpr, cssW, cssH, clipRef.current);
-      // Size/DPR change only — never scroll/zoom mid-stroke (those are frozen).
+      // A resize mid-stroke resets the backing store and wipes what is drawn;
+      // the only honest recovery is a full repaint under the frozen camera.
       if (
-        !bakeRef.current ||
-        bakeKeyRef.current !== key ||
-        canvas.width !== Math.round(cssW * dpr) ||
-        canvas.height !== Math.round(cssH * dpr)
+        canvas.width !== Math.round(box.width * dpr) ||
+        canvas.height !== Math.round(box.height * dpr)
       ) {
-        // Still avoid a full clear if we can: ensureBake under the frozen view.
-        ensureBake(view, dpr, cssW, cssH);
-        if (
-          !bakeRef.current ||
-          canvas.width !== Math.round(cssW * dpr) ||
-          canvas.height !== Math.round(cssH * dpr)
-        ) {
-          repaint();
-          return;
-        }
-        // Blit bake then continue incremental from current fromIndex.
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(bakeRef.current, 0, 0);
-        liveDrawnIndexRef.current = 0;
+        repaint();
+        return;
       }
 
-      setInkSceneTransform(ctx, view, dpr);
+      const frame: ViewportTransform = { ...view, width: box.width, height: box.height };
+      setInkSceneTransform(ctx, frame, dpr);
       const clipBox = clipRef.current;
       const from = liveDrawnIndexRef.current;
+      const pixelScale = frame.zoom * dpr;
       if (clipBox) {
         ctx.save();
         ctx.beginPath();
@@ -356,12 +336,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           clipBox.maxY - clipBox.minY,
         );
         ctx.clip();
-        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from);
+        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from, pixelScale);
         ctx.restore();
       } else {
-        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from);
+        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from, pixelScale);
       }
-    }, [ensureBake, repaint]);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }, [repaint]);
 
     const commitLive = useCallback(() => {
       const live = liveRef.current;
@@ -372,31 +353,44 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         undoRef.current.splice(0, undoRef.current.length - 40);
       }
       redoRef.current = [];
-      opsRef.current = [...opsRef.current, live];
+
+      /*
+       * Smooth the pen stroke now that it is finished.
+       *
+       * On commit rather than per sample: smoothing a live stroke means lagging
+       * the tip behind the nib, and ink that trails the pen is worse than ink
+       * that wobbles. Waiting for the lift buys a symmetric filter with no
+       * latency at all, at the cost of a settle nobody notices at the default
+       * strength. The eraser is left alone — its stamps are a coverage mask,
+       * not a line, and rounding them would leave crumbs behind.
+       */
+      const smoothing = smoothingRef.current;
+      const committed =
+        live.kind === "draw" && smoothing > 0
+          ? {
+              ...live,
+              points: smoothInkPoints(
+                live.points,
+                smoothing,
+                inkLineWidth(live.baseWidth, 0, false),
+              ),
+            }
+          : live;
+
+      opsRef.current = [...opsRef.current, committed];
       liveRef.current = null;
       liveDrawnIndexRef.current = 0;
       lastPointRef.current = null;
 
-      const canvas = canvasRef.current;
-      const viewport = getViewport();
-      if (canvas && viewport) {
-        const excalRect = alignToExcalidraw(canvas);
-        const dpr = window.devicePixelRatio || 1;
-        const cssW = excalRect?.width ?? viewport.width;
-        const cssH = excalRect?.height ?? viewport.height;
-        const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
-        stampOntoBake(live, view, dpr, cssW, cssH);
-      } else {
-        invalidateBake();
-      }
+      // Only the tiles the stroke landed on are dropped, so committing on a
+      // full page costs the same as committing on an empty one.
+      ensureTiles().appendOp(committed);
       repaint();
       onChange?.();
-    }, [alignToExcalidraw, getViewport, invalidateBake, onChange, repaint, stampOntoBake]);
+    }, [ensureTiles, onChange, repaint]);
 
     const paintLiveIncrementalRef = useRef(paintLiveIncremental);
     paintLiveIncrementalRef.current = paintLiveIncremental;
-    const repaintRef = useRef(repaint);
-    repaintRef.current = repaint;
     const commitLiveRef = useRef(commitLive);
     commitLiveRef.current = commitLive;
 
@@ -410,7 +404,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           opsRef.current = [];
           liveRef.current = null;
           liveDrawnIndexRef.current = 0;
-          invalidateBake();
+          invalidateTiles();
           repaint();
           onChange?.();
         },
@@ -420,7 +414,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           opsRef.current = undoRef.current.pop() ?? [];
           liveRef.current = null;
           liveDrawnIndexRef.current = 0;
-          invalidateBake();
+          invalidateTiles();
           repaint();
           onChange?.();
           return true;
@@ -431,7 +425,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           opsRef.current = redoRef.current.pop() ?? [];
           liveRef.current = null;
           liveDrawnIndexRef.current = 0;
-          invalidateBake();
+          invalidateTiles();
           repaint();
           onChange?.();
           return true;
@@ -456,30 +450,36 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           redoRef.current = [];
           liveRef.current = null;
           liveDrawnIndexRef.current = 0;
-          invalidateBake();
+          invalidateTiles();
           repaint();
         },
         repaint,
+        syncCamera,
+        commitCamera,
       }),
-      [invalidateBake, onChange, repaint],
+      [commitCamera, invalidateTiles, onChange, repaint, syncCamera],
     );
 
+    // The clip is compared inside the cache, which drops its tiles only when the
+    // page actually changed — repainting on every render is just a blit.
     useEffect(() => {
       if (drawingRef.current) return;
-      invalidateBake();
       repaint();
-    }, [enabled, clip, invalidateBake, repaint]);
+    }, [enabled, clip, repaint]);
 
     useEffect(() => {
       if (!enabled) return;
       const onResize = () => {
         if (drawingRef.current) return;
-        invalidateBake();
+        // Tiles live in scene space, so a window resize costs a repaint of the
+        // overlay and nothing else — the cache survives intact.
         repaint();
       };
       window.addEventListener("resize", onResize);
       return () => window.removeEventListener("resize", onResize);
-    }, [enabled, invalidateBake, repaint]);
+    }, [enabled, repaint]);
+
+    useEffect(() => () => tilesRef.current?.dispose(), []);
 
     useEffect(() => {
       if (!enabled) return;
@@ -524,9 +524,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           rect,
           strokeView,
           event.pressure,
+          event.pointerType,
         );
         lastPointRef.current = point;
-        smoothedPressureRef.current = point.pressure;
+        smoothedPressureRef.current = hasStylusPressure(point.pressure) ? point.pressure : 0;
         inkMetrics.begin();
         const width = strokeWidthRef.current;
         const activeTool = toolRef.current;
@@ -535,6 +536,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             kind: "draw",
             color: inkColorRef.current,
             baseWidth: width,
+            maxFullness: inkFullnessRef.current,
+            pressureClip: pressureClipRef.current,
             pressureSensitive: pressureSensitiveRef.current,
             points: [point],
           };
@@ -578,6 +581,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
         const width = strokeWidthRef.current;
         const pressureSensitive = live.kind === "draw" && live.pressureSensitive;
+        const maxFullness = live.kind === "draw" ? live.maxFullness : 1;
+        const pressureClip = live.kind === "draw" ? live.pressureClip : 1;
         for (const sample of batch) {
           const last = lastPointRef.current;
           if (!last) break;
@@ -587,8 +592,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             rect,
             strokeView,
             sample.pressure,
+            sample.pointerType,
           );
-          if (pressureSensitive) {
+          if (pressureSensitive && hasStylusPressure(point.pressure)) {
             // Filter pressure, not position: smoothing the path would lag the
             // tip, but width has no business tracking sample noise.
             smoothedPressureRef.current = smoothPressure(
@@ -596,15 +602,28 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               point.pressure,
             );
             point.pressure = smoothedPressureRef.current;
+          } else {
+            point.pressure = NO_PRESSURE;
           }
           const step =
             live.kind === "erase"
               ? Math.max(live.radius * 0.45, 0.5)
-              : Math.max(
-                  inkLineWidth(width, point.pressure, pressureSensitive) *
-                    (pressureSensitive ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
-                  0.5,
-                );
+              : (() => {
+                  const style = inkStrokeStyle(
+                    width,
+                    maxFullness,
+                    point.pressure,
+                    pressureClip,
+                    pressureSensitive,
+                  );
+                  return Math.max(
+                    style.lineWidth *
+                      (pressureSensitive && hasStylusPressure(point.pressure)
+                        ? INK_STEP_FACTOR_PRESSURE
+                        : INK_STEP_FACTOR),
+                    0.5,
+                  );
+                })();
           const stamps = stampAlongSegment(last, point, step);
           live.points.push(...stamps);
           lastPointRef.current = point;

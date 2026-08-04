@@ -135,7 +135,8 @@ export const FONT_SIZE_LABELS: Record<(typeof FONT_SIZES)[number], string> = {
   20: "M",
   28: "L",
 };
-export const DEFAULT_FONT_SIZE = 20;
+/** Default typed-note size (canvas px). Wheel range is 16–144. */
+export const DEFAULT_FONT_SIZE = 48;
 
 /** Board background options. Light-first; a stylus session is usually daytime. */
 export interface BoardTheme {

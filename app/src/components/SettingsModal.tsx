@@ -11,8 +11,28 @@ import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { HoldButton } from "./HoldButton";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import {
+  loadInkPressureClip,
+  pressureClipFromPercent,
+  pressureClipToPercent,
+  saveInkPressureClip,
+} from "../util/inkPressureClip";
+import {
+  loadInkSmoothing,
+  saveInkSmoothing,
+  smoothingFromPercent,
+  smoothingToPercent,
+} from "../util/inkSmoothingPref";
+import {
   loadAutoSaveCaptures,
+  CAPTURE_COUNTDOWN_CHOICES,
+  loadCaptureCountdown,
+  loadCaptureDestination,
+  loadCaptureFolder,
+  saveCaptureCountdown,
+  saveCaptureFolder,
   saveAutoSaveCaptures,
+  saveCaptureDestination,
+  type CaptureDestination,
 } from "../util/capturePrefs";
 import {
   loadOfflineMergePolicy,
@@ -24,6 +44,8 @@ import { offlinePackDownloader } from "../util/offlinePackDownload";
 import { useIsMobile } from "../util/mobile";
 
 type TabId = "workspace" | "personalise" | "server";
+
+const PRESSURE_CLIP_STEPS = [30, 40, 50, 60, 70, 80, 90, 100] as const;
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "personalise", label: "Personalise" },
@@ -114,6 +136,48 @@ function emptyConfig(): LcConfig {
   };
 }
 
+/** Device-only prefs edited in Personalise — deferred until Save like config.toml. */
+interface DevicePrefs {
+  handedness: InkHandedness;
+  autoSaveCaptures: boolean;
+  captureDestination: CaptureDestination;
+  captureFolder: string;
+  captureCountdown: number;
+  offlineMerge: OfflineMergePolicy;
+  pressureClip: number;
+  inkSmoothing: number;
+}
+
+function loadDevicePrefs(): DevicePrefs {
+  return {
+    handedness: loadInkHandedness(),
+    autoSaveCaptures: loadAutoSaveCaptures(),
+    captureDestination: loadCaptureDestination(),
+    captureFolder: loadCaptureFolder(),
+    captureCountdown: loadCaptureCountdown(),
+    offlineMerge: loadOfflineMergePolicy(),
+    pressureClip: loadInkPressureClip(),
+    inkSmoothing: loadInkSmoothing(),
+  };
+}
+
+function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
+  return (
+    a.handedness === b.handedness &&
+    a.autoSaveCaptures === b.autoSaveCaptures &&
+    a.captureDestination === b.captureDestination &&
+    a.captureFolder === b.captureFolder &&
+    a.captureCountdown === b.captureCountdown &&
+    a.offlineMerge === b.offlineMerge &&
+    a.pressureClip === b.pressureClip &&
+    a.inkSmoothing === b.inkSmoothing
+  );
+}
+
+function configEqual(a: LcConfig, b: LcConfig): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export interface SettingsModalProps {
   open: boolean;
   client: LcClient;
@@ -140,6 +204,8 @@ export function SettingsModal({
   const [draft, setDraft] = useState<LcConfig>(emptyConfig);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Separate from `busy` so a slow/hung GET /config cannot leave Save stuck disabled. */
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [providerFocus, setProviderFocus] = useState<"local" | "ollama" | "openai">("local");
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
@@ -151,9 +217,19 @@ export function SettingsModal({
   } | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [autoSaveCaptures, setAutoSaveCaptures] = useState(() => loadAutoSaveCaptures());
+  const [captureDestination, setCaptureDestination] = useState<CaptureDestination>(() =>
+    loadCaptureDestination(),
+  );
+  const [captureFolder, setCaptureFolder] = useState(() => loadCaptureFolder());
+  const [captureCountdown, setCaptureCountdown] = useState(() => loadCaptureCountdown());
   const [offlineMerge, setOfflineMerge] = useState<OfflineMergePolicy>(() =>
     loadOfflineMergePolicy(),
   );
+  const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
+  const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
+  /** Last saved config + device prefs — Cancel restores these; Save advances them. */
+  const [baselineConfig, setBaselineConfig] = useState<LcConfig>(emptyConfig);
+  const [baselinePrefs, setBaselinePrefs] = useState<DevicePrefs>(loadDevicePrefs);
   const [packMeta, setPackMeta] = useState<{
     built_at: number;
     problemCount: number;
@@ -229,9 +305,16 @@ export function SettingsModal({
     let cancelled = false;
     setError(null);
     setBusy("loading…");
-    setHandedness(loadInkHandedness());
-    setAutoSaveCaptures(loadAutoSaveCaptures());
-    setOfflineMerge(loadOfflineMergePolicy());
+    const prefs = loadDevicePrefs();
+    setHandedness(prefs.handedness);
+    setAutoSaveCaptures(prefs.autoSaveCaptures);
+    setCaptureDestination(prefs.captureDestination);
+    setCaptureFolder(prefs.captureFolder);
+    setCaptureCountdown(prefs.captureCountdown);
+    setOfflineMerge(prefs.offlineMerge);
+    setPressureClip(prefs.pressureClip);
+    setInkSmoothing(prefs.inkSmoothing);
+    setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     void offlinePackMeta().then((meta) => {
       if (!cancelled && meta) {
@@ -243,6 +326,7 @@ export function SettingsModal({
         const cfg = await client.getConfig();
         if (!cancelled) {
           setDraft(cfg);
+          setBaselineConfig(cfg);
           setBusy(null);
         }
         await refreshLlm();
@@ -274,22 +358,66 @@ export function SettingsModal({
 
   if (!open) return null;
 
+  const draftPrefs: DevicePrefs = {
+    handedness,
+    autoSaveCaptures,
+    captureDestination,
+    captureFolder,
+    captureCountdown,
+    offlineMerge,
+    pressureClip,
+    inkSmoothing,
+  };
+  const dirty =
+    !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
+
   const patchProvider = (key: "local" | "ollama" | "openai" | "groq", patch: Partial<ProviderConfig>) => {
     setDraft((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   };
 
+  const cancel = () => {
+    // Nothing persisted mid-edit — closing drops the draft. Baseline stays on disk.
+    onClose();
+  };
+
   const save = async () => {
-    setBusy("saving…");
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    setSaving(true);
     setError(null);
+    const prefsDirty = !prefsEqual(draftPrefs, baselinePrefs);
+    const configDirty = !configEqual(draft, baselineConfig);
     try {
-      const saved = await client.putConfig(draft);
-      setDraft(saved);
+      // Device prefs never need the daemon — persist them even if PUT /config fails.
+      if (prefsDirty) {
+        saveInkHandedness(handedness);
+        saveAutoSaveCaptures(autoSaveCaptures);
+        saveCaptureDestination(captureDestination);
+        saveCaptureFolder(captureFolder);
+        saveCaptureCountdown(captureCountdown);
+        saveOfflineMergePolicy(offlineMerge);
+        saveInkPressureClip(pressureClip);
+        saveInkSmoothing(inkSmoothing);
+        setBaselinePrefs(draftPrefs);
+        window.dispatchEvent(
+          new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
+        );
+        window.dispatchEvent(new CustomEvent("lc-ink-pressure-clip"));
+        window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
+      }
+      if (configDirty) {
+        const saved = await client.putConfig(draft);
+        setDraft(saved);
+        setBaselineConfig(saved);
+      }
       onSaved?.();
-      setBusy(null);
+      setSaving(false);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setBusy(null);
+      setSaving(false);
     }
   };
 
@@ -324,7 +452,7 @@ export function SettingsModal({
       className="lc-settings-backdrop"
       role="presentation"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) cancel();
       }}
     >
       <div className="lc-settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
@@ -449,13 +577,7 @@ export function SettingsModal({
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => {
-                    setHandedness("right");
-                    saveInkHandedness("right");
-                    window.dispatchEvent(
-                      new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: "right" }),
-                    );
-                  }}
+                  onClick={() => setHandedness("right")}
                 >
                   <strong>Right hand</strong>
                   <span className="lc-muted">Chrome sits below-right of the tip.</span>
@@ -469,13 +591,7 @@ export function SettingsModal({
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => {
-                    setHandedness("left");
-                    saveInkHandedness("left");
-                    window.dispatchEvent(
-                      new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: "left" }),
-                    );
-                  }}
+                  onClick={() => setHandedness("left")}
                 >
                   <strong>Left hand</strong>
                   <span className="lc-muted">Chrome sits below-left of the tip.</span>
@@ -484,9 +600,8 @@ export function SettingsModal({
 
               <div className="lc-settings-subhead">Screen captures</div>
               <p className="lc-settings-hint">
-                When you capture the board (entire or a region), also save a PNG to this device.
-                Uses the share sheet on phones, or a download on desktop. Saved on this device
-                only.
+                When you capture the board (entire or a region), also save a PNG on this device.
+                Default destination is Photos. Saved on this device only.
               </p>
               <div
                 className="lc-settings-choice"
@@ -502,10 +617,7 @@ export function SettingsModal({
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => {
-                    setAutoSaveCaptures(true);
-                    saveAutoSaveCaptures(true);
-                  }}
+                  onClick={() => setAutoSaveCaptures(true)}
                 >
                   <strong>Auto-save captures</strong>
                   <span className="lc-muted">
@@ -521,14 +633,190 @@ export function SettingsModal({
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => {
-                    setAutoSaveCaptures(false);
-                    saveAutoSaveCaptures(false);
-                  }}
+                  onClick={() => setAutoSaveCaptures(false)}
                 >
                   <strong>Board only</strong>
                   <span className="lc-muted">Place the capture on the board; do not save a file.</span>
                 </button>
+              </div>
+
+              {autoSaveCaptures && (
+                <>
+                  <div className="lc-settings-subhead">Capture save location</div>
+                  <div
+                    className="lc-settings-choice"
+                    role="radiogroup"
+                    aria-label="Capture save location"
+                  >
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={captureDestination === "photos"}
+                      className={
+                        captureDestination === "photos"
+                          ? "lc-settings-choice-option is-active"
+                          : "lc-settings-choice-option"
+                      }
+                      onClick={() => setCaptureDestination("photos")}
+                    >
+                      <strong>Device photos</strong>
+                      <span className="lc-muted">
+                        Pictures library / Photos app (Pictures/lc). Default.
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={captureDestination === "downloads"}
+                      className={
+                        captureDestination === "downloads"
+                          ? "lc-settings-choice-option is-active"
+                          : "lc-settings-choice-option"
+                      }
+                      onClick={() => setCaptureDestination("downloads")}
+                    >
+                      <strong>Downloads</strong>
+                      <span className="lc-muted">Write a PNG into the Downloads folder.</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={captureDestination === "folder"}
+                      className={
+                        captureDestination === "folder"
+                          ? "lc-settings-choice-option is-active"
+                          : "lc-settings-choice-option"
+                      }
+                      onClick={() => setCaptureDestination("folder")}
+                    >
+                      <strong>A folder you pick</strong>
+                      <span className="lc-muted">
+                        Write PNGs into a directory you name below. Desktop app only.
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={captureDestination === "share"}
+                      className={
+                        captureDestination === "share"
+                          ? "lc-settings-choice-option is-active"
+                          : "lc-settings-choice-option"
+                      }
+                      onClick={() => setCaptureDestination("share")}
+                    >
+                      <strong>Share sheet</strong>
+                      <span className="lc-muted">
+                        Android only — hands the PNG to the system chooser. Elsewhere it
+                        saves to Photos and tells you where.
+                      </span>
+                    </button>
+                  </div>
+
+                  {captureDestination === "folder" && (
+                    <>
+                      <p className="lc-settings-hint">
+                        Absolute path. <code>~</code> works. The folder is created if it
+                        does not exist; if the write fails the capture falls back to a
+                        download and the toast says so.
+                      </p>
+                      <input
+                        type="text"
+                        value={captureFolder}
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        placeholder="~/Pictures/lc-board"
+                        aria-label="Capture folder"
+                        onChange={(event) => setCaptureFolder(event.target.value)}
+                      />
+                    </>
+                  )}
+
+                  <div className="lc-settings-subhead">Capture countdown</div>
+                  <p className="lc-settings-hint">
+                    Seconds between pressing the shutter and the shot, so you can get out
+                    of your own way. Tapping the countdown shoots immediately.
+                  </p>
+                  <div
+                    className="lc-settings-choice lc-settings-choice-compact"
+                    role="radiogroup"
+                    aria-label="Capture countdown"
+                  >
+                    {CAPTURE_COUNTDOWN_CHOICES.map((seconds) => (
+                      <button
+                        key={seconds}
+                        type="button"
+                        role="radio"
+                        aria-checked={captureCountdown === seconds}
+                        className={
+                          captureCountdown === seconds
+                            ? "lc-settings-choice-option is-active"
+                            : "lc-settings-choice-option"
+                        }
+                        onClick={() => setCaptureCountdown(seconds)}
+                      >
+                        <strong>{seconds === 0 ? "Off" : `${seconds}s`}</strong>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <div className="lc-settings-subhead">Pressure clip</div>
+              <p className="lc-settings-hint">
+                How hard you press before the pen reads as &ldquo;full&rdquo; pressure. Lower
+                values make light strokes reach max ink sooner — useful on a stiff nib or a tablet
+                that reports low pressure. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Pressure clip"
+              >
+                {PRESSURE_CLIP_STEPS.map((percent) => (
+                  <button
+                    key={percent}
+                    type="button"
+                    role="radio"
+                    aria-checked={pressureClipToPercent(pressureClip) === percent}
+                    className={
+                      pressureClipToPercent(pressureClip) === percent
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setPressureClip(pressureClipFromPercent(percent))}
+                  >
+                    <strong>{percent}%</strong>
+                  </button>
+                ))}
+              </div>
+
+              <div className="lc-settings-subhead">Stroke smoothing</div>
+              <p className="lc-settings-hint">
+                How much of the shake to take out of a pen stroke. It is applied when
+                you lift the pen, so the ink never lags the nib while you write. Higher
+                steadies a shaky hand; lower keeps every kink you actually drew. Saved on
+                this device only.
+              </p>
+              <div className="lc-settings-slider">
+                <input
+                  type="range"
+                  className="lc-settings-slider-input"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={smoothingToPercent(inkSmoothing)}
+                  aria-label="Stroke smoothing"
+                  onChange={(event) =>
+                    setInkSmoothing(smoothingFromPercent(Number(event.target.value)))
+                  }
+                />
+                <span className="lc-settings-slider-value">
+                  {smoothingToPercent(inkSmoothing) === 0
+                    ? "Off"
+                    : `${smoothingToPercent(inkSmoothing)}%`}
+                </span>
               </div>
 
               <div className="lc-settings-subhead">When a case fails</div>
@@ -597,10 +885,7 @@ export function SettingsModal({
                         ? "lc-settings-choice-option is-active"
                         : "lc-settings-choice-option"
                     }
-                    onClick={() => {
-                      setOfflineMerge(id);
-                      saveOfflineMergePolicy(id);
-                    }}
+                    onClick={() => setOfflineMerge(id)}
                   >
                     <strong>{label}</strong>
                     <span className="lc-muted">{hint}</span>
@@ -882,11 +1167,16 @@ export function SettingsModal({
         </div>
 
         <div className="lc-settings-foot">
-          <button type="button" className="lc-secondary" onClick={onClose}>
+          <button type="button" className="lc-secondary" onClick={cancel}>
             Cancel
           </button>
-          <button type="button" className="lc-primary" disabled={!!busy} onClick={() => void save()}>
-            Save
+          <button
+            type="button"
+            className="lc-primary"
+            disabled={!dirty || saving}
+            onClick={() => void save()}
+          >
+            {saving ? "Saving…" : "Save"}
           </button>
         </div>
       </div>

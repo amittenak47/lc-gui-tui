@@ -1,30 +1,21 @@
 /**
- * Ink colour control for the floating toolbar.
+ * Ink colour control — modern radial wheel (SVG donut wedges), not a fan of
+ * floating circles. Hold or tap the centre dot to open; drag/tap a wedge to pick.
  *
- * One dot filled with the current colour. Press and hold (or tap) fans the
- * theme's swatches out on an arc above the bar; releasing over a swatch takes
- * it, releasing anywhere else keeps the current colour. A short tap never
- * recolours on its own — the old strip of six swatches was wide enough to catch
- * a resting palm, and this is the fix for that, not a smaller version of it.
- *
- * The arc leans away from the writing hand so the fan opens into empty board
- * instead of under the wrist. The fan itself is portaled with `position: fixed`
- * so the toolbar row's horizontal scroller cannot clip it.
+ * Portaled with `position: fixed` so the toolbar scroller cannot clip the ring.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { InkHandedness } from "../util/inkHandedness";
 
-/** Hold this long and the fan opens under the finger, ready for a drag-pick. */
-const HOLD_MS = 240;
-/** Distance from the dot centre to a swatch centre. */
-const RADIUS = 62;
-/** Total sweep of the fan. */
-const SPREAD_DEG = 128;
-/** Lean of the fan away from the writing hand. */
-const HAND_TILT_DEG = 16;
+const HOLD_MS = 220;
+/** Outer / inner radius of the colour ring (CSS px). */
+const OUTER_R = 78;
+const INNER_R = 34;
+/** Hit slop beyond the ring for drag-pick. */
+const HIT_PAD = 10;
 
 interface ColorRadialProps {
   colors: readonly string[];
@@ -34,27 +25,83 @@ interface ColorRadialProps {
   compact?: boolean;
 }
 
-interface SwatchSeat {
+interface Wedge {
   color: string;
-  x: number;
-  y: number;
+  /** Mid-angle in radians (0 = up, clockwise). */
+  mid: number;
+  start: number;
+  end: number;
+  path: string;
 }
 
-/** Fan the swatches on an arc opening upward, tilted off the writing hand. */
-function seats(colors: readonly string[], handedness: InkHandedness): SwatchSeat[] {
-  const tilt = handedness === "right" ? -HAND_TILT_DEG : HAND_TILT_DEG;
-  const span = colors.length > 1 ? SPREAD_DEG : 0;
-  const step = colors.length > 1 ? span / (colors.length - 1) : 0;
+function polar(cx: number, cy: number, r: number, angle: number): [number, number] {
+  // 0 rad = straight up; positive clockwise (matches prior fan convention).
+  return [cx + Math.sin(angle) * r, cy - Math.cos(angle) * r];
+}
+
+function donutSlice(
+  cx: number,
+  cy: number,
+  inner: number,
+  outer: number,
+  a0: number,
+  a1: number,
+): string {
+  const large = a1 - a0 > Math.PI ? 1 : 0;
+  const [x0, y0] = polar(cx, cy, outer, a0);
+  const [x1, y1] = polar(cx, cy, outer, a1);
+  const [x2, y2] = polar(cx, cy, inner, a1);
+  const [x3, y3] = polar(cx, cy, inner, a0);
+  return [
+    `M ${x0} ${y0}`,
+    `A ${outer} ${outer} 0 ${large} 1 ${x1} ${y1}`,
+    `L ${x2} ${y2}`,
+    `A ${inner} ${inner} 0 ${large} 0 ${x3} ${y3}`,
+    "Z",
+  ].join(" ");
+}
+
+/** Build equal wedges; slight rotation bias so seams sit clear of the writing hand. */
+function buildWedges(colors: readonly string[], handedness: InkHandedness): Wedge[] {
+  const n = Math.max(colors.length, 1);
+  const step = (Math.PI * 2) / n;
+  // Rotate so a seam is not under the wrist; right-hand writers get a small CW bias.
+  const bias = handedness === "right" ? -step * 0.15 : step * 0.15;
+  const start0 = -Math.PI + bias;
   return colors.map((color, index) => {
-    const deg = tilt - span / 2 + step * index;
-    const rad = (deg * Math.PI) / 180;
-    // 0deg points straight up; positive is clockwise.
+    const start = start0 + step * index;
+    const end = start + step;
+    const mid = (start + end) / 2;
     return {
       color,
-      x: Math.sin(rad) * RADIUS,
-      y: -Math.cos(rad) * RADIUS,
+      mid,
+      start,
+      end,
+      path: donutSlice(OUTER_R, OUTER_R, INNER_R, OUTER_R, start, end),
     };
   });
+}
+
+function angleFromCentre(dx: number, dy: number): number {
+  // Match polar(): 0 = up, clockwise positive.
+  return Math.atan2(dx, -dy);
+}
+
+function normalizeAngle(a: number): number {
+  let x = a;
+  while (x <= -Math.PI) x += Math.PI * 2;
+  while (x > Math.PI) x -= Math.PI * 2;
+  return x;
+}
+
+function angleInWedge(angle: number, start: number, end: number): boolean {
+  const a = normalizeAngle(angle);
+  const s = normalizeAngle(start);
+  let e = normalizeAngle(end);
+  if (e < s) e += Math.PI * 2;
+  let x = a;
+  if (x < s) x += Math.PI * 2;
+  return x >= s && x <= e;
 }
 
 export function ColorRadial({
@@ -69,10 +116,10 @@ export function ColorRadial({
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const holdTimerRef = useRef<number | null>(null);
-  /** Set while a press is still down, so pointerup can pick what it landed on. */
   const draggingRef = useRef(false);
 
-  const layout = seats(colors, handedness);
+  const wedges = useMemo(() => buildWedges(colors, handedness), [colors, handedness]);
+  const size = OUTER_R * 2;
 
   const clearHold = useCallback(() => {
     if (holdTimerRef.current != null) {
@@ -90,8 +137,6 @@ export function ColorRadial({
 
   useEffect(() => clearHold, [clearHold]);
 
-  // Pin the fan to the live centre of the colour dot so it sits above the
-  // toolbar island even when the row scrolls or the window resizes.
   useLayoutEffect(() => {
     if (!open) {
       setAnchor(null);
@@ -115,13 +160,12 @@ export function ColorRadial({
     };
   }, [open]);
 
-  // Any press outside the fan closes it, as does Escape.
   useEffect(() => {
     if (!open) return;
     const onDown = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && rootRef.current?.contains(target)) return;
-      if (target instanceof Element && target.closest(".lc-color-fan")) return;
+      if (target instanceof Element && target.closest(".lc-color-wheel")) return;
       close();
     };
     const onKey = (event: KeyboardEvent) => {
@@ -135,44 +179,36 @@ export function ColorRadial({
     };
   }, [open, close]);
 
-  /** Which swatch is under this client point, if any. */
-  const seatAt = useCallback(
+  const colorAt = useCallback(
     (clientX: number, clientY: number): string | null => {
-      const node = rootRef.current;
-      if (!node) return null;
-      const rect = node.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2;
-      const cy = rect.top + rect.height / 2;
-      let best: string | null = null;
-      let bestDist = Infinity;
-      for (const seat of layout) {
-        const dist = Math.hypot(clientX - (cx + seat.x), clientY - (cy + seat.y));
-        if (dist < bestDist) {
-          bestDist = dist;
-          best = seat.color;
-        }
+      if (!anchor) return null;
+      const dx = clientX - anchor.x;
+      const dy = clientY - anchor.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < INNER_R - HIT_PAD || dist > OUTER_R + HIT_PAD) return null;
+      const angle = angleFromCentre(dx, dy);
+      for (const wedge of wedges) {
+        if (angleInWedge(angle, wedge.start, wedge.end)) return wedge.color;
       }
-      return bestDist <= 26 ? best : null;
+      return null;
     },
-    [layout],
+    [anchor, wedges],
   );
 
-  // Drag-pick: track the finger while it stays down after the fan opened.
   useEffect(() => {
     if (!open) return;
     const onMove = (event: PointerEvent) => {
       if (!draggingRef.current) return;
-      setHovered(seatAt(event.clientX, event.clientY));
+      setHovered(colorAt(event.clientX, event.clientY));
     };
     const onUp = (event: PointerEvent) => {
       if (!draggingRef.current) return;
       draggingRef.current = false;
-      const landed = seatAt(event.clientX, event.clientY);
+      const landed = colorAt(event.clientX, event.clientY);
       if (landed) {
         onPick(landed);
         close();
       } else {
-        // Released back on the dot — leave the fan up so it can be tapped.
         setHovered(null);
       }
     };
@@ -184,44 +220,80 @@ export function ColorRadial({
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [open, seatAt, onPick, close]);
+  }, [open, colorAt, onPick, close]);
 
-  const fan =
+  const wheel =
     open &&
     anchor &&
     createPortal(
       <div
-        className="lc-color-fan"
+        className="lc-color-wheel"
         role="menu"
         aria-label="Ink colour"
-        style={{ left: anchor.x, top: anchor.y }}
+        style={{
+          left: anchor.x,
+          top: anchor.y,
+          width: size,
+          height: size,
+          marginLeft: -OUTER_R,
+          marginTop: -OUTER_R,
+        }}
       >
-        {layout.map((seat) => {
-          const state =
-            seat.color === hovered
-              ? " is-hovered"
-              : seat.color === value
-                ? " is-current"
-                : "";
-          return (
-            <button
-              key={seat.color}
-              type="button"
-              role="menuitem"
-              className={`lc-color-seat${state}`}
-              style={{
-                background: seat.color,
-                transform: `translate(${seat.x}px, ${seat.y}px)`,
-              }}
-              aria-label={`Ink ${seat.color}`}
-              aria-pressed={seat.color === value}
-              onClick={() => {
-                onPick(seat.color);
-                close();
-              }}
+        <div className="lc-color-wheel-disc" aria-hidden>
+          <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size}>
+            <defs>
+              <filter id="lc-color-wheel-soft" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="4" stdDeviation="6" floodOpacity="0.28" />
+              </filter>
+            </defs>
+            <circle
+              className="lc-color-wheel-well"
+              cx={OUTER_R}
+              cy={OUTER_R}
+              r={OUTER_R - 0.5}
+              filter="url(#lc-color-wheel-soft)"
             />
-          );
-        })}
+            {wedges.map((wedge) => {
+              const state =
+                wedge.color === hovered
+                  ? " is-hovered"
+                  : wedge.color === value
+                    ? " is-current"
+                    : "";
+              return (
+                <path
+                  key={wedge.color}
+                  className={`lc-color-wedge${state}`}
+                  d={wedge.path}
+                  fill={wedge.color}
+                  role="menuitem"
+                  tabIndex={-1}
+                  aria-label={`Ink ${wedge.color}`}
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    draggingRef.current = true;
+                    setHovered(wedge.color);
+                  }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onPick(wedge.color);
+                    close();
+                  }}
+                />
+              );
+            })}
+            <circle className="lc-color-wheel-hub-ring" cx={OUTER_R} cy={OUTER_R} r={INNER_R} />
+          </svg>
+          <button
+            type="button"
+            className="lc-color-wheel-hub"
+            style={{ background: value }}
+            aria-label="Current ink colour"
+            onClick={() => close()}
+          />
+        </div>
       </div>,
       document.body,
     );
@@ -237,7 +309,7 @@ export function ColorRadial({
         aria-label="Ink colour"
         aria-haspopup="true"
         aria-expanded={open}
-        title="Ink colour — hold to open the palette"
+        title="Ink colour — hold to open the wheel"
         onPointerDown={() => {
           draggingRef.current = true;
           clearHold();
@@ -247,7 +319,6 @@ export function ColorRadial({
           }, HOLD_MS);
         }}
         onPointerUp={() => {
-          // Short tap: the hold never fired, so treat it as a toggle.
           if (holdTimerRef.current != null) {
             clearHold();
             draggingRef.current = false;
@@ -261,7 +332,7 @@ export function ColorRadial({
       >
         <span className="lc-color-dot-fill" style={{ background: value }} aria-hidden />
       </button>
-      {fan}
+      {wheel}
     </div>
   );
 }

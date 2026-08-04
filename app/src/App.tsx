@@ -2649,11 +2649,12 @@ export function App() {
         </div>
       </header>
 
-      {busy && problem && switchMotion === "idle" && <div className="lc-busy">{busy}</div>}
-      <StatusBanner text={error} variant="error" />
-      <StatusBanner text={!error ? notice : null} variant="notice" />
-
       <main className="lc-main">
+        <div className="lc-chrome-overlay-top" aria-live="polite">
+          {busy && problem && switchMotion === "idle" && <div className="lc-busy">{busy}</div>}
+          <StatusBanner text={error} variant="error" />
+          <StatusBanner text={!error ? notice : null} variant="notice" />
+        </div>
         <div
           className={[
             "lc-canvas-wrap",

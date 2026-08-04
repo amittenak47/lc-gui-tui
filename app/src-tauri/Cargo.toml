@@ -25,6 +25,10 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 # back to typed text or a PNG sent to a vision model.
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-inkrecognition = { path = "plugins/inkrecognition" }
+tauri-plugin-gallerysave = { path = "plugins/gallerysave" }
+# Only the share bridge needs it, and only on Android — the desktop build has
+# no share sheet to hand bytes to.
+base64 = "0.22"
 
 [profile.release]
 lto = true

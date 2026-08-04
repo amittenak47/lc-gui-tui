@@ -11,9 +11,12 @@
  *
  * Everything that is not a tool hides behind a press: shapes fan out of one
  * button, colour fans out of one dot ({@link ColorRadial}).
+ *
+ * Long-press the grip to undock and drag the island anywhere on the workspace;
+ * drop near the bottom dock slot to snap it home with a short settle animation.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   SHAPES,
@@ -21,39 +24,67 @@ import {
   type ShapeModValue,
   type ShapeStamp,
 } from "../templates/shapes";
+import { LONG_PRESS_MS } from "../util/gesture";
 import type { InkHandedness } from "../util/inkHandedness";
+import {
+  loadToolbarLayout,
+  saveToolbarLayout,
+  TOOLBAR_DOCK_SNAP_PX,
+  type ToolbarLayout,
+} from "../util/toolbarLayout";
 import type { ToolName } from "./BoardHandle";
 import { ColorRadial } from "./ColorRadial";
 import { FontSizeSlider } from "./FontSizeSlider";
 import { inkSwatches } from "./inkColors";
+import { InkFullnessSlider } from "./InkFullnessSlider";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
 
-/** Hold this long on Text to open Text / Code (click also toggles the menu). */
-const TEXT_HOLD_MS = 240;
+function clampFloatingPos(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): { x: number; y: number } {
+  const margin = 8;
+  const maxX = Math.max(margin, window.innerWidth - width - margin);
+  const maxY = Math.max(margin, window.innerHeight - height - margin);
+  return {
+    x: Math.min(maxX, Math.max(margin, x)),
+    y: Math.min(maxY, Math.max(margin, y)),
+  };
+}
 
-/** The five tools that earn a permanent seat on the bar. */
+function dockAnchorRect(toolbar: HTMLElement | null): DOMRect | null {
+  const dock = toolbar?.closest(".lc-board-dock");
+  if (!(dock instanceof HTMLElement)) return null;
+  // Prefer the dedicated anchor (sized when the island is floating); fall back
+  // to the dock column itself.
+  const anchor = dock.querySelector(".lc-toolbar-dock-anchor");
+  if (anchor instanceof HTMLElement) {
+    const rect = anchor.getBoundingClientRect();
+    if (rect.width >= 8 || rect.height >= 8) return rect;
+  }
+  return dock.getBoundingClientRect();
+}
+
+/** Permanent seats (Hand + Select share one seat via the Hand flyout). */
 const TOOLS: Array<{ tool: ToolName; label: string; hint: string; icon?: "pen" | "eraser" }> = [
-  { tool: "hand", label: "✋", hint: "Pan — drag to move; scroll wheel zooms" },
-  {
-    tool: "selection",
-    label: "⬚",
-    hint: "Select — resize region boxes (they stay locked in place) or move your work",
-  },
   { tool: "freedraw", label: "Pen", hint: "Pen", icon: "pen" },
   { tool: "eraser", label: "Eraser", hint: "Eraser — only removes ink under the brush", icon: "eraser" },
-  {
-    tool: "text",
-    label: "T",
-    hint: "Text — click to place (Enter finishes, Shift+Enter for a new line)",
-  },
 ];
 
-/** Shapes that used to hold their own seats; now they live behind the flyout. */
+/** Shapes flyout — same menu the ⬡ button opens (includes Text box). */
 const SHAPE_TOOLS: Array<{ tool: ToolName; label: string; glyph: string }> = [
   { tool: "rectangle", label: "Square", glyph: "▭" },
   { tool: "ellipse", label: "Circle", glyph: "◯" },
   { tool: "arrow", label: "Arrow", glyph: "↗" },
+  { tool: "text", label: "Text box", glyph: "T" },
+];
+
+const HAND_TOOLS: Array<{ tool: "hand" | "selection"; label: string; glyph: string; hint: string }> = [
+  { tool: "hand", label: "Hand", glyph: "✋", hint: "Pan the board" },
+  { tool: "selection", label: "Select", glyph: "⬚", hint: "Move or resize work" },
 ];
 
 export interface BoardToolbarProps {
@@ -65,6 +96,8 @@ export interface BoardToolbarProps {
   handedness: InkHandedness;
   strokeWidth: number;
   onStrokeWidth: (width: number) => void;
+  inkFullness: number;
+  onInkFullness: (fullness: number) => void;
   pressureSensitive: boolean;
   onPressureSensitive: (enabled: boolean) => void;
   fontSize: number;
@@ -99,11 +132,13 @@ export function BoardToolbar({
   handedness,
   strokeWidth,
   onStrokeWidth,
+  inkFullness,
+  onInkFullness,
   pressureSensitive,
   onPressureSensitive,
   fontSize,
   onFontSize,
-  textMode,
+  textMode: _textMode,
   onTextMode,
   shapesOpen,
   onToggleShapes,
@@ -132,33 +167,61 @@ export function BoardToolbar({
   const [moveAsOne, setMoveAsOne] = useState(true);
   const [shapePhase, setShapePhase] = useState<"list" | "fade" | "mod">("list");
   const [helpOpen, setHelpOpen] = useState(false);
-  const [textFlyoutOpen, setTextFlyoutOpen] = useState(false);
-  const textHoldTimerRef = useRef<number | null>(null);
+  const [handMenuOpen, setHandMenuOpen] = useState(false);
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
 
-  const clearTextHold = useCallback(() => {
-    if (textHoldTimerRef.current != null) {
-      window.clearTimeout(textHoldTimerRef.current);
-      textHoldTimerRef.current = null;
+  const [layout, setLayout] = useState<ToolbarLayout>(() => loadToolbarLayout());
+  const [dragging, setDragging] = useState(false);
+  const [docking, setDocking] = useState(false);
+  const [dockNear, setDockNear] = useState(false);
+  const dragHoldTimerRef = useRef<number | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
+  const floating = layout.mode === "floating";
+  const floatX = layout.mode === "floating" ? layout.x : 0;
+  const floatY = layout.mode === "floating" ? layout.y : 0;
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const draggingRef = useRef(dragging);
+  draggingRef.current = dragging;
+
+  const clearDragHold = useCallback(() => {
+    if (dragHoldTimerRef.current != null) {
+      window.clearTimeout(dragHoldTimerRef.current);
+      dragHoldTimerRef.current = null;
     }
   }, []);
 
-  useEffect(() => clearTextHold, [clearTextHold]);
+  useEffect(() => clearDragHold, [clearDragHold]);
 
-  // A press anywhere else closes the text / shape flyouts.
+  // A press anywhere else closes any open flyout. Capture lives in Board's
+  // state rather than ours, but it is the same kind of menu and has to dismiss
+  // the same way — leaving it out is why it used to stay open behind a stroke.
+  const captureMenuOpenRef = useRef(captureMenuOpen);
+  captureMenuOpenRef.current = captureMenuOpen;
+  const onToggleCaptureMenuRef = useRef(onToggleCaptureMenu);
+  onToggleCaptureMenuRef.current = onToggleCaptureMenu;
+
   useEffect(() => {
-    if (!textFlyoutOpen && !shapeMenuOpen) return;
+    if (!handMenuOpen && !shapeMenuOpen && !captureMenuOpen) return;
+    const closeAll = () => {
+      setHandMenuOpen(false);
+      setShapeMenuOpen(false);
+      if (captureMenuOpenRef.current) onToggleCaptureMenuRef.current();
+    };
     const onDown = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && toolbarRootRef.current?.contains(target)) return;
-      setTextFlyoutOpen(false);
-      setShapeMenuOpen(false);
+      closeAll();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setTextFlyoutOpen(false);
-        setShapeMenuOpen(false);
-      }
+      if (event.key === "Escape") closeAll();
     };
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey);
@@ -166,7 +229,7 @@ export function BoardToolbar({
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [textFlyoutOpen, shapeMenuOpen]);
+  }, [captureMenuOpen, handMenuOpen, shapeMenuOpen]);
 
   // Read through a ref so an inline callback cannot rebuild the observer on
   // every render.
@@ -176,13 +239,20 @@ export function BoardToolbar({
   useEffect(() => {
     const node = toolbarRootRef.current;
     if (!node) return;
-    const publish = () =>
+    const publish = () => {
+      // Floating chrome does not reserve dock clearance — page fit measures the
+      // remaining bottom tray (pager / eye) instead.
+      if (layout.mode === "floating") {
+        onHeightChangeRef.current?.(0);
+        return;
+      }
       onHeightChangeRef.current?.(Math.ceil(node.getBoundingClientRect().height));
+    };
     publish();
     const observer = new ResizeObserver(publish);
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [layout.mode]);
 
   useEffect(() => {
     if (!shapesOpen) {
@@ -191,6 +261,152 @@ export function BoardToolbar({
       setShapePhase("list");
     }
   }, [shapesOpen]);
+
+  // Keep a restored floating position on-screen after rotate / resize.
+  useLayoutEffect(() => {
+    if (layout.mode !== "floating" || dragging || docking) return;
+    const node = toolbarRootRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const next = clampFloatingPos(layout.x, layout.y, rect.width, rect.height);
+    if (next.x !== layout.x || next.y !== layout.y) {
+      const updated: ToolbarLayout = { mode: "floating", ...next };
+      setLayout(updated);
+      saveToolbarLayout(updated);
+    }
+  }, [layout, dragging, docking]);
+
+  const finishDockAnimation = useCallback(() => {
+    const docked: ToolbarLayout = { mode: "docked" };
+    setLayout(docked);
+    saveToolbarLayout(docked);
+    setDocking(false);
+    setDockNear(false);
+    setDragging(false);
+    dragRef.current = null;
+  }, []);
+
+  const onGripPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    if (docking) return;
+    event.preventDefault();
+    event.stopPropagation();
+    clearDragHold();
+    const fromDocked = layout.mode === "docked";
+    const pointerId = event.pointerId;
+    const clientX = event.clientX;
+    const clientY = event.clientY;
+    const target = event.currentTarget;
+    dragHoldTimerRef.current = window.setTimeout(() => {
+      dragHoldTimerRef.current = null;
+      const node = toolbarRootRef.current;
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const x = fromDocked ? rect.left : floatX;
+      const y = fromDocked ? rect.top : floatY;
+      setLayout({ mode: "floating", x, y });
+      setDragging(true);
+      setDocking(false);
+      setShapeMenuOpen(false);
+      setHandMenuOpen(false);
+      setHelpOpen(false);
+      dragRef.current = {
+        pointerId,
+        offsetX: clientX - x,
+        offsetY: clientY - y,
+        width: rect.width,
+        height: rect.height,
+      };
+      try {
+        target.setPointerCapture(pointerId);
+      } catch {
+        /* already captured */
+      }
+    }, LONG_PRESS_MS);
+  };
+
+  const onGripPointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !draggingRef.current) return;
+    const next = clampFloatingPos(
+      event.clientX - drag.offsetX,
+      event.clientY - drag.offsetY,
+      drag.width,
+      drag.height,
+    );
+    setLayout({ mode: "floating", ...next });
+    const anchor = dockAnchorRect(toolbarRootRef.current);
+    if (anchor) {
+      const cx = next.x + drag.width / 2;
+      const cy = next.y + drag.height / 2;
+      const ax = anchor.left + Math.max(anchor.width, 1) / 2;
+      const ay = anchor.top + Math.max(12, anchor.height / 2);
+      setDockNear(Math.hypot(cx - ax, cy - ay) < TOOLBAR_DOCK_SNAP_PX);
+    } else {
+      setDockNear(false);
+    }
+  };
+
+  const onGripPointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
+    clearDragHold();
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    if (!draggingRef.current) {
+      dragRef.current = null;
+      return;
+    }
+
+    const current = layoutRef.current;
+    const curX = current.mode === "floating" ? current.x : floatX;
+    const curY = current.mode === "floating" ? current.y : floatY;
+    const anchor = dockAnchorRect(toolbarRootRef.current);
+    const width = drag.width;
+    const height = drag.height;
+    const cx = curX + width / 2;
+    const cy = curY + height / 2;
+    let shouldDock = false;
+    let dockX = curX;
+    let dockY = curY;
+    if (anchor) {
+      const ax = anchor.left + Math.max(anchor.width, 1) / 2;
+      const ay = anchor.top + Math.max(12, anchor.height / 2);
+      shouldDock = Math.hypot(cx - ax, cy - ay) < TOOLBAR_DOCK_SNAP_PX;
+      dockX = ax - width / 2;
+      dockY = ay - height / 2;
+    }
+
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      /* ignore */
+    }
+
+    if (shouldDock) {
+      setDragging(false);
+      setDocking(true);
+      setDockNear(true);
+      setLayout({ mode: "floating", x: dockX, y: dockY });
+      window.setTimeout(finishDockAnimation, 320);
+      return;
+    }
+
+    const saved: ToolbarLayout = {
+      mode: "floating",
+      ...clampFloatingPos(curX, curY, width, height),
+    };
+    setLayout(saved);
+    saveToolbarLayout(saved);
+    setDragging(false);
+    setDockNear(false);
+    dragRef.current = null;
+  };
 
   const pickShape = (shape: ShapeStamp) => {
     setConfiguring(shape);
@@ -217,30 +433,20 @@ export function BoardToolbar({
     if (shapesOpen) onToggleShapes();
     if (captureMenuOpen) onToggleCaptureMenu();
     setShapeMenuOpen(false);
-    setTextFlyoutOpen(false);
+    setHandMenuOpen(false);
+    if (tool === "text") onTextMode("plain");
     onPick(tool);
   };
 
-  const pickTextVariant = (mode: "plain" | "code") => {
-    clearTextHold();
-    setTextFlyoutOpen(false);
-    if (shapesOpen) onToggleShapes();
-    if (captureMenuOpen) onToggleCaptureMenu();
-    setShapeMenuOpen(false);
-    onTextMode(mode);
-  };
+  const shapeToolActive =
+    shapesOpen ||
+    active === "rectangle" ||
+    active === "ellipse" ||
+    active === "arrow" ||
+    active === "text";
 
-  const onTextToolClick = () => {
-    clearTextHold();
-    if (active === "text" && !shapesOpen) {
-      setTextFlyoutOpen((open) => !open);
-      return;
-    }
-    pickTextVariant(textMode);
-    setTextFlyoutOpen(true);
-  };
-
-  const shapeToolActive = SHAPE_TOOLS.some((entry) => entry.tool === active);
+  const handToolActive = active === "hand" || active === "selection";
+  const handGlyph = active === "selection" ? "⬚" : "✋";
 
   const renderToolButton = (
     tool: ToolName,
@@ -275,83 +481,95 @@ export function BoardToolbar({
       className={[
         "lc-toolbar",
         mobile ? "lc-toolbar-compact" : "",
+        floating ? "lc-toolbar-floating" : "",
+        dragging ? "lc-toolbar-dragging" : "",
+        docking ? "lc-toolbar-docking" : "",
+        dockNear && (dragging || docking) ? "lc-toolbar-dock-near" : "",
       ]
         .filter(Boolean)
         .join(" ")}
+      style={
+        floating || dragging || docking
+          ? {
+              position: "fixed",
+              left: floatX,
+              top: floatY,
+              right: "auto",
+              bottom: "auto",
+              zIndex: 55,
+            }
+          : undefined
+      }
       role="toolbar"
       aria-label="Drawing tools"
     >
       <div className="lc-toolbar-row">
-        {TOOLS.map(({ tool, label, hint, icon }) =>
-          tool === "text" ? (
-            <div key="text" className="lc-text-wrap">
-              <button
-                type="button"
-                className={
-                  active === "text" && !shapesOpen
-                    ? "lc-tool lc-tool-active"
-                    : "lc-tool"
-                }
-                aria-label={
-                  textMode === "code"
-                    ? "Code note — click for Text / Code"
-                    : "Text — click for Text / Code"
-                }
-                title={
-                  textMode === "code"
-                    ? "Code note (monospace on canvas) — click for Text / Code"
-                    : "Text — click for Text / Code"
-                }
-                aria-pressed={active === "text" && !shapesOpen}
-                aria-haspopup="menu"
-                aria-expanded={textFlyoutOpen}
-                onClick={onTextToolClick}
-                onPointerDown={() => {
-                  clearTextHold();
-                  textHoldTimerRef.current = window.setTimeout(() => {
-                    textHoldTimerRef.current = null;
-                    setShapeMenuOpen(false);
-                    setTextFlyoutOpen(true);
-                  }, TEXT_HOLD_MS);
-                }}
-                onPointerUp={clearTextHold}
-                onPointerCancel={clearTextHold}
-              >
-                <span className="lc-tool-emoji" aria-hidden>
-                  {textMode === "code" ? "</>" : "T"}
-                </span>
-              </button>
-              {textFlyoutOpen && (
-                <div className="lc-text-flyout" role="menu" aria-label="Text mode">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={textMode === "plain" ? "is-active" : undefined}
-                    onClick={() => pickTextVariant("plain")}
-                  >
-                    <span className="lc-text-flyout-glyph" aria-hidden>
-                      T
-                    </span>
-                    Text
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={textMode === "code" ? "is-active" : undefined}
-                    onClick={() => pickTextVariant("code")}
-                  >
-                    <span className="lc-text-flyout-glyph" aria-hidden>
-                      {"</>"}
-                    </span>
-                    Code note
-                    <span className="lc-muted lc-text-flyout-sub">Monospace on canvas</span>
-                  </button>
-                </div>
-              )}
+        <button
+          type="button"
+          className="lc-toolbar-grip"
+          aria-label="Hold and drag to move toolbar"
+          title="Hold and drag to move · drop on the dock to pin"
+          onPointerDown={onGripPointerDown}
+          onPointerMove={onGripPointerMove}
+          onPointerUp={onGripPointerUp}
+          onPointerCancel={onGripPointerUp}
+        >
+          <span className="lc-toolbar-grip-dots" aria-hidden />
+        </button>
+        <div className="lc-hand-wrap">
+          <button
+            type="button"
+            className={
+              handToolActive && !shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"
+            }
+            aria-label={
+              active === "selection"
+                ? "Select — tap for Hand / Select"
+                : "Pan — tap for Hand / Select"
+            }
+            title={
+              active === "selection"
+                ? "Select — tap for Hand / Select"
+                : "Pan — tap for Hand / Select"
+            }
+            aria-pressed={handToolActive && !shapesOpen}
+            aria-haspopup="menu"
+            aria-expanded={handMenuOpen}
+            onClick={() => {
+              setShapeMenuOpen(false);
+              setHandMenuOpen((open) => !open);
+            }}
+          >
+            <span className="lc-tool-emoji" aria-hidden>
+              {handGlyph}
+            </span>
+          </button>
+          {handMenuOpen && (
+            <div className="lc-shape-flyout" role="menu" aria-label="Hand tools">
+              {HAND_TOOLS.map(({ tool, label, glyph, hint }) => (
+                <button
+                  key={tool}
+                  type="button"
+                  role="menuitem"
+                  // The description lives on the tooltip, not in the menu: two
+                  // rows of prose per item made this flyout twice the height of
+                  // the shapes one for two entries anybody can read at a glance.
+                  title={hint}
+                  className={tool === active ? "is-active" : undefined}
+                  onClick={() => pickTool(tool)}
+                >
+                  <span className="lc-shape-flyout-glyph" aria-hidden>
+                    {glyph}
+                  </span>
+                  {label}
+                </button>
+              ))}
             </div>
-          ) : (
-            renderToolButton(tool, label, hint, icon)
-          ),
+          )}
+        </div>
+
+        {TOOLS.map(({ tool, label, hint, icon }) =>
+          renderToolButton(tool, label, hint, icon),
         )}
 
         <div className="lc-tool-sep" />
@@ -363,11 +581,12 @@ export function BoardToolbar({
               shapeMenuOpen || shapesOpen || shapeToolActive ? "lc-tool lc-tool-active" : "lc-tool"
             }
             aria-label="Shapes"
-            title="Shapes"
+            title="Shapes — Square, Circle, Arrow, Text box"
             aria-expanded={shapeMenuOpen}
             aria-haspopup="menu"
             onClick={() => {
               if (shapesOpen) onToggleShapes();
+              setHandMenuOpen(false);
               setShapeMenuOpen((open) => !open);
             }}
           >
@@ -379,7 +598,7 @@ export function BoardToolbar({
             <div className="lc-shape-flyout" role="menu" aria-label="Shapes">
               {SHAPE_TOOLS.map(({ tool, label, glyph }) => (
                 <button
-                  key={tool}
+                  key={`${tool}-${label}`}
                   type="button"
                   role="menuitem"
                   className={tool === active ? "is-active" : undefined}
@@ -437,11 +656,27 @@ export function BoardToolbar({
             </span>
           </button>
           {captureMenuOpen && (
-            <div className="lc-capture-menu" role="menu">
-              <button type="button" role="menuitem" onClick={onCaptureEntire}>
+            <div className="lc-shape-flyout" role="menu" aria-label="Capture">
+              <button
+                type="button"
+                role="menuitem"
+                title="Shoot the whole board and drop the image on it"
+                onClick={onCaptureEntire}
+              >
+                <span className="lc-shape-flyout-glyph" aria-hidden>
+                  ▣
+                </span>
                 Entire board
               </button>
-              <button type="button" role="menuitem" onClick={onCaptureRegion}>
+              <button
+                type="button"
+                role="menuitem"
+                title="Drag a rectangle to shoot part of the board"
+                onClick={onCaptureRegion}
+              >
+                <span className="lc-shape-flyout-glyph" aria-hidden>
+                  ⧉
+                </span>
                 Region…
               </button>
             </div>
@@ -487,10 +722,13 @@ export function BoardToolbar({
               eraser={active === "eraser"}
             />
             {active === "freedraw" && (
-              <PressureSensitiveToggle
-                enabled={pressureSensitive}
-                onChange={onPressureSensitive}
-              />
+              <>
+                <InkFullnessSlider value={inkFullness} onChange={onInkFullness} />
+                <PressureSensitiveToggle
+                  enabled={pressureSensitive}
+                  onChange={onPressureSensitive}
+                />
+              </>
             )}
           </div>
         )}

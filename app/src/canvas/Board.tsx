@@ -65,13 +65,11 @@ import {
   statementLinePitch,
   type BoardReadingSize,
 } from "../modes/codeFontSize";
-
-/** Default wrap width for the text tool (canvas units). User can resize the box. */
-const TEXT_WRAP_WIDTH = 420;
 import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
 import { textBaselineY, SCRATCH_LINE_PITCH, linedRuleClearance, defaultLineHeight } from "../modes/textBaseline";
 import type { BoardBinaryFile, BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
+import { TEXT_FONT_MAX, TEXT_FONT_MIN } from "./FontSizeSlider";
 import { applyMetadata, isCoachElement } from "./scene";
 import {
   applyPageVisibility,
@@ -81,10 +79,27 @@ import {
 } from "./pageView";
 import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
+import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
+import {
+  minTextBox,
+  textClientFromScene,
+  textEditorAnchor,
+  textPlaceRect,
+  TEXT_TAP_SLOP_PX,
+  type TextPlaceViewport,
+} from "./textPlacement";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
-import { loadAutoSaveCaptures, saveCaptureToDevice } from "../util/capturePrefs";
+import { loadInkPressureClip } from "../util/inkPressureClip";
+import { loadInkSmoothing } from "../util/inkSmoothingPref";
+import {
+  describeCaptureResult,
+  loadAutoSaveCaptures,
+  loadCaptureCountdown,
+  saveCaptureToDevice,
+} from "../util/capturePrefs";
+import { CaptureFeedback, type CaptureFeedbackHandle } from "./CaptureFeedback";
 import { loadInkToolPrefs, saveInkToolPrefs } from "../util/inkToolPrefs";
 import { useRepeatPress } from "../util/useRepeatPress";
 import {
@@ -449,8 +464,20 @@ function loadImageSize(dataURL: string): Promise<{ width: number; height: number
 const ZOOM_MIN = 0.15;
 const ZOOM_MAX = 1.75;
 const ZOOM_STEP = 1.15;
+/** Button zoom animation — retargets smoothly on repeat / hold. */
+const ZOOM_ANIM_MS = 220;
+/** Hand-tool pan inertia — exponential friction per ms (same feel as NumberWheel). */
+const PAN_FRICTION = 0.0038;
+/** Minimum scroll speed (scene units/ms) to coast after a flick. */
+const PAN_FLICK_MIN = 0.06;
+/** Stop coasting below this scroll speed. */
+const PAN_REST_SPEED = 0.00025;
 /** Matches Excalidraw's internal wheel-zoom step (not our button ZOOM_STEP). */
 const WHEEL_ZOOM_STEP = 0.1;
+
+function zoomEaseOut(t: number): number {
+  return 1 - (1 - t) * (1 - t);
+}
 
 function clampZoom(value: number, min = ZOOM_MIN): number {
   return Math.min(ZOOM_MAX, Math.max(min, value));
@@ -467,10 +494,15 @@ function safeCssPx(name: "--lc-safe-top" | "--lc-safe-bottom" | "--lc-safe-left"
 /**
  * Viewport chrome around the fitted template page.
  *
- * Everything the board draws over the canvas now sits in one bottom row, so the
- * top of the page is free and only the bottom needs clearing.
+ * Bottom tray / toolbar overlay the canvas — they do not shrink the board
+ * element. The template page frame includes the toolbar strip; chrome draws on
+ * top. Eye-hide only conceals menu items (toolbar height stays reserved in the
+ * overlay), so fit insets stay small either way.
  */
-function mobilePageInsets(toolbarH: number): {
+function mobilePageInsets(
+  _toolbarH: number,
+  _chromeHidden: boolean,
+): {
   top: number;
   left: number;
   right: number;
@@ -480,12 +512,16 @@ function mobilePageInsets(toolbarH: number): {
     top: 6,
     left: 2,
     right: 2,
-    bottom: Math.max(44, Math.round(toolbarH) + 16),
+    // Template includes the bottom chrome strip; toolbar floats over it.
+    bottom: 12,
   };
 }
 
-/** Desktop page fit — full width above the floating toolbar. */
-function desktopPageInsets(toolbarH: number, chromeHidden: boolean): {
+/** Desktop page fit — full board including the toolbar overlay zone. */
+function desktopPageInsets(
+  _toolbarH: number,
+  _chromeHidden: boolean,
+): {
   top: number;
   left: number;
   right: number;
@@ -495,14 +531,13 @@ function desktopPageInsets(toolbarH: number, chromeHidden: boolean): {
     top: 8,
     left: 4,
     right: 4,
-    bottom: chromeHidden ? 12 : Math.max(52, Math.round(toolbarH) + 20),
+    bottom: 12,
   };
 }
 
 /**
- * Measure the live chrome hole so the dashed frame can run to the top of the
- * board and stop above the floating controls (they overlay the page; the coach
- * does not shrink it).
+ * Measure the live chrome hole. Template includes the toolbar overlay area —
+ * stop just above the very bottom edge, not above the floating controls.
  */
 function measureChromeInsets(
   boardEl: HTMLElement | null,
@@ -511,24 +546,16 @@ function measureChromeInsets(
   mobile: boolean,
 ): { top: number; left: number; right: number; bottom: number } {
   const fallback = mobile
-    ? mobilePageInsets(toolbarH)
+    ? mobilePageInsets(toolbarH, chromeHidden)
     : desktopPageInsets(toolbarH, chromeHidden);
   if (!boardEl) return fallback;
   const board = boardEl.getBoundingClientRect();
   if (board.width < 8 || board.height < 8) return fallback;
-
-  const chrome = boardEl.querySelector(".lc-map-controls") as HTMLElement | null;
-  const chromeRect = chrome?.getBoundingClientRect();
-  const bottom =
-    chromeRect && chromeRect.height > 4
-      ? Math.max(8, Math.round(board.bottom - chromeRect.top + 6))
-      : fallback.bottom;
-
   return {
     top: fallback.top,
     left: fallback.left,
     right: fallback.right,
-    bottom,
+    bottom: fallback.bottom,
   };
 }
 
@@ -744,6 +771,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   mobileRef.current = mobile;
   const [activeTool, setActiveTool] = useState<ToolName>("hand");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
   /** Plain prose vs monospace “code note” for the Text tool. */
   const [textMode, setTextMode] = useState<"plain" | "code">("plain");
   const textModeRef = useRef(textMode);
@@ -752,10 +781,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkColor, setInkColor] = useState(() =>
     resolveInkColor(themeId, inkPrefsRef.current.inkColor),
   );
+  const inkColorRef = useRef(inkColor);
+  inkColorRef.current = inkColor;
   const [penStrokeWidth, setPenStrokeWidth] = useState(() => inkPrefsRef.current.penWidth);
   const [eraserStrokeWidth, setEraserStrokeWidth] = useState(() => inkPrefsRef.current.eraserWidth);
+  const [inkFullness, setInkFullnessState] = useState(() => inkPrefsRef.current.inkFullness);
   const strokeWidth = activeTool === "eraser" ? eraserStrokeWidth : penStrokeWidth;
   const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
+  const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
+  const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
   const [stampTrash, setStampTrash] = useState<{
     left: number;
     top: number;
@@ -793,6 +827,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     () => inkPrefsRef.current.pressureSensitive,
   );
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
+  const textPlaceGhostRef = useRef<TextPlaceGhostHandle | null>(null);
+  const captureFeedbackRef = useRef<CaptureFeedbackHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [captureMenuOpen, setCaptureMenuOpen] = useState(false);
@@ -821,6 +857,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const pageBoundsRef = useRef<SceneBounds | null>(null);
   /** Student changed zoom/pan — skip auto camera reset on resize refits. */
   const userAdjustedCameraRef = useRef(false);
+  const zoomAnimRef = useRef<{
+    from: number;
+    to: number;
+    start: number;
+    rafId: number | null;
+  } | null>(null);
   /** True while fitCamera is applying zoom/scroll (not user input). */
   const fittingCameraRef = useRef(false);
   /** Measured toolbar height so fitView lands the template under it. */
@@ -834,6 +876,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const toolbarHeightRef = useRef(36);
   const clampingScrollRef = useRef(false);
+  /** Hand-tool pan: track velocity from scroll deltas for flick inertia. */
+  const handPanningRef = useRef(false);
+  const panVelocityRef = useRef({ x: 0, y: 0 });
+  const lastPanScrollRef = useRef({ x: 0, y: 0, t: 0 });
+  const inertiaFrameRef = useRef(0);
+  const slotReportFrameRef = useRef(0);
   const [readingSizeLocal, setReadingSizeLocal] = useState<BoardReadingSize>(() => loadBoardReadingSize());
   const readingSize = readingSizeProp ?? readingSizeLocal;
   const readingSizeRef = useRef(readingSize);
@@ -866,14 +914,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** Read by the pointer listeners, which must not re-bind on every tool change. */
   const activeToolRef = useRef<ToolName>(activeTool);
   activeToolRef.current = activeTool;
-  /** True while a text tap is being replayed, so it isn't intercepted again. */
-  const replayingTextTapRef = useRef(false);
-  /** Where a press landed while an empty text box was open, pending its replay. */
-  const pendingTextTapRef = useRef<{
-    clientX: number;
-    clientY: number;
-    pointerType: string;
-  } | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -933,95 +973,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.removeEventListener("keydown", guard, true);
       window.removeEventListener("keypress", guard, true);
       window.removeEventListener("keyup", guard, true);
-    };
-  }, [interactive]);
-
-  /**
-   * Placing the next text box in one tap.
-   *
-   * Excalidraw refuses to create a text element while another is being edited —
-   * `handleTextOnPointerDown` returns early with "clicking outside should only
-   * finalize it, not create another". With a locked text tool that costs two
-   * taps for every box after the first: one to throw the empty box away, one to
-   * place the new one. On a tablet that reads as the tool not working.
-   *
-   * So the press is intercepted while an *empty* box is open: commit it, then
-   * replay the same press at the same point once Excalidraw has cleared its
-   * editing state. A box with text in it is left alone — that gesture already
-   * commits and hands back to the hand tool, which is what it should do.
-   */
-  useEffect(() => {
-    if (!interactive) return;
-    const root = boardRef.current;
-    if (!root) return;
-
-    const onPointerDown = (event: PointerEvent) => {
-      pendingTextTapRef.current = null;
-      if (replayingTextTapRef.current) return;
-      if (activeToolRef.current !== "text") return;
-      const editable = document.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
-      if (!editable || event.target === editable) return;
-      if (editable.value.trim().length > 0) return;
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (!target.closest(".excalidraw")) return;
-      if (
-        target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager",
-        )
-      ) {
-        return;
-      }
-
-      // The press itself is left alone — it is what commits (and, being empty,
-      // deletes) the open box. Only the placement Excalidraw refuses to do is
-      // added, once its own gesture has finished.
-      pendingTextTapRef.current = {
-        clientX: event.clientX,
-        clientY: event.clientY,
-        pointerType: event.pointerType || "mouse",
-      };
-    };
-
-    const onPointerUp = () => {
-      const tap = pendingTextTapRef.current;
-      pendingTextTapRef.current = null;
-      if (!tap || activeToolRef.current !== "text") return;
-
-      const replay = () => {
-        replayingTextTapRef.current = false;
-        // Excalidraw commits the empty box on this pointerup; if something kept
-        // it open, replaying would only be refused again.
-        if (document.querySelector("textarea.excalidraw-wysiwyg")) return;
-        const canvas =
-          root.querySelector("canvas.excalidraw__canvas.interactive") ??
-          root.querySelector("canvas.excalidraw__canvas");
-        if (!(canvas instanceof Element)) return;
-        const init: PointerEventInit = {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          clientX: tap.clientX,
-          clientY: tap.clientY,
-          pointerId: 1,
-          pointerType: tap.pointerType,
-          isPrimary: true,
-          button: 0,
-        };
-        canvas.dispatchEvent(new PointerEvent("pointerdown", { ...init, buttons: 1 }));
-        canvas.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
-      };
-
-      replayingTextTapRef.current = true;
-      // Two frames: Excalidraw's submit runs through React state first.
-      window.requestAnimationFrame(() => window.requestAnimationFrame(replay));
-    };
-
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("pointerup", onPointerUp, true);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("pointerup", onPointerUp, true);
     };
   }, [interactive]);
 
@@ -1353,18 +1304,70 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     setLinedSlot(next);
   }, []);
 
+  const scheduleSlotReports = useCallback(() => {
+    if (slotReportFrameRef.current) return;
+    slotReportFrameRef.current = requestAnimationFrame(() => {
+      slotReportFrameRef.current = 0;
+      reportCodeSlot();
+      reportLinedSlot();
+      reportTitleSlot();
+    });
+  }, [reportCodeSlot, reportLinedSlot, reportTitleSlot]);
+
+  const clampPanScroll = useCallback((scrollX: number, scrollY: number, zoom: number) => {
+    if (!mobileRef.current || mobileRegionRef.current == null) {
+      return { scrollX, scrollY };
+    }
+    const bounds = pageBoundsRef.current;
+    const api = apiRef.current;
+    if (!bounds || !api) return { scrollX, scrollY };
+    const state = api.getAppState() as { width?: number; height?: number };
+    if (typeof state.width !== "number" || typeof state.height !== "number") {
+      return { scrollX, scrollY };
+    }
+    const inset = measureChromeInsets(
+      boardRef.current,
+      toolbarHeightRef.current,
+      mapChromeHiddenRef.current,
+      mobileRef.current,
+    );
+    return clampScrollToBounds(
+      scrollX,
+      scrollY,
+      zoom,
+      state.width,
+      state.height,
+      bounds,
+      inset,
+    );
+  }, []);
+
+  const stopPanInertia = useCallback(() => {
+    if (inertiaFrameRef.current) {
+      cancelAnimationFrame(inertiaFrameRef.current);
+      inertiaFrameRef.current = 0;
+    }
+  }, []);
+
   const persistInkPrefs = useCallback(
-    (patch: Partial<{ penWidth: number; eraserWidth: number; pressureSensitive: boolean; inkColor: string }>) => {
+    (patch: Partial<{
+      penWidth: number;
+      eraserWidth: number;
+      inkFullness: number;
+      pressureSensitive: boolean;
+      inkColor: string;
+    }>) => {
       const next = {
         penWidth: patch.penWidth ?? penStrokeWidth,
         eraserWidth: patch.eraserWidth ?? eraserStrokeWidth,
+        inkFullness: patch.inkFullness ?? inkFullness,
         pressureSensitive: patch.pressureSensitive ?? pressureSensitive,
         inkColor: patch.inkColor ?? inkColor,
       };
       inkPrefsRef.current = next;
       saveInkToolPrefs(next);
     },
-    [penStrokeWidth, eraserStrokeWidth, pressureSensitive, inkColor],
+    [penStrokeWidth, eraserStrokeWidth, inkFullness, pressureSensitive, inkColor],
   );
 
   const setStrokeWidth = useCallback((width: number) => {
@@ -1389,6 +1392,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [persistInkPrefs],
   );
 
+  const setInkFullness = useCallback(
+    (fullness: number) => {
+      setInkFullnessState(fullness);
+      persistInkPrefs({ inkFullness: fullness });
+    },
+    [persistInkPrefs],
+  );
+
   const applyTextModeToAppState = useCallback((mode: "plain" | "code") => {
     apiRef.current?.updateScene({
       appState: {
@@ -1406,10 +1417,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcEraser", locked: false });
       apiRef.current?.setCursor?.(eraserCanvasCursorCss());
     } else if (tool === "text") {
-      // Locked keeps Excalidraw on the text tool after a click — otherwise it
-      // flips to selection and the crosshair dies before you can place again.
-      // Do not resetCursor here: setActiveTool already sets the text crosshair.
-      apiRef.current?.setActiveTool({ type: "text", locked: true });
+      // Excalidraw stays on `selection` while our Text tool is up. Its own text
+      // tool cannot place a second box without a spare tap, and its
+      // double-click — the only way to open the editor on a box we placed —
+      // refuses to run under any other tool. The placement effect owns the
+      // gesture; upstream only ever sees the hand-off.
+      const zoom =
+        (apiRef.current?.getAppState() as { zoom?: { value?: number } } | undefined)?.zoom
+          ?.value ?? 1;
+      const size = Math.min(
+        TEXT_FONT_MAX,
+        Math.max(TEXT_FONT_MIN, Math.round(DEFAULT_FONT_SIZE / Math.max(zoom, 0.35))),
+      );
+      setFontSizeState(size);
+      apiRef.current?.updateScene({
+        appState: {
+          currentItemFontSize: size,
+          currentItemAutoResize: true,
+        },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+      apiRef.current?.setActiveTool({ type: "selection" });
+      apiRef.current?.setCursor?.("text");
       applyTextModeToAppState(textModeRef.current);
     } else {
       apiRef.current?.setActiveTool({ type: tool, locked: false });
@@ -1418,6 +1447,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // The brush node unmounts with the tool; hiding it here keeps a stale ring
     // off the canvas for the frame between the click and the unmount.
     if (tool !== "eraser") eraserBrushRef.current?.setVisible(false);
+    if (tool !== "text") textPlaceGhostRef.current?.setVisible(false);
 
     // Leaving the text tool: drop empty placeholders left from click-around.
     if (tool !== "text" && activeTool === "text") {
@@ -1493,6 +1523,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => window.removeEventListener("lc-ink-handedness", onHand);
   }, []);
 
+  useEffect(() => {
+    const onClip = () => setPressureClip(loadInkPressureClip());
+    window.addEventListener("lc-ink-pressure-clip", onClip);
+    return () => window.removeEventListener("lc-ink-pressure-clip", onClip);
+  }, []);
+
+  useEffect(() => {
+    const onSmoothing = () => setInkSmoothing(loadInkSmoothing());
+    window.addEventListener("lc-ink-smoothing", onSmoothing);
+    return () => window.removeEventListener("lc-ink-smoothing", onSmoothing);
+  }, []);
+
   const deleteSelectedStamps = useCallback(() => {
     const api = apiRef.current;
     if (!api || !stampTrash) return;
@@ -1555,6 +1597,125 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       height: state.height,
     };
   }, []);
+
+  useEffect(() => {
+    if (!interactive) return;
+    const root = boardRef.current;
+    if (!root) return;
+
+    const isHandPanTarget = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) return false;
+      if (
+        target.closest(
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
+        )
+      ) {
+        return false;
+      }
+      return target.closest(".excalidraw") != null;
+    };
+
+    const startPanInertia = (velocityX: number, velocityY: number) => {
+      const api = apiRef.current;
+      if (!api) return;
+      stopPanInertia();
+      let velX = velocityX;
+      let velY = velocityY;
+      let last = performance.now();
+      const state = api.getAppState() as {
+        scrollX?: number;
+        scrollY?: number;
+        zoom?: { value?: number };
+      };
+      let scrollX = state.scrollX ?? 0;
+      let scrollY = state.scrollY ?? 0;
+      const zoom = state.zoom?.value ?? 1;
+
+      const step = (now: number) => {
+        const dt = Math.min(34, Math.max(1, now - last));
+        last = now;
+        scrollX += velX * dt;
+        scrollY += velY * dt;
+        const clamped = clampPanScroll(scrollX, scrollY, zoom);
+        scrollX = clamped.scrollX;
+        scrollY = clamped.scrollY;
+        velX *= Math.exp(-PAN_FRICTION * dt);
+        velY *= Math.exp(-PAN_FRICTION * dt);
+        if (Math.abs(velX) < PAN_REST_SPEED && Math.abs(velY) < PAN_REST_SPEED) {
+          inertiaFrameRef.current = 0;
+          api.updateScene({
+            appState: { scrollX, scrollY },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+          rasterInkRef.current?.commitCamera();
+          scheduleSlotReports();
+          return;
+        }
+        api.updateScene({
+          appState: { scrollX, scrollY },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        rasterInkRef.current?.syncCamera();
+        scheduleSlotReports();
+        inertiaFrameRef.current = requestAnimationFrame(step);
+      };
+      inertiaFrameRef.current = requestAnimationFrame(step);
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (activeToolRef.current !== "hand") return;
+      if (event.button !== 0) return;
+      if (!isHandPanTarget(event.target)) return;
+      stopPanInertia();
+      handPanningRef.current = true;
+      panVelocityRef.current = { x: 0, y: 0 };
+      const api = apiRef.current;
+      const now = performance.now();
+      if (api) {
+        const state = api.getAppState() as { scrollX?: number; scrollY?: number };
+        lastPanScrollRef.current = {
+          x: state.scrollX ?? 0,
+          y: state.scrollY ?? 0,
+          t: now,
+        };
+      } else {
+        lastPanScrollRef.current = { x: 0, y: 0, t: now };
+      }
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (!handPanningRef.current) return;
+      handPanningRef.current = false;
+      if (activeToolRef.current !== "hand") return;
+      if (!isHandPanTarget(event.target)) {
+        rasterInkRef.current?.commitCamera();
+        return;
+      }
+      const vel = panVelocityRef.current;
+      const speed = Math.hypot(vel.x, vel.y);
+      if (speed >= PAN_FLICK_MIN) {
+        startPanInertia(vel.x, vel.y);
+        return;
+      }
+      rasterInkRef.current?.commitCamera();
+    };
+
+    root.addEventListener("pointerdown", onPointerDown, true);
+    root.addEventListener("pointerup", onPointerUp, true);
+    root.addEventListener("pointercancel", onPointerUp, true);
+    return () => {
+      root.removeEventListener("pointerdown", onPointerDown, true);
+      root.removeEventListener("pointerup", onPointerUp, true);
+      root.removeEventListener("pointercancel", onPointerUp, true);
+      stopPanInertia();
+    };
+  }, [clampPanScroll, interactive, scheduleSlotReports, stopPanInertia]);
+
+  useEffect(() => {
+    stopPanInertia();
+    handPanningRef.current = false;
+    rasterInkRef.current?.commitCamera();
+  }, [activeTool, stopPanInertia]);
 
   const inkToolActive = activeTool === "freedraw" || activeTool === "eraser";
 
@@ -1667,73 +1828,395 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [],
   );
 
-  const setFontSize = useCallback((size: number) => {
-    setFontSizeState(size);
-    const api = apiRef.current;
-    if (!api) return;
-    const appState = api.getAppState() as {
-      selectedElementIds?: Record<string, boolean>;
-      editingTextElement?: { id?: string; fontFamily?: number; lineHeight?: number } | null;
+  /**
+   * Text placement — our gesture, Excalidraw's editor.
+   *
+   * Two upstream rules fight a locked text tool on a tablet.
+   * `handleTextOnPointerDown` returns early while `editingTextElement` is set,
+   * so every box after the first costs two taps: one to commit, one to place.
+   * And `handleCanvasDoubleClick` — the one entry point that will open the
+   * wysiwyg on an element we placed ourselves — bails unless the active tool is
+   * `selection`. Dispatching a double-click while Excalidraw sat on the text
+   * tool was therefore a no-op: the box appeared, the editor never did, and the
+   * soft keyboard never came up.
+   *
+   * So Excalidraw stays on `selection` for as long as our Text tool is up, we
+   * own the pointer gesture, insert the element, select it, then hand over with
+   * a double-click inside it. Upstream sees a selected text element, treats it
+   * as existing, and opens and focuses its textarea. That focus lands inside
+   * the pointerup's user-activation window, which is what makes Android raise
+   * the keyboard.
+   *
+   * Nothing here replays pointer events. The previous attempt did, and
+   * `handleCanvasPointerDown` calls `setPointerCapture` with the id it is
+   * given — a synthetic id belongs to no active pointer, so it threw and took
+   * the placement down with it. That is why replay worked on a mouse and never
+   * on a tablet.
+   */
+  useEffect(() => {
+    if (!interactive) return;
+    const root = boardRef.current;
+    if (!root) return;
+
+    type Drag = {
+      origin: { x: number; y: number };
+      current: { x: number; y: number };
+      pointerId: number;
     };
-    const selected = new Set(
-      Object.entries(appState.selectedElementIds ?? {})
-        .filter(([, on]) => on)
-        .map(([id]) => id),
-    );
-    const editingId = appState.editingTextElement?.id ?? editingTextIdRef.current;
-    if (editingId) selected.add(editingId);
+    let drag: Drag | null = null;
+    let frame = 0;
+    /** rAF id of an in-flight hand-off, so a fast second tap cancels the first. */
+    let handoff = 0;
 
-    const current = api.getSceneElements() as Array<{
-      id: string;
-      type: string;
-      fontSize?: number;
-      fontFamily?: number;
-      lineHeight?: number;
-      version?: number;
-      versionNonce?: number;
-      [key: string]: unknown;
-    }>;
-    let changed = false;
-    let edited: (typeof current)[number] | null = null;
-    const next = current.map((el) => {
-      if (el.type !== "text" || !selected.has(el.id) || el.fontSize === size) return el;
-      changed = true;
-      const updated = {
-        ...el,
-        fontSize: size,
-        version: (el.version ?? 0) + 1,
-        versionNonce: Math.floor(Math.random() * 2 ** 31),
+    const readViewport = (): TextPlaceViewport => {
+      const state = apiRef.current?.getAppState() as
+        | {
+            zoom?: { value?: number };
+            scrollX?: number;
+            scrollY?: number;
+            offsetLeft?: number;
+            offsetTop?: number;
+          }
+        | undefined;
+      return {
+        zoom: state?.zoom?.value ?? 1,
+        scrollX: state?.scrollX ?? 0,
+        scrollY: state?.scrollY ?? 0,
+        offsetLeft: state?.offsetLeft ?? 0,
+        offsetTop: state?.offsetTop ?? 0,
       };
-      if (el.id === editingId) edited = updated;
-      return updated;
-    });
+    };
 
-    api.updateScene({
-      appState: { currentItemFontSize: size },
-      ...(changed ? { elements: next } : {}),
-      captureUpdate: CaptureUpdateAction.NEVER,
-    });
+    const boardPoint = (clientX: number, clientY: number) => {
+      const boardRect = root.getBoundingClientRect();
+      return { x: clientX - boardRect.left, y: clientY - boardRect.top };
+    };
 
-    // Live wysiwyg keeps its own <textarea> styles — push the size there too so
-    // the caret stays put and the glyphs resize while still typing.
-    if (editingId) {
-      const editable = document.querySelector<HTMLTextAreaElement>(
-        "textarea.excalidraw-wysiwyg",
-      );
-      if (editable) {
-        const source =
-          edited ??
-          next.find((el) => el.id === editingId) ??
-          appState.editingTextElement;
-        editable.style.fontSize = `${size}px`;
-        if (source?.lineHeight) {
-          editable.style.lineHeight = String(source.lineHeight);
+    const openEditable = () =>
+      document.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
+
+    const interactiveCanvas = () =>
+      root.querySelector("canvas.excalidraw__canvas.interactive") ??
+      root.querySelector("canvas.excalidraw__canvas");
+
+    const paintGhost = (d: Drag) => {
+      const ghost = textPlaceGhostRef.current;
+      if (!ghost) return;
+      const a = boardPoint(d.origin.x, d.origin.y);
+      const b = boardPoint(d.current.x, d.current.y);
+      const viewport = readViewport();
+      const min = minTextBox(fontSizeRef.current, viewport.zoom);
+      const dragged =
+        Math.abs(d.current.x - d.origin.x) > TEXT_TAP_SLOP_PX ||
+        Math.abs(d.current.y - d.origin.y) > TEXT_TAP_SLOP_PX;
+      if (dragged) {
+        ghost.setSize(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+        ghost.move(Math.min(a.x, b.x), Math.min(a.y, b.y));
+      } else {
+        // Preview the box a release would actually drop, not a dot.
+        ghost.setSize(min.width * viewport.zoom, min.height * viewport.zoom);
+        ghost.move(a.x, a.y);
+      }
+      ghost.setVisible(true);
+    };
+
+    const hideGhost = () => {
+      textPlaceGhostRef.current?.setVisible(false);
+    };
+
+    /**
+     * Drop the student's blank text boxes.
+     *
+     * Placing leaves an empty element behind whenever the editor is dismissed
+     * without typing, and they are invisible but selectable. Template text is
+     * tagged and never touched.
+     */
+    const cullEmptyStudentText = () => {
+      const api = apiRef.current;
+      if (!api) return;
+      const current = api.getSceneElements() as Array<{
+        id: string;
+        type: string;
+        text?: string;
+        originalText?: string;
+        isDeleted?: boolean;
+        customData?: { lcRegion?: string; lcVizId?: string } | null;
+        [key: string]: unknown;
+      }>;
+      let changed = false;
+      const next = current.map((el) => {
+        if (el.isDeleted || el.type !== "text") return el;
+        if (el.customData?.lcRegion || el.customData?.lcVizId) return el;
+        if ((el.originalText ?? el.text ?? "").trim().length > 0) return el;
+        changed = true;
+        return { ...el, isDeleted: true };
+      });
+      if (!changed) return;
+      api.updateScene({
+        elements: next,
+        appState: { selectedElementIds: {} },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    };
+
+    /** Run `task` once the open editor has committed itself, or give up. */
+    const afterEditorCloses = (task: () => void, framesLeft = 24) => {
+      if (!openEditable()) {
+        task();
+        return;
+      }
+      if (framesLeft <= 0) {
+        // The editor is wedged open. Blurring is the last thing that reliably
+        // commits it; placing on top of it would only be refused.
+        openEditable()?.blur();
+        handoff = requestAnimationFrame(() => {
+          handoff = 0;
+          task();
+        });
+        return;
+      }
+      handoff = requestAnimationFrame(() => {
+        handoff = 0;
+        afterEditorCloses(task, framesLeft - 1);
+      });
+    };
+
+    const placeText = (d: Drag) => {
+      const api = apiRef.current;
+      if (!api) return;
+
+      const viewport = readViewport();
+      const rect = textPlaceRect(d.origin, d.current, viewport, fontSizeRef.current);
+      const fontFamily = textModeRef.current === "code" ? FONT_CODE : FONT_UI;
+      const skeletons: Skeleton[] = [
+        {
+          type: "text",
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          // Empty, not a placeholder character: whatever is here is what the
+          // student has to backspace over before they can type.
+          text: "",
+          fontSize: fontSizeRef.current,
+          fontFamily,
+          lineHeight: defaultLineHeight(fontFamily),
+          strokeColor: inkColorRef.current,
+          textAlign: "left",
+          verticalAlign: "top",
+          autoResize: rect.autoResize,
+          roughness: 0,
+        },
+      ];
+      const created = convert(skeletons) as Array<{ id: string; [key: string]: unknown }>;
+      if (created.length === 0) return;
+      const textEl = created[0];
+
+      const live = api.getSceneElements() as Array<{
+        id: string;
+        isDeleted?: boolean;
+        [key: string]: unknown;
+      }>;
+      api.updateScene({
+        elements: [...live.filter((el) => !el.isDeleted), ...created],
+        appState: {
+          // Selecting it is what makes the hand-off unambiguous: `startTextEditing`
+          // prefers the single selected text element over whatever the pointer
+          // happens to be over, so the double-click cannot bind our note into a
+          // region rectangle underneath it.
+          selectedElementIds: { [textEl.id]: true },
+          selectedGroupIds: {},
+          editingGroupId: null,
+        },
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+
+      // Next frame: the selection has to be in Excalidraw's state before the
+      // double-click reads it back.
+      handoff = requestAnimationFrame(() => {
+        handoff = 0;
+        const canvas = interactiveCanvas();
+        if (!(canvas instanceof Element)) return;
+        const anchor = textEditorAnchor(rect);
+        const at = textClientFromScene(anchor.x, anchor.y, readViewport());
+        canvas.dispatchEvent(
+          new MouseEvent("dblclick", {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            clientX: at.x,
+            clientY: at.y,
+            button: 0,
+            detail: 2,
+          }),
+        );
+        // A tablet keyboard sometimes needs the focus asserted again after
+        // Excalidraw's own deferred focus; harmless when it is already focused.
+        handoff = requestAnimationFrame(() => {
+          handoff = 0;
+          const editable = openEditable();
+          if (editable) {
+            if (document.activeElement !== editable) editable.focus();
+            return;
+          }
+          // Editor refused to open — do not leave an invisible box behind.
+          cullEmptyStudentText();
+        });
+      });
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (activeToolRef.current !== "text") return;
+      if (event.button !== 0 && event.pointerType === "mouse") return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (
+        target.closest(
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
+        )
+      ) {
+        return;
+      }
+      // Presses inside the open editor belong to the editor.
+      if (target.closest("textarea.excalidraw-wysiwyg, .excalidraw-textEditorContainer")) {
+        return;
+      }
+      if (!target.closest(".excalidraw, .lc-board")) return;
+
+      if (handoff) {
+        cancelAnimationFrame(handoff);
+        handoff = 0;
+      }
+
+      /*
+       * `stopPropagation`, never `stopImmediatePropagation` or `preventDefault`.
+       *
+       * Excalidraw's own canvas handlers hang off the React root below us, so
+       * stopping propagation is enough to keep the selection tool out of the
+       * way. The open editor's commit-on-outside-press listener is on `window`
+       * like ours, so `stopImmediatePropagation` would silence it and the box
+       * would never commit. And `preventDefault` on a touch pointerdown is what
+       * costs you the soft keyboard on Android.
+       */
+      event.stopPropagation();
+
+      drag = {
+        origin: { x: event.clientX, y: event.clientY },
+        current: { x: event.clientX, y: event.clientY },
+        pointerId: event.pointerId,
+      };
+      paintGhost(drag);
+      try {
+        root.setPointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (activeToolRef.current !== "text") return;
+
+      if (!drag) {
+        // Hover preview — only meaningful with a mouse or a hovering stylus.
+        if (openEditable()) {
+          hideGhost();
+          return;
         }
-        requestAnimationFrame(() => {
-          editable.focus({ preventScroll: true });
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager")
+        ) {
+          hideGhost();
+          return;
+        }
+        const hitCanvas = interactiveCanvas();
+        if (!(hitCanvas instanceof HTMLCanvasElement)) return;
+        const canvasRect = hitCanvas.getBoundingClientRect();
+        if (
+          event.clientX < canvasRect.left ||
+          event.clientX > canvasRect.right ||
+          event.clientY < canvasRect.top ||
+          event.clientY > canvasRect.bottom
+        ) {
+          hideGhost();
+          return;
+        }
+        const viewport = readViewport();
+        brushZoomRef.current = viewport.zoom;
+        const ghost = textPlaceGhostRef.current;
+        if (!ghost) return;
+        const min = minTextBox(fontSizeRef.current, viewport.zoom);
+        const p = boardPoint(event.clientX, event.clientY);
+        ghost.setSize(min.width * viewport.zoom, min.height * viewport.zoom);
+        ghost.move(p.x, p.y);
+        ghost.setVisible(true);
+        return;
+      }
+
+      if (event.pointerId !== drag.pointerId) return;
+      event.stopPropagation();
+      drag = { ...drag, current: { x: event.clientX, y: event.clientY } };
+      if (!frame) {
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (drag) paintGhost(drag);
         });
       }
-    }
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      const finished: Drag = { ...drag, current: { x: event.clientX, y: event.clientY } };
+      drag = null;
+      event.stopPropagation();
+      try {
+        root.releasePointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      hideGhost();
+      // The open editor commits itself one frame after our pointerdown; placing
+      // before that lands the new box in a scene it is about to rewrite.
+      afterEditorCloses(() => {
+        cullEmptyStudentText();
+        placeText(finished);
+      });
+    };
+
+    const onPointerCancel = (event: PointerEvent) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      drag = null;
+      hideGhost();
+    };
+
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointermove", onPointerMove, true);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerCancel, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointermove", onPointerMove, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerCancel, true);
+      if (frame) cancelAnimationFrame(frame);
+      if (handoff) cancelAnimationFrame(handoff);
+      hideGhost();
+    };
+  }, [convert, interactive]);
+
+  const setFontSize = useCallback((size: number) => {
+    const clamped = Math.min(TEXT_FONT_MAX, Math.max(TEXT_FONT_MIN, Math.round(size)));
+    setFontSizeState(clamped);
+    // Forward-only: size applies to the next typed run / next placed box.
+    // Do not rewrite the editing element or live wysiwyg — that used to resize
+    // the whole box mid-type (Paint keeps prior glyphs at their own size).
+    // Excalidraw still stores one fontSize per text element, so mixed sizes in
+    // one box need separate placements until a rich-text editor exists.
+    apiRef.current?.updateScene({
+      appState: { currentItemFontSize: clamped },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
   }, []);
 
   const setInk = useCallback((color: string) => {
@@ -1769,13 +2252,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return state?.zoom?.value ?? 1;
   }, []);
 
-  const setZoom = useCallback(
-    (next: number) => {
+  const getZoomFloor = useCallback(
+    () =>
+      mobile && mobileRegionRef.current != null && fitZoomMinRef.current != null
+        ? fitZoomMinRef.current
+        : ZOOM_MIN,
+    [mobile],
+  );
+
+  const getBoardCenter = useCallback((): { x: number; y: number } => {
+    const rect = boardRef.current?.getBoundingClientRect();
+    if (rect && rect.width > 0 && rect.height > 0) {
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+    return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+  }, []);
+
+  const applyZoomAtViewport = useCallback(
+    (next: number, viewportX: number, viewportY: number) => {
       userAdjustedCameraRef.current = true;
-      const floor =
-        mobile && mobileRegionRef.current != null && fitZoomMinRef.current != null
-          ? fitZoomMinRef.current
-          : ZOOM_MIN;
+      const floor = getZoomFloor();
       const clamped = clampZoom(next, floor);
       const api = apiRef.current;
       if (!api) return;
@@ -1784,10 +2280,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         scrollY?: number;
         width?: number;
         height?: number;
+        offsetLeft?: number;
+        offsetTop?: number;
+        zoom?: { value?: number };
       };
+      let appState = getStateForZoom(
+        { viewportX, viewportY, nextZoom: clamped },
+        state,
+      );
       const bounds = pageBoundsRef.current;
-      let appState: Record<string, unknown> = { zoom: { value: clamped } };
-      // Tablet page lock only — desktop (coach on the right) stays free to pan.
       if (
         mobile &&
         mobileRegionRef.current != null &&
@@ -1802,8 +2303,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           mobile,
         );
         const clampedScroll = clampScrollToBounds(
-          state.scrollX ?? 0,
-          state.scrollY ?? 0,
+          appState.scrollX,
+          appState.scrollY,
           clamped,
           state.width,
           state.height,
@@ -1819,11 +2320,70 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       setZoomPct(Math.round(clamped * 100));
       requestAnimationFrame(reportCodeSlot);
     },
-    [mobile, reportCodeSlot],
+    [getZoomFloor, mobile, reportCodeSlot],
   );
 
-  const zoomIn = useCallback(() => setZoom(readZoom() * ZOOM_STEP), [readZoom, setZoom]);
-  const zoomOut = useCallback(() => setZoom(readZoom() / ZOOM_STEP), [readZoom, setZoom]);
+  const interpolateZoomAnim = useCallback((): number | null => {
+    const anim = zoomAnimRef.current;
+    if (!anim) return null;
+    const t = Math.min(1, (performance.now() - anim.start) / ZOOM_ANIM_MS);
+    return anim.from + (anim.to - anim.from) * zoomEaseOut(t);
+  }, []);
+
+  const runZoomAnimFrame = useCallback(() => {
+    const anim = zoomAnimRef.current;
+    if (!anim) return;
+    const t = Math.min(1, (performance.now() - anim.start) / ZOOM_ANIM_MS);
+    const z = anim.from + (anim.to - anim.from) * zoomEaseOut(t);
+    const { x, y } = getBoardCenter();
+    applyZoomAtViewport(z, x, y);
+    if (t < 1) {
+      anim.rafId = requestAnimationFrame(runZoomAnimFrame);
+    } else {
+      applyZoomAtViewport(anim.to, x, y);
+      zoomAnimRef.current = null;
+    }
+  }, [applyZoomAtViewport, getBoardCenter]);
+
+  const retargetZoomBy = useCallback(
+    (direction: 1 | -1) => {
+      const floor = getZoomFloor();
+      const anim = zoomAnimRef.current;
+      const currentDest = anim?.to ?? readZoom();
+      const factor = direction === 1 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      const newTo = clampZoom(currentDest * factor, floor);
+      if (Math.abs(newTo - currentDest) < 1e-6) return;
+
+      let from: number;
+      if (anim) {
+        from = interpolateZoomAnim() ?? readZoom();
+        if (anim.rafId != null) cancelAnimationFrame(anim.rafId);
+      } else {
+        from = readZoom();
+      }
+      if (Math.abs(newTo - from) < 1e-6) return;
+
+      zoomAnimRef.current = {
+        from,
+        to: newTo,
+        start: performance.now(),
+        rafId: null,
+      };
+      runZoomAnimFrame();
+    },
+    [getZoomFloor, interpolateZoomAnim, readZoom, runZoomAnimFrame],
+  );
+
+  const zoomIn = useCallback(() => retargetZoomBy(1), [retargetZoomBy]);
+  const zoomOut = useCallback(() => retargetZoomBy(-1), [retargetZoomBy]);
+
+  useEffect(
+    () => () => {
+      const anim = zoomAnimRef.current;
+      if (anim?.rafId != null) cancelAnimationFrame(anim.rafId);
+    },
+    [],
+  );
 
   // Excalidraw pans on wheel by default (Ctrl/Cmd+wheel zooms). Prefer scroll =
   // zoom toward the cursor; hand-tool drag stays the way to pan. Shift+wheel
@@ -2435,12 +2995,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [insertImageFromDataURL],
   );
 
-  const maybeAutoSaveCapture = useCallback(async (blob: Blob) => {
-    if (!loadAutoSaveCaptures()) return;
+  /**
+   * Save the PNG and say what happened.
+   *
+   * Every capture reports now, whether or not a file was written: "Added to the
+   * board" is still an outcome, and it is the one the student sees when
+   * auto-save is off. Silence used to be the only feedback either way.
+   */
+  const reportCapture = useCallback(async (blob: Blob) => {
+    if (!loadAutoSaveCaptures()) {
+      captureFeedbackRef.current?.toast("Added to the board");
+      return;
+    }
     try {
-      await saveCaptureToDevice(blob);
-    } catch {
-      /* best-effort — board image still placed */
+      const result = await saveCaptureToDevice(blob);
+      captureFeedbackRef.current?.toast(
+        describeCaptureResult(result),
+        result.outcome === "failed" ? "error" : "ok",
+      );
+    } catch (cause) {
+      captureFeedbackRef.current?.toast(`Could not save — ${String(cause)}`, "error");
     }
   }, []);
 
@@ -2448,12 +3022,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const api = apiRef.current;
     if (!api) return;
     setCaptureMenuOpen(false);
+    const feedback = captureFeedbackRef.current;
+    // Countdown first, so whatever is mid-thought has a moment to settle and the
+    // shot is not a surprise. Zero seconds shoots straight through.
+    if (feedback && !(await feedback.countdown(loadCaptureCountdown(), "Capturing board"))) {
+      return;
+    }
+    feedback?.flash();
     const blob = await exportBoardBlob(api, rasterInkRef.current?.getOps() ?? []);
-    if (!blob || blob.size === 0) return;
+    if (!blob || blob.size === 0) {
+      feedback?.toast("Nothing to capture", "error");
+      return;
+    }
     const dataURL = await blobToDataURL(blob);
     await insertImageFromDataURL(dataURL, "image/png");
-    await maybeAutoSaveCapture(blob);
-  }, [insertImageFromDataURL, maybeAutoSaveCapture]);
+    await reportCapture(blob);
+  }, [insertImageFromDataURL, reportCapture]);
 
   const beginRegionCapture = useCallback(() => {
     setCaptureMenuOpen(false);
@@ -2489,18 +3073,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const y = Math.min(a.y, b.y);
       const width = Math.abs(b.x - a.x);
       const height = Math.abs(b.y - a.y);
-      if (width < 8 || height < 8) return;
+      if (width < 8 || height < 8) {
+        captureFeedbackRef.current?.toast("Region too small to capture", "error");
+        return;
+      }
+      const feedback = captureFeedbackRef.current;
+      // Same ceremony as the full board: the region is already drawn, so the
+      // countdown is the cue that the shot is coming.
+      if (feedback && !(await feedback.countdown(loadCaptureCountdown(), "Capturing region"))) {
+        return;
+      }
+      feedback?.flash();
       const blob = await exportSceneFrameBlob(
         api,
         rasterInkRef.current?.getOps() ?? [],
         { x, y, width, height },
       );
-      if (!blob || blob.size === 0) return;
+      if (!blob || blob.size === 0) {
+        feedback?.toast("Nothing to capture", "error");
+        return;
+      }
       const dataURL = await blobToDataURL(blob);
       await insertImageFromDataURL(dataURL, "image/png", { x, y, width, height });
-      await maybeAutoSaveCapture(blob);
+      await reportCapture(blob);
     },
-    [clientToScene, insertImageFromDataURL, maybeAutoSaveCapture],
+    [clientToScene, insertImageFromDataURL, reportCapture],
   );
 
 
@@ -2535,10 +3132,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       elements: sized as unknown[],
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
-    requestAnimationFrame(() => {
-      scheduleFitView();
-    });
-  }, [convert, scheduleFitView, themeId]);
+    /*
+     * Fit inside the same commit, not on the next frame.
+     *
+     * The seed skeletons are at their authored size, and the fit is what grows
+     * the page frame to the viewport and sets the camera. Deferring it by a
+     * frame let Excalidraw paint the authored layout once at the old camera —
+     * the snap-then-resize everyone sees. `updateScene` writes the elements
+     * synchronously and the camera is a state update, so doing both here lands
+     * them in one paint.
+     */
+    refitToViewport();
+    // Fonts and text metrics settle a beat later; these only nudge.
+    scheduleFitView();
+  }, [convert, refitToViewport, scheduleFitView, themeId]);
 
   const applyRegionLayout = useCallback(() => {
     const api = apiRef.current;
@@ -2730,7 +3337,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       const editingId = appState?.editingTextElement?.id ?? null;
       const prevEditingId = editingTextIdRef.current;
-      const resizing = Boolean(appState?.isResizing || appState?.resizingElement);
       const current = api.getSceneElements() as Array<{
         id: string;
         type: string;
@@ -2766,7 +3372,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             ...el,
             fontFamily: wantFont,
             lineHeight: defaultLineHeight(wantFont),
-            version: (el.version ?? 0) + 1,
+            version: (typeof el.version === "number" ? el.version : 0) + 1,
             versionNonce: Math.floor(Math.random() * 2 ** 31),
           };
         }
@@ -2780,28 +3386,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           return { ...el, isDeleted: true };
         }
 
-        // First place: wrap at a default width once editing ends. Forcing this
-        // mid-edit fights Excalidraw's caret and blocks placing another box.
-        if (el.id !== editingId && el.autoResize !== false) {
-          changed = true;
-          return {
-            ...el,
-            autoResize: false,
-            width: TEXT_WRAP_WIDTH,
-          };
-        }
-
-        if (
-          resizing &&
-          shiftHeldRef.current &&
-          (appState?.resizingElement?.id === el.id ||
-            appState?.selectedElementIds?.[el.id]) &&
-          el.width !== TEXT_WRAP_WIDTH
-        ) {
-          changed = true;
-          return { ...el, width: TEXT_WRAP_WIDTH };
-        }
-
+        // Leave autoResize alone — Paint-like single-tap placement needs it true.
         return el;
       });
 
@@ -2828,19 +3413,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (viaEnter || finishedText.length > 0) {
           setTool("hand");
         } else {
-          // Do NOT re-set the tool here. Clicking away from an empty box *is*
-          // the click that places the next one, and re-entering the text tool
-          // mid-gesture threw away the element Excalidraw had just started —
-          // which is why placing used to cost two clicks. The tool is locked,
-          // so it stays on text by itself; this only recovers the case where
-          // Excalidraw dropped it, checked a frame later when the gesture is
-          // over.
+          // Stay on the Text tool: dismissing an empty box is usually the press
+          // that places the next one. Nothing to re-arm — our own gesture owns
+          // placement and Excalidraw is meant to sit on `selection` throughout.
+          // Only the caret Excalidraw resets on submit has to be put back.
           window.requestAnimationFrame(() => {
-            const state = apiRef.current?.getAppState() as
-              | { activeTool?: { type?: string; locked?: boolean } }
-              | undefined;
-            if (state?.activeTool?.type === "text") return;
-            apiRef.current?.setActiveTool({ type: "text", locked: true });
+            if (activeToolRef.current !== "text") return;
+            apiRef.current?.setCursor?.("text");
           });
         }
       }
@@ -3250,8 +3829,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           // Not the hand-drawn default: typed notes should read like notes.
           currentItemFontFamily: FONT_UI,
           currentItemFontSize: DEFAULT_FONT_SIZE,
-          // Prefer click-to-place text with a wrap width over drag-to-size.
-          currentItemAutoResize: false,
+          // Paint-like: single tap opens the editor (not drag-to-size).
+          currentItemAutoResize: true,
         },
         // We call settleFitView ourselves — Excalidraw's default fits the entire
         // board and lands the problem as a postage stamp in the corner.
@@ -3316,9 +3895,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
               )}
             </div>
-            {!mapChromeHidden && (
-              <div className="lc-board-dock">
-                {bottomCenter}
+            <div className="lc-board-dock">
+              {!mapChromeHidden && bottomCenter}
+              <div className="lc-toolbar-dock-anchor" aria-hidden />
+              {!mapChromeHidden && (
               <BoardToolbar
                 active={activeTool}
                 onPick={setTool}
@@ -3328,6 +3908,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 handedness={inkHandedness}
                 strokeWidth={strokeWidth}
                 onStrokeWidth={setStrokeWidth}
+                inkFullness={inkFullness}
+                onInkFullness={setInkFullness}
                 pressureSensitive={pressureSensitive}
                 onPressureSensitive={setPressureSensitive}
                 fontSize={fontSize}
@@ -3362,16 +3944,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   toolbarHeightRef.current = height;
                 }}
               />
-              </div>
-            )}
+              )}
+            </div>
             <div className="lc-map-chrome-right">
               <div className="lc-map-chrome-row">
                 <button
                   type="button"
                   className={
-                    mapChromeHidden
-                      ? "lc-map-btn lc-chrome-eye is-dimmed"
-                      : "lc-map-btn lc-chrome-eye"
+                    mapChromeHidden ? "lc-chrome-eye is-dimmed" : "lc-chrome-eye"
                   }
                   aria-pressed={!mapChromeHidden}
                   aria-label={mapChromeHidden ? "Show board chrome" : "Hide board chrome"}
@@ -3432,6 +4012,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
         strokeWidth={strokeWidth}
         inkColor={inkColor}
+        inkFullness={inkFullness}
+        pressureClip={pressureClip}
+        smoothing={inkSmoothing}
         pressureSensitive={pressureSensitive}
         getViewport={getViewport}
         clip={inkClip}
@@ -3448,13 +4031,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             apiRef.current.onScrollChange?.((scrollX, scrollY, zoom) => {
               const pct = Math.round(zoom.value * 100);
               setZoomPct((current) => (current === pct ? current : pct));
-              // Full ink rebuild mid-stroke drops coalesced samples and cuts glyphs.
-              if (!rasterInkRef.current?.isDrawing()) {
-                rasterInkRef.current?.repaint();
+              if (
+                activeToolRef.current === "hand" &&
+                handPanningRef.current &&
+                inertiaFrameRef.current === 0
+              ) {
+                const now = performance.now();
+                const last = lastPanScrollRef.current;
+                if (last.t > 0) {
+                  const dt = Math.max(1, now - last.t);
+                  const instantX = (scrollX - last.x) / dt;
+                  const instantY = (scrollY - last.y) / dt;
+                  panVelocityRef.current = {
+                    x: panVelocityRef.current.x * 0.65 + instantX * 0.35,
+                    y: panVelocityRef.current.y * 0.65 + instantY * 0.35,
+                  };
+                }
+                lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
               }
-              reportCodeSlot();
-              reportLinedSlot();
-              reportTitleSlot();
+              // Reblit the ink tiles for the new camera. Fires on zoom as well
+              // as scroll, which is what keeps a smooth zoom smooth.
+              if (!rasterInkRef.current?.isDrawing()) {
+                rasterInkRef.current?.syncCamera();
+              }
+              scheduleSlotReports();
 
               // Tablet only — desktop keeps free pan (coach docks on the right).
               if (!fittingCameraRef.current && !clampingScrollRef.current) {
@@ -3508,6 +4108,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         initialData={initialData}
         UIOptions={UI_OPTIONS}
       />
+      {interactive && activeTool === "text" && <TextPlaceGhost ref={textPlaceGhostRef} />}
       {interactive && stampTrash && (
         <button
           type="button"
@@ -3537,6 +4138,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           </svg>
         </button>
       )}
+      {interactive && <CaptureFeedback ref={captureFeedbackRef} />}
+
       {interactive && captureArmed && (
         <div
           className="lc-capture-overlay"
