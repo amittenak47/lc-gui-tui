@@ -6,6 +6,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — the ink log now says where the delay was
+
+- **`[ink]` stroke lines carry `stale`, `gap` and `frame` alongside `paint`.**
+  The paint latency alone could not tell a stall from a smooth stroke, and it
+  failed in the flattering direction. It is measured against the dispatched
+  `pointermove`'s timestamp, and a dispatched move carries the *newest* sample
+  in its batch — the older ones are in `getCoalescedEvents()`. Block the main
+  thread for a third of a second and the browser does not hand over a third of
+  a second of queued moves; it coalesces them into one move stamped a
+  millisecond before the handler finally runs, and the freeze prints as a 2ms
+  paint. The three new numbers are the ones that can see it: `stale` is the age
+  of the oldest sample in a batch when the batch was handled, which is how far
+  behind the hand the ink really was; `gap` is the longest stretch with no move
+  handled at all, which is the stall itself; `frame` runs from the draw calls
+  returning to the start of the next animation frame, because a canvas draw
+  only queues work, and ink drawn on time but presented late is a compositor
+  problem rather than an input one. The coalesced count was never a delay:
+  those samples ride in on the same event and are stamped in the same
+  synchronous loop, so a higher count means more of the stroke was drawn, not
+  that any of it was drawn later.
+
 ### Fixed — one hand on the page at a time
 
 - **The autosave no longer lands in the middle of a letter.** Board persistence

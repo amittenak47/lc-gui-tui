@@ -826,7 +826,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
          */
         const coalesced = event.getCoalescedEvents?.();
         const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
-        inkMetrics.move(batch.length);
+        // The batch is in report order, so its first entry is the oldest ink in
+        // hand — and the only sample here whose age reflects a stall, since the
+        // dispatched event carries the newest one.
+        inkMetrics.move(batch.length, batch[0]?.timeStamp);
 
         const width = strokeWidthRef.current;
         const pressureSensitive = live.kind === "draw" && live.pressureSensitive;

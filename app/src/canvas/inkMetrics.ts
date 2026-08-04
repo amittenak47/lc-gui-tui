@@ -19,6 +19,31 @@
  * driver reporting well above display Hz will show ~60 moves/s and a much
  * higher sample rate, and the gap between the two is exactly what would be lost
  * without coalesced sampling.
+ *
+ * ## Reading the latency numbers
+ *
+ * `paint` is measured from the *dispatched* event's timestamp, and a dispatched
+ * `pointermove` carries the **newest** sample in its batch — the older ones are
+ * in `getCoalescedEvents()`. That makes it the wrong number to look at alone,
+ * and wrong in the flattering direction: block the main thread for 300ms and
+ * the browser does not queue 300ms of moves, it coalesces them into one move
+ * stamped a millisecond before the handler finally runs. The freeze reads as a
+ * ~2ms paint. So a low `paint max` is not evidence that the ink kept up.
+ *
+ * Three numbers exist to close that hole, and they are the ones to read when
+ * ink appears late:
+ *
+ * - `stale` — age of the *oldest* sample in a batch when the batch was handled.
+ *   This is how far behind the hand the ink actually was. One frame is normal;
+ *   coalescing cannot push it past the stall that produced it.
+ * - `gap` — longest stretch with no move handled at all. Frame time is normal
+ *   (11ms at 90Hz, 17ms at 60); anything near a glyph's duration means the
+ *   thread was gone, whatever `paint` says.
+ * - `frame` — from finishing the draw calls to the start of the next animation
+ *   frame. Canvas draws are queued, not presented, so this is the closest thing
+ *   here to "and then it was on screen". A large `frame` with a small `stale`
+ *   means the ink was drawn on time and shown late, which is a compositor
+ *   problem and not an input one.
  */
 
 export interface InkStrokeMetrics {
@@ -35,6 +60,12 @@ export interface InkStrokeMetrics {
   /** Mean event-timestamp → painted latency, ms. */
   meanLatencyMs: number;
   maxLatencyMs: number;
+  /** Worst age of the oldest sample in a batch when that batch was handled, ms. */
+  maxSampleAgeMs: number;
+  /** Longest stretch with no `pointermove` handled, ms. The first spans pointerdown. */
+  maxGapMs: number;
+  /** Worst draw-calls-returned → next animation frame, ms. */
+  maxFrameMs: number;
 }
 
 interface Totals {
@@ -45,6 +76,9 @@ interface Totals {
   latencySumMs: number;
   latencyCount: number;
   maxLatencyMs: number;
+  maxSampleAgeMs: number;
+  maxGapMs: number;
+  maxFrameMs: number;
   last: InkStrokeMetrics | null;
   /** Pointer-path decisions that produced no stroke, counted by reason. */
   notes: Map<string, number>;
@@ -68,6 +102,9 @@ const totals: Totals = {
   latencySumMs: 0,
   latencyCount: 0,
   maxLatencyMs: 0,
+  maxSampleAgeMs: 0,
+  maxGapMs: 0,
+  maxFrameMs: 0,
   last: null,
   notes: new Map<string, number>(),
 };
@@ -78,6 +115,13 @@ let samples = 0;
 let latencySum = 0;
 let latencyCount = 0;
 let maxLatency = 0;
+let maxSampleAge = 0;
+let maxGap = 0;
+let maxFrame = 0;
+/** When the last move was handled, for {@link maxGap}. Seeded by `begin`. */
+let lastMoveAt = 0;
+/** One frame probe in flight at a time — the rest of the stroke's are the same frame. */
+let framePending = false;
 
 export const inkMetrics = {
   enabled,
@@ -85,11 +129,15 @@ export const inkMetrics = {
   begin(): void {
     if (!enabled) return;
     startedAt = performance.now();
+    lastMoveAt = startedAt;
     moves = 0;
     samples = 0;
     latencySum = 0;
     latencyCount = 0;
     maxLatency = 0;
+    maxSampleAge = 0;
+    maxGap = 0;
+    maxFrame = 0;
   },
 
   /**
@@ -111,18 +159,55 @@ export const inkMetrics = {
     console.info(`[ink] ${reason}`);
   },
 
-  /** One `pointermove` carrying `sampleCount` pointer samples. */
-  move(sampleCount: number): void {
+  /**
+   * One `pointermove` carrying `sampleCount` pointer samples, the oldest of
+   * them stamped `oldestTimeMs`.
+   *
+   * The gap since the previous move is the honest stall detector: a blocked
+   * main thread does not delay the dispatched move's timestamp, it just stops
+   * dispatching, and only the wall clock between handlers can see that.
+   */
+  move(sampleCount: number, oldestTimeMs?: number): void {
     if (!enabled) return;
     moves += 1;
     samples += sampleCount;
+
+    const now = performance.now();
+    const gap = now - lastMoveAt;
+    lastMoveAt = now;
+    if (Number.isFinite(gap) && gap > maxGap) maxGap = gap;
+
+    if (oldestTimeMs === undefined) return;
+    // `event.timeStamp` shares the origin with `performance.now()`.
+    const age = now - oldestTimeMs;
+    if (Number.isFinite(age) && age > maxSampleAge) maxSampleAge = age;
   },
 
-  /** Painted the batch that began with an event stamped `eventTimeMs`. */
+  /**
+   * Finished the draw calls for the batch dispatched as an event stamped
+   * `eventTimeMs`.
+   *
+   * Two clocks stop here. The latency against the event is what the pen paid to
+   * reach the canvas — read it with the caveat at the top of this file, since
+   * the stamp belongs to the newest sample in the batch. The frame probe runs
+   * on from here to the start of the next animation frame, because a 2D draw
+   * call only queues work: without it there is no way to tell ink that was
+   * drawn late from ink that was drawn on time and presented late.
+   */
   painted(eventTimeMs: number): void {
     if (!enabled) return;
-    // `event.timeStamp` shares the origin with `performance.now()`.
-    const latency = performance.now() - eventTimeMs;
+    const paintedAt = performance.now();
+    if (!framePending && typeof requestAnimationFrame === "function") {
+      framePending = true;
+      requestAnimationFrame((frameTimeMs) => {
+        framePending = false;
+        // The rAF argument is the frame's start time, on the same origin.
+        const wait = frameTimeMs - paintedAt;
+        if (Number.isFinite(wait) && wait > maxFrame) maxFrame = wait;
+      });
+    }
+
+    const latency = paintedAt - eventTimeMs;
     if (!Number.isFinite(latency) || latency < 0) return;
     latencySum += latency;
     latencyCount += 1;
@@ -144,6 +229,9 @@ export const inkMetrics = {
       meanLatencyMs:
         latencyCount > 0 ? Math.round((latencySum / latencyCount) * 100) / 100 : 0,
       maxLatencyMs: Math.round(maxLatency * 100) / 100,
+      maxSampleAgeMs: Math.round(maxSampleAge * 100) / 100,
+      maxGapMs: Math.round(maxGap * 100) / 100,
+      maxFrameMs: Math.round(maxFrame * 100) / 100,
     };
 
     totals.strokes += 1;
@@ -153,6 +241,9 @@ export const inkMetrics = {
     totals.latencySumMs += latencySum;
     totals.latencyCount += latencyCount;
     totals.maxLatencyMs = Math.max(totals.maxLatencyMs, maxLatency);
+    totals.maxSampleAgeMs = Math.max(totals.maxSampleAgeMs, maxSampleAge);
+    totals.maxGapMs = Math.max(totals.maxGapMs, maxGap);
+    totals.maxFrameMs = Math.max(totals.maxFrameMs, maxFrame);
     totals.last = metrics;
 
     // Strokes shorter than a flick are noise — the rates are meaningless.
@@ -161,7 +252,9 @@ export const inkMetrics = {
       console.info(
         `[ink] ${metrics.moveHz} moves/s · ${metrics.sampleHz} samples/s ` +
           `(+${metrics.recovered} coalesced) · paint ${metrics.meanLatencyMs}ms mean, ` +
-          `${metrics.maxLatencyMs}ms max · ${metrics.durationMs}ms stroke`,
+          `${metrics.maxLatencyMs}ms max · stale ${metrics.maxSampleAgeMs}ms max · ` +
+          `gap ${metrics.maxGapMs}ms max · frame ${metrics.maxFrameMs}ms max · ` +
+          `${metrics.durationMs}ms stroke`,
       );
     }
     return metrics;
@@ -180,6 +273,9 @@ export const inkMetrics = {
           ? Math.round((totals.latencySumMs / totals.latencyCount) * 100) / 100
           : 0,
       maxLatencyMs: Math.round(totals.maxLatencyMs * 100) / 100,
+      maxSampleAgeMs: Math.round(totals.maxSampleAgeMs * 100) / 100,
+      maxGapMs: Math.round(totals.maxGapMs * 100) / 100,
+      maxFrameMs: Math.round(totals.maxFrameMs * 100) / 100,
       last: totals.last,
       notes: Object.fromEntries(totals.notes),
     };
