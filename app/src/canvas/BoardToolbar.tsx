@@ -200,20 +200,28 @@ export function BoardToolbar({
 
   useEffect(() => clearDragHold, [clearDragHold]);
 
-  // A press anywhere else closes the hand / shape flyouts.
+  // A press anywhere else closes any open flyout. Capture lives in Board's
+  // state rather than ours, but it is the same kind of menu and has to dismiss
+  // the same way — leaving it out is why it used to stay open behind a stroke.
+  const captureMenuOpenRef = useRef(captureMenuOpen);
+  captureMenuOpenRef.current = captureMenuOpen;
+  const onToggleCaptureMenuRef = useRef(onToggleCaptureMenu);
+  onToggleCaptureMenuRef.current = onToggleCaptureMenu;
+
   useEffect(() => {
-    if (!handMenuOpen && !shapeMenuOpen) return;
+    if (!handMenuOpen && !shapeMenuOpen && !captureMenuOpen) return;
+    const closeAll = () => {
+      setHandMenuOpen(false);
+      setShapeMenuOpen(false);
+      if (captureMenuOpenRef.current) onToggleCaptureMenuRef.current();
+    };
     const onDown = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && toolbarRootRef.current?.contains(target)) return;
-      setHandMenuOpen(false);
-      setShapeMenuOpen(false);
+      closeAll();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setHandMenuOpen(false);
-        setShapeMenuOpen(false);
-      }
+      if (event.key === "Escape") closeAll();
     };
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey);
@@ -221,7 +229,7 @@ export function BoardToolbar({
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [handMenuOpen, shapeMenuOpen]);
+  }, [captureMenuOpen, handMenuOpen, shapeMenuOpen]);
 
   // Read through a ref so an inline callback cannot rebuild the observer on
   // every render.
@@ -543,6 +551,10 @@ export function BoardToolbar({
                   key={tool}
                   type="button"
                   role="menuitem"
+                  // The description lives on the tooltip, not in the menu: two
+                  // rows of prose per item made this flyout twice the height of
+                  // the shapes one for two entries anybody can read at a glance.
+                  title={hint}
                   className={tool === active ? "is-active" : undefined}
                   onClick={() => pickTool(tool)}
                 >
@@ -550,7 +562,6 @@ export function BoardToolbar({
                     {glyph}
                   </span>
                   {label}
-                  <span className="lc-muted lc-text-flyout-sub">{hint}</span>
                 </button>
               ))}
             </div>
@@ -645,11 +656,27 @@ export function BoardToolbar({
             </span>
           </button>
           {captureMenuOpen && (
-            <div className="lc-capture-menu" role="menu">
-              <button type="button" role="menuitem" onClick={onCaptureEntire}>
+            <div className="lc-shape-flyout" role="menu" aria-label="Capture">
+              <button
+                type="button"
+                role="menuitem"
+                title="Shoot the whole board and drop the image on it"
+                onClick={onCaptureEntire}
+              >
+                <span className="lc-shape-flyout-glyph" aria-hidden>
+                  ▣
+                </span>
                 Entire board
               </button>
-              <button type="button" role="menuitem" onClick={onCaptureRegion}>
+              <button
+                type="button"
+                role="menuitem"
+                title="Drag a rectangle to shoot part of the board"
+                onClick={onCaptureRegion}
+              >
+                <span className="lc-shape-flyout-glyph" aria-hidden>
+                  ⧉
+                </span>
                 Region…
               </button>
             </div>

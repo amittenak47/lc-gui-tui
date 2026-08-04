@@ -811,41 +811,6 @@ input[type="checkbox"] {
   display: inline-flex;
 }
 
-.lc-capture-menu {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 70;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 140px;
-  padding: 6px;
-  border-radius: 10px;
-  background: var(--panel, #fff);
-  border: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
-  box-shadow: 0 8px 24px color-mix(in srgb, #000 18%, transparent);
-}
-
-.lc-capture-menu button {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  padding: 8px 10px;
-  border-radius: 8px;
-  font: inherit;
-  font-size: 13px;
-  color: var(--ink);
-  cursor: pointer;
-}
-
-.lc-capture-menu button:hover,
-.lc-capture-menu button:focus-visible {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
 .lc-capture-overlay {
   position: absolute;
   inset: 0;
@@ -1816,21 +1781,41 @@ input[type="checkbox"] {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
+/* Same card as the lined-paper toggle it sits beside. It used to also carry
+ * `.lc-map-btn`, whose transparent background and squared corners are declared
+ * further down the file and therefore won.  */
 .lc-chrome-eye {
   width: 36px;
   min-width: 36px;
+  min-height: 28px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  font-size: 15px;
+  line-height: 1;
   border: 1px solid var(--chrome-edge);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
   color: var(--ink);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
+.lc-chrome-eye:hover {
+  background: var(--panel);
+}
+
+.lc-chrome-eye:active {
+  transform: scale(0.97);
+}
+
+/* Hidden chrome is a state, not a disabled control: keep it legible. */
 .lc-chrome-eye.is-dimmed {
-  opacity: 0.45;
+  color: var(--muted);
 }
 
 .lc-map-controls-collapsed {
