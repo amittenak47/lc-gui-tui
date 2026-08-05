@@ -6,6 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — replying to the coach
+
+- **A quoted message is a thread, not a paste.** Quoting used to copy the
+  coach's whole answer into the composer as `>` prose, so replying to a long
+  turn meant scrolling past a copy of it to reach your own cursor — and the copy
+  was all that survived, since the sent message had no idea what it was
+  answering. A reply now holds a reference: the quoted turn shows as a chip
+  above the composer while you write and as a stub inside the bubble once you
+  send, and tapping the stub scrolls back to the original and flashes it. The
+  coach is told what is being replied to as well, so a bare "why?" no longer
+  arrives without a subject. Threads survive a reload.
+
+- **The composer is a paragraph tall.** A question to a coach is usually a few
+  sentences, and the box was sized like a search field.
+
+
 ### Fixed — Discard now discards
 
 - **The scratchpad's Discard button did nothing, and Save could not be

@@ -1930,7 +1930,7 @@ export function App() {
       // Scratchpad has no solution.py, no review pipeline and no board regions
       // to draw into — Ask is the only flag that means anything there.
       const flags: CoachSendFlags = isScratchpad(problem)
-        ? { ask: true, draw: false, reviewBoard: false, lazy: false }
+        ? { ask: true, draw: false, reviewBoard: false, lazy: false, ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}) }
         : requestedFlags;
       const flagBits = [
         flags.ask ? "Ask" : null,
@@ -1957,14 +1957,27 @@ export function App() {
         pushCoachMessage("user", text || "Send", {
           ...(attachments ? { attachments } : {}),
           ...(flagBits.length > 0 ? { flags: flagBits } : {}),
+          ...(flags.replyTo ? { replyTo: flags.replyTo } : {}),
         });
+
+        /*
+         * Say what is being replied to, for the model as well as the reader.
+         *
+         * The thread is a pointer, so without this the coach would get a bare
+         * "why?" with no idea which of its own paragraphs the student meant.
+         * Prefixed onto the prompt rather than stored in the message, so the
+         * bubble stays clean and the quote is not duplicated on screen.
+         */
+        const prompt = flags.replyTo
+          ? `Replying to your earlier message: “${flags.replyTo.excerpt}”\n\n${text}`
+          : text;
 
         // Review runs the staged pipeline. Ask (or bare text without Review)
         // skips it and does a single-turn Q&A.
         if (flags.reviewBoard) {
-          await submitForReview(text, true, attachments, flags.lazy);
+          await submitForReview(prompt, true, attachments, flags.lazy);
         } else if (flags.ask || text) {
-          await askCoach(text || "What should I focus on next?");
+          await askCoach(prompt || "What should I focus on next?");
         }
         if (flags.draw) {
           await askForDiagram(text);
@@ -3710,6 +3723,17 @@ function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
     const flags = Array.isArray(message.flags)
       ? message.flags.filter((flag): flag is string => typeof flag === "string" && flag.length > 0)
       : undefined;
+    // This function rebuilds a turn field by field, so anything not named here
+    // is dropped on reload — a reply thread has to be carried explicitly or it
+    // survives exactly until the page refreshes.
+    const raw = message.replyTo;
+    const replyTo =
+      raw &&
+      typeof raw.id === "string" &&
+      typeof raw.role === "string" &&
+      typeof raw.excerpt === "string"
+        ? { id: raw.id, role: raw.role as CoachChatMessage["role"], excerpt: raw.excerpt }
+        : undefined;
     // Empty assistant shells left after stripping `pending` are noise.
     if (
       message.role === "assistant" &&
@@ -3734,6 +3758,7 @@ function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
         ...(flags && flags.length > 0 ? { flags } : {}),
         ...(processEvents ? { processEvents } : {}),
         ...(drawing ? { drawing } : {}),
+        ...(replyTo ? { replyTo } : {}),
       },
     ];
   });
