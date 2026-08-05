@@ -832,7 +832,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const mobile = useIsMobile();
   const mobileRef = useRef(mobile);
   mobileRef.current = mobile;
-  const [activeTool, setActiveTool] = useState<ToolName>("selection");
+  // Reading mode is the resting state, and reading mode is the hand — a board
+  // that starts on `selection` answers the first finger drag with a rubber band.
+  const [activeTool, setActiveTool] = useState<ToolName>("hand");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
   const fontSizeRef = useRef(fontSize);
   fontSizeRef.current = fontSize;
@@ -1560,27 +1562,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       );
       return;
     }
-    // Leaving hands the board back to something that does not mark it.
-    setActiveToolRef.current("selection");
+    /*
+     * Leaving annotate is entering reading mode, and reading mode is the hand.
+     *
+     * Not `selection`: a finger drag on the selection tool draws a rubber band
+     * instead of scrolling the page, which on a board with no hand button left
+     * is a page you cannot move. The hand tool has no UI any more — it is what
+     * the board sits on whenever nobody is marking it.
+     */
+    setActiveToolRef.current("hand");
   }, [annotateCode]);
 
   const reportLinedSlot = useCallback(() => {
     /*
-     * The code page is not paper.
+     * `linedPaperOn` is the whole gate — see where it is derived.
      *
-     * Ruling it lines up nothing: Monaco sits in that frame with its own line
-     * grid at its own pitch, so the board's rules run behind the editor at a
-     * spacing that agrees with neither the code nor the statement, and the two
-     * grids beat against each other. There is also nothing to write between
-     * them — the page is for typing, not for handwriting.
+     * It is false on the code page and on the statement, and for the same
+     * reason in both: those pages already have a line grid of their own, at
+     * their own pitch, and a second one behind them agrees with neither and
+     * beats against the first.
      */
-    if (mobileRegionRef.current === "code") {
-      if (lastLinedSlotRef.current !== null) {
-        lastLinedSlotRef.current = null;
-        setLinedSlotOn(false);
-      }
-      return;
-    }
     if (!linedPaperOnRef.current) {
       if (lastLinedSlotRef.current !== null) {
         lastLinedSlotRef.current = null;
