@@ -1534,12 +1534,6 @@ export function App() {
     }
   }, [busy, openMdInk]);
 
-  // The document reports its height once it has laid out; the page frame
-  // follows it, so ink can be put anywhere down a long note.
-  useEffect(() => {
-    if (!isMdInk(problem) || mdInkHeight === null) return;
-    boardRef.current?.setMdInkPageHeight(mdInkPageHeight(mdInkHeight));
-  }, [mdInkHeight, problem]);
 
   const addScratchPage = useCallback(() => {
     if (!isScratchpad(problem)) return;
@@ -3475,6 +3469,9 @@ export function App() {
                   disabled={busy !== null || boardPreparing}
                 />
               ) : null
+            }
+            pageContentHeight={
+              problem && isMdInk(problem) ? mdInkPageHeight(mdInkHeight) : null
             }
             pageContent={
               problem && isMdInk(problem) && mdInkSource ? (
