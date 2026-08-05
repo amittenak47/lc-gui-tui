@@ -863,6 +863,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const lastContentSlotRef = useRef<typeof contentSlot>(null);
   const pageContentRef = useRef<ReactNode>(pageContent);
   pageContentRef.current = pageContent;
+  /**
+   * This page is a document: fit its width and scroll the rest.
+   *
+   * The content slot is only ever a document, so its presence is the signal —
+   * there is no second flag to keep in step with it.
+   */
+  const fitWidthOnlyRef = useRef(false);
+  fitWidthOnlyRef.current = Boolean(pageContent);
   const transparentCanvasRef = useRef(transparentCanvas);
   transparentCanvasRef.current = transparentCanvas;
   /** Reading mode: wheel scrolls, drags stay in the column. */
@@ -3064,8 +3072,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
         const boxWidth = Math.max(1, maxX - minX);
         const boxHeight = Math.max(1, maxY - minY);
-        // Exact fill of the chrome hole (both axes).
-        const zoom = clampZoom(Math.min(availWidth / boxWidth, availHeight / boxHeight));
+        /*
+         * A document fits its width. A page fits both.
+         *
+         * Fitting both axes is right for a sheet of paper — the whole thing is
+         * meant to be on screen at once. It is catastrophic for a document,
+         * because the page is as tall as the text: a long note zooms out until
+         * every line of it is visible, which is to say until none of it is
+         * readable, and the taller the file the smaller it gets. Growing the
+         * frame to the content made that worse rather than better.
+         *
+         * Width-only is what a reader does. The column lands at the screen's
+         * width, the type stays the size it was authored at, and the height
+         * that does not fit is the thing you scroll — which the pan clamp then
+         * permits precisely because the content is taller than the viewport.
+         */
+        const zoom = clampZoom(
+          fitWidthOnlyRef.current
+            ? availWidth / boxWidth
+            : Math.min(availWidth / boxWidth, availHeight / boxHeight),
+        );
         fitZoomMinRef.current = zoom;
         // Tablet locks zoom-out at page fit; desktop (coach on the right) stays free.
         setZoomFloorPct(
@@ -3074,7 +3100,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pageBoundsRef.current = { minX, minY, maxX, maxY };
 
         const slackX = Math.max(0, availWidth - boxWidth * zoom);
-        const slackY = isScratchPage ? 0 : Math.max(0, availHeight - boxHeight * zoom);
+        const slackY =
+          isScratchPage || fitWidthOnlyRef.current
+            ? 0
+            : Math.max(0, availHeight - boxHeight * zoom);
         fittingCameraRef.current = true;
         api.updateScene({
           appState: {
