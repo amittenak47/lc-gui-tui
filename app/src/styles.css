@@ -6864,3 +6864,33 @@ button.lc-row-selected:hover:not(:disabled) {
     animation: none;
   }
 }
+
+/*
+ * The code dock while the pen owns the page.
+ *
+ * Pointer-events off is the whole mechanism: strokes fall through to the ink
+ * layer instead of landing in Monaco's textarea. The tint is there so the page
+ * says out loud that typing will not work right now — an editor that silently
+ * ignores a tap is worse than one that is visibly switched off.
+ */
+.lc-code-dock-annotating {
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 6px;
+}
+
+.lc-code-dock-annotating .monaco-editor .cursors-layer {
+  display: none;
+}
+
+/*
+ * Ink over the editor, for as long as the pen owns the page.
+ *
+ * The raster layer normally sits at 3, well under the dock at 8, because on
+ * every other page the dock is chrome the ink has no business covering. While
+ * annotating it is the opposite: the marks are *about* the code, so they have
+ * to land on top of it or they are drawn into a layer nobody can see.
+ */
+.lc-annotating-code .lc-raster-ink {
+  z-index: 12;
+}
