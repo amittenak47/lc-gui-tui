@@ -81,6 +81,52 @@ export function pickMarkdownFile(): Promise<OpenedMarkdown | null> {
   });
 }
 
+/**
+ * Ask for a `.lc-ink.json` sidecar and read it.
+ *
+ * Same shape as {@link pickMarkdownFile} — see the note there about why cancel
+ * resolves rather than rejects.
+ */
+export function pickSidecarFile(): Promise<{ name: string; text: string } | null> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.style.position = "fixed";
+    input.style.left = "-10000px";
+    input.style.opacity = "0";
+
+    let settled = false;
+    const finish = (value: { name: string; text: string } | null) => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      resolve(value);
+    };
+
+    input.addEventListener("cancel", () => finish(null));
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (!file) {
+        finish(null);
+        return;
+      }
+      file
+        .text()
+        .then((text) => finish({ name: file.name, text }))
+        .catch((cause) => {
+          if (settled) return;
+          settled = true;
+          input.remove();
+          reject(cause);
+        });
+    });
+
+    document.body.append(input);
+    input.click();
+  });
+}
+
 export interface MdInkSidecar {
   v: 1;
   sourceName: string;

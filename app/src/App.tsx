@@ -96,10 +96,17 @@ import {
   MD_INK_REGION,
   MD_INK_TASK_ID,
 } from "./templates/mdInk";
-import { pickMarkdownFile } from "./util/mdInkFs";
+import {
+  buildMdInkSidecar,
+  exportMdInkSidecar,
+  pickMarkdownFile,
+  pickSidecarFile,
+  readMdInkSidecar,
+} from "./util/mdInkFs";
 import {
   deleteMdInkDoc,
   findMdInkDocByHash,
+  findStaleMdInkDoc,
   getMdInkDoc,
   hashMarkdown,
   MdInkLibraryFullError,
@@ -1343,6 +1350,17 @@ export function App() {
           ? getMdInkDoc(input.docId)
           : findMdInkDocByHash(hash);
 
+        /*
+         * Say so when the file has moved on since it was last annotated.
+         *
+         * Without this the writer gets a blank page and no explanation, which
+         * from the outside is indistinguishable from having lost their work.
+         * The old set is not applied — its marks belong to lines that have
+         * shifted or gone — but it is still in the library under Recent, so
+         * naming it is enough to make the situation legible.
+         */
+        const stale = existing ? null : findStaleMdInkDoc(input.name, hash);
+
         setBoardPreparing(true);
         setProblem(MD_INK_PROBLEM);
         setPseudocode("");
@@ -1397,6 +1415,13 @@ export function App() {
         setEntering(true);
         window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
         setCoachOpen(false);
+        if (stale) {
+          setNotice(
+            `“${input.name}” has changed since it was annotated on ` +
+              `${new Date(stale.updatedAt).toLocaleDateString()} — starting a fresh set. ` +
+              `The old one is still under Recent.`,
+          );
+        }
       } catch (cause) {
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
@@ -1408,6 +1433,66 @@ export function App() {
     },
     [busy, themeId],
   );
+
+  /**
+   * Write the annotation set out as a file the writer can keep.
+   *
+   * Annotations live in this browser's storage, which is fine right up until
+   * the tablet is not the device they have. The sidecar is the way out.
+   */
+  const exportMdInkAnnotations = useCallback(() => {
+    const board = boardRef.current;
+    const source = mdInkSourceRef.current;
+    if (!board || !source) return;
+    exportMdInkSidecar(
+      buildMdInkSidecar({
+        sourceName: source.name,
+        contentHash: source.hash,
+        board: board.saveBoard(),
+      }),
+    );
+    setNotice(`Exported annotations for “${source.name}”.`);
+  }, []);
+
+  /**
+   * Read a sidecar back in, over the document it was drawn on.
+   *
+   * Refused when the sidecar belongs to different text: its marks were placed
+   * against lines that are not the ones on screen, and putting them down anyway
+   * would scatter ink across the wrong words with no way back.
+   */
+  const importMdInkAnnotations = useCallback(async () => {
+    const source = mdInkSourceRef.current;
+    if (!source) {
+      setError("Open a markdown file first, then import its annotations.");
+      return;
+    }
+    try {
+      const picked = await pickSidecarFile();
+      if (!picked) return;
+      const sidecar = readMdInkSidecar(picked.text);
+      if (!sidecar) {
+        setError(`“${picked.name}” is not an annotation sidecar.`);
+        return;
+      }
+      if (sidecar.contentHash !== source.hash) {
+        setError(
+          `Those annotations were drawn over a different version of ` +
+            `“${sidecar.sourceName}” — they would not line up with this text.`,
+        );
+        return;
+      }
+      boardRef.current?.restoreBoard(sidecar.board.elements, sidecar.board.appState, {
+        skeletons: buildMdInkTemplate(mdInkPageHeight(mdInkHeight), isDarkTheme(themeId)),
+        ink: Array.isArray(sidecar.board.ink) ? sidecar.board.ink : [],
+        files: sidecar.board.files,
+      });
+      if (Array.isArray(sidecar.board.ink)) boardRef.current?.setInkOps(sidecar.board.ink);
+      setNotice(`Imported annotations for “${sidecar.sourceName}”.`);
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  }, [mdInkHeight, themeId]);
 
   /** Pick a markdown file from disk and open it. */
   const pickAndOpenMdInk = useCallback(async () => {
@@ -2906,6 +2991,12 @@ export function App() {
                   ›
                 </button>
               </div>
+              ) : isMdInk(problem) ? (
+                // The document is the thing being worked on, so it gets the
+                // slot the problem's name would have had.
+                <span className="lc-current" title={mdInkSource?.name ?? "Markdown"}>
+                  {mdInkSource?.name ?? "Markdown"}
+                </span>
               ) : (
                 <span className="lc-current" title="Scratchpad">
                   Scratchpad
@@ -3485,6 +3576,14 @@ export function App() {
             if (choice === "save") {
               const saved = saveMdInkSession();
               if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+              return;
+            }
+            if (choice === "export") {
+              exportMdInkAnnotations();
+              return;
+            }
+            if (choice === "import") {
+              void importMdInkAnnotations();
               return;
             }
             if (choice === "recent" && docId) {

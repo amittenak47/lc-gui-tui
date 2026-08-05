@@ -14,7 +14,7 @@ import { HoldButton } from "../components/HoldButton";
 import { deleteMdInkDoc, listMdInkDocs, type MdInkDocMeta } from "../util/mdInkStore";
 
 export type MdInkLeaveChoice = "save" | "discard";
-export type MdInkEntryChoice = "open" | "recent" | "save";
+export type MdInkEntryChoice = "open" | "recent" | "save" | "export" | "import";
 
 interface LeaveProps {
   mode: "leave";
@@ -206,6 +206,31 @@ export function MdInkDialog(props: MdInkDialogProps) {
                   >
                     <strong>Recent…</strong>
                     <span className="lc-muted">Reopen something already annotated.</span>
+                  </HoldButton>
+                  {/*
+                    Annotations live in this browser's storage, which is fine
+                    until the tablet is not the device you have. The sidecar is
+                    the way out and back in — a file to keep beside the .md.
+                  */}
+                  {allowSave && (
+                    <HoldButton
+                      label="Export annotations"
+                      className="lc-hold-choice"
+                      disabled={locked}
+                      onConfirm={() => props.onChoose("export")}
+                    >
+                      <strong>Export annotations…</strong>
+                      <span className="lc-muted">Save a sidecar file beside the .md.</span>
+                    </HoldButton>
+                  )}
+                  <HoldButton
+                    label="Import annotations"
+                    className="lc-hold-choice"
+                    disabled={locked}
+                    onConfirm={() => props.onChoose("import")}
+                  >
+                    <strong>Import annotations…</strong>
+                    <span className="lc-muted">Open a sidecar exported elsewhere.</span>
                   </HoldButton>
                 </>
               )}
