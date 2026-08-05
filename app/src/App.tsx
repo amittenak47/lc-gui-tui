@@ -3027,6 +3027,9 @@ export function App() {
             thinkingPhase={coachPhase}
             messages={coachMessages}
             askOnly={isScratchpad(problem)}
+            onThreadChange={(rootId) => {
+              threadRootIdRef.current = rootId;
+            }}
             forwardFailures={forwardFailures}
             onForwardFailuresChange={(on) => {
               setForwardFailures(on);

@@ -7,7 +7,7 @@
  * as assistant turns.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
 import { STAGE_LABELS } from "../api/types";
@@ -67,6 +67,23 @@ export function replyExcerpt(content: string): string {
   return flat.length > REPLY_EXCERPT_MAX
     ? `${flat.slice(0, REPLY_EXCERPT_MAX - 1).trimEnd()}…`
     : flat;
+}
+
+/** The message a thread hangs off — walking up through any chain of replies. */
+function messageThreadRoot(
+  messages: readonly CoachChatMessage[],
+  message: CoachChatMessage,
+): string {
+  let current: CoachChatMessage | undefined = message;
+  const seen = new Set<string>();
+  while (current?.replyTo && !seen.has(current.id)) {
+    seen.add(current.id);
+    const parentId: string = current.replyTo.id;
+    const parent = messages.find((candidate) => candidate.id === parentId);
+    if (!parent) return parentId;
+    current = parent;
+  }
+  return current?.id ?? message.id;
 }
 
 function replyRefFor(message: CoachChatMessage): CoachReplyRef | null {
@@ -229,6 +246,8 @@ export interface AgentSidePanelProps {
    */
   askOnly?: boolean;
   onSend: (text: string, flags: CoachSendFlags) => void;
+  /** The open thread, so the caller can narrow what the coach is told. */
+  onThreadChange?: (rootId: string | null) => void;
   /** Forward a failed test run to the coach without being asked. */
   forwardFailures?: boolean;
   onForwardFailuresChange?: (on: boolean) => void;
@@ -254,6 +273,7 @@ export function AgentSidePanel({
   messages,
   askOnly = false,
   onSend,
+  onThreadChange,
   forwardFailures = false,
   onForwardFailuresChange,
   onRequestBridge,
@@ -282,6 +302,69 @@ export function AgentSidePanel({
   const [copyFlash, setCopyFlash] = useState(false);
   /** The turn the next send is answering, if the writer quoted one. */
   const [replyTo, setReplyTo] = useState<CoachReplyRef | null>(null);
+  /**
+   * The thread filling the panel, or null for the main conversation.
+   *
+   * A thread is identified by the message it hangs off rather than by an id of
+   * its own: threads are not created, they are noticed — the second reply to a
+   * message is what turns two turns into a conversation about it.
+   */
+  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+
+  /**
+   * The conversation, grouped into roots and the threads hanging off them.
+   *
+   * A reply is threaded under the *root* of whatever it answers, not under the
+   * message it directly quotes, so a back-and-forth stays one thread instead of
+   * nesting a level deeper every turn. Nesting is what makes a quoted
+   * conversation unreadable, and the writer only ever sees one thing: a
+   * subconversation about a message.
+   */
+  const { threadReplies, rootMessages } = useMemo(() => {
+    const rootOf = new Map<string, string>();
+    const replies = new Map<string, CoachChatMessage[]>();
+    const roots: CoachChatMessage[] = [];
+    for (const message of messages) {
+      const parent = message.replyTo?.id;
+      if (!parent) {
+        roots.push(message);
+        continue;
+      }
+      // Follow the chain up: a reply to a reply belongs to the same thread.
+      const root = rootOf.get(parent) ?? parent;
+      rootOf.set(message.id, root);
+      const bucket = replies.get(root);
+      if (bucket) bucket.push(message);
+      else replies.set(root, [message]);
+    }
+    return { threadReplies: replies, rootMessages: roots };
+  }, [messages]);
+
+  /**
+   * What the transcript shows: the room, or one thread within it.
+   *
+   * A thread that is open takes the whole panel — its root at the top and its
+   * replies under it — because a subconversation shown inline next to the
+   * conversation it came from is the interleaving this exists to remove.
+   */
+  const visibleMessages = useMemo(() => {
+    if (!openThreadId) return rootMessages;
+    const root = messages.find((message) => message.id === openThreadId);
+    const replies = threadReplies.get(openThreadId) ?? [];
+    return root ? [root, ...replies] : replies;
+  }, [messages, openThreadId, rootMessages, threadReplies]);
+
+  useEffect(() => {
+    onThreadChange?.(openThreadId);
+  }, [onThreadChange, openThreadId]);
+
+  // A thread whose root has gone (cleared history, a trimmed session) must not
+  // strand the panel in a view of nothing.
+  useEffect(() => {
+    if (openThreadId && !messages.some((message) => message.id === openThreadId)) {
+      setOpenThreadId(null);
+    }
+  }, [messages, openThreadId]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
@@ -489,6 +572,9 @@ export function AgentSidePanel({
       // to reach your own cursor — and the copy was all that survived, since a
       // sent message had no idea what it was answering.
       setReplyTo(ref);
+      // Answering a message *is* its thread, so go there: the reply and the
+      // ones before it belong in the same view, not scattered up the room.
+      setOpenThreadId((current) => current ?? messageThreadRoot(messages, message));
       closeMessageMenu();
       onOpenChange?.(true);
       requestAnimationFrame(() => {
@@ -629,7 +715,25 @@ export function AgentSidePanel({
       >
         <span className="lc-coach-fold-bar" aria-hidden />
       </div>
-      <div className="lc-coach-chat">
+      <div className={openThreadId ? "lc-coach-chat is-threaded" : "lc-coach-chat"}>
+        {openThreadId && (
+          <div className="lc-coach-thread-bar">
+            <button
+              type="button"
+              className="lc-coach-thread-back"
+              onClick={() => {
+                setOpenThreadId(null);
+                setReplyTo(null);
+              }}
+            >
+              ← Conversation
+            </button>
+            <span className="lc-coach-thread-title">
+              Thread · {threadReplies.get(openThreadId)?.length ?? 0}{" "}
+              {(threadReplies.get(openThreadId)?.length ?? 0) === 1 ? "reply" : "replies"}
+            </span>
+          </div>
+        )}
         <div className="lc-coach-messages" ref={listRef} aria-live="polite">
           {messages.length === 0 && !children && !thinking && (
             <p className="lc-muted lc-coach-empty">
@@ -637,7 +741,7 @@ export function AgentSidePanel({
               staged board review, or <strong>Draw</strong> to request a diagram.
             </p>
           )}
-          {messages.map((message) => (
+          {visibleMessages.map((message) => (
             <div
               key={message.id}
               data-coach-message={message.id}
@@ -700,6 +804,36 @@ export function AgentSidePanel({
               {message.content ? (
                 <div className="lc-coach-turn-body">{message.content}</div>
               ) : null}
+              {!openThreadId && (threadReplies.get(message.id)?.length ?? 0) > 0 && (
+                /*
+                 * The thread, collapsed to one line.
+                 *
+                 * Replies used to sit in the transcript as ordinary turns, so a
+                 * message with three answers put three of them between you and
+                 * whatever was said next, each carrying its own stub of the
+                 * same quote. One bubble instead, and the back-and-forth lives
+                 * behind it.
+                 */
+                <button
+                  type="button"
+                  className="lc-coach-thread-open"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setOpenThreadId(message.id);
+                  }}
+                >
+                  <span className="lc-coach-thread-open-count">
+                    {threadReplies.get(message.id)!.length}{" "}
+                    {threadReplies.get(message.id)!.length === 1 ? "reply" : "replies"}
+                  </span>
+                  <span className="lc-coach-thread-open-peek">
+                    {threadReplies.get(message.id)!.at(-1)?.content.slice(0, 60)}
+                  </span>
+                  <span className="lc-coach-thread-open-chevron" aria-hidden>
+                    ›
+                  </span>
+                </button>
+              )}
               {message.flags && message.flags.length > 0 && (
                 <div className="lc-coach-turn-footnotes">
                   <span className="lc-coach-turn-flag-rule" aria-hidden />
