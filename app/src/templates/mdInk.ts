@@ -27,10 +27,22 @@ export const MD_INK_REGION = "mdink-0";
  * document instead of reading one. It was a desktop layout on a device nobody
  * holds like a desktop.
  *
- * Sized like a phone reading column instead. Prose wants 60–75 characters a
- * line; at the document's 15px body that is roughly 640 CSS px, and the page is
- * a shade wider to leave a margin for marks down the side. Fitted to width, the
- * text lands at about the size Obsidian shows on a phone.
+ * 760 leaves a 700px text column once the document's 30px side padding is
+ * taken out, which is Obsidian's own `--file-line-width` default. That is the
+ * basis for the number — not a character count.
+ *
+ * Be honest about what that measures: at the 15px body this renders, 700px is
+ * roughly 93 characters a line, which is above the 50–75 usually called ideal
+ * for prose and well above the 30–50 quoted for phones. It is, however, what
+ * Obsidian itself puts on screen, and the two cannot both be satisfied here.
+ * The page is fitted to the viewport, so column width and apparent text size
+ * are locked together — narrowing to 70 characters would fit a ~585 page and
+ * render the body near 26px on a tablet, which is large enough to look like an
+ * accessibility setting rather than a document. Matching Obsidian and letting
+ * the writer zoom is the better of the two.
+ *
+ * The measure does not change when they do: characters per line is fixed by
+ * this width against the font size, and the camera scales both together.
  */
 export const MD_INK_PAGE_W = 760;
 
