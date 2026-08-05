@@ -3997,7 +3997,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     void settleFitView().then(() => {
       reportCodeSlot();
       rasterInkRef.current?.syncCamera();
-      if (!annotateCodeRef.current) armReadingScroll();
     });
   }, [
     interactive,
@@ -4005,9 +4004,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     reportCodeSlot,
     settleFitView,
     syncPageVisibility,
-    ensureReadingHand,
-    armReadingScroll,
   ]);
+
+  /*
+   * Leaving view mode (interactive false → true) resets Excalidraw.
+   * Arm reading scroll only after that flip — same moment the toolbar toggle
+   * works. Retry a few times: Excalidraw finishes view-mode exit asynchronously.
+   */
+  useEffect(() => {
+    if (!interactive || annotateCodeRef.current) return;
+    const arm = () => {
+      if (!annotateCodeRef.current) armReadingScroll();
+    };
+    arm();
+    const raf = requestAnimationFrame(arm);
+    const t1 = window.setTimeout(arm, 50);
+    const t2 = window.setTimeout(arm, 200);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [interactive, armReadingScroll]);
 
   const handleSceneChange = useCallback(
     (
