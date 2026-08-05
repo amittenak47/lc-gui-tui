@@ -58,6 +58,13 @@ import { BackgroundPalette } from "../components/BackgroundPalette";
 import { resolveInkColor } from "./inkColors";
 import { ReadingSizeControl } from "../components/ReadingSizeControl";
 import { useIsMobile } from "../util/mobile";
+import {
+  clearInkOverrides,
+  loadInkOverrides,
+  resolveSwatches,
+  setInkOverride,
+  type InkPaletteOverrides,
+} from "../util/inkPaletteStore";
 import { isDarkTheme } from "../theme/appThemes";
 import {
   loadBoardReadingSize,
@@ -799,6 +806,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     top: number;
     ids: string[];
   } | null>(null);
+  /**
+   * Slot overrides for the ink palette, for the mode this theme is in.
+   *
+   * Held here rather than read straight from storage inside the toolbar so a
+   * change repaints the swatches: the store is the record, this is the copy
+   * React is allowed to see.
+   */
+  const paletteMode: "light" | "dark" = isDarkTheme(themeId) ? "dark" : "light";
+  const [inkOverrides, setInkOverrides] = useState<InkPaletteOverrides>(() =>
+    loadInkOverrides(paletteMode),
+  );
+  useEffect(() => {
+    setInkOverrides(loadInkOverrides(paletteMode));
+  }, [paletteMode]);
+  const inkPalette = useMemo(
+    () => resolveSwatches(paletteMode, inkOverrides),
+    [inkOverrides, paletteMode],
+  );
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
@@ -3989,6 +4014,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               <div className="lc-toolbar-dock-anchor" aria-hidden />
               {!mapChromeHidden && (
               <BoardToolbar
+                inkPalette={inkPalette}
+                onEditInkColor={(index, colour) => {
+                  setInkOverrides(setInkOverride(paletteMode, index, colour));
+                }}
+                onResetInkPalette={() => {
+                  setInkOverrides(clearInkOverrides(paletteMode));
+                }}
                 active={activeTool}
                 onPick={setTool}
                 themeId={themeId}

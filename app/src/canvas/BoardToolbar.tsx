@@ -88,6 +88,15 @@ const HAND_TOOLS: Array<{ tool: "hand" | "selection"; label: string; glyph: stri
 ];
 
 export interface BoardToolbarProps {
+  /**
+   * Ink swatches with the writer's own slot overrides applied. Falls back to
+   * the authored palette, so a caller that has no opinion still gets one.
+   */
+  inkPalette?: readonly string[];
+  /** A swatch was held — put a different colour in that slot. */
+  onEditInkColor?: (index: number, color: string) => void;
+  /** The hub was held — restore every slot's authored colour. */
+  onResetInkPalette?: () => void;
   active: ToolName;
   onPick: (tool: ToolName) => void;
   themeId: string;
@@ -127,6 +136,9 @@ export function BoardToolbar({
   active,
   onPick,
   themeId,
+  inkPalette,
+  onEditInkColor,
+  onResetInkPalette,
   inkColor,
   onInk,
   handedness,
@@ -705,7 +717,9 @@ export function BoardToolbar({
 
         <div className="lc-color-wrap">
           <ColorRadial
-            colors={inkSwatches(themeId)}
+            colors={inkPalette ?? inkSwatches(themeId)}
+            onEditColor={onEditInkColor}
+            onResetPalette={onResetInkPalette}
             value={inkColor}
             onPick={onInk}
             handedness={handedness}
