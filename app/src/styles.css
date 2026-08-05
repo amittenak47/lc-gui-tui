@@ -5662,7 +5662,12 @@ button.lc-row-selected:hover:not(:disabled) {
   left: 4px;
   right: 4px;
   bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift));
-  align-items: center;
+  /*
+   * Must stay end/flex-end — NOT center. Centre vertically lifts Theme /
+   * Toolbar / Eye when the pen island grows (higher-specificity mobile rule
+   * used to override .lc-map-controls-paged { align-items: end }).
+   */
+  align-items: flex-end;
   gap: 4px;
 }
 
@@ -6284,9 +6289,14 @@ button.lc-row-selected:hover:not(:disabled) {
   grid-template-columns: 1fr auto 1fr;
   /*
    * Bottom baseline for Theme / Toolbar toggle / lined / Eye / pager.
-   * Pen island sits in the centre column above the pager; align-items:end keeps
+   * Pen island sits in the centre column above the pager; end alignment keeps
    * those controls pinned when annotate opens (island grows upward).
+   * Specificity must beat `.lc-mobile .lc-map-controls` if that sets align-items.
    */
+  align-items: end;
+}
+
+.lc-mobile .lc-map-controls.lc-map-controls-paged {
   align-items: end;
 }
 
