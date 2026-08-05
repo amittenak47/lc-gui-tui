@@ -1490,15 +1490,9 @@ export function App() {
           boardRef.current?.setInkOps(existing.board.ink);
         }
 
-        // Document must finish laying out (measure stable) before we refresh.
+        // Document must finish laying out (measure stable) before reveal.
         await waitForMdInkLaidOut(() => mdInkHeightRef.current);
         await boardRef.current?.settleFitView();
-
-        // Refresh — same arming the toolbar toggle used to unlock touch scroll.
-        boardRef.current?.armReadingScroll();
-        await waitMs(32);
-        await boardRef.current?.settleFitView();
-        boardRef.current?.armReadingScroll();
 
         {
           const board = boardRef.current;
@@ -1508,6 +1502,7 @@ export function App() {
         }
 
         // Complete the loading transition (same teardown as pickProblem).
+        // Do NOT arm scroll here — interactive is still false (view mode).
         setBrowseMotion("idle");
         setSwitchMotion("idle");
         setHoldBrowseOverlay(false);
@@ -1517,6 +1512,16 @@ export function App() {
         setEntering(true);
         window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
         setCoachOpen(false);
+
+        // Arm AFTER interactive flips true (Excalidraw left view mode).
+        // Toggle worked because it ran here; open used to arm during prepare.
+        await waitMs(0);
+        boardRef.current?.armReadingScroll();
+        await waitMs(50);
+        boardRef.current?.armReadingScroll();
+        await waitMs(150);
+        boardRef.current?.armReadingScroll();
+
         if (stale) {
           setNotice(
             `“${input.name}” has changed since it was annotated on ` +
