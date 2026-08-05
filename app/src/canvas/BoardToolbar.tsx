@@ -68,9 +68,8 @@ function dockAnchorRect(toolbar: HTMLElement | null): DOMRect | null {
   return dock.getBoundingClientRect();
 }
 
-/** Permanent seats — Select first, then pen / eraser. No Hand: scrolling is toolbar-off. */
-const TOOLS: Array<{ tool: ToolName; label: string; hint: string; icon?: "pen" | "eraser" }> = [
-  { tool: "selection", label: "Select", hint: "Move or resize work" },
+/** Ink seats first, then Select after the divider. No Hand: scrolling is toolbar-off. */
+const INK_TOOLS: Array<{ tool: ToolName; label: string; hint: string; icon?: "pen" | "eraser" }> = [
   { tool: "freedraw", label: "Pen", hint: "Pen", icon: "pen" },
   { tool: "eraser", label: "Eraser", hint: "Eraser — only removes ink under the brush", icon: "eraser" },
 ];
@@ -510,11 +509,13 @@ export function BoardToolbar({
           <span className="lc-toolbar-grip-dots" aria-hidden />
         </button>
 
-        {TOOLS.map(({ tool, label, hint, icon }) =>
+        {INK_TOOLS.map(({ tool, label, hint, icon }) =>
           renderToolButton(tool, label, hint, icon),
         )}
 
         <div className="lc-tool-sep" />
+
+        {renderToolButton("selection", "Select", "Move or resize work")}
 
         <div className="lc-shapes-wrap">
           <button

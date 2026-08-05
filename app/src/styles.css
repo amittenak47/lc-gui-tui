@@ -1458,7 +1458,9 @@ input[type="checkbox"] {
   height: 16px;
 }
 
-/* Bottom dock — pager (when a mode has one) stacked over the island. */
+/* Bottom dock — pen island stacked above the pager.
+ * Pager stays on the bottom baseline with Theme / Eye (grid align-items:end);
+ * opening annotate grows the island upward instead of lifting the chrome. */
 .lc-board-dock {
   display: flex;
   flex-direction: column;
@@ -6270,7 +6272,11 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-map-controls-paged {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
-  /* Bottom-align so Theme / toggles share one baseline when the pen island grows above the pager. */
+  /*
+   * Bottom baseline for Theme / Toolbar toggle / lined / Eye / pager.
+   * Pen island sits in the centre column above the pager; align-items:end keeps
+   * those controls pinned when annotate opens (island grows upward).
+   */
   align-items: end;
 }
 
