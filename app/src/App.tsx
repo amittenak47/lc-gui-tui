@@ -68,6 +68,8 @@ import {
 } from "./modes/AgentSidePanel";
 import { AttemptDialog } from "./modes/AttemptDialog";
 import { ScratchpadDialog } from "./modes/ScratchpadDialog";
+import { describeRunFailure, withConversationContext } from "./modes/coachContext";
+import { loadForwardFailures, saveForwardFailures } from "./util/coachPrefs";
 import { ScratchpadLibraryDialog } from "./modes/ScratchpadLibraryDialog";
 import { formatTestReport, TestResultsModal } from "./modes/TestResultsModal";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
@@ -560,6 +562,21 @@ export function App() {
 
   const [nudges, setNudges] = useState<AmbientEntry[]>([]);
   const [coachMessages, setCoachMessages] = useState<CoachChatMessage[]>([]);
+  /**
+   * The thread read from the hot paths.
+   *
+   * `askCoach` is rebuilt whenever its deps change, and adding the whole
+   * message list to them would rebuild it on every turn — including mid-send.
+   * The ref is the transcript's stable door.
+   */
+  const coachMessagesRef = useRef<CoachChatMessage[]>([]);
+  coachMessagesRef.current = coachMessages;
+  /** Hand a failed run to the coach without being asked. Off by default. */
+  const [forwardFailures, setForwardFailures] = useState(() => loadForwardFailures());
+  const forwardFailuresRef = useRef(forwardFailures);
+  forwardFailuresRef.current = forwardFailures;
+  /** Thread the composer is inside, if any — narrows what the coach is told. */
+  const threadRootIdRef = useRef<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [coachPhase, setCoachPhase] = useState<string | null>(null);
@@ -1906,11 +1923,24 @@ export function App() {
       let finished = false;
       try {
         await syncSolution();
+        /*
+         * Carry the conversation into the prompt.
+         *
+         * `/coach/ask` builds from the problem, the code and the question, so
+         * without this every turn arrives as the first one — which is why a
+         * shorthand reference to something two answers ago used to be answered
+         * as if it had never been said. The transcript is assembled from the
+         * turns already on screen, and from inside a thread it is that thread's
+         * turns rather than the whole room.
+         */
+        const asked = withConversationContext(note, coachMessagesRef.current, {
+          threadRootId: threadRootIdRef.current,
+        });
         const result = await runCoachJob<{ reply: string }>(
           "ask",
-          { task_id: problem.task_id, dataset: problem.dataset, question: note },
+          { task_id: problem.task_id, dataset: problem.dataset, question: asked },
           turnId,
-          () => client.ask(problem.task_id, note, problem.dataset),
+          () => client.ask(problem.task_id, asked, problem.dataset),
         );
         finished = true;
         finishCoachTurn(turnId, [{ content: result.reply }]);
@@ -1924,6 +1954,10 @@ export function App() {
     },
     [client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob],
   );
+
+  /** `runTests` fires this and is defined above it — see the auto-forward. */
+  const askCoachRef = useRef<((question: string) => Promise<void>) | null>(null);
+  askCoachRef.current = askCoach;
 
   const sendCoachChat = useCallback(
     (text: string, requestedFlags: CoachSendFlags) => {
@@ -2048,6 +2082,17 @@ export function App() {
         lastTestReportRef.current = report;
         pushCoachMessage("app", report);
         dirtyRef.current = true;
+        /*
+         * Hand a red run straight to the coach, when asked to.
+         *
+         * The report is already in the thread, so the model would see it on the
+         * next question anyway — what this buys is not having to ask. The code
+         * rides along because a traceback without the source is a line number
+         * with nothing at the end of it.
+         */
+        if (!result.all_passed && forwardFailuresRef.current) {
+          void askCoachRef.current?.(describeRunFailure(report, pseudocodeRef.current));
+        }
         if (result.all_passed) {
           setAttemptState((current) => ({
             solved: true,
@@ -2982,6 +3027,11 @@ export function App() {
             thinkingPhase={coachPhase}
             messages={coachMessages}
             askOnly={isScratchpad(problem)}
+            forwardFailures={forwardFailures}
+            onForwardFailuresChange={(on) => {
+              setForwardFailures(on);
+              saveForwardFailures(on);
+            }}
             onSend={sendCoachChat}
             onRequestBridge={(messageId) => {
               revealForMessageIdRef.current = messageId;
