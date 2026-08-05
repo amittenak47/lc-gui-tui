@@ -10,6 +10,7 @@
  * above the box. Heights never drop below the content or REGION_MIN floors.
  */
 
+import { DRAW_HEADER_BAND } from "./drawPageGrowth";
 import {
   REGIONS,
   REGION_GUTTER,
@@ -36,6 +37,7 @@ export interface LayoutElement {
     lcRegionOx?: number;
     lcRegionOy?: number;
     lcFixedSize?: boolean;
+    lcPinnedHeader?: boolean;
   } | null;
   [key: string]: unknown;
 }
@@ -119,9 +121,11 @@ function contentMinHeight(
   region: RegionId,
   frameOriginY: number,
 ): number {
-  let bottomRel = 0;
+  // Pinned label/hint chrome — content below still counts.
+  let bottomRel = DRAW_HEADER_BAND;
   for (const element of elements) {
     if (frameRegionOf(element)) continue;
+    if (element.customData?.lcPinnedHeader) continue;
     if (element.customData?.lcRegion !== region) continue;
     const meta = element.customData;
     const offsetY =

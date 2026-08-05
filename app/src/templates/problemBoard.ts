@@ -177,6 +177,8 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
         ...at(region, labelX, labelY),
         lcFontBase: labelFont,
         lcFixedSize: true,
+        // Measure/capture split — agent boxes start below this band.
+        lcPinnedHeader: true,
       },
     });
 
@@ -200,7 +202,10 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
         strokeColor: ink.hint,
         opacity: 90,
         locked: true,
-        customData: at(region, hintX, hintY),
+        customData: {
+          ...at(region, hintX, hintY),
+          lcPinnedHeader: true,
+        },
       });
     }
 

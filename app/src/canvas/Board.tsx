@@ -45,6 +45,14 @@ import {
   SCRATCH_PAGE_W,
 } from "../templates/scratchpad";
 import { regionFrameId, regionFramesOf, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
+import {
+  contentAABBsInFrame,
+  contentBottomInFrame,
+  growDrawHeight,
+  initialDrawHeight,
+  isDrawPageRegion,
+} from "../templates/drawPageGrowth";
+import { inkRegionSplit } from "./inkRegionSplit";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
 import { REGION_GUTTER, REGION_MIN, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
@@ -743,6 +751,8 @@ export interface BoardProps {
   linedPaperToggle?: boolean;
   /** Optional fold handle under the bottom chrome (coach closed → open). */
   coachFold?: ReactNode;
+  /** Show dashed preview boxes over student ink bands (Draw / Review flags). */
+  agentPreview?: boolean;
 }
 
 /** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
@@ -799,6 +809,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onAnnotateCodeChange,
     linedPaperToggle = false,
     coachFold = null,
+    agentPreview = false,
   },
   ref,
 ) {
@@ -1043,6 +1054,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const scrollUnsubRef = useRef<(() => void) | null>(null);
   const layoutSyncingRef = useRef(false);
   const codeContentHeightRef = useRef<number | null>(null);
+  /** Viewport page height from the last draw-page fit — drives ink growth steps. */
+  const drawBasePageHRef = useRef<number | null>(null);
+  const agentPreviewRef = useRef(agentPreview);
+  agentPreviewRef.current = agentPreview;
+  const [agentPreviewSlots, setAgentPreviewSlots] = useState<
+    Array<{ left: number; top: number; width: number; height: number }>
+  >([]);
+  const lastAgentPreviewSigRef = useRef("");
   const lastCodeSourceRef = useRef<string>("");
   const lastCodeSlotRef = useRef<ScreenRect | null>(null);
   /** Skip full scene reconcile when Excalidraw only moved the camera. */
@@ -1615,6 +1634,108 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
   }, []);
 
+  const reportAgentPreview = useCallback(() => {
+    if (!agentPreviewRef.current) {
+      setAgentPreviewSlots((prev) => (prev.length === 0 ? prev : []));
+      lastAgentPreviewSigRef.current = "";
+      return;
+    }
+    const api = apiRef.current;
+    const page = mobileRegionRef.current;
+    if (!api || !isDrawPageRegion(page)) {
+      setAgentPreviewSlots((prev) => (prev.length === 0 ? prev : []));
+      lastAgentPreviewSigRef.current = "";
+      return;
+    }
+
+    const live = api.getSceneElements() as LayoutElement[];
+    const frames = regionFramesOf(live);
+    let frame =
+      typeof page === "string" && page in REGIONS
+        ? frames.get(page as RegionId)
+        : undefined;
+    if (!frame && page) {
+      frame = live.find(
+        (el) => el.customData?.lcRegionFrame && el.customData?.lcRegion === page,
+      );
+    }
+    if (!frame) {
+      setAgentPreviewSlots((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
+
+    const ops = rasterInkRef.current?.getOps() ?? [];
+    const rects = inkRegionSplit(frame, contentAABBsInFrame(live, ops, frame));
+    const sig = rects.map((r) => `${r.x},${r.y},${r.width},${r.height}`).join("|");
+    if (sig === lastAgentPreviewSigRef.current) return;
+    lastAgentPreviewSigRef.current = sig;
+
+    const state = api.getAppState() as {
+      scrollX?: number;
+      scrollY?: number;
+      zoom?: { value?: number };
+    };
+    const zoom = state.zoom?.value ?? 1;
+    const scrollX = state.scrollX ?? 0;
+    const scrollY = state.scrollY ?? 0;
+    setAgentPreviewSlots(
+      rects.map((r) => ({
+        left: roundPx((r.x + scrollX) * zoom),
+        top: roundPx((r.y + scrollY) * zoom),
+        width: roundPx(r.width * zoom),
+        height: roundPx(r.height * zoom),
+      })),
+    );
+  }, []);
+
+  const maybeGrowDrawFrame = useCallback((): boolean => {
+    const api = apiRef.current;
+    if (!api || layoutSyncingRef.current) return false;
+    const page = mobileRegionRef.current;
+    if (!isDrawPageRegion(page)) return false;
+
+    const basePageH = drawBasePageHRef.current;
+    if (!basePageH || basePageH < 1) return false;
+
+    const live = api.getSceneElements() as LayoutElement[];
+    const frames = regionFramesOf(live);
+    let frame =
+      typeof page === "string" && page in REGIONS
+        ? frames.get(page as RegionId)
+        : undefined;
+    if (!frame && page) {
+      frame = live.find(
+        (el) => el.customData?.lcRegionFrame && el.customData?.lcRegion === page,
+      );
+    }
+    if (!frame) return false;
+
+    const ops = rasterInkRef.current?.getOps() ?? [];
+    const contentBottomRel = contentBottomInFrame(live, ops, frame);
+    const curH = num(frame.height, 0);
+    const nextH = growDrawHeight({ basePageH, currentH: curH, contentBottomRel });
+    if (Math.abs(curH - nextH) <= 1) return false;
+
+    const nextElements = live.map((el) =>
+      el.id === frame!.id ? { ...el, height: nextH } : el,
+    ) as LayoutElement[];
+    const isScratch = typeof page === "string" && page.startsWith("pad-");
+    const synced = isScratch
+      ? nextElements
+      : syncRegionLayout(nextElements, {
+          codeContentHeight: codeContentHeightRef.current ?? undefined,
+        }) ?? nextElements;
+
+    layoutSyncingRef.current = true;
+    api.updateScene({
+      elements: synced as unknown[],
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    layoutSyncingRef.current = false;
+    syncPageVisibility();
+    return true;
+  }, [syncPageVisibility]);
+
   const scheduleSlotReports = useCallback(() => {
     if (slotReportFrameRef.current) return;
     slotReportFrameRef.current = requestAnimationFrame(() => {
@@ -1625,8 +1746,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       reportLinedSlot();
       reportTitleSlot();
       reportContentSlot();
+      reportAgentPreview();
     });
-  }, [reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot]);
+  }, [reportAgentPreview, reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot]);
 
   const clampPanScroll = useCallback((scrollX: number, scrollY: number, zoom: number) => {
     if (!mobileRef.current || mobileRegionRef.current == null) {
@@ -3187,7 +3309,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             typeof regionKey === "string" && regionKey in REGION_MIN
               ? REGION_MIN[regionKey as RegionId].minH
               : 800;
-          const nextH = Math.max(regionMin, Math.round(fillHeight));
+          const ops = rasterInkRef.current?.getOps() ?? [];
+          let nextH: number;
+          if (isDrawPageRegion(typeof regionKey === "string" ? regionKey : null)) {
+            const basePageH = fillHeight;
+            drawBasePageHRef.current = basePageH;
+            const contentBottomRel = contentBottomInFrame(live, ops, primary);
+            nextH = Math.max(
+              regionMin,
+              growDrawHeight({
+                basePageH,
+                currentH: initialDrawHeight(basePageH),
+                contentBottomRel,
+              }),
+            );
+          } else {
+            nextH = Math.max(regionMin, Math.round(fillHeight));
+          }
           const curH = num(primary.height, 0);
           if (Math.abs(curH - nextH) > 1 || Math.abs(num(primary.width, 0) - frameW) > 1) {
             const nextElements = live.map((element) =>
@@ -3428,23 +3566,29 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const isMdFrame = Boolean(
       (frame as { customData?: { lcMdInkFrame?: boolean } }).customData?.lcMdInkFrame,
     );
+    const isCodePage = page === "code" && !isMdFrame;
+    const grown = current.map((el) =>
+      el === frame
+        ? {
+            ...(el as object),
+            height: pageContentHeight,
+            // Md frame must stay locked — see buildMdInkTemplate.
+            ...(isMdFrame ? { locked: true } : {}),
+            versionNonce: Math.random() * 2 ** 31,
+          }
+        : el,
+    ) as LayoutElement[];
+    const synced = isCodePage
+      ? syncRegionLayout(grown, { codeContentHeight: pageContentHeight }) ?? grown
+      : grown;
     api.updateScene({
-      elements: current.map((el) =>
-        el === frame
-          ? {
-              ...(el as object),
-              height: pageContentHeight,
-              // Md frame must stay locked — see buildMdInkTemplate.
-              ...(isMdFrame ? { locked: true } : {}),
-              versionNonce: Math.random() * 2 ** 31,
-            }
-          : el,
-      ) as unknown[],
+      elements: synced as unknown[],
       captureUpdate: CaptureUpdateAction.NEVER,
     });
     syncPageVisibility();
     scheduleSlotReports();
-  }, [pageContent, pageContentHeight, scheduleSlotReports, syncPageVisibility]);
+    if (isCodePage) requestAnimationFrame(reportCodeSlot);
+  }, [pageContent, pageContentHeight, reportCodeSlot, scheduleSlotReports, syncPageVisibility]);
 
   // A toggle mid-gesture must not leave a stale pin behind.
   useEffect(() => {
@@ -4166,6 +4310,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       // Frames: pin column position, zero rotation; resize height/width still works.
       applyRegionLayout();
+      maybeGrowDrawFrame();
       reportCodeSlot();
 
       const prevEditingId = editingTextIdRef.current;
@@ -4326,8 +4471,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       onChange?.();
     },
-    [activeTool, applyRegionLayout, onChange, reportCodeSlot, setTool, syncPageVisibility],
+    [activeTool, applyRegionLayout, maybeGrowDrawFrame, onChange, reportCodeSlot, setTool, syncPageVisibility],
   );
+
+  const handleInkChange = useCallback(() => {
+    onChange?.();
+    if (maybeGrowDrawFrame()) {
+      scheduleSlotReports();
+    }
+  }, [maybeGrowDrawFrame, onChange, scheduleSlotReports]);
+
+  useEffect(() => {
+    lastAgentPreviewSigRef.current = "";
+    scheduleSlotReports();
+  }, [agentPreview, scheduleSlotReports]);
 
   useImperativeHandle(
     ref,
@@ -4422,23 +4579,52 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           );
           if (authored.length === 0 && !hasInk) continue;
 
-          const png = await captureImage(
-            () =>
-              exportRegionBlob(
-                api,
-                ops,
-                inBox as SceneElementLike[],
-                {
-                  x: frame.x,
-                  y: frame.y,
-                  width: frame.width,
-                  height: frame.height,
-                },
-              ),
-            { maxEdge: 640, maxBase64: 2 * 1024 * 1024 },
+          const frameRect = {
+            x: frame.x,
+            y: frame.y,
+            width: frame.width,
+            height: frame.height,
+            customData: frame.customData,
+          };
+          const splitRects = inkRegionSplit(
+            frameRect,
+            contentAABBsInFrame(all, ops, frameRect),
           );
-          if (png) {
-            thumbs.push({ region, label: REGIONS[region].label, png });
+          const crops =
+            splitRects.length > 0
+              ? splitRects
+              : [{ x: frame.x, y: frame.y, width: frame.width, height: frame.height }];
+
+          for (let index = 0; index < crops.length; index++) {
+            const crop = crops[index];
+            const cropElements = inBox.filter((el) => {
+              const cx = el.x + el.width / 2;
+              const cy = el.y + el.height / 2;
+              return (
+                cx >= crop.x &&
+                cy >= crop.y &&
+                cx <= crop.x + crop.width &&
+                cy <= crop.y + crop.height
+              );
+            });
+            const png = await captureImage(
+              () =>
+                exportRegionBlob(api, ops, cropElements as SceneElementLike[], {
+                  x: crop.x,
+                  y: crop.y,
+                  width: crop.width,
+                  height: crop.height,
+                }),
+              { maxEdge: 640, maxBase64: 2 * 1024 * 1024 },
+            );
+            if (png) {
+              const baseLabel = REGIONS[region].label;
+              thumbs.push({
+                region,
+                label: crops.length > 1 ? `${baseLabel} ${index + 1}` : baseLabel,
+                png,
+              });
+            }
           }
         }
 
@@ -4707,6 +4893,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       {linedPaper && linedSlotOn && (
         <div ref={linedSlotNodeRef} className="lc-board-lined-overlay" aria-hidden />
       )}
+      {agentPreview &&
+        agentPreviewSlots.map((slot, index) => (
+          <div
+            key={`agent-preview-${index}`}
+            className="lc-agent-preview-box"
+            style={{
+              left: slot.left,
+              top: slot.top,
+              width: slot.width,
+              height: slot.height,
+            }}
+            aria-hidden
+          />
+        ))}
       {interactive && pageTitle && titleSlot && (
         <div
           ref={titleSlotNodeRef}
@@ -4889,7 +5089,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pressureSensitive={pressureSensitive}
         getViewport={getViewport}
         clip={inkClip}
-        onChange={onChange}
+        onChange={handleInkChange}
         onStylusAccessory={interactive ? handleStylusAccessory : undefined}
       />
       <Excalidraw
