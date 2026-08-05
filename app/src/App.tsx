@@ -242,6 +242,8 @@ export function App() {
    * both on the one transform.
    */
   const [codeContentHeight, setCodeContentHeight] = useState<number | null>(null);
+  /** Draw / Review toggles from the coach composer — drives agent preview boxes. */
+  const [coachPreviewFlags, setCoachPreviewFlags] = useState({ draw: false, reviewBoard: false });
   const [scratchLibOpen, setScratchLibOpen] = useState(false);
   const scratchLibResumeRef = useRef<(() => void) | null>(null);
   /**
@@ -3564,7 +3566,10 @@ export function App() {
                 : // The code page grows to the code for the same reason the
                   // document page grows to the document: so the thing being
                   // annotated and the ink on it move together.
-                  problem && !isLocalPad(problem) && codeContentHeight
+                  problem &&
+                    !isLocalPad(problem) &&
+                    codeContentHeight &&
+                    (!mobile || activeRegion === "code")
                   ? codeContentHeight + CODE_PAGE_TAIL
                   : null
             }
@@ -3577,6 +3582,7 @@ export function App() {
               ) : null
             }
             coachFold={null}
+            agentPreview={coachPreviewFlags.draw || coachPreviewFlags.reviewBoard}
           />
           {(!problem || holdBrowseOverlay) && (
             <div
@@ -3695,6 +3701,7 @@ export function App() {
             }}
             onToggleDrawing={toggleDrawing}
             onDrawingFrame={showDrawingFrame}
+            onFlagsChange={setCoachPreviewFlags}
           >
             {AMBIENT_ENABLED && mode === "ambient" && (
               <AmbientPanel

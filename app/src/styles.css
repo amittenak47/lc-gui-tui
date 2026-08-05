@@ -2235,6 +2235,16 @@ input[type="checkbox"] {
   opacity: 0.9;
 }
 
+.lc-agent-preview-box {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  border: 2px dashed color-mix(in srgb, var(--accent) 72%, transparent);
+  background: transparent;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
 .lc-coach-fold {
   display: flex;
   align-items: center;
