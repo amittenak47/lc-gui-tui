@@ -103,7 +103,6 @@ import {
 } from "../util/capturePrefs";
 import { CaptureFeedback, type CaptureFeedbackHandle } from "./CaptureFeedback";
 import { loadInkToolPrefs, saveInkToolPrefs } from "../util/inkToolPrefs";
-import { useRepeatPress } from "../util/useRepeatPress";
 import {
   clampExportScale,
   exportScaleFrom,
@@ -750,7 +749,7 @@ export interface BoardProps {
    * and asking "why this?" is the most natural thing to want to do to code you
    * are reading, and until now the editor swallowed every pointer that tried.
    */
-  annotateCodeToggle?: boolean;
+  annotateToggle?: boolean;
   /** Annotation mode changed — the caller makes the dock stop taking pointers. */
   onAnnotateCodeChange?: (on: boolean) => void;
   /** Show lined-paper toggle in the map chrome. */
@@ -813,7 +812,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     pageContentHeight = null,
     transparentCanvas = false,
     scrollModeToggle = false,
-    annotateCodeToggle = false,
+    annotateToggle = true,
     onAnnotateCodeChange,
     linedPaperToggle = false,
     showReadingSize = false,
@@ -953,9 +952,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   } | null>(null);
   const [captureArmed, setCaptureArmed] = useState(false);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
-  const [zoomPct, setZoomPct] = useState(100);
+  const [, setZoomPct] = useState(100);
   /** Effective zoom-out floor as a percent — page fit on mobile, else ZOOM_MIN. */
-  const [zoomFloorPct, setZoomFloorPct] = useState(() => Math.round(ZOOM_MIN * 100));
+  const [, setZoomFloorPct] = useState(() => Math.round(ZOOM_MIN * 100));
   /** Scene box of the open mobile page — clips the raster ink layer to it. */
   const [inkClip, setInkClip] = useState<SceneBounds | null>(null);
   /** Floor zoom for the open mobile page (fit-to-chrome); null on desktop. */
@@ -1405,8 +1404,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * explain why — the toggle it was set from is not even on screen any more.
    */
   useEffect(() => {
-    if (!annotateCodeToggle && annotateCode) setAnnotateCode(false);
-  }, [annotateCode, annotateCodeToggle]);
+    if (!annotateToggle && annotateCode) setAnnotateCode(false);
+  }, [annotateCode, annotateToggle]);
 
   useEffect(() => {
     onAnnotateCodeChange?.(annotateCode);
@@ -4441,9 +4440,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             <div className="lc-board-dock">
               {!mapChromeHidden && bottomCenter}
               <div className="lc-toolbar-dock-anchor" aria-hidden />
-              {!mapChromeHidden && (
+              {/*
+                The toolbar is annotate mode's toolbar.
+                Every one of these tools puts marks on the page, and outside
+                annotate mode the page is something you are reading and
+                scrolling. A pen offered on a surface that is not accepting pen
+                is the "it looks off" — so the whole strip goes with the mode
+                rather than being present and inert.
+              */}
+              {!mapChromeHidden && annotateCode && (
               <BoardToolbar
-                hidePanTool={mobileRegion === "code"}
+                hidePanTool
                 active={activeTool}
                 onPick={setTool}
                 themeId={themeId}
@@ -4522,7 +4529,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <ScrollModeIcon reading={scrollMode} />
                   </button>
                 )}
-                {!mapChromeHidden && annotateCodeToggle && (
+                {!mapChromeHidden && annotateToggle && (
                   <button
                     type="button"
                     className={
@@ -4564,16 +4571,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               {!mapChromeHidden && showReadingSize && (
                 <ReadingSizeControl value={readingSize} onChange={setReadingSize} />
               )}
-              {!mapChromeHidden && (
-                <ZoomControls
-                  zoomPct={zoomPct}
-                  zoomFloorPct={zoomFloorPct}
-                  zoomMaxPct={Math.round(ZOOM_MAX * 100)}
-                  onZoomIn={zoomIn}
-                  onZoomOut={zoomOut}
-                  onFit={fitCurrentView}
-                />
-              )}
+              {/*
+                No zoom, no fit. Every page is laid out at a size the reading
+                control already names and scrolls from there, so a zoom level
+                is a second, contradictory answer to "how big is the text" and
+                fit is a button that undoes wherever you had scrolled to.
+              */}
             </div>
             {coachFold}
           </div>
@@ -4928,62 +4931,5 @@ function AnnotateIcon({ on = false }: { on?: boolean }) {
       <path d="M12.7 8.2 15 5.9a1.2 1.2 0 0 1 1.7 1.7l-2.3 2.3z" />
       {on && <path d="M7.5 16.8 6.8 18.5l1.7-.7" />}
     </svg>
-  );
-}
-
-function ZoomControls({
-  zoomPct,
-  zoomFloorPct,
-  zoomMaxPct,
-  onZoomIn,
-  onZoomOut,
-  onFit,
-}: {
-  zoomPct: number;
-  zoomFloorPct: number;
-  zoomMaxPct: number;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-  onFit: () => void;
-}) {
-  const atMin = zoomPct <= zoomFloorPct;
-  const atMax = zoomPct >= zoomMaxPct;
-  const zoomInHold = useRepeatPress(onZoomIn, { disabled: atMax, delayMs: 400, intervalMs: 120 });
-  const zoomOutHold = useRepeatPress(onZoomOut, { disabled: atMin, delayMs: 400, intervalMs: 120 });
-  return (
-    <div className="lc-zoom" role="group" aria-label="Zoom">
-      <button
-        type="button"
-        className="lc-map-btn"
-        data-tip={atMax ? `Maximum zoom (${zoomMaxPct}%)` : "Zoom in — hold to keep going"}
-        data-tip-placement="left"
-        aria-label={atMax ? `Zoom in disabled, maximum ${zoomMaxPct}%` : "Zoom in"}
-        disabled={atMax}
-        {...zoomInHold}
-      >
-        +
-      </button>
-      <button
-        type="button"
-        className="lc-map-btn"
-        data-tip={atMin ? `Minimum zoom (${zoomFloorPct}%)` : "Zoom out — hold to keep going"}
-        data-tip-placement="left"
-        aria-label={atMin ? `Zoom out disabled, minimum ${zoomFloorPct}%` : "Zoom out"}
-        disabled={atMin}
-        {...zoomOutHold}
-      >
-        −
-      </button>
-      <button
-        type="button"
-        className="lc-map-btn"
-        data-tip={`Fit width (${zoomPct}%)`}
-        data-tip-placement="left"
-        aria-label={`Fit width, ${zoomPct}% zoom`}
-        onClick={onFit}
-      >
-        ⊡
-      </button>
-    </div>
   );
 }

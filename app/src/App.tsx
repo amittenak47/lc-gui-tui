@@ -239,8 +239,6 @@ export function App() {
    * both on the one transform.
    */
   const [codeContentHeight, setCodeContentHeight] = useState<number | null>(null);
-  /** Only the code page has an editor to annotate over. */
-  const codeAnnotatable = !mobile || activeRegion === "code";
   const [scratchLibOpen, setScratchLibOpen] = useState(false);
   const scratchLibResumeRef = useRef<(() => void) | null>(null);
   /**
@@ -3447,7 +3445,7 @@ export function App() {
             onCodeSlot={onCodeSlot}
             transparentCanvas={Boolean(problem && isMdInk(problem))}
             scrollModeToggle={Boolean(problem && isMdInk(problem))}
-            annotateCodeToggle={Boolean(problem && !isScratchpad(problem)) && codeAnnotatable}
+            annotateToggle={Boolean(problem)}
             onAnnotateCodeChange={setAnnotateCode}
             // Ruled lines under somebody else's typography would be noise.
             linedPaperToggle={Boolean(problem) && !isMdInk(problem)}
