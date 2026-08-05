@@ -551,10 +551,17 @@ input[type="checkbox"] {
 /*
  * Reading mode gatekeeper: Excalidraw must not steal pointers.
  * Capture-phase scroll on `.lc-board` owns the gesture; annotate removes this.
+ * `touch-action: none` is mandatory — without it the browser eats the pan
+ * (touch-action:manipulation / auto) and our pointermove never arms.
  */
+.lc-board-reading {
+  touch-action: none;
+}
+
 .lc-board-reading .excalidraw,
 .lc-board-reading .excalidraw__canvas {
   pointer-events: none !important;
+  touch-action: none;
 }
 
 /* Delete control for a selected library stamp / capture image. */

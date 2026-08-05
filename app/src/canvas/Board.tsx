@@ -466,15 +466,18 @@ const ZOOM_STEP = 1.15;
 /** Button zoom animation — retargets smoothly on repeat / hold. */
 const ZOOM_ANIM_MS = 220;
 /** Hand-tool pan inertia — exponential friction per ms (coast after flick). */
-const PAN_FRICTION = 0.002;
+const PAN_FRICTION = 0.0016;
 /** Faster decay when the reader taps mid-glide — stop smooth, not hard. */
 const PAN_BRAKE_FRICTION = 0.014;
 /** Minimum scroll speed (scene units/ms) to coast after a flick. */
-const PAN_FLICK_MIN = 0.045;
+const PAN_FLICK_MIN = 0.035;
 /** Stop coasting below this scroll speed. */
 const PAN_REST_SPEED = 0.0002;
-/** Px before a press-during-glide becomes a new drag instead of a soft stop. */
-const PAN_DRAG_THRESHOLD_PX = 5;
+/** Px before a mouse press-during-glide becomes a new drag (touch arms immediately). */
+const PAN_DRAG_THRESHOLD_PX = 3;
+/** Finger/wheel travel multiplier — 1:1 felt sluggish vs Obsidian. */
+const SCROLL_TOUCH_GAIN = 1.85;
+const SCROLL_WHEEL_GAIN = 1.55;
 
 function zoomEaseOut(t: number): number {
   return 1 - (1 - t) * (1 - t);
@@ -1673,6 +1676,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
   }, []);
 
+  /**
+   * What the toolbar toggle was accidentally doing: leave annotate, assert hand,
+   * refresh page bounds so touch scroll has somewhere to go.
+   */
+  const armReadingScroll = useCallback(() => {
+    setAnnotateCode(false);
+    annotateCodeRef.current = false;
+    setActiveTool("hand");
+    activeToolRef.current = "hand";
+    apiRef.current?.setActiveTool({ type: "hand" });
+    apiRef.current?.updateScene({
+      appState: { selectedElementIds: {} },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    syncPageVisibility();
+    const state = apiRef.current?.getAppState() as
+      | { scrollX?: number; scrollY?: number }
+      | undefined;
+    if (state && scrollModeRef.current) {
+      lockedScrollXRef.current = state.scrollX ?? 0;
+    }
+    scheduleSlotReports();
+  }, [scheduleSlotReports, syncPageVisibility]);
+
   const persistInkPrefs = useCallback(
     (patch: Partial<{
       penWidth: number;
@@ -2045,17 +2072,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * Gemini's sample flipped this. Reading mode is when we own the gesture.
      */
     const isScrollSurface = (target: EventTarget | null) => {
-      if (!(target instanceof Element)) return false;
+      const el =
+        target instanceof Element
+          ? target
+          : target && typeof (target as Node).parentElement !== "undefined"
+            ? (target as Node).parentElement
+            : null;
+      if (!el) return false;
       if (mobileRegionRef.current === "code" && !annotateCodeRef.current) return false;
       if (
-        target.closest(
+        el.closest(
           ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
         )
       ) {
         return false;
       }
-      // Reading mode mutes .excalidraw pointer-events — hits land on .lc-board.
-      return target.closest(".lc-board") != null;
+      return el.closest(".lc-board") != null;
     };
 
     const canOwnScroll = () => {
@@ -2137,7 +2169,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         inertiaBrakingRef.current = true;
       }
 
-      // Mute Excalidraw for this gesture (capture phase).
+      // Mute Excalidraw / browser for this gesture (capture phase).
       event.preventDefault();
       event.stopPropagation();
 
@@ -2148,6 +2180,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const cam = readScroll();
       lockedScrollXRef.current = scrollModeRef.current ? cam.scrollX : null;
       lastPanScrollRef.current = { x: cam.scrollX, y: cam.scrollY, t: now };
+      // Touch/pen: arm immediately. Waiting for a move threshold left the first
+      // flick dead on tablets when the browser also contested the gesture.
+      const touchLike = event.pointerType === "touch" || event.pointerType === "pen";
       panDragRef.current = {
         pointerId: event.pointerId,
         startClientX: event.clientX,
@@ -2155,7 +2190,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         startScrollY: cam.scrollY,
         lastClientY: event.clientY,
         lastT: now,
-        armed: false,
+        armed: touchLike,
       };
       try {
         root.setPointerCapture(event.pointerId);
@@ -2189,17 +2224,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       const zoom = readScroll().zoom;
       const lockX = lockedScrollXRef.current;
-      const nextY = drag.startScrollY + (event.clientY - drag.startClientY) / zoom;
+      const nextY =
+        drag.startScrollY +
+        ((event.clientY - drag.startClientY) / zoom) * SCROLL_TOUCH_GAIN;
       const clamped = clampPanScroll(lockX ?? 0, nextY, zoom);
       const scrollX = lockX ?? clamped.scrollX;
       const scrollY = clamped.scrollY;
 
       const now = performance.now();
       const dt = Math.max(1, now - drag.lastT);
-      const instantY = (event.clientY - drag.lastClientY) / zoom / dt;
+      const instantY =
+        ((event.clientY - drag.lastClientY) / zoom / dt) * SCROLL_TOUCH_GAIN;
       panVelocityRef.current = {
         x: 0,
-        y: panVelocityRef.current.y * 0.65 + instantY * 0.35,
+        y: panVelocityRef.current.y * 0.55 + instantY * 0.45,
       };
       drag.lastClientY = event.clientY;
       drag.lastT = now;
@@ -3020,7 +3058,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const live = liveCameraRef.current;
         const baseY = live?.live ? live.scrollY : (state.scrollY ?? 0);
         const baseX = live?.live ? live.scrollX : (state.scrollX ?? 0);
-        const wheeled = clampPanScroll(baseX, baseY - event.deltaY / zoom, zoom);
+        const wheeled = clampPanScroll(
+          baseX,
+          baseY - (event.deltaY / zoom) * SCROLL_WHEEL_GAIN,
+          zoom,
+        );
         if (scrollModeRef.current) lockedScrollXRef.current = wheeled.scrollX;
         applyVisualScrollRef.current(wheeled.scrollX, wheeled.scrollY);
         return;
@@ -3955,7 +3997,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     void settleFitView().then(() => {
       reportCodeSlot();
       rasterInkRef.current?.syncCamera();
-      if (!annotateCodeRef.current) ensureReadingHand();
+      if (!annotateCodeRef.current) armReadingScroll();
     });
   }, [
     interactive,
@@ -3964,6 +4006,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     settleFitView,
     syncPageVisibility,
     ensureReadingHand,
+    armReadingScroll,
   ]);
 
   const handleSceneChange = useCallback(
@@ -4577,8 +4620,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           captureUpdate: CaptureUpdateAction.NEVER,
         });
       },
+      armReadingScroll,
     }),
-    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, refitToViewport, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand],
+    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, refitToViewport, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
