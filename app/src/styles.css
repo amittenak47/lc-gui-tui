@@ -6580,3 +6580,109 @@ button.lc-row-selected:hover:not(:disabled) {
   min-height: 8.5rem;
   resize: vertical;
 }
+
+
+/*
+ * Threads in the coach panel.
+ *
+ * A thread is a subconversation about one message. Collapsed it is a single
+ * bubble under the turn it belongs to; opened it takes the whole transcript,
+ * because a subconversation shown beside the conversation it came from is the
+ * interleaving threads exist to remove.
+ */
+.lc-coach-thread-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+
+.lc-coach-thread-open:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.lc-coach-thread-open-count {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: color-mix(in srgb, var(--accent) 85%, var(--ink));
+}
+
+.lc-coach-thread-open-peek {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--ink) 62%, transparent);
+}
+
+.lc-coach-thread-open-chevron {
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1;
+  color: color-mix(in srgb, var(--accent) 80%, var(--ink));
+}
+
+.lc-coach-thread-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.lc-coach-thread-back {
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--accent) 85%, var(--ink));
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lc-coach-thread-back:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.lc-coach-thread-title {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--ink) 62%, transparent);
+}
+
+/* Opening a thread should feel like the bubble grew into the panel. */
+.lc-coach-chat.is-threaded .lc-coach-messages {
+  animation: lc-thread-in 180ms ease-out;
+}
+
+@keyframes lc-thread-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-coach-chat.is-threaded .lc-coach-messages {
+    animation: none;
+  }
+}
