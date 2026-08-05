@@ -987,6 +987,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     lastT: number;
     armed: boolean;
   } | null>(null);
+  /**
+   * Live camera while reading-scroll is in flight.
+   *
+   * `updateScene` every pointer/wheel frame is what caps us at ~30fps — Excalidraw
+   * reconciles a full scene. During a gesture we drive markdown + ink from this
+   * ref and commit scroll to Excalidraw once on settle (Obsidian-style).
+   */
+  const liveCameraRef = useRef<{
+    scrollX: number;
+    scrollY: number;
+    zoom: number;
+    width: number;
+    height: number;
+    offsetLeft: number;
+    offsetTop: number;
+    live: boolean;
+  } | null>(null);
   const slotReportFrameRef = useRef(0);
   /**
    * Wheel / scroll bursts must pin ink tiles the same way a pan does.
@@ -994,6 +1011,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const cameraMotionTimerRef = useRef(0);
   const cameraMotionActiveRef = useRef(false);
+  const applyVisualScrollRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
+  const commitVisualScrollRef = useRef<() => void>(() => {});
+
   const pulseCameraMotion = useCallback(() => {
     if (!cameraMotionActiveRef.current) {
       cameraMotionActiveRef.current = true;
@@ -1003,6 +1023,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     cameraMotionTimerRef.current = window.setTimeout(() => {
       cameraMotionTimerRef.current = 0;
       cameraMotionActiveRef.current = false;
+      // Wheel bursts use live camera — commit once the burst idles.
+      if (!handPanningRef.current && !inertiaFrameRef.current) {
+        commitVisualScrollRef.current();
+      }
       rasterInkRef.current?.setCameraMoving(false);
     }, 140);
   }, []);
@@ -1909,6 +1933,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   const getViewport = useCallback((): ViewportTransform | null => {
+    const live = liveCameraRef.current;
+    if (live?.live) {
+      return {
+        zoom: live.zoom,
+        scrollX: live.scrollX,
+        scrollY: live.scrollY,
+        offsetLeft: live.offsetLeft,
+        offsetTop: live.offsetTop,
+        width: live.width,
+        height: live.height,
+      };
+    }
     const state = apiRef.current?.getAppState() as
       | {
           zoom?: { value?: number };
@@ -1934,27 +1970,82 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
   }, []);
 
+  /**
+   * Move markdown + ink for one scroll sample — no Excalidraw `updateScene`.
+   */
+  const applyVisualScroll = useCallback((scrollX: number, scrollY: number) => {
+    const api = apiRef.current;
+    if (!api) return;
+    const state = api.getAppState() as {
+      zoom?: { value?: number };
+      scrollX?: number;
+      scrollY?: number;
+      offsetLeft?: number;
+      offsetTop?: number;
+      width?: number;
+      height?: number;
+    };
+    if (typeof state.width !== "number" || typeof state.height !== "number") return;
+    const zoom = state.zoom?.value ?? 1;
+    liveCameraRef.current = {
+      scrollX,
+      scrollY,
+      zoom,
+      width: state.width,
+      height: state.height,
+      offsetLeft: state.offsetLeft ?? 0,
+      offsetTop: state.offsetTop ?? 0,
+      live: true,
+    };
+    const bounds = pageBoundsRef.current;
+    const node = contentSlotNodeRef.current;
+    if (bounds && node && pageContentRef.current) {
+      const left = (bounds.minX + scrollX) * zoom;
+      const top = (bounds.minY + scrollY) * zoom;
+      node.style.transform = `translate(${left}px, ${top}px) scale(${zoom})`;
+      lastContentSlotRef.current = {
+        left,
+        top,
+        sceneWidth: Math.max(1, bounds.maxX - bounds.minX),
+        zoom,
+      };
+    }
+    pulseCameraMotionRef.current();
+    if (!rasterInkRef.current?.isDrawing()) {
+      rasterInkRef.current?.syncCamera();
+    }
+  }, []);
+
+  /** Push live camera into Excalidraw once the gesture settles. */
+  const commitVisualScroll = useCallback(() => {
+    const live = liveCameraRef.current;
+    if (!live?.live) return;
+    live.live = false;
+    apiRef.current?.updateScene({
+      appState: { scrollX: live.scrollX, scrollY: live.scrollY },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    scheduleSlotReports();
+  }, [scheduleSlotReports]);
+  applyVisualScrollRef.current = applyVisualScroll;
+  commitVisualScrollRef.current = commitVisualScroll;
+
   useEffect(() => {
     if (!interactive) return;
     const root = boardRef.current;
     if (!root) return;
 
     /*
-     * Vertical scroll only — reading pages have no sideways ground.
+     * Gatekeeper (Gemini idea, correct polarity).
      *
-     * Claude's fixed-view commit set this to `false`, which killed flick
-     * inertia and the column lock. Excalidraw's hand still panned in 2D, so a
-     * diagonal flick drifted X then the clamp yanked it back. We own the
-     * gesture again: Y scroll + coast, X pinned.
+     * Annotate OFF → capture-phase hijack: Excalidraw never sees the pointer.
+     * Annotate ON  → only hijack when Hand is active (scroll while annotating);
+     *                drawing tools pass through to Excalidraw / ink.
+     *
+     * Gemini's sample flipped this. Reading mode is when we own the gesture.
      */
-    const isHandPanTarget = (target: EventTarget | null) => {
+    const isScrollSurface = (target: EventTarget | null) => {
       if (!(target instanceof Element)) return false;
-      /*
-       * The code page does not pan.
-       *
-       * It is one HTML editor filling the screen, wrapped to the column and
-       * scrolled by Monaco — there is no second screenful beside it to reach.
-       */
       if (mobileRegionRef.current === "code" && !annotateCodeRef.current) return false;
       if (
         target.closest(
@@ -1963,75 +2054,74 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       ) {
         return false;
       }
-      return target.closest(".excalidraw") != null;
+      // Reading mode mutes .excalidraw pointer-events — hits land on .lc-board.
+      return target.closest(".lc-board") != null;
     };
 
-    const startPanInertia = (velocityX: number, velocityY: number) => {
+    const canOwnScroll = () => {
+      if (!annotateCodeRef.current) return true;
+      return activeToolRef.current === "hand";
+    };
+
+    const readScroll = () => {
+      const live = liveCameraRef.current;
+      if (live?.live) return { scrollX: live.scrollX, scrollY: live.scrollY, zoom: live.zoom };
+      const state = apiRef.current?.getAppState() as
+        | { scrollX?: number; scrollY?: number; zoom?: { value?: number } }
+        | undefined;
+      return {
+        scrollX: state?.scrollX ?? 0,
+        scrollY: state?.scrollY ?? 0,
+        zoom: state?.zoom?.value ?? 1,
+      };
+    };
+
+    const startPanInertia = (_velocityX: number, velocityY: number) => {
       const api = apiRef.current;
       if (!api) return;
       stopPanInertia();
       inertiaBrakingRef.current = false;
-      let velX = velocityX;
       let velY = velocityY;
       let last = performance.now();
-      const state = api.getAppState() as {
-        scrollX?: number;
-        scrollY?: number;
-        zoom?: { value?: number };
-      };
-      let scrollX = state.scrollX ?? 0;
-      let scrollY = state.scrollY ?? 0;
-      const zoom = state.zoom?.value ?? 1;
-      if (scrollModeRef.current) {
-        lockedScrollXRef.current = scrollX;
-        velX = 0;
-      }
+      const cam = readScroll();
+      let scrollX = scrollModeRef.current
+        ? (lockedScrollXRef.current ?? cam.scrollX)
+        : cam.scrollX;
+      let scrollY = cam.scrollY;
+      const zoom = cam.zoom;
+      if (scrollModeRef.current) lockedScrollXRef.current = scrollX;
 
       const settle = () => {
         inertiaFrameRef.current = 0;
         inertiaBrakingRef.current = false;
-        api.updateScene({
-          appState: { scrollX, scrollY },
-          captureUpdate: CaptureUpdateAction.NEVER,
-        });
+        applyVisualScrollRef.current(scrollX, scrollY);
+        commitVisualScrollRef.current();
         rasterInkRef.current?.setCameraMoving(false);
-        scheduleSlotReports();
       };
 
       const step = (now: number) => {
         const dt = Math.min(34, Math.max(1, now - last));
         last = now;
-        const wantX = scrollX + velX * dt;
         const wantY = scrollY + velY * dt;
-        const clamped = clampPanScroll(wantX, wantY, zoom);
-        const takenX = clamped.scrollX - scrollX;
+        const clamped = clampPanScroll(scrollX, wantY, zoom);
         const takenY = clamped.scrollY - scrollY;
-        const wantedX = wantX - scrollX;
         const wantedY = wantY - scrollY;
-        if (Math.abs(wantedX) > 1e-6) {
-          velX *= Math.min(1, Math.max(0, takenX / wantedX));
-        }
         if (Math.abs(wantedY) > 1e-6) {
           velY *= Math.min(1, Math.max(0, takenY / wantedY));
         }
-        scrollX = clamped.scrollX;
         scrollY = clamped.scrollY;
         if (scrollModeRef.current && lockedScrollXRef.current !== null) {
           scrollX = lockedScrollXRef.current;
+        } else {
+          scrollX = clamped.scrollX;
         }
         const friction = inertiaBrakingRef.current ? PAN_BRAKE_FRICTION : PAN_FRICTION;
-        velX *= Math.exp(-friction * dt);
         velY *= Math.exp(-friction * dt);
-        if (Math.abs(velX) < PAN_REST_SPEED && Math.abs(velY) < PAN_REST_SPEED) {
+        if (Math.abs(velY) < PAN_REST_SPEED) {
           settle();
           return;
         }
-        api.updateScene({
-          appState: { scrollX, scrollY },
-          captureUpdate: CaptureUpdateAction.NEVER,
-        });
-        rasterInkRef.current?.syncCamera();
-        scheduleSlotReports();
+        applyVisualScrollRef.current(scrollX, scrollY);
         inertiaFrameRef.current = requestAnimationFrame(step);
       };
       rasterInkRef.current?.setCameraMoving(true);
@@ -2039,35 +2129,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
 
     const onPointerDown = (event: PointerEvent) => {
-      if (activeToolRef.current !== "hand") return;
+      if (!canOwnScroll()) return;
       if (event.button !== 0) return;
-      if (!isHandPanTarget(event.target)) return;
+      if (!isScrollSurface(event.target)) return;
 
-      // Tap mid-glide: soft-brake. A follow-up move arms a new drag.
       if (inertiaFrameRef.current) {
         inertiaBrakingRef.current = true;
       }
 
+      // Mute Excalidraw for this gesture (capture phase).
       event.preventDefault();
       event.stopPropagation();
 
       handPanningRef.current = true;
       rasterInkRef.current?.setCameraMoving(true);
       panVelocityRef.current = { x: 0, y: 0 };
-      const api = apiRef.current;
       const now = performance.now();
-      const state = api?.getAppState() as
-        | { scrollX?: number; scrollY?: number; zoom?: { value?: number } }
-        | undefined;
-      const scrollX = state?.scrollX ?? 0;
-      const scrollY = state?.scrollY ?? 0;
-      lockedScrollXRef.current = scrollModeRef.current ? scrollX : null;
-      lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
+      const cam = readScroll();
+      lockedScrollXRef.current = scrollModeRef.current ? cam.scrollX : null;
+      lastPanScrollRef.current = { x: cam.scrollX, y: cam.scrollY, t: now };
       panDragRef.current = {
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        startScrollY: scrollY,
+        startScrollY: cam.scrollY,
         lastClientY: event.clientY,
         lastT: now,
         armed: false,
@@ -2083,18 +2168,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const drag = panDragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
       if (!handPanningRef.current) return;
-      if (activeToolRef.current !== "hand") return;
+      if (!canOwnScroll()) return;
 
       const dx = event.clientX - drag.startClientX;
       const dy = event.clientY - drag.startClientY;
       if (!drag.armed) {
         if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD_PX) return;
-        // Real drag — cancel any soft-brake coast and take the wheel.
         stopPanInertia();
         inertiaBrakingRef.current = false;
-        const api = apiRef.current;
-        const live = api?.getAppState() as { scrollY?: number } | undefined;
-        drag.startScrollY = live?.scrollY ?? drag.startScrollY;
+        const cam = readScroll();
+        drag.startScrollY = cam.scrollY;
         drag.startClientY = event.clientY;
         drag.lastClientY = event.clientY;
         drag.lastT = performance.now();
@@ -2104,10 +2187,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       event.preventDefault();
       event.stopPropagation();
 
-      const api = apiRef.current;
-      if (!api) return;
-      const state = api.getAppState() as { zoom?: { value?: number } };
-      const zoom = state.zoom?.value ?? 1;
+      const zoom = readScroll().zoom;
       const lockX = lockedScrollXRef.current;
       const nextY = drag.startScrollY + (event.clientY - drag.startClientY) / zoom;
       const clamped = clampPanScroll(lockX ?? 0, nextY, zoom);
@@ -2125,15 +2205,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       drag.lastT = now;
       lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
 
-      pulseCameraMotionRef.current();
-      api.updateScene({
-        appState: { scrollX, scrollY },
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
-      if (!rasterInkRef.current?.isDrawing()) {
-        rasterInkRef.current?.syncCamera();
-      }
-      scheduleSlotReports();
+      applyVisualScrollRef.current(scrollX, scrollY);
     };
 
     const onPointerUp = (event: PointerEvent) => {
@@ -2149,14 +2221,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       handPanningRef.current = false;
       panDragRef.current = null;
 
-      if (activeToolRef.current !== "hand") {
+      if (!canOwnScroll()) {
+        commitVisualScrollRef.current();
         rasterInkRef.current?.setCameraMoving(false);
         return;
       }
 
-      // Tap during glide: leave soft-brake running; do not start a new coast.
       if (!drag?.armed) {
         if (!inertiaFrameRef.current) {
+          commitVisualScrollRef.current();
           rasterInkRef.current?.setCameraMoving(false);
         }
         return;
@@ -2165,28 +2238,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       event.preventDefault();
       event.stopPropagation();
 
-      const raw = { x: 0, y: panVelocityRef.current.y };
-      const vel = (() => {
-        const api = apiRef.current;
-        if (!api) return raw;
-        const state = api.getAppState() as {
-          scrollX?: number;
-          scrollY?: number;
-          zoom?: { value?: number };
-        };
-        const x = state.scrollX ?? 0;
-        const y = state.scrollY ?? 0;
-        const probe = clampPanScroll(x + raw.x * 16, y + raw.y * 16, state.zoom?.value ?? 1);
-        return {
-          x: 0,
-          y: Math.abs(probe.scrollY - y) < 0.5 ? 0 : raw.y,
-        };
+      const rawY = panVelocityRef.current.y;
+      const velY = (() => {
+        const cam = readScroll();
+        const probe = clampPanScroll(cam.scrollX, cam.scrollY + rawY * 16, cam.zoom);
+        return Math.abs(probe.scrollY - cam.scrollY) < 0.5 ? 0 : rawY;
       })();
-      const speed = Math.abs(vel.y);
-      if (speed >= PAN_FLICK_MIN) {
-        startPanInertia(0, vel.y);
+      if (Math.abs(velY) >= PAN_FLICK_MIN) {
+        startPanInertia(0, velY);
         return;
       }
+      commitVisualScrollRef.current();
       rasterInkRef.current?.setCameraMoving(false);
     };
 
@@ -2201,13 +2263,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       root.removeEventListener("pointercancel", onPointerUp, true);
       stopPanInertia();
     };
-  }, [clampPanScroll, interactive, scheduleSlotReports, stopPanInertia]);
+  }, [clampPanScroll, interactive, stopPanInertia]);
 
   useEffect(() => {
     stopPanInertia();
     inertiaBrakingRef.current = false;
     handPanningRef.current = false;
     panDragRef.current = null;
+    commitVisualScrollRef.current();
     rasterInkRef.current?.setCameraMoving(false);
   }, [activeTool, stopPanInertia]);
 
@@ -2927,7 +2990,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       ) {
         return;
       }
-      if (!target.closest(".excalidraw")) return;
+      // Reading mode mutes .excalidraw hits — wheel still lands on .lc-board.
+      if (!target.closest(".lc-board")) return;
 
       const api = apiRef.current;
       if (!api) return;
@@ -2952,17 +3016,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         event.preventDefault();
         event.stopPropagation();
         userAdjustedCameraRef.current = true;
-        pulseCameraMotion();
-        const next = clampPanScroll(
-          state.scrollX ?? 0,
-          (state.scrollY ?? 0) - event.deltaY / zoom,
-          zoom,
-        );
-        if (scrollModeRef.current) lockedScrollXRef.current = next.scrollX;
-        api.updateScene({
-          appState: { scrollX: next.scrollX, scrollY: next.scrollY },
-          captureUpdate: CaptureUpdateAction.NEVER,
-        });
+        // Prefer live camera when a gesture is already mid-flight.
+        const live = liveCameraRef.current;
+        const baseY = live?.live ? live.scrollY : (state.scrollY ?? 0);
+        const baseX = live?.live ? live.scrollX : (state.scrollX ?? 0);
+        const wheeled = clampPanScroll(baseX, baseY - event.deltaY / zoom, zoom);
+        if (scrollModeRef.current) lockedScrollXRef.current = wheeled.scrollX;
+        applyVisualScrollRef.current(wheeled.scrollX, wheeled.scrollY);
         return;
       }
 
@@ -3895,6 +3955,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     void settleFitView().then(() => {
       reportCodeSlot();
       rasterInkRef.current?.syncCamera();
+      if (!annotateCodeRef.current) ensureReadingHand();
     });
   }, [
     interactive,
@@ -3902,6 +3963,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     reportCodeSlot,
     settleFitView,
     syncPageVisibility,
+    ensureReadingHand,
   ]);
 
   const handleSceneChange = useCallback(
@@ -3934,7 +3996,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         cameraMotionActiveRef.current ||
         clampingScrollRef.current ||
         fittingCameraRef.current ||
-        layoutSyncingRef.current
+        layoutSyncingRef.current ||
+        liveCameraRef.current?.live
       ) {
         return;
       }
@@ -4549,8 +4612,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       className={[
         "lc-board",
         !interactive && "lc-board-idle",
-        // The canvas is see-through in this mode, so the paper colour has to
-        // come from somewhere — here, under everything, including the markdown.
+        // Reading: mute Excalidraw hit-testing so capture scroll always wins
+        // (Gemini gatekeeper + CSS). Annotate restores normal canvas hits.
+        interactive && !annotateCode && "lc-board-reading",
         transparentCanvas && "lc-board-paper",
       ]
         .filter(Boolean)

@@ -548,6 +548,15 @@ input[type="checkbox"] {
   height: 100%;
 }
 
+/*
+ * Reading mode gatekeeper: Excalidraw must not steal pointers.
+ * Capture-phase scroll on `.lc-board` owns the gesture; annotate removes this.
+ */
+.lc-board-reading .excalidraw,
+.lc-board-reading .excalidraw__canvas {
+  pointer-events: none !important;
+}
+
 /* Delete control for a selected library stamp / capture image. */
 .lc-stamp-trash {
   position: absolute;
