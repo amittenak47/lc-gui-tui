@@ -473,8 +473,6 @@ const PAN_FRICTION = 0.0038;
 const PAN_FLICK_MIN = 0.06;
 /** Stop coasting below this scroll speed. */
 const PAN_REST_SPEED = 0.00025;
-/** Matches Excalidraw's internal wheel-zoom step (not our button ZOOM_STEP). */
-const WHEEL_ZOOM_STEP = 0.1;
 
 function zoomEaseOut(t: number): number {
   return 1 - (1 - t) * (1 - t);
@@ -1853,27 +1851,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const root = boardRef.current;
     if (!root) return;
 
-    const isHandPanTarget = (target: EventTarget | null) => {
-      if (!(target instanceof Element)) return false;
-      /*
-       * The code page does not pan.
-       *
-       * It is one HTML editor filling the screen, wrapped to the column and
-       * scrolled by Monaco — there is no second screenful beside it to reach,
-       * so a drag could only push the page off-centre and leave the reader
-       * fighting the clamp to get it back. Zoom changes the type size; the
-       * scrollbar moves through the file; the hand has nothing left to do.
-       */
-      if (mobileRegionRef.current === "code" && !annotateCodeRef.current) return false;
-      if (
-        target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
-        )
-      ) {
-        return false;
-      }
-      return target.closest(".excalidraw") != null;
-    };
+    /*
+     * Nothing pans any more.
+     *
+     * Every page is laid out at a size the reading control names and fills the
+     * width of the screen, so there is no ground beside the page to reach — a
+     * drag could only push the content off-centre and leave you fighting the
+     * clamp to get it back. Up and down is the only direction that means
+     * anything on these pages, and that is a scroll.
+     *
+     * Kept as a named predicate rather than deleting the pointer path: the
+     * flick, its velocity estimate and the inertia all hang off it, and this is
+     * the one place that decides whether any of that runs.
+     */
+    const isHandPanTarget = (_target: EventTarget | null) => false;
 
     const startPanInertia = (velocityX: number, velocityY: number) => {
       const api = apiRef.current;
@@ -2784,30 +2775,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       };
       const zoom = state.zoom?.value ?? 1;
 
-      // Shift+wheel: pan (trackpad / mouse escape without switching tools).
-      if (event.shiftKey && !event.ctrlKey && !event.metaKey) {
-        event.preventDefault();
-        event.stopPropagation();
-        userAdjustedCameraRef.current = true;
-        api.updateScene({
-          appState: {
-            scrollX: (state.scrollX ?? 0) - (event.deltaY || event.deltaX) / zoom,
-          },
-          captureUpdate: CaptureUpdateAction.NEVER,
-        });
-        requestAnimationFrame(reportCodeSlot);
-        return;
-      }
-
       /*
-       * Reading mode: the wheel reads the page instead of resizing it.
+       * The wheel reads the page. It is the only thing it does now.
        *
-       * Wheel-to-zoom is right for a one-page problem you are sketching on and
-       * wrong for a document you are reading down — every scroll of a trackpad
-       * would rescale the words. Ctrl/Cmd+wheel still zooms, which is what every
-       * other document surface does, so the gesture is not lost, just demoted.
+       * Zoom-to-wheel and shift-to-pan were both ways of moving a camera that
+       * no longer moves: the page is laid out at the reading size and fills the
+       * width, so the only travel left is down the page.
        */
-      if (scrollModeRef.current && !event.ctrlKey && !event.metaKey) {
+      {
         event.preventDefault();
         event.stopPropagation();
         userAdjustedCameraRef.current = true;
@@ -2823,69 +2798,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return;
       }
 
-      event.preventDefault();
-      event.stopPropagation();
-
-      const { deltaY } = event;
-      const sign = Math.sign(deltaY) || -1;
-      const maxStep = WHEEL_ZOOM_STEP * 100;
-      const absDelta = Math.abs(deltaY);
-      let delta = deltaY;
-      if (absDelta > maxStep) {
-        delta = maxStep * sign;
-      }
-      let next = zoom - delta / 100;
-      next +=
-        Math.log10(Math.max(1, zoom)) * -sign * Math.min(1, absDelta / 20);
-      const floor =
-        mobile && mobileRegionRef.current != null && fitZoomMinRef.current != null
-          ? fitZoomMinRef.current
-          : ZOOM_MIN;
-      const nextZoom = clampZoom(next, floor);
-      if (nextZoom === zoom) return;
-      userAdjustedCameraRef.current = true;
-
-      let appState = getStateForZoom(
-        {
-          viewportX: event.clientX,
-          viewportY: event.clientY,
-          nextZoom,
-        },
-        state,
-      );
-      const bounds = pageBoundsRef.current;
-      const full = api.getAppState() as { width?: number; height?: number };
-      if (
-        mobile &&
-        mobileRegionRef.current != null &&
-        bounds &&
-        typeof full.width === "number" &&
-        typeof full.height === "number"
-      ) {
-        const inset = measureChromeInsets(
-          boardRef.current,
-          toolbarHeightRef.current,
-          mapChromeHiddenRef.current,
-          mobile,
-        );
-        const clampedScroll = clampScrollToBounds(
-          appState.scrollX,
-          appState.scrollY,
-          nextZoom,
-          full.width,
-          full.height,
-          bounds,
-          inset,
-        );
-        appState = { ...appState, ...clampedScroll };
-      }
-
-      api.updateScene({
-        appState,
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
-      showZoom(Math.round(nextZoom * 100));
-      requestAnimationFrame(reportCodeSlot);
     };
 
     root.addEventListener("wheel", onWheel, { capture: true, passive: false });
