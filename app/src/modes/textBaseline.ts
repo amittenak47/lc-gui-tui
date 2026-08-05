@@ -49,7 +49,16 @@ export function defaultLineHeight(fontFamily?: number): number {
  * not glued onto it.
  */
 export function linedRuleClearance(fontSize: number): number {
-  return Math.max(3, fontSize * 0.14);
+  /*
+   * Clear the descenders, then leave air.
+   *
+   * 14% of the em put the rule inside the descender depth of every common
+   * face — a `g` or a `p` came down through the line rather than sitting above
+   * it, which reads as the text being glued to the rule rather than written on
+   * it. A descender runs to roughly 21% of the font size, so the rule has to
+   * start below that before any of the gap is breathing room.
+   */
+  return Math.max(4, fontSize * 0.26);
 }
 
 /** Scene-space distance from element `y` (top) to the first line's alphabetic baseline. */
