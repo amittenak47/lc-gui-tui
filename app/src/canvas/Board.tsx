@@ -1204,6 +1204,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   const reportLinedSlot = useCallback(() => {
+    /*
+     * The code page is not paper.
+     *
+     * Ruling it lines up nothing: Monaco sits in that frame with its own line
+     * grid at its own pitch, so the board's rules run behind the editor at a
+     * spacing that agrees with neither the code nor the statement, and the two
+     * grids beat against each other. There is also nothing to write between
+     * them — the page is for typing, not for handwriting.
+     */
+    if (mobileRegionRef.current === "code") {
+      if (lastLinedSlotRef.current !== null) {
+        lastLinedSlotRef.current = null;
+        setLinedSlot(null);
+      }
+      return;
+    }
     if (!linedPaperRef.current) {
       if (lastLinedSlotRef.current !== null) {
         lastLinedSlotRef.current = null;
@@ -1688,8 +1704,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
          * coast honestly — a flick into a wall should stop at the wall, not
          * spend a second pretending it is still moving.
          */
-        if (Math.abs(clamped.scrollX - wantX) > 0.05) velX = 0;
-        if (Math.abs(clamped.scrollY - wantY) > 0.05) velY = 0;
+        /*
+         * Land soft: keep the fraction of the step the clamp actually allowed.
+         *
+         * Zeroing velocity the moment the clamp bit stopped the coast dead —
+         * correct, in that it no longer fought the wall, but it arrived at the
+         * boundary at full speed and halted in one frame, which reads as
+         * bouncing off it. Scaling by how much of the requested step got taken
+         * decays the velocity over the last few frames instead: far from the
+         * edge the ratio is 1 and nothing changes, and as the wall comes up
+         * each frame gets less of what it asked for, so the view glides into
+         * the boundary and settles there.
+         */
+        const takenX = clamped.scrollX - scrollX;
+        const takenY = clamped.scrollY - scrollY;
+        const wantedX = wantX - scrollX;
+        const wantedY = wantY - scrollY;
+        if (Math.abs(wantedX) > 1e-6) {
+          velX *= Math.min(1, Math.max(0, takenX / wantedX));
+        }
+        if (Math.abs(wantedY) > 1e-6) {
+          velY *= Math.min(1, Math.max(0, takenY / wantedY));
+        }
         scrollX = clamped.scrollX;
         scrollY = clamped.scrollY;
         velX *= Math.exp(-PAN_FRICTION * dt);
@@ -4049,7 +4085,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 >
                   <EyeIcon closed={mapChromeHidden} />
                 </button>
-                {!mapChromeHidden && linedPaperToggle && (
+                {!mapChromeHidden && linedPaperToggle && mobileRegion !== "code" && (
                   <button
                     type="button"
                     className={
