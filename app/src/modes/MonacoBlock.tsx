@@ -142,6 +142,17 @@ export interface MonacoBlockProps {
   height?: string;
   onChange: (value: string) => void;
   onReady: () => void;
+  /**
+   * Report the editor's full content height as it changes.
+   *
+   * The code page annotates: ink is drawn in board scene coordinates, and
+   * Monaco scrolling its own viewport moves the text underneath ink that does
+   * not move with it, so a mark drawn on line 30 ends up beside line 12. The
+   * cure is for the editor never to scroll — it is laid out at its whole
+   * height and the *board* scrolls, which is the one transform the ink already
+   * shares. This is what tells the board how tall to be.
+   */
+  onContentHeight?: (height: number) => void;
 }
 
 export default function MonacoBlock({
@@ -153,11 +164,14 @@ export default function MonacoBlock({
   height = "min(42vh, 360px)",
   onChange,
   onReady,
+  onContentHeight,
 }: MonacoBlockProps) {
   const mobile = useIsMobile();
   const monacoTheme = useMemo(() => ensureMonacoTheme(themeId), [themeId]);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const fontSize = codeFontPx(fontSizePref, zoom);
+  const onContentHeightRef = useRef(onContentHeight);
+  onContentHeightRef.current = onContentHeight;
 
   useEffect(() => {
     ensureMonacoTheme(themeId);
@@ -215,6 +229,14 @@ export default function MonacoBlock({
           ...tabletSuggestOptions(mobile),
         });
         if (mobile) enableTabletKeyboardHelpers(editor);
+        if (onContentHeightRef.current) {
+          // `scrollHeight` is the laid-out height including the bottom padding
+          // Monaco reserves; the board frame has to cover all of it or the last
+          // line sits outside the page and cannot be annotated.
+          const report = () => onContentHeightRef.current?.(editor.getContentHeight());
+          editor.onDidContentSizeChange(report);
+          report();
+        }
         onReady();
         editor.layout();
       }}

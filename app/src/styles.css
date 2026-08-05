@@ -587,7 +587,12 @@ input[type="checkbox"] {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  z-index: 5;
+  /*
+   * Above the code dock (8), which fills the screen on the code page and was
+   * hiding the readout completely — zooming there gave no feedback at all.
+   * Below the toolbars, which the reader still has to be able to hit.
+   */
+  z-index: 14;
   pointer-events: none;
   padding: 0.5rem 0.9rem;
   border-radius: 999px;
@@ -6944,4 +6949,41 @@ button.lc-row-selected:hover:not(:disabled) {
   .lc-coach-turn-actions {
     opacity: 0.65;
   }
+}
+
+
+/*
+ * Annotate mode, stated out loud.
+ *
+ * The only sign used to be a toggle in the corner rendering as pressed, which
+ * is not enough for a mode that makes the editor stop accepting typing: you
+ * find out by tapping into the code and having nothing happen. The tint marks
+ * the dock and this names the state.
+ */
+.lc-annotate-badge {
+  position: absolute;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 96px);
+  transform: translateX(-50%);
+  z-index: 14;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(6px);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.lc-annotate-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
 }

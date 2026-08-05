@@ -1259,11 +1259,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           ? Math.max(0, Math.min(rawWidth, viewWidth - clampedLeft - margin))
           : rawWidth,
       ),
-      height: roundPx(
-        onCodePage && viewHeight > 0
-          ? Math.max(0, Math.min(rawHeight, viewHeight - clampedTop - margin))
-          : rawHeight,
-      ),
+      /*
+       * Width is bounded by the screen; height is not.
+       *
+       * Clamping the height was what left Monaco with its own scrollbar, and an
+       * editor that scrolls internally slides the code out from under ink that
+       * does not move with it. The dock is now as tall as the page frame, which
+       * is as tall as the code, so there is nothing left for Monaco to scroll —
+       * the board scrolls instead, carrying text and marks on one transform.
+       */
+      height: roundPx(rawHeight),
       /*
        * On the code page, zoom is reported *relative to the page fit*.
        *
@@ -3191,9 +3196,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const api = apiRef.current;
     if (!api || !pageContentHeight || pageContentHeight < 1) return;
     const current = api.getSceneElements() as SceneElementLike[];
-    const frame = current.find(
-      (el) => (el as { customData?: { lcMdInkFrame?: boolean } }).customData?.lcMdInkFrame,
-    ) as (SceneElementLike & { height?: number }) | undefined;
+    const page = mobileRegionRef.current;
+    const frame = current.find((el) => {
+      const meta = (el as { customData?: { lcMdInkFrame?: boolean; lcRegion?: string; lcRegionFrame?: boolean } })
+        .customData;
+      // The markdown page has its own marker; the code page is just the frame
+      // of the region we are on. Both grow to the content they carry.
+      return meta?.lcMdInkFrame || (meta?.lcRegionFrame && meta.lcRegion === page);
+    }) as (SceneElementLike & { height?: number }) | undefined;
     if (!frame) return;
     if (typeof frame.height === "number" && Math.abs(frame.height - pageContentHeight) < 1) {
       return;
@@ -4344,6 +4354,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         raster ink both draw over it. It is scaled, never reflowed — see
         `reportContentSlot`.
       */}
+      {annotateCode && (
+        <div className="lc-annotate-badge" aria-live="polite">
+          <span className="lc-annotate-badge-dot" aria-hidden />
+          Annotating — the editor is not taking typing
+        </div>
+      )}
       {pageContent && contentSlot && (
         <div
           className="lc-page-content-slot"
@@ -4413,6 +4429,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               <div className="lc-toolbar-dock-anchor" aria-hidden />
               {!mapChromeHidden && (
               <BoardToolbar
+                hidePanTool={mobileRegion === "code"}
                 active={activeTool}
                 onPick={setTool}
                 themeId={themeId}
