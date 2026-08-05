@@ -1129,20 +1129,56 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const inset = Math.max(6, Math.round(8 * zoom));
     // Leave room for the CODE label + hint above Monaco (same chrome as Approach).
     const headerReserve = Math.round(codeLabelReserve(readingSizeRef.current) * zoom);
+    const rawLeft = (frame.x + scrollX) * zoom + inset;
+    const rawTop = (frame.y + scrollY) * zoom + inset + headerReserve;
+    const rawWidth = Math.max(0, num(frame.width, REGIONS.code.w) * zoom - inset * 2);
+    const rawHeight = Math.max(
+      0,
+      num(frame.height, REGIONS.code.h) * zoom - inset * 2 - headerReserve,
+    );
+
+    /*
+     * On the code page the dock is bounded by the screen, not by the frame.
+     *
+     * Zoom already reaches Monaco as a font size, and word wrap is on, so
+     * zooming in *should* mean bigger code re-flowed to the same column with
+     * the overflow under Monaco's own scrollbar. It did not, because the dock
+     * was sized from the scene rect: the box grew with the zoom too, so the
+     * text re-wrapped to a column that was now wider than the viewport and the
+     * rest of it sat off the right-hand edge — unreachable, because a page
+     * that is one HTML editor has nothing for the hand tool to pan.
+     *
+     * Clamping the box to the visible area fixes both halves at once. The
+     * column stays the width of the screen however far in the zoom goes, the
+     * text re-wraps into it, and what does not fit vertically is a scroll
+     * rather than a pan.
+     */
+    const onCodePage = page === "code";
+    const viewWidth = typeof state.width === "number" ? state.width : 0;
+    const viewHeight = typeof state.height === "number" ? state.height : 0;
+    const margin = Math.max(8, inset);
+    const clampedLeft = onCodePage ? Math.max(margin, rawLeft) : rawLeft;
+    const clampedTop = onCodePage ? Math.max(margin, rawTop) : rawTop;
     const next: ScreenRect = {
-      left: roundPx((frame.x + scrollX) * zoom + inset),
-      top: roundPx((frame.y + scrollY) * zoom + inset + headerReserve),
-      width: roundPx(Math.max(0, num(frame.width, REGIONS.code.w) * zoom - inset * 2)),
+      left: roundPx(clampedLeft),
+      top: roundPx(clampedTop),
+      width: roundPx(
+        onCodePage && viewWidth > 0
+          ? Math.max(0, Math.min(rawWidth, viewWidth - clampedLeft - margin))
+          : rawWidth,
+      ),
       height: roundPx(
-        Math.max(0, num(frame.height, REGIONS.code.h) * zoom - inset * 2 - headerReserve),
+        onCodePage && viewHeight > 0
+          ? Math.max(0, Math.min(rawHeight, viewHeight - clampedTop - margin))
+          : rawHeight,
       ),
       zoom: Math.round(zoom * 1000) / 1000,
     };
 
     // Hide the dock when the code frame is fully off-screen — switching to the
     // fallback absolute slot caused a visible snap while panning past the box.
-    const viewH = typeof state.height === "number" ? state.height : 0;
-    const viewW = typeof state.width === "number" ? state.width : 0;
+    const viewH = viewHeight;
+    const viewW = viewWidth;
     const offscreen =
       next.top + next.height < -40 ||
       next.top > viewH + 40 ||
