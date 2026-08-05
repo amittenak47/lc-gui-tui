@@ -1,5 +1,13 @@
 /**
- * Cluster student content AABBs into vertical bands for agent preview / capture.
+ * Cut a page into the boxes the agent is sent.
+ *
+ * These are not template boxes and are never drawn. A page is one scrollable
+ * surface for the person writing on it; the agent, which sees stills, needs it
+ * delivered as a handful of readable crops instead of one strip the height of
+ * five screens. So the split is derived from the work rather than authored
+ * around it: content is clustered by the vertical gaps between it, and a
+ * cluster taller than a screenful is cut again — always *between* two things
+ * that were written, never through one, so no annotation is ever halved.
  */
 
 import type { SceneAABB } from "../templates/drawPageGrowth";
@@ -47,13 +55,76 @@ function mergeOverlapping(rects: RegionRect[]): RegionRect[] {
 }
 
 /**
+ * Cut one rect into bands no taller than `maxHeight`, at the gaps between the
+ * boxes inside it.
+ *
+ * A box that is on its own taller than the limit is left whole: halving a
+ * single long stroke would send the agent two pictures of nothing rather than
+ * one picture of something.
+ */
+function splitByHeight(
+  rect: RegionRect,
+  aabbs: readonly SceneAABB[],
+  maxHeight: number,
+  padding: number,
+): RegionRect[] {
+  if (!(maxHeight > 0) || rect.height <= maxHeight) return [rect];
+
+  const inside = aabbs
+    .filter(
+      (box) =>
+        box.y + box.height > rect.y && box.y < rect.y + rect.height,
+    )
+    .sort((a, b) => a.y - b.y || a.x - b.x);
+  if (inside.length === 0) return [rect];
+
+  const bands: SceneAABB[][] = [];
+  let band: SceneAABB[] = [];
+  let bandTop = inside[0].y;
+  for (const box of inside) {
+    const wouldEnd = Math.max(
+      ...band.map((b) => b.y + b.height),
+      box.y + box.height,
+    );
+    if (band.length > 0 && wouldEnd - bandTop > maxHeight) {
+      bands.push(band);
+      band = [box];
+      bandTop = box.y;
+      continue;
+    }
+    band.push(box);
+  }
+  if (band.length > 0) bands.push(band);
+  if (bands.length <= 1) return [rect];
+
+  const rectBottom = rect.y + rect.height;
+  return bands.map((members) => {
+    const top = Math.max(rect.y, Math.min(...members.map((b) => b.y)) - padding);
+    const bottom = Math.min(
+      rectBottom,
+      Math.max(...members.map((b) => b.y + b.height)) + padding,
+    );
+    return {
+      x: rect.x,
+      y: top,
+      width: rect.width,
+      height: Math.max(1, bottom - top),
+    };
+  });
+}
+
+/**
  * Group content boxes by Y gaps; return padded rects clipped to the frame.
+ *
+ * `maxHeight` is a screenful of the page in scene units. Leave it out (or pass
+ * 0) to cluster by gaps alone.
  */
 export function inkRegionSplit(
   frame: { x: number; y: number; width: number; height: number },
   aabbs: readonly SceneAABB[],
   gapThreshold = INK_REGION_GAP,
   padding = INK_REGION_PAD,
+  maxHeight = 0,
 ): RegionRect[] {
   if (aabbs.length === 0) return [];
 
@@ -95,5 +166,7 @@ export function inkRegionSplit(
     };
   });
 
-  return mergeOverlapping(rects);
+  return mergeOverlapping(rects).flatMap((rect) =>
+    splitByHeight(rect, aabbs, maxHeight, padding),
+  );
 }

@@ -44,7 +44,14 @@ import {
   scratchTitleAnchor,
   SCRATCH_PAGE_W,
 } from "../templates/scratchpad";
-import { regionFrameId, regionFramesOf, syncRegionLayout, type LayoutElement } from "../templates/regionLayout";
+import {
+  isReadingColumnFrame,
+  regionFrameId,
+  regionFramesOf,
+  syncRegionLayout,
+  type LayoutElement,
+} from "../templates/regionLayout";
+import { readingColumnWidth } from "../templates/readingColumn";
 import {
   contentAABBsInFrame,
   contentBottomInFrame,
@@ -52,7 +59,7 @@ import {
   initialDrawHeight,
   isDrawPageRegion,
 } from "../templates/drawPageGrowth";
-import { inkRegionSplit } from "./inkRegionSplit";
+import { INK_REGION_GAP, INK_REGION_PAD, inkRegionSplit } from "./inkRegionSplit";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
 import { REGION_GUTTER, REGION_MIN, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
@@ -761,8 +768,6 @@ export interface BoardProps {
   linedPaperToggle?: boolean;
   /** Optional fold handle under the bottom chrome (coach closed → open). */
   coachFold?: ReactNode;
-  /** Show dashed preview boxes over student ink bands (Draw / Review flags). */
-  agentPreview?: boolean;
 }
 
 /** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
@@ -819,7 +824,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onAnnotateCodeChange,
     linedPaperToggle = false,
     coachFold = null,
-    agentPreview = false,
   },
   ref,
 ) {
@@ -905,6 +909,33 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
+  /**
+   * Ruled lines belong on pages you draw on.
+   *
+   * The statement and the code page are documents: they already have their own
+   * typography, and ruling under somebody else's leading puts a line through
+   * every third descender. The toggle is hidden on those pages and, because a
+   * board can arrive with it already on, the state is gated here as well.
+   */
+  const linedPaperOn = linedPaper && isDrawPageRegion(mobileRegion ?? null);
+  const linedPaperOnRef = useRef(linedPaperOn);
+  linedPaperOnRef.current = linedPaperOn;
+  /**
+   * The board's content width in CSS pixels.
+   *
+   * The reading column is sized against this, so it has to be the *board's*
+   * box rather than the window's: opening the coach panel narrows the board
+   * without narrowing the window, and a column measured against the window
+   * would then be wider than the space it is fitted into.
+   */
+  /** Set below — lets the camera fit re-set a column it just re-measured. */
+  const reflowReadingTextRef = useRef<(() => void) | null>(null);
+
+  const boardCssWidth = useCallback(() => {
+    const box = boardRef.current?.getBoundingClientRect();
+    if (box && box.width > 8) return Math.round(box.width);
+    return typeof window !== "undefined" ? window.innerWidth : 0;
+  }, []);
   /** Lined overlay — geometry written to the node; mount flag only. */
   const linedSlotNodeRef = useRef<HTMLDivElement | null>(null);
   const [linedSlotOn, setLinedSlotOn] = useState(false);
@@ -1059,6 +1090,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const readingSize = readingSizeProp ?? "M";
   const readingSizeRef = useRef(readingSize);
   readingSizeRef.current = readingSize;
+
+  /**
+   * Options every `applyBoardReadingSize` call needs.
+   *
+   * `viewportWidth` is not decoration: the statement's scene font is derived
+   * from it, so a call that leaves it out sizes the statement for a phone.
+   */
+  const readingOpts = useCallback(
+    (captureFrom?: BoardReadingSize) => ({
+      captureFrom: captureFrom ?? readingSizeRef.current,
+      lined: linedPaperOnRef.current,
+      viewportWidth: boardCssWidth(),
+    }),
+    [boardCssWidth],
+  );
   const templateRef = useRef<unknown[]>([]);
   const seedSkeletonsRef = useRef<Skeleton[]>([]);
   const scrollUnsubRef = useRef<(() => void) | null>(null);
@@ -1066,12 +1112,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const codeContentHeightRef = useRef<number | null>(null);
   /** Viewport page height from the last draw-page fit — drives ink growth steps. */
   const drawBasePageHRef = useRef<number | null>(null);
-  const agentPreviewRef = useRef(agentPreview);
-  agentPreviewRef.current = agentPreview;
-  const [agentPreviewSlots, setAgentPreviewSlots] = useState<
-    Array<{ left: number; top: number; width: number; height: number }>
-  >([]);
-  const lastAgentPreviewSigRef = useRef("");
   const lastCodeSourceRef = useRef<string>("");
   const lastCodeSlotRef = useRef<ScreenRect | null>(null);
   /** Skip full scene reconcile when Excalidraw only moved the camera. */
@@ -1541,7 +1581,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       return;
     }
-    if (!linedPaperRef.current) {
+    if (!linedPaperOnRef.current) {
       if (lastLinedSlotRef.current !== null) {
         lastLinedSlotRef.current = null;
         setLinedSlotOn(false);
@@ -1670,76 +1710,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
   }, []);
 
-  const reportAgentPreview = useCallback(() => {
-    if (!agentPreviewRef.current) {
-      setAgentPreviewSlots((prev) => (prev.length === 0 ? prev : []));
-      lastAgentPreviewSigRef.current = "";
-      return;
-    }
-    const api = apiRef.current;
-    const page = mobileRegionRef.current;
-    if (!api || !isDrawPageRegion(page)) {
-      setAgentPreviewSlots((prev) => (prev.length === 0 ? prev : []));
-      lastAgentPreviewSigRef.current = "";
-      return;
-    }
-
-    const live = api.getSceneElements() as LayoutElement[];
-    const frames = regionFramesOf(live);
-    let frame =
-      typeof page === "string" && page in REGIONS
-        ? frames.get(page as RegionId)
-        : undefined;
-    if (!frame && page) {
-      frame = live.find(
-        (el) => el.customData?.lcRegionFrame && el.customData?.lcRegion === page,
-      );
-    }
-    if (!frame) {
-      setAgentPreviewSlots((prev) => (prev.length === 0 ? prev : []));
-      return;
-    }
-
-    const ops = rasterInkRef.current?.getOps() ?? [];
-    /*
-     * `LayoutElement` carries width/height as optional — a scene element is not
-     * obliged to have them — while the splitter needs a real box. Nothing
-     * reaches here without a frame that has both, but the compiler cannot know
-     * that, so the box is made explicit rather than asserted away.
-     */
-    const box = {
-      x: frame.x,
-      y: frame.y,
-      width: num(frame.width, 0),
-      height: num(frame.height, 0),
-    };
-    if (box.width < 1 || box.height < 1) {
-      setAgentPreviewSlots((prev) => (prev.length === 0 ? prev : []));
-      return;
-    }
-    const rects = inkRegionSplit(box, contentAABBsInFrame(live, ops, box));
-    const sig = rects.map((r) => `${r.x},${r.y},${r.width},${r.height}`).join("|");
-    if (sig === lastAgentPreviewSigRef.current) return;
-    lastAgentPreviewSigRef.current = sig;
-
-    const state = api.getAppState() as {
-      scrollX?: number;
-      scrollY?: number;
-      zoom?: { value?: number };
-    };
-    const zoom = state.zoom?.value ?? 1;
-    const scrollX = state.scrollX ?? 0;
-    const scrollY = state.scrollY ?? 0;
-    setAgentPreviewSlots(
-      rects.map((r) => ({
-        left: roundPx((r.x + scrollX) * zoom),
-        top: roundPx((r.y + scrollY) * zoom),
-        width: roundPx(r.width * zoom),
-        height: roundPx(r.height * zoom),
-      })),
-    );
-  }, []);
-
   const maybeGrowDrawFrame = useCallback((): boolean => {
     const api = apiRef.current;
     if (!api || layoutSyncingRef.current) return false;
@@ -1806,9 +1776,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       reportLinedSlot();
       reportTitleSlot();
       reportContentSlot();
-      reportAgentPreview();
     });
-  }, [reportAgentPreview, reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot]);
+  }, [reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot]);
 
   const clampPanScroll = useCallback((scrollX: number, scrollY: number, zoom: number) => {
     if (!mobileRef.current || mobileRegionRef.current == null) {
@@ -3360,9 +3329,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           const regionKey = primary.customData?.lcRegion;
           const isScratch =
             typeof regionKey === "string" && regionKey.startsWith("pad-");
+          /*
+           * A reading column is re-measured against the screen on every fit.
+           *
+           * Its scene width is what the width-only fit divides by, so it is
+           * also what decides the type size — leaving it at whatever the frame
+           * happened to be is how the statement ended up four screens wide with
+           * 3px text. Re-deriving it here means a board saved under the old
+           * geometry heals the first time it is opened, and a rotate or a coach
+           * panel opening re-flows the column instead of shrinking the words.
+           */
+          const readingColumn = isReadingColumnFrame(primary);
           const frameW = Math.max(
             1,
-            isScratch ? SCRATCH_PAGE_W : num(primary.width, REGIONS.constraints.w),
+            isScratch
+              ? SCRATCH_PAGE_W
+              : readingColumn
+                ? readingColumnWidth(availWidth)
+                : num(primary.width, REGIONS.approach.w),
           );
           // Raw ratio — do not floor to ZOOM_MIN or fillHeight collapses.
           const zoomForWidth = Math.max(0.05, Math.min(ZOOM_MAX, availWidth / frameW));
@@ -3395,7 +3379,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             nextH = Math.max(regionMin, Math.round(fillHeight));
           }
           const curH = num(primary.height, 0);
-          if (Math.abs(curH - nextH) > 1 || Math.abs(num(primary.width, 0) - frameW) > 1) {
+          const widthChanged = Math.abs(num(primary.width, 0) - frameW) > 1;
+          if (Math.abs(curH - nextH) > 1 || widthChanged) {
             const nextElements = live.map((element) =>
               element.id === primary.id ? { ...element, height: nextH, width: frameW } : element,
             ) as LayoutElement[];
@@ -3403,7 +3388,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               ? nextElements
               : syncRegionLayout(nextElements, {
                   codeContentHeight: codeContentHeightRef.current ?? undefined,
+                  readingColumnWidth: readingColumn ? frameW : undefined,
                 }) ?? nextElements;
+            /*
+             * A column that changed width is a page that has to be re-set.
+             *
+             * `syncRegionLayout` re-wraps the text to the new measure but the
+             * type size comes from the reading pass, and that reads the column
+             * width — so without this the statement keeps the font it was sized
+             * for on the old screen.
+             */
+            if (readingColumn && widthChanged) {
+              const reflow = reflowReadingTextRef.current;
+              if (reflow) requestAnimationFrame(() => reflow());
+            }
             layoutSyncingRef.current = true;
             api.updateScene({
               elements: synced as unknown[],
@@ -3579,7 +3577,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   useEffect(() => {
     reportLinedSlot();
-  }, [linedPaper, reportLinedSlot]);
+  }, [linedPaperOn, reportLinedSlot]);
 
   // A document arriving (or the page frame growing under it) has to place the
   // content layer before the first frame it is visible in.
@@ -4048,10 +4046,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const dark = isDarkTheme(themeId);
     const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
     const recolored = recolorTemplateElements(converted, dark) ?? converted;
-    const sized = applyBoardReadingSize(recolored, readingSizeRef.current, {
-      captureFrom: "M",
-      lined: linedPaperRef.current,
-    });
+    const sized = applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M"));
     templateRef.current = sized;
     apiRef.current?.updateScene({
       elements: sized as unknown[],
@@ -4170,10 +4165,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!api || layoutSyncingRef.current) return;
       const size = opts?.size ?? readingSizeRef.current;
       const current = api.getSceneElements() as SceneElementLike[];
-      const scaled = applyBoardReadingSize(current, size, {
-        captureFrom: opts?.captureFrom ?? size,
-        lined: linedPaperRef.current,
-      });
+      const scaled = applyBoardReadingSize(
+        current,
+        size,
+        readingOpts(opts?.captureFrom ?? size),
+      );
       if (scaled === current) return;
       layoutSyncingRef.current = true;
       api.updateScene({
@@ -4189,6 +4185,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     },
     [applyRegionLayout, reportCodeSlot, reportLinedSlot],
   );
+  reflowReadingTextRef.current = reflowReadingText;
 
   const wasInteractiveRef = useRef(false);
 
@@ -4552,11 +4549,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
   }, [maybeGrowDrawFrame, onChange, scheduleSlotReports]);
 
-  useEffect(() => {
-    lastAgentPreviewSigRef.current = "";
-    scheduleSlotReports();
-  }, [agentPreview, scheduleSlotReports]);
-
   useImperativeHandle(
     ref,
     (): BoardHandle => ({
@@ -4576,10 +4568,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const dark = isDarkTheme(themeId);
         const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
         const recolored = recolorTemplateElements(converted, dark) ?? converted;
-        const next = applyBoardReadingSize(recolored, readingSizeRef.current, {
-          captureFrom: "M",
-          lined: linedPaperRef.current,
-        });
+        const next = applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M"));
         templateRef.current = next;
         rasterInkRef.current?.clear();
         apiRef.current?.updateScene({
@@ -4609,9 +4598,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const all = api.getSceneElements() as SceneElementLike[];
         const ops = rasterInkRef.current?.getOps() ?? [];
         const thumbs: Array<{ region: RegionId; label: string; png: string }> = [];
+        /*
+         * A screenful of page, in scene units.
+         *
+         * The pages scroll now, so "one region" can be five screens of work,
+         * and one crop that tall arrives at the model as an unreadable strip.
+         * The width-only fit means a screen is `frameWidth × viewH / viewW` of
+         * scene, which is the bound the splitter cuts against.
+         */
+        const view = api.getAppState() as { width?: number; height?: number };
+        const viewW = num(view.width, 0);
+        const viewH = num(view.height, 0);
+        const screenfulOf = (frameWidth: number) =>
+          viewW > 0 && viewH > 0 ? Math.max(240, (frameWidth * viewH) / viewW) : 0;
 
         for (const region of STUDENT_REGION_ORDER) {
-          if (region === "constraints" || region === "code") continue;
+          /*
+           * Code is excluded because it is not a picture: Monaco is HTML, so a
+           * canvas crop of the code page comes back as marks over an empty
+           * rectangle. That page is sent as re-rendered source with the ink
+           * composited on top (see `renderAnnotatedCode`). Everything else,
+           * the statement included, is captured here — annotations on the
+           * problem statement used to be sent nowhere at all.
+           */
+          if (region === "code") continue;
           const frame = all.find(
             (el) =>
               el.type === "rectangle" &&
@@ -4635,9 +4645,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             );
           });
 
-          // Skip empty template chrome (frame + label + hint only).
+          /*
+           * Only send a page that has something *of the student's* on it.
+           *
+           * The statement page is full of template text — the whole problem is
+           * printed on it — so counting authored elements would attach it to
+           * every turn. What makes a page worth sending is a mark that was not
+           * there when the page was seeded.
+           */
           const authored = inBox.filter(
-            (el) => !el.customData?.lcRegionFrame && !el.id.includes("-label") && !el.id.includes("-hint"),
+            (el) =>
+              !el.customData?.lcRegionFrame &&
+              !el.customData?.lcRegion &&
+              !el.id.startsWith("lcregion-"),
           );
           const hasInk = ops.some((op) =>
             op.points.some(
@@ -4658,9 +4678,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             // The splitter only reads `lcRegion`; the frame's meta is wider.
             customData: frame.customData ?? undefined,
           };
+          const contentBoxes = contentAABBsInFrame(all, ops, frameRect);
           const splitRects = inkRegionSplit(
             frameRect,
-            contentAABBsInFrame(all, ops, frameRect),
+            contentBoxes,
+            INK_REGION_GAP,
+            INK_REGION_PAD,
+            screenfulOf(frame.width),
           );
           const crops =
             splitRects.length > 0
@@ -4755,10 +4779,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const dark = isDarkTheme(themeId);
         const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
         const recolored = recolorTemplateElements(converted, dark) ?? converted;
-        const sized = applyBoardReadingSize(recolored, readingSizeRef.current, {
-          captureFrom: "M",
-          lined: linedPaperRef.current,
-        });
+        const sized = applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M"));
         let maxPage = -1;
         for (const el of sized) {
           const page = (el as { customData?: { lcScratchPage?: unknown } }).customData
@@ -4829,9 +4850,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           nextElements as PageableElement[],
         ) as unknown as SceneElementLike[];
         const scratchHealed = healScratchpadGeometry(cleared) as SceneElementLike[];
-        const healed = healBoardLayout(scratchHealed, {
+        /*
+         * Boards saved when regions had labels and hints carry those elements.
+         * Nothing draws them any more, but they are still in the file — so a
+         * restore that kept them would put "APPROACH / What are you scanning?"
+         * back on a page that is supposed to be blank.
+         */
+        const chromeStripped = scratchHealed.filter(
+          (el) =>
+            !(
+              typeof el.id === "string" &&
+              el.id.startsWith("lcregion-") &&
+              (el.id.endsWith("-label") || el.id.endsWith("-hint"))
+            ),
+        );
+        const healed = healBoardLayout(chromeStripped, {
             readingSize: readingSizeRef.current,
             codeContentHeight: codeContentHeightRef.current ?? undefined,
+            viewportWidth: boardCssWidth(),
           },
         );
         // Keep a fit target so landing zooms to problem+code, not the full board.
@@ -4962,23 +4998,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           {pageContent}
         </div>
       )}
-      {linedPaper && linedSlotOn && (
+      {linedPaperOn && linedSlotOn && (
         <div ref={linedSlotNodeRef} className="lc-board-lined-overlay" aria-hidden />
       )}
-      {agentPreview &&
-        agentPreviewSlots.map((slot, index) => (
-          <div
-            key={`agent-preview-${index}`}
-            className="lc-agent-preview-box"
-            style={{
-              left: slot.left,
-              top: slot.top,
-              width: slot.width,
-              height: slot.height,
-            }}
-            aria-hidden
-          />
-        ))}
       {interactive && pageTitle && titleSlot && (
         <div
           ref={titleSlotNodeRef}
@@ -5035,7 +5057,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       <AnnotateIcon on={annotateCode} />
                     </button>
                   )}
-                  {linedPaperToggle && mobileRegion !== "code" && (
+                  {linedPaperToggle && isDrawPageRegion(mobileRegion ?? null) && (
                     <button
                       type="button"
                       className={

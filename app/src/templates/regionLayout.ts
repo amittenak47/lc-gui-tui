@@ -11,6 +11,7 @@
  */
 
 import { DRAW_HEADER_BAND } from "./drawPageGrowth";
+import { regionTextWidth } from "./readingColumn";
 import {
   REGIONS,
   REGION_GUTTER,
@@ -38,8 +39,23 @@ export interface LayoutElement {
     lcRegionOy?: number;
     lcFixedSize?: boolean;
     lcPinnedHeader?: boolean;
+    lcReadingColumn?: boolean;
   } | null;
   [key: string]: unknown;
+}
+
+/**
+ * Frames that carry their own width because they are documents.
+ *
+ * The statement is a reading column sized to the viewport; forcing it to the
+ * shared student width is what made it four screens wide and its type
+ * microscopic. Untagged boards are recognised by region so a saved board heals
+ * on its first sync rather than staying wide forever.
+ */
+export function isReadingColumnFrame(element: LayoutElement): boolean {
+  const meta = element.customData;
+  if (meta?.lcReadingColumn) return true;
+  return frameRegionOf(element) === "constraints";
 }
 
 const REGION_IDS = new Set<string>(Object.keys(REGIONS));
@@ -80,13 +96,19 @@ export function regionFramesOf(
  * that width wins; otherwise keep the common / constraints width.
  */
 function sharedStudentWidth(frames: Map<RegionId, LayoutElement>): number {
-  const minColumn = Math.max(...STUDENT_REGION_ORDER.map((region) => REGION_MIN[region].minW));
-  const widths = STUDENT_REGION_ORDER.map((region) => {
+  const columns = STUDENT_REGION_ORDER.filter((region) => {
     const frame = frames.get(region);
-    return frame ? num(frame.width, REGIONS[region].w) : null;
-  }).filter((width): width is number => width !== null);
+    return !frame || !isReadingColumnFrame(frame);
+  });
+  const minColumn = Math.max(...columns.map((region) => REGION_MIN[region].minW));
+  const widths = columns
+    .map((region) => {
+      const frame = frames.get(region);
+      return frame ? num(frame.width, REGIONS[region].w) : null;
+    })
+    .filter((width): width is number => width !== null);
 
-  if (widths.length === 0) return Math.max(minColumn, REGIONS.constraints.w);
+  if (widths.length === 0) return Math.max(minColumn, REGIONS.approach.w);
   if (widths.every((width) => width === widths[0])) return Math.max(minColumn, widths[0]);
 
   const counts = new Map<number, number>();
@@ -107,9 +129,6 @@ function sharedStudentWidth(frames: Map<RegionId, LayoutElement>): number {
   let picked = majorityWidth;
   if (new Set(outliers).size === 1 && outliers.length <= Math.ceil(widths.length / 2)) {
     picked = outliers[0];
-  } else {
-    const constraints = frames.get("constraints");
-    picked = constraints ? num(constraints.width, majorityWidth) : majorityWidth;
   }
 
   return Math.max(minColumn, picked);
@@ -155,7 +174,7 @@ function contentMinHeight(
  */
 export function syncRegionLayout(
   elements: readonly LayoutElement[],
-  options?: { codeContentHeight?: number },
+  options?: { codeContentHeight?: number; readingColumnWidth?: number },
 ): LayoutElement[] | null {
   const byId = new Map(elements.map((element) => [element.id, { ...element }]));
   const frames = regionFramesOf([...byId.values()]);
@@ -176,6 +195,13 @@ export function syncRegionLayout(
     const frame = frames.get(region);
     if (!frame) continue;
 
+    const readingColumn = isReadingColumnFrame(frame);
+    const frameWidth = readingColumn
+      ? Math.max(
+          REGION_MIN[region].minW,
+          options?.readingColumnWidth ?? num(frame.width, REGIONS[region].w),
+        )
+      : sharedWidth;
     const requested = num(frame.height, REGIONS[region].h);
     const originY = oldOrigins.get(region)?.y ?? frame.y;
     const contentFloor = contentMinHeight([...byId.values()], region, originY);
@@ -198,7 +224,7 @@ export function syncRegionLayout(
       ...frame,
       x: 0,
       y,
-      width: sharedWidth,
+      width: frameWidth,
       height,
       // Template boxes stay upright — same rule as "no free move".
       angle: 0,
@@ -258,8 +284,6 @@ export function syncRegionLayout(
     frames.set("agent", next);
   }
 
-  const contentWidth = Math.max(200, sharedWidth - 72);
-
   for (const element of byId.values()) {
     if (frameRegionOf(element)) continue;
     const region = element.customData?.lcRegion as RegionId | undefined;
@@ -268,6 +292,10 @@ export function syncRegionLayout(
     const frame = frames.get(region);
     const oldOrigin = oldOrigins.get(region);
     if (!frame || !oldOrigin) continue;
+
+    // Text wraps to the frame it lives in, not to the widest frame on the
+    // board — the statement's column is narrower than the drawing pages'.
+    const contentWidth = regionTextWidth(num(frame.width, sharedWidth));
 
     const meta = element.customData;
     const offsetX =

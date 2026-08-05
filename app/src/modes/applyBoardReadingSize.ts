@@ -8,8 +8,19 @@
  * Monaco scales its CSS px by the same zoom so the dock stays proportional.
  */
 
+import {
+  regionTextWidth,
+  STATEMENT_BASE_RANGE,
+  STATEMENT_CODE_BASE,
+  STATEMENT_PROSE_BASE,
+} from "../templates/readingColumn";
 import { FONT_CODE, FONT_UI } from "../templates/skeleton";
-import { BODY_FONT_PX, STATEMENT_LINE_HEIGHT_RATIO, type BoardReadingSize } from "./codeFontSize";
+import {
+  BODY_FONT_PX,
+  statementSceneFont,
+  STATEMENT_LINE_HEIGHT_RATIO,
+  type BoardReadingSize,
+} from "./codeFontSize";
 import { linedRuleClearance, textBaselineOffset } from "./textBaseline";
 
 type ReadingMeta = {
@@ -77,23 +88,36 @@ function frameWidth(
   return typeof frame?.width === "number" ? frame.width : null;
 }
 
+/**
+ * The base a statement block is *authored* at, healed onto the reading-column
+ * scale.
+ *
+ * The base only survives to carry one fact — is this block prose or an example
+ * — and boards saved under the old four-screen-wide column carry bases (28/24,
+ * or a compounded 36/44) that mean nothing on a column a tenth as wide. Out of
+ * range, the face is the better witness than the number.
+ */
+function healedBase(element: ReadingElement, stored: number | undefined): number {
+  const [lo, hi] = STATEMENT_BASE_RANGE;
+  if (typeof stored === "number" && stored >= lo && stored <= hi) return stored;
+  const family =
+    element.fontFamily ?? (typeof stored === "number" && stored < 26 ? FONT_CODE : FONT_UI);
+  return family === FONT_CODE ? STATEMENT_CODE_BASE : STATEMENT_PROSE_BASE;
+}
+
 function ensureBases(element: ReadingElement): ReadingMeta {
   const meta: ReadingMeta = { ...(element.customData ?? {}) };
 
-  if (typeof element.fontSize === "number" && meta.lcFontBase == null) {
-    // Prefer template sizes (24 code / 28 prose). Heal compounded bases.
-    const raw = element.fontSize;
-    meta.lcFontBase = raw > 42 ? 28 : raw < 12 ? 28 : raw;
-  }
-  if (typeof meta.lcFontBase === "number" && meta.lcFontBase > 42) {
-    meta.lcFontBase = 28;
-  }
+  meta.lcFontBase = healedBase(
+    element,
+    typeof meta.lcFontBase === "number" ? meta.lcFontBase : element.fontSize,
+  );
   if (typeof meta.lcRegionOy === "number" && meta.lcRegionOyBase == null) {
     meta.lcRegionOyBase = meta.lcRegionOy;
   }
   if (meta.lcLineHeightBase == null) {
-    const base = meta.lcFontBase ?? 28;
-    meta.lcLineHeightBase = base < 26 ? 34 / 24 : STATEMENT_LINE_HEIGHT_RATIO;
+    const family = element.fontFamily ?? FONT_UI;
+    meta.lcLineHeightBase = family === FONT_CODE ? 1.42 : STATEMENT_LINE_HEIGHT_RATIO;
   }
   return meta;
 }
@@ -142,6 +166,15 @@ export interface ApplyReadingOpts {
   zoom?: number;
   /** Snap body blocks onto the lined-paper pitch so statement text sits on the rules. */
   lined?: boolean;
+  /**
+   * Board content width in CSS pixels.
+   *
+   * The statement page is a reading column fitted to this width, so this is
+   * what turns the S/M/L *reading* size into a scene font. Omitted (or zero)
+   * means "not measured": the column is then treated as full-bleed, which is
+   * both the phone case and the conservative one.
+   */
+  viewportWidth?: number;
 }
 
 /**
@@ -153,9 +186,7 @@ export function applyBoardReadingSize<T extends ReadingElement>(
   size: BoardReadingSize,
   opts?: ApplyReadingOpts,
 ): T[] {
-  const targetFont = BODY_FONT_PX[size];
   const lined = Boolean(opts?.lined);
-  const gridPitch = targetFont * STATEMENT_LINE_HEIGHT_RATIO;
 
   const frames = new Map<string, { x: number; y: number; width?: number }>();
   for (const element of elements) {
@@ -168,6 +199,23 @@ export function applyBoardReadingSize<T extends ReadingElement>(
     }
   }
 
+  /*
+   * The reading column decides the type size, so it is measured first.
+   *
+   * `targetFont` used to be a constant per S/M/L. That was right when the
+   * statement lived in a fixed 3920-unit frame and wrong the moment the frame
+   * became a column sized to the screen: the same 36 units is 36 CSS px on a
+   * phone-width column and 3.6 on a desk-width one. Deriving it from the column
+   * and the viewport is what makes S/M/L name a size the reader can see.
+   */
+  const constraintsW = frameWidth(frames, "constraints");
+  const textWidth = constraintsW != null ? regionTextWidth(constraintsW) : null;
+  const targetFont =
+    constraintsW != null
+      ? statementSceneFont(size, constraintsW, opts?.viewportWidth ?? 0)
+      : BODY_FONT_PX[size];
+  const gridPitch = targetFont * STATEMENT_LINE_HEIGHT_RATIO;
+
   const bodies = elements
     .map((element, index) => ({ element, index }))
     .filter(({ element }) => isBody(element));
@@ -179,10 +227,9 @@ export function applyBoardReadingSize<T extends ReadingElement>(
     if (typeof meta.lcRegionOyBase === "number") {
       bodyAnchor =
         bodyAnchor == null ? meta.lcRegionOyBase : Math.min(bodyAnchor, meta.lcRegionOyBase);
-      const baseFont = meta.lcFontBase ?? 28;
+      const baseFont = meta.lcFontBase ?? STATEMENT_PROSE_BASE;
       const lhBase = meta.lcLineHeightBase ?? STATEMENT_LINE_HEIGHT_RATIO;
-      const fontFamily =
-        element.fontFamily ?? (baseFont < 26 ? FONT_CODE : FONT_UI);
+      const fontFamily = element.fontFamily ?? FONT_UI;
       const baseline =
         meta.lcRegionOyBase +
         textBaselineOffset(baseFont, lhBase, fontFamily);
@@ -205,24 +252,20 @@ export function applyBoardReadingSize<T extends ReadingElement>(
   >();
   let cursor = bodyAnchor;
   let baselineCursor = Math.round(bodyBaselineAnchor / gridPitch) * gridPitch;
-  const gap = 22;
-  const constraintsW = frameWidth(frames, "constraints");
-  const textWidth =
-    constraintsW != null ? Math.max(200, constraintsW - 72) : null;
+  const gap = Math.round(targetFont * 0.78);
 
   for (const { element, index } of bodies) {
     const meta = ensureBases(element);
-    const baseFont = meta.lcFontBase ?? 28;
-    // Preserve code vs prose ratio from the template (24 vs 28).
-    const ratio = Math.min(1.05, Math.max(0.8, baseFont / 28));
+    const baseFont = meta.lcFontBase ?? STATEMENT_PROSE_BASE;
+    // Preserve the code vs prose ratio the template authored.
+    const ratio = Math.min(1.05, Math.max(0.8, baseFont / STATEMENT_PROSE_BASE));
     const fontSize = Math.round(targetFont * ratio * 10) / 10;
     // Lined mode uses a shared prose pitch so rules match every body line.
     const lhRatio = lined
       ? STATEMENT_LINE_HEIGHT_RATIO
       : (meta.lcLineHeightBase ?? STATEMENT_LINE_HEIGHT_RATIO);
     const lineH = lined ? gridPitch : fontSize * lhRatio;
-    const fontFamily =
-      element.fontFamily ?? (baseFont < 26 ? FONT_CODE : FONT_UI);
+    const fontFamily = element.fontFamily ?? FONT_UI;
     const baselineOffset = textBaselineOffset(fontSize, lhRatio, fontFamily);
     // Approximate soft-wrap: chars per line shrinks as font grows.
     const wrapWidth = textWidth ?? element.width ?? 800;

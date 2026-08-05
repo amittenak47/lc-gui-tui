@@ -259,8 +259,6 @@ export interface AgentSidePanelProps {
   onDrawingFrame?: (programId: string, frameIndex: number) => void;
   /** Structured cards (tests, ambient, …) rendered in the thread. */
   children?: ReactNode;
-  /** Fires when Draw or Review toggles change (for board preview overlays). */
-  onFlagsChange?: (flags: { draw: boolean; reviewBoard: boolean }) => void;
 }
 
 export function AgentSidePanel({
@@ -282,7 +280,6 @@ export function AgentSidePanel({
   onToggleDrawing,
   onDrawingFrame,
   children,
-  onFlagsChange,
 }: AgentSidePanelProps) {
   const mobile = useIsMobile();
   const setOpen = useCallback(
@@ -300,9 +297,6 @@ export function AgentSidePanel({
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
 
-  useEffect(() => {
-    onFlagsChange?.({ draw, reviewBoard });
-  }, [draw, onFlagsChange, reviewBoard]);
   const [lightbox, setLightbox] = useState<CoachAttachment | null>(null);
   const [lightboxClosing, setLightboxClosing] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);

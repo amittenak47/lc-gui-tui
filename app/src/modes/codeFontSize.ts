@@ -17,6 +17,42 @@ export const BODY_FONT_PX: Record<BoardReadingSize, number> = {
   L: 44,
 };
 
+/**
+ * Statement body size in **CSS pixels** — the size it comes out at on screen.
+ *
+ * {@link BODY_FONT_PX} is a scene size, and a scene size only means something
+ * once you know how wide the page is: the statement page is a reading column
+ * fitted to the viewport, so its zoom is `viewport / column` and its scene
+ * units are near CSS pixels. Naming the CSS size instead of the scene size is
+ * what keeps the same text the same size on a phone and on a tablet, with the
+ * bigger screen spending its extra width on a longer line rather than on
+ * bigger type — which is what every document reader does.
+ */
+export const STATEMENT_CSS_PX: Record<BoardReadingSize, number> = {
+  S: 16,
+  M: 19,
+  L: 23,
+};
+
+/**
+ * Scene font for statement prose in a column this wide on a viewport this wide.
+ *
+ * `viewportWidth <= 0` means "not measured yet" — fall back to treating the
+ * column as full-bleed, which is the phone case and the safe one.
+ */
+export function statementSceneFont(
+  size: BoardReadingSize,
+  columnWidth: number,
+  viewportWidth: number,
+): number {
+  const column = Number.isFinite(columnWidth) && columnWidth > 0 ? columnWidth : 1;
+  const viewport =
+    Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : column;
+  const fitZoom = viewport / column;
+  const scene = STATEMENT_CSS_PX[size] / fitZoom;
+  return Math.round(Math.max(8, Math.min(200, scene)) * 10) / 10;
+}
+
 /** Prose lineHeight / fontSize — matches problemBoard template (40 / 28). */
 export const STATEMENT_LINE_HEIGHT_RATIO = 40 / 28;
 

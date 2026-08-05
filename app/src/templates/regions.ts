@@ -10,6 +10,8 @@
  * coach-tagged via `lcVizId`) so the coach can point without mutating ink.
  */
 
+import { READING_COLUMN_MIN } from "./readingColumn";
+
 export type RegionId =
   | "constraints"
   | "code"
@@ -56,7 +58,10 @@ const WALKTHROUGH_H = 1960;
  * Agent minW matches the default so older saved boards expand on sync.
  */
 export const REGION_MIN: Record<RegionId, { minW: number; minH: number }> = {
-  constraints: { minW: 1680, minH: 1260 },
+  // The statement is a reading column, not a student frame: it is as wide as
+  // the viewport's measure and as tall as the text. Its floors are a document's
+  // floors — anything larger would pad a short problem with empty page.
+  constraints: { minW: READING_COLUMN_MIN, minH: 600 },
   code: { minW: 1680, minH: 1344 },
   approach: { minW: 1680, minH: 980 },
   complexity: { minW: 1680, minH: 448 },

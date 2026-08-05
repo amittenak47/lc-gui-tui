@@ -4,18 +4,29 @@
  * The statement is reference material you read for twenty minutes while
  * sketching, so it is set like the problems page: a normal sans for prose, a
  * monospace face for anything with brackets or subscripts, and no hand-drawn
- * font anywhere. Region scaffolding is light, locked, and tagged with
- * `lcRegion` so the coach can tell "nothing written under Complexity" from
- * "there is no Complexity section".
+ * font anywhere. Region scaffolding is locked and tagged with `lcRegion` so the
+ * coach can tell "nothing written under Complexity" from "there is no
+ * Complexity section".
+ *
+ * **The scaffolding is not drawn.** Region frames used to be dashed boxes with
+ * a label and a hint inside them, and every one of them was a lie about what
+ * the surface is: you cannot see a page's own edge from inside the page, the
+ * neighbouring boxes leaked in around the fitted one, and re-inking them on a
+ * theme change un-hid the boxes paging had just hidden. The frames still exist —
+ * they are what the camera fits, what the pan clamp bounds, what the ink is
+ * clipped to, and what the agent's capture boxes are measured inside — but they
+ * have no stroke, and the label/hint text they carried is gone with them.
  */
 
 import { REGIONS, type RegionId } from "./regions";
 import {
-  FONT_CODE,
-  FONT_UI,
-  templatePalette,
-  type Skeleton,
-} from "./skeleton";
+  readingColumnWidth,
+  regionTextInset,
+  regionTextWidth,
+  STATEMENT_CODE_BASE,
+  STATEMENT_PROSE_BASE,
+} from "./readingColumn";
+import { FONT_CODE, FONT_UI, templatePalette, type Skeleton } from "./skeleton";
 
 export interface ProblemTemplateInput {
   taskId: string;
@@ -28,8 +39,17 @@ export interface ProblemTemplateInput {
   /** Dark board themes need light statement ink. */
   dark?: boolean;
   /**
+   * Board content width in CSS pixels, for sizing the statement's reading
+   * column. Falls back to the column ceiling when the caller has no viewport
+   * yet (tests, server-side).
+   */
+  viewportWidth?: number;
+  /**
    * Optional AI (or caller) overrides for empty-region prompts.
-   * Missing keys fall back to the generic HINTS.
+   *
+   * Retained so the scaffold round-trip keeps working, but nothing is drawn
+   * from it any more: region hints were template-box text, and template boxes
+   * are not displayed.
    */
   scaffolding?: {
     approach?: string;
@@ -37,17 +57,6 @@ export interface ProblemTemplateInput {
     walkthrough?: string;
   };
 }
-
-/** Prompts, so an empty region still says what belongs there. */
-const HINTS: Record<RegionId, string> = {
-  constraints: "",
-  code: "Type your solution here — this is what tests and the coach read.",
-  approach: "What are you scanning, and what invariant holds at each step?",
-  complexity: "time / space — and why",
-  walkthrough: "Trace one example by hand.",
-  scratch: "Scratch work — still included when the coach reads your board.",
-  agent: "Coach diagrams land here.",
-};
 
 /** One block of statement text, and how it should be set. */
 export interface StatementBlock {
@@ -126,10 +135,27 @@ export function parseStatement(
   return blocks.map((block) => ({ ...block, text: block.text.trim() }));
 }
 
+/** Scene units of blank page above the statement's first line. */
+const STATEMENT_TOP_PAD = 28;
+
 export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
   const skeletons: Skeleton[] = [];
   const ink = templatePalette(Boolean(input.dark));
-  const textWidth = REGIONS.constraints.w - 72;
+
+  /*
+   * The statement is set in its own column, not in the student column.
+   *
+   * Everything else on the board is a wide desk you write on; this one page is
+   * a document you read. Sizing it to the viewport is what makes the width-only
+   * fit land near zoom 1, which is what makes an 18-unit body come out as
+   * 18-ish CSS pixels instead of the 3.6 it came out as when the page was four
+   * screens wide.
+   */
+  const columnWidth = readingColumnWidth(
+    typeof input.viewportWidth === "number" ? input.viewportWidth : Number.NaN,
+  );
+  const columnInset = regionTextInset(columnWidth);
+  const columnText = regionTextWidth(columnWidth);
 
   const at = (region: { id: RegionId; x: number; y: number }, x: number, y: number, extra: Record<string, unknown> = {}) => ({
     lcRegion: region.id,
@@ -139,20 +165,31 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
   });
 
   for (const region of Object.values(REGIONS)) {
+    const isStatement = region.id === "constraints";
     skeletons.push({
       id: `lcregion-${region.id}-frame`,
       type: "rectangle",
       x: region.x,
       y: region.y,
-      width: region.w,
+      width: isStatement ? columnWidth : region.w,
       height: region.h,
-      strokeColor: ink.border,
+      /*
+       * Invisible, and locked so it cannot be selected.
+       *
+       * A dashed border around the page you are writing on is a box the page
+       * is inside of, and the page is the whole screen — so the border was
+       * never a boundary the writer could learn anything from, only chrome
+       * that leaked in from the neighbouring pages. Locking it additionally
+       * keeps Excalidraw from painting marching ants around a document-tall
+       * rectangle on every scroll frame.
+       */
+      strokeColor: "transparent",
       backgroundColor: "transparent",
-      strokeStyle: "dashed",
-      strokeWidth: 2,
+      strokeStyle: "solid",
+      strokeWidth: 0,
       roughness: 0,
-      opacity: 100,
-      locked: false,
+      opacity: 0,
+      locked: true,
       angle: 0,
       customData: {
         lcRegion: region.id,
@@ -167,82 +204,30 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
          * rest to the scroll — the same treatment the markdown page gets, for
          * the same reason.
          */
-        ...(region.id === "constraints" ? { lcDocumentPage: true } : {}),
+        ...(isStatement ? { lcDocumentPage: true, lcReadingColumn: true } : {}),
       },
     });
-
-    // Code keeps the same label/hint chrome as Approach; Monaco docks under it.
-    const labelX = region.x + 36;
-    const labelY = region.y + 24;
-    const labelFont = region.id === "constraints" ? 24 : 20;
-    skeletons.push({
-      id: `lcregion-${region.id}-label`,
-      type: "text",
-      x: labelX,
-      y: labelY,
-      width: textWidth,
-      text: region.label.toUpperCase(),
-      fontSize: labelFont,
-      fontFamily: FONT_UI,
-      strokeColor: ink.hint,
-      opacity: 100,
-      locked: true,
-      customData: {
-        ...at(region, labelX, labelY),
-        lcFontBase: labelFont,
-        lcFixedSize: true,
-        // Measure/capture split — agent boxes start below this band.
-        lcPinnedHeader: true,
-      },
-    });
-
-    const hint =
-      (region.id === "approach" && input.scaffolding?.approach) ||
-      (region.id === "complexity" && input.scaffolding?.complexity) ||
-      (region.id === "walkthrough" && input.scaffolding?.walkthrough) ||
-      HINTS[region.id];
-    if (hint) {
-      const hintX = region.x + 36;
-      const hintY = region.y + 64;
-      skeletons.push({
-        id: `lcregion-${region.id}-hint`,
-        type: "text",
-        x: hintX,
-        y: hintY,
-        width: textWidth,
-        text: hint,
-        fontSize: 22,
-        fontFamily: FONT_UI,
-        strokeColor: ink.hint,
-        opacity: 90,
-        locked: true,
-        customData: {
-          ...at(region, hintX, hintY),
-          lcPinnedHeader: true,
-        },
-      });
-    }
-
-    // Statement body is filled below; Monaco owns the code region interior.
-    if (region.id === "code") continue;
   }
 
   const constraints = REGIONS.constraints;
+  const textLeft = constraints.x + columnInset;
 
+  const titleFont = Math.round(STATEMENT_PROSE_BASE * 1.75);
+  const titleY = constraints.y + STATEMENT_TOP_PAD;
   skeletons.push({
     id: "lcregion-constraints-title",
     type: "text",
-    x: constraints.x + 36,
-    y: constraints.y + 64,
-    width: textWidth,
+    x: textLeft,
+    y: titleY,
+    width: columnText,
     text: input.title,
-    fontSize: 56,
+    fontSize: titleFont,
     fontFamily: FONT_UI,
     strokeColor: ink.primary,
     locked: true,
     customData: {
-      ...at(constraints, constraints.x + 36, constraints.y + 64),
-      lcFontBase: 56,
+      ...at(constraints, textLeft, titleY),
+      lcFontBase: titleFont,
       lcFixedSize: true,
     },
   });
@@ -255,17 +240,17 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       : null,
   ].filter((part): part is string => Boolean(part && part.length > 0));
 
-  let bodyY = constraints.y + 200;
+  let bodyY = titleY + Math.round(titleFont * 1.6);
   if (metaParts.length > 0) {
-    const metaFont = 26;
-    const padX = 16;
-    const padY = 10;
-    const gap = 14;
-    const boxH = metaFont + padY * 2 + 6;
-    let chipX = constraints.x + 36;
-    let chipY = constraints.y + 140;
-    const rowLeft = constraints.x + 36;
-    const rowRight = rowLeft + textWidth;
+    const metaFont = Math.round(STATEMENT_PROSE_BASE * 0.78);
+    const padX = 8;
+    const padY = 5;
+    const gap = 8;
+    const boxH = metaFont + padY * 2 + 4;
+    let chipX = textLeft;
+    let chipY = titleY + Math.round(titleFont * 1.55);
+    const rowLeft = textLeft;
+    const rowRight = rowLeft + columnText;
 
     metaParts.forEach((part, index) => {
       const textW = Math.max(48, Math.ceil(part.length * metaFont * 0.56));
@@ -317,18 +302,18 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
     });
 
     const chipsBottom = chipY + boxH;
-    const ruleY = chipsBottom + 22;
+    const ruleY = chipsBottom + 14;
     const ruleX = rowLeft;
     skeletons.push({
       id: "lcregion-constraints-meta-rule",
       type: "line",
       x: ruleX,
       y: ruleY,
-      width: textWidth,
+      width: columnText,
       height: 0,
       points: [
         [0, 0],
-        [textWidth, 0],
+        [columnText, 0],
       ],
       strokeColor: ink.border,
       strokeWidth: 1.5,
@@ -337,21 +322,21 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       locked: true,
       customData: { ...at(constraints, ruleX, ruleY), lcFixedSize: true },
     });
-    bodyY = ruleY + 28;
+    bodyY = ruleY + 20;
   }
 
   // Statement body, block by block, so examples keep the monospace face.
   let y = bodyY;
   parseStatement(input.description, 48).forEach((block, index) => {
-    const fontSize = block.code ? 24 : 28;
-    const lineHeight = block.code ? 34 : 40;
-    const x = constraints.x + 36;
+    const fontSize = block.code ? STATEMENT_CODE_BASE : STATEMENT_PROSE_BASE;
+    const lineHeight = Math.round(fontSize * (block.code ? 1.42 : 1.43) * 10) / 10;
+    const x = textLeft;
     skeletons.push({
       id: `lcregion-constraints-body-${index}`,
       type: "text",
       x,
       y,
-      width: textWidth,
+      width: columnText,
       text: block.text,
       fontSize,
       fontFamily: block.code ? FONT_CODE : FONT_UI,
@@ -365,7 +350,7 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
         lcRegionOyBase: y - constraints.y,
       },
     });
-    y += block.text.split("\n").length * lineHeight + 22;
+    y += block.text.split("\n").length * lineHeight + 14;
   });
 
   return skeletons;
@@ -411,15 +396,36 @@ export function recolorTemplateElements<
       isTemplateElementId(element.id) || Boolean(meta?.lcRegion) || isFrame;
     if (!isTemplate) return element;
 
+    /*
+     * Frames are never given a stroke — they are taken away from.
+     *
+     * This is where the dashed boxes came back from. Paging hides an off-page
+     * frame by parking its opacity at 0; recolouring set every frame's opacity
+     * back to 100 and its stroke to the theme border — so changing Appearance
+     * un-hid every page's box at once, and turning the page and back was the
+     * only way to put them away.
+     *
+     * Running it the other way round does double duty: the bug cannot happen,
+     * and a board saved when frames *were* dashed loses its boxes the first
+     * time it is opened, since `applyThemeInk` runs on every restore.
+     */
+    if (isFrame) {
+      if (element.strokeWidth === 0 && element.strokeColor === "transparent") {
+        return element;
+      }
+      changed = true;
+      return { ...element, strokeColor: "transparent", strokeWidth: 0 };
+    }
+
     let strokeColor = ink.body;
     let strokeWidth = element.strokeWidth;
-    if (isFrame) {
-      strokeColor = ink.border;
-      strokeWidth = 2;
-    } else if (element.id.includes("-meta-box") || element.id.includes("-meta-rule")) {
+    if (element.id.includes("-meta-box") || element.id.includes("-meta-rule")) {
       strokeColor = ink.border;
       if (element.id.includes("-meta-box")) strokeWidth = 1.5;
-    } else if (element.id.includes("-title") || (element.fontSize ?? 0) >= 48) {
+    } else if (element.id.includes("-title") || (element.fontSize ?? 0) >= 40) {
+      // The id is the reliable witness; the size is the fallback for boards
+      // whose ids were rewritten by conversion. 40 is above any body size the
+      // template has ever authored and below every title.
       strokeColor = ink.primary;
     } else if (
       element.id.includes("-label") ||
@@ -432,7 +438,7 @@ export function recolorTemplateElements<
       strokeColor = element.fontFamily === FONT_CODE ? ink.primary : ink.body;
     }
 
-    const opacity = isFrame ? 100 : element.opacity;
+    const opacity = element.opacity;
     if (
       element.strokeColor === strokeColor &&
       element.opacity === opacity &&

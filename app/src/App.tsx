@@ -242,8 +242,6 @@ export function App() {
    * both on the one transform.
    */
   const [codeContentHeight, setCodeContentHeight] = useState<number | null>(null);
-  /** Draw / Review toggles from the coach composer — drives agent preview boxes. */
-  const [coachPreviewFlags, setCoachPreviewFlags] = useState({ draw: false, reviewBoard: false });
   const [scratchLibOpen, setScratchLibOpen] = useState(false);
   const scratchLibResumeRef = useRef<(() => void) | null>(null);
   /**
@@ -595,6 +593,44 @@ export function App() {
   const [browseMotion, setBrowseMotion] = useState<"enter" | "idle" | "busy" | "exit" | "done">("idle");
   /** Same spinner → check transition when stepping ‹ › between problems. */
   const [switchMotion, setSwitchMotion] = useState<"idle" | "busy" | "done">("idle");
+
+  /**
+   * Play the closing beats of the loading transition — slide away, then check.
+   *
+   * Call this *after* the workspace is actually on the board. It used to run
+   * before: the checkmark landed, and then the page spent another two seconds
+   * building itself in full view of somebody who had just been told it was
+   * ready. A transition that finishes early is not a transition, it is a
+   * decoration over a wait, and it makes the wait feel longer than it is.
+   */
+  const finishLoadingTransition = useCallback(
+    async (fromBrowse: boolean, switching: boolean) => {
+      if (fromBrowse) {
+        // Ready: keep the spinner, slide the browser away under the blur.
+        setBrowseMotion("exit");
+        await waitMs(slideDurationMs());
+        // Spinner → checkmark, then a short beat before the board.
+        setBrowseMotion("done");
+        await waitMs(doneHoldMs());
+      } else if (switching) {
+        setSwitchMotion("done");
+        await waitMs(doneHoldMs());
+      }
+    },
+    [],
+  );
+
+  /**
+   * The board's content width in CSS pixels, for sizing the statement column.
+   *
+   * Read at seed time rather than passed down, because the template is built
+   * before the board has rendered the problem — `window.innerWidth` is the
+   * honest answer at that moment, and the first fit re-measures anyway.
+   */
+  const boardCssWidth = useCallback(() => {
+    if (typeof window === "undefined") return 0;
+    return Math.round(window.innerWidth);
+  }, []);
   /** Active problem-bank filter — header prev/next walk this when there's no session queue. */
   const [bankFilters, setBankFilters] = useState<SearchOptions>({});
   /** Disk practice session from `lc serve` (queue + progress). */
@@ -1077,16 +1113,6 @@ export function App() {
           }
           const source = ensureCodingRoom(detail.starter_code ?? "");
 
-          if (fromBrowse) {
-            setBrowseMotion("exit");
-            await waitMs(slideDurationMs());
-            setBrowseMotion("done");
-            await waitMs(doneHoldMs());
-          } else if (switching) {
-            setSwitchMotion("done");
-            await waitMs(doneHoldMs());
-          }
-
           setPseudocode(source);
           loadedSourceRef.current = source;
           setBoardPreparing(true);
@@ -1100,6 +1126,7 @@ export function App() {
             description: detail.problem_description,
             caseCount: detail.cases.length,
             dark: isDarkTheme(themeId),
+            viewportWidth: boardCssWidth(),
           });
           lastSavedHashRef.current = null;
           boardRef.current?.seedTemplate(skeletons);
@@ -1109,6 +1136,8 @@ export function App() {
           lastIdsRef.current = new Set();
           await boardRef.current?.waitForTemplate();
           await boardRef.current?.settleFitView();
+
+          await finishLoadingTransition(fromBrowse, switching);
 
           setBrowseMotion("idle");
           setSwitchMotion("idle");
@@ -1149,18 +1178,6 @@ export function App() {
         // A saved coach thread comes back with drawings attached to turns.
         const resumedMessages = restoreCoachMessages(loaded.resume.agent_messages);
         if (resumedMessages.length > 0) setCoachMessages(resumedMessages);
-
-        if (fromBrowse) {
-          // Ready: keep the spinner, slide the browser away under the blur.
-          setBrowseMotion("exit");
-          await waitMs(slideDurationMs());
-          // Spinner → checkmark, then a short beat before the board.
-          setBrowseMotion("done");
-          await waitMs(doneHoldMs());
-        } else if (switching) {
-          setSwitchMotion("done");
-          await waitMs(doneHoldMs());
-        }
 
         setPseudocode(source);
         loadedSourceRef.current = source;
@@ -1207,6 +1224,7 @@ export function App() {
           caseCount: detail.cases.length,
           dark: isDarkTheme(themeId),
           scaffolding,
+          viewportWidth: boardCssWidth(),
         });
 
         // A saved layout is restored over the fresh template; otherwise seed
@@ -1239,6 +1257,8 @@ export function App() {
           boardRef.current?.setInkOps(saved.ink as import("./canvas/rasterInk").InkOp[]);
         }
 
+        await finishLoadingTransition(fromBrowse, switching);
+
         setBrowseMotion("idle");
         setSwitchMotion("idle");
         setHoldBrowseOverlay(false);
@@ -1262,7 +1282,15 @@ export function App() {
         setBusy(null);
       }
     },
-    [client, themeId, problem, refreshSession, syncDrawingsToBoard],
+    [
+      boardCssWidth,
+      client,
+      finishLoadingTransition,
+      problem,
+      refreshSession,
+      syncDrawingsToBoard,
+      themeId,
+    ],
   );
 
   const openScratchpad = useCallback(
@@ -1423,17 +1451,6 @@ export function App() {
          */
         const stale = existing ? null : findStaleMdInkDoc(input.name, hash);
 
-        // Spinner → slide-away → checkmark (identical beats to pickProblem).
-        if (fromBrowse) {
-          setBrowseMotion("exit");
-          await waitMs(slideDurationMs());
-          setBrowseMotion("done");
-          await waitMs(doneHoldMs());
-        } else if (switching) {
-          setSwitchMotion("done");
-          await waitMs(doneHoldMs());
-        }
-
         // Mount the board under the overlay / blur, but keep it invisible until
         // the document is laid out and refreshed — then crossfade.
         setBoardPreparing(true);
@@ -1503,8 +1520,10 @@ export function App() {
             : null;
         }
 
-        // Complete the loading transition (same teardown as pickProblem).
-        // Do NOT arm scroll here — interactive is still false (view mode).
+        // Complete the loading transition (same beats and teardown as
+        // pickProblem). Do NOT arm scroll here — interactive is still false.
+        await finishLoadingTransition(fromBrowse, switching);
+
         setBrowseMotion("idle");
         setSwitchMotion("idle");
         setHoldBrowseOverlay(false);
@@ -1543,7 +1562,7 @@ export function App() {
         setBusy(null);
       }
     },
-    [busy, themeId, problem],
+    [busy, finishLoadingTransition, problem, themeId],
   );
 
   /**
@@ -3582,7 +3601,6 @@ export function App() {
               ) : null
             }
             coachFold={null}
-            agentPreview={coachPreviewFlags.draw || coachPreviewFlags.reviewBoard}
           />
           {(!problem || holdBrowseOverlay) && (
             <div
@@ -3711,7 +3729,6 @@ export function App() {
             }}
             onToggleDrawing={toggleDrawing}
             onDrawingFrame={showDrawingFrame}
-            onFlagsChange={setCoachPreviewFlags}
           >
             {AMBIENT_ENABLED && mode === "ambient" && (
               <AmbientPanel
