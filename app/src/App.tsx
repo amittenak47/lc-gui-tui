@@ -73,6 +73,7 @@ import { AttemptDialog } from "./modes/AttemptDialog";
 import { ScratchpadDialog } from "./modes/ScratchpadDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { loadForwardFailures, saveForwardFailures } from "./util/coachPrefs";
+import { ensureTypingImports } from "./util/pythonImports";
 import { ScratchpadLibraryDialog } from "./modes/ScratchpadLibraryDialog";
 import { formatTestReport, TestResultsModal } from "./modes/TestResultsModal";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
@@ -2207,7 +2208,15 @@ export function App() {
   const applyFilledCode = useCallback(
     async (filled: string, note: string) => {
       if (!problem) return;
-      const next = filled.trim();
+      /*
+       * Repair the import the model forgot before it reaches the editor.
+       *
+       * Models answer these in the 3.5 idiom — `List[int]` — because that is
+       * what the training data looks like, and often omit the import. On 3.12
+       * that is `NameError` at import time: the tests do not fail, they never
+       * start. The prompt asks for builtin generics; this is the net under it.
+       */
+      const next = ensureTypingImports(filled.trim());
       if (!next) return;
       setPseudocode(next);
       pseudocodeRef.current = next;

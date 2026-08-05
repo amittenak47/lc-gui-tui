@@ -518,7 +518,15 @@ export function AgentSidePanel({
       if (state.timer == null || state.moved) return;
       const dx = event.clientX - state.startX;
       const dy = event.clientY - state.startY;
-      if (dx * dx + dy * dy > 100) {
+      /*
+       * A finger resting on glass is never perfectly still.
+       *
+       * The old threshold was 10px, which a stationary thumb crosses on a
+       * tablet before a 500ms hold is up — so the hold cancelled itself. Only a
+       * deliberate drag should count, and the list scrolls vertically, so
+       * vertical travel is the one that means "I am scrolling, not holding".
+       */
+      if (Math.abs(dy) > 14 || Math.abs(dx) > 22) {
         state.moved = true;
         clearLongPress();
       }
@@ -777,6 +785,30 @@ export function AgentSidePanel({
               {message.processEvents && message.processEvents.length > 0 && (
                 <ProcessBlock events={message.processEvents} running={Boolean(message.pending)} />
               )}
+              {/*
+                The always-works way into the menu.
+                Long-press is the accelerator, not the mechanism: a message list
+                is a scroll container, and a scroller claims a touch by firing
+                `pointercancel` — which killed the hold timer before it could
+                finish, so on a tablet the menu was unreachable and quoting
+                could not be used at all. A button cannot be stolen.
+              */}
+              <button
+                type="button"
+                className="lc-coach-turn-actions"
+                aria-label={`Actions for ${ROLE_LABEL[message.role]}'s message`}
+                title="Message actions"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  clearLongPress();
+                  openMessageMenu(
+                    message.id,
+                    event.currentTarget.closest(".lc-coach-turn") as HTMLElement,
+                  );
+                }}
+              >
+                <span aria-hidden>⋯</span>
+              </button>
               {message.replyTo && (
                 /*
                  * The quoted turn, above the reply that answers it.

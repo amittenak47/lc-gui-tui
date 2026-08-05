@@ -6894,3 +6894,54 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-annotating-code .lc-raster-ink {
   z-index: 12;
 }
+
+
+/*
+ * Per-message actions handle.
+ *
+ * Long-press remains the accelerator, but it is not reliable on a scroll
+ * container — the scroller claims the touch and the hold never completes — so
+ * the menu also has a control that cannot be stolen. Faint until the turn is
+ * hovered or focused, and always visible on touch, where there is no hover to
+ * reveal it with.
+ */
+.lc-coach-turn {
+  position: relative;
+}
+
+.lc-coach-turn-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--ink) 55%, transparent);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.lc-coach-turn:hover .lc-coach-turn-actions,
+.lc-coach-turn-actions:focus-visible {
+  opacity: 1;
+}
+
+.lc-coach-turn-actions:hover {
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  color: var(--ink);
+}
+
+@media (hover: none) {
+  .lc-coach-turn-actions {
+    opacity: 0.65;
+  }
+}
