@@ -57,6 +57,9 @@ import { studentAuthoredElements, studentElements } from "./canvas/capture";
 import type { StructureBaseline } from "./canvas/boardDelta";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
 import { buildSnapshot, sceneFingerprint, structureBaselineFromBoard } from "./canvas/snapshot";
+import { hasCodeAnnotations, renderAnnotatedCode } from "./canvas/codeAnnotation";
+import { BOARD_THEMES } from "./templates/skeleton";
+import { statementLinePitch } from "./modes/codeFontSize";
 import { sha256Hex } from "./util/codeHash";
 import { HOLD_SENSITIVE_MS } from "./util/gesture";
 import { skeletonOf } from "./util/solutionSplit";
@@ -160,6 +163,13 @@ export function App() {
   const [scratchPageCount, setScratchPageCount] = useState(1);
   const [scratchNotebookId, setScratchNotebookId] = useState<string | null>(null);
   const [scratchEntryOpen, setScratchEntryOpen] = useState(false);
+  /**
+   * The pen owns the code page: the editor stops taking pointers so strokes
+   * reach the ink layer instead of the textarea underneath them.
+   */
+  const [annotateCode, setAnnotateCode] = useState(false);
+  /** Only the code page has an editor to annotate over. */
+  const codeAnnotatable = !mobile || activeRegion === "code";
   const [scratchLibOpen, setScratchLibOpen] = useState(false);
   const scratchLibResumeRef = useRef<(() => void) | null>(null);
   /**
@@ -1941,6 +1951,56 @@ export function App() {
 
       void (async () => {
         let attachments: CoachChatMessage["attachments"];
+
+        /*
+         * Marks on the code go as a picture; the code itself always goes as
+         * text.
+         *
+         * Only when there is something drawn. With no annotation an image adds
+         * nothing the source does not already say and costs a vision round-trip
+         * to say it, so the plain-text path is not just the cheaper answer, it
+         * is the better one. The picture is a re-render rather than a
+         * screenshot because Monaco is HTML: a canvas export would come back as
+         * marks floating over an empty rectangle, and a mark with nothing under
+         * it tells a model nothing.
+         */
+        const codeShot = (() => {
+          const board = boardRef.current;
+          if (!board) return null;
+          const blob = board.saveBoard();
+          const ops = Array.isArray(blob.ink) ? blob.ink : [];
+          if (ops.length === 0) return null;
+          const frame = board
+            .getElements()
+            .find(
+              (el) =>
+                (el as { customData?: { lcRegion?: string; lcRegionFrame?: boolean } })
+                  .customData?.lcRegion === "code" &&
+                (el as { customData?: { lcRegionFrame?: boolean } }).customData
+                  ?.lcRegionFrame,
+            ) as { x?: number; y?: number; width?: number; height?: number } | undefined;
+          if (!frame || typeof frame.x !== "number" || typeof frame.y !== "number") {
+            return null;
+          }
+          const box = {
+            minX: frame.x,
+            minY: frame.y,
+            maxX: frame.x + (frame.width ?? 0),
+            maxY: frame.y + (frame.height ?? 0),
+          };
+          if (!hasCodeAnnotations(ops, box)) return null;
+          const theme =
+            BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
+          const png = renderAnnotatedCode({
+            source: pseudocodeRef.current,
+            ops,
+            box,
+            background: theme.background,
+            textColor: isDarkTheme(themeId) ? "#e6edf3" : "#1b1f24",
+            fontScene: statementLinePitch(readingSize) * 0.55,
+          });
+          return png ? { label: "Annotated code", png } : null;
+        })();
         if ((flags.reviewBoard || flags.lazy) && boardRef.current) {
           try {
             const thumbs = await boardRef.current.exportRegionThumbs();
@@ -1954,6 +2014,10 @@ export function App() {
             /* thumbnails are best-effort */
           }
         }
+        if (codeShot) {
+          attachments = [...(attachments ?? []), codeShot];
+        }
+
         pushCoachMessage("user", text || "Send", {
           ...(attachments ? { attachments } : {}),
           ...(flagBits.length > 0 ? { flags: flagBits } : {}),
@@ -2832,6 +2896,8 @@ export function App() {
             boardPreparing && "lc-canvas-preparing",
             !problem && "lc-canvas-idle",
             (switchMotion === "busy" || switchMotion === "done") && "lc-switching",
+            // Lifts the ink layer over the dock — see the rule in styles.css.
+            annotateCode && "lc-annotating-code",
           ]
             .filter(Boolean)
             .join(" ")}
@@ -2844,6 +2910,8 @@ export function App() {
             onReadingSizeChange={setReadingSize}
             interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
             onCodeSlot={onCodeSlot}
+            annotateCodeToggle={Boolean(problem && !isScratchpad(problem)) && codeAnnotatable}
+            onAnnotateCodeChange={setAnnotateCode}
             linedPaperToggle={Boolean(problem)}
             showReadingSize={Boolean(problem && !isScratchpad(problem) && mobile)}
             mobileRegion={
@@ -2930,7 +2998,15 @@ export function App() {
             const visible = Boolean(codeSlot);
             return (
               <div
-                className={visible ? "lc-code-dock" : "lc-code-dock lc-code-dock-offscreen"}
+                className={[
+                  "lc-code-dock",
+                  !visible && "lc-code-dock-offscreen",
+                  // The pen cannot reach the ink layer through an editor that
+                  // is still claiming every pointer that lands on it.
+                  annotateCode && "lc-code-dock-annotating",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 style={{
                   left: slot.left,
                   top: slot.top,
