@@ -110,6 +110,7 @@ export function buildMdInkTemplate(height: number, _dark = false): Skeleton[] {
         lcRegion: MD_INK_REGION,
         lcRegionFrame: true,
         lcMdInkFrame: true,
+        lcDocumentPage: true,
       },
     },
   ];

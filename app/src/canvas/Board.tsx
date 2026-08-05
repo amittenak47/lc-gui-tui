@@ -869,8 +869,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * The content slot is only ever a document, so its presence is the signal —
    * there is no second flag to keep in step with it.
    */
-  const fitWidthOnlyRef = useRef(false);
-  fitWidthOnlyRef.current = Boolean(pageContent);
+
   const transparentCanvasRef = useRef(transparentCanvas);
   transparentCanvasRef.current = transparentCanvas;
   /** Reading mode: wheel scrolls, drags stay in the column. */
@@ -3092,8 +3091,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
          * that does not fit is the thing you scroll — which the pan clamp then
          * permits precisely because the content is taller than the viewport.
          */
+        /*
+         * Ask the scene, not React.
+         *
+         * This used to read a ref assigned during render, which is a different
+         * clock from the one the fit runs on: opening a document fits before
+         * the render that would have set it, so the very fit that matters saw
+         * "not a document" and shrank the whole file onto one screen. The frame
+         * carries the answer now, so it cannot arrive late.
+         */
+        const widthOnly =
+          focus.some(
+            (element) =>
+              (element as { customData?: { lcDocumentPage?: boolean } }).customData
+                ?.lcDocumentPage === true,
+          ) || page === "code";
         const zoom = clampZoom(
-          fitWidthOnlyRef.current
+          widthOnly
             ? availWidth / boxWidth
             : Math.min(availWidth / boxWidth, availHeight / boxHeight),
         );
@@ -3106,7 +3120,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
         const slackX = Math.max(0, availWidth - boxWidth * zoom);
         const slackY =
-          isScratchPage || fitWidthOnlyRef.current
+          isScratchPage || widthOnly
             ? 0
             : Math.max(0, availHeight - boxHeight * zoom);
         fittingCameraRef.current = true;
