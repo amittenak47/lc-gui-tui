@@ -46,7 +46,8 @@ export const MD_INK_REGION = "mdink-0";
  * The known cost is a phone, where fitting 760 to ~400px renders the body near
  * 8px. Sizing the page to the viewport would fix that and break the contract
  * above, so it needs a per-document stored width rather than a constant.
- export const MD_INK_PAGE_W = 760;
+ */
+export const MD_INK_PAGE_W = 760;
 
 /** Height before the document has been measured, and the floor afterwards. */
 export const MD_INK_MIN_PAGE_H = 1100;
