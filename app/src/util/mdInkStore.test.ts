@@ -4,6 +4,7 @@ import type { BoardBlob } from "../canvas/BoardHandle";
 import {
   deleteMdInkDoc,
   findMdInkDocByHash,
+  findStaleMdInkDoc,
   getMdInkDoc,
   hashMarkdown,
   listMdInkDocs,
@@ -133,5 +134,24 @@ describe("deleteMdInkDoc", () => {
     deleteMdInkDoc(saved.id);
     expect(getMdInkDoc(saved.id)).toBeNull();
     expect(listMdInkDocs()).toHaveLength(0);
+  });
+});
+
+describe("findStaleMdInkDoc", () => {
+  it("names the old set when a file has been edited since", () => {
+    saveMdInkDoc({ name: "notes.md", hash: "old-hash", source: "# v1", board: board() });
+    // Same file on disk, edited — the ink belongs to text that has moved.
+    const stale = findStaleMdInkDoc("notes.md", "new-hash");
+    expect(stale?.hash).toBe("old-hash");
+  });
+
+  it("stays quiet when the text is unchanged", () => {
+    saveMdInkDoc({ name: "notes.md", hash: "same", source: "# v1", board: board() });
+    expect(findStaleMdInkDoc("notes.md", "same")).toBeNull();
+  });
+
+  it("does not confuse a different file that happens to be open", () => {
+    saveMdInkDoc({ name: "notes.md", hash: "h1", source: "# a", board: board() });
+    expect(findStaleMdInkDoc("other.md", "h2")).toBeNull();
   });
 });

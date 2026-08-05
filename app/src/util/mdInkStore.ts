@@ -110,6 +110,23 @@ export function findMdInkDocByHash(hash: string): MdInkDoc | null {
   return readLibrary().find((entry) => entry.hash === hash) ?? null;
 }
 
+/**
+ * An annotation set for a file of this name, drawn over *different* text.
+ *
+ * The interesting case for a warning rather than a match. Edit a note between
+ * two annotating sessions and the hash moves, so the old ink no longer belongs
+ * to it — the marks would sit on lines that have shifted or gone. Silently
+ * opening a blank page is the safe behaviour and a confusing one, because from
+ * the outside it looks like the annotations were lost. Naming the stale set
+ * lets the writer be told what happened.
+ */
+export function findStaleMdInkDoc(name: string, hash: string): MdInkDocMeta | null {
+  const match = readLibrary().find((entry) => entry.name === name && entry.hash !== hash);
+  if (!match) return null;
+  const { id, name: entryName, hash: entryHash, updatedAt } = match;
+  return { id, name: entryName, hash: entryHash, updatedAt };
+}
+
 /** See the note on `freshId` in `scratchpadStore` — same millisecond, same trap. */
 function freshId(library: readonly MdInkDoc[], now: number): string {
   const base = `mdink-${now.toString(36)}`;

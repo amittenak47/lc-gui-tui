@@ -44,10 +44,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is taken away. A document opens in reading mode, because you opened it to read
   it.
 
+  **Annotations travel.** Export writes a `.lc-ink.json` sidecar to keep beside
+  the `.md`; import reads one back. Import refuses a sidecar drawn over
+  different text rather than scattering ink across words it was never placed
+  on. And a file that has been edited since it was last annotated now says so
+  instead of quietly opening blank — the old set stays under Recent, which
+  turns "where did my annotations go" into a sentence that explains itself.
+
   Not in v1: editing the markdown, multipage documents, the coach, and writing
-  the annotation sidecar to disk automatically — `exportMdInkSidecar` produces
-  the `.lc-ink.json` on request so an annotation set is never trapped in one
-  browser's storage.
+  the sidecar to disk automatically — export is explicit, so nothing appears
+  next to the writer's files without them asking.
 
 ### Fixed — Discard now discards
 
