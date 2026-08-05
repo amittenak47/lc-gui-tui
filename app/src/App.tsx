@@ -290,6 +290,8 @@ export function App() {
    * way round.
    */
   const [mdInkHeight, setMdInkHeight] = useState<number | null>(null);
+  const mdInkHeightRef = useRef<number | null>(null);
+  mdInkHeightRef.current = mdInkHeight;
   /** Scene width of the open markdown page — viewport-sized on fresh opens. */
   const [mdInkPageWidth, setMdInkPageWidth] = useState(MD_INK_PAGE_W);
   const onMdInkMeasure = useCallback((height: number) => {
@@ -1381,6 +1383,13 @@ export function App() {
   const openMdInk = useCallback(
     async (input: { name: string; text: string; docId?: string | null }) => {
       if (busy !== null) return;
+      /*
+       * Same loading transition as pickProblem — do not invent a parallel path.
+       * fromBrowse: browser overlay spinner → slide → checkmark → board under
+       * preparing → reveal. switching: WorkspaceLoadStatus blur spinner → check.
+       */
+      const fromBrowse = !problem;
+      const switching = Boolean(problem);
       setBusy("opening document…");
       setError(null);
       setTests(null);
@@ -1389,6 +1398,11 @@ export function App() {
       setMdInkEntryOpen(false);
       boardSaveSuspendedRef.current = true;
       agentSaveSuspendedRef.current = true;
+      if (fromBrowse) {
+        setHoldBrowseOverlay(true);
+        setBrowseMotion("busy");
+      }
+      if (switching) setSwitchMotion("busy");
 
       try {
         const hash = hashMarkdown(input.text);
@@ -1407,6 +1421,19 @@ export function App() {
          */
         const stale = existing ? null : findStaleMdInkDoc(input.name, hash);
 
+        // Spinner → slide-away → checkmark (identical beats to pickProblem).
+        if (fromBrowse) {
+          setBrowseMotion("exit");
+          await waitMs(slideDurationMs());
+          setBrowseMotion("done");
+          await waitMs(doneHoldMs());
+        } else if (switching) {
+          setSwitchMotion("done");
+          await waitMs(doneHoldMs());
+        }
+
+        // Mount the board under the overlay / blur, but keep it invisible until
+        // the document is laid out and refreshed — then crossfade.
         setBoardPreparing(true);
         setProblem(MD_INK_PROBLEM);
         setPseudocode("");
@@ -1414,15 +1441,10 @@ export function App() {
         lastSavedHashRef.current = null;
         setMdInkSource({ name: input.name, text: input.text, hash });
         setMdInkHeight(null);
+        mdInkHeightRef.current = null;
 
         const dark = isDarkTheme(themeId);
-        // The real height arrives from the document's own measure a frame or
-        // two later; start at the floor so the frame is never zero-sized.
         const savedInk = Array.isArray(existing?.board.ink) ? existing.board.ink : [];
-        // Size the column to this screen so width-fit keeps type Obsidian-readable
-        // (a fixed 760 on a phone was ~8px body). Inked restores from a wider
-        // tablet may see marks drift — the width is part of the annotate
-        // contract; storing it per document is the lasting fix.
         const pageWidth = mdInkPageWidthForViewport(
           typeof window !== "undefined" ? window.innerWidth : MD_INK_PAGE_W,
         );
@@ -1435,9 +1457,6 @@ export function App() {
             ink: savedInk,
             files: existing.board.files,
           });
-          // Restore kept the saved frame width — rewrite to this viewport so
-          // fit does not shrink the type. Ink stays; marks may drift if the
-          // page was authored wider.
           const live = boardRef.current?.getElements() ?? [];
           boardRef.current?.setElements(
             live.map((el) => {
@@ -1467,11 +1486,19 @@ export function App() {
         lastIdsRef.current = new Set();
         await boardRef.current?.waitForTemplate();
         await boardRef.current?.settleFitView();
-        // Same late-mount dance as the scratchpad: the ink layer may only exist
-        // after the first restore, so the strokes go on again once it does.
         if (existing && Array.isArray(existing.board.ink)) {
           boardRef.current?.setInkOps(existing.board.ink);
         }
+
+        // Document must finish laying out (measure stable) before we refresh.
+        await waitForMdInkLaidOut(() => mdInkHeightRef.current);
+        await boardRef.current?.settleFitView();
+
+        // Refresh — same arming the toolbar toggle used to unlock touch scroll.
+        boardRef.current?.armReadingScroll();
+        await waitMs(32);
+        await boardRef.current?.settleFitView();
+        boardRef.current?.armReadingScroll();
 
         {
           const board = boardRef.current;
@@ -1480,13 +1507,13 @@ export function App() {
             : null;
         }
 
+        // Complete the loading transition (same teardown as pickProblem).
+        setBrowseMotion("idle");
+        setSwitchMotion("idle");
+        setHoldBrowseOverlay(false);
         setBoardPreparing(false);
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
-        // Same effect as open→close toolbar: arm touch scroll for reading mode.
-        boardRef.current?.armReadingScroll();
-        requestAnimationFrame(() => boardRef.current?.armReadingScroll());
-        window.setTimeout(() => boardRef.current?.armReadingScroll(), 120);
         setEntering(true);
         window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
         setCoachOpen(false);
@@ -1501,12 +1528,15 @@ export function App() {
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
+        setHoldBrowseOverlay(false);
         setBoardPreparing(false);
+        if (fromBrowse) setBrowseMotion("idle");
+        setSwitchMotion("idle");
       } finally {
         setBusy(null);
       }
     },
-    [busy, themeId],
+    [busy, themeId, problem],
   );
 
   /**
@@ -4368,6 +4398,42 @@ async function loadTauriInvoke() {
 function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Wait until MdInkDocument has reported a stable height.
+ * Used under the existing loading overlay so refresh runs on a finished page.
+ */
+function waitForMdInkLaidOut(
+  readHeight: () => number | null,
+  timeoutMs = 8000,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const start = performance.now();
+    let last: number | null = null;
+    let stable = 0;
+    const tick = () => {
+      const height = readHeight();
+      if (height != null && height > 0) {
+        if (last != null && Math.abs(height - last) < 1) {
+          stable += 1;
+          if (stable >= 3) {
+            resolve();
+            return;
+          }
+        } else {
+          stable = 0;
+        }
+        last = height;
+      }
+      if (performance.now() - start >= timeoutMs) {
+        resolve();
+        return;
+      }
+      window.setTimeout(tick, 50);
+    };
+    tick();
   });
 }
 
