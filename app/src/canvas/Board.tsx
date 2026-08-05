@@ -4787,15 +4787,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               )}
             </div>
             <div className="lc-board-dock">
-              {!mapChromeHidden && bottomCenter}
-              <div className="lc-toolbar-dock-anchor" aria-hidden />
               {/*
-                The toolbar is annotate mode's toolbar.
-                Every one of these tools puts marks on the page, and outside
-                annotate mode the page is something you are reading and
-                scrolling. A pen offered on a surface that is not accepting pen
-                is the "it looks off" — so the whole strip goes with the mode
-                rather than being present and inert.
+                Pen island ABOVE the pager. Grid uses align-items:end so Theme /
+                Eye / pager share one bottom baseline; opening the toolbar grows
+                upward and must not lift those controls.
               */}
               {!mapChromeHidden && annotateCode && (
               <BoardToolbar
@@ -4844,6 +4839,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 }}
               />
               )}
+              <div className="lc-toolbar-dock-anchor" aria-hidden />
+              {!mapChromeHidden && bottomCenter}
             </div>
             <div className="lc-map-chrome-right">
               <div className="lc-map-chrome-row">
