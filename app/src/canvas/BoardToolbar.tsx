@@ -68,8 +68,9 @@ function dockAnchorRect(toolbar: HTMLElement | null): DOMRect | null {
   return dock.getBoundingClientRect();
 }
 
-/** Permanent seats (Hand + Select share one seat via the Hand flyout). */
+/** Permanent seats — Select first, then pen / eraser. No Hand: scrolling is toolbar-off. */
 const TOOLS: Array<{ tool: ToolName; label: string; hint: string; icon?: "pen" | "eraser" }> = [
+  { tool: "selection", label: "Select", hint: "Move or resize work" },
   { tool: "freedraw", label: "Pen", hint: "Pen", icon: "pen" },
   { tool: "eraser", label: "Eraser", hint: "Eraser — only removes ink under the brush", icon: "eraser" },
 ];
@@ -82,20 +83,7 @@ const SHAPE_TOOLS: Array<{ tool: ToolName; label: string; glyph: string }> = [
   { tool: "text", label: "Text box", glyph: "T" },
 ];
 
-const HAND_TOOLS: Array<{ tool: "hand" | "selection"; label: string; glyph: string; hint: string }> = [
-  { tool: "hand", label: "Hand", glyph: "✋", hint: "Pan the board" },
-  { tool: "selection", label: "Select", glyph: "⬚", hint: "Move or resize work" },
-];
-
 export interface BoardToolbarProps {
-  /**
-   * The page has no ground to pan, so the hand has nothing to do on it.
-   *
-   * Dropped from the menu rather than disabled: a greyed control still asks to
-   * be understood, and there is nothing to understand here beyond "not on this
-   * page". What remains is Select, which is what a page you cannot pan wants.
-   */
-  hidePanTool?: boolean;
   active: ToolName;
   onPick: (tool: ToolName) => void;
   themeId: string;
@@ -133,7 +121,6 @@ export interface BoardToolbarProps {
 
 export function BoardToolbar({
   active,
-  hidePanTool = false,
   onPick,
   themeId,
   inkColor,
@@ -176,7 +163,6 @@ export function BoardToolbar({
   const [moveAsOne, setMoveAsOne] = useState(true);
   const [shapePhase, setShapePhase] = useState<"list" | "fade" | "mod">("list");
   const [helpOpen, setHelpOpen] = useState(false);
-  const [handMenuOpen, setHandMenuOpen] = useState(false);
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
 
   const [layout, setLayout] = useState<ToolbarLayout>(() => loadToolbarLayout());
@@ -218,9 +204,8 @@ export function BoardToolbar({
   onToggleCaptureMenuRef.current = onToggleCaptureMenu;
 
   useEffect(() => {
-    if (!handMenuOpen && !shapeMenuOpen && !captureMenuOpen) return;
+    if (!shapeMenuOpen && !captureMenuOpen) return;
     const closeAll = () => {
-      setHandMenuOpen(false);
       setShapeMenuOpen(false);
       if (captureMenuOpenRef.current) onToggleCaptureMenuRef.current();
     };
@@ -238,7 +223,7 @@ export function BoardToolbar({
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [captureMenuOpen, handMenuOpen, shapeMenuOpen]);
+  }, [captureMenuOpen, shapeMenuOpen]);
 
   // Read through a ref so an inline callback cannot rebuild the observer on
   // every render.
@@ -317,7 +302,6 @@ export function BoardToolbar({
       setDragging(true);
       setDocking(false);
       setShapeMenuOpen(false);
-      setHandMenuOpen(false);
       setHelpOpen(false);
       dragRef.current = {
         pointerId,
@@ -442,7 +426,6 @@ export function BoardToolbar({
     if (shapesOpen) onToggleShapes();
     if (captureMenuOpen) onToggleCaptureMenu();
     setShapeMenuOpen(false);
-    setHandMenuOpen(false);
     if (tool === "text") onTextMode("plain");
     onPick(tool);
   };
@@ -453,9 +436,6 @@ export function BoardToolbar({
     active === "ellipse" ||
     active === "arrow" ||
     active === "text";
-
-  const handToolActive = active === "hand" || active === "selection";
-  const handGlyph = active === "selection" ? "⬚" : "✋";
 
   const renderToolButton = (
     tool: ToolName,
@@ -476,6 +456,10 @@ export function BoardToolbar({
         <PinkEraserIcon />
       ) : icon === "pen" ? (
         <PenIcon />
+      ) : tool === "selection" ? (
+        <span className="lc-tool-emoji" aria-hidden>
+          ⬚
+        </span>
       ) : (
         <span className="lc-tool-emoji" aria-hidden>
           {label}
@@ -525,59 +509,6 @@ export function BoardToolbar({
         >
           <span className="lc-toolbar-grip-dots" aria-hidden />
         </button>
-        <div className="lc-hand-wrap">
-          <button
-            type="button"
-            className={
-              handToolActive && !shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"
-            }
-            aria-label={
-              active === "selection"
-                ? "Select — tap for Hand / Select"
-                : "Pan — tap for Hand / Select"
-            }
-            title={
-              active === "selection"
-                ? "Select — tap for Hand / Select"
-                : "Pan — tap for Hand / Select"
-            }
-            aria-pressed={handToolActive && !shapesOpen}
-            aria-haspopup="menu"
-            aria-expanded={handMenuOpen}
-            onClick={() => {
-              setShapeMenuOpen(false);
-              setHandMenuOpen((open) => !open);
-            }}
-          >
-            <span className="lc-tool-emoji" aria-hidden>
-              {handGlyph}
-            </span>
-          </button>
-          {handMenuOpen && (
-            <div className="lc-shape-flyout" role="menu" aria-label="Hand tools">
-              {HAND_TOOLS.filter(
-                ({ tool }) => !(hidePanTool && tool === "hand"),
-              ).map(({ tool, label, glyph, hint }) => (
-                <button
-                  key={tool}
-                  type="button"
-                  role="menuitem"
-                  // The description lives on the tooltip, not in the menu: two
-                  // rows of prose per item made this flyout twice the height of
-                  // the shapes one for two entries anybody can read at a glance.
-                  title={hint}
-                  className={tool === active ? "is-active" : undefined}
-                  onClick={() => pickTool(tool)}
-                >
-                  <span className="lc-shape-flyout-glyph" aria-hidden>
-                    {glyph}
-                  </span>
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
 
         {TOOLS.map(({ tool, label, hint, icon }) =>
           renderToolButton(tool, label, hint, icon),
@@ -597,7 +528,6 @@ export function BoardToolbar({
             aria-haspopup="menu"
             onClick={() => {
               if (shapesOpen) onToggleShapes();
-              setHandMenuOpen(false);
               setShapeMenuOpen((open) => !open);
             }}
           >

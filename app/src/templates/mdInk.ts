@@ -20,34 +20,51 @@ export const MD_INK_REGION = "mdink-0";
 /**
  * Scene width of the document page — a reading column, not a desk.
  *
- * This was the scratchpad's 3920, matched so a nib covered the same fraction of
- * the page in both modes. That reasoning was about the pen and ignored the
- * reader: a page that wide, fitted to a tablet held upright, renders body text
- * at a size you cannot read without zooming, and once zoomed you are panning a
- * document instead of reading one. It was a desktop layout on a device nobody
- * holds like a desktop.
+ * {@link MD_INK_PAGE_W} is the *ceiling* (Obsidian's `--file-line-width`
+ * default). On a phone, fitting that ceiling to ~400 CSS px used to render
+ * body text near 8px — unreadable. New sessions size the page to the viewport
+ * instead so width-fit lands near zoom 1 and type stays Obsidian-sized. The
+ * ceiling still applies on a tablet, so the column does not stretch into a
+ * desktop-wide measure.
  *
- * 760 leaves a 700px text column once the document's 30px side padding is
- * taken out, which is Obsidian's own `--file-line-width` default.
- *
- * The page is fitted to the viewport's *width* — a document scrolls its height
- * rather than shrinking to it — so on a tablet held upright (~820 CSS px) this
- * lands at roughly 1.08x: the body renders near 16px, which is the size a
- * mobile reader shows, and the column fills the screen.
- *
- * The measure is ~93 characters, above the 50-75 usually called ideal for
- * prose. That is the same measure Obsidian puts on an iPad, and it is fixed
- * here for a harder reason than taste: annotations are stored in scene
- * coordinates against this column. Change the width — or the body size — and
- * the text reflows underneath ink that does not, so every mark on every saved
- * document slides off the words it was drawn on. The column is part of the
- * document's contract once anything has been written on it.
- *
- * The known cost is a phone, where fitting 760 to ~400px renders the body near
- * 8px. Sizing the page to the viewport would fix that and break the contract
- * above, so it needs a per-document stored width rather than a constant.
+ * Annotations are stored in scene coordinates against whatever width the page
+ * had when they were drawn. Changing width under existing ink reflows the
+ * markdown and leaves marks on the wrong words — so restores with ink keep
+ * their saved frame width.
  */
 export const MD_INK_PAGE_W = 760;
+
+/** Narrowest column we will author — below this, chrome eats the prose. */
+export const MD_INK_PAGE_W_MIN = 300;
+
+/**
+ * Page width for a fresh markdown session on this screen.
+ *
+ * `cssWidth` should be the board's content width (or `window.innerWidth` before
+ * the board mounts). The fit aims this frame at the available width, so matching
+ * them keeps zoom near 1 and body text near the authored CSS size.
+ */
+export function mdInkPageWidthForViewport(cssWidth: number): number {
+  if (!Number.isFinite(cssWidth) || cssWidth < 1) return MD_INK_PAGE_W;
+  // A little inset so the column is not flush with the bezel — Obsidian leaves
+  // gutters; edge-bleed type feels like a zoomed-out desktop page.
+  const inset = cssWidth < 640 ? 24 : 32;
+  const usable = cssWidth - inset * 2;
+  return Math.round(Math.min(MD_INK_PAGE_W, Math.max(MD_INK_PAGE_W_MIN, usable)));
+}
+
+/** Width stamped on a saved md-ink frame, if any. */
+export function mdInkFrameWidthFromElements(
+  elements: readonly { width?: number; customData?: { lcMdInkFrame?: boolean } | null }[],
+): number | null {
+  for (const el of elements) {
+    if (!el?.customData?.lcMdInkFrame) continue;
+    if (typeof el.width === "number" && Number.isFinite(el.width) && el.width > 0) {
+      return Math.round(el.width);
+    }
+  }
+  return null;
+}
 
 /** Height before the document has been measured, and the floor afterwards. */
 export const MD_INK_MIN_PAGE_H = 1100;
@@ -80,14 +97,23 @@ export function mdInkPageHeight(measuredPx: number | null): number {
  * and measure it — the *markdown* is what is locked, and it is HTML under the
  * canvas rather than an element on it, so there is nothing here to lock.
  */
-export function buildMdInkTemplate(height: number, _dark = false): Skeleton[] {
+export function buildMdInkTemplate(
+  height: number,
+  _dark = false,
+  width: number = MD_INK_PAGE_W,
+): Skeleton[] {
+  const pageW = Math.round(
+    Number.isFinite(width) && width > 0
+      ? Math.min(MD_INK_PAGE_W, Math.max(MD_INK_PAGE_W_MIN, width))
+      : MD_INK_PAGE_W,
+  );
   return [
     {
       id: "lcmdink-0-frame",
       type: "rectangle",
       x: 0,
       y: 0,
-      width: MD_INK_PAGE_W,
+      width: pageW,
       height,
       /*
        * Invisible on purpose.
@@ -104,7 +130,13 @@ export function buildMdInkTemplate(height: number, _dark = false): Skeleton[] {
       strokeWidth: 0,
       roughness: 0,
       opacity: 0,
-      locked: false,
+      /*
+       * Locked: an unlocked document-tall frame can be selected, and Excalidraw
+       * then paints marching-ants around the whole page. On a long markdown file
+       * that selection box is as tall as the document and is redrawn every scroll
+       * frame — the lag the writer sees as the dashed box on the screen edge.
+       */
+      locked: true,
       angle: 0,
       customData: {
         lcRegion: MD_INK_REGION,
