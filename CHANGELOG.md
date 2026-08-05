@@ -6,6 +6,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Markdown Ink
+
+- **Annotate a markdown file the way you annotate a scratchpad.** A markdown
+  icon sits immediately left of the scratchpad's paper: tap it to pick a `.md`
+  file, hold it for documents already annotated. The file opens as the page —
+  scrollable like a note in Obsidian, read-only, never written to — and the
+  whole existing toolbar works on top of it: pen, eraser, shapes, text, colours,
+  undo.
+
+  The document is *paper*, not a viewer. It has no scrollbar of its own: it lays
+  out at full height inside the page frame and rides the board camera, so a pan
+  moves the words, the shapes and the ink together as one thing. An inner
+  scroller would have been far easier and completely wrong — the ink would slide
+  off the words the moment you scrolled. The text is laid out once at the page's
+  scene width and then *scaled* by the camera, one affine transform shared with
+  Excalidraw and the raster ink, so the three cannot drift apart at any zoom.
+
+  Annotations are keyed by a hash of the markdown's content rather than its
+  path, so reopening the same file finds its ink again wherever the file has
+  moved to. Save, discard and quick-leave follow the scratchpad's contracts
+  exactly, including the two that were bugs there until recently: nothing is
+  committed until something has been drawn, so opening a document to read it
+  leaves no trace, and an explicit Save re-baselines so a later Discard rolls
+  back to the save rather than past it.
+
+  **Discard only ever throws away annotations.** The file on disk is opened
+  read-only and nothing in this feature can write to it.
+
+  **Reading and annotating are a toggle**, sitting with the eye and the
+  lined-paper switch in the map chrome and wearing the same card. A board built
+  for a one-page problem gives you free 2D pan and wheel-to-zoom, which is right
+  for something you are sketching on and wrong for something you are reading
+  down — every scroll of a trackpad would rescale the words. Reading mode makes
+  the wheel scroll and keeps a drag in its column, so you cannot wander sideways
+  off the text; Ctrl/Cmd+wheel still zooms, and the pen still draws, so nothing
+  is taken away. A document opens in reading mode, because you opened it to read
+  it.
+
+  **Annotations travel.** Export writes a `.lc-ink.json` sidecar to keep beside
+  the `.md`; import reads one back. Import refuses a sidecar drawn over
+  different text rather than scattering ink across words it was never placed
+  on. And a file that has been edited since it was last annotated now says so
+  instead of quietly opening blank — the old set stays under Recent, which
+  turns "where did my annotations go" into a sentence that explains itself.
+
+  Not in v1: editing the markdown, multipage documents, the coach, and writing
+  the sidecar to disk automatically — export is explicit, so nothing appears
+  next to the writer's files without them asking.
+
 ### Changed — replying to the coach
 
 - **A quoted message is a thread, not a paste.** Quoting used to copy the
@@ -20,7 +69,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **The composer is a paragraph tall.** A question to a coach is usually a few
   sentences, and the box was sized like a search field.
-
 
 ### Fixed — Discard now discards
 
