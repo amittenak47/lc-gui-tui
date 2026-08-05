@@ -10,7 +10,7 @@
  * coach-tagged via `lcVizId`) so the coach can point without mutating ink.
  */
 
-import { READING_COLUMN_MIN } from "./readingColumn";
+import { READING_COLUMN_MAX, READING_COLUMN_MIN } from "./readingColumn";
 
 export type RegionId =
   | "constraints"
@@ -44,8 +44,15 @@ const STUDENT_WIDTH = 3920;
 /** Coach lane — same width as the student column (was far too narrow at 1400). */
 const AGENT_WIDTH = STUDENT_WIDTH;
 
-/** Problem statements need real room to breathe at a readable font size. */
-const CONSTRAINTS_H = 1960;
+/**
+ * Starting height for the statement page.
+ *
+ * Only a starting point: the fit grows it to a screenful and the layout sync
+ * grows it to the text. It came down from 1960 when the page became a reading
+ * column — that number was a fifth of a four-screen-wide desk, and on a phone
+ * column it is five screens of blank paper under a short problem.
+ */
+const CONSTRAINTS_H = 900;
 /** Monaco solution editor sits in this slot under the problem statement. */
 const CODE_H = 2352; // 3× the original 784 — room for Imports + Solution without feeling cramped
 const APPROACH_H = 2380;
@@ -100,7 +107,9 @@ export const REGIONS: Record<RegionId, Region> = {
     label: "Problem & constraints",
     x: 0,
     y: 0,
-    w: STUDENT_WIDTH,
+    // A measure, not a desk — the live frame is sized to the viewport, and this
+    // is the ceiling it is capped at. See `readingColumn`.
+    w: READING_COLUMN_MAX,
     h: CONSTRAINTS_H,
   },
   code: {

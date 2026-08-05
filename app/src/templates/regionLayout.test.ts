@@ -207,11 +207,11 @@ describe("syncRegionLayout", () => {
   it("keeps the coach lane beside the shared student column", () => {
     const elements = framesFromTemplate();
     const code = elements.find((element) => element.id === regionFrameId("code"))!;
-    code.width = REGIONS.constraints.w + 300;
+    code.width = REGIONS.approach.w + 300;
 
     const synced = syncRegionLayout(elements)!;
     const agent = synced.find((element) => element.id === regionFrameId("agent"))!;
-    expect(agent.x).toBe(REGIONS.constraints.w + 300 + 128);
+    expect(agent.x).toBe(REGIONS.approach.w + 300 + 128);
     expect(agent.y).toBe(0);
   });
 });
