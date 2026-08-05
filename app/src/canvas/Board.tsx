@@ -714,6 +714,17 @@ export interface BoardProps {
    */
   pageContent?: ReactNode;
   /**
+   * Scene height the page frame should grow to — the measured document.
+   *
+   * A prop rather than a handle call because the imperative version had to
+   * land *after* the template existed, and a call that arrives one frame early
+   * silently does nothing: the frame stays at its floor, the pan clamp stays
+   * with it, and the reader can scroll to the bottom of a page that ends long
+   * before the text does. As a prop it is re-applied whenever either side
+   * changes, so there is no ordering left to get wrong.
+   */
+  pageContentHeight?: number | null;
+  /**
    * Let {@link pageContent} show through the canvas.
    *
    * Excalidraw paints an opaque viewport background, which would bury the
@@ -799,6 +810,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     bottomCenter = null,
     pageTitle = null,
     pageContent = null,
+    pageContentHeight = null,
     transparentCanvas = false,
     scrollModeToggle = false,
     annotateCodeToggle = false,
@@ -869,6 +881,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const lockedScrollXRef = useRef<number | null>(null);
   /** Pen goes to the code page instead of the editor. */
   const [annotateCode, setAnnotateCode] = useState(false);
+  const annotateCodeRef = useRef(annotateCode);
+  annotateCodeRef.current = annotateCode;
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
@@ -1242,7 +1256,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           ? Math.max(0, Math.min(rawHeight, viewHeight - clampedTop - margin))
           : rawHeight,
       ),
-      zoom: Math.round(zoom * 1000) / 1000,
+      /*
+       * On the code page, zoom is reported *relative to the page fit*.
+       *
+       * Monaco multiplies its base font by this. Absolute board zoom made that
+       * base meaningless: the code region is a wide scene rect, so fitting it
+       * to a tablet lands at a fraction of 1 and the editor rendered at a
+       * fraction of its readable size — the "desktop view squeezed onto a
+       * phone" problem. Measured against the fit instead, the page opens at the
+       * reading size the S/M/L preference actually names, and zooming from
+       * there scales it the way it reads: 2× really is twice the type.
+       */
+      zoom: Math.round(
+        (onCodePage && (fitZoomMinRef.current ?? 0) > 0
+          ? zoom / (fitZoomMinRef.current as number)
+          : zoom) * 1000,
+      ) / 1000,
     };
 
     // Hide the dock when the code frame is fully off-screen — switching to the
@@ -1815,6 +1844,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     const isHandPanTarget = (target: EventTarget | null) => {
       if (!(target instanceof Element)) return false;
+      /*
+       * The code page does not pan.
+       *
+       * It is one HTML editor filling the screen, wrapped to the column and
+       * scrolled by Monaco — there is no second screenful beside it to reach,
+       * so a drag could only push the page off-centre and leave the reader
+       * fighting the clamp to get it back. Zoom changes the type size; the
+       * scrollbar moves through the file; the hand has nothing left to do.
+       */
+      if (mobileRegionRef.current === "code" && !annotateCodeRef.current) return false;
       if (
         target.closest(
           ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
@@ -1950,9 +1989,33 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         rasterInkRef.current?.setCameraMoving(false);
         return;
       }
-      const vel = scrollModeRef.current
+      const raw = scrollModeRef.current
         ? { x: 0, y: panVelocityRef.current.y }
         : panVelocityRef.current;
+      /*
+       * Drop the components that have nowhere to go.
+       *
+       * Pressed against a boundary, the clamp already refuses that axis, so
+       * coasting into it can only produce a frame of motion the clamp undoes —
+       * which is the judder this is meant to be rid of. A throw along the wall
+       * still coasts; a throw into it simply does not start.
+       */
+      const vel = (() => {
+        const api = apiRef.current;
+        if (!api) return raw;
+        const state = api.getAppState() as {
+          scrollX?: number;
+          scrollY?: number;
+          zoom?: { value?: number };
+        };
+        const x = state.scrollX ?? 0;
+        const y = state.scrollY ?? 0;
+        const probe = clampPanScroll(x + raw.x * 16, y + raw.y * 16, state.zoom?.value ?? 1);
+        return {
+          x: Math.abs(probe.scrollX - x) < 0.5 ? 0 : raw.x,
+          y: Math.abs(probe.scrollY - y) < 0.5 ? 0 : raw.y,
+        };
+      })();
       const speed = Math.hypot(vel.x, vel.y);
       // The lift is not the settle when the view is still coasting — leave the
       // level pinned and let the coast's own settle release it.
@@ -3086,6 +3149,38 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     reportContentSlot();
   }, [pageContent, reportContentSlot]);
 
+  /**
+   * Grow the page to the document, and tell the pan clamp about it.
+   *
+   * `syncPageVisibility` is what recomputes `pageBoundsRef`, and that ref is
+   * the entire reason scrolling works: the clamp allows travel only while the
+   * content is taller than the viewport, so a frame left at its floor is a
+   * document you cannot scroll past the first screen of. Growing the frame
+   * without refreshing the bounds fixes nothing, which is why both happen here.
+   */
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api || !pageContentHeight || pageContentHeight < 1) return;
+    const current = api.getSceneElements() as SceneElementLike[];
+    const frame = current.find(
+      (el) => (el as { customData?: { lcMdInkFrame?: boolean } }).customData?.lcMdInkFrame,
+    ) as (SceneElementLike & { height?: number }) | undefined;
+    if (!frame) return;
+    if (typeof frame.height === "number" && Math.abs(frame.height - pageContentHeight) < 1) {
+      return;
+    }
+    api.updateScene({
+      elements: current.map((el) =>
+        el === frame
+          ? { ...(el as object), height: pageContentHeight, versionNonce: Math.random() * 2 ** 31 }
+          : el,
+      ) as unknown[],
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    syncPageVisibility();
+    scheduleSlotReports();
+  }, [pageContent, pageContentHeight, scheduleSlotReports, syncPageVisibility]);
+
   // A toggle mid-gesture must not leave a stale pin behind.
   useEffect(() => {
     if (!scrollMode) lockedScrollXRef.current = null;
@@ -4031,30 +4126,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       fitRegion: (regionId: RegionId | string) => {
         refitToViewport(regionId);
       },
-      setMdInkPageHeight: (height: number) => {
-        const api = apiRef.current;
-        if (!api || !Number.isFinite(height) || height < 1) return;
-        const current = api.getSceneElements() as SceneElementLike[];
-        const frame = current.find(
-          (el) => (el as { customData?: { lcMdInkFrame?: boolean } }).customData?.lcMdInkFrame,
-        ) as (SceneElementLike & { height?: number }) | undefined;
-        if (!frame) return;
-        // The measure re-fires on every font settle and layout pass; a whole
-        // scene update for a sub-pixel difference is not worth the repaint.
-        if (typeof frame.height === "number" && Math.abs(frame.height - height) < 1) return;
-        api.updateScene({
-          elements: current.map((el) =>
-            el === frame ? { ...(el as object), height, versionNonce: Math.random() * 2 ** 31 } : el,
-          ) as unknown[],
-          captureUpdate: CaptureUpdateAction.NEVER,
-        });
-        // The page just changed size, so the ink clip and the content slot are
-        // both measuring against a stale box.
-        requestAnimationFrame(() => {
-          syncPageVisibility();
-          scheduleSlotReports();
-        });
-      },
       appendScratchPage: (skeletons: Skeleton[]) => {
         const api = apiRef.current;
         if (!api || skeletons.length === 0) return 0;
@@ -4517,10 +4588,29 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 });
               }
 
+              /*
+               * Estimate the throw — from the hand, never from the correction.
+               *
+               * This is where the bounce actually came from, and why fixing the
+               * inertia twice did not stop it. Drag past a boundary and each
+               * frame goes: Excalidraw moves the view out, this samples the
+               * delta, then the bounds clamp below snaps it back with
+               * `updateScene` — which raises a *second* scroll event, whose
+               * delta points back toward the middle. That reversed sample went
+               * into the same average as the real ones, so a flick into a wall
+               * lifted off with velocity pointing away from it and the view
+               * sailed backwards. A literal rebound, produced by measuring our
+               * own correction and calling it the user's hand.
+               *
+               * The snap-back frames are the ones raised while `clampingScroll`
+               * is set. Skipping them leaves the estimate made only of movement
+               * somebody's finger actually caused.
+               */
               if (
                 activeToolRef.current === "hand" &&
                 handPanningRef.current &&
-                inertiaFrameRef.current === 0
+                inertiaFrameRef.current === 0 &&
+                !clampingScrollRef.current
               ) {
                 const now = performance.now();
                 const last = lastPanScrollRef.current;

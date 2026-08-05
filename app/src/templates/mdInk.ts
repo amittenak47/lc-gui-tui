@@ -18,16 +18,24 @@ export const MD_INK_DATASET = "md-ink";
 export const MD_INK_REGION = "mdink-0";
 
 /**
- * Scene width of the document page.
+ * Scene width of the document page — a reading column, not a desk.
  *
- * Matches the scratchpad page so a stroke of a given nib size covers the same
- * fraction of the page in both modes — the pen should not feel like a different
- * pen because the paper underneath it is a different mode.
+ * This was the scratchpad's 3920, matched so a nib covered the same fraction of
+ * the page in both modes. That reasoning was about the pen and ignored the
+ * reader: a page that wide, fitted to a tablet held upright, renders body text
+ * at a size you cannot read without zooming, and once zoomed you are panning a
+ * document instead of reading one. It was a desktop layout on a device nobody
+ * holds like a desktop.
+ *
+ * Sized like a phone reading column instead. Prose wants 60–75 characters a
+ * line; at the document's 15px body that is roughly 640 CSS px, and the page is
+ * a shade wider to leave a margin for marks down the side. Fitted to width, the
+ * text lands at about the size Obsidian shows on a phone.
  */
-export const MD_INK_PAGE_W = 3920;
+export const MD_INK_PAGE_W = 760;
 
 /** Height before the document has been measured, and the floor afterwards. */
-export const MD_INK_MIN_PAGE_H = 2400;
+export const MD_INK_MIN_PAGE_H = 1100;
 
 /**
  * Scene units per CSS pixel of rendered markdown.
@@ -41,7 +49,7 @@ export const MD_INK_MIN_PAGE_H = 2400;
 export const MD_INK_SCENE_PER_PX = 1;
 
 /** Room under the last line so a note can be written past the end of the text. */
-export const MD_INK_TAIL_PAD = 320;
+export const MD_INK_TAIL_PAD = 180;
 
 export function mdInkPageHeight(measuredPx: number | null): number {
   if (measuredPx === null || !Number.isFinite(measuredPx) || measuredPx <= 0) {
