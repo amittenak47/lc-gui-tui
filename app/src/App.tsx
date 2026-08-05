@@ -74,6 +74,9 @@ import { ScratchpadDialog } from "./modes/ScratchpadDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { loadForwardFailures, saveForwardFailures } from "./util/coachPrefs";
 import { ensureTypingImports } from "./util/pythonImports";
+
+/** Room under the last line of code so a note fits below it. */
+const CODE_PAGE_TAIL = 160;
 import { ScratchpadLibraryDialog } from "./modes/ScratchpadLibraryDialog";
 import { formatTestReport, TestResultsModal } from "./modes/TestResultsModal";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
@@ -226,6 +229,16 @@ export function App() {
    * reach the ink layer instead of the textarea underneath them.
    */
   const [annotateCode, setAnnotateCode] = useState(false);
+  /**
+   * Monaco's full content height, so the code page can be as tall as the code.
+   *
+   * Annotation is why this exists. Ink is stored in board scene coordinates; an
+   * editor that scrolls its own viewport slides the text out from under marks
+   * that stay put, so a note drawn on line 30 ends up beside line 12. Laying
+   * the editor out at full height and letting the board do the scrolling puts
+   * both on the one transform.
+   */
+  const [codeContentHeight, setCodeContentHeight] = useState<number | null>(null);
   /** Only the code page has an editor to annotate over. */
   const codeAnnotatable = !mobile || activeRegion === "code";
   const [scratchLibOpen, setScratchLibOpen] = useState(false);
@@ -3471,7 +3484,14 @@ export function App() {
               ) : null
             }
             pageContentHeight={
-              problem && isMdInk(problem) ? mdInkPageHeight(mdInkHeight) : null
+              problem && isMdInk(problem)
+                ? mdInkPageHeight(mdInkHeight)
+                : // The code page grows to the code for the same reason the
+                  // document page grows to the document: so the thing being
+                  // annotated and the ink on it move together.
+                  problem && !isLocalPad(problem) && codeContentHeight
+                  ? codeContentHeight + CODE_PAGE_TAIL
+                  : null
             }
             pageContent={
               problem && isMdInk(problem) && mdInkSource ? (
@@ -3562,6 +3582,7 @@ export function App() {
                   readingSize={readingSize}
                   defaultOpen
                   variant="dock"
+                  onCodeHeight={setCodeContentHeight}
                 />
               </div>
             );

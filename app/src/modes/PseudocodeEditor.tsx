@@ -29,9 +29,12 @@ export interface PseudocodeEditorProps {
   defaultOpen?: boolean;
   /** Docked on the canvas beneath the problem statement. */
   variant?: "panel" | "dock";
+  /** Monaco's full content height, so the board page can grow to it. */
+  onCodeHeight?: (height: number) => void;
 }
 
 export function PseudocodeEditor({
+  onCodeHeight,
   value,
   onChange,
   themeId = "blue",
@@ -83,6 +86,7 @@ export function PseudocodeEditor({
           height={dock ? "100%" : "min(42vh, 360px)"}
           onChange={editTab}
           onReady={() => {}}
+          onContentHeight={onCodeHeight}
         />
       </Suspense>
     </ErrorBoundary>

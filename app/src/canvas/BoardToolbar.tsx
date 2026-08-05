@@ -88,6 +88,14 @@ const HAND_TOOLS: Array<{ tool: "hand" | "selection"; label: string; glyph: stri
 ];
 
 export interface BoardToolbarProps {
+  /**
+   * The page has no ground to pan, so the hand has nothing to do on it.
+   *
+   * Dropped from the menu rather than disabled: a greyed control still asks to
+   * be understood, and there is nothing to understand here beyond "not on this
+   * page". What remains is Select, which is what a page you cannot pan wants.
+   */
+  hidePanTool?: boolean;
   active: ToolName;
   onPick: (tool: ToolName) => void;
   themeId: string;
@@ -125,6 +133,7 @@ export interface BoardToolbarProps {
 
 export function BoardToolbar({
   active,
+  hidePanTool = false,
   onPick,
   themeId,
   inkColor,
@@ -546,7 +555,9 @@ export function BoardToolbar({
           </button>
           {handMenuOpen && (
             <div className="lc-shape-flyout" role="menu" aria-label="Hand tools">
-              {HAND_TOOLS.map(({ tool, label, glyph, hint }) => (
+              {HAND_TOOLS.filter(
+                ({ tool }) => !(hidePanTool && tool === "hand"),
+              ).map(({ tool, label, glyph, hint }) => (
                 <button
                   key={tool}
                   type="button"
