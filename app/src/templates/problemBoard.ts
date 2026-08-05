@@ -154,7 +154,21 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       opacity: 100,
       locked: false,
       angle: 0,
-      customData: { lcRegion: region.id, lcRegionFrame: true },
+      customData: {
+        lcRegion: region.id,
+        lcRegionFrame: true,
+        /*
+         * The statement reads like a document, so it is fitted like one.
+         *
+         * Constraints is a wall of prose and examples that only ever gets read
+         * top to bottom. Fitting it on both axes shrinks the whole wall to the
+         * screen and makes it a picture of text rather than text; fitting the
+         * width lands it at the size the reading control names and leaves the
+         * rest to the scroll — the same treatment the markdown page gets, for
+         * the same reason.
+         */
+        ...(region.id === "constraints" ? { lcDocumentPage: true } : {}),
+      },
     });
 
     // Code keeps the same label/hint chrome as Approach; Monaco docks under it.
