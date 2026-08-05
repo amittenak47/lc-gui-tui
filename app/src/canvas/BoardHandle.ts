@@ -144,4 +144,9 @@ export interface BoardHandle {
   applyThemeInk(themeId: string): void;
   /** Drop all coach viz elements — used before re-applying from chat drawings. */
   stripCoachViz(): void;
+  /**
+   * Force reading-mode scroll arming after a document opens.
+   * Toolbar toggle used to be required — this is that toggle, without the UI.
+   */
+  armReadingScroll(): void;
 }

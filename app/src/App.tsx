@@ -1483,6 +1483,10 @@ export function App() {
         setBoardPreparing(false);
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
+        // Same effect as open→close toolbar: arm touch scroll for reading mode.
+        boardRef.current?.armReadingScroll();
+        requestAnimationFrame(() => boardRef.current?.armReadingScroll());
+        window.setTimeout(() => boardRef.current?.armReadingScroll(), 120);
         setEntering(true);
         window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
         setCoachOpen(false);
