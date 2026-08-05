@@ -97,6 +97,14 @@ export interface SkeletonMeta {
    * answer arrive with the thing being measured.
    */
   lcDocumentPage?: boolean;
+  /**
+   * A band pinned to the top of a draw page, carrying its template text.
+   *
+   * Split out from the page it heads so the two can have different jobs: the
+   * header stays put and describes the page, the region under it grows with
+   * what is written and is what gets cut into boxes for the agent.
+   */
+  lcPinnedHeader?: boolean;
 }
 
 /** Muted palette: the coach's ink should read as annotation, not as the work. */

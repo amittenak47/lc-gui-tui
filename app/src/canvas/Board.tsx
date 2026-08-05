@@ -468,6 +468,16 @@ function loadImageSize(dataURL: string): Promise<{ width: number; height: number
   });
 }
 
+/** Tools that put marks on the page — the ones annotate mode exists for. */
+const DRAWING_TOOLS = new Set<ToolName>([
+  "freedraw",
+  "eraser",
+  "text",
+  "rectangle",
+  "ellipse",
+  "arrow",
+]);
+
 const ZOOM_MIN = 0.15;
 const ZOOM_MAX = 1.75;
 const ZOOM_STEP = 1.15;
@@ -818,7 +828,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const mobile = useIsMobile();
   const mobileRef = useRef(mobile);
   mobileRef.current = mobile;
-  const [activeTool, setActiveTool] = useState<ToolName>("hand");
+  const [activeTool, setActiveTool] = useState<ToolName>("selection");
   const [fontSize, setFontSizeState] = useState<number>(DEFAULT_FONT_SIZE);
   const fontSizeRef = useRef(fontSize);
   fontSizeRef.current = fontSize;
@@ -1488,6 +1498,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onAnnotateCodeChange?.(annotateCode);
   }, [annotateCode, onAnnotateCodeChange]);
 
+  /*
+   * Entering annotate mode has to pick up a pen.
+   *
+   * The ink layer only accepts pointers while a drawing tool is active — that
+   * is what `pointerEvents: tool ? "auto" : "none"` says. Nothing set one. The
+   * toolbar used to be permanently on screen so the writer had chosen the pen
+   * long before, which is why every page that had been drawn on once kept
+   * working and the code page, which nobody had drawn on, never did: the mode
+   * came up with `hand` still selected and the layer stayed transparent to
+   * every stroke.
+   *
+   * Removing the hand tool made it a trap rather than a nuisance — `hand` is no
+   * longer reachable from the menu, so a board that started there could not be
+   * argued out of it.
+   */
+  useEffect(() => {
+    if (annotateCode) {
+      setActiveToolRef.current(
+        DRAWING_TOOLS.has(activeToolRef.current) ? activeToolRef.current : "freedraw",
+      );
+      return;
+    }
+    // Leaving hands the board back to something that does not mark it.
+    setActiveToolRef.current("selection");
+  }, [annotateCode]);
+
   const reportLinedSlot = useCallback(() => {
     /*
      * The code page is not paper.
@@ -1665,7 +1701,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
 
     const ops = rasterInkRef.current?.getOps() ?? [];
-    const rects = inkRegionSplit(frame, contentAABBsInFrame(live, ops, frame));
+    /*
+     * `LayoutElement` carries width/height as optional — a scene element is not
+     * obliged to have them — while the splitter needs a real box. Nothing
+     * reaches here without a frame that has both, but the compiler cannot know
+     * that, so the box is made explicit rather than asserted away.
+     */
+    const box = {
+      x: frame.x,
+      y: frame.y,
+      width: num(frame.width, 0),
+      height: num(frame.height, 0),
+    };
+    if (box.width < 1 || box.height < 1) {
+      setAgentPreviewSlots((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
+    const rects = inkRegionSplit(box, contentAABBsInFrame(live, ops, box));
     const sig = rects.map((r) => `${r.x},${r.y},${r.width},${r.height}`).join("|");
     if (sig === lastAgentPreviewSigRef.current) return;
     lastAgentPreviewSigRef.current = sig;
@@ -1711,8 +1763,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!frame) return false;
 
     const ops = rasterInkRef.current?.getOps() ?? [];
-    const contentBottomRel = contentBottomInFrame(live, ops, frame);
+    // Same widening as the preview split: the frame's box has to be concrete
+    // before anything measures against it.
     const curH = num(frame.height, 0);
+    const contentBottomRel = contentBottomInFrame(live, ops, {
+      x: frame.x,
+      y: frame.y,
+      width: num(frame.width, 0),
+      height: curH,
+      customData: frame.customData ?? undefined,
+    });
     const nextH = growDrawHeight({ basePageH, currentH: curH, contentBottomRel });
     if (Math.abs(curH - nextH) <= 1) return false;
 
@@ -1882,6 +1942,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
   }, []);
 
+  const setActiveToolRef = useRef<(tool: ToolName) => void>(() => {});
   const setTool = useCallback((tool: ToolName) => {
     if (tool === "freedraw") {
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcInk", locked: false });
@@ -1963,6 +2024,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       });
     }
   }, [activeTool, applyTextModeToAppState]);
+  setActiveToolRef.current = setTool;
 
   useEffect(() => {
     if (annotateCode) {
@@ -3314,7 +3376,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           if (isDrawPageRegion(typeof regionKey === "string" ? regionKey : null)) {
             const basePageH = fillHeight;
             drawBasePageHRef.current = basePageH;
-            const contentBottomRel = contentBottomInFrame(live, ops, primary);
+            const contentBottomRel = contentBottomInFrame(live, ops, {
+              x: primary.x,
+              y: primary.y,
+              width: num(primary.width, 0),
+              height: num(primary.height, 0),
+              customData: primary.customData ?? undefined,
+            });
             nextH = Math.max(
               regionMin,
               growDrawHeight({
@@ -3569,13 +3637,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const isCodePage = page === "code" && !isMdFrame;
     const grown = current.map((el) =>
       el === frame
-        ? {
-            ...(el as object),
+        ? ({
+            // Spread the element itself, not `object` — widening to `object`
+            // erases id/type/x/y and leaves nothing for `LayoutElement` to
+            // match against.
+            ...el,
             height: pageContentHeight,
             // Md frame must stay locked — see buildMdInkTemplate.
             ...(isMdFrame ? { locked: true } : {}),
             versionNonce: Math.random() * 2 ** 31,
-          }
+          } as LayoutElement)
         : el,
     ) as LayoutElement[];
     const synced = isCodePage
@@ -4584,7 +4655,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             y: frame.y,
             width: frame.width,
             height: frame.height,
-            customData: frame.customData,
+            // The splitter only reads `lcRegion`; the frame's meta is wider.
+            customData: frame.customData ?? undefined,
           };
           const splitRects = inkRegionSplit(
             frameRect,
