@@ -229,6 +229,9 @@ export interface AgentSidePanelProps {
    */
   askOnly?: boolean;
   onSend: (text: string, flags: CoachSendFlags) => void;
+  /** Forward a failed test run to the coach without being asked. */
+  forwardFailures?: boolean;
+  onForwardFailuresChange?: (on: boolean) => void;
   /** Opens the hold-to-reveal dialog for the review on this message. */
   onRequestBridge?: (messageId: string) => void;
   /** Expand/collapse a message's drawing section (and sync the board). */
@@ -251,6 +254,8 @@ export function AgentSidePanel({
   messages,
   askOnly = false,
   onSend,
+  forwardFailures = false,
+  onForwardFailuresChange,
   onRequestBridge,
   onToggleDrawing,
   onDrawingFrame,
@@ -827,6 +832,19 @@ export function AgentSidePanel({
             {/* Ambient stays greyed until AMBIENT_ENABLED is flipped. The
                 socket + 120s loop are already wired in App / coachSocket. */}
             <div className="lc-modes" role="group" aria-label="Coach mode">
+              {onForwardFailuresChange && (
+                <Tip tip="Send failed test runs to the coach automatically" placement="right">
+                  <button
+                    type="button"
+                    className={forwardFailures ? "lc-mode lc-mode-active" : "lc-mode"}
+                    aria-pressed={forwardFailures}
+                    disabled={busy}
+                    onClick={() => onForwardFailuresChange(!forwardFailures)}
+                  >
+                    Failures
+                  </button>
+                </Tip>
+              )}
               <Tip tip="Analyze on send" placement="right">
                 <button
                   type="button"
