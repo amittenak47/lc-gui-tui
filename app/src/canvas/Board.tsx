@@ -1362,9 +1362,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /**
    * Project the open page onto the screen for the HTML content layer.
    *
-   * Left/top/zoom go straight to the DOM node — a scroll frame must not
-   * re-render Board (camera perf: same reason the zoom pill is imperative).
-   * Scene width still uses React because it reflows the markdown column.
+   * Position is transform-only (translate+scale) so a scroll frame does not
+   * reflow the markdown tree. Scene width still uses React because it reflows
+   * the column — that path is rare (open / resize), not per-scroll.
    */
   const reportContentSlot = useCallback(() => {
     const api = apiRef.current;
@@ -1398,9 +1398,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     lastContentSlotRef.current = next;
     if (node) {
-      node.style.left = `${next.left}px`;
-      node.style.top = `${next.top}px`;
-      node.style.transform = `scale(${next.zoom})`;
+      /*
+       * Translate+scale only — never left/top.
+       *
+       * Writing left/top every scroll frame reflows the whole markdown tree
+       * (long notes = thousands of nodes). Transform stays on the compositor.
+       */
+      node.style.transform = `translate(${next.left}px, ${next.top}px) scale(${next.zoom})`;
     }
     if (!last || Math.abs(last.sceneWidth - next.sceneWidth) >= 0.01) {
       setContentSceneWidth(next.sceneWidth);

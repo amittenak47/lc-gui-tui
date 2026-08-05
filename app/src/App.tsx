@@ -292,6 +292,11 @@ export function App() {
   const [mdInkHeight, setMdInkHeight] = useState<number | null>(null);
   /** Scene width of the open markdown page — viewport-sized on fresh opens. */
   const [mdInkPageWidth, setMdInkPageWidth] = useState(MD_INK_PAGE_W);
+  const onMdInkMeasure = useCallback((height: number) => {
+    setMdInkHeight((prev) =>
+      prev !== null && Math.abs(prev - height) < 1 ? prev : height,
+    );
+  }, []);
   /** Same discard contract as the scratchpad — see `scratchBaselineRef`. */
   const mdInkBaselineRef = useRef<{ id: string | null; entry: MdInkDoc | null }>({
     id: null,
@@ -3528,11 +3533,7 @@ export function App() {
               problem && isMdInk(problem) && mdInkSource ? (
                 <MdInkDocument
                   source={mdInkSource.text}
-                  onMeasure={(height) => {
-                    setMdInkHeight((prev) =>
-                      prev !== null && Math.abs(prev - height) < 1 ? prev : height,
-                    );
-                  }}
+                  onMeasure={onMdInkMeasure}
                 />
               ) : null
             }
