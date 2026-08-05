@@ -52,12 +52,27 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   return Boolean(target.closest("button, a, input, textarea, select, [role='button']"));
 }
 
-function formatMessageQuote(message: CoachChatMessage): string {
-  const body = message.content.trim();
-  if (!body) return "";
-  const label = ROLE_LABEL[message.role];
-  const quoted = body.split("\n").map((line) => `> ${line}`).join("\n");
-  return `> **${label}:**\n${quoted}\n\n`;
+/** Longest stub shown in a reply bubble before it is cut. */
+const REPLY_EXCERPT_MAX = 160;
+
+/**
+ * A one-line trace of the quoted turn.
+ *
+ * Collapsed to a single line: a stub is there to say *which* message is being
+ * answered, and a stub that reproduced the paragraph breaks of a long coach
+ * answer would be the answer again rather than a reference to it.
+ */
+export function replyExcerpt(content: string): string {
+  const flat = content.replace(/\s+/g, " ").trim();
+  return flat.length > REPLY_EXCERPT_MAX
+    ? `${flat.slice(0, REPLY_EXCERPT_MAX - 1).trimEnd()}…`
+    : flat;
+}
+
+function replyRefFor(message: CoachChatMessage): CoachReplyRef | null {
+  const excerpt = replyExcerpt(message.content);
+  if (!excerpt) return null;
+  return { id: message.id, role: message.role, excerpt };
 }
 
 /**
@@ -114,6 +129,20 @@ interface MessageMenuState {
   left: number;
 }
 
+/**
+ * The turn a reply is hanging off, kept small on purpose.
+ *
+ * An id, who said it, and enough text to recognise it — not the whole message.
+ * The thread is a pointer, so a long coach answer does not get copied into
+ * every reply to it, and the excerpt still renders when the original has
+ * scrolled far out of view or been trimmed from the persisted thread.
+ */
+export interface CoachReplyRef {
+  id: string;
+  role: CoachChatMessage["role"];
+  excerpt: string;
+}
+
 export interface CoachSendFlags {
   /** Ask the coach a question without the staged review pipeline. */
   ask: boolean;
@@ -126,6 +155,8 @@ export interface CoachSendFlags {
    * dump). Works with Draw / Review / a plain question.
    */
   lazy: boolean;
+  /** The message this turn is answering, when the writer quoted one. */
+  replyTo?: CoachReplyRef;
 }
 
 export interface CoachAttachment {
@@ -167,6 +198,16 @@ export interface CoachChatMessage {
   processEvents?: CoachProcessEvent[];
   /** The request is still in flight — this turn is a placeholder. */
   pending?: boolean;
+  /**
+   * The turn this one is answering.
+   *
+   * Quoting used to paste the coach's whole answer into the composer as `>`
+   * prose, which made the reply unreadable before it was even sent and left no
+   * relationship behind once it was — the quote was just more text in a new
+   * message. Holding the reference instead means the bubble can show a stub
+   * and the model can be told what is being replied to, separately.
+   */
+  replyTo?: CoachReplyRef;
 }
 
 export interface AgentSidePanelProps {
@@ -234,6 +275,8 @@ export function AgentSidePanel({
   const [lightboxClosing, setLightboxClosing] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [copyFlash, setCopyFlash] = useState(false);
+  /** The turn the next send is answering, if the writer quoted one. */
+  const [replyTo, setReplyTo] = useState<CoachReplyRef | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
@@ -417,13 +460,30 @@ export function AgentSidePanel({
     clearLongPress();
   }, [clearLongPress]);
 
+  /**
+   * Scroll a quoted turn back into view and flash it.
+   *
+   * The flash matters: on a long thread the original may land anywhere in the
+   * viewport after the scroll, and without something to catch the eye the jump
+   * reads as the panel having moved for no reason.
+   */
+  const jumpToMessage = useCallback((id: string) => {
+    const node = document.querySelector<HTMLElement>(`[data-coach-message="${id}"]`);
+    if (!node) return;
+    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    node.classList.add("is-flashed");
+    window.setTimeout(() => node.classList.remove("is-flashed"), 1400);
+  }, []);
+
   const quoteMessage = useCallback(
     (message: CoachChatMessage) => {
-      const text = formatMessageQuote(message);
-      if (!text) return;
-      // Quote becomes the draft for a new send — its own user turn when they hit
-      // Send. Threaded reply bubbles can replace this later.
-      setDraft((current) => (current.trim() ? `${current.trimEnd()}\n\n${text}` : text));
+      const ref = replyRefFor(message);
+      if (!ref) return;
+      // The draft is left alone. Quoting used to paste the whole answer in as
+      // `>` prose, so replying to a long turn meant scrolling past a copy of it
+      // to reach your own cursor — and the copy was all that survived, since a
+      // sent message had no idea what it was answering.
+      setReplyTo(ref);
       closeMessageMenu();
       onOpenChange?.(true);
       requestAnimationFrame(() => {
@@ -503,7 +563,8 @@ export function AgentSidePanel({
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!canSend) return;
-    onSend(draft.trim(), { ask, draw, reviewBoard, lazy });
+    onSend(draft.trim(), { ask, draw, reviewBoard, lazy, ...(replyTo ? { replyTo } : {}) });
+    setReplyTo(null);
     setDraft("");
     setAsk(askOnly);
     setDraw(false);
@@ -574,6 +635,7 @@ export function AgentSidePanel({
           {messages.map((message) => (
             <div
               key={message.id}
+              data-coach-message={message.id}
               className={`lc-coach-turn lc-coach-turn-selectable lc-coach-turn-${turnKind(message.role)}${
                 messageMenu?.messageId === message.id ? " lc-coach-turn-selected" : ""
               }`}
@@ -605,6 +667,30 @@ export function AgentSidePanel({
               </div>
               {message.processEvents && message.processEvents.length > 0 && (
                 <ProcessBlock events={message.processEvents} running={Boolean(message.pending)} />
+              )}
+              {message.replyTo && (
+                /*
+                 * The quoted turn, above the reply that answers it.
+                 *
+                 * Clicking it scrolls to the original and flashes it, which is
+                 * the whole point of keeping a reference rather than a copy:
+                 * the thread is navigable in both directions instead of being
+                 * prose that happens to mention what came before.
+                 */
+                <button
+                  type="button"
+                  className="lc-coach-reply-stub"
+                  title={`Go to ${ROLE_LABEL[message.replyTo.role]}'s message`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    jumpToMessage(message.replyTo!.id);
+                  }}
+                >
+                  <span className="lc-coach-reply-stub-role">
+                    {ROLE_LABEL[message.replyTo.role]}
+                  </span>
+                  <span className="lc-coach-reply-stub-text">{message.replyTo.excerpt}</span>
+                </button>
               )}
               {message.content ? (
                 <div className="lc-coach-turn-body">{message.content}</div>
@@ -703,10 +789,30 @@ export function AgentSidePanel({
         </div>
 
         <form className="lc-coach-composer" onSubmit={submit}>
+          {replyTo && (
+            <div className="lc-coach-reply-chip">
+              <span className="lc-coach-reply-chip-mark" aria-hidden />
+              <div className="lc-coach-reply-chip-text">
+                <span className="lc-coach-reply-stub-role">
+                  Replying to {ROLE_LABEL[replyTo.role]}
+                </span>
+                <span className="lc-coach-reply-stub-text">{replyTo.excerpt}</span>
+              </div>
+              <button
+                type="button"
+                className="lc-coach-reply-chip-clear"
+                aria-label="Cancel reply"
+                title="Cancel reply"
+                onClick={() => setReplyTo(null)}
+              >
+                ×
+              </button>
+            </div>
+          )}
           <textarea
             ref={composerRef}
             value={draft}
-            rows={3}
+            rows={6}
             placeholder="Ask the coach about your board or code…"
             disabled={busy}
             onChange={(event) => setDraft(event.target.value)}
