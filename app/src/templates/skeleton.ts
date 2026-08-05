@@ -88,6 +88,15 @@ export interface SkeletonMeta {
   lcScratchFrame?: boolean;
   /** Dashed frame for the Markdown Ink page, grown to the document's height. */
   lcMdInkFrame?: boolean;
+  /**
+   * This page is a document: fit its width, scroll its height.
+   *
+   * Lives on the element rather than in React state because the camera fit
+   * reads the scene, and a flag held in a ref is whatever the last render left
+   * there — which during an open is "not yet". Marking the frame makes the
+   * answer arrive with the thing being measured.
+   */
+  lcDocumentPage?: boolean;
 }
 
 /** Muted palette: the coach's ink should read as annotation, not as the work. */
