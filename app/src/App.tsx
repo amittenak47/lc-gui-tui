@@ -3621,13 +3621,23 @@ export function App() {
                 browseMotion === "done" ||
                 (holdBrowseOverlay && boardPreparing)) && (
                 <WorkspaceLoadStatus
-                  done={browseMotion === "done" || (holdBrowseOverlay && boardPreparing)}
+                  /*
+                   * Done means done.
+                   *
+                   * `holdBrowseOverlay && boardPreparing` is the state where the
+                   * board is still being built, and it was being passed as
+                   * *finished* — so the transition showed its checkmark over a
+                   * workspace that was visibly still loading, with the banner
+                   * underneath correctly saying so. The banner was not the
+                   * thing that was wrong.
+                   */
+                  done={browseMotion === "done" && !boardPreparing}
                 />
               )}
             </div>
           )}
           {problem && (switchMotion === "busy" || switchMotion === "done") && (
-            <WorkspaceLoadStatus done={switchMotion === "done"} />
+            <WorkspaceLoadStatus done={switchMotion === "done" && !boardPreparing} />
           )}
           {/* Monaco docks into the code frame — and on mobile that frame only
               exists on its own page, so the dock is mounted nowhere else. */}
