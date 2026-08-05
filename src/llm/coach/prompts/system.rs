@@ -211,7 +211,7 @@ Rules:\n\
 `filled_code` — do not leave the earned part as TODO.\n\
 - Only leave `pass` / `# TODO:` for ideas the board has not earned yet. When the claim lists what it \
 has not decided, those items are the only TODOs allowed.\n\
-- Prefer a short correct solution that matches their insight over a longer textbook dump.\n\
+- The runtime is Python 3.12. Prefer builtin generics — `list[int]`, `dict[str, int]`, `X | None` — which need no import. If you do use a `typing` name such as `List` or `Optional`, you must emit `from typing import ...` for it; a bare `List[int]` annotation is a `NameError` at import time and the tests never run.\n- Prefer a short correct solution that matches their insight over a longer textbook dump.\n\
 - Do NOT invent an unrelated full reference solution that contradicts their approach.\n\
 - Reply with a single JSON object and nothing else.";
 
@@ -223,6 +223,9 @@ Rules:\n\
 - Interpret the drawing first; fill the correct earned pieces into solution.py.\n\
 - Leave only the unearned idea as TODO/pass.\n\
 - Do not paste the full reference when their board only earned part of it.\n\
+- The runtime is Python 3.12. Prefer builtin generics — `list[int]`, `dict[str, int]`, `X | None` \
+— which need no import. If you use a `typing` name, emit its `from typing import ...`; a bare \
+`List[int]` is a `NameError` at import time and the tests never run.\n\
 - Reply with a single JSON object and nothing else.";
 
 pub const SCAFFOLD_SYSTEM_PROMPT: &str = "You prepare a blank whiteboard for a coding interview \
