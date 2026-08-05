@@ -704,6 +704,16 @@ export interface BoardProps {
    * squatting in the bottom bar next to the tools.
    */
   pageTitle?: ReactNode;
+  /**
+   * Offer the annotate toggle on the code page, in the lined-paper's place.
+   *
+   * Ruling that page is meaningless, but marking it up is not: circling a line
+   * and asking "why this?" is the most natural thing to want to do to code you
+   * are reading, and until now the editor swallowed every pointer that tried.
+   */
+  annotateCodeToggle?: boolean;
+  /** Annotation mode changed — the caller makes the dock stop taking pointers. */
+  onAnnotateCodeChange?: (on: boolean) => void;
   /** Show lined-paper toggle in the map chrome. */
   linedPaperToggle?: boolean;
   /** Show S/M/L reading size (problem boards on mobile — not scratchpad). */
@@ -760,6 +770,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     mobileRegion = null,
     bottomCenter = null,
     pageTitle = null,
+    annotateCodeToggle = false,
+    onAnnotateCodeChange,
     linedPaperToggle = false,
     showReadingSize = false,
     coachFold = null,
@@ -799,6 +811,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     top: number;
     ids: string[];
   } | null>(null);
+  /** Pen goes to the code page instead of the editor. */
+  const [annotateCode, setAnnotateCode] = useState(false);
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
@@ -1238,6 +1252,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     lastTitleSlotRef.current = next;
     setTitleSlot(next);
   }, []);
+
+  /*
+   * Annotation belongs to the code page and dies with it.
+   *
+   * The toggle makes the editor ignore pointers, so a mode left on after a page
+   * turn would be an editor nobody could type in and no visible control to
+   * explain why — the toggle it was set from is not even on screen any more.
+   */
+  useEffect(() => {
+    if (!annotateCodeToggle && annotateCode) setAnnotateCode(false);
+  }, [annotateCode, annotateCodeToggle]);
+
+  useEffect(() => {
+    onAnnotateCodeChange?.(annotateCode);
+  }, [annotateCode, onAnnotateCodeChange]);
 
   const reportLinedSlot = useCallback(() => {
     /*
@@ -4121,6 +4150,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 >
                   <EyeIcon closed={mapChromeHidden} />
                 </button>
+                {!mapChromeHidden && annotateCodeToggle && (
+                  <button
+                    type="button"
+                    className={
+                      annotateCode ? "lc-lined-toggle is-active" : "lc-lined-toggle"
+                    }
+                    aria-pressed={annotateCode}
+                    aria-label={annotateCode ? "Stop annotating the code" : "Annotate the code"}
+                    title={
+                      annotateCode
+                        ? "Annotating — the editor is not taking input"
+                        : "Annotate the code with the pen"
+                    }
+                    onClick={() => setAnnotateCode((current) => !current)}
+                  >
+                    <AnnotateIcon on={annotateCode} />
+                  </button>
+                )}
                 {!mapChromeHidden && linedPaperToggle && mobileRegion !== "code" && (
                   <button
                     type="button"
@@ -4402,6 +4449,28 @@ function EyeIcon({ closed = false }: { closed?: boolean }) {
     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
       <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+/** A page with a nib on it — the same 24-grid as the eye beside it. */
+function AnnotateIcon({ on = false }: { on?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 3h9l4 4v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M7.5 16.8 14.4 9.9" />
+      <path d="M12.7 8.2 15 5.9a1.2 1.2 0 0 1 1.7 1.7l-2.3 2.3z" />
+      {on && <path d="M7.5 16.8 6.8 18.5l1.7-.7" />}
     </svg>
   );
 }
