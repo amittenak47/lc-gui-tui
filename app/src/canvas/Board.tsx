@@ -732,6 +732,16 @@ export interface BoardProps {
    * instead of zooming, and a drag cannot wander sideways off the column.
    */
   scrollModeToggle?: boolean;
+  /**
+   * Offer the annotate toggle on the code page, in the lined-paper's place.
+   *
+   * Ruling that page is meaningless, but marking it up is not: circling a line
+   * and asking "why this?" is the most natural thing to want to do to code you
+   * are reading, and until now the editor swallowed every pointer that tried.
+   */
+  annotateCodeToggle?: boolean;
+  /** Annotation mode changed — the caller makes the dock stop taking pointers. */
+  onAnnotateCodeChange?: (on: boolean) => void;
   /** Show lined-paper toggle in the map chrome. */
   linedPaperToggle?: boolean;
   /** Show S/M/L reading size (problem boards on mobile — not scratchpad). */
@@ -791,6 +801,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     pageContent = null,
     transparentCanvas = false,
     scrollModeToggle = false,
+    annotateCodeToggle = false,
+    onAnnotateCodeChange,
     linedPaperToggle = false,
     showReadingSize = false,
     coachFold = null,
@@ -855,6 +867,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * margin the moment they scroll down.
    */
   const lockedScrollXRef = useRef<number | null>(null);
+  /** Pen goes to the code page instead of the editor. */
+  const [annotateCode, setAnnotateCode] = useState(false);
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
@@ -1185,20 +1199,56 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const inset = Math.max(6, Math.round(8 * zoom));
     // Leave room for the CODE label + hint above Monaco (same chrome as Approach).
     const headerReserve = Math.round(codeLabelReserve(readingSizeRef.current) * zoom);
+    const rawLeft = (frame.x + scrollX) * zoom + inset;
+    const rawTop = (frame.y + scrollY) * zoom + inset + headerReserve;
+    const rawWidth = Math.max(0, num(frame.width, REGIONS.code.w) * zoom - inset * 2);
+    const rawHeight = Math.max(
+      0,
+      num(frame.height, REGIONS.code.h) * zoom - inset * 2 - headerReserve,
+    );
+
+    /*
+     * On the code page the dock is bounded by the screen, not by the frame.
+     *
+     * Zoom already reaches Monaco as a font size, and word wrap is on, so
+     * zooming in *should* mean bigger code re-flowed to the same column with
+     * the overflow under Monaco's own scrollbar. It did not, because the dock
+     * was sized from the scene rect: the box grew with the zoom too, so the
+     * text re-wrapped to a column that was now wider than the viewport and the
+     * rest of it sat off the right-hand edge — unreachable, because a page
+     * that is one HTML editor has nothing for the hand tool to pan.
+     *
+     * Clamping the box to the visible area fixes both halves at once. The
+     * column stays the width of the screen however far in the zoom goes, the
+     * text re-wraps into it, and what does not fit vertically is a scroll
+     * rather than a pan.
+     */
+    const onCodePage = page === "code";
+    const viewWidth = typeof state.width === "number" ? state.width : 0;
+    const viewHeight = typeof state.height === "number" ? state.height : 0;
+    const margin = Math.max(8, inset);
+    const clampedLeft = onCodePage ? Math.max(margin, rawLeft) : rawLeft;
+    const clampedTop = onCodePage ? Math.max(margin, rawTop) : rawTop;
     const next: ScreenRect = {
-      left: roundPx((frame.x + scrollX) * zoom + inset),
-      top: roundPx((frame.y + scrollY) * zoom + inset + headerReserve),
-      width: roundPx(Math.max(0, num(frame.width, REGIONS.code.w) * zoom - inset * 2)),
+      left: roundPx(clampedLeft),
+      top: roundPx(clampedTop),
+      width: roundPx(
+        onCodePage && viewWidth > 0
+          ? Math.max(0, Math.min(rawWidth, viewWidth - clampedLeft - margin))
+          : rawWidth,
+      ),
       height: roundPx(
-        Math.max(0, num(frame.height, REGIONS.code.h) * zoom - inset * 2 - headerReserve),
+        onCodePage && viewHeight > 0
+          ? Math.max(0, Math.min(rawHeight, viewHeight - clampedTop - margin))
+          : rawHeight,
       ),
       zoom: Math.round(zoom * 1000) / 1000,
     };
 
     // Hide the dock when the code frame is fully off-screen — switching to the
     // fallback absolute slot caused a visible snap while panning past the box.
-    const viewH = typeof state.height === "number" ? state.height : 0;
-    const viewW = typeof state.width === "number" ? state.width : 0;
+    const viewH = viewHeight;
+    const viewW = viewWidth;
     const offscreen =
       next.top + next.height < -40 ||
       next.top > viewH + 40 ||
@@ -1306,7 +1356,38 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     setContentSlot(next);
   }, []);
 
+  /*
+   * Annotation belongs to the code page and dies with it.
+   *
+   * The toggle makes the editor ignore pointers, so a mode left on after a page
+   * turn would be an editor nobody could type in and no visible control to
+   * explain why — the toggle it was set from is not even on screen any more.
+   */
+  useEffect(() => {
+    if (!annotateCodeToggle && annotateCode) setAnnotateCode(false);
+  }, [annotateCode, annotateCodeToggle]);
+
+  useEffect(() => {
+    onAnnotateCodeChange?.(annotateCode);
+  }, [annotateCode, onAnnotateCodeChange]);
+
   const reportLinedSlot = useCallback(() => {
+    /*
+     * The code page is not paper.
+     *
+     * Ruling it lines up nothing: Monaco sits in that frame with its own line
+     * grid at its own pitch, so the board's rules run behind the editor at a
+     * spacing that agrees with neither the code nor the statement, and the two
+     * grids beat against each other. There is also nothing to write between
+     * them — the page is for typing, not for handwriting.
+     */
+    if (mobileRegionRef.current === "code") {
+      if (lastLinedSlotRef.current !== null) {
+        lastLinedSlotRef.current = null;
+        setLinedSlot(null);
+      }
+      return;
+    }
     if (!linedPaperRef.current) {
       if (lastLinedSlotRef.current !== null) {
         lastLinedSlotRef.current = null;
@@ -1792,8 +1873,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
          * coast honestly — a flick into a wall should stop at the wall, not
          * spend a second pretending it is still moving.
          */
-        if (Math.abs(clamped.scrollX - wantX) > 0.05) velX = 0;
-        if (Math.abs(clamped.scrollY - wantY) > 0.05) velY = 0;
+        /*
+         * Land soft: keep the fraction of the step the clamp actually allowed.
+         *
+         * Zeroing velocity the moment the clamp bit stopped the coast dead —
+         * correct, in that it no longer fought the wall, but it arrived at the
+         * boundary at full speed and halted in one frame, which reads as
+         * bouncing off it. Scaling by how much of the requested step got taken
+         * decays the velocity over the last few frames instead: far from the
+         * edge the ratio is 1 and nothing changes, and as the wall comes up
+         * each frame gets less of what it asked for, so the view glides into
+         * the boundary and settles there.
+         */
+        const takenX = clamped.scrollX - scrollX;
+        const takenY = clamped.scrollY - scrollY;
+        const wantedX = wantX - scrollX;
+        const wantedY = wantY - scrollY;
+        if (Math.abs(wantedX) > 1e-6) {
+          velX *= Math.min(1, Math.max(0, takenX / wantedX));
+        }
+        if (Math.abs(wantedY) > 1e-6) {
+          velY *= Math.min(1, Math.max(0, takenY / wantedY));
+        }
         scrollX = clamped.scrollX;
         scrollY = clamped.scrollY;
         velX *= Math.exp(-PAN_FRICTION * dt);
@@ -4290,7 +4391,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <ScrollModeIcon reading={scrollMode} />
                   </button>
                 )}
-                {!mapChromeHidden && linedPaperToggle && (
+                {!mapChromeHidden && annotateCodeToggle && (
+                  <button
+                    type="button"
+                    className={
+                      annotateCode ? "lc-lined-toggle is-active" : "lc-lined-toggle"
+                    }
+                    aria-pressed={annotateCode}
+                    aria-label={annotateCode ? "Stop annotating the code" : "Annotate the code"}
+                    title={
+                      annotateCode
+                        ? "Annotating — the editor is not taking input"
+                        : "Annotate the code with the pen"
+                    }
+                    onClick={() => setAnnotateCode((current) => !current)}
+                  >
+                    <AnnotateIcon on={annotateCode} />
+                  </button>
+                )}
+                {!mapChromeHidden && linedPaperToggle && mobileRegion !== "code" && (
                   <button
                     type="button"
                     className={
@@ -4636,6 +4755,28 @@ function ScrollModeIcon({ reading = false }: { reading?: boolean }) {
           <path d="M8 16.5 7.2 18.3l1.8-.8" />
         </>
       )}
+    </svg>
+  );
+}
+
+/** A page with a nib on it — the same 24-grid as the eye beside it. */
+function AnnotateIcon({ on = false }: { on?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 3h9l4 4v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M7.5 16.8 14.4 9.9" />
+      <path d="M12.7 8.2 15 5.9a1.2 1.2 0 0 1 1.7 1.7l-2.3 2.3z" />
+      {on && <path d="M7.5 16.8 6.8 18.5l1.7-.7" />}
     </svg>
   );
 }
