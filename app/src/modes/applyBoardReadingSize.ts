@@ -125,14 +125,24 @@ function ensureBases(element: ReadingElement): ReadingMeta {
 function restoreChrome<T extends ReadingElement>(
   element: T,
   frames: Map<string, { x: number; y: number; width?: number }>,
+  /**
+   * How much the statement's type had to shrink to come out at the reading
+   * size on this screen. Chrome is scaled by the same factor so the title
+   * stays the same size to the reader — without it the title is *larger* on a
+   * tablet than on a phone, since only the body follows the fit.
+   */
+  chromeScale = 1,
 ): T {
   const meta = { ...(element.customData ?? {}) };
   const patch: Partial<ReadingElement> = {};
   let changed = false;
 
-  if (typeof meta.lcFontBase === "number" && element.fontSize !== meta.lcFontBase) {
-    patch.fontSize = meta.lcFontBase;
-    changed = true;
+  if (typeof meta.lcFontBase === "number") {
+    const scaled = Math.round(meta.lcFontBase * chromeScale * 10) / 10;
+    if (element.fontSize !== scaled) {
+      patch.fontSize = scaled;
+      changed = true;
+    }
   }
   if (typeof meta.lcRegionOyBase === "number") {
     const oy = meta.lcRegionOyBase;
@@ -215,6 +225,7 @@ export function applyBoardReadingSize<T extends ReadingElement>(
       ? statementSceneFont(size, constraintsW, opts?.viewportWidth ?? 0)
       : BODY_FONT_PX[size];
   const gridPitch = targetFont * STATEMENT_LINE_HEIGHT_RATIO;
+  const chromeScale = targetFont / STATEMENT_PROSE_BASE;
 
   const bodies = elements
     .map((element, index) => ({ element, index }))
@@ -302,7 +313,11 @@ export function applyBoardReadingSize<T extends ReadingElement>(
   let changed = false;
   const next = elements.map((element, index) => {
     if (isFixedChrome(element)) {
-      const restored = restoreChrome(element, frames);
+      const restored = restoreChrome(
+        element,
+        frames,
+        element.customData?.lcRegion === "constraints" ? chromeScale : 1,
+      );
       if (restored !== element) changed = true;
       return restored;
     }

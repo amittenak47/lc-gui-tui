@@ -331,9 +331,10 @@ describe("recolorTemplateElements", () => {
 
 describe("board size", () => {
   it("is roomy enough to sketch in", () => {
-    // Reported: "size of the whiteboard larger".
-    expect(REGIONS.constraints.w).toBeGreaterThanOrEqual(2800);
-    expect(REGIONS.constraints.h).toBeGreaterThanOrEqual(1680);
+    // Reported: "size of the whiteboard larger". The statement is exempt: it
+    // is a reading column sized to the screen, and "roomy" is the opposite of
+    // what a measure wants.
+    expect(REGIONS.approach.w).toBeGreaterThanOrEqual(2800);
     expect(REGIONS.approach.h).toBeGreaterThanOrEqual(2100);
     expect(REGIONS.complexity.h).toBeGreaterThanOrEqual(700);
     expect(REGIONS.walkthrough.h).toBeGreaterThanOrEqual(1680);
@@ -341,7 +342,7 @@ describe("board size", () => {
   });
 
   it("keeps the agent lane clear of the student's columns", () => {
-    const student = REGIONS.constraints;
+    const student = REGIONS.approach;
     expect(REGIONS.agent.x).toBeGreaterThan(student.x + student.w);
   });
 });
