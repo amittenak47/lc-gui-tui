@@ -86,6 +86,8 @@ export interface SkeletonMeta {
   lcScratchPage?: number;
   /** Dashed frame for a scratchpad notebook page. */
   lcScratchFrame?: boolean;
+  /** Dashed frame for the Markdown Ink page, grown to the document's height. */
+  lcMdInkFrame?: boolean;
 }
 
 /** Muted palette: the coach's ink should read as annotation, not as the work. */

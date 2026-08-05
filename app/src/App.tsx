@@ -89,6 +89,33 @@ import { MOBILE_REGION_ORDER, REGIONS, type RegionId } from "./templates/regions
 import { splitProblemKey } from "./util/datasetKey";
 import { isMobileViewport, useIsMobile } from "./util/mobile";
 import { installSafeAreaInsets } from "./util/safeArea";
+import { MdInkDialog } from "./modes/MdInkDialog";
+import { MdInkDocument } from "./modes/MdInkDocument";
+import {
+  buildMdInkTemplate,
+  mdInkPageHeight,
+  MD_INK_DATASET,
+  MD_INK_REGION,
+  MD_INK_TASK_ID,
+} from "./templates/mdInk";
+import {
+  buildMdInkSidecar,
+  exportMdInkSidecar,
+  pickMarkdownFile,
+  pickSidecarFile,
+  readMdInkSidecar,
+} from "./util/mdInkFs";
+import {
+  deleteMdInkDoc,
+  findMdInkDocByHash,
+  findStaleMdInkDoc,
+  getMdInkDoc,
+  hashMarkdown,
+  MdInkLibraryFullError,
+  restoreMdInkDoc,
+  saveMdInkDoc,
+  type MdInkDoc,
+} from "./util/mdInkStore";
 import {
   deleteScratchNotebook,
   getScratchNotebook,
@@ -144,6 +171,34 @@ function isScratchpad(problem: ProblemDetail | null | undefined): boolean {
   return problem?.task_id === SCRATCHPAD_TASK_ID;
 }
 
+/** Annotating a markdown file — a scratchpad whose paper is somebody's notes. */
+const MD_INK_PROBLEM: ProblemDetail = {
+  dataset: MD_INK_DATASET,
+  key: `${MD_INK_DATASET}/${MD_INK_TASK_ID}`,
+  task_id: MD_INK_TASK_ID,
+  question_id: null,
+  difficulty: null,
+  tags: ["md-ink"],
+  problem_description: "Markdown annotation — no problem set.",
+  starter_code: null,
+  entry_point: null,
+  cases: [],
+};
+
+function isMdInk(problem: ProblemDetail | null | undefined): boolean {
+  return problem?.task_id === MD_INK_TASK_ID;
+}
+
+/**
+ * Both freeform modes, for the many places that treat them alike.
+ *
+ * Neither has an attempt on the daemon, a test run, or a solution file; both
+ * persist to a local library and both offer save / discard on the way out.
+ */
+function isLocalPad(problem: ProblemDetail | null | undefined): boolean {
+  return isScratchpad(problem) || isMdInk(problem);
+}
+
 export function App() {
   const mobile = useIsMobile();
 
@@ -188,6 +243,36 @@ export function App() {
    * anything?". Compared against the live board — see {@link scratchUntouched}.
    */
   const scratchPristineHashRef = useRef<number | null>(null);
+
+  /** The markdown being annotated: its text, its name, and its content hash. */
+  const [mdInkSource, setMdInkSource] = useState<{
+    name: string;
+    text: string;
+    hash: string;
+  } | null>(null);
+  /** Library entry this session is writing to, once it has one. */
+  const [mdInkDocId, setMdInkDocId] = useState<string | null>(null);
+  const [mdInkEntryOpen, setMdInkEntryOpen] = useState(false);
+  // Read from the autosave interval, which must not be torn down and rebuilt
+  // every time one of these changes — a restarted timer is a skipped save.
+  const mdInkSourceRef = useRef<{ name: string; text: string; hash: string } | null>(null);
+  const mdInkDocIdRef = useRef<string | null>(null);
+  /**
+   * Measured document height, in scene units, driving the page frame.
+   *
+   * A page that ended before the text did would clip ink off the bottom of a
+   * long document, so the frame is grown to the markdown rather than the other
+   * way round.
+   */
+  const [mdInkHeight, setMdInkHeight] = useState<number | null>(null);
+  /** Same discard contract as the scratchpad — see `scratchBaselineRef`. */
+  const mdInkBaselineRef = useRef<{ id: string | null; entry: MdInkDoc | null }>({
+    id: null,
+    entry: null,
+  });
+  const mdInkPristineHashRef = useRef<number | null>(null);
+  mdInkSourceRef.current = mdInkSource;
+  mdInkDocIdRef.current = mdInkDocId;
   const [pairing, setPairing] = useState<Pairing>(() => loadPairing());
   const [pairingEditing, setPairingEditing] = useState(false);
   const client = useMemo(() => new LcClient(pairing), [pairing]);
@@ -792,6 +877,38 @@ export function App() {
       }
       deferredSavesRef.current = 0;
 
+      if (isMdInk(problem)) {
+        /*
+         * Annotations autosave, the document does not.
+         *
+         * Same crash-insurance the scratchpad gets, and the same restraint:
+         * nothing is written until something has actually been drawn, so
+         * opening a document to read it never creates a library entry. Discard
+         * on the way out undoes whatever these ticks committed.
+         */
+        if (mdInkPristineHashRef.current === hash) {
+          lastSavedHashRef.current = hash;
+          return;
+        }
+        const source = mdInkSourceRef.current;
+        if (!source) return;
+        try {
+          const saved = saveMdInkDoc({
+            id: mdInkDocIdRef.current ?? undefined,
+            name: source.name,
+            hash: source.hash,
+            source: source.text,
+            board: board.saveBoard(),
+          });
+          if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
+          lastSavedHashRef.current = hash;
+        } catch {
+          // A full library is not worth interrupting a writing session for;
+          // the explicit Save on the way out reports it properly.
+        }
+        return;
+      }
+
       if (isScratchpad(problem)) {
         /*
          * Don't put an untouched notebook in the library.
@@ -875,7 +992,7 @@ export function App() {
   );
 
   const syncSolution = useCallback(async () => {
-    if (!problem || isScratchpad(problem)) return;
+    if (!problem || isLocalPad(problem)) return;
     await client.putSolution(problem.task_id, pseudocodeRef.current, problem.dataset);
   }, [client, problem]);
 
@@ -1223,6 +1340,195 @@ export function App() {
     },
     [busy, themeId],
   );
+
+  /**
+   * Open a markdown document to annotate.
+   *
+   * Either a file the writer just picked, or a library entry being reopened —
+   * both land here with the same three things: the text, its name, and its
+   * hash. Any annotation set already drawn over that exact text is restored
+   * with it, so picking the same file twice picks up where it left off.
+   */
+  const openMdInk = useCallback(
+    async (input: { name: string; text: string; docId?: string | null }) => {
+      if (busy !== null) return;
+      setBusy("opening document…");
+      setError(null);
+      setTests(null);
+      setNudges([]);
+      setCoachMessages([]);
+      setMdInkEntryOpen(false);
+      boardSaveSuspendedRef.current = true;
+      agentSaveSuspendedRef.current = true;
+
+      try {
+        const hash = hashMarkdown(input.text);
+        const existing = input.docId
+          ? getMdInkDoc(input.docId)
+          : findMdInkDocByHash(hash);
+
+        /*
+         * Say so when the file has moved on since it was last annotated.
+         *
+         * Without this the writer gets a blank page and no explanation, which
+         * from the outside is indistinguishable from having lost their work.
+         * The old set is not applied — its marks belong to lines that have
+         * shifted or gone — but it is still in the library under Recent, so
+         * naming it is enough to make the situation legible.
+         */
+        const stale = existing ? null : findStaleMdInkDoc(input.name, hash);
+
+        setBoardPreparing(true);
+        setProblem(MD_INK_PROBLEM);
+        setPseudocode("");
+        loadedSourceRef.current = "";
+        lastSavedHashRef.current = null;
+        setMdInkSource({ name: input.name, text: input.text, hash });
+        setMdInkHeight(null);
+
+        const dark = isDarkTheme(themeId);
+        // The real height arrives from the document's own measure a frame or
+        // two later; start at the floor so the frame is never zero-sized.
+        const skeletons = buildMdInkTemplate(mdInkPageHeight(null), dark);
+
+        if (existing) {
+          boardRef.current?.restoreBoard(existing.board.elements, existing.board.appState, {
+            skeletons,
+            ink: Array.isArray(existing.board.ink) ? existing.board.ink : [],
+            files: existing.board.files,
+          });
+          setMdInkDocId(existing.id);
+        } else {
+          boardRef.current?.seedTemplate(skeletons);
+          setMdInkDocId(null);
+        }
+
+        mdInkBaselineRef.current = {
+          id: existing?.id ?? null,
+          entry: existing,
+        };
+
+        boardRef.current?.applyThemeInk(themeId);
+        boardRef.current?.stripCoachViz();
+        lastIdsRef.current = new Set();
+        await boardRef.current?.waitForTemplate();
+        await boardRef.current?.settleFitView();
+        // Same late-mount dance as the scratchpad: the ink layer may only exist
+        // after the first restore, so the strokes go on again once it does.
+        if (existing && Array.isArray(existing.board.ink)) {
+          boardRef.current?.setInkOps(existing.board.ink);
+        }
+
+        {
+          const board = boardRef.current;
+          mdInkPristineHashRef.current = board
+            ? sceneFingerprint(board.getElements(), board.getInkOpCount())
+            : null;
+        }
+
+        setBoardPreparing(false);
+        boardSaveSuspendedRef.current = false;
+        agentSaveSuspendedRef.current = false;
+        setEntering(true);
+        window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
+        setCoachOpen(false);
+        if (stale) {
+          setNotice(
+            `“${input.name}” has changed since it was annotated on ` +
+              `${new Date(stale.updatedAt).toLocaleDateString()} — starting a fresh set. ` +
+              `The old one is still under Recent.`,
+          );
+        }
+      } catch (cause) {
+        setError(messageOf(cause));
+        boardSaveSuspendedRef.current = false;
+        agentSaveSuspendedRef.current = false;
+        setBoardPreparing(false);
+      } finally {
+        setBusy(null);
+      }
+    },
+    [busy, themeId],
+  );
+
+  /**
+   * Write the annotation set out as a file the writer can keep.
+   *
+   * Annotations live in this browser's storage, which is fine right up until
+   * the tablet is not the device they have. The sidecar is the way out.
+   */
+  const exportMdInkAnnotations = useCallback(() => {
+    const board = boardRef.current;
+    const source = mdInkSourceRef.current;
+    if (!board || !source) return;
+    exportMdInkSidecar(
+      buildMdInkSidecar({
+        sourceName: source.name,
+        contentHash: source.hash,
+        board: board.saveBoard(),
+      }),
+    );
+    setNotice(`Exported annotations for “${source.name}”.`);
+  }, []);
+
+  /**
+   * Read a sidecar back in, over the document it was drawn on.
+   *
+   * Refused when the sidecar belongs to different text: its marks were placed
+   * against lines that are not the ones on screen, and putting them down anyway
+   * would scatter ink across the wrong words with no way back.
+   */
+  const importMdInkAnnotations = useCallback(async () => {
+    const source = mdInkSourceRef.current;
+    if (!source) {
+      setError("Open a markdown file first, then import its annotations.");
+      return;
+    }
+    try {
+      const picked = await pickSidecarFile();
+      if (!picked) return;
+      const sidecar = readMdInkSidecar(picked.text);
+      if (!sidecar) {
+        setError(`“${picked.name}” is not an annotation sidecar.`);
+        return;
+      }
+      if (sidecar.contentHash !== source.hash) {
+        setError(
+          `Those annotations were drawn over a different version of ` +
+            `“${sidecar.sourceName}” — they would not line up with this text.`,
+        );
+        return;
+      }
+      boardRef.current?.restoreBoard(sidecar.board.elements, sidecar.board.appState, {
+        skeletons: buildMdInkTemplate(mdInkPageHeight(mdInkHeight), isDarkTheme(themeId)),
+        ink: Array.isArray(sidecar.board.ink) ? sidecar.board.ink : [],
+        files: sidecar.board.files,
+      });
+      if (Array.isArray(sidecar.board.ink)) boardRef.current?.setInkOps(sidecar.board.ink);
+      setNotice(`Imported annotations for “${sidecar.sourceName}”.`);
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  }, [mdInkHeight, themeId]);
+
+  /** Pick a markdown file from disk and open it. */
+  const pickAndOpenMdInk = useCallback(async () => {
+    if (busy !== null) return;
+    try {
+      const picked = await pickMarkdownFile();
+      if (!picked) return;
+      await openMdInk({ name: picked.name, text: picked.source });
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  }, [busy, openMdInk]);
+
+  // The document reports its height once it has laid out; the page frame
+  // follows it, so ink can be put anywhere down a long note.
+  useEffect(() => {
+    if (!isMdInk(problem) || mdInkHeight === null) return;
+    boardRef.current?.setMdInkPageHeight(mdInkPageHeight(mdInkHeight));
+  }, [mdInkHeight, problem]);
 
   const addScratchPage = useCallback(() => {
     if (!isScratchpad(problem)) return;
@@ -2219,6 +2525,7 @@ export function App() {
     const timer = window.setTimeout(() => {
       if (agentSaveSuspendedRef.current) return;
       const agent = persistableCoachMessages(coachMessages);
+      if (isMdInk(problem)) return;
       if (isScratchpad(problem)) {
         // Board autosave only writes when the scene + ink fingerprint moves, so
         // a chat-only exchange would otherwise be lost. Write the notebook with
@@ -2430,6 +2737,62 @@ export function App() {
     setScratchNotebookId(null);
   }, [scratchNotebookId]);
 
+  /** Nothing drawn on this document since it opened. */
+  const mdInkUntouched = useCallback(() => {
+    const board = boardRef.current;
+    const pristine = mdInkPristineHashRef.current;
+    if (!board || pristine === null) return false;
+    return sceneFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
+  }, []);
+
+  /**
+   * Throw away this session's annotations — and only those.
+   *
+   * The markdown is never touched by any of this: the file on disk was only
+   * ever read, and the library's copy of the text goes away with the entry it
+   * belongs to. Discarding leaves the writer's document exactly as it was.
+   */
+  const discardMdInkSession = useCallback(() => {
+    const baseline = mdInkBaselineRef.current;
+    if (baseline.entry && baseline.id) {
+      restoreMdInkDoc(baseline.entry);
+    } else if (mdInkDocId) {
+      deleteMdInkDoc(mdInkDocId);
+    }
+    mdInkBaselineRef.current = { id: null, entry: null };
+    mdInkPristineHashRef.current = null;
+    setMdInkDocId(null);
+  }, [mdInkDocId]);
+
+  /** Commit the annotations to the library. Returns the entry, or null on failure. */
+  const saveMdInkSession = useCallback((): MdInkDoc | null => {
+    const board = boardRef.current;
+    const source = mdInkSource;
+    if (!board || !source) return null;
+    const blob = board.saveBoard();
+    if (!blob) return null;
+    try {
+      const saved = saveMdInkDoc({
+        id: mdInkDocId ?? undefined,
+        name: source.name,
+        hash: source.hash,
+        source: source.text,
+        board: blob,
+      });
+      setMdInkDocId(saved.id);
+      // Discard now rolls back to this save, not past it.
+      mdInkBaselineRef.current = { id: saved.id, entry: getMdInkDoc(saved.id) };
+      return saved;
+    } catch (cause) {
+      if (cause instanceof MdInkLibraryFullError) {
+        setError(cause.message);
+        return null;
+      }
+      setError(messageOf(cause));
+      return null;
+    }
+  }, [mdInkDocId, mdInkSource]);
+
   const leaveProblem = useCallback(
     (next: () => void) => {
       if (!problem) {
@@ -2450,6 +2813,20 @@ export function App() {
         setLeaving({ run: next });
         return;
       }
+      if (isMdInk(problem)) {
+        // Same rule, same reason: an unannotated document is a document that
+        // was only read, and reading it is not a decision.
+        if (mdInkUntouched()) {
+          boardSaveSuspendedRef.current = true;
+          discardMdInkSession();
+          next();
+          return;
+        }
+        setLeavingError(null);
+        setLeavingPhase("open");
+        setLeaving({ run: next });
+        return;
+      }
       if (!dirtyRef.current) {
         next();
         return;
@@ -2458,7 +2835,7 @@ export function App() {
       setLeavingPhase("open");
       setLeaving({ run: next });
     },
-    [discardScratchSession, problem, scratchUntouched],
+    [discardMdInkSession, discardScratchSession, mdInkUntouched, problem, scratchUntouched],
   );
 
   const resolveLeave = useCallback(
@@ -2484,6 +2861,18 @@ export function App() {
       };
 
       try {
+        if (isMdInk(problem)) {
+          if (save) {
+            const saved = saveMdInkSession();
+            if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+          } else {
+            discardMdInkSession();
+          }
+          await dismissDialog();
+          setLeavingPending(false);
+          pending.run();
+          return;
+        }
         if (isScratchpad(problem)) {
           if (save) {
             const blob = boardRef.current?.saveBoard();
@@ -2566,7 +2955,9 @@ export function App() {
     },
     [
       client,
+      discardMdInkSession,
       discardScratchSession,
+      saveMdInkSession,
       rebaselineScratchSession,
       problem,
       leaving,
@@ -2620,11 +3011,11 @@ export function App() {
                 onClick={() => leaveProblem(returnToBrowse)}
               >
                 <span className="lc-label-long">
-                  {isScratchpad(problem) ? "← Home" : "← Problems"}
+                  {isLocalPad(problem) ? "← Home" : "← Problems"}
                 </span>
                 <span className="lc-label-short">←</span>
               </button>
-              {!isScratchpad(problem) ? (
+              {!isLocalPad(problem) ? (
               <div className="lc-problem-nav" role="group" aria-label="Problem">
                 <button
                   type="button"
@@ -2658,6 +3049,12 @@ export function App() {
                   ›
                 </button>
               </div>
+              ) : isMdInk(problem) ? (
+                // The document is the thing being worked on, so it gets the
+                // slot the problem's name would have had.
+                <span className="lc-current" title={mdInkSource?.name ?? "Markdown"}>
+                  {mdInkSource?.name ?? "Markdown"}
+                </span>
               ) : (
                 <span className="lc-current" title="Scratchpad">
                   Scratchpad
@@ -2710,7 +3107,7 @@ export function App() {
         </div>
 
         <div className="lc-header-center">
-          {problem && !isScratchpad(problem) && (
+          {problem && !isLocalPad(problem) && (
             <div className="lc-actions">
               <button
                 type="button"
@@ -2752,6 +3149,70 @@ export function App() {
         </div>
 
         <div className="lc-header-right">
+          {/*
+            Markdown icon, immediately left of the scratchpad's paper: tap picks
+            a file to annotate, hold opens the library. Same split as its
+            neighbour, since it is the same kind of thing.
+          */}
+          {!problem && (
+            <HoldButton
+              label="Markdown"
+              ariaLabel="Markdown Ink: tap to open a file, hold for recent documents"
+              className="lc-icon lc-tip-target lc-hold-icon"
+              dataTip="Markdown — tap to open, hold for recent"
+              dataTipPlacement="bottom"
+              disabled={busy !== null}
+              onTap={() => void pickAndOpenMdInk()}
+              onConfirm={() => setMdInkEntryOpen(true)}
+            >
+              <svg
+                className="lc-icon-svg"
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6" />
+                {/* An "M" and a down-arrow — the markdown mark, at icon scale. */}
+                <path d="M7 18v-5l2.2 2.6L11.4 13v5" />
+                <path d="M14.6 13v5M12.9 16.4l1.7 1.6 1.7-1.6" />
+              </svg>
+            </HoldButton>
+          )}
+          {problem && isMdInk(problem) && (
+            <button
+              type="button"
+              className="lc-icon lc-tip-target is-active"
+              aria-label="Markdown documents"
+              data-tip="Markdown — save / open"
+              data-tip-placement="bottom"
+              aria-pressed="true"
+              disabled={busy !== null}
+              onClick={() => setMdInkEntryOpen(true)}
+            >
+              <svg
+                className="lc-icon-svg lc-icon-svg-filled"
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="currentColor"
+                stroke="currentColor"
+                strokeWidth="1.25"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6" fill="none" />
+              </svg>
+            </button>
+          )}
           {/*
             Paper icon: tap for a blank notebook, hold for the library.
             Starting to write is the common case by a wide margin, and it was
@@ -2902,19 +3363,24 @@ export function App() {
             onReadingSizeChange={setReadingSize}
             interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
             onCodeSlot={onCodeSlot}
-            linedPaperToggle={Boolean(problem)}
-            showReadingSize={Boolean(problem && !isScratchpad(problem) && mobile)}
+            transparentCanvas={Boolean(problem && isMdInk(problem))}
+            scrollModeToggle={Boolean(problem && isMdInk(problem))}
+            // Ruled lines under somebody else's typography would be noise.
+            linedPaperToggle={Boolean(problem) && !isMdInk(problem)}
+            showReadingSize={Boolean(problem && !isLocalPad(problem) && mobile)}
             mobileRegion={
               problem
                 ? isScratchpad(problem)
                   ? scratchPageId(scratchPageIndex)
-                  : mobile
-                    ? activeRegion
-                    : null
+                  : isMdInk(problem)
+                    ? MD_INK_REGION
+                    : mobile
+                      ? activeRegion
+                      : null
                 : null
             }
             bottomCenter={
-              problem && !isScratchpad(problem) && mobile ? (
+              problem && !isLocalPad(problem) && mobile ? (
                 <RegionPager
                   active={activeRegion}
                   onPick={setActiveRegion}
@@ -2931,6 +3397,11 @@ export function App() {
                   onAddPage={addScratchPage}
                   disabled={busy !== null || boardPreparing}
                 />
+              ) : null
+            }
+            pageContent={
+              problem && isMdInk(problem) && mdInkSource ? (
+                <MdInkDocument source={mdInkSource.text} onMeasure={setMdInkHeight} />
               ) : null
             }
             coachFold={null}
@@ -2982,7 +3453,7 @@ export function App() {
           )}
           {/* Monaco docks into the code frame — and on mobile that frame only
               exists on its own page, so the dock is mounted nowhere else. */}
-          {problem && !isScratchpad(problem) && (!mobile || activeRegion === "code") && (() => {
+          {problem && !isLocalPad(problem) && (!mobile || activeRegion === "code") && (() => {
             const slot = codeSlot ?? lastCodeSlotRef.current;
             if (!slot || slot.width <= 24 || slot.height <= 24) return null;
             const visible = Boolean(codeSlot);
@@ -3145,7 +3616,58 @@ export function App() {
         />
       )}
 
-      {leaving && problem && !isScratchpad(problem) && (
+      {leaving && problem && isMdInk(problem) && (
+        <MdInkDialog
+          mode="leave"
+          docName={mdInkSource?.name ?? "this document"}
+          pending={leavingPending}
+          exiting={leavingPhase === "exit"}
+          error={leavingError}
+          onChoose={(choice) => void resolveLeave(choice === "save")}
+          onCancel={() => {
+            if (leavingPending || leavingPhase === "exit") return;
+            setLeaving(null);
+            setLeavingError(null);
+          }}
+        />
+      )}
+
+      {mdInkEntryOpen && (
+        <MdInkDialog
+          mode="entry"
+          pending={busy !== null}
+          allowSave={Boolean(problem && isMdInk(problem))}
+          onChoose={(choice, docId) => {
+            setMdInkEntryOpen(false);
+            if (choice === "save") {
+              const saved = saveMdInkSession();
+              if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+              return;
+            }
+            if (choice === "export") {
+              exportMdInkAnnotations();
+              return;
+            }
+            if (choice === "import") {
+              void importMdInkAnnotations();
+              return;
+            }
+            if (choice === "recent" && docId) {
+              const entry = getMdInkDoc(docId);
+              if (!entry) {
+                setError("That document is no longer in the library.");
+                return;
+              }
+              void openMdInk({ name: entry.name, text: entry.source, docId: entry.id });
+              return;
+            }
+            void pickAndOpenMdInk();
+          }}
+          onCancel={() => setMdInkEntryOpen(false)}
+        />
+      )}
+
+      {leaving && problem && !isLocalPad(problem) && (
         <AttemptDialog
           taskId={problem.task_id}
           solved={attemptState?.solved ?? tests?.all_passed ?? false}
