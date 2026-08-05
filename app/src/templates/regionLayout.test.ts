@@ -21,8 +21,15 @@ function framesFromTemplate() {
   }));
 }
 
+/**
+ * The shared student column — the statement is deliberately not in it.
+ *
+ * Constraints is a reading column sized to the viewport, not a desk that has
+ * to match its neighbours, so a test that expected it to track the other
+ * frames would be asserting the bug it used to have.
+ */
 function studentWidths(elements: { id: string; width?: number }[]) {
-  return ["constraints", "code", "approach", "complexity", "walkthrough"].map((region) => {
+  return ["code", "approach", "complexity", "walkthrough"].map((region) => {
     const frame = elements.find((element) => element.id === regionFrameId(region as never));
     return frame?.width;
   });
@@ -36,27 +43,27 @@ describe("syncRegionLayout", () => {
   it("widens every student region when the code frame is resized", () => {
     const elements = framesFromTemplate();
     const code = elements.find((element) => element.id === regionFrameId("code"))!;
-    code.width = REGIONS.constraints.w + 400;
+    code.width = REGIONS.approach.w + 400;
 
     const synced = syncRegionLayout(elements);
     expect(synced).not.toBeNull();
 
     const widths = studentWidths(synced!);
     expect(new Set(widths).size).toBe(1);
-    expect(widths[0]).toBe(REGIONS.constraints.w + 400);
+    expect(widths[0]).toBe(REGIONS.approach.w + 400);
   });
 
   it("matches every student region when another column frame is widened", () => {
     const elements = framesFromTemplate();
     const approach = elements.find((element) => element.id === regionFrameId("approach"))!;
-    approach.width = REGIONS.constraints.w + 400;
+    approach.width = REGIONS.approach.w + 400;
 
     const synced = syncRegionLayout(elements);
     expect(synced).not.toBeNull();
 
     const widths = studentWidths(synced!);
     expect(new Set(widths).size).toBe(1);
-    expect(widths[0]).toBe(REGIONS.constraints.w + 400);
+    expect(widths[0]).toBe(REGIONS.approach.w + 400);
   });
 
   it("finds frames by customData even when ids were rewritten", () => {
@@ -68,17 +75,21 @@ describe("syncRegionLayout", () => {
     const code = elements.find(
       (element) => element.customData?.lcRegion === "code" && element.customData?.lcRegionFrame,
     )!;
-    code.width = REGIONS.constraints.w + 250;
+    code.width = REGIONS.approach.w + 250;
 
     const synced = syncRegionLayout(elements);
     expect(synced).not.toBeNull();
 
     const studentFrames = synced!.filter((element) => element.customData?.lcRegionFrame);
     const studentWidthsOnly = studentFrames
-      .filter((element) => element.customData?.lcRegion !== "agent")
+      .filter(
+        (element) =>
+          element.customData?.lcRegion !== "agent" &&
+          element.customData?.lcRegion !== "constraints",
+      )
       .map((element) => element.width);
     expect(new Set(studentWidthsOnly).size).toBe(1);
-    expect(studentWidthsOnly[0]).toBe(REGIONS.constraints.w + 250);
+    expect(studentWidthsOnly[0]).toBe(REGIONS.approach.w + 250);
   });
 
   it("reflows regions below a taller problem statement", () => {
@@ -163,10 +174,34 @@ describe("syncRegionLayout", () => {
     }
 
     const synced = syncRegionLayout(elements)!;
-    const widths = ["constraints", "code", "approach"].map((region) => {
+    const widths = ["code", "approach"].map((region) => {
       return synced.find((element) => element.id === regionFrameId(region as never))?.width;
     });
     expect(widths.every((width) => (width ?? 0) >= 1680)).toBe(true);
+  });
+
+  it("does not drag the statement column out to the student width", () => {
+    const elements = framesFromTemplate();
+    const statement = elements.find((element) => element.id === regionFrameId("constraints"))!;
+    const authored = statement.width!;
+    const approach = elements.find((element) => element.id === regionFrameId("approach"))!;
+    approach.width = REGIONS.approach.w + 600;
+
+    const synced = syncRegionLayout(elements)!;
+    const next = synced.find((element) => element.id === regionFrameId("constraints"))!;
+    // Widening a drawing page is not a request to widen the measure you read.
+    expect(next.width).toBe(authored);
+  });
+
+  it("re-widths the statement column when a caller supplies one", () => {
+    const elements = framesFromTemplate();
+    const synced = syncRegionLayout(elements, { readingColumnWidth: 420 })!;
+    const statement = synced.find((element) => element.id === regionFrameId("constraints"))!;
+    const body = synced.find((element) => element.id === "lcregion-constraints-body-0")!;
+    expect(statement.width).toBe(420);
+    // Text wraps to the frame it is in, not to the widest frame on the board.
+    expect(body.width).toBeLessThan(420);
+    expect(body.width).toBeGreaterThan(300);
   });
 
   it("keeps the coach lane beside the shared student column", () => {

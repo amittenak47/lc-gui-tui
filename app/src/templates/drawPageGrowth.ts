@@ -9,8 +9,16 @@
 
 import type { InkOp } from "../canvas/rasterInk";
 
-/** Approximate scene height of region label + hint chrome. */
-export const DRAW_HEADER_BAND = 110;
+/**
+ * Scene height at the top of a page that is chrome rather than content.
+ *
+ * Zero now: the label and hint that used to sit there were template-box text
+ * and are not drawn. Kept as a named constant (and as a parameter on the
+ * helpers) because "content starts below the chrome" is still the rule — there
+ * is simply no chrome. A page that grows one again sets this and everything
+ * downstream, growth and agent capture alike, moves with it.
+ */
+export const DRAW_HEADER_BAND = 0;
 export const DRAW_GROWTH_CAP = 5;
 export const DRAW_BUFFER_FRAC = 0.5;
 
@@ -69,9 +77,15 @@ function shouldExcludeFromContent(el: MeasuringElement): boolean {
   if (el.customData?.lcRegionFrame) return true;
   if (el.customData?.lcPinnedHeader) return true;
   if (el.customData?.lcVizId) return true;
-  if (typeof el.id === "string" && (el.id.includes("-label") || el.id.includes("-hint"))) {
-    return true;
-  }
+  /*
+   * Template scaffolding is not content.
+   *
+   * It matters most on the statement page, which is nothing *but* scaffolding:
+   * counting it would make the agent's capture boxes span the whole printed
+   * problem, so a single circled word would arrive as five screenfuls of the
+   * statement. What the boxes are for is the marks somebody made.
+   */
+  if (typeof el.id === "string" && el.id.startsWith("lcregion-")) return true;
   return false;
 }
 

@@ -9,6 +9,7 @@
  * clip ink off the bottom of a long document.
  */
 
+import { READING_COLUMN_MAX, READING_COLUMN_MIN, readingColumnWidth } from "./readingColumn";
 import type { Skeleton } from "./skeleton";
 
 export const MD_INK_TASK_ID = "__md_ink__";
@@ -32,25 +33,19 @@ export const MD_INK_REGION = "mdink-0";
  * markdown and leaves marks on the wrong words — so restores with ink keep
  * their saved frame width.
  */
-export const MD_INK_PAGE_W = 760;
+export const MD_INK_PAGE_W = READING_COLUMN_MAX;
 
 /** Narrowest column we will author — below this, chrome eats the prose. */
-export const MD_INK_PAGE_W_MIN = 300;
+export const MD_INK_PAGE_W_MIN = READING_COLUMN_MIN;
 
 /**
  * Page width for a fresh markdown session on this screen.
  *
- * `cssWidth` should be the board's content width (or `window.innerWidth` before
- * the board mounts). The fit aims this frame at the available width, so matching
- * them keeps zoom near 1 and body text near the authored CSS size.
+ * The problem statement is set the same way now, so the arithmetic lives in
+ * {@link readingColumnWidth} and both documents share it.
  */
 export function mdInkPageWidthForViewport(cssWidth: number): number {
-  if (!Number.isFinite(cssWidth) || cssWidth < 1) return MD_INK_PAGE_W;
-  // A little inset so the column is not flush with the bezel — Obsidian leaves
-  // gutters; edge-bleed type feels like a zoomed-out desktop page.
-  const inset = cssWidth < 640 ? 24 : 32;
-  const usable = cssWidth - inset * 2;
-  return Math.round(Math.min(MD_INK_PAGE_W, Math.max(MD_INK_PAGE_W_MIN, usable)));
+  return readingColumnWidth(cssWidth);
 }
 
 /** Width stamped on a saved md-ink frame, if any. */

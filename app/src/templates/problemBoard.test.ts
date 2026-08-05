@@ -11,6 +11,13 @@ import { describe, expect, it } from "vitest";
 
 import { REGIONS } from "./regions";
 import { buildProblemTemplate, parseStatement, recolorTemplateElements } from "./problemBoard";
+import {
+  READING_COLUMN_MAX,
+  readingColumnWidth,
+  regionTextWidth,
+  STATEMENT_CODE_BASE,
+  STATEMENT_PROSE_BASE,
+} from "./readingColumn";
 import { FONT_CODE, FONT_UI, templatePalette } from "./skeleton";
 
 const DESCRIPTION = `Given an m x n binary matrix mat, return the distance of the nearest 0 for each cell.
@@ -106,18 +113,65 @@ describe("buildProblemTemplate", () => {
     expect(codeBlocks.some((s) => s.text?.includes("mat[i][j]"))).toBe(true);
   });
 
-  it("gives the title and statement a readable size", () => {
+  it("sets the statement at reading-column sizes, not desk sizes", () => {
+    /*
+     * The page is a column roughly one screen wide, so its scene units are
+     * roughly CSS pixels and the authored size is the size you read. Desk-scale
+     * numbers here (the old 28/56) would come out five times too large.
+     */
     const title = skeletons.find((s) => s.id === "lcregion-constraints-title");
-    expect(title?.fontSize).toBeGreaterThanOrEqual(48);
+    expect(title?.fontSize).toBeGreaterThan(STATEMENT_PROSE_BASE);
+    expect(title?.fontSize).toBeLessThan(STATEMENT_PROSE_BASE * 3);
     const body = skeletons.filter((s) => s.id?.startsWith("lcregion-constraints-body-"));
-    expect(body.every((s) => (s.fontSize ?? 0) >= 22)).toBe(true);
+    expect(body.length).toBeGreaterThan(0);
+    expect(body.every((s) => (s.fontSize ?? 0) <= STATEMENT_PROSE_BASE)).toBe(true);
+    expect(body.every((s) => (s.fontSize ?? 0) >= STATEMENT_CODE_BASE)).toBe(true);
+  });
+
+  it("sizes the statement column to the screen it will be read on", () => {
+    const phone = buildProblemTemplate({
+      taskId: "01-matrix",
+      title: "01 Matrix",
+      description: "Given a matrix.",
+      viewportWidth: 400,
+    }).find((s) => s.id === "lcregion-constraints-frame");
+    const tablet = buildProblemTemplate({
+      taskId: "01-matrix",
+      title: "01 Matrix",
+      description: "Given a matrix.",
+      viewportWidth: 1400,
+    }).find((s) => s.id === "lcregion-constraints-frame");
+
+    expect(phone?.width).toBe(readingColumnWidth(400));
+    expect(phone?.width).toBeLessThan(400);
+    // Capped, so a desk does not stretch the measure into a desktop line.
+    expect(tablet?.width).toBe(READING_COLUMN_MAX);
+    expect(phone?.customData?.lcDocumentPage).toBe(true);
+    expect(phone?.customData?.lcReadingColumn).toBe(true);
   });
 
   it("tags every element with its region, so Clear can keep them", () => {
     expect(skeletons.every((s) => Boolean(s.customData?.lcRegion))).toBe(true);
   });
 
-  it("accepts AI scaffolding for approach / complexity / walkthrough hints", () => {
+  it("draws no region chrome — no boxes, no labels, no hints", () => {
+    const frames = skeletons.filter((s) => s.id?.endsWith("-frame"));
+    expect(frames.length).toBeGreaterThan(0);
+    // The frames still exist: they are what the camera fits and the ink is
+    // clipped to. They are simply not something anybody can see.
+    expect(frames.every((s) => s.strokeWidth === 0)).toBe(true);
+    expect(frames.every((s) => s.strokeColor === "transparent")).toBe(true);
+    expect(frames.every((s) => s.opacity === 0)).toBe(true);
+    expect(frames.every((s) => s.locked === true)).toBe(true);
+    expect(frames.every((s) => s.customData?.lcRegionFrame)).toBe(true);
+
+    expect(skeletons.some((s) => s.id?.endsWith("-label"))).toBe(false);
+    expect(skeletons.some((s) => s.id?.endsWith("-hint"))).toBe(false);
+  });
+
+  it("draws nothing for scaffolding it is handed", () => {
+    // The hints were template-box text. Accepting them keeps the scaffold
+    // round-trip intact; drawing them would put the boxes back.
     const custom = buildProblemTemplate({
       taskId: "two-sum",
       title: "Two Sum",
@@ -127,21 +181,14 @@ describe("buildProblemTemplate", () => {
         walkthrough: "Trace nums = [2,7,11] target = 9",
       },
     });
-    const approach = custom.find((s) => s.id === "lcregion-approach-hint");
-    const complexity = custom.find((s) => s.id === "lcregion-complexity-hint");
-    const walkthrough = custom.find((s) => s.id === "lcregion-walkthrough-hint");
-    expect(approach?.text).toContain("O(1)");
-    expect(complexity?.text).toContain("time");
-    expect(walkthrough?.text).toContain("[2,7,11]");
+    expect(custom.some((s) => s.text?.includes("O(1)"))).toBe(false);
+    expect(custom.some((s) => s.id?.includes("-hint"))).toBe(false);
   });
 
-  it("locks statement text but leaves region frames resizable", () => {
-    const frames = skeletons.filter((s) => s.id?.endsWith("-frame"));
+  it("locks statement text", () => {
     const content = skeletons.filter((s) => !s.id?.endsWith("-frame"));
-    expect(frames.length).toBeGreaterThan(0);
-    expect(frames.every((s) => s.locked === false)).toBe(true);
+    expect(content.length).toBeGreaterThan(0);
     expect(content.every((s) => s.locked === true)).toBe(true);
-    expect(frames.every((s) => s.customData?.lcRegionFrame)).toBe(true);
   });
 
   it("uses light ink on dark boards", () => {
@@ -177,9 +224,20 @@ describe("buildProblemTemplate", () => {
     expect(texts.every((text) => text.customData?.lcFixedSize)).toBe(true);
   });
 
-  it("sets a wrap width on statement text", () => {
+  it("wraps statement text to the reading column", () => {
+    const frame = skeletons.find((s) => s.id === "lcregion-constraints-frame")!;
     const body = skeletons.filter((s) => s.id?.startsWith("lcregion-constraints-body-"));
-    expect(body.every((s) => (s.width ?? 0) > 1000)).toBe(true);
+    expect(body.length).toBeGreaterThan(0);
+    expect(body.every((s) => (s.width ?? 0) < frame.width!)).toBe(true);
+    expect(body.every((s) => (s.width ?? 0) === regionTextWidth(frame.width!))).toBe(true);
+  });
+
+  it("starts the statement at the top of the page", () => {
+    const frame = skeletons.find((s) => s.id === "lcregion-constraints-frame")!;
+    const title = skeletons.find((s) => s.id === "lcregion-constraints-title")!;
+    // Nothing sits above the title any more, so nothing should be reserved
+    // above it either — the first thing on the page is the first thing to read.
+    expect(title.y - frame.y).toBeLessThan(40);
   });
 });
 
@@ -214,7 +272,9 @@ describe("recolorTemplateElements", () => {
     const frame = light.find((el) => el.id === "lcregion-constraints-frame");
     const student = light.find((el) => el.id === "student-stroke");
     expect(title?.strokeColor).toBe(lightInk.primary);
-    expect(frame?.strokeColor).toBe(lightInk.border);
+    // A frame is never given a stroke by a theme change — that repaint is what
+    // used to bring every page's dashed box back on screen at once.
+    expect(frame?.strokeColor).toBe("transparent");
     expect(student?.strokeColor).toBe("#ff00aa");
 
     const back = recolorTemplateElements(light, true)!;
@@ -257,7 +317,12 @@ describe("recolorTemplateElements", () => {
     ];
 
     const next = recolorTemplateElements(elements, true)!;
-    expect(next.find((el) => el.id === "random-frame")?.strokeColor).toBe(darkInk.border);
+    // Frames go the other way: a board saved when they were dashed loses the
+    // boxes on its first restore, since `applyThemeInk` runs on every one.
+    expect(next.find((el) => el.id === "random-frame")?.strokeColor).toBe("transparent");
+    expect(
+      (next.find((el) => el.id === "random-frame") as { strokeWidth?: number })?.strokeWidth,
+    ).toBe(0);
     expect(next.find((el) => el.id === "random-body")?.strokeColor).toBe(darkInk.body);
     expect(next.find((el) => el.id === "random-title")?.strokeColor).toBe(darkInk.primary);
     expect(next.find((el) => el.id === "student-stroke")?.strokeColor).toBe("#ff00aa");

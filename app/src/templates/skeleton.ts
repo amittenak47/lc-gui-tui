@@ -105,6 +105,16 @@ export interface SkeletonMeta {
    * what is written and is what gets cut into boxes for the agent.
    */
   lcPinnedHeader?: boolean;
+  /**
+   * Size this frame to the viewport's reading column, not to the student
+   * column.
+   *
+   * `lcDocumentPage` says "fit my width and scroll my height"; this says "and
+   * my width is a measure, not a desk". The camera fit re-widths frames that
+   * carry it on every fit, which is also how a board saved under the old
+   * four-screen-wide geometry heals itself the first time it is opened.
+   */
+  lcReadingColumn?: boolean;
 }
 
 /** Muted palette: the coach's ink should read as annotation, not as the work. */

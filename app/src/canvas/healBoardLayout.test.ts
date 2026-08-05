@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { statementSceneFont } from "../modes/codeFontSize";
+import { readingColumnWidth } from "../templates/readingColumn";
 import { healBoardLayout } from "./healBoardLayout";
 import type { ReadingElement } from "../modes/applyBoardReadingSize";
 
@@ -32,16 +34,22 @@ describe("healBoardLayout", () => {
         type: "rectangle",
         x: 0,
         y: 0,
-        width: 1200,
+        width: 420,
         height: 800,
         customData: { lcRegion: "constraints", lcRegionFrame: true },
       },
       body(96),
     ];
 
-    const healed = healBoardLayout(elements, { readingSize: "M" });
+    const healed = healBoardLayout(elements, { readingSize: "M", viewportWidth: 420 });
+    const frame = healed.find((el) => el.id.endsWith("-frame"))!;
     const text = healed.find((el) => el.id.endsWith("-body-0"))!;
-    expect(text.fontSize).toBe(36);
-    expect(text.width).toBeGreaterThan(400);
+    // The saved column is re-measured for this screen first, and only then is
+    // the type set — 96 is a compounded font from an older build and the
+    // reading size replaces it with one derived from the column it now sits in.
+    const column = readingColumnWidth(420);
+    expect(frame.width).toBe(column);
+    expect(text.fontSize).toBe(statementSceneFont("M", column, 420));
+    expect(text.width).toBeLessThan(column);
   });
 });
