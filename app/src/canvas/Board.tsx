@@ -465,12 +465,16 @@ const ZOOM_MAX = 1.75;
 const ZOOM_STEP = 1.15;
 /** Button zoom animation — retargets smoothly on repeat / hold. */
 const ZOOM_ANIM_MS = 220;
-/** Hand-tool pan inertia — exponential friction per ms (same feel as NumberWheel). */
-const PAN_FRICTION = 0.0038;
+/** Hand-tool pan inertia — exponential friction per ms (coast after flick). */
+const PAN_FRICTION = 0.002;
+/** Faster decay when the reader taps mid-glide — stop smooth, not hard. */
+const PAN_BRAKE_FRICTION = 0.014;
 /** Minimum scroll speed (scene units/ms) to coast after a flick. */
-const PAN_FLICK_MIN = 0.06;
+const PAN_FLICK_MIN = 0.045;
 /** Stop coasting below this scroll speed. */
-const PAN_REST_SPEED = 0.00025;
+const PAN_REST_SPEED = 0.0002;
+/** Px before a press-during-glide becomes a new drag instead of a soft stop. */
+const PAN_DRAG_THRESHOLD_PX = 5;
 
 function zoomEaseOut(t: number): number {
   return 1 - (1 - t) * (1 - t);
@@ -968,6 +972,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const panVelocityRef = useRef({ x: 0, y: 0 });
   const lastPanScrollRef = useRef({ x: 0, y: 0, t: 0 });
   const inertiaFrameRef = useRef(0);
+  /** Mid-glide tap: raise friction until rest (smooth stop, not cancel). */
+  const inertiaBrakingRef = useRef(false);
+  /**
+   * Vertical-only drag we own. Excalidraw's hand pans in 2D; reading pages
+   * must not. Capture phase + our own scrollY updates keep the column pinned.
+   */
+  const panDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startScrollY: number;
+    lastClientY: number;
+    lastT: number;
+    armed: boolean;
+  } | null>(null);
   const slotReportFrameRef = useRef(0);
   /**
    * Wheel / scroll bursts must pin ink tiles the same way a pan does.
@@ -1615,6 +1634,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       cancelAnimationFrame(inertiaFrameRef.current);
       inertiaFrameRef.current = 0;
     }
+    inertiaBrakingRef.current = false;
+  }, []);
+
+  /** Reading mode: Excalidraw must be on hand, or finger drag does nothing. */
+  const ensureReadingHand = useCallback(() => {
+    if (annotateCodeRef.current) return;
+    setActiveTool("hand");
+    activeToolRef.current = "hand";
+    apiRef.current?.setActiveTool({ type: "hand" });
+    apiRef.current?.updateScene({
+      appState: { selectedElementIds: {} },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
   }, []);
 
   const persistInkPrefs = useCallback(
@@ -1908,24 +1940,37 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!root) return;
 
     /*
-     * Nothing pans any more.
+     * Vertical scroll only — reading pages have no sideways ground.
      *
-     * Every page is laid out at a size the reading control names and fills the
-     * width of the screen, so there is no ground beside the page to reach — a
-     * drag could only push the content off-centre and leave you fighting the
-     * clamp to get it back. Up and down is the only direction that means
-     * anything on these pages, and that is a scroll.
-     *
-     * Kept as a named predicate rather than deleting the pointer path: the
-     * flick, its velocity estimate and the inertia all hang off it, and this is
-     * the one place that decides whether any of that runs.
+     * Claude's fixed-view commit set this to `false`, which killed flick
+     * inertia and the column lock. Excalidraw's hand still panned in 2D, so a
+     * diagonal flick drifted X then the clamp yanked it back. We own the
+     * gesture again: Y scroll + coast, X pinned.
      */
-    const isHandPanTarget = (_target: EventTarget | null) => false;
+    const isHandPanTarget = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) return false;
+      /*
+       * The code page does not pan.
+       *
+       * It is one HTML editor filling the screen, wrapped to the column and
+       * scrolled by Monaco — there is no second screenful beside it to reach.
+       */
+      if (mobileRegionRef.current === "code" && !annotateCodeRef.current) return false;
+      if (
+        target.closest(
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
+        )
+      ) {
+        return false;
+      }
+      return target.closest(".excalidraw") != null;
+    };
 
     const startPanInertia = (velocityX: number, velocityY: number) => {
       const api = apiRef.current;
       if (!api) return;
       stopPanInertia();
+      inertiaBrakingRef.current = false;
       let velX = velocityX;
       let velY = velocityY;
       let last = performance.now();
@@ -1937,9 +1982,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       let scrollX = state.scrollX ?? 0;
       let scrollY = state.scrollY ?? 0;
       const zoom = state.zoom?.value ?? 1;
+      if (scrollModeRef.current) {
+        lockedScrollXRef.current = scrollX;
+        velX = 0;
+      }
 
       const settle = () => {
         inertiaFrameRef.current = 0;
+        inertiaBrakingRef.current = false;
         api.updateScene({
           appState: { scrollX, scrollY },
           captureUpdate: CaptureUpdateAction.NEVER,
@@ -1954,34 +2004,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const wantX = scrollX + velX * dt;
         const wantY = scrollY + velY * dt;
         const clamped = clampPanScroll(wantX, wantY, zoom);
-        /*
-         * An axis that would not go where the coast asked is done coasting.
-         *
-         * This used to keep integrating velocity into a wall: every frame the
-         * coast asked for ground the clamp refuses, the clamp answered with the
-         * edge — or, on an axis whose content fits the viewport, with the
-         * centred position, which is not the edge but the middle. So the flick
-         * threw the view out and the clamp yanked it back, once per frame, for
-         * as long as the friction took to die. That is the bounce, and on a
-         * fitted axis it is also why a flick looked like it reverted: it was
-         * being re-centred sixty times a second.
-         *
-         * Stopping the axis at the boundary is the whole fix. It also ends the
-         * coast honestly — a flick into a wall should stop at the wall, not
-         * spend a second pretending it is still moving.
-         */
-        /*
-         * Land soft: keep the fraction of the step the clamp actually allowed.
-         *
-         * Zeroing velocity the moment the clamp bit stopped the coast dead —
-         * correct, in that it no longer fought the wall, but it arrived at the
-         * boundary at full speed and halted in one frame, which reads as
-         * bouncing off it. Scaling by how much of the requested step got taken
-         * decays the velocity over the last few frames instead: far from the
-         * edge the ratio is 1 and nothing changes, and as the wall comes up
-         * each frame gets less of what it asked for, so the view glides into
-         * the boundary and settles there.
-         */
         const takenX = clamped.scrollX - scrollX;
         const takenY = clamped.scrollY - scrollY;
         const wantedX = wantX - scrollX;
@@ -1994,8 +2016,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
         scrollX = clamped.scrollX;
         scrollY = clamped.scrollY;
-        velX *= Math.exp(-PAN_FRICTION * dt);
-        velY *= Math.exp(-PAN_FRICTION * dt);
+        if (scrollModeRef.current && lockedScrollXRef.current !== null) {
+          scrollX = lockedScrollXRef.current;
+        }
+        const friction = inertiaBrakingRef.current ? PAN_BRAKE_FRICTION : PAN_FRICTION;
+        velX *= Math.exp(-friction * dt);
+        velY *= Math.exp(-friction * dt);
         if (Math.abs(velX) < PAN_REST_SPEED && Math.abs(velY) < PAN_REST_SPEED) {
           settle();
           return;
@@ -2016,48 +2042,130 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (activeToolRef.current !== "hand") return;
       if (event.button !== 0) return;
       if (!isHandPanTarget(event.target)) return;
-      stopPanInertia();
+
+      // Tap mid-glide: soft-brake. A follow-up move arms a new drag.
+      if (inertiaFrameRef.current) {
+        inertiaBrakingRef.current = true;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
       handPanningRef.current = true;
       rasterInkRef.current?.setCameraMoving(true);
-      lockedScrollXRef.current = null;
       panVelocityRef.current = { x: 0, y: 0 };
       const api = apiRef.current;
       const now = performance.now();
-      if (api) {
-        const state = api.getAppState() as { scrollX?: number; scrollY?: number };
-        lastPanScrollRef.current = {
-          x: state.scrollX ?? 0,
-          y: state.scrollY ?? 0,
-          t: now,
-        };
-        if (scrollModeRef.current) lockedScrollXRef.current = state.scrollX ?? 0;
-      } else {
-        lastPanScrollRef.current = { x: 0, y: 0, t: now };
+      const state = api?.getAppState() as
+        | { scrollX?: number; scrollY?: number; zoom?: { value?: number } }
+        | undefined;
+      const scrollX = state?.scrollX ?? 0;
+      const scrollY = state?.scrollY ?? 0;
+      lockedScrollXRef.current = scrollModeRef.current ? scrollX : null;
+      lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
+      panDragRef.current = {
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startScrollY: scrollY,
+        lastClientY: event.clientY,
+        lastT: now,
+        armed: false,
+      };
+      try {
+        root.setPointerCapture(event.pointerId);
+      } catch {
+        /* capture is best-effort on some hosts */
       }
     };
 
+    const onPointerMove = (event: PointerEvent) => {
+      const drag = panDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (!handPanningRef.current) return;
+      if (activeToolRef.current !== "hand") return;
+
+      const dx = event.clientX - drag.startClientX;
+      const dy = event.clientY - drag.startClientY;
+      if (!drag.armed) {
+        if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD_PX) return;
+        // Real drag — cancel any soft-brake coast and take the wheel.
+        stopPanInertia();
+        inertiaBrakingRef.current = false;
+        const api = apiRef.current;
+        const live = api?.getAppState() as { scrollY?: number } | undefined;
+        drag.startScrollY = live?.scrollY ?? drag.startScrollY;
+        drag.startClientY = event.clientY;
+        drag.lastClientY = event.clientY;
+        drag.lastT = performance.now();
+        drag.armed = true;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const api = apiRef.current;
+      if (!api) return;
+      const state = api.getAppState() as { zoom?: { value?: number } };
+      const zoom = state.zoom?.value ?? 1;
+      const lockX = lockedScrollXRef.current;
+      const nextY = drag.startScrollY + (event.clientY - drag.startClientY) / zoom;
+      const clamped = clampPanScroll(lockX ?? 0, nextY, zoom);
+      const scrollX = lockX ?? clamped.scrollX;
+      const scrollY = clamped.scrollY;
+
+      const now = performance.now();
+      const dt = Math.max(1, now - drag.lastT);
+      const instantY = (event.clientY - drag.lastClientY) / zoom / dt;
+      panVelocityRef.current = {
+        x: 0,
+        y: panVelocityRef.current.y * 0.65 + instantY * 0.35,
+      };
+      drag.lastClientY = event.clientY;
+      drag.lastT = now;
+      lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
+
+      pulseCameraMotionRef.current();
+      api.updateScene({
+        appState: { scrollX, scrollY },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+      if (!rasterInkRef.current?.isDrawing()) {
+        rasterInkRef.current?.syncCamera();
+      }
+      scheduleSlotReports();
+    };
+
     const onPointerUp = (event: PointerEvent) => {
+      const drag = panDragRef.current;
+      if (drag && drag.pointerId === event.pointerId) {
+        try {
+          root.releasePointerCapture(event.pointerId);
+        } catch {
+          /* ignore */
+        }
+      }
       if (!handPanningRef.current) return;
       handPanningRef.current = false;
+      panDragRef.current = null;
+
       if (activeToolRef.current !== "hand") {
         rasterInkRef.current?.setCameraMoving(false);
         return;
       }
-      if (!isHandPanTarget(event.target)) {
-        rasterInkRef.current?.setCameraMoving(false);
+
+      // Tap during glide: leave soft-brake running; do not start a new coast.
+      if (!drag?.armed) {
+        if (!inertiaFrameRef.current) {
+          rasterInkRef.current?.setCameraMoving(false);
+        }
         return;
       }
-      const raw = scrollModeRef.current
-        ? { x: 0, y: panVelocityRef.current.y }
-        : panVelocityRef.current;
-      /*
-       * Drop the components that have nowhere to go.
-       *
-       * Pressed against a boundary, the clamp already refuses that axis, so
-       * coasting into it can only produce a frame of motion the clamp undoes —
-       * which is the judder this is meant to be rid of. A throw along the wall
-       * still coasts; a throw into it simply does not start.
-       */
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const raw = { x: 0, y: panVelocityRef.current.y };
       const vel = (() => {
         const api = apiRef.current;
         if (!api) return raw;
@@ -2070,25 +2178,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const y = state.scrollY ?? 0;
         const probe = clampPanScroll(x + raw.x * 16, y + raw.y * 16, state.zoom?.value ?? 1);
         return {
-          x: Math.abs(probe.scrollX - x) < 0.5 ? 0 : raw.x,
+          x: 0,
           y: Math.abs(probe.scrollY - y) < 0.5 ? 0 : raw.y,
         };
       })();
-      const speed = Math.hypot(vel.x, vel.y);
-      // The lift is not the settle when the view is still coasting — leave the
-      // level pinned and let the coast's own settle release it.
+      const speed = Math.abs(vel.y);
       if (speed >= PAN_FLICK_MIN) {
-        startPanInertia(vel.x, vel.y);
+        startPanInertia(0, vel.y);
         return;
       }
       rasterInkRef.current?.setCameraMoving(false);
     };
 
     root.addEventListener("pointerdown", onPointerDown, true);
+    root.addEventListener("pointermove", onPointerMove, true);
     root.addEventListener("pointerup", onPointerUp, true);
     root.addEventListener("pointercancel", onPointerUp, true);
     return () => {
       root.removeEventListener("pointerdown", onPointerDown, true);
+      root.removeEventListener("pointermove", onPointerMove, true);
       root.removeEventListener("pointerup", onPointerUp, true);
       root.removeEventListener("pointercancel", onPointerUp, true);
       stopPanInertia();
@@ -2097,7 +2205,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   useEffect(() => {
     stopPanInertia();
+    inertiaBrakingRef.current = false;
     handPanningRef.current = false;
+    panDragRef.current = null;
     rasterInkRef.current?.setCameraMoving(false);
   }, [activeTool, stopPanInertia]);
 
@@ -2848,8 +2958,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           (state.scrollY ?? 0) - event.deltaY / zoom,
           zoom,
         );
+        if (scrollModeRef.current) lockedScrollXRef.current = next.scrollX;
         api.updateScene({
-          appState: { scrollY: next.scrollY },
+          appState: { scrollX: next.scrollX, scrollY: next.scrollY },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
         return;
@@ -3092,11 +3203,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             ? 0
             : Math.max(0, availHeight - boxHeight * zoom);
         fittingCameraRef.current = true;
+        const nextScrollX = (inset.left + slackX / 2) / zoom - minX;
+        const nextScrollY = (inset.top + slackY / 2) / zoom - minY;
+        if (scrollModeRef.current) lockedScrollXRef.current = nextScrollX;
         api.updateScene({
           appState: {
             zoom: { value: zoom },
-            scrollX: (inset.left + slackX / 2) / zoom - minX,
-            scrollY: (inset.top + slackY / 2) / zoom - minY,
+            scrollX: nextScrollX,
+            scrollY: nextScrollY,
           },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
@@ -3598,16 +3712,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
 
 
-  // Excalidraw can reset the active tool during its own mount; re-assert the
-  // default once the API is live so a session starts in pan mode, not drawing.
+  // Excalidraw can reset the active tool during its own mount; re-assert hand
+  // once the API is live so a session starts scrolling, not selecting.
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (apiRef.current && activeTool === "hand") {
-        apiRef.current.setActiveTool({ type: "hand" });
-      }
+      if (!annotateCodeRef.current) ensureReadingHand();
     }, 120);
     return () => clearTimeout(timer);
-  }, [activeTool]);
+  }, [activeTool, ensureReadingHand]);
 
   const resetTemplate = useCallback(() => {
     const skeletons = seedSkeletonsRef.current;
@@ -4128,6 +4240,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           apiRef.current?.history?.clear();
           syncPageVisibility();
           scheduleFitView();
+          ensureReadingHand();
         });
       },
       resetTemplate,
@@ -4341,11 +4454,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         );
         // Keep a fit target so landing zooms to problem+code, not the full board.
         templateRef.current = healed as unknown[];
-        // Drop saved zoom/pan — never pass zoom: undefined (Excalidraw crashes).
+        // Drop saved camera — never pass zoom: undefined (Excalidraw crashes).
+        // Also drop tool/selection: a board saved while annotating would restore
+        // Select, and finger-scroll dies until the toolbar is toggled.
         const saved = { ...((appState as Record<string, unknown> | undefined) ?? {}) };
         delete saved.zoom;
         delete saved.scrollX;
         delete saved.scrollY;
+        delete saved.activeTool;
+        delete saved.selectedElementIds;
         if (options?.files && apiRef.current?.addFiles) {
           const list = Object.values(options.files).map((file) => ({
             id: file.id,
@@ -4361,10 +4478,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           captureUpdate: CaptureUpdateAction.NEVER,
         });
         rasterInkRef.current?.setOps(options?.ink ?? []);
+        ensureReadingHand();
         requestAnimationFrame(() => {
           apiRef.current?.history?.clear();
           syncPageVisibility();
           scheduleFitView();
+          ensureReadingHand();
         });
       },
       applyThemeInk: (nextThemeId: string) => {
@@ -4396,7 +4515,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
       },
     }),
-    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, refitToViewport, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut],
+    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, refitToViewport, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
@@ -4668,18 +4787,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               }
 
               /*
-               * Hold the column while a reading-mode drag is running.
+               * Reading mode: column never moves sideways.
                *
-               * The hand tool is Excalidraw's and pans in two dimensions, so
-               * the lock is a correction rather than a restraint: put `scrollX`
-               * back where the drag started. Only during the drag — a zoom or a
-               * fit moves the column legitimately, and the correction is
-               * sub-pixel on any drag that is mostly vertical, which in reading
-               * mode is all of them.
+               * Excalidraw's hand is 2D; we own vertical drag, but wheel /
+               * clamp / stray pans can still nudge X. Pin every frame.
                */
               if (
                 scrollModeRef.current &&
-                handPanningRef.current &&
                 !clampingScrollRef.current &&
                 lockedScrollXRef.current !== null &&
                 Math.abs(scrollX - lockedScrollXRef.current) > 0.05
@@ -4795,6 +4909,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           const pct = Math.round((state.zoom?.value ?? 1) * 100);
           setZoomPct((current) => (current === pct ? current : pct));
           apiRef.current.setActiveTool({ type: "hand" });
+          if (!annotateCodeRef.current) {
+            ensureReadingHand();
+          }
           reportCodeSlot();
         }}
         onChange={handleSceneChange}
