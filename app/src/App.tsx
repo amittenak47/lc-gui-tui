@@ -51,7 +51,7 @@ import { offlinePackDownloader } from "./util/offlinePackDownload";
 import { StatusBanner } from "./components/StatusBanner";
 import { SmartTips } from "./components/SmartTips";
 import { Board } from "./canvas/Board";
-import { loadBoardReadingSize, saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
+import { saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
 import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
 import { studentAuthoredElements, studentElements } from "./canvas/capture";
 import type { StructureBaseline } from "./canvas/boardDelta";
@@ -94,14 +94,17 @@ import {
 } from "./templates/scratchpad";
 import { MOBILE_REGION_ORDER, REGIONS, type RegionId } from "./templates/regions";
 import { splitProblemKey } from "./util/datasetKey";
-import { isMobileViewport, useIsMobile } from "./util/mobile";
+import { useIsMobile } from "./util/mobile";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { MdInkDialog } from "./modes/MdInkDialog";
 import { MdInkDocument } from "./modes/MdInkDocument";
 import {
   buildMdInkTemplate,
+  mdInkFrameWidthFromElements,
   mdInkPageHeight,
+  mdInkPageWidthForViewport,
   MD_INK_DATASET,
+  MD_INK_PAGE_W,
   MD_INK_REGION,
   MD_INK_TASK_ID,
 } from "./templates/mdInk";
@@ -287,6 +290,8 @@ export function App() {
    * way round.
    */
   const [mdInkHeight, setMdInkHeight] = useState<number | null>(null);
+  /** Scene width of the open markdown page — viewport-sized on fresh opens. */
+  const [mdInkPageWidth, setMdInkPageWidth] = useState(MD_INK_PAGE_W);
   /** Same discard contract as the scratchpad — see `scratchBaselineRef`. */
   const mdInkBaselineRef = useRef<{ id: string | null; entry: MdInkDoc | null }>({
     id: null,
@@ -295,6 +300,7 @@ export function App() {
   const mdInkPristineHashRef = useRef<number | null>(null);
   mdInkSourceRef.current = mdInkSource;
   mdInkDocIdRef.current = mdInkDocId;
+
   const [pairing, setPairing] = useState<Pairing>(() => loadPairing());
   const [pairingEditing, setPairingEditing] = useState(false);
   const client = useMemo(() => new LcClient(pairing), [pairing]);
@@ -575,6 +581,7 @@ export function App() {
   const [boardPreparing, setBoardPreparing] = useState(false);
   /** Keep the problem browser overlay up while the first board fit settles. */
   const [holdBrowseOverlay, setHoldBrowseOverlay] = useState(false);
+
   /** Browser overlay: idle / enter / busy (spin) / exit (slide+spin) / done (check). */
   const [browseMotion, setBrowseMotion] = useState<"enter" | "idle" | "busy" | "exit" | "done">("idle");
   /** Same spinner → check transition when stepping ‹ › between problems. */
@@ -593,10 +600,7 @@ export function App() {
   /** Distinguishes header Run tests vs Submit for the results panel. */
   const [lastRunKind, setLastRunKind] = useState<"run" | "submit">("run");
   const [themeId, setThemeId] = useState(loadThemeId);
-  const [readingSize, setReadingSize] = useState<BoardReadingSize>(() =>
-    // Desktop zooms with the wheel — S/M/L only fights statement vs Monaco scale.
-    isMobileViewport() ? loadBoardReadingSize() : "M",
-  );
+  const [readingSize, setReadingSize] = useState<BoardReadingSize>("M");
   const [coachOpen, setCoachOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [codeSlot, setCodeSlot] = useState<ScreenRect | null>(null);
@@ -630,13 +634,11 @@ export function App() {
   }, [themeId]);
 
   useEffect(() => {
-    // Desktop stays flat at Medium; only persist S/M/L on mobile.
-    if (!mobile) {
-      if (readingSize !== "M") setReadingSize("M");
-      return;
-    }
-    saveBoardReadingSize(readingSize);
-  }, [mobile, readingSize]);
+    // S/M/L is gone — annotations track the page, and a size switch reflows
+    // frames without remapping ink. Always Medium.
+    if (readingSize !== "M") setReadingSize("M");
+    saveBoardReadingSize("M");
+  }, [readingSize]);
 
   const [tests, setTests] = useState<TestResponse | null>(null);
   const [capabilities, setCapabilities] = useState<CoachCapabilities | null>(null);
@@ -1411,14 +1413,39 @@ export function App() {
         const dark = isDarkTheme(themeId);
         // The real height arrives from the document's own measure a frame or
         // two later; start at the floor so the frame is never zero-sized.
-        const skeletons = buildMdInkTemplate(mdInkPageHeight(null), dark);
+        const savedInk = Array.isArray(existing?.board.ink) ? existing.board.ink : [];
+        // Size the column to this screen so width-fit keeps type Obsidian-readable
+        // (a fixed 760 on a phone was ~8px body). Inked restores from a wider
+        // tablet may see marks drift — the width is part of the annotate
+        // contract; storing it per document is the lasting fix.
+        const pageWidth = mdInkPageWidthForViewport(
+          typeof window !== "undefined" ? window.innerWidth : MD_INK_PAGE_W,
+        );
+        setMdInkPageWidth(pageWidth);
+        const skeletons = buildMdInkTemplate(mdInkPageHeight(null), dark, pageWidth);
 
         if (existing) {
           boardRef.current?.restoreBoard(existing.board.elements, existing.board.appState, {
             skeletons,
-            ink: Array.isArray(existing.board.ink) ? existing.board.ink : [],
+            ink: savedInk,
             files: existing.board.files,
           });
+          // Restore kept the saved frame width — rewrite to this viewport so
+          // fit does not shrink the type. Ink stays; marks may drift if the
+          // page was authored wider.
+          const live = boardRef.current?.getElements() ?? [];
+          boardRef.current?.setElements(
+            live.map((el) => {
+              const meta = (el as { customData?: { lcMdInkFrame?: boolean } }).customData;
+              if (!meta?.lcMdInkFrame) return el;
+              return {
+                ...(el as object),
+                width: pageWidth,
+                locked: true,
+                versionNonce: Math.random() * 2 ** 31,
+              };
+            }),
+          );
           setMdInkDocId(existing.id);
         } else {
           boardRef.current?.seedTemplate(skeletons);
@@ -1522,7 +1549,16 @@ export function App() {
         return;
       }
       boardRef.current?.restoreBoard(sidecar.board.elements, sidecar.board.appState, {
-        skeletons: buildMdInkTemplate(mdInkPageHeight(mdInkHeight), isDarkTheme(themeId)),
+        skeletons: buildMdInkTemplate(
+          mdInkPageHeight(mdInkHeight),
+          isDarkTheme(themeId),
+          mdInkFrameWidthFromElements(
+            sidecar.board.elements as {
+              width?: number;
+              customData?: { lcMdInkFrame?: boolean } | null;
+            }[],
+          ) ?? mdInkPageWidth,
+        ),
         ink: Array.isArray(sidecar.board.ink) ? sidecar.board.ink : [],
         files: sidecar.board.files,
       });
@@ -3440,16 +3476,13 @@ export function App() {
             themeId={themeId}
             onThemePick={setThemeId}
             readingSize={readingSize}
-            onReadingSizeChange={setReadingSize}
             interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
             onCodeSlot={onCodeSlot}
             transparentCanvas={Boolean(problem && isMdInk(problem))}
-            scrollModeToggle={Boolean(problem && isMdInk(problem))}
             annotateToggle={Boolean(problem)}
             onAnnotateCodeChange={setAnnotateCode}
             // Ruled lines under somebody else's typography would be noise.
             linedPaperToggle={Boolean(problem) && !isMdInk(problem)}
-            showReadingSize={Boolean(problem && !isLocalPad(problem) && mobile)}
             mobileRegion={
               problem
                 ? isScratchpad(problem)
@@ -3493,7 +3526,14 @@ export function App() {
             }
             pageContent={
               problem && isMdInk(problem) && mdInkSource ? (
-                <MdInkDocument source={mdInkSource.text} onMeasure={setMdInkHeight} />
+                <MdInkDocument
+                  source={mdInkSource.text}
+                  onMeasure={(height) => {
+                    setMdInkHeight((prev) =>
+                      prev !== null && Math.abs(prev - height) < 1 ? prev : height,
+                    );
+                  }}
+                />
               ) : null
             }
             coachFold={null}

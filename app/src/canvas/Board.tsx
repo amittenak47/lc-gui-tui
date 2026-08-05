@@ -24,6 +24,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -56,12 +57,9 @@ import {
 } from "../templates/skeleton";
 import { BackgroundPalette } from "../components/BackgroundPalette";
 import { resolveInkColor } from "./inkColors";
-import { ReadingSizeControl } from "../components/ReadingSizeControl";
 import { useIsMobile } from "../util/mobile";
 import { isDarkTheme } from "../theme/appThemes";
 import {
-  loadBoardReadingSize,
-  saveBoardReadingSize,
   statementLinePitch,
   type BoardReadingSize,
 } from "../modes/codeFontSize";
@@ -537,25 +535,20 @@ function desktopPageInsets(
 /**
  * Measure the live chrome hole. Template includes the toolbar overlay area —
  * stop just above the very bottom edge, not above the floating controls.
+ *
+ * Insets are authored constants — do not call `getBoundingClientRect` here. A
+ * scroll clamp runs every wheel/pan frame, and re-learning a box only a resize
+ * can move was the forced-layout tax the camera perf pass removed.
  */
 function measureChromeInsets(
-  boardEl: HTMLElement | null,
+  _boardEl: HTMLElement | null,
   toolbarH: number,
   chromeHidden: boolean,
   mobile: boolean,
 ): { top: number; left: number; right: number; bottom: number } {
-  const fallback = mobile
+  return mobile
     ? mobilePageInsets(toolbarH, chromeHidden)
     : desktopPageInsets(toolbarH, chromeHidden);
-  if (!boardEl) return fallback;
-  const board = boardEl.getBoundingClientRect();
-  if (board.width < 8 || board.height < 8) return fallback;
-  return {
-    top: fallback.top,
-    left: fallback.left,
-    right: fallback.right,
-    bottom: fallback.bottom,
-  };
 }
 
 /**
@@ -677,9 +670,8 @@ export interface BoardProps {
   interactive?: boolean;
   /** Screen rect of the solution-code region, updated as you pan/zoom/resize. */
   onCodeSlot?: (rect: ScreenRect | null) => void;
-  /** Shared S/M/L size for problem statement + code. */
+  /** Shared reading size for problem statement + code (locked to Medium). */
   readingSize?: BoardReadingSize;
-  onReadingSizeChange?: (size: BoardReadingSize) => void;
   /**
    * Mobile "page": the one student region the viewport is fitted to. `null` on
    * desktop, where the whole stacked column stays one wide canvas.
@@ -732,28 +724,16 @@ export interface BoardProps {
    */
   transparentCanvas?: boolean;
   /**
-   * Offer the read/annotate toggle in the map chrome — Markdown Ink.
+   * Offer the toolbar toggle in the map chrome.
    *
-   * A long document is something you read down, not something you fly around,
-   * and a board built for a one-page problem gives you free 2D pan and
-   * wheel-to-zoom. Reading mode turns the board into a page: the wheel scrolls
-   * instead of zooming, and a drag cannot wander sideways off the column.
-   */
-  scrollModeToggle?: boolean;
-  /**
-   * Offer the annotate toggle on the code page, in the lined-paper's place.
-   *
-   * Ruling that page is meaningless, but marking it up is not: circling a line
-   * and asking "why this?" is the most natural thing to want to do to code you
-   * are reading, and until now the editor swallowed every pointer that tried.
+   * Toolbar on: drawing tools mount. Toolbar off: tools deselect and the board
+   * is scroll-only (internal hand — never shown in the UI).
    */
   annotateToggle?: boolean;
   /** Annotation mode changed — the caller makes the dock stop taking pointers. */
   onAnnotateCodeChange?: (on: boolean) => void;
   /** Show lined-paper toggle in the map chrome. */
   linedPaperToggle?: boolean;
-  /** Show S/M/L reading size (problem boards on mobile — not scratchpad). */
-  showReadingSize?: boolean;
   /** Optional fold handle under the bottom chrome (coach closed → open). */
   coachFold?: ReactNode;
 }
@@ -802,18 +782,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     interactive = true,
     onCodeSlot,
     readingSize: readingSizeProp,
-    onReadingSizeChange,
     mobileRegion = null,
     bottomCenter = null,
     pageTitle = null,
     pageContent = null,
     pageContentHeight = null,
     transparentCanvas = false,
-    scrollModeToggle = false,
     annotateToggle = true,
     onAnnotateCodeChange,
     linedPaperToggle = false,
-    showReadingSize = false,
     coachFold = null,
   },
   ref,
@@ -851,13 +828,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     top: number;
     ids: string[];
   } | null>(null);
-  const [contentSlot, setContentSlot] = useState<{
+  /**
+   * Markdown content slot — width is React state (rare); left/top/zoom are
+   * written to the DOM node so a scroll frame does not re-render Board.
+   * Same class of fix as the zoom pill (camera perf pass).
+   */
+  const contentSlotNodeRef = useRef<HTMLDivElement | null>(null);
+  const [contentSceneWidth, setContentSceneWidth] = useState(1);
+  const lastContentSlotRef = useRef<{
     left: number;
     top: number;
     sceneWidth: number;
     zoom: number;
   } | null>(null);
-  const lastContentSlotRef = useRef<typeof contentSlot>(null);
   const pageContentRef = useRef<ReactNode>(pageContent);
   pageContentRef.current = pageContent;
   /**
@@ -870,7 +853,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const transparentCanvasRef = useRef(transparentCanvas);
   transparentCanvasRef.current = transparentCanvas;
   /** Reading mode: wheel scrolls, drags stay in the column. */
-  const [scrollMode, setScrollMode] = useState(false);
+  /*
+   * Column lock is always on. There is no free 2D pan on these pages — wheel
+   * scrolls vertically, and a drag cannot wander sideways off the column.
+   */
+  const [scrollMode] = useState(true);
   const scrollModeRef = useRef(scrollMode);
   scrollModeRef.current = scrollMode;
   /**
@@ -890,14 +877,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
-  const [linedSlot, setLinedSlot] = useState<{
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-    gap: number;
-    phase: number;
-  } | null>(null);
+  /** Lined overlay — geometry written to the node; mount flag only. */
+  const linedSlotNodeRef = useRef<HTMLDivElement | null>(null);
+  const [linedSlotOn, setLinedSlotOn] = useState(false);
   const lastLinedSlotRef = useRef<{
     left: number;
     top: number;
@@ -911,6 +893,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     top: number;
     fontPx: number;
   } | null>(null);
+  const titleSlotNodeRef = useRef<HTMLDivElement | null>(null);
   const lastTitleSlotRef = useRef<{ left: number; top: number; fontPx: number } | null>(null);
   const [mapChromeHidden, setMapChromeHidden] = useState(false);
   const mapChromeHiddenRef = useRef(mapChromeHidden);
@@ -986,8 +969,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const lastPanScrollRef = useRef({ x: 0, y: 0, t: 0 });
   const inertiaFrameRef = useRef(0);
   const slotReportFrameRef = useRef(0);
-  const [readingSizeLocal, setReadingSizeLocal] = useState<BoardReadingSize>(() => loadBoardReadingSize());
-  const readingSize = readingSizeProp ?? readingSizeLocal;
+  /**
+   * Wheel / scroll bursts must pin ink tiles the same way a pan does.
+   * Without this, every scroll frame paid full raster budget (camera perf).
+   */
+  const cameraMotionTimerRef = useRef(0);
+  const cameraMotionActiveRef = useRef(false);
+  const pulseCameraMotion = useCallback(() => {
+    if (!cameraMotionActiveRef.current) {
+      cameraMotionActiveRef.current = true;
+      rasterInkRef.current?.setCameraMoving(true);
+    }
+    if (cameraMotionTimerRef.current) window.clearTimeout(cameraMotionTimerRef.current);
+    cameraMotionTimerRef.current = window.setTimeout(() => {
+      cameraMotionTimerRef.current = 0;
+      cameraMotionActiveRef.current = false;
+      rasterInkRef.current?.setCameraMoving(false);
+    }, 140);
+  }, []);
+  const pulseCameraMotionRef = useRef(pulseCameraMotion);
+  pulseCameraMotionRef.current = pulseCameraMotion;
+  const readingSize = readingSizeProp ?? "M";
   const readingSizeRef = useRef(readingSize);
   readingSizeRef.current = readingSize;
   const templateRef = useRef<unknown[]>([]);
@@ -997,6 +999,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const codeContentHeightRef = useRef<number | null>(null);
   const lastCodeSourceRef = useRef<string>("");
   const lastCodeSlotRef = useRef<ScreenRect | null>(null);
+  /** Skip full scene reconcile when Excalidraw only moved the camera. */
+  const lastSceneElementsRevRef = useRef<number>(-1);
+  const lastSelectionSigRef = useRef<string>("");
+  const lastElementsArgRef = useRef<readonly unknown[] | null>(null);
   const onCodeSlotRef = useRef(onCodeSlot);
   onCodeSlotRef.current = onCodeSlot;
   /** Read by `fitView` and `reportCodeSlot`, which must not re-bind per page. */
@@ -1344,28 +1350,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     lastTitleSlotRef.current = next;
-    setTitleSlot(next);
+    if (!prev) setTitleSlot(next);
+    const node = titleSlotNodeRef.current;
+    if (node) {
+      node.style.left = `${next.left}px`;
+      node.style.top = `${next.top}px`;
+      node.style.fontSize = `${next.fontPx}px`;
+    }
   }, []);
 
   /**
    * Project the open page onto the screen for the HTML content layer.
    *
-   * Only the page origin and the zoom are reported — no width or height in
-   * screen pixels. The content is laid out once at the page's *scene* width and
-   * then scaled by the camera, which is the whole trick: one affine transform
-   * for the markdown, the same one the canvas uses for shapes and ink, so the
-   * three cannot drift apart at any zoom. Reporting a pixel width instead would
-   * have reflowed the text on every zoom frame and moved every word out from
-   * under the ink sitting on it.
+   * Left/top/zoom go straight to the DOM node — a scroll frame must not
+   * re-render Board (camera perf: same reason the zoom pill is imperative).
+   * Scene width still uses React because it reflows the markdown column.
    */
   const reportContentSlot = useCallback(() => {
     const api = apiRef.current;
     const bounds = pageBoundsRef.current;
+    const node = contentSlotNodeRef.current;
     if (!pageContentRef.current || !api || !bounds) {
-      if (lastContentSlotRef.current !== null) {
-        lastContentSlotRef.current = null;
-        setContentSlot(null);
-      }
+      lastContentSlotRef.current = null;
       return;
     }
     const state = api.getAppState() as {
@@ -1391,15 +1397,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     lastContentSlotRef.current = next;
-    setContentSlot(next);
+    if (node) {
+      node.style.left = `${next.left}px`;
+      node.style.top = `${next.top}px`;
+      node.style.transform = `scale(${next.zoom})`;
+    }
+    if (!last || Math.abs(last.sceneWidth - next.sceneWidth) >= 0.01) {
+      setContentSceneWidth(next.sceneWidth);
+    }
   }, []);
 
   /*
-   * Annotation belongs to the code page and dies with it.
-   *
-   * The toggle makes the editor ignore pointers, so a mode left on after a page
-   * turn would be an editor nobody could type in and no visible control to
-   * explain why — the toggle it was set from is not even on screen any more.
+   * Toolbar owns annotate mode. Off → deselect tools and scroll-only hand.
+   * On → Select is the entry tool (Hand is gone from the strip).
    */
   useEffect(() => {
     if (!annotateToggle && annotateCode) setAnnotateCode(false);
@@ -1422,14 +1432,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (mobileRegionRef.current === "code") {
       if (lastLinedSlotRef.current !== null) {
         lastLinedSlotRef.current = null;
-        setLinedSlot(null);
+        setLinedSlotOn(false);
       }
       return;
     }
     if (!linedPaperRef.current) {
       if (lastLinedSlotRef.current !== null) {
         lastLinedSlotRef.current = null;
-        setLinedSlot(null);
+        setLinedSlotOn(false);
       }
       return;
     }
@@ -1438,7 +1448,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!api || !bounds) {
       if (lastLinedSlotRef.current !== null) {
         lastLinedSlotRef.current = null;
-        setLinedSlot(null);
+        setLinedSlotOn(false);
       }
       return;
     }
@@ -1539,14 +1549,29 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     lastLinedSlotRef.current = next;
-    setLinedSlot(next);
+    if (width > 8 && height > 8) {
+      setLinedSlotOn((on) => on || true);
+      const node = linedSlotNodeRef.current;
+      if (node) {
+        node.style.left = `${next.left}px`;
+        node.style.top = `${next.top}px`;
+        node.style.width = `${next.width}px`;
+        node.style.height = `${next.height}px`;
+        node.style.backgroundSize = `100% ${next.gap}px`;
+        node.style.backgroundPosition = `0 ${next.phase}px`;
+      }
+    } else {
+      setLinedSlotOn((on) => (on ? false : on));
+    }
   }, []);
 
   const scheduleSlotReports = useCallback(() => {
     if (slotReportFrameRef.current) return;
     slotReportFrameRef.current = requestAnimationFrame(() => {
       slotReportFrameRef.current = 0;
-      reportCodeSlot();
+      // Code dock only exists on the code page — skip the scene walk elsewhere.
+      const page = mobileRegionRef.current;
+      if (page === null || page === "code") reportCodeSlot();
       reportLinedSlot();
       reportTitleSlot();
       reportContentSlot();
@@ -1720,7 +1745,34 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
 
     setActiveTool(tool);
+    // Scroll tool: drop any selection. A selected page frame draws animated
+    // ants around the whole document and tanks scroll on long pages.
+    if (tool === "hand") {
+      apiRef.current?.updateScene({
+        appState: { selectedElementIds: {} },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    }
   }, [activeTool, applyTextModeToAppState]);
+
+  useEffect(() => {
+    if (annotateCode) {
+      setShapesOpen(false);
+      setCaptureMenuOpen(false);
+      setTool("selection");
+      return;
+    }
+    setShapesOpen(false);
+    setCaptureMenuOpen(false);
+    setTool("hand");
+    apiRef.current?.updateScene({
+      appState: { selectedElementIds: {} },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    // Only when the toolbar mode flips — setTool changes every tool pick and
+    // must not yank the pen back to Select mid-stroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [annotateCode]);
 
   const pickTextMode = useCallback(
     (mode: "plain" | "code") => {
@@ -2786,6 +2838,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         event.preventDefault();
         event.stopPropagation();
         userAdjustedCameraRef.current = true;
+        pulseCameraMotion();
         const next = clampPanScroll(
           state.scrollX ?? 0,
           (state.scrollY ?? 0) - event.deltaY / zoom,
@@ -2802,7 +2855,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     root.addEventListener("wheel", onWheel, { capture: true, passive: false });
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
-  }, [clampPanScroll, interactive, mobile, reportCodeSlot, showZoom]);
+  }, [clampPanScroll, interactive, mobile, pulseCameraMotion, reportCodeSlot, showZoom]);
 
   type FitMode = "frame" | "camera" | "both";
 
@@ -3108,6 +3161,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     reportContentSlot();
   }, [pageContent, reportContentSlot]);
 
+  // Slot nodes mount one frame after their flags flip — push geometry then.
+  useLayoutEffect(() => {
+    if (!pageContent) return;
+    reportContentSlot();
+  }, [pageContent, contentSceneWidth, reportContentSlot]);
+
+  useLayoutEffect(() => {
+    if (!linedSlotOn) return;
+    const next = lastLinedSlotRef.current;
+    const node = linedSlotNodeRef.current;
+    if (!next || !node) return;
+    node.style.left = `${next.left}px`;
+    node.style.top = `${next.top}px`;
+    node.style.width = `${next.width}px`;
+    node.style.height = `${next.height}px`;
+    node.style.backgroundSize = `100% ${next.gap}px`;
+    node.style.backgroundPosition = `0 ${next.phase}px`;
+  }, [linedSlotOn]);
+
   /**
    * Grow the page to the document, and tell the pan clamp about it.
    *
@@ -3133,10 +3205,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (typeof frame.height === "number" && Math.abs(frame.height - pageContentHeight) < 1) {
       return;
     }
+    const isMdFrame = Boolean(
+      (frame as { customData?: { lcMdInkFrame?: boolean } }).customData?.lcMdInkFrame,
+    );
     api.updateScene({
       elements: current.map((el) =>
         el === frame
-          ? { ...(el as object), height: pageContentHeight, versionNonce: Math.random() * 2 ** 31 }
+          ? {
+              ...(el as object),
+              height: pageContentHeight,
+              // Md frame must stay locked — see buildMdInkTemplate.
+              ...(isMdFrame ? { locked: true } : {}),
+              versionNonce: Math.random() * 2 ** 31,
+            }
           : el,
       ) as unknown[],
       captureUpdate: CaptureUpdateAction.NEVER,
@@ -3150,17 +3231,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!scrollMode) lockedScrollXRef.current = null;
   }, [scrollMode]);
 
-  /*
-   * A document opens in reading mode, and a board without one is never in it.
-   *
-   * You open a file to read it; annotating comes after. Reading mode does not
-   * take the pen away — it only changes what the wheel and a sideways drag do —
-   * so starting there costs an annotator one tap and saves every reader from
-   * rescaling the words on their first scroll.
-   */
   useEffect(() => {
-    setScrollMode(scrollModeToggle);
-  }, [scrollModeToggle]);
+    return () => {
+      if (cameraMotionTimerRef.current) window.clearTimeout(cameraMotionTimerRef.current);
+      cameraMotionTimerRef.current = 0;
+      cameraMotionActiveRef.current = false;
+    };
+  }, []);
 
   // Entering or leaving md-ink flips the canvas between opaque and see-through
   // after the theme has already been applied, so it needs its own push.
@@ -3679,28 +3756,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     },
     [applyRegionLayout, reportCodeSlot, reportLinedSlot],
   );
-  const setReadingSize = useCallback(
-    (next: BoardReadingSize) => {
-      const prev = readingSizeRef.current;
-      if (next === prev) {
-        onReadingSizeChange?.(next);
-        return;
-      }
-      readingSizeRef.current = next;
-      setReadingSizeLocal(next);
-      saveBoardReadingSize(next);
-      onReadingSizeChange?.(next);
-
-      reflowReadingText({ size: next, captureFrom: prev });
-      if (lastCodeSourceRef.current) {
-        codeContentHeightRef.current = codeFrameHeightForSource(
-          lastCodeSourceRef.current,
-          next,
-        );
-      }
-    },
-    [onReadingSizeChange, reflowReadingText],
-  );
 
   const wasInteractiveRef = useRef(false);
 
@@ -3716,10 +3771,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     userAdjustedCameraRef.current = false;
     // Hide the other pages *before* fitting: a page is the only thing on the
     // canvas, so zooming out on a tablet shows one frame, not the whole column.
+    // Ink clip tracks the same box — without this, marks from the previous page
+    // can flash on the next one until the next camera tick.
     syncPageVisibility();
     reportCodeSlot();
+    rasterInkRef.current?.syncCamera();
     void settleFitView().then(() => {
       reportCodeSlot();
+      rasterInkRef.current?.syncCamera();
     });
   }, [
     interactive,
@@ -3746,12 +3805,87 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return;
       }
 
-      // Frames: pin column position, zero rotation; resize height/width still works.
-      applyRegionLayout();
-      reportCodeSlot();
+      /*
+       * Scroll and zoom fire `onChange` with the same elements.
+       *
+       * A wheel frame used to pay for region layout, a full element walk,
+       * page-visibility rewrite, stamp chrome, and an App `onChange` (which
+       * fingerprints the whole board for autosave). That is the camera-perf
+       * class of bug again — the page was being reconciled because the camera
+       * moved. Slots already update from `onScrollChange`; skip the rest.
+       */
+      if (
+        cameraMotionActiveRef.current ||
+        clampingScrollRef.current ||
+        fittingCameraRef.current ||
+        layoutSyncingRef.current
+      ) {
+        return;
+      }
+
+      /*
+       * Page-tall frames + selection ants = scroll death.
+       *
+       * Hand/scroll mode never needs a selection. If a document frame (md-ink
+       * or region) is selected, Excalidraw paints animated dashes around the
+       * whole page every frame — that is the lagging box on the screen edge.
+       */
+      const selectedIds = Object.entries(appState?.selectedElementIds ?? {})
+        .filter(([, on]) => on)
+        .map(([id]) => id);
+      if (selectedIds.length > 0 && activeToolRef.current === "hand") {
+        api.updateScene({
+          appState: { selectedElementIds: {} },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        return;
+      }
+      if (selectedIds.length > 0) {
+        const live = api.getSceneElements() as Array<{
+          id: string;
+          customData?: { lcMdInkFrame?: boolean } | null;
+        }>;
+        const hitMdFrame = selectedIds.some((id) => {
+          const el = live.find((candidate) => candidate.id === id);
+          return Boolean(el?.customData?.lcMdInkFrame);
+        });
+        if (hitMdFrame) {
+          const nextSelected = { ...(appState?.selectedElementIds ?? {}) };
+          for (const id of selectedIds) {
+            const el = live.find((candidate) => candidate.id === id);
+            if (el?.customData?.lcMdInkFrame) delete nextSelected[id];
+          }
+          api.updateScene({
+            appState: { selectedElementIds: nextSelected },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+          return;
+        }
+      }
 
       const editingId = appState?.editingTextElement?.id ?? null;
-      const prevEditingId = editingTextIdRef.current;
+      const structuralUi =
+        Boolean(appState?.isResizing) ||
+        Boolean(appState?.resizingElement) ||
+        Boolean(appState?.newElement);
+      const selectionSig = Object.entries(appState?.selectedElementIds ?? {})
+        .filter(([, on]) => on)
+        .map(([id]) => id)
+        .sort()
+        .join("\0");
+
+      // Same elements array reference = camera/selection chrome only. O(1).
+      if (
+        !structuralUi &&
+        _elements !== undefined &&
+        _elements === lastElementsArgRef.current &&
+        selectionSig === lastSelectionSigRef.current &&
+        editingId === editingTextIdRef.current
+      ) {
+        return;
+      }
+      if (_elements !== undefined) lastElementsArgRef.current = _elements;
+
       const current = api.getSceneElements() as Array<{
         id: string;
         type: string;
@@ -3769,6 +3903,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         customData?: { lcRegion?: string; lcVizId?: string; lcRegionFrame?: boolean } | null;
         [key: string]: unknown;
       }>;
+
+      let elementsRev = current.length * 2654435761;
+      for (const el of current) {
+        elementsRev =
+          (elementsRev +
+            ((typeof el.version === "number" ? el.version : 0) | 0) * 131 +
+            ((typeof el.versionNonce === "number" ? el.versionNonce : 0) | 0)) |
+          0;
+      }
+
+      if (
+        !structuralUi &&
+        elementsRev === lastSceneElementsRevRef.current &&
+        selectionSig === lastSelectionSigRef.current &&
+        editingId === editingTextIdRef.current
+      ) {
+        return;
+      }
+      lastSceneElementsRevRef.current = elementsRev;
+      lastSelectionSigRef.current = selectionSig;
+
+      // Frames: pin column position, zero rotation; resize height/width still works.
+      applyRegionLayout();
+      reportCodeSlot();
+
+      const prevEditingId = editingTextIdRef.current;
 
       let changed = false;
       const next = current.map((el) => {
@@ -4285,36 +4445,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           Annotating — the editor is not taking typing
         </div>
       )}
-      {pageContent && contentSlot && (
+      {pageContent && (
         <div
+          ref={contentSlotNodeRef}
           className="lc-page-content-slot"
           aria-hidden
-          style={{
-            left: contentSlot.left,
-            top: contentSlot.top,
-            width: contentSlot.sceneWidth,
-            transform: `scale(${contentSlot.zoom})`,
-          }}
+          style={{ width: contentSceneWidth }}
         >
           {pageContent}
         </div>
       )}
-      {linedPaper && linedSlot && linedSlot.width > 8 && linedSlot.height > 8 && (
-        <div
-          className="lc-board-lined-overlay"
-          aria-hidden
-          style={{
-            left: linedSlot.left,
-            top: linedSlot.top,
-            width: linedSlot.width,
-            height: linedSlot.height,
-            backgroundSize: `100% ${linedSlot.gap}px`,
-            backgroundPosition: `0 ${linedSlot.phase}px`,
-          }}
-        />
+      {linedPaper && linedSlotOn && (
+        <div ref={linedSlotNodeRef} className="lc-board-lined-overlay" aria-hidden />
       )}
       {interactive && pageTitle && titleSlot && (
         <div
+          ref={titleSlotNodeRef}
           className="lc-page-title-slot"
           style={{ left: titleSlot.left, top: titleSlot.top, fontSize: titleSlot.fontPx }}
         >
@@ -4345,8 +4491,50 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               .join(" ")}
           >
             <div className="lc-map-chrome-left">
-              {!mapChromeHidden && onThemePick && (
-                <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
+              {!mapChromeHidden && (
+                <div className="lc-map-chrome-row">
+                  {onThemePick && (
+                    <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
+                  )}
+                  {annotateToggle && (
+                    <button
+                      type="button"
+                      className={
+                        annotateCode ? "lc-lined-toggle is-active" : "lc-lined-toggle"
+                      }
+                      aria-pressed={annotateCode}
+                      aria-label={annotateCode ? "Hide toolbar" : "Show toolbar"}
+                      title={
+                        annotateCode
+                          ? "Toolbar on — tap to scroll the page"
+                          : "Toolbar — annotate this page"
+                      }
+                      onClick={() => setAnnotateCode((current) => !current)}
+                    >
+                      <AnnotateIcon on={annotateCode} />
+                    </button>
+                  )}
+                  {linedPaperToggle && mobileRegion !== "code" && (
+                    <button
+                      type="button"
+                      className={
+                        linedPaper ? "lc-lined-toggle is-active" : "lc-lined-toggle"
+                      }
+                      aria-pressed={linedPaper}
+                      aria-label="Lined paper"
+                      title="Lined paper"
+                      onClick={() => {
+                        const next = !linedPaperRef.current;
+                        linedPaperRef.current = next;
+                        setLinedPaper(next);
+                        reflowReadingText();
+                        requestAnimationFrame(reportLinedSlot);
+                      }}
+                    >
+                      <span aria-hidden>🗒️</span>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
             <div className="lc-board-dock">
@@ -4362,7 +4550,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               */}
               {!mapChromeHidden && annotateCode && (
               <BoardToolbar
-                hidePanTool
                 active={activeTool}
                 onPick={setTool}
                 themeId={themeId}
@@ -4423,71 +4610,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 >
                   <EyeIcon closed={mapChromeHidden} />
                 </button>
-                {!mapChromeHidden && scrollModeToggle && (
-                  <button
-                    type="button"
-                    className={
-                      scrollMode ? "lc-scroll-toggle is-active" : "lc-scroll-toggle"
-                    }
-                    aria-pressed={scrollMode}
-                    aria-label={scrollMode ? "Reading: wheel scrolls" : "Annotating: wheel zooms"}
-                    title={
-                      scrollMode
-                        ? "Reading — wheel scrolls the page"
-                        : "Annotating — wheel zooms, drag pans freely"
-                    }
-                    onClick={() => setScrollMode((current) => !current)}
-                  >
-                    <ScrollModeIcon reading={scrollMode} />
-                  </button>
-                )}
-                {!mapChromeHidden && annotateToggle && (
-                  <button
-                    type="button"
-                    className={
-                      annotateCode ? "lc-lined-toggle is-active" : "lc-lined-toggle"
-                    }
-                    aria-pressed={annotateCode}
-                    aria-label={annotateCode ? "Stop annotating the code" : "Annotate the code"}
-                    title={
-                      annotateCode
-                        ? "Annotating — the editor is not taking input"
-                        : "Annotate the code with the pen"
-                    }
-                    onClick={() => setAnnotateCode((current) => !current)}
-                  >
-                    <AnnotateIcon on={annotateCode} />
-                  </button>
-                )}
-                {!mapChromeHidden && linedPaperToggle && mobileRegion !== "code" && (
-                  <button
-                    type="button"
-                    className={
-                      linedPaper ? "lc-lined-toggle is-active" : "lc-lined-toggle"
-                    }
-                    aria-pressed={linedPaper}
-                    aria-label="Lined paper"
-                    title="Lined paper"
-                    onClick={() => {
-                      const next = !linedPaperRef.current;
-                      linedPaperRef.current = next;
-                      setLinedPaper(next);
-                      reflowReadingText();
-                      requestAnimationFrame(reportLinedSlot);
-                    }}
-                  >
-                    <span aria-hidden>🗒️</span>
-                  </button>
-                )}
               </div>
-              {!mapChromeHidden && showReadingSize && (
-                <ReadingSizeControl value={readingSize} onChange={setReadingSize} />
-              )}
               {/*
-                No zoom, no fit. Every page is laid out at a size the reading
-                control already names and scrolls from there, so a zoom level
-                is a second, contradictory answer to "how big is the text" and
-                fit is a button that undoes wherever you had scrolled to.
+                No zoom, no fit, no S/M/L. Annotations track the page in scene
+                space — a reading-size switch reflows the frames without
+                remapping ink, which is how marks ended up on the wrong page.
               */}
             </div>
             {coachFold}
@@ -4602,6 +4729,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               }
               // Reblit the ink tiles for the new camera. Fires on zoom as well
               // as scroll, which is what keeps a smooth zoom smooth.
+              if (!fittingCameraRef.current && !clampingScrollRef.current) {
+                pulseCameraMotionRef.current();
+              }
               if (!rasterInkRef.current?.isDrawing()) {
                 rasterInkRef.current?.syncCamera();
               }
@@ -4788,43 +4918,8 @@ function EyeIcon({ closed = false }: { closed?: boolean }) {
 }
 
 /**
- * Reading vs annotating, in the shape of the eye beside it.
- *
- * Reading is a page with a scroll arrow down its side; annotating is the same
- * page with a nib on it. Same 24-grid, same stroke weight as {@link EyeIcon},
- * so the two read as one row of toggles rather than two decisions.
+ * A page with a nib on it — the toolbar toggle, same 24-grid as the eye.
  */
-function ScrollModeIcon({ reading = false }: { reading?: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      aria-hidden
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M5 3h9l4 4v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
-      {reading ? (
-        <>
-          <path d="M12 9v7" />
-          <path d="M9.4 13.4 12 16l2.6-2.6" />
-        </>
-      ) : (
-        <>
-          <path d="M8 16.5 15 9.5" />
-          <path d="M13.2 7.8 15.6 5.4a1.2 1.2 0 0 1 1.7 1.7l-2.4 2.4z" />
-          <path d="M8 16.5 7.2 18.3l1.8-.8" />
-        </>
-      )}
-    </svg>
-  );
-}
-
-/** A page with a nib on it — the same 24-grid as the eye beside it. */
 function AnnotateIcon({ on = false }: { on?: boolean }) {
   return (
     <svg
