@@ -3730,10 +3730,10 @@ export function App() {
                   client={client}
                   onPick={pickProblem}
                   busy={busy !== null || boardPreparing}
-                  themeId={themeId}
-                  onThemePick={setThemeId}
                   session={session}
                   offline={serverLink !== "online"}
+                  themeId={themeId}
+                  onThemePick={setThemeId}
                   onStartSession={(ids, bank) => void startFreshSession(ids, bank)}
                   onResetSession={() => {
                     setResetError(null);
@@ -4159,13 +4159,19 @@ interface OverflowItem {
   run: () => void;
 }
 
+/** When false, the ⋯ button opens settings directly instead of a submenu. */
+const HEADER_OVERFLOW_MENU = false;
+
 /** The mobile "⋯": everything that doesn't earn a thumb-sized slot in the header. */
 function HeaderOverflow({ items }: { items: OverflowItem[] }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
+  const settingsItem =
+    items.find((item) => item.id === "settings") ?? items[0] ?? null;
+
   useEffect(() => {
-    if (!open) return;
+    if (!HEADER_OVERFLOW_MENU || !open) return;
     const onPointerDown = (event: PointerEvent) => {
       if (wrapRef.current?.contains(event.target as Node)) return;
       setOpen(false);
@@ -4182,6 +4188,23 @@ function HeaderOverflow({ items }: { items: OverflowItem[] }) {
   }, [open]);
 
   if (items.length === 0) return null;
+
+  if (!HEADER_OVERFLOW_MENU) {
+    return (
+      <div className="lc-overflow" ref={wrapRef}>
+        <button
+          type="button"
+          className="lc-icon"
+          aria-label="Settings"
+          aria-expanded={false}
+          disabled={settingsItem?.disabled}
+          onClick={() => settingsItem?.run()}
+        >
+          ⋯
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="lc-overflow" ref={wrapRef}>

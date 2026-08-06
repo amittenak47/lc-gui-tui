@@ -18,7 +18,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LcClient, SearchOptions } from "../api/client";
 import type { DatasetInfo, ProblemSummary, SessionSnapshot } from "../api/types";
 import { DEFAULT_DATASET } from "../api/types";
-import { BackgroundPalette } from "../components/BackgroundPalette";
 import { useIsMobile } from "../util/mobile";
 import {
   loadOfflinePack,
@@ -27,6 +26,8 @@ import {
   offlineSearch,
   type OfflinePack,
 } from "../util/offlineCorpus";
+import { BackgroundPalette } from "../components/BackgroundPalette";
+import { HoldButton } from "../components/HoldButton";
 import { titleFromSlug } from "../util/text";
 import { loadBrowsePosition, saveBrowsePosition } from "../util/browsePosition";
 
@@ -49,8 +50,6 @@ export interface ProblemBrowserProps {
   /** Opens a problem; `bank` is the active filter so header prev/next can walk the corpus. */
   onPick: (taskId: string, bank?: SearchOptions) => void;
   busy: boolean;
-  themeId: string;
-  onThemePick: (id: string) => void;
   session?: SessionSnapshot | null;
   /** When lc serve is unreachable — skip fetches and show a calm empty state. */
   offline?: boolean;
@@ -65,6 +64,8 @@ export interface ProblemBrowserProps {
   onResetSession?: () => void;
   /** Build a random session queue from current filters (Random button / R). */
   onRandomSession?: (bank: SearchOptions) => void;
+  themeId: string;
+  onThemePick: (id: string) => void;
 }
 
 /** Step through a cycle of options, wrapping — the TUI's T/E/O behaviour. */
@@ -77,13 +78,13 @@ export function ProblemBrowser({
   client,
   onPick,
   busy,
-  themeId,
-  onThemePick,
   session = null,
   offline = false,
   onStartSession,
   onResetSession,
   onRandomSession,
+  themeId,
+  onThemePick,
 }: ProblemBrowserProps) {
   const mobile = useIsMobile();
   const initial = useMemo(() => loadBrowsePosition(), []);
@@ -108,6 +109,7 @@ export function ProblemBrowser({
   const [selectMode, setSelectMode] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [offlinePack, setOfflinePack] = useState<OfflinePack | null>(null);
+  const [startMode, setStartMode] = useState<"begin" | "random">("begin");
 
   const searchRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -125,21 +127,17 @@ export function ProblemBrowser({
       if (!body) return;
       const viewportH = window.innerHeight;
       const top = body.getBoundingClientRect().top;
-      const palette = body
-        .closest(".lc-browser")
-        ?.querySelector(".lc-bg-palette-inline");
-      const paletteH = palette?.getBoundingClientRect().height ?? 28;
       const foot = body.querySelector(".lc-browser-foot");
       const footH = foot?.getBoundingClientRect().height ?? 64;
       const filters = body.querySelector(".lc-browser-filters");
-      const tabs = body.querySelector(".lc-dataset-tabs");
+      const tabs = body.querySelector(".lc-dataset-tabs-row");
       const head = body.querySelector(".lc-table-head");
       const filtersH = filters?.getBoundingClientRect().height ?? 26;
       const tabsH = tabs?.getBoundingClientRect().height ?? 0;
       const headH = head?.getBoundingClientRect().height ?? 20;
       const gaps = 24;
       const tableChrome = 12;
-      const avail = viewportH - top - paletteH - footH - gaps;
+      const avail = viewportH - top - footH - gaps;
       const rowSlot = 30;
       const count = Math.floor((avail - filtersH - tabsH - headH - tableChrome) / rowSlot);
       setPageSize(Math.max(MOBILE_PAGE_SIZE_MIN, Math.min(PAGE_SIZE, count)));
@@ -500,12 +498,13 @@ export function ProblemBrowser({
       ?.scrollIntoView({ block: "nearest" });
   }, [selected, mobile]);
 
-  const rangeLabel = useMemo(() => {
+  /** Footer page line — e.g. `1–15 • 1 of 46` (range + page, not total hits). */
+  const pageInlineLabel = useMemo(() => {
     if (total === 0) return "no matches";
     const first = page * pageSize + 1;
     const last = Math.min(total, (page + 1) * pageSize);
-    return `${first}–${last} of ${total}`;
-  }, [page, total, pageSize]);
+    return `${first}–${last} • ${page + 1} of ${pageCount}`;
+  }, [page, pageCount, total, pageSize]);
 
   return (
     <section className="lc-browser" aria-label="Browse problems">
@@ -521,6 +520,8 @@ export function ProblemBrowser({
               active={dataset}
               disabled={busy}
               onPick={switchDataset}
+              themeId={themeId}
+              onThemePick={onThemePick}
             />
             <div className="lc-browser-filters">
               <input
@@ -568,14 +569,6 @@ export function ProblemBrowser({
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
-                className="lc-secondary"
-                disabled={busy || !onRandomSession}
-                onClick={randomizeSession}
-              >
-                Random
-              </button>
             </div>
 
             {error && <p className="lc-warning">{error}</p>}
@@ -659,78 +652,87 @@ export function ProblemBrowser({
               </div>
 
               <div className="lc-browser-foot">
-                <div className="lc-browser-foot-session">
-                  <div className="lc-browser-foot-actions">
-                    <button
-                      type="button"
-                      className="lc-secondary"
-                      disabled={busy || !onStartSession}
-                      onClick={commitStart}
-                    >
-                      Start
-                    </button>
-                    <button
-                      type="button"
-                      className="lc-secondary"
-                      disabled={busy || !onResetSession}
-                      onClick={commitReset}
-                    >
-                      Reset
-                    </button>
-                    <button
-                      type="button"
-                      className={selectMode ? "lc-secondary is-active" : "lc-secondary"}
-                      disabled={busy}
-                      aria-pressed={selectMode}
-                      onClick={() => setSelectMode((on) => !on)}
-                    >
-                      Select{picked.size > 0 ? ` (${picked.size})` : ""}
-                    </button>
-                  </div>
-                  <div className="lc-browser-foot-nav">
-                    <button
-                      type="button"
-                      className="lc-secondary"
-                      disabled={page === 0 || loading}
-                      onClick={() => turnPage(-1)}
-                    >
-                      <span className="lc-label-long">‹ prev</span>
-                      <span className="lc-label-short">‹</span>
-                    </button>
-                    <span className="lc-muted lc-browser-page-label">
-                      <span className="lc-browser-page-range">{rangeLabel}</span>
-                      <span className="lc-browser-page-pages">
-                        page {page + 1}/{pageCount}
-                      </span>
+                {/*
+                  Corners: ‹ / ›. Center: Select | Start | Reset, status under.
+                  End column: › above inline page (`1–15 • 1 of 46`).
+                */}
+                <div className="lc-browser-foot-bar">
+                  <button
+                    type="button"
+                    className="lc-secondary lc-browser-foot-prev"
+                    disabled={page === 0 || loading}
+                    onClick={() => turnPage(-1)}
+                    aria-label="Previous page"
+                  >
+                    <span className="lc-label-long">‹ prev</span>
+                    <span className="lc-label-short">‹</span>
+                  </button>
+                  <div className="lc-browser-foot-center">
+                    <div className="lc-browser-foot-actions">
+                      <button
+                        type="button"
+                        className={selectMode ? "lc-secondary is-active" : "lc-secondary"}
+                        disabled={busy}
+                        aria-pressed={selectMode}
+                        onClick={() => setSelectMode((on) => !on)}
+                      >
+                        Select{picked.size > 0 ? ` (${picked.size})` : ""}
+                      </button>
+                      <HoldButton
+                        label={startMode === "begin" ? "Begin!" : "Random"}
+                        className="lc-secondary lc-browser-start-hold"
+                        disabled={
+                          busy ||
+                          (startMode === "begin" ? !onStartSession : !onRandomSession)
+                        }
+                        ariaLabel={
+                          startMode === "begin"
+                            ? "Begin session: tap for Random, hold to start"
+                            : "Random session: tap for Begin, hold to randomize"
+                        }
+                        onTap={() =>
+                          setStartMode((mode) => (mode === "begin" ? "random" : "begin"))
+                        }
+                        onConfirm={() =>
+                          startMode === "begin" ? commitStart() : randomizeSession()
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="lc-secondary"
+                        disabled={busy || !onResetSession}
+                        onClick={commitReset}
+                      >
+                        Reset
+                      </button>
+                    </div>
+                    <span className="lc-browser-foot-stats lc-muted">
+                      {picked.size > 0
+                        ? `${picked.size} selected`
+                        : session && session.queue.length > 0
+                          ? `${session.queue.length} in queue · ${session.stats?.passed ?? 0} passed · ${session.stats?.failed ?? 0} failed`
+                          : "no session queue"}
                     </span>
+                  </div>
+                  <div className="lc-browser-foot-end">
                     <button
                       type="button"
-                      className="lc-secondary"
+                      className="lc-secondary lc-browser-foot-next"
                       disabled={page >= pageCount - 1 || loading}
                       onClick={() => turnPage(1)}
+                      aria-label="Next page"
                     >
                       <span className="lc-label-long">next ›</span>
                       <span className="lc-label-short">›</span>
                     </button>
+                    <span className="lc-muted lc-browser-page-label">{pageInlineLabel}</span>
                   </div>
                 </div>
-                <div className="lc-browser-foot-keys">
-                  <span className="lc-keys lc-muted lc-desktop-only">
+                <div className="lc-browser-foot-keys lc-desktop-only">
+                  <span className="lc-keys lc-muted">
                     W/S move · A/D page · / search · T tag · E diff · O sort · G dataset · R
                     random · M select · Space add · X reset · Enter open
                   </span>
-                  <span className="lc-browser-foot-stats lc-muted">
-                    {picked.size > 0
-                      ? `${picked.size} selected`
-                      : session && session.queue.length > 0
-                        ? `${session.queue.length} in queue · ${session.stats?.passed ?? 0} passed · ${session.stats?.failed ?? 0} failed`
-                        : "no session queue"}
-                  </span>
-                  <BackgroundPalette
-                    themeId={themeId}
-                    onPick={onThemePick}
-                    variant="map"
-                  />
                 </div>
               </div>
             </div>
@@ -754,37 +756,44 @@ function DatasetTabs({
   active,
   disabled,
   onPick,
+  themeId,
+  onThemePick,
 }: {
   datasets: DatasetInfo[];
   active: string;
   disabled: boolean;
   onPick: (id: string) => void;
+  themeId: string;
+  onThemePick: (id: string) => void;
 }) {
-  // An older daemon returns nothing; one tab is the honest rendering of that.
-  if (datasets.length <= 1) return null;
   return (
-    <div className="lc-dataset-tabs" role="tablist" aria-label="Problem set">
-      {datasets.map((entry) => (
-        <button
-          key={entry.id}
-          type="button"
-          role="tab"
-          aria-selected={entry.id === active}
-          className={[
-            "lc-dataset-tab",
-            entry.id === active ? "is-active" : "",
-            entry.count === 0 ? "is-empty" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          disabled={disabled}
-          title={entry.source}
-          onClick={() => onPick(entry.id)}
-        >
-          {entry.label}
-          <span className="lc-dataset-tab-count">{entry.count.toLocaleString()}</span>
-        </button>
-      ))}
+    <div className="lc-dataset-tabs-row">
+      {datasets.length > 1 ? (
+        <div className="lc-dataset-tabs" role="tablist" aria-label="Problem set">
+          {datasets.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={entry.id === active}
+              className={[
+                "lc-dataset-tab",
+                entry.id === active ? "is-active" : "",
+                entry.count === 0 ? "is-empty" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              disabled={disabled}
+              title={entry.source}
+              onClick={() => onPick(entry.id)}
+            >
+              {entry.label}
+              <span className="lc-dataset-tab-count">{entry.count.toLocaleString()}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <BackgroundPalette themeId={themeId} onPick={onThemePick} variant="map" />
     </div>
   );
 }

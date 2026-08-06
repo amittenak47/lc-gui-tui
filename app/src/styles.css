@@ -3979,13 +3979,19 @@ code {
 }
 
 .lc-browser-filters input[type="search"],
-.lc-browser-filters select,
-.lc-browser-filters button {
+.lc-browser-filters select {
   border-color: var(--chrome-edge);
 }
 
 .lc-browser-filters input[type="search"] {
-  flex: 1 1 260px;
+  flex: 0 1 140px;
+  max-width: 160px;
+  min-width: 96px;
+}
+
+.lc-browser-filters select {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .lc-table-head,
@@ -4104,11 +4110,48 @@ button.lc-row-selected:hover:not(:disabled) {
   padding-top: 10px;
 }
 
-.lc-browser-foot-session {
+/* ‹ | actions+status | ›+page — equal side tracks center the action group. */
+.lc-browser-foot-bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
+  column-gap: 10px;
+}
+
+.lc-browser-foot-prev,
+.lc-browser-foot-next {
+  min-width: 2.75rem;
+  padding: 0 8px;
+}
+
+.lc-browser-foot-prev {
+  justify-self: start;
+}
+
+.lc-browser-foot-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  justify-self: center;
+}
+
+.lc-browser-foot-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 6px;
   flex-wrap: wrap;
+}
+
+.lc-browser-foot-end {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  justify-self: end;
 }
 
 .lc-browser-foot-label {
@@ -4117,43 +4160,16 @@ button.lc-row-selected:hover:not(:disabled) {
   color: var(--fg);
 }
 
-.lc-browser-foot-nav {
-  display: grid;
-  grid-template-columns: 2.75rem minmax(10rem, 14rem) 2.75rem;
-  align-items: center;
-  justify-items: center;
-  column-gap: 6px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-.lc-browser-foot-nav > button:first-child {
-  justify-self: stretch;
-  width: 100%;
-  padding: 0;
-}
-
-.lc-browser-foot-nav > button:last-child {
-  justify-self: stretch;
-  width: 100%;
-  padding: 0;
-}
-
 .lc-browser-page-label {
   min-width: 0;
-  width: 100%;
   max-width: 14rem;
-  text-align: center;
+  text-align: right;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   line-height: 1.2;
-}
-
-.lc-browser-page-pages::before {
-  content: " · ";
 }
 
 .lc-browser-foot-keys {
@@ -4164,15 +4180,10 @@ button.lc-row-selected:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
-.lc-browser-foot-keys .lc-palette-map {
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
 .lc-browser-foot-stats {
-  margin-left: auto;
   white-space: nowrap;
   font-size: 11px;
+  text-align: center;
 }
 
 .lc-browser-foot button {
@@ -4186,6 +4197,31 @@ button.lc-row-selected:hover:not(:disabled) {
   border-color: var(--accent, #c47a2c);
   color: var(--fg);
   background: var(--panel, rgb(127 127 127 / 14%));
+}
+
+.lc-browser-foot .lc-hold-reveal.lc-browser-start-hold {
+  min-width: 0;
+  min-height: 32px;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: inherit;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+}
+
+.lc-browser-foot .lc-browser-start-hold .lc-hold-reveal-label {
+  display: inline;
+}
+
+.lc-browser-foot .lc-browser-start-hold .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 20%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 34%, transparent) 100%
+  );
 }
 
 .lc-keys {
@@ -5947,10 +5983,6 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 }
 
-.lc-browser-foot-actions {
-  display: contents;
-}
-
 /* --- problem browser (browse overlay) on phone / tablet / app --- */
 
 .lc-mobile .lc-overlay {
@@ -5979,6 +6011,23 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.lc-mobile .lc-dataset-tabs-row {
+  gap: 4px;
+  align-items: center;
+}
+
+.lc-mobile .lc-dataset-tabs-row .lc-palette-trigger-map.lc-map-btn {
+  width: 28px;
+  min-width: 28px;
+  min-height: 24px;
+  height: 24px;
+}
+
+.lc-mobile .lc-dataset-tabs-row .lc-palette-map .lc-palette-chip {
+  width: 12px;
+  height: 12px;
 }
 
 .lc-mobile .lc-dataset-tabs {
@@ -6018,26 +6067,25 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-browser-filters input[type="search"],
-.lc-mobile .lc-browser-filters select,
-.lc-mobile .lc-browser-filters button {
+.lc-mobile .lc-browser-filters select {
   min-height: 24px;
   height: 24px;
   padding: 0 4px;
   font-size: 10px;
   border-radius: 6px;
-  flex-shrink: 0;
 }
 
 .lc-mobile .lc-browser-filters input[type="search"] {
-  flex: 1 1 56px;
-  min-width: 52px;
-  max-width: none;
+  /* Mint: keep search short so orange filters can grow. */
+  flex: 0 1 72px;
+  min-width: 56px;
+  max-width: 96px;
 }
 
 .lc-mobile .lc-browser-filters select {
-  width: 3.4rem;
-  max-width: 3.4rem;
+  flex: 1 1 0;
   min-width: 0;
+  max-width: none;
   padding-right: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6099,68 +6147,52 @@ button.lc-row-selected:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-/* Session buttons, then pagination on its own row — nothing clips off-screen. */
+/* Corners: ‹ / ›. Center: Select|Start|Reset + status. Right: › + inline page. */
 .lc-mobile .lc-browser-foot {
   gap: 3px;
   padding-top: 6px;
   flex-shrink: 0;
 }
 
-.lc-mobile .lc-browser-foot-session {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
-  overflow: visible;
+.lc-mobile .lc-browser-foot-bar {
+  column-gap: 4px;
+  align-items: start;
+}
+
+.lc-mobile .lc-browser-foot-prev,
+.lc-mobile .lc-browser-foot-next {
+  min-width: 1.65rem;
+  width: 1.65rem;
+  padding: 0;
+}
+
+.lc-mobile .lc-browser-foot-center {
+  gap: 2px;
 }
 
 .lc-mobile .lc-browser-foot-actions {
-  display: flex;
-  align-items: center;
   gap: 4px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
-.lc-mobile .lc-browser-foot-label {
-  font-size: 10px;
-  flex-shrink: 0;
-}
-
-.lc-mobile .lc-browser-foot-nav {
-  margin-left: 0;
-  width: 100%;
-  flex-shrink: 0;
-  grid-template-columns: 1.65rem minmax(0, 1fr) 1.65rem;
-  column-gap: 3px;
+.lc-mobile .lc-browser-foot-end {
+  gap: 1px;
+  min-width: 4.5rem;
 }
 
 .lc-mobile .lc-browser-page-label {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
+  display: block;
   font-size: 9px;
   line-height: 1.15;
-  white-space: normal;
-  overflow: visible;
-  text-overflow: unset;
-  max-width: none;
-}
-
-.lc-mobile .lc-browser-page-pages::before {
-  content: none;
-}
-
-.lc-mobile .lc-browser-page-range,
-.lc-mobile .lc-browser-page-pages {
-  max-width: 100%;
+  text-align: right;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 7.5rem;
 }
 
-.lc-mobile .lc-browser-foot button {
+.lc-mobile .lc-browser-foot button,
+.lc-mobile .lc-browser-foot .lc-hold-reveal.lc-browser-start-hold {
   min-height: 26px;
   height: 26px;
   padding: 0 7px;
@@ -6168,54 +6200,25 @@ button.lc-row-selected:hover:not(:disabled) {
   flex-shrink: 0;
 }
 
-.lc-mobile .lc-browser-foot-keys {
-  position: relative;
-  justify-content: flex-end;
-  gap: 0;
-  min-height: 28px;
-}
-
-.lc-mobile .lc-browser-foot-keys .lc-palette-map {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  z-index: 2;
+.lc-mobile .lc-browser-foot-prev,
+.lc-mobile .lc-browser-foot-next {
+  padding: 0;
 }
 
 .lc-mobile .lc-browser-foot-stats {
   margin-left: 0;
   font-size: 9px;
-  width: 100%;
+  width: auto;
+  max-width: 100%;
   text-align: center;
   opacity: 0.85;
   line-height: 1.2;
-  overflow: visible;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Theme row under the browser card. */
-.lc-mobile .lc-bg-palette-inline {
-  padding-top: 6px;
-  gap: 6px;
-}
-
-.lc-mobile .lc-bg-palette-label {
-  font-size: 11px;
-}
-
-.lc-mobile .lc-bg-palette .lc-swatch {
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  min-height: 16px !important;
-  border-radius: 3px;
-}
-
-.lc-mobile .lc-bg-palette-swatches {
-  gap: 4px;
-  flex: 1;
-  min-width: 0;
-}
+/* Theme chip was briefly in header; browse palette now lives on tabs row. */
 
 .lc-mobile .lc-pairing {
   max-width: none;
@@ -6232,8 +6235,7 @@ button.lc-row-selected:hover:not(:disabled) {
 /* Tablet / landscape Magic Note Pad: room for tags + fuller chrome, still one row. */
 @media (min-width: 601px) {
   .lc-mobile .lc-browser-filters input[type="search"],
-  .lc-mobile .lc-browser-filters select,
-  .lc-mobile .lc-browser-filters button {
+  .lc-mobile .lc-browser-filters select {
     min-height: 28px;
     height: 28px;
     font-size: 12px;
@@ -6241,7 +6243,8 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 
   .lc-mobile .lc-browser-filters select {
-    max-width: 9rem;
+    flex: 1 1 0;
+    max-width: none;
   }
 
   .lc-mobile .lc-table-head,
@@ -6257,43 +6260,43 @@ button.lc-row-selected:hover:not(:disabled) {
     display: unset;
   }
 
-  .lc-mobile .lc-browser-foot button {
+  .lc-mobile .lc-browser-foot button,
+  .lc-mobile .lc-browser-foot .lc-hold-reveal.lc-browser-start-hold {
     min-height: 28px;
     height: 28px;
     font-size: 12px;
     padding: 0 8px;
   }
 
-  .lc-mobile .lc-browser-page-label {
-    max-width: none;
-    font-size: 11px;
+  .lc-mobile .lc-browser-foot-prev,
+  .lc-mobile .lc-browser-foot-next {
+    padding: 0;
+    min-width: 1.75rem;
+    width: 1.75rem;
   }
 
-  .lc-mobile .lc-bg-palette .lc-swatch {
-    width: 18px;
-    height: 18px;
-    min-width: 18px;
-    min-height: 18px !important;
+  .lc-mobile .lc-browser-page-label {
+    max-width: 9rem;
+    font-size: 11px;
   }
 }
 
 /* Very narrow (iPhone SE / Galaxy portrait): tighter still. */
 @media (max-width: 400px) {
-  .lc-mobile .lc-browser-foot-label {
-    display: none;
-  }
-
   .lc-mobile .lc-browser-filters select {
-    width: 3rem;
-    max-width: 3rem;
+    flex: 1 1 0;
+    min-width: 0;
   }
 
-  .lc-mobile .lc-browser-foot-nav {
-    grid-template-columns: 1.5rem minmax(0, 1fr) 1.5rem;
+  .lc-mobile .lc-browser-foot-prev,
+  .lc-mobile .lc-browser-foot-next {
+    min-width: 1.5rem;
+    width: 1.5rem;
   }
 
   .lc-mobile .lc-browser-page-label {
     font-size: 8px;
+    max-width: 6.5rem;
   }
 
   .lc-mobile .lc-overlay {
@@ -6552,12 +6555,34 @@ button.lc-row-selected:hover:not(:disabled) {
  * dropdown in the filter row.
  * ------------------------------------------------------------------------ */
 
+.lc-dataset-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--chrome-edge, rgb(127 127 127 / 20%));
+}
+
+.lc-dataset-tabs-row .lc-palette-map {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.lc-dataset-tabs-row .lc-palette-popover-map {
+  top: calc(100% + 6px);
+  bottom: auto;
+  right: 0;
+  left: auto;
+}
+
 .lc-dataset-tabs {
   display: flex;
   gap: 2px;
   flex-wrap: wrap;
   align-items: flex-end;
-  border-bottom: 1px solid var(--chrome-edge, rgb(127 127 127 / 20%));
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  border-bottom: none;
 }
 
 .lc-dataset-tab {
