@@ -467,8 +467,11 @@ function boardViewBackground(
   carbon: boolean,
   themeBackground: string,
 ): string {
-  if (carbon) return CARBON_BOARD_BG;
+  // Transparent must win when HTML (statement / md-ink) sits under the canvas —
+  // an opaque carbon fill would hide that layer. OLED black still comes from
+  // `.lc-board-carbon` / `.lc-md-ink-carbon` CSS behind the transparent canvas.
   if (transparent) return "transparent";
+  if (carbon) return CARBON_BOARD_BG;
   return themeBackground;
 }
 
@@ -5077,12 +5080,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         raster ink both draw over it. It is scaled, never reflowed — see
         `reportContentSlot`.
       */}
-      {annotateCode && (
-        <div className="lc-annotate-badge" aria-live="polite">
-          <span className="lc-annotate-badge-dot" aria-hidden />
-          Annotating — the editor is not taking typing
-        </div>
-      )}
       {pageContent && (
         <div
           ref={contentSlotNodeRef}
