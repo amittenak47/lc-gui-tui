@@ -183,6 +183,9 @@ function isScratchpad(problem: ProblemDetail | null | undefined): boolean {
 }
 
 /** Annotating a markdown file — a scratchpad whose paper is somebody's notes. */
+/** Hide under-header busy strip; keep `busy` for disable logic (re-enable later). */
+const SHOW_BUSY_BANNER = false;
+
 const MD_INK_PROBLEM: ProblemDetail = {
   dataset: MD_INK_DATASET,
   key: `${MD_INK_DATASET}/${MD_INK_TASK_ID}`,
@@ -3591,7 +3594,9 @@ export function App() {
 
       <main className="lc-main">
         <div className="lc-chrome-overlay-top" aria-live="polite">
-          {busy && problem && switchMotion === "idle" && <div className="lc-busy">{busy}</div>}
+          {SHOW_BUSY_BANNER && busy && problem && switchMotion === "idle" && (
+            <div className="lc-busy">{busy}</div>
+          )}
           <StatusBanner text={error} variant="error" />
           <StatusBanner text={!error ? notice : null} variant="notice" />
         </div>

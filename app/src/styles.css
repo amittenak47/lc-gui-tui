@@ -2133,10 +2133,17 @@ input[type="checkbox"] {
   background: var(--board-paper);
 }
 
+.lc-board.lc-board-carbon .lc-code-dock .lc-pseudo-dock .lc-pseudo-fallback,
+.lc-board.lc-board-carbon .lc-code-dock .lc-pseudo-dock .lc-pseudo-loading {
+  background: #0a0a0b;
+  color: var(--ink);
+}
+
 .lc-md-ink-carbon {
   --ink: #ededf0;
   --accent: #a5b4fc;
   color: var(--ink);
+  background: #0a0a0b;
 }
 
 .lc-page-content-slot {
@@ -2564,10 +2571,10 @@ input[type="checkbox"] {
 }
 
 .lc-palette-popover-map {
-  left: 0;
-  right: auto;
-  /* Open above the Theme chip so the dock / coach peek cannot cover it. */
-  bottom: calc(100% + 6px);
+  /* Open to the left of the color chip (map chrome + browser foot). */
+  right: calc(100% + 6px);
+  left: auto;
+  bottom: 0;
   top: auto;
   display: flex;
   flex-direction: column;
@@ -4157,6 +4164,11 @@ button.lc-row-selected:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
+.lc-browser-foot-keys .lc-palette-map {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .lc-browser-foot-stats {
   margin-left: auto;
   white-space: nowrap;
@@ -4291,6 +4303,12 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-code-dock .monaco-scrollable-element > .scrollbar > .slider:hover,
 .lc-code-dock .monaco-scrollable-element > .scrollbar > .slider.active {
   background: color-mix(in srgb, var(--ink) 42%, transparent) !important;
+}
+
+/* Board pan over code — mute Monaco hit-testing while scroll is armed. */
+.lc-code-dock-scrolling .monaco-editor,
+.lc-code-dock-scrolling .monaco-editor * {
+  pointer-events: none !important;
 }
 
 .lc-mobile .lc-code-dock .monaco-scrollable-element > .scrollbar {
@@ -5816,9 +5834,9 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /* Theme map chip matches lined / eye square — don't inherit zoom-btn width. */
 .lc-mobile .lc-palette-trigger-map.lc-map-btn {
-  width: 28px;
-  min-width: 28px;
-  min-height: 24px;
+  width: 36px;
+  min-width: 36px;
+  min-height: 28px;
   height: auto;
   padding: 0;
   border-left: none;
@@ -5831,8 +5849,8 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-palette-map .lc-palette-chip {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   margin: 0;
   flex-shrink: 0;
 }
@@ -5923,8 +5941,9 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 
   .lc-mobile .lc-palette-trigger-map.lc-map-btn {
-    width: auto;
-    min-height: 26px;
+    width: 36px;
+    min-width: 36px;
+    min-height: 28px;
   }
 }
 
@@ -6150,8 +6169,17 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-browser-foot-keys {
+  position: relative;
   justify-content: flex-end;
   gap: 0;
+  min-height: 28px;
+}
+
+.lc-mobile .lc-browser-foot-keys .lc-palette-map {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
 }
 
 .lc-mobile .lc-browser-foot-stats {

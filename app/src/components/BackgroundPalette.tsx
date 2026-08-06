@@ -31,8 +31,9 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
     return () => document.removeEventListener("mousedown", onPointer);
   }, [open]);
 
-  // Map/header popovers open above or below the chip — tip on the opposite side.
-  const tipPlacement = variant === "header" || variant === "map" ? "bottom" : "left";
+  // Map popover opens left of the chip; header opens below — tip on the far side.
+  const tipPlacement =
+    variant === "map" ? "right" : variant === "header" ? "bottom" : "left";
 
   if (variant === "inline") {
     return (
@@ -153,7 +154,7 @@ function ThemeGroup({
   themes: AppTheme[];
   themeId: string;
   onPick: (id: string) => void;
-  tipPlacement: "top" | "left" | "bottom";
+  tipPlacement: "top" | "left" | "bottom" | "right";
 }) {
   return (
     <div className="lc-palette-group">
@@ -182,7 +183,7 @@ function Swatch({
   theme: AppTheme;
   active: boolean;
   onPick: (id: string) => void;
-  tipPlacement: "top" | "left" | "bottom";
+  tipPlacement: "top" | "left" | "bottom" | "right";
 }) {
   return (
     <button

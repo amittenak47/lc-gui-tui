@@ -467,8 +467,8 @@ function boardViewBackground(
   carbon: boolean,
   themeBackground: string,
 ): string {
-  if (transparent) return "transparent";
   if (carbon) return CARBON_BOARD_BG;
+  if (transparent) return "transparent";
   return themeBackground;
 }
 
@@ -1086,6 +1086,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     lastClientY: number;
     lastT: number;
     armed: boolean;
+    /** Code dock: defer arming so taps still focus Monaco. */
+    codeDock: boolean;
+    codeDockEl: Element | null;
   } | null>(null);
   /**
    * Live camera while reading-scroll is in flight.
@@ -2258,18 +2261,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      *
      * Gemini's sample flipped this. Reading mode is when we own the gesture.
      */
+    const resolveElement = (target: EventTarget | null): Element | null => {
+      if (target instanceof Element) return target;
+      if (target && typeof (target as Node).parentElement !== "undefined") {
+        return (target as Node).parentElement;
+      }
+      return null;
+    };
+
+    const isCodeDockTarget = (target: EventTarget | null) =>
+      mobileRegionRef.current === "code" &&
+      !annotateCodeRef.current &&
+      resolveElement(target)?.closest(".lc-code-dock") != null;
+
     const isScrollSurface = (target: EventTarget | null) => {
-      const el =
-        target instanceof Element
-          ? target
-          : target && typeof (target as Node).parentElement !== "undefined"
-            ? (target as Node).parentElement
-            : null;
+      const el = resolveElement(target);
       if (!el) return false;
-      if (mobileRegionRef.current === "code" && !annotateCodeRef.current) return false;
       if (
         el.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
+          ".lc-toolbar, .lc-map-controls, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
         )
       ) {
         return false;
@@ -2354,23 +2364,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (event.button !== 0) return;
       if (!isScrollSurface(event.target)) return;
 
+      const onCodeDock = isCodeDockTarget(event.target);
+      const codeDockEl = onCodeDock
+        ? resolveElement(event.target)?.closest(".lc-code-dock") ?? null
+        : null;
+
       if (inertiaFrameRef.current) {
         inertiaBrakingRef.current = true;
       }
 
-      // Mute Excalidraw / browser for this gesture (capture phase).
-      event.preventDefault();
-      event.stopPropagation();
+      // Code dock: defer preventDefault until pan arms — taps must reach Monaco.
+      if (!onCodeDock) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
 
       handPanningRef.current = true;
-      rasterInkRef.current?.setCameraMoving(true);
+      if (!onCodeDock) {
+        rasterInkRef.current?.setCameraMoving(true);
+      }
       panVelocityRef.current = { x: 0, y: 0 };
       const now = performance.now();
       const cam = readScroll();
       lockedScrollXRef.current = scrollModeRef.current ? cam.scrollX : null;
       lastPanScrollRef.current = { x: cam.scrollX, y: cam.scrollY, t: now };
-      // Touch/pen: arm immediately. Waiting for a move threshold left the first
-      // flick dead on tablets when the browser also contested the gesture.
+      // Touch/pen: arm immediately except on code dock (tap-to-edit).
       const touchLike = event.pointerType === "touch" || event.pointerType === "pen";
       panDragRef.current = {
         pointerId: event.pointerId,
@@ -2379,12 +2397,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         startScrollY: cam.scrollY,
         lastClientY: event.clientY,
         lastT: now,
-        armed: touchLike,
+        armed: onCodeDock ? false : touchLike,
+        codeDock: onCodeDock,
+        codeDockEl,
       };
-      try {
-        root.setPointerCapture(event.pointerId);
-      } catch {
-        /* capture is best-effort on some hosts */
+      if (!onCodeDock) {
+        try {
+          root.setPointerCapture(event.pointerId);
+        } catch {
+          /* capture is best-effort on some hosts */
+        }
       }
     };
 
@@ -2406,6 +2428,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         drag.lastClientY = event.clientY;
         drag.lastT = performance.now();
         drag.armed = true;
+        if (drag.codeDock) {
+          drag.codeDockEl?.classList.add("lc-code-dock-scrolling");
+          rasterInkRef.current?.setCameraMoving(true);
+          try {
+            root.setPointerCapture(event.pointerId);
+          } catch {
+            /* capture is best-effort on some hosts */
+          }
+        }
       }
 
       event.preventDefault();
@@ -2437,6 +2468,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     const onPointerUp = (event: PointerEvent) => {
       const drag = panDragRef.current;
+      if (drag?.codeDockEl) {
+        drag.codeDockEl.classList.remove("lc-code-dock-scrolling");
+      }
       if (drag && drag.pointerId === event.pointerId) {
         try {
           root.releasePointerCapture(event.pointerId);
@@ -2451,6 +2485,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!canOwnScroll()) {
         rasterInkRef.current?.setCameraMoving(false);
         commitVisualScrollRef.current();
+        return;
+      }
+
+      // Code dock tap — never armed, let Monaco receive focus.
+      if (drag?.codeDock && !drag.armed) {
+        if (!inertiaFrameRef.current) {
+          rasterInkRef.current?.setCameraMoving(false);
+          commitVisualScrollRef.current();
+        }
         return;
       }
 
