@@ -47,9 +47,18 @@ function turnKind(role: CoachChatMessage["role"]): string {
   return role === "user" || role === "system" || role === "app" ? role : "assistant";
 }
 
-function isInteractiveTarget(target: EventTarget | null): boolean {
+/**
+ * Controls that must stay tappable — do not start a message hold on these.
+ * Process toggles are fine to hold through; thread open and reply stubs
+ * navigate on tap and should not steal into the menu.
+ */
+function isLongPressBlocked(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  return Boolean(target.closest("button, a, input, textarea, select, [role='button']"));
+  return Boolean(
+    target.closest(
+      "a, input, textarea, select, .lc-coach-thread-open, .lc-coach-reply-stub",
+    ),
+  );
 }
 
 /** Longest stub shown in a reply bubble before it is cut. */
@@ -301,6 +310,8 @@ export function AgentSidePanel({
   const [lightboxClosing, setLightboxClosing] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [copyFlash, setCopyFlash] = useState(false);
+  /** Swallow the click that follows a successful long-press (process toggle etc.). */
+  const suppressClickRef = useRef(false);
   /** The turn the next send is answering, if the writer quoted one. */
   const [replyTo, setReplyTo] = useState<CoachReplyRef | null>(null);
   /**
@@ -381,11 +392,23 @@ export function AgentSidePanel({
   } | null>(null);
   const longPressRef = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
+    armTimer: ReturnType<typeof setTimeout> | null;
     messageId: string | null;
+    pointerId: number | null;
     startX: number;
     startY: number;
     moved: boolean;
-  }>({ timer: null, messageId: null, startX: 0, startY: 0, moved: false });
+    armed: boolean;
+  }>({
+    timer: null,
+    armTimer: null,
+    messageId: null,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    moved: false,
+    armed: false,
+  });
 
   const sheetHeight = () => panelRef.current?.offsetHeight ?? 0;
   const closedOffset = () => Math.max(0, sheetHeight() - COACH_SHEET_PEEK_PX);
@@ -508,26 +531,34 @@ export function AgentSidePanel({
   const clearLongPress = useCallback(() => {
     const state = longPressRef.current;
     if (state.timer != null) clearTimeout(state.timer);
+    if (state.armTimer != null) clearTimeout(state.armTimer);
     state.timer = null;
+    state.armTimer = null;
     state.messageId = null;
+    state.pointerId = null;
     state.moved = false;
+    state.armed = false;
   }, []);
 
   const trackLongPressMove = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
       const state = longPressRef.current;
       if (state.timer == null || state.moved) return;
+      if (state.pointerId != null && event.pointerId !== state.pointerId) return;
       const dx = event.clientX - state.startX;
       const dy = event.clientY - state.startY;
       /*
        * A finger resting on glass is never perfectly still.
        *
-       * The old threshold was 10px, which a stationary thumb crosses on a
-       * tablet before a 500ms hold is up — so the hold cancelled itself. Only a
-       * deliberate drag should count, and the list scrolls vertically, so
-       * vertical travel is the one that means "I am scrolling, not holding".
+       * Only a deliberate scroll should cancel. Once armed (pointer captured),
+       * swallow the move so the message list cannot steal the hold mid-gesture
+       * — that is what made coach long-press feel broken on tablet.
        */
-      if (Math.abs(dy) > 14 || Math.abs(dx) > 22) {
+      if (state.armed) {
+        event.preventDefault();
+        return;
+      }
+      if (Math.abs(dy) > 16 || Math.abs(dx) > 24) {
         state.moved = true;
         clearLongPress();
       }
@@ -544,7 +575,11 @@ export function AgentSidePanel({
         Math.max(rect.left + rect.width / 2, pad + menuWidth / 2),
         window.innerWidth - pad - menuWidth / 2,
       );
-      const top = Math.max(rect.top - 6, pad + 44);
+      // Bubble under the message (iOS-style), not above.
+      const top = Math.min(
+        rect.bottom + 8,
+        window.innerHeight - pad - 48,
+      );
       setMessageMenu({ messageId, top, left });
       setCopyFlash(false);
     },
@@ -647,15 +682,38 @@ export function AgentSidePanel({
   const menuHasText = Boolean(menuMessage?.content.trim());
 
   const beginLongPress = (messageId: string, event: PointerEvent<HTMLDivElement>) => {
-    if (isInteractiveTarget(event.target)) return;
+    if (isLongPressBlocked(event.target)) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
     clearLongPress();
     const node = event.currentTarget;
-    longPressRef.current.messageId = messageId;
-    longPressRef.current.startX = event.clientX;
-    longPressRef.current.startY = event.clientY;
-    longPressRef.current.moved = false;
-    longPressRef.current.timer = window.setTimeout(() => {
-      if (longPressRef.current.moved) return;
+    const state = longPressRef.current;
+    state.messageId = messageId;
+    state.pointerId = event.pointerId;
+    state.startX = event.clientX;
+    state.startY = event.clientY;
+    state.moved = false;
+    state.armed = false;
+    // After a short stillness, capture the pointer so the scroller cannot
+    // cancel the hold with pointercancel before LONG_PRESS_MS.
+    state.armTimer = window.setTimeout(() => {
+      if (state.moved || state.messageId !== messageId) return;
+      state.armed = true;
+      try {
+        node.setPointerCapture(event.pointerId);
+      } catch {
+        /* capture can fail if the pointer already ended */
+      }
+    }, 140);
+    state.timer = window.setTimeout(() => {
+      if (state.moved || state.messageId !== messageId) return;
+      try {
+        if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+          navigator.vibrate(10);
+        }
+      } catch {
+        /* ignore */
+      }
+      suppressClickRef.current = true;
       openMessageMenu(messageId, node);
     }, LONG_PRESS_MS);
   };
@@ -758,7 +816,7 @@ export function AgentSidePanel({
                 messageMenu?.messageId === message.id ? " lc-coach-turn-selected" : ""
               }`}
               onContextMenu={(event) => {
-                if (isInteractiveTarget(event.target)) return;
+                if (isLongPressBlocked(event.target)) return;
                 event.preventDefault();
                 openMessageMenu(message.id, event.currentTarget);
               }}
@@ -766,7 +824,22 @@ export function AgentSidePanel({
               onPointerMove={trackLongPressMove}
               onPointerUp={clearLongPress}
               onPointerCancel={clearLongPress}
-              onPointerLeave={clearLongPress}
+              onPointerLeave={(event) => {
+                // Captured holds survive leave; only clear when not armed.
+                if (!longPressRef.current.armed) clearLongPress();
+                else if (
+                  longPressRef.current.pointerId != null &&
+                  event.pointerId !== longPressRef.current.pointerId
+                ) {
+                  clearLongPress();
+                }
+              }}
+              onClickCapture={(event) => {
+                if (!suppressClickRef.current) return;
+                suppressClickRef.current = false;
+                event.preventDefault();
+                event.stopPropagation();
+              }}
             >
               <div
                 className={
@@ -786,30 +859,6 @@ export function AgentSidePanel({
               {message.processEvents && message.processEvents.length > 0 && (
                 <ProcessBlock events={message.processEvents} running={Boolean(message.pending)} />
               )}
-              {/*
-                The always-works way into the menu.
-                Long-press is the accelerator, not the mechanism: a message list
-                is a scroll container, and a scroller claims a touch by firing
-                `pointercancel` — which killed the hold timer before it could
-                finish, so on a tablet the menu was unreachable and quoting
-                could not be used at all. A button cannot be stolen.
-              */}
-              <button
-                type="button"
-                className="lc-coach-turn-actions"
-                aria-label={`Actions for ${ROLE_LABEL[message.role]}'s message`}
-                title="Message actions"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  clearLongPress();
-                  openMessageMenu(
-                    message.id,
-                    event.currentTarget.closest(".lc-coach-turn") as HTMLElement,
-                  );
-                }}
-              >
-                <span aria-hidden>⋯</span>
-              </button>
               {message.replyTo && (
                 /*
                  * The quoted turn, above the reply that answers it.
@@ -1182,7 +1231,7 @@ export function AgentSidePanel({
               disabled={!menuHasText}
               onClick={() => quoteMessage(menuMessage)}
             >
-              Quote in reply
+              Quote
             </button>
           </div>
         </>

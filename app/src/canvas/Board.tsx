@@ -75,11 +75,10 @@ import { resolveInkColor } from "./inkColors";
 import { useIsMobile } from "../util/mobile";
 import { isDarkTheme } from "../theme/appThemes";
 import {
-  statementLinePitch,
   type BoardReadingSize,
 } from "../modes/codeFontSize";
 import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
-import { textBaselineY, SCRATCH_LINE_PITCH, linedRuleClearance, defaultLineHeight } from "../modes/textBaseline";
+import { defaultLineHeight } from "../modes/textBaseline";
 import type { BoardBinaryFile, BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
 import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
 import { TEXT_FONT_MAX, TEXT_FONT_MIN } from "./FontSizeSlider";
@@ -1640,66 +1639,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const top = roundPx((bounds.minY + scrollY) * zoom + pad);
     const width = roundPx(Math.max(0, (bounds.maxX - bounds.minX) * zoom - pad * 2));
     const height = roundPx(Math.max(0, (bounds.maxY - bounds.minY) * zoom - pad * 2));
-    // Match statement prose pitch so rules sit under each text line.
-    // Scratchpad has no reading-size control — keep the authored grid.
-    const page = mobileRegionRef.current;
-    const isScratch = typeof page === "string" && page.startsWith("pad-");
-    const pitchScene = isScratch
-      ? SCRATCH_LINE_PITCH
-      : statementLinePitch(readingSizeRef.current);
-    // Scene pitch straight through the camera, sub-pixel and unclamped: a
-    // floor here (there used to be one at 12px) means the rules stop shrinking
-    // while the ink keeps going, so writing drifts off them as you zoom out.
-    const gap = Math.max(1, Math.round(pitchScene * zoom * 100) / 100);
+    // Handwriting rules: fixed screen pitch so a fitted wide draw frame cannot
+    // shrink statement-prose spacing into an unwritable grid. This path only
+    // runs for draw pages (`linedPaperOn`); statement/code never get here.
+    const zoomSafe = Math.max(0.05, zoom);
+    const DRAW_LINE_SCREEN_PX = 36;
+    const pitchScene = DRAW_LINE_SCREEN_PX / zoomSafe;
+    const gap = DRAW_LINE_SCREEN_PX;
 
     let phase = 0;
-    const elements = api.getSceneElements() as Array<{
-      id?: string;
-      type?: string;
-      y?: number;
-      fontSize?: number;
-      lineHeight?: number;
-      fontFamily?: number;
-      customData?: { lcLineHeightBase?: number; lcFontBase?: number } | null;
-    }>;
-    const body = elements.find(
-      (el) => el.type === "text" && typeof el.id === "string" && el.id.includes("-body-"),
-    );
-    // Prefer title/hint over PAGE label so large chrome sets the grid.
-    const scratchAnchor =
-      elements.find(
-        (el) => el.type === "text" && typeof el.id === "string" && el.id.includes("-title"),
-      ) ??
-      elements.find(
-        (el) => el.type === "text" && typeof el.id === "string" && el.id.includes("-hint"),
-      ) ??
-      elements.find(
-        (el) =>
-          el.type === "text" &&
-          typeof el.id === "string" &&
-          el.id.startsWith("lcscratch-"),
-      );
-    const anchor = body ?? scratchAnchor;
-    if (anchor && typeof anchor.y === "number") {
-      const baselineScene = textBaselineY({ ...anchor, y: anchor.y });
-      if (baselineScene != null) {
-        const fontSize =
-          typeof anchor.fontSize === "number" && anchor.fontSize > 0
-            ? anchor.fontSize
-            : 28;
-        // Rule sits just under the glyphs — not through the baseline.
-        const ruleScene = baselineScene + linedRuleClearance(fontSize);
-        const rulePx = (ruleScene + scrollY) * zoom;
-        const rel = rulePx - top;
-        // Gradient paints the rule at the end of each gap tile.
-        phase = ((rel - gap + 1) % gap + gap) % gap;
-      }
-    } else if (isScratch) {
-      // No chrome text — still lock rules to the authored pitch from the frame top.
-      const firstRulePx = (bounds.minY + SCRATCH_LINE_PITCH + scrollY) * zoom;
-      const rel = firstRulePx - top;
-      phase = ((rel - gap + 1) % gap + gap) % gap;
-    }
+    // Lock rules from the frame top — draw pages have no statement body grid.
+    const firstRulePx = (bounds.minY + pitchScene + scrollY) * zoom;
+    const rel = firstRulePx - top;
+    phase = ((rel - gap + 1) % gap + gap) % gap;
 
     const next = {
       left,
