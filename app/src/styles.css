@@ -1720,6 +1720,32 @@ input[type="checkbox"] {
   pointer-events: none;
 }
 
+/*
+ * Loading transition — board and dock stay off-screen until the spinner/check
+ * finishes. Preparing wins over switching when both classes are present.
+ */
+.lc-canvas-loading .lc-board,
+.lc-canvas-loading .lc-code-dock {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  filter: none;
+}
+
+/* Coach mounts with the problem — keep it off-screen until the load transition ends. */
+.lc-app-loading .lc-side {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lc-canvas-preparing.lc-switching .lc-board,
+.lc-canvas-preparing.lc-switching .lc-code-dock {
+  visibility: hidden;
+  opacity: 0;
+  filter: none;
+}
+
 .lc-switching .lc-board,
 .lc-switching .lc-code-dock {
   opacity: 0.55;
@@ -1780,7 +1806,8 @@ input[type="checkbox"] {
 .lc-overlay-spinner {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  /* Above `.lc-map-controls` (50) inside the board. */
+  z-index: 60;
   display: grid;
   place-items: center;
   pointer-events: auto;
@@ -2118,6 +2145,47 @@ input[type="checkbox"] {
 }
 
 .lc-md-ink-doc > :first-child {
+  margin-top: 0;
+}
+
+.lc-statement-title {
+  margin: 0 0 0.55em;
+  font-size: 1.55em;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.lc-statement-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 1em;
+}
+
+/*
+ * One chip = one label. Width/height come from the text + padding — no fixed
+ * box size that can drift away from the words (the old Excalidraw meta-box bug).
+ */
+.lc-statement-tag {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0.35em 0.7em;
+  border: 1px solid color-mix(in srgb, var(--ink) 28%, transparent);
+  border-radius: 0.5em;
+  font-size: 0.78em;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  color: color-mix(in srgb, var(--ink) 78%, transparent);
+}
+
+.lc-statement-body > :first-child {
   margin-top: 0;
 }
 
@@ -3426,8 +3494,8 @@ input[type="checkbox"] {
 
 /* Something worth saying that did not stop the request — not an error. */
 .lc-notice {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%);
+  border-bottom-color: color-mix(in srgb, var(--accent) 34%);
   color: var(--muted);
   font-size: 13px;
 }
@@ -5332,13 +5400,11 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 }
 
-/* Pad the whole shell above the Android nav bar — floating controls stay at
-   bottom: 6px inside this inset area, not stacked on top of it. */
+/* Shell uses the page background edge-to-edge; safe-area fill lives on the coach sheet. */
 .lc-mobile.lc-app {
   box-sizing: border-box;
   height: 100%;
   height: 100dvh;
-  padding-bottom: var(--lc-safe-bottom);
   padding-left: var(--lc-safe-left);
   padding-right: var(--lc-safe-right);
 }
@@ -5354,15 +5420,21 @@ button.lc-row-selected:hover:not(:disabled) {
   top: auto;
   left: 0;
   right: 0;
-  bottom: var(--lc-coach-sheet-lift);
+  bottom: 0;
   width: auto;
-  height: var(--lc-coach-sheet);
+  height: calc(var(--lc-coach-sheet) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom));
   max-height: none;
   border-left: none;
   border-top: 1px solid var(--chrome-edge);
   box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
+  background: var(--panel);
   /* Peek handle stays visible when parked; board chrome sits above it. */
   z-index: 40;
+}
+
+.lc-mobile .lc-coach-chat {
+  padding-bottom: calc(var(--lc-safe-bottom) + var(--lc-coach-sheet-lift));
+  box-sizing: border-box;
 }
 
 .lc-mobile .lc-side-sheet-parked {
@@ -5377,13 +5449,13 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-map-controls {
   /* Room for the parked coach peek handle under the chrome. */
-  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift));
+  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom));
 }
 
 
 .lc-mobile.lc-app-coach-open .lc-map-controls {
   /* Sheet covers the bottom; keep controls from fighting the handle. */
-  bottom: calc(4px + var(--lc-coach-sheet) + var(--lc-coach-sheet-lift));
+  bottom: calc(4px + var(--lc-coach-sheet) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom));
   opacity: 0;
   pointer-events: none;
 }
@@ -5651,7 +5723,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-map-controls {
   left: 4px;
   right: 4px;
-  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift));
+  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom));
   /*
    * Must stay end/flex-end — NOT center. Centre vertically lifts Theme /
    * Toolbar / Eye when the pen island grows (higher-specificity mobile rule
