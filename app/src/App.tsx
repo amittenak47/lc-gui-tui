@@ -342,7 +342,7 @@ export function App() {
 
   /** Reachability of `lc serve` — offline skips problem/tests/coach that need it. */
   const [serverLink, setServerLink] = useState<"checking" | "online" | "offline">("checking");
-  const [bootPhase, setBootPhase] = useState<"enter" | "show" | "exit" | "gone">("enter");
+  const [bootPhase, setBootPhase] = useState<"enter" | "show" | "done" | "exit" | "gone">("enter");
   const [gateOpen, setGateOpen] = useState(false);
   const [gateKind, setGateKind] = useState<ServerGateKind>("startup");
   const [gatePhase, setGatePhase] = useState<"enter" | "open" | "exit">("enter");
@@ -354,6 +354,8 @@ export function App() {
   const gateOpenRef = useRef(gateOpen);
   gateOpenRef.current = gateOpen;
   const bootGenRef = useRef(0);
+  /** Boot overlay still waiting for LLM probe → checkmark before dismiss. */
+  const bootOverlayPendingRef = useRef(true);
 
   const boardRef = useRef<BoardHandle | null>(null);
   const [recognizer, setRecognizer] = useState<InkRecognizer>(() => new NoopRecognizer());
@@ -395,6 +397,7 @@ export function App() {
   }, []);
 
   const openGate = useCallback((kind: ServerGateKind) => {
+    bootOverlayPendingRef.current = false;
     setBootPhase("gone");
     setGateKind(kind);
     setGateWaiting(false);
@@ -407,6 +410,7 @@ export function App() {
 
   // First contact with the daemon — boot spinner (doodle-able), then dialog or continue.
   // Generation counter so a remount does not leave us cancelled mid-hang forever.
+  // Completion (checkmark + LLM probe) lives in the effect below `openLlmGate`.
   useEffect(() => {
     let cancelled = false;
     const generation = ++bootGenRef.current;
@@ -414,6 +418,7 @@ export function App() {
     setBootPhase("enter");
     setGateOpen(false);
     setGateWaiting(false);
+    bootOverlayPendingRef.current = true;
     window.requestAnimationFrame(() => {
       if (!cancelled && bootGenRef.current === generation) setBootPhase("show");
     });
@@ -421,14 +426,11 @@ export function App() {
       const ok = await pingServer();
       if (cancelled || bootGenRef.current !== generation) return;
       if (ok) {
-        setBootPhase("exit");
-        window.setTimeout(() => {
-          if (cancelled || bootGenRef.current !== generation) return;
-          setBootPhase("gone");
-          setServerLink("online");
-        }, serverGateExitMs());
+        // Leave the spinner up — the LLM probe effect finishes with a check.
+        setServerLink("online");
       } else {
         // Drop the spinner immediately and show the wait/offline dialog.
+        bootOverlayPendingRef.current = false;
         setBootPhase("gone");
         openGate("startup");
       }
@@ -548,6 +550,8 @@ export function App() {
   }, []);
 
   // After lc serve is up, check whether a model is actually available for Coach.
+  // While the boot overlay is still up, finish with the same spinner → check
+  // beat used when opening a problem — no tap required when both are healthy.
   useEffect(() => {
     if (serverLink !== "online") {
       setLlmLink("unknown");
@@ -558,6 +562,24 @@ export function App() {
     void (async () => {
       const ok = await probeLlm();
       if (cancelled) return;
+
+      if (bootOverlayPendingRef.current) {
+        bootOverlayPendingRef.current = false;
+        setBootPhase("done");
+        await waitMs(doneHoldMs());
+        if (cancelled) return;
+        setBootPhase("exit");
+        window.setTimeout(() => {
+          if (cancelled) return;
+          setBootPhase("gone");
+          if (!ok && !llmPromptedRef.current) {
+            llmPromptedRef.current = true;
+            openLlmGate();
+          }
+        }, serverGateExitMs());
+        return;
+      }
+
       if (!ok && !llmPromptedRef.current) {
         llmPromptedRef.current = true;
         openLlmGate();
@@ -1231,7 +1253,15 @@ export function App() {
           | undefined;
         if (!hasSavedBoard) {
           try {
-            const scaffold = await client.scaffoldBoard(detail.task_id, datasetId);
+            // Scaffolding is optional fluff — don't hold the loading check on a
+            // slow local model. Eight seconds is enough for a warm LLM; past
+            // that the board opens with the generic HINTS.
+            const scaffold = await Promise.race([
+              client.scaffoldBoard(detail.task_id, datasetId),
+              new Promise<never>((_, reject) => {
+                window.setTimeout(() => reject(new Error("scaffold timed out")), 8000);
+              }),
+            ]);
             scaffolding = {
               approach: scaffold.approach || undefined,
               complexity: scaffold.complexity || undefined,
@@ -1682,21 +1712,6 @@ export function App() {
       setError(messageOf(cause));
     }
   }, [busy, openMdInk]);
-
-
-  const addScratchPage = useCallback(() => {
-    if (!isScratchpad(problem)) return;
-    if (scratchPageCount >= SCRATCHPAD_PAGE_LIMIT) {
-      setNotice(`Scratchpad notebooks cap at ${SCRATCHPAD_PAGE_LIMIT} pages.`);
-      return;
-    }
-    const nextIndex = scratchPageCount;
-    const skeletons = buildScratchPageSkeletons(nextIndex, isDarkTheme(themeId));
-    const index = boardRef.current?.appendScratchPage(skeletons) ?? nextIndex;
-    setScratchPageCount(index + 1);
-    setScratchPageIndex(index);
-    dirtyRef.current = true;
-  }, [problem, scratchPageCount, themeId]);
 
   /** Session queue after Start / Random; otherwise the filtered problem bank. */
   const stepProblem = useCallback(
@@ -2432,10 +2447,18 @@ export function App() {
       // Scratchpad has no solution.py, no review pipeline and no board regions
       // to draw into — Ask is the only flag that means anything there.
       const flags: CoachSendFlags = isScratchpad(problem)
-        ? { ask: true, draw: false, reviewBoard: false, lazy: false, ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}) }
+        ? {
+            ask: true,
+            draw: false,
+            reviewBoard: false,
+            lazy: false,
+            annotate: false,
+            ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}),
+          }
         : requestedFlags;
       const flagBits = [
         flags.ask ? "Ask" : null,
+        flags.annotate ? "Annotation" : null,
         flags.reviewBoard ? "Review" : null,
         flags.draw ? "Draw" : null,
         flags.lazy ? "Lazy" : null,
@@ -2493,7 +2516,7 @@ export function App() {
           });
           return png ? { label: "Annotated code", png } : null;
         })();
-        if ((flags.reviewBoard || flags.lazy) && boardRef.current) {
+        if ((flags.reviewBoard || flags.lazy || flags.annotate) && boardRef.current) {
           try {
             const thumbs = await boardRef.current.exportRegionThumbs();
             if (thumbs.length > 0) {
@@ -2506,7 +2529,9 @@ export function App() {
             /* thumbnails are best-effort */
           }
         }
-        if (codeShot) {
+        // Annotated-code shot used to attach on every send (including Ask-only).
+        // Gate it with Annotation / Review / Lazy so Ask alone stays text-only.
+        if (codeShot && (flags.annotate || flags.reviewBoard || flags.lazy)) {
           attachments = [...(attachments ?? []), codeShot];
         }
 
@@ -3605,6 +3630,15 @@ export function App() {
                   (!isLocalPad(problem) &&
                     (!mobile || activeRegion === "constraints"))),
             )}
+            carbonPaper={Boolean(
+              problem &&
+                (isMdInk(problem) ||
+                  isScratchpad(problem) ||
+                  (!isLocalPad(problem) &&
+                    (!mobile ||
+                      activeRegion === "constraints" ||
+                      activeRegion === "code"))),
+            )}
             annotateToggle={Boolean(problem)}
             onAnnotateCodeChange={setAnnotateCode}
             // Ruled lines under somebody else's typography would be noise.
@@ -3629,17 +3663,7 @@ export function App() {
                 />
               ) : null
             }
-            pageTitle={
-              problem && isScratchpad(problem) ? (
-                <ScratchPager
-                  index={scratchPageIndex}
-                  count={scratchPageCount}
-                  onPick={setScratchPageIndex}
-                  onAddPage={addScratchPage}
-                  disabled={busy !== null || boardPreparing}
-                />
-              ) : null
-            }
+            pageTitle={null}
             pageContentHeight={
               problem && isMdInk(problem)
                 ? mdInkPageHeight(mdInkHeight)
@@ -4036,17 +4060,34 @@ export function App() {
         <div
           className={[
             "lc-server-gate-boot",
-            bootPhase === "enter" || bootPhase === "show" ? "lc-server-gate-boot-enter" : "",
+            bootPhase === "enter" || bootPhase === "show" || bootPhase === "done"
+              ? "lc-server-gate-boot-enter"
+              : "",
             bootPhase === "exit" ? "lc-server-gate-boot-exit" : "",
           ]
             .filter(Boolean)
             .join(" ")}
           role="status"
           aria-live="polite"
-          aria-label="Checking local server"
+          aria-label={bootPhase === "done" ? "Ready" : "Checking local server"}
         >
           <LoadingDoodle />
-          <div className="lc-spinner" aria-hidden="true" />
+          {bootPhase === "done" ? (
+            <div className="lc-spinner-check" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22">
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            </div>
+          ) : (
+            <div className="lc-spinner" aria-hidden="true" />
+          )}
         </div>
       )}
 
@@ -4168,59 +4209,6 @@ function HeaderOverflow({ items }: { items: OverflowItem[] }) {
         </div>
       )}
     </div>
-  );
-}
-
-/**
- * Scratchpad notebook pager — Next on the last page adds a blank page.
- *
- * It sits on the page's own title line rather than in the board's bottom row:
- * the notebook is what is being paged, so `‹ 1/3 ›` belongs above `Scratchpad`
- * the way a page number belongs on the paper. Board positions it through the
- * camera; the sizing here is in `em` so it scales with the slot's font size.
- */
-function ScratchPager({
-  index,
-  count,
-  onPick,
-  onAddPage,
-  disabled,
-}: {
-  index: number;
-  count: number;
-  onPick: (page: number) => void;
-  onAddPage: () => void;
-  disabled: boolean;
-}) {
-  const atEnd = index >= count - 1;
-  return (
-    <nav className="lc-page-pager" aria-label="Notebook pages">
-      <button
-        type="button"
-        className="lc-page-pager-step"
-        aria-label="Previous page"
-        disabled={disabled || index <= 0}
-        onClick={() => onPick(Math.max(0, index - 1))}
-      >
-        ‹
-      </button>
-      <span className="lc-page-pager-count">
-        {index + 1}/{count}
-      </span>
-      <button
-        type="button"
-        className="lc-page-pager-step"
-        aria-label={atEnd ? "Add page" : "Next page"}
-        title={atEnd ? "Add page" : "Next page"}
-        disabled={disabled || (atEnd && count >= SCRATCHPAD_PAGE_LIMIT)}
-        onClick={() => {
-          if (atEnd) onAddPage();
-          else onPick(index + 1);
-        }}
-      >
-        {atEnd && count < SCRATCHPAD_PAGE_LIMIT ? "+" : "›"}
-      </button>
-    </nav>
   );
 }
 

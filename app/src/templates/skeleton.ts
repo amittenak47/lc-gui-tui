@@ -202,7 +202,7 @@ export const BOARD_THEMES: BoardTheme[] = [
   { id: "ocean", label: "Nord", background: "#2e3440", hint: "#6d7a94" },
   { id: "graphite", label: "Carbon", background: "#0a0a0b", hint: "#4d4d55" },
   { id: "pine", label: "Pine", background: "#0d1a18", hint: "#4a7268" },
-  { id: "dusk", label: "Plum", background: "#17111c", hint: "#6b5a7d" },
+  { id: "dusk", label: "Slate", background: "#12161c", hint: "#5a6578" },
 ];
 
 /** Tag a whole group as the coach's, so capture and replacement both work. */

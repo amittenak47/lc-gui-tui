@@ -92,10 +92,7 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
           </>
         )}
         {variant === "map" && (
-          <span className="lc-palette-map-label">
-            <span className="lc-palette-chip" style={{ background: current.background }} aria-hidden />
-            Theme
-          </span>
+          <span className="lc-palette-chip" style={{ background: current.background }} aria-hidden />
         )}
       </button>
       {open && (

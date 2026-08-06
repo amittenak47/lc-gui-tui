@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef } from "react";
 // would double the prefix.
 import editorWorker from "monaco-editor/editor/editor.worker.js?worker";
 
-import { APP_THEMES } from "../theme/appThemes";
+import { APP_THEMES, themeTokens } from "../theme/appThemes";
 import { useIsMobile } from "../util/mobile";
 import type { CodeFontSize } from "./codeFontSize";
 import { codeFontPx } from "./codeFontSize";
@@ -38,6 +38,8 @@ const definedThemes = new Set<string>();
 
 const PAD_TOP = 8;
 const SCROLLBAR = 4;
+/** Tablet hitbox — 4px is nearly impossible to grab without focusing the editor. */
+const SCROLLBAR_MOBILE = 14;
 
 /** Mix a hex color toward black (darken) or white (lighten) by `amount` 0–1. */
 function mixHex(hex: string, toward: "#000000" | "#ffffff", amount: number): string {
@@ -77,12 +79,12 @@ function ensureMonacoTheme(themeId: string): string {
       "editor.lineHighlightBorder": "#00000000",
       "editor.selectionBackground": selection,
       "editor.inactiveSelectionBackground": selection,
-      "editorCursor.foreground": dark ? "#f97316" : "#b45309",
+      "editorCursor.foreground": themeTokens(appTheme).accent,
       "editorWidget.background": appTheme.panel,
       "editorSuggestWidget.background": appTheme.panel,
-      "scrollbarSlider.background": dark ? "#ffffff3d" : "#00000033",
-      "scrollbarSlider.hoverBackground": dark ? "#ffffff55" : "#00000045",
-      "scrollbarSlider.activeBackground": dark ? "#ffffff66" : "#00000055",
+      "scrollbarSlider.background": dark ? "#ffffff66" : "#00000055",
+      "scrollbarSlider.hoverBackground": dark ? "#ffffff88" : "#00000066",
+      "scrollbarSlider.activeBackground": dark ? "#ffffffaa" : "#00000077",
     },
   });
   definedThemes.add(name);
@@ -188,15 +190,16 @@ export default function MonacoBlock({
   }, [themeId, value]);
 
   useEffect(() => {
+    const size = mobile ? SCROLLBAR_MOBILE : SCROLLBAR;
     editorRef.current?.updateOptions({
       fontSize,
       padding: { top: PAD_TOP },
       scrollbar: {
-        verticalScrollbarSize: SCROLLBAR,
-        horizontalScrollbarSize: SCROLLBAR,
+        verticalScrollbarSize: size,
+        horizontalScrollbarSize: size,
       },
     });
-  }, [fontSize]);
+  }, [fontSize, mobile]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -215,12 +218,13 @@ export default function MonacoBlock({
         editorRef.current = editor;
         ensureMonacoTheme(themeId);
         monaco.editor.setTheme(monacoThemeName(themeId));
+        const size = mobile ? SCROLLBAR_MOBILE : SCROLLBAR;
         editor.updateOptions({
           fontSize,
           padding: { top: PAD_TOP },
           scrollbar: {
-            verticalScrollbarSize: SCROLLBAR,
-            horizontalScrollbarSize: SCROLLBAR,
+            verticalScrollbarSize: size,
+            horizontalScrollbarSize: size,
             arrowSize: 0,
             useShadows: false,
             verticalHasArrows: false,
@@ -259,8 +263,8 @@ export default function MonacoBlock({
         // writable, so board shortcuts (H, ?, tools…) fire while coding.
         editContext: false,
         scrollbar: {
-          verticalScrollbarSize: SCROLLBAR,
-          horizontalScrollbarSize: SCROLLBAR,
+          verticalScrollbarSize: mobile ? SCROLLBAR_MOBILE : SCROLLBAR,
+          horizontalScrollbarSize: mobile ? SCROLLBAR_MOBILE : SCROLLBAR,
           arrowSize: 0,
           useShadows: false,
           verticalHasArrows: false,

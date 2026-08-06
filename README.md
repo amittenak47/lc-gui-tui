@@ -193,6 +193,13 @@ Adapters: [`src/datasets/`](src/datasets/). After adapter changes: `lc index --d
 
 ---
 
+## Need to Fix
+
+- Desktop scrolling page indicator
+- Chat improvements
+
+---
+
 ## 7. License and references
 
 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — free for personal, educational, and other noncommercial use; commercial use needs a separate license. See [LICENSE](LICENSE).

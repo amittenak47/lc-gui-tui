@@ -66,7 +66,7 @@ export function StatementDocument({
   }, [bodyHtml, chips, title]);
 
   return (
-    <div ref={nodeRef} className="lc-md-ink-doc lc-statement-doc">
+    <div ref={nodeRef} className="lc-md-ink-doc lc-statement-doc lc-md-ink-carbon">
       <h1 className="lc-statement-title">{title}</h1>
       {chips.length > 0 && (
         <div className="lc-statement-tags" aria-label="Problem tags">

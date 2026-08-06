@@ -8,6 +8,7 @@
  */
 
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
 import { STAGE_LABELS } from "../api/types";
@@ -153,6 +154,8 @@ interface MessageMenuState {
   messageId: string;
   top: number;
   left: number;
+  /** Message fills most of the chat — selection uses outline only, no scale-up. */
+  tall: boolean;
 }
 
 /**
@@ -181,6 +184,11 @@ export interface CoachSendFlags {
    * dump). Works with Draw / Review / a plain question.
    */
   lazy: boolean;
+  /**
+   * Attach board ink / annotated-code thumbnails to this send.
+   * Independent of Review — Ask alone must not sneak annotations in.
+   */
+  annotate: boolean;
   /** The message this turn is answering, when the writer quoted one. */
   replyTo?: CoachReplyRef;
 }
@@ -305,6 +313,7 @@ export function AgentSidePanel({
   const [draw, setDraw] = useState(false);
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
+  const [annotate, setAnnotate] = useState(false);
 
   const [lightbox, setLightbox] = useState<CoachAttachment | null>(null);
   const [lightboxClosing, setLightboxClosing] = useState(false);
@@ -438,6 +447,7 @@ export function AgentSidePanel({
     setDraw(false);
     setReviewBoard(false);
     setLazy(false);
+    setAnnotate(false);
   }, [askOnly]);
 
   const endSheetDrag = useCallback(
@@ -569,18 +579,26 @@ export function AgentSidePanel({
   const openMessageMenu = useCallback(
     (messageId: string, anchor: HTMLElement) => {
       const rect = anchor.getBoundingClientRect();
+      const panel = panelRef.current?.getBoundingClientRect();
+      const chat = listRef.current?.getBoundingClientRect();
       const menuWidth = 168;
+      const menuHeight = 44;
       const pad = 8;
+      const leftBound = (panel?.left ?? 0) + pad;
+      const rightBound = (panel?.right ?? window.innerWidth) - pad;
       const left = Math.min(
-        Math.max(rect.left + rect.width / 2, pad + menuWidth / 2),
-        window.innerWidth - pad - menuWidth / 2,
+        Math.max(rect.left + rect.width / 2, leftBound + menuWidth / 2),
+        rightBound - menuWidth / 2,
       );
-      // Bubble under the message (iOS-style), not above.
-      const top = Math.min(
-        rect.bottom + 8,
-        window.innerHeight - pad - 48,
-      );
-      setMessageMenu({ messageId, top, left });
+      // Prefer under the message; flip above when near the panel bottom.
+      const bottomBound = (panel?.bottom ?? window.innerHeight) - pad;
+      let top = rect.bottom + 8;
+      if (top + menuHeight > bottomBound) {
+        top = Math.max((panel?.top ?? pad) + pad, rect.top - menuHeight - 8);
+      }
+      const chatH = chat?.height ?? Math.max(200, window.innerHeight * 0.4);
+      const tall = rect.height > chatH * 0.85;
+      setMessageMenu({ messageId, top, left, tall });
       setCopyFlash(false);
     },
     [],
@@ -675,7 +693,7 @@ export function AgentSidePanel({
 
   if (!open && !mobile) return null;
 
-  const canSend = !busy && (draft.trim().length > 0 || ask || draw || reviewBoard || lazy);
+  const canSend = !busy && (draft.trim().length > 0 || ask || draw || reviewBoard || lazy || annotate);
   const menuMessage = messageMenu
     ? messages.find((message) => message.id === messageMenu.messageId)
     : undefined;
@@ -721,13 +739,21 @@ export function AgentSidePanel({
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!canSend) return;
-    onSend(draft.trim(), { ask, draw, reviewBoard, lazy, ...(replyTo ? { replyTo } : {}) });
+    onSend(draft.trim(), {
+      ask,
+      draw,
+      reviewBoard,
+      lazy,
+      annotate,
+      ...(replyTo ? { replyTo } : {}),
+    });
     setReplyTo(null);
     setDraft("");
     setAsk(askOnly);
     setDraw(false);
     setReviewBoard(false);
     setLazy(false);
+    setAnnotate(false);
     closeMessageMenu();
   };
 
@@ -813,7 +839,11 @@ export function AgentSidePanel({
               key={message.id}
               data-coach-message={message.id}
               className={`lc-coach-turn lc-coach-turn-selectable lc-coach-turn-${turnKind(message.role)}${
-                messageMenu?.messageId === message.id ? " lc-coach-turn-selected" : ""
+                messageMenu?.messageId === message.id
+                  ? messageMenu.tall
+                    ? " lc-coach-turn-selected lc-coach-turn-selected-tall"
+                    : " lc-coach-turn-selected"
+                  : ""
               }`}
               onContextMenu={(event) => {
                 if (isLongPressBlocked(event.target)) return;
@@ -1147,6 +1177,24 @@ export function AgentSidePanel({
                 tip={
                   askOnly
                     ? NOT_ON_SCRATCHPAD
+                    : "Attach board ink / annotated code to this send"
+                }
+                placement="left"
+              >
+                <button
+                  type="button"
+                  className={`lc-flag${annotate ? " lc-flag-active" : ""}${flagUnavailable}`}
+                  aria-pressed={annotate}
+                  disabled={busy || askOnly}
+                  onClick={() => setAnnotate((current) => !current)}
+                >
+                  Annotation
+                </button>
+              </Tip>
+              <Tip
+                tip={
+                  askOnly
+                    ? NOT_ON_SCRATCHPAD
                     : ask
                       ? "Turn off Ask to use Review"
                       : "Run a staged review of the board"
@@ -1203,39 +1251,42 @@ export function AgentSidePanel({
         </form>
       </div>
 
-      {messageMenu && menuMessage && (
-        <>
-          <button
-            type="button"
-            className="lc-coach-message-menu-backdrop"
-            aria-label="Dismiss message actions"
-            onClick={closeMessageMenu}
-          />
-          <div
-            className="lc-coach-message-menu"
-            role="menu"
-            style={{ top: messageMenu.top, left: messageMenu.left }}
-            onClick={(event) => event.stopPropagation()}
-          >
+      {messageMenu &&
+        menuMessage &&
+        createPortal(
+          <>
             <button
               type="button"
-              role="menuitem"
-              disabled={!menuHasText}
-              onClick={() => void copyMessage(menuMessage)}
+              className="lc-coach-message-menu-backdrop"
+              aria-label="Dismiss message actions"
+              onClick={closeMessageMenu}
+            />
+            <div
+              className="lc-coach-message-menu"
+              role="menu"
+              style={{ top: messageMenu.top, left: messageMenu.left }}
+              onClick={(event) => event.stopPropagation()}
             >
-              {copyFlash ? "Copied" : "Copy"}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={!menuHasText}
-              onClick={() => quoteMessage(menuMessage)}
-            >
-              Quote
-            </button>
-          </div>
-        </>
-      )}
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!menuHasText}
+                onClick={() => void copyMessage(menuMessage)}
+              >
+                {copyFlash ? "Copied" : "Copy"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!menuHasText}
+                onClick={() => quoteMessage(menuMessage)}
+              >
+                Quote
+              </button>
+            </div>
+          </>,
+          document.body,
+        )}
 
       {lightbox && (
         <div
