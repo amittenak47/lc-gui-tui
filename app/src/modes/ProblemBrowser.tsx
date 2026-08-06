@@ -661,7 +661,6 @@ export function ProblemBrowser({
               <div className="lc-browser-foot">
                 <div className="lc-browser-foot-session">
                   <div className="lc-browser-foot-actions">
-                    <span className="lc-browser-foot-label">Session</span>
                     <button
                       type="button"
                       className="lc-secondary"
@@ -727,14 +726,17 @@ export function ProblemBrowser({
                         ? `${session.queue.length} in queue · ${session.stats?.passed ?? 0} passed · ${session.stats?.failed ?? 0} failed`
                         : "no session queue"}
                   </span>
+                  <BackgroundPalette
+                    themeId={themeId}
+                    onPick={onThemePick}
+                    variant="map"
+                  />
                 </div>
               </div>
             </div>
           </div>
         )}
       </div>
-
-      <BackgroundPalette themeId={themeId} onPick={onThemePick} variant="inline" />
     </section>
   );
 }
