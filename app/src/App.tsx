@@ -610,9 +610,23 @@ export function App() {
    * building itself in full view of somebody who had just been told it was
    * ready. A transition that finishes early is not a transition, it is a
    * decoration over a wait, and it makes the wait feel longer than it is.
+   *
+   * Preparing must clear *before* the "done" beat. The status UI is
+   * `done={motion === "done"}` (and used to also require `!boardPreparing`).
+   * Callers left preparing true through the whole hold, so the checkmark
+   * never painted — then idle + preparing false landed in one frame and the
+   * spinner simply vanished.
    */
   const finishLoadingTransition = useCallback(
     async (fromBrowse: boolean, switching: boolean) => {
+      // Board is fitted — stop preparing so the checkmark gate can open.
+      setBoardPreparing(false);
+      // Let React commit preparing=false while we are still on busy/exit
+      // (spinner), then flip to done so the spinner→check transition plays.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+
       if (fromBrowse) {
         // Ready: keep the spinner, slide the browser away under the blur.
         setBrowseMotion("exit");
@@ -3192,6 +3206,7 @@ export function App() {
     switchMotion !== "idle" ||
     browseMotion === "busy" ||
     browseMotion === "exit" ||
+    browseMotion === "done" ||
     (holdBrowseOverlay && boardPreparing);
 
   return (
@@ -3574,7 +3589,15 @@ export function App() {
             themeId={themeId}
             onThemePick={setThemeId}
             readingSize={readingSize}
-            interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
+            interactive={Boolean(
+              problem &&
+                switchMotion === "idle" &&
+                !boardPreparing &&
+                !holdBrowseOverlay &&
+                browseMotion !== "busy" &&
+                browseMotion !== "exit" &&
+                browseMotion !== "done",
+            )}
             onCodeSlot={onCodeSlot}
             transparentCanvas={Boolean(
               problem &&
@@ -3696,22 +3719,17 @@ export function App() {
                 (holdBrowseOverlay && boardPreparing)) && (
                 <WorkspaceLoadStatus
                   /*
-                   * Done means done.
-                   *
-                   * `holdBrowseOverlay && boardPreparing` is the state where the
-                   * board is still being built, and it was being passed as
-                   * *finished* — so the transition showed its checkmark over a
-                   * workspace that was visibly still loading, with the banner
-                   * underneath correctly saying so. The banner was not the
-                   * thing that was wrong.
+                   * Checkmark when the motion says done. Preparing is cleared
+                   * inside finishLoadingTransition *before* this beat — do not
+                   * AND `!boardPreparing` here or the hold never shows a check.
                    */
-                  done={browseMotion === "done" && !boardPreparing}
+                  done={browseMotion === "done"}
                 />
               )}
             </div>
           )}
           {problem && (switchMotion === "busy" || switchMotion === "done") && (
-            <WorkspaceLoadStatus done={switchMotion === "done" && !boardPreparing} />
+            <WorkspaceLoadStatus done={switchMotion === "done"} />
           )}
           {/* Monaco docks into the code frame — and on mobile that frame only
               exists on its own page, so the dock is mounted nowhere else. */}
