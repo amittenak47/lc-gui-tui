@@ -193,10 +193,16 @@ Adapters: [`src/datasets/`](src/datasets/). After adapter changes: `lc index --d
 
 ---
 
-## Need to Fix
+## Upcoming changes
 
 - Desktop scrolling page indicator
 - Chat improvements
+- Untether from LAN-only: today the app is semi-tethered to a local network where the runtime and LLM share the same LAN. Plan combinations of on-device-only (LLM maybe), remote, and local configs.
+- Optional bundling of dataset + index with the app on device
+- Optional hosting of the dataset in a remote location
+- On-device Python interpreter when possible (for on-device testing)
+- Optional remote runtime via microVM
+- After the above: optionally enable the server on device
 
 ---
 
