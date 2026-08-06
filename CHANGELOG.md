@@ -55,6 +55,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the sidecar to disk automatically — export is explicit, so nothing appears
   next to the writer's files without them asking.
 
+### Added — the ink palette is yours
+
+- **Hold a swatch to change what colour lives there.** The six swatches are
+  positions, not colours — slot 0 is "the dark one you write with" — so an
+  override changes what sits in a slot without changing what the slot is for.
+  The authored colours stay the defaults: a slot nobody has touched keeps its
+  own forever, setting one back to its original clears the override rather than
+  storing it, and holding the hub in the middle of the ring restores the lot.
+  Light and dark keep separate palettes, because the pale set is unreadable on
+  paper and the dark set vanishes on a black board, so a choice made on one
+  must not follow you to the other.
+
+  The hold is longer than the one that opens the ring: opening is something you
+  do constantly and editing is something you do twice, so the rarer gesture is
+  the one that has to be meant. The picker itself is the platform's own, which
+  is the one that works in the tablet's WebView and on the desktop without
+  shipping a second colour UI.
+
 ### Changed — replying to the coach
 
 - **A quoted message is a thread, not a paste.** Quoting used to copy the

@@ -7089,3 +7089,20 @@ button.lc-row-selected:hover:not(:disabled) {
   border-radius: 50%;
   background: var(--accent);
 }
+
+/*
+ * The native colour picker behind a held swatch — see ColorRadial.
+ *
+ * Present in the DOM so `click()` can open the platform picker, and given no
+ * size so it never shows: a visible swatch input beside a colour wheel would
+ * be a second, contradictory control.
+ */
+.lc-color-slot-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
