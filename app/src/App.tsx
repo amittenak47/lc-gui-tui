@@ -85,7 +85,6 @@ import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { RevealDialog } from "./modes/RevealDialog";
 import { buildProblemTemplate } from "./templates/problemBoard";
 import {
-  buildScratchPageSkeletons,
   buildScratchpadTemplate,
   countScratchPages,
   SCRATCHPAD_DATASET,
