@@ -67,7 +67,7 @@ pub fn load_task(path: &Path, task_id: &str) -> Result<Problem> {
     } else {
         let mut problem: Problem = serde_json::from_str(&raw)
             .with_context(|| format!("cannot parse problem JSON {}", path.display()))?;
-        datasets::sanitize_entry_point(&mut problem);
+        datasets::finish_canonical(&mut problem);
         if problem.task_id != task_id {
             bail!(
                 "problem file {} contains {:?}, not {:?}",
@@ -247,12 +247,12 @@ fn parse_json_corpus(raw: &str, path: &Path) -> Result<Vec<Problem>> {
         .with_context(|| format!("cannot parse problem JSON {}", path.display()))?;
     Ok(match corpus {
         JsonCorpus::One(mut problem) => {
-            datasets::sanitize_entry_point(&mut problem);
+            datasets::finish_canonical(&mut problem);
             vec![problem]
         }
         JsonCorpus::Many(mut problems) => {
             for problem in &mut problems {
-                datasets::sanitize_entry_point(problem);
+                datasets::finish_canonical(problem);
             }
             problems
         }
@@ -282,7 +282,7 @@ fn load_all_jsonl(path: &Path) -> Result<Vec<Problem>> {
                 line_no + 1
             )
         })?;
-        datasets::sanitize_entry_point(&mut problem);
+        datasets::finish_canonical(&mut problem);
         out.push(problem);
     }
     Ok(out)
@@ -304,7 +304,7 @@ fn load_task_jsonl(path: &Path, task_id: &str) -> Result<Problem> {
                 line_no + 1
             )
         })?;
-        datasets::sanitize_entry_point(&mut problem);
+        datasets::finish_canonical(&mut problem);
         if problem.task_id == task_id {
             return Ok(problem);
         }
@@ -470,6 +470,81 @@ mod tests {
         assert_eq!(second.task_id, ids[1]);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A statement that arrived as one paragraph with its exponents flattened
+    /// — the shape `datasets::finalize_problem_description` exists to fix.
+    const MASHED: &str = "Return the answer. Example 1: Input: nums = [1,2] Output: 3 Constraints: 1 <= nums.length <= 104";
+
+    fn assert_cleaned(description: Option<&str>) {
+        let text = description.expect("the statement survives the load");
+        assert!(text.contains("\n\nExample 1:"), "{text}");
+        assert!(text.contains("\n\nInput:\n\nnums = [1,2]"), "{text}");
+        assert!(text.contains("10<sup>4</sup>"), "{text}");
+    }
+
+    /// The point of the whole exercise: the API, the coach, the TUI and an
+    /// offline pack all read the description off a loaded `Problem`, so it has
+    /// to be laid out by the time it leaves the loader — not only once the
+    /// board has run its own copy of the normalizer over it.
+    #[test]
+    fn a_loaded_statement_is_already_laid_out() {
+        let dir = std::env::temp_dir().join(format!("lc-statement-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = serde_json::json!({
+            "task_id": "two-sum",
+            "question_id": 1,
+            "problem_description": MASHED,
+            "input_output": [],
+        });
+
+        // Every canonical reader: one object, a JSON array, and `.jsonl`.
+        let single = dir.join("one.json");
+        std::fs::write(&single, record.to_string()).unwrap();
+        assert_cleaned(
+            load_task(&single, "two-sum")
+                .unwrap()
+                .problem_description
+                .as_deref(),
+        );
+
+        let array = dir.join("bulk.json");
+        std::fs::write(&array, serde_json::json!([record]).to_string()).unwrap();
+        assert_cleaned(load_all(&array).unwrap()[0].problem_description.as_deref());
+
+        let lines = dir.join("bulk.jsonl");
+        std::fs::write(&lines, format!("{record}\n")).unwrap();
+        assert_cleaned(
+            load_task(&lines, "two-sum")
+                .unwrap()
+                .problem_description
+                .as_deref(),
+        );
+
+        // And through the dataset-aware entry point the daemon actually calls.
+        let dataset = crate::dataset::get(crate::dataset::DEFAULT_DATASET).unwrap();
+        assert_cleaned(
+            load_task_for(dataset, &single, "two-sum")
+                .unwrap()
+                .problem_description
+                .as_deref(),
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The adapters reach the same normalizer by a different route — the end of
+    /// `datasets::normalize` rather than a canonical serde site.
+    #[test]
+    fn an_adapted_statement_is_laid_out_too() {
+        let dataset = crate::dataset::get("ms-python-q").unwrap();
+        let raw = serde_json::json!({
+            "problem_id": "two-sum",
+            "problem_description": MASHED,
+            "starter_code": "def solve(nums):\n    pass",
+        });
+        let problem = datasets::normalize(dataset, &raw).expect("the adapter takes the row");
+        assert_cleaned(problem.problem_description.as_deref());
     }
 
     #[test]
