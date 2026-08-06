@@ -2216,6 +2216,24 @@ input[type="checkbox"] {
   margin-top: 0;
 }
 
+.lc-statement-body p,
+.lc-statement-body ul,
+.lc-statement-body ol,
+.lc-statement-body li,
+.lc-statement-body h1,
+.lc-statement-body h2,
+.lc-statement-body h3,
+.lc-statement-body h4,
+.lc-statement-body h5,
+.lc-statement-body h6 {
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.lc-statement-body sup {
+  font-size: 0.75em;
+}
+
 .lc-md-ink-doc h1,
 .lc-md-ink-doc h2,
 .lc-md-ink-doc h3,
@@ -4108,14 +4126,22 @@ button.lc-row-selected:hover:not(:disabled) {
   flex-shrink: 0;
   border-top: 1px solid var(--chrome-edge);
   padding-top: 10px;
+  padding-bottom: 4px;
 }
 
-/* ‹ | actions+status | ›+page — equal side tracks center the action group. */
+/* Row 1: ‹ | actions | ›. Row 2: (empty) | stats | page label. */
 .lc-browser-foot-bar {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: start;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto;
+  align-items: center;
   column-gap: 10px;
+  row-gap: 4px;
+}
+
+.lc-browser-foot-center,
+.lc-browser-foot-end {
+  display: contents;
 }
 
 .lc-browser-foot-prev,
@@ -4125,16 +4151,10 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-browser-foot-prev {
+  grid-column: 1;
+  grid-row: 1;
   justify-self: start;
-}
-
-.lc-browser-foot-center {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  justify-self: center;
+  align-self: start;
 }
 
 .lc-browser-foot-actions {
@@ -4143,15 +4163,27 @@ button.lc-row-selected:hover:not(:disabled) {
   justify-content: center;
   gap: 6px;
   flex-wrap: wrap;
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  min-width: 0;
 }
 
-.lc-browser-foot-end {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  min-width: 0;
+.lc-browser-foot-next {
+  grid-column: 3;
+  grid-row: 1;
   justify-self: end;
+  align-self: start;
+}
+
+.lc-browser-foot-stats {
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: center;
+  align-self: start;
+  white-space: nowrap;
+  font-size: 11px;
+  text-align: center;
 }
 
 .lc-browser-foot-label {
@@ -4161,6 +4193,12 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-browser-page-label {
+  grid-column: 3;
+  grid-row: 2;
+  justify-self: end;
+  align-self: start;
+  /* Visual only — does not grow the row or move queue stats. */
+  transform: translateY(10px);
   min-width: 0;
   max-width: 14rem;
   text-align: right;
@@ -4178,12 +4216,6 @@ button.lc-row-selected:hover:not(:disabled) {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-}
-
-.lc-browser-foot-stats {
-  white-space: nowrap;
-  font-size: 11px;
-  text-align: center;
 }
 
 .lc-browser-foot button {
@@ -6154,12 +6186,13 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-browser-foot {
   gap: 2px;
   padding-top: 2px;
+  padding-bottom: 6px;
   flex-shrink: 0;
 }
 
 .lc-mobile .lc-browser-foot-bar {
   column-gap: 4px;
-  align-items: start;
+  row-gap: 2px;
 }
 
 .lc-mobile .lc-browser-foot-prev,
@@ -6169,18 +6202,9 @@ button.lc-row-selected:hover:not(:disabled) {
   padding: 0;
 }
 
-.lc-mobile .lc-browser-foot-center {
-  gap: 2px;
-}
-
 .lc-mobile .lc-browser-foot-actions {
   gap: 4px;
   flex-wrap: nowrap;
-}
-
-.lc-mobile .lc-browser-foot-end {
-  gap: 1px;
-  min-width: 4.5rem;
 }
 
 .lc-mobile .lc-browser-page-label {
@@ -6192,6 +6216,8 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 7.5rem;
+  /* Visual only — queue stats stay on their baseline. */
+  transform: translateY(8px);
 }
 
 .lc-mobile .lc-browser-foot button,

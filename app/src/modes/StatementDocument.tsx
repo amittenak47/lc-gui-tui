@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
+import { normalizeStatementForMarkdown } from "../util/statementMarkdown";
 import { renderMarkdown } from "./MdInkDocument";
 
 export interface StatementDocumentProps {
@@ -45,7 +46,10 @@ export function StatementDocument({
     [caseCount, difficulty, tags],
   );
   const bodyHtml = useMemo(
-    () => renderMarkdown(description?.trim() || "_No description in the corpus._"),
+    () =>
+      renderMarkdown(
+        normalizeStatementForMarkdown(description?.trim() || "_No description in the corpus._"),
+      ),
     [description],
   );
   const onMeasureRef = useRef(onMeasure);
