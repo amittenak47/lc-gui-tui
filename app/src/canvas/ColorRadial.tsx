@@ -11,6 +11,14 @@ import { createPortal } from "react-dom";
 import type { InkHandedness } from "../util/inkHandedness";
 
 const HOLD_MS = 220;
+/**
+ * Hold on a wedge to change what colour lives there.
+ *
+ * Longer than {@link HOLD_MS}, which opens the ring: opening is a thing you do
+ * constantly and editing is a thing you do twice, so the rarer gesture is the
+ * one that has to be meant. Long enough that a slow tap-to-pick never trips it.
+ */
+const EDIT_HOLD_MS = 550;
 /** Outer / inner radius of the colour ring (CSS px). */
 const OUTER_R = 78;
 const INNER_R = 34;
@@ -21,6 +29,21 @@ interface ColorRadialProps {
   colors: readonly string[];
   value: string;
   onPick: (color: string) => void;
+  /**
+   * A wedge was held: the writer wants a different colour in that slot.
+   *
+   * Absent means the palette is not editable here, and the hold does nothing —
+   * the control still works exactly as it did.
+   */
+  onEditColor?: (index: number, color: string) => void;
+  /**
+   * The hub was held: put every slot back to its authored colour.
+   *
+   * Editing a slot has to be undoable by something other than remembering the
+   * hex that used to be there, and the hub is the one part of the ring that is
+   * about the palette as a whole rather than about one colour in it.
+   */
+  onResetPalette?: () => void;
   handedness: InkHandedness;
   compact?: boolean;
 }
@@ -108,6 +131,8 @@ export function ColorRadial({
   colors,
   value,
   onPick,
+  onEditColor,
+  onResetPalette,
   handedness,
   compact = false,
 }: ColorRadialProps) {
@@ -117,6 +142,39 @@ export function ColorRadial({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const holdTimerRef = useRef<number | null>(null);
   const draggingRef = useRef(false);
+  /**
+   * Slot-edit hold. Cancelled by the pick, by leaving the wedge, and by the
+   * drag that a pick starts with, so the only way to reach the editor is to
+   * put a finger down and leave it there.
+   */
+  const editTimerRef = useRef<number>(0);
+  const editingSlotRef = useRef<number | null>(null);
+  const colorInputRef = useRef<HTMLInputElement | null>(null);
+
+  const cancelEditHold = useCallback(() => {
+    if (editTimerRef.current) {
+      window.clearTimeout(editTimerRef.current);
+      editTimerRef.current = 0;
+    }
+  }, []);
+
+  useEffect(() => cancelEditHold, [cancelEditHold]);
+
+  /**
+   * Hand the slot to the platform's own colour picker.
+   *
+   * A native `<input type="color">` rather than a bespoke wheel: it is the one
+   * picker that works in the tablet's WebView and on the desktop without
+   * shipping a second colour UI, and on a touch device it is the OS picker the
+   * writer already knows.
+   */
+  const openSlotEditor = useCallback((index: number, current: string) => {
+    const input = colorInputRef.current;
+    if (!input) return;
+    editingSlotRef.current = index;
+    input.value = current;
+    input.click();
+  }, []);
 
   const wedges = useMemo(() => buildWedges(colors, handedness), [colors, handedness]);
   const size = OUTER_R * 2;
@@ -274,10 +332,26 @@ export function ColorRadial({
                     event.stopPropagation();
                     draggingRef.current = true;
                     setHovered(wedge.color);
+                    if (!onEditColor) return;
+                    cancelEditHold();
+                    const slot = wedges.indexOf(wedge);
+                    editTimerRef.current = window.setTimeout(() => {
+                      editTimerRef.current = 0;
+                      // The hold has won: this is no longer a pick.
+                      draggingRef.current = false;
+                      openSlotEditor(slot, wedge.color);
+                    }, EDIT_HOLD_MS);
                   }}
+                  onPointerUp={cancelEditHold}
+                  onPointerLeave={cancelEditHold}
+                  onPointerCancel={cancelEditHold}
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
+                    // A completed hold already opened the editor; the release
+                    // that follows it must not also pick the old colour.
+                    if (editingSlotRef.current !== null) return;
+                    cancelEditHold();
                     onPick(wedge.color);
                     close();
                   }}
@@ -286,12 +360,52 @@ export function ColorRadial({
             })}
             <circle className="lc-color-wheel-hub-ring" cx={OUTER_R} cy={OUTER_R} r={INNER_R} />
           </svg>
+          <input
+            ref={colorInputRef}
+            type="color"
+            className="lc-color-slot-input"
+            aria-hidden
+            tabIndex={-1}
+            onChange={(event) => {
+              const slot = editingSlotRef.current;
+              editingSlotRef.current = null;
+              if (slot === null) return;
+              onEditColor?.(slot, event.target.value);
+            }}
+            onBlur={() => {
+              editingSlotRef.current = null;
+            }}
+          />
           <button
             type="button"
             className="lc-color-wheel-hub"
             style={{ background: value }}
-            aria-label="Current ink colour"
-            onClick={() => close()}
+            aria-label={
+              onResetPalette
+                ? "Current ink colour — hold to restore the default palette"
+                : "Current ink colour"
+            }
+            title={onResetPalette ? "Hold to restore default colours" : undefined}
+            onPointerDown={() => {
+              if (!onResetPalette) return;
+              cancelEditHold();
+              editTimerRef.current = window.setTimeout(() => {
+                editTimerRef.current = 0;
+                // Mark it handled so the release does not also close the ring:
+                // the writer should see the palette change under their finger.
+                editingSlotRef.current = -1;
+                onResetPalette();
+                editingSlotRef.current = null;
+              }, EDIT_HOLD_MS);
+            }}
+            onPointerUp={cancelEditHold}
+            onPointerLeave={cancelEditHold}
+            onPointerCancel={cancelEditHold}
+            onClick={() => {
+              if (editingSlotRef.current !== null) return;
+              cancelEditHold();
+              close();
+            }}
           />
         </div>
       </div>,

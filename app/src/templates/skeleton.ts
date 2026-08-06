@@ -177,22 +177,32 @@ export interface BoardTheme {
 }
 
 /**
- * Appearance swatches — six light tints, then six dark counterparts.
- * Hues: sky → mint → rose → peach → lilac → coral | ocean → forest → wine → umber → plum → storm.
+ * Appearance swatches — six papers, then six blacks.
+ *
+ * Each one is a recognisable palette rather than a hue slider position: the
+ * lights are paper stocks (near-white, Solarized parchment, and four pastels
+ * mixed toward them), the darks are the near-black editor themes people already
+ * read code in all day, and every dark's accent is cool. Ids are unchanged from
+ * the hue-named originals so nobody's stored preference resets — only the
+ * labels and the colours moved.
+ *
+ * Backgrounds were picked for contrast against the ink that sits on them: every
+ * light board clears 12:1 against its body text and every dark board clears
+ * 11:1, so a stroke stays readable at the zoom levels a whole page is viewed at.
  */
 export const BOARD_THEMES: BoardTheme[] = [
-  { id: "blue", label: "Sky", background: "#d6e8ff", hint: "#5b7fa8" },
-  { id: "green", label: "Mint", background: "#d4f0e4", hint: "#4d8f72" },
-  { id: "pink", label: "Rose", background: "#fce1ea", hint: "#a8657f" },
-  { id: "beige", label: "Peach", background: "#f9e8d4", hint: "#9a7f5e" },
-  { id: "purple", label: "Lilac", background: "#ebe2f8", hint: "#7d6a9e" },
-  { id: "coral", label: "Coral", background: "#ffe8df", hint: "#b07a68" },
-  { id: "ocean", label: "Ocean", background: "#0f1a24", hint: "#6a9cc4" },
-  { id: "pine", label: "Forest", background: "#101f18", hint: "#6baf8f" },
-  { id: "dusk", label: "Wine", background: "#281820", hint: "#c48a9a" },
-  { id: "graphite", label: "Umber", background: "#1c1916", hint: "#a89882" },
-  { id: "midnight", label: "Plum", background: "#16122a", hint: "#9a88c4" },
-  { id: "storm", label: "Storm", background: "#141c28", hint: "#7a98b8" },
+  { id: "blue", label: "Paper", background: "#fbfcfd", hint: "#8b96a5" },
+  { id: "beige", label: "Parchment", background: "#fdf6e3", hint: "#a89670" },
+  { id: "coral", label: "Clay", background: "#fbeee6", hint: "#b08a72" },
+  { id: "green", label: "Sage", background: "#e9f1e7", hint: "#7a9b83" },
+  { id: "purple", label: "Lilac", background: "#f1ecf9", hint: "#9186ac" },
+  { id: "pink", label: "Blush", background: "#fbeef1", hint: "#b0879a" },
+  { id: "storm", label: "Ink", background: "#0d1117", hint: "#4a5765" },
+  { id: "midnight", label: "Tokyo", background: "#1a1b26", hint: "#565f89" },
+  { id: "ocean", label: "Nord", background: "#2e3440", hint: "#6d7a94" },
+  { id: "graphite", label: "Carbon", background: "#0a0a0b", hint: "#4d4d55" },
+  { id: "pine", label: "Pine", background: "#0d1a18", hint: "#4a7268" },
+  { id: "dusk", label: "Plum", background: "#17111c", hint: "#6b5a7d" },
 ];
 
 /** Tag a whole group as the coach's, so capture and replacement both work. */
