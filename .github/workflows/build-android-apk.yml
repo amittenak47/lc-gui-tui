@@ -1,0 +1,107 @@
+# Build a sideloadable debug APK on every push to main (and on manual run).
+#
+# This is a Tauri 2 Android app under `app/` — not a root Gradle project.
+# Local equivalent: `cd app && npm run android:init && npm run android:apk`
+#
+# Install on tablet: Actions → this workflow → latest run → Artifacts →
+# download `lc-whiteboard-debug-apk` → open the APK (allow unknown apps).
+
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build debug apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+          link-to-sdk: true
+
+      - name: Export Android env
+        run: |
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      # Gradle BuildTask.kt invokes `cargo tauri …`; the npm CLI alone is not enough.
+      - name: Install cargo tauri-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2.11.4
+
+      - name: Install npm dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Init Android project + cleartext overlay
+        working-directory: app
+        run: npm run android:init
+
+      - name: Build debug APK
+        working-directory: app
+        run: npm run android:apk
+
+      - name: Stage APK
+        run: |
+          APK="app/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk"
+          test -f "$APK" || {
+            echo "APK missing at $APK — searching outputs…"
+            find app/src-tauri/gen/android/app/build/outputs -name '*.apk' -print || true
+            exit 1
+          }
+          mkdir -p dist
+          cp "$APK" "dist/lc-whiteboard-debug.apk"
+          ls -lh dist/
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lc-whiteboard-debug-apk
+          path: dist/lc-whiteboard-debug.apk
+          retention-days: 30
