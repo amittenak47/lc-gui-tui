@@ -98,7 +98,7 @@ import {
 } from "./pageView";
 import { eraserScreenRadius } from "./rasterInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
-import { ZoomIndicator, type ZoomIndicatorHandle } from "./ZoomIndicator";
+import { ModeIndicator, type ModeIndicatorHandle } from "./ModeIndicator";
 import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
 import {
   minTextBox,
@@ -459,6 +459,19 @@ function newImageFileId(): string {
   return `lcimg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/** Carbon OLED board paper — same as graphite / Carbon theme. */
+const CARBON_BOARD_BG = "#0a0a0b";
+
+function boardViewBackground(
+  transparent: boolean,
+  carbon: boolean,
+  themeBackground: string,
+): string {
+  if (transparent) return "transparent";
+  if (carbon) return CARBON_BOARD_BG;
+  return themeBackground;
+}
+
 function blobToDataURL(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -769,6 +782,11 @@ export interface BoardProps {
    */
   transparentCanvas?: boolean;
   /**
+   * Carbon OLED paper (`graphite` / `#0a0a0b`) regardless of chrome theme.
+   * Used for md-ink, statement, scratchpad, and the code page.
+   */
+  carbonPaper?: boolean;
+  /**
    * Offer the toolbar toggle in the map chrome.
    *
    * Toolbar on: drawing tools mount. Toolbar off: tools deselect and the board
@@ -834,6 +852,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     pageContentHeight = null,
     codeContentHeight = null,
     transparentCanvas = false,
+    carbonPaper = false,
     annotateToggle = true,
     onAnnotateCodeChange,
     linedPaperToggle = false,
@@ -900,6 +919,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const transparentCanvasRef = useRef(transparentCanvas);
   transparentCanvasRef.current = transparentCanvas;
+  const carbonPaperRef = useRef(carbonPaper);
+  carbonPaperRef.current = carbonPaper;
   /** Reading mode: wheel scrolls, drags stay in the column. */
   /*
    * Column lock is always on. There is no free 2D pan on these pages — wheel
@@ -995,18 +1016,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     () => inkPrefsRef.current.pressureSensitive,
   );
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
-  const zoomIndicatorRef = useRef<ZoomIndicatorHandle | null>(null);
-  /**
-   * Settle the toolbar's copy of the zoom well after the pill has it.
-   *
-   * The pill is written every frame because it is one text node; `zoomPct` is
-   * React state that re-renders Board and its toolbar, and doing *that* per
-   * frame was a real part of why holding a zoom button stuttered. The number
-   * only has to be right once the gesture stops.
-   */
-  const zoomPctSettleRef = useRef<number>(0);
-  /** Last level the pill was raised for, so panning cannot keep it awake. */
-  const lastZoomPctRef = useRef<number>(100);
+  const modeIndicatorRef = useRef<ModeIndicatorHandle | null>(null);
   const textPlaceGhostRef = useRef<TextPlaceGhostHandle | null>(null);
   const captureFeedbackRef = useRef<CaptureFeedbackHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
@@ -1026,7 +1036,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   } | null>(null);
   const [captureArmed, setCaptureArmed] = useState(false);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
-  const [, setZoomPct] = useState(100);
   /** Effective zoom-out floor as a percent — page fit on mobile, else ZOOM_MIN. */
   const [, setZoomFloorPct] = useState(() => Math.round(ZOOM_MIN * 100));
   /** Scene box of the open mobile page — clips the raster ink layer to it. */
@@ -1056,6 +1065,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const toolbarHeightRef = useRef(36);
   const clampingScrollRef = useRef(false);
+  /** True while commitVisualScroll's updateScene is in flight — skip re-clamp. */
+  const committingScrollRef = useRef(false);
   /** Hand-tool pan: track velocity from scroll deltas for flick inertia. */
   const handPanningRef = useRef(false);
   const panVelocityRef = useRef({ x: 0, y: 0 });
@@ -1112,9 +1123,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     cameraMotionTimerRef.current = window.setTimeout(() => {
       cameraMotionTimerRef.current = 0;
       cameraMotionActiveRef.current = false;
-      // Wheel bursts use live camera — commit once the burst idles.
+      // Wheel bursts use live camera — paint while live is still true, then
+      // commit (clears live on the next frame).
       if (!handPanningRef.current && !inertiaFrameRef.current) {
+        rasterInkRef.current?.setCameraMoving(false);
         commitVisualScrollRef.current();
+        return;
       }
       rasterInkRef.current?.setCameraMoving(false);
     }, 140);
@@ -1585,6 +1599,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * On → Select is the entry tool (Hand is gone from the strip).
    */
   useEffect(() => {
+    // Forced off when the board unmounts / leaves a problem — no mode toast.
+    // Only the toolbar toggle flashes Annotation / Scroll mode.
     if (!annotateToggle && annotateCode) setAnnotateCode(false);
   }, [annotateCode, annotateToggle]);
 
@@ -2005,7 +2021,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (annotateCode) {
       setShapesOpen(false);
       setCaptureMenuOpen(false);
-      setTool("selection");
+      // Pen is the annotate entry tool — Select is a deliberate second pick.
+      setTool("freedraw");
       return;
     }
     setShapesOpen(false);
@@ -2202,14 +2219,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
   }, []);
 
-  /** Push live camera into Excalidraw once the gesture settles. */
+  /**
+   * Push live camera into Excalidraw once the gesture settles.
+   *
+   * Keep `live` true through the settle paint. Clearing it before
+   * `setCameraMoving(false)` → `commitCamera` made ink fall back to
+   * Excalidraw's still-stale appState and flash the pre-flick view (often
+   * the top of the page) for one frame when a coast hits the bottom wall.
+   */
   const commitVisualScroll = useCallback(() => {
     const live = liveCameraRef.current;
     if (!live?.live) return;
-    live.live = false;
+    committingScrollRef.current = true;
     apiRef.current?.updateScene({
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    requestAnimationFrame(() => {
+      committingScrollRef.current = false;
+      if (liveCameraRef.current === live) live.live = false;
     });
     scheduleSlotReports();
   }, [scheduleSlotReports]);
@@ -2286,8 +2314,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         inertiaFrameRef.current = 0;
         inertiaBrakingRef.current = false;
         applyVisualScrollRef.current(scrollX, scrollY);
-        commitVisualScrollRef.current();
+        // Paint while live camera still holds the coast position, then push
+        // into Excalidraw. Commit clears live on the next frame.
         rasterInkRef.current?.setCameraMoving(false);
+        commitVisualScrollRef.current();
       };
 
       const step = (now: number) => {
@@ -2419,15 +2449,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       panDragRef.current = null;
 
       if (!canOwnScroll()) {
-        commitVisualScrollRef.current();
         rasterInkRef.current?.setCameraMoving(false);
+        commitVisualScrollRef.current();
         return;
       }
 
       if (!drag?.armed) {
         if (!inertiaFrameRef.current) {
-          commitVisualScrollRef.current();
           rasterInkRef.current?.setCameraMoving(false);
+          commitVisualScrollRef.current();
         }
         return;
       }
@@ -2445,8 +2475,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         startPanInertia(0, velY);
         return;
       }
-      commitVisualScrollRef.current();
       rasterInkRef.current?.setCameraMoving(false);
+      commitVisualScrollRef.current();
     };
 
     root.addEventListener("pointerdown", onPointerDown, true);
@@ -2467,8 +2497,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     inertiaBrakingRef.current = false;
     handPanningRef.current = false;
     panDragRef.current = null;
-    commitVisualScrollRef.current();
     rasterInkRef.current?.setCameraMoving(false);
+    commitVisualScrollRef.current();
   }, [activeTool, stopPanInertia]);
 
   const inkToolActive = activeTool === "freedraw" || activeTool === "eraser";
@@ -2995,7 +3025,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     api.updateScene({
       appState: {
-        viewBackgroundColor: transparentCanvasRef.current ? "transparent" : theme.background,
+        viewBackgroundColor: boardViewBackground(
+          transparentCanvasRef.current,
+          carbonPaperRef.current,
+          theme.background,
+        ),
         currentItemStrokeColor: ink,
       },
       ...(recolored
@@ -3024,28 +3058,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   }, []);
-
-  /**
-   * Push a zoom level to the pill now and to React once the gesture stops.
-   *
-   * Safe to call on every frame of an animated zoom — see the note on
-   * {@link zoomPctSettleRef} for why the two go at different speeds.
-   */
-  const showZoom = useCallback((pct: number) => {
-    zoomIndicatorRef.current?.show(pct);
-    if (zoomPctSettleRef.current) window.clearTimeout(zoomPctSettleRef.current);
-    zoomPctSettleRef.current = window.setTimeout(() => {
-      zoomPctSettleRef.current = 0;
-      setZoomPct((current) => (current === pct ? current : pct));
-    }, 140);
-  }, []);
-
-  useEffect(
-    () => () => {
-      if (zoomPctSettleRef.current) window.clearTimeout(zoomPctSettleRef.current);
-    },
-    [],
-  );
 
   const applyZoomAtViewport = useCallback(
     (next: number, viewportX: number, viewportY: number) => {
@@ -3096,9 +3108,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         appState,
         captureUpdate: CaptureUpdateAction.NEVER,
       });
-      showZoom(Math.round(clamped * 100));
     },
-    [getZoomFloor, mobile, showZoom],
+    [getZoomFloor, mobile],
   );
 
   const interpolateZoomAnim = useCallback((): number | null => {
@@ -3231,7 +3242,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     root.addEventListener("wheel", onWheel, { capture: true, passive: false });
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
-  }, [clampPanScroll, interactive, mobile, pulseCameraMotion, reportCodeSlot, showZoom]);
+  }, [clampPanScroll, interactive, mobile, pulseCameraMotion, reportCodeSlot]);
 
   type FitMode = "frame" | "camera" | "both";
 
@@ -3537,7 +3548,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         requestAnimationFrame(() => {
           fittingCameraRef.current = false;
         });
-        setZoomPct(Math.round(zoom * 100));
         requestAnimationFrame(reportCodeSlot);
         requestAnimationFrame(reportLinedSlot);
         requestAnimationFrame(reportTitleSlot);
@@ -3692,21 +3702,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
   }, []);
 
-  // Entering or leaving md-ink flips the canvas between opaque and see-through
-  // after the theme has already been applied, so it needs its own push.
+  // Entering or leaving Carbon / transparent paper flips the canvas after the
+  // theme has already been applied, so it needs its own push.
   useEffect(() => {
     const api = apiRef.current;
     if (!api) return;
+    const themeBg =
+      (BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0])
+        .background;
     api.updateScene({
       appState: {
-        viewBackgroundColor: transparentCanvas
-          ? "transparent"
-          : (BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0])
-              .background,
+        viewBackgroundColor: boardViewBackground(transparentCanvas, carbonPaper, themeBg),
       },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
-  }, [transparentCanvas, themeId]);
+  }, [transparentCanvas, carbonPaper, themeId]);
 
   useEffect(() => {
     reportTitleSlot();
@@ -4952,7 +4962,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const recolored = recolorTemplateElements(scene, dark);
         api.updateScene({
           appState: {
-            viewBackgroundColor: transparentCanvasRef.current ? "transparent" : theme.background,
+            viewBackgroundColor: boardViewBackground(
+          transparentCanvasRef.current,
+          carbonPaperRef.current,
+          theme.background,
+        ),
             currentItemStrokeColor: ink,
           },
           ...(recolored
@@ -4981,7 +4995,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const prefs = inkPrefsRef.current;
       return {
         appState: {
-          viewBackgroundColor: transparentCanvas ? "transparent" : theme.background,
+          viewBackgroundColor: boardViewBackground(transparentCanvas, carbonPaper, theme.background),
           currentItemStrokeColor: resolveInkColor(themeId, prefs.inkColor),
           currentItemStrokeWidth: prefs.penWidth,
           currentItemRoughness: 1,
@@ -4996,7 +5010,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         scrollToContent: false,
       };
     },
-    [theme.background, themeId, transparentCanvas],
+    [theme.background, themeId, transparentCanvas, carbonPaper],
   );
 
   return (
@@ -5009,6 +5023,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // (Gemini gatekeeper + CSS). Annotate restores normal canvas hits.
         interactive && !annotateCode && "lc-board-reading",
         transparentCanvas && "lc-board-paper",
+        carbonPaper && "lc-board-carbon",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -5071,55 +5086,38 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               .join(" ")}
           >
             <div className="lc-map-chrome-left">
-              {!mapChromeHidden && (
+              {!mapChromeHidden && annotateToggle && (
                 <div className="lc-map-chrome-row">
-                  {onThemePick && (
-                    <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
-                  )}
-                  {annotateToggle && (
-                    <button
-                      type="button"
-                      className={
-                        annotateCode ? "lc-lined-toggle is-active" : "lc-lined-toggle"
-                      }
-                      aria-pressed={annotateCode}
-                      aria-label={annotateCode ? "Hide toolbar" : "Show toolbar"}
-                      title={
-                        annotateCode
-                          ? "Toolbar on — tap to scroll the page"
-                          : "Toolbar — annotate this page"
-                      }
-                      onClick={() => setAnnotateCode((current) => !current)}
-                    >
-                      <AnnotateIcon on={annotateCode} />
-                    </button>
-                  )}
-                  {linedPaperToggle && isDrawPageRegion(mobileRegion ?? null) && (
-                    <button
-                      type="button"
-                      className={
-                        linedPaper ? "lc-lined-toggle is-active" : "lc-lined-toggle"
-                      }
-                      aria-pressed={linedPaper}
-                      aria-label="Lined paper"
-                      title="Lined paper"
-                      onClick={() => {
-                        const next = !linedPaperRef.current;
-                        linedPaperRef.current = next;
-                        setLinedPaper(next);
-                        reflowReadingText();
-                        requestAnimationFrame(reportLinedSlot);
-                      }}
-                    >
-                      <span aria-hidden>🗒️</span>
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className={
+                      annotateCode ? "lc-lined-toggle is-active" : "lc-lined-toggle"
+                    }
+                    aria-pressed={annotateCode}
+                    aria-label={annotateCode ? "Hide toolbar" : "Show toolbar"}
+                    title={
+                      annotateCode
+                        ? "Toolbar on — tap to scroll the page"
+                        : "Toolbar — annotate this page"
+                    }
+                    onClick={() => {
+                      setAnnotateCode((current) => {
+                        const next = !current;
+                        modeIndicatorRef.current?.show(
+                          next ? "Annotation" : "Scroll mode",
+                        );
+                        return next;
+                      });
+                    }}
+                  >
+                    <AnnotateIcon on={annotateCode} />
+                  </button>
                 </div>
               )}
             </div>
             <div className="lc-board-dock">
               {/*
-                Pen island ABOVE the pager. Grid uses align-items:end so Theme /
+                Pen island ABOVE the pager. Grid uses align-items:end so Annotate /
                 Eye / pager share one bottom baseline; opening the toolbar grows
                 upward and must not lift those controls.
               */}
@@ -5181,7 +5179,36 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               {!mapChromeHidden && bottomCenter}
             </div>
             <div className="lc-map-chrome-right">
-              <div className="lc-map-chrome-row">
+              {/*
+                Right stack (bottom → top): eye, theme chip, lined paper.
+                Annotate stays on the opposite end. Eye stays when chrome collapses.
+              */}
+              <div className="lc-map-chrome-stack">
+                {!mapChromeHidden &&
+                  linedPaperToggle &&
+                  isDrawPageRegion(mobileRegion ?? null) && (
+                    <button
+                      type="button"
+                      className={
+                        linedPaper ? "lc-lined-toggle is-active" : "lc-lined-toggle"
+                      }
+                      aria-pressed={linedPaper}
+                      aria-label="Lined paper"
+                      title="Lined paper"
+                      onClick={() => {
+                        const next = !linedPaperRef.current;
+                        linedPaperRef.current = next;
+                        setLinedPaper(next);
+                        reflowReadingText();
+                        requestAnimationFrame(reportLinedSlot);
+                      }}
+                    >
+                      <span aria-hidden>🗒️</span>
+                    </button>
+                  )}
+                {!mapChromeHidden && onThemePick && (
+                  <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
+                )}
                 <button
                   type="button"
                   className={
@@ -5195,18 +5222,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   <EyeIcon closed={mapChromeHidden} />
                 </button>
               </div>
-              {/*
-                No zoom, no fit, no S/M/L. Annotations track the page in scene
-                space — a reading-size switch reflows the frames without
-                remapping ink, which is how marks ended up on the wrong page.
-              */}
             </div>
             {coachFold}
           </div>
         </>
       )}
       {interactive && activeTool === "eraser" && <EraserBrush ref={eraserBrushRef} />}
-      {interactive && <ZoomIndicator ref={zoomIndicatorRef} />}
+      {interactive && <ModeIndicator ref={modeIndicatorRef} />}
       <RasterInkLayer
         ref={rasterInkRef}
         enabled={interactive}
@@ -5237,16 +5259,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           apiRef.current = api as ExcalidrawApi;
           scrollUnsubRef.current?.();
           scrollUnsubRef.current =
-            apiRef.current.onScrollChange?.((scrollX, scrollY, zoom) => {
-              // Fires on pan as well as zoom, so only a *changed* level counts
-              // as zooming. Otherwise every pan frame would restart the pill's
-              // fade and hold it on screen for the whole gesture.
-              const pct = Math.round(zoom.value * 100);
-              if (lastZoomPctRef.current !== pct) {
-                lastZoomPctRef.current = pct;
-                showZoom(pct);
-              }
-
+            apiRef.current.onScrollChange?.((scrollX, scrollY) => {
               /*
                * Reading mode: column never moves sideways.
                *
@@ -5327,14 +5340,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 !mobileRef.current ||
                 mobileRegionRef.current == null ||
                 clampingScrollRef.current ||
-                inertiaFrameRef.current !== 0
+                committingScrollRef.current ||
+                inertiaFrameRef.current !== 0 ||
+                liveCameraRef.current?.live
               ) {
                 return;
               }
               const bounds = pageBoundsRef.current;
               const api = apiRef.current;
               if (!bounds || !api) return;
-              const state = api.getAppState() as { width?: number; height?: number };
+              const state = api.getAppState() as {
+                width?: number;
+                height?: number;
+                zoom?: { value?: number };
+              };
               if (typeof state.width !== "number" || typeof state.height !== "number") return;
               const inset = measureChromeInsets(
                 boardRef.current,
@@ -5345,7 +5364,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               const next = clampScrollToBounds(
                 scrollX,
                 scrollY,
-                zoom.value,
+                state.zoom?.value ?? 1,
                 state.width,
                 state.height,
                 bounds,
@@ -5366,9 +5385,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 clampingScrollRef.current = false;
               });
             }) ?? null;
-          const state = apiRef.current.getAppState() as { zoom?: { value?: number } };
-          const pct = Math.round((state.zoom?.value ?? 1) * 100);
-          setZoomPct((current) => (current === pct ? current : pct));
           apiRef.current.setActiveTool({ type: "hand" });
           if (!annotateCodeRef.current) {
             ensureReadingHand();

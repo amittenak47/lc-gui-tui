@@ -13,7 +13,7 @@
   --bg: #ffffff;
   --panel: #f8fafc;
   --overlay-bg: rgb(255 255 255 / 97%);
-  --accent: #c2410c;
+  --accent: #4a6280;
   --ok: #166534;
   --bad: #b91c1c;
   --touch: 44px;
@@ -591,22 +591,21 @@ input[type="checkbox"] {
 }
 
 /*
- * Zoom readout: a pill in the middle of the board, shown while zooming.
+ * Mode toast: a pill in the middle of the board, shown on annotate toggle.
  *
- * Text and the `is-visible` class are written by Board's zoom path, never by
- * React — see ZoomIndicator.tsx. Only `opacity` transitions, so the fade is a
- * compositor job and cannot land on the main thread mid-zoom, which is the one
- * thing this element must never do.
+ * Text and the `is-visible` class are written by Board, never by React — see
+ * ModeIndicator.tsx. Only `opacity` transitions, so the fade is a compositor
+ * job and cannot land on the main thread mid-gesture.
  */
-.lc-zoom-indicator {
+.lc-mode-indicator {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
   /*
    * Above the code dock (8), which fills the screen on the code page and was
-   * hiding the readout completely — zooming there gave no feedback at all.
-   * Below the toolbars, which the reader still has to be able to hit.
+   * hiding the readout completely. Below the toolbars, which the reader still
+   * has to be able to hit.
    */
   z-index: 14;
   pointer-events: none;
@@ -617,7 +616,6 @@ input[type="checkbox"] {
   backdrop-filter: blur(6px);
   color: var(--ink);
   font-size: 1.05rem;
-  font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
   line-height: 1;
   opacity: 0;
@@ -625,13 +623,13 @@ input[type="checkbox"] {
   will-change: opacity;
 }
 
-.lc-zoom-indicator.is-visible {
+.lc-mode-indicator.is-visible {
   opacity: 1;
   transition-duration: 90ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lc-zoom-indicator {
+  .lc-mode-indicator {
     transition: none;
   }
 }
@@ -1957,9 +1955,18 @@ input[type="checkbox"] {
 
 .lc-map-chrome-right {
   display: flex;
-  flex-direction: row;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-end;
   gap: 6px;
+}
+
+.lc-map-chrome-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 4px;
 }
 
 .lc-map-chrome-row {
@@ -2117,6 +2124,19 @@ input[type="checkbox"] {
  * `transparentCanvas`. Excalidraw would otherwise paint over the markdown. */
 .lc-board-paper {
   background: var(--board-paper, var(--surface, var(--bg)));
+}
+
+/* Carbon OLED paper — md-ink / statement / scratchpad / code, any chrome theme. */
+.lc-board-paper.lc-board-carbon,
+.lc-board.lc-board-carbon {
+  --board-paper: #0a0a0b;
+  background: var(--board-paper);
+}
+
+.lc-md-ink-carbon {
+  --ink: #ededf0;
+  --accent: #a5b4fc;
+  color: var(--ink);
 }
 
 .lc-page-content-slot {
@@ -2517,9 +2537,10 @@ input[type="checkbox"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: auto;
+  width: 36px;
+  min-width: 36px;
   min-height: 28px;
-  padding: 0 10px;
+  padding: 0;
   border: none !important;
   border-radius: 8px;
   background: transparent !important;
@@ -2528,21 +2549,18 @@ input[type="checkbox"] {
 }
 
 .lc-palette-map {
-  border: 1px solid var(--line);
+  border: 1px solid var(--chrome-edge);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
   overflow: visible;
 }
 
-.lc-palette-map-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  color: var(--ink);
+.lc-palette-map .lc-palette-chip {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border-radius: 999px;
 }
 
 .lc-palette-popover-map {
@@ -2804,6 +2822,14 @@ input[type="checkbox"] {
     0 10px 28px color-mix(in srgb, var(--accent) 28%, transparent),
     0 0 32px color-mix(in srgb, var(--accent) 18%, transparent);
   z-index: 2;
+}
+
+/* Tall turns already fill the chat — scale would swallow the thread. */
+.lc-coach-turn-selected-tall {
+  transform: none;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .lc-coach-message-menu-backdrop {
@@ -4245,7 +4271,7 @@ button.lc-row-selected:hover:not(:disabled) {
   background-color: transparent !important;
 }
 
-/* iOS-style thin rounded thumb over the code gutter. */
+/* iOS-style thin rounded thumb over the code gutter — wider on tablet. */
 .lc-code-dock .monaco-scrollable-element > .scrollbar {
   background: transparent !important;
   border: none !important;
@@ -4265,6 +4291,23 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-code-dock .monaco-scrollable-element > .scrollbar > .slider:hover,
 .lc-code-dock .monaco-scrollable-element > .scrollbar > .slider.active {
   background: color-mix(in srgb, var(--ink) 42%, transparent) !important;
+}
+
+.lc-mobile .lc-code-dock .monaco-scrollable-element > .scrollbar {
+  width: 14px !important;
+}
+
+.lc-mobile .lc-code-dock .monaco-scrollable-element > .scrollbar.horizontal {
+  height: 14px !important;
+}
+
+.lc-mobile .lc-code-dock .monaco-scrollable-element > .scrollbar > .slider {
+  background: color-mix(in srgb, var(--ink) 48%, transparent) !important;
+}
+
+.lc-mobile .lc-code-dock .monaco-scrollable-element > .scrollbar > .slider:hover,
+.lc-mobile .lc-code-dock .monaco-scrollable-element > .scrollbar > .slider.active {
+  background: color-mix(in srgb, var(--ink) 68%, transparent) !important;
 }
 
 .lc-pseudo-open {
@@ -4781,6 +4824,12 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-server-gate-boot > .lc-spinner {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.lc-server-gate-boot > .lc-spinner-check {
   position: relative;
   z-index: 1;
   pointer-events: none;
@@ -5765,14 +5814,13 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 12px;
 }
 
-/* Theme is a labeled chip, not a square zoom button — don't inherit 24px width. */
+/* Theme map chip matches lined / eye square — don't inherit zoom-btn width. */
 .lc-mobile .lc-palette-trigger-map.lc-map-btn {
-  width: auto;
-  min-width: 0;
+  width: 28px;
+  min-width: 28px;
   min-height: 24px;
   height: auto;
-  padding: 0 8px;
-  font-size: 11px;
+  padding: 0;
   border-left: none;
 }
 
@@ -5782,15 +5830,9 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: visible;
 }
 
-.lc-mobile .lc-palette-map-label {
-  gap: 5px;
-  font-size: 11px;
-  line-height: 1;
-}
-
-.lc-mobile .lc-palette-chip {
-  width: 11px;
-  height: 11px;
+.lc-mobile .lc-palette-map .lc-palette-chip {
+  width: 12px;
+  height: 12px;
   margin: 0;
   flex-shrink: 0;
 }

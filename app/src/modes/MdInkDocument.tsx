@@ -75,7 +75,7 @@ export function MdInkDocument({ source, onMeasure }: MdInkDocumentProps) {
   return (
     <div
       ref={nodeRef}
-      className="lc-md-ink-doc"
+      className="lc-md-ink-doc lc-md-ink-carbon"
       // Locked: the markdown is the page, and a page does not answer the pen.
       // Pointer events belong to the ink layer above and the board beneath.
       aria-hidden

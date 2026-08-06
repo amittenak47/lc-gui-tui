@@ -2,7 +2,8 @@
  * UI chrome themes — paired with board backgrounds so the browser overlay,
  * side panel, and canvas all feel like one surface.
  *
- * Light and dark swatches share a hue order: sky → mint → rose → peach → lilac → coral.
+ * Light papers stay pastel neutrals; dark boards use cool near-blacks with
+ * distinct cool accents (no orange in dark mode).
  */
 
 import { BOARD_THEMES, type BoardTheme } from "../templates/skeleton";
@@ -27,7 +28,7 @@ const LIGHT_TOKENS = {
   muted: "#5b6478",
   hint: "#6b7280",
   line: "#c9ced6",
-  accent: "#b45309",
+  accent: "#4a6280",
   ok: "#166534",
   bad: "#b91c1c",
   surface: "rgb(255 255 255 / 94%)",
@@ -80,7 +81,7 @@ const CHROME: Record<string, ChromeEntry> = {
     panel: "#f2ead4",
     overlay: "rgb(253 246 227 / 98%)",
     mode: "light",
-    tokens: { ink: "#2f2a21", muted: "#6b6250", hint: "#7d7360", line: "#d5c9a8", accent: "#a35f11", selectEdge: "#a35f11", selectFill: "rgb(163 95 17 / 10%)" },
+    tokens: { ink: "#2f2a21", muted: "#6b6250", hint: "#7d7360", line: "#d5c9a8", accent: "#7a6b52", selectEdge: "#7a6b52", selectFill: "rgb(122 107 82 / 10%)" },
   },
   coral: {
     panel: "#f4e3d8",
@@ -121,7 +122,7 @@ const CHROME: Record<string, ChromeEntry> = {
     panel: "#24283b",
     overlay: "rgb(26 27 38 / 98%)",
     mode: "dark",
-    tokens: { ink: "#c0caf5", muted: "#9aa5ce", hint: "#565f89", line: "#3b4261", accent: "#7aa2f7", selectEdge: "#7aa2f7", selectFill: "rgb(122 162 247 / 15%)" },
+    tokens: { ink: "#c0caf5", muted: "#9aa5ce", hint: "#565f89", line: "#3b4261", accent: "#bb9af7", selectEdge: "#bb9af7", selectFill: "rgb(187 154 247 / 15%)" },
   },
   // Nord — Polar Night board, Snow Storm ink, Frost accent.
   ocean: {
@@ -135,7 +136,7 @@ const CHROME: Record<string, ChromeEntry> = {
     panel: "#141416",
     overlay: "rgb(10 10 11 / 98%)",
     mode: "dark",
-    tokens: { ink: "#ededf0", muted: "#9a9aa4", hint: "#70707a", line: "#2a2a30", accent: "#7dd3fc", selectEdge: "#7dd3fc", selectFill: "rgb(125 211 252 / 15%)" },
+    tokens: { ink: "#ededf0", muted: "#9a9aa4", hint: "#70707a", line: "#2a2a30", accent: "#a5b4fc", selectEdge: "#a5b4fc", selectFill: "rgb(165 180 252 / 15%)" },
   },
   pine: {
     panel: "#132523",
@@ -144,10 +145,10 @@ const CHROME: Record<string, ChromeEntry> = {
     tokens: { ink: "#e3efec", muted: "#9ab8b1", hint: "#6b8f86", line: "#27403b", accent: "#4fd6be", selectEdge: "#4fd6be", selectFill: "rgb(79 214 190 / 15%)" },
   },
   dusk: {
-    panel: "#221929",
-    overlay: "rgb(23 17 28 / 98%)",
+    panel: "#171c24",
+    overlay: "rgb(18 22 28 / 98%)",
     mode: "dark",
-    tokens: { ink: "#ece6f2", muted: "#b3a5c2", hint: "#867596", line: "#382942", accent: "#c792ea", selectEdge: "#c792ea", selectFill: "rgb(199 146 234 / 15%)" },
+    tokens: { ink: "#e4e8ee", muted: "#9aa3b0", hint: "#6b7585", line: "#2a313c", accent: "#7eb6d9", selectEdge: "#7eb6d9", selectFill: "rgb(126 182 217 / 15%)" },
   },
 };
 
@@ -229,4 +230,16 @@ export function applyAppTheme(id: string): AppTheme {
 
 export function isDarkTheme(id: string): boolean {
   return APP_THEMES.find((theme) => theme.id === id)?.mode === "dark";
+}
+
+/** Carbon OLED — md-ink document paper always uses this, not the app chrome theme. */
+export const MD_INK_DISPLAY_THEME_ID = "graphite";
+
+export function mdInkDisplayTheme(): AppTheme {
+  return APP_THEMES.find((theme) => theme.id === MD_INK_DISPLAY_THEME_ID) ?? APP_THEMES[0];
+}
+
+export function mdInkDisplayTokens(): typeof LIGHT_TOKENS & { background: string } {
+  const theme = mdInkDisplayTheme();
+  return { background: theme.background, ...themeTokens(theme) };
 }

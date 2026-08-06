@@ -11,7 +11,7 @@ export const INK_COLORS_LIGHT = [
   "#c07d91", // dusty rose
   "#8a7aaf", // wisteria
   "#6d9e8a", // sage
-  "#c49163", // apricot
+  "#7a8b9e", // slate
 ] as const;
 
 export const INK_COLORS_DARK = [
@@ -20,7 +20,7 @@ export const INK_COLORS_DARK = [
   "#e8a4bf", // blush
   "#c4b0e8", // lilac
   "#98d4b0", // mint
-  "#f0c896", // peach
+  "#9ec5e8", // sky
 ] as const;
 
 export function inkSwatches(themeId: string): readonly string[] {
