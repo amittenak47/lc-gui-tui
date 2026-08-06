@@ -1,32 +1,14 @@
 /**
  * The layout the board pre-seeds when a problem is picked.
  *
- * The statement is reference material you read for twenty minutes while
- * sketching, so it is set like the problems page: a normal sans for prose, a
- * monospace face for anything with brackets or subscripts, and no hand-drawn
- * font anywhere. Region scaffolding is locked and tagged with `lcRegion` so the
- * coach can tell "nothing written under Complexity" from "there is no
- * Complexity section".
- *
- * **The scaffolding is not drawn.** Region frames used to be dashed boxes with
- * a label and a hint inside them, and every one of them was a lie about what
- * the surface is: you cannot see a page's own edge from inside the page, the
- * neighbouring boxes leaked in around the fitted one, and re-inking them on a
- * theme change un-hid the boxes paging had just hidden. The frames still exist —
- * they are what the camera fits, what the pan clamp bounds, what the ink is
- * clipped to, and what the agent's capture boxes are measured inside — but they
- * have no stroke, and the label/hint text they carried is gone with them.
+ * Region frames still exist (camera fit, pan clamp, ink clip) but are invisible.
+ * Statement prose is HTML under the canvas — {@link StatementDocument} — same
+ * markdown paper path as md-ink, so wrap and continuous scroll come free.
  */
 
-import { REGIONS, type RegionId } from "./regions";
-import {
-  readingColumnWidth,
-  regionTextInset,
-  regionTextWidth,
-  STATEMENT_CODE_BASE,
-  STATEMENT_PROSE_BASE,
-} from "./readingColumn";
-import { FONT_CODE, FONT_UI, templatePalette, type Skeleton } from "./skeleton";
+import { REGIONS } from "./regions";
+import { readingColumnWidth } from "./readingColumn";
+import { FONT_CODE, templatePalette, type Skeleton } from "./skeleton";
 
 export interface ProblemTemplateInput {
   taskId: string;
@@ -135,34 +117,18 @@ export function parseStatement(
   return blocks.map((block) => ({ ...block, text: block.text.trim() }));
 }
 
-/** Scene units of blank page above the statement's first line. */
-const STATEMENT_TOP_PAD = 28;
-
 export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
   const skeletons: Skeleton[] = [];
-  const ink = templatePalette(Boolean(input.dark));
 
   /*
    * The statement is set in its own column, not in the student column.
    *
-   * Everything else on the board is a wide desk you write on; this one page is
-   * a document you read. Sizing it to the viewport is what makes the width-only
-   * fit land near zoom 1, which is what makes an 18-unit body come out as
-   * 18-ish CSS pixels instead of the 3.6 it came out as when the page was four
-   * screens wide.
+   * Prose is HTML under the canvas ({@link StatementDocument} / md-ink path).
+   * Frames still size the camera, pan clamp, and ink clip.
    */
   const columnWidth = readingColumnWidth(
     typeof input.viewportWidth === "number" ? input.viewportWidth : Number.NaN,
   );
-  const columnInset = regionTextInset(columnWidth);
-  const columnText = regionTextWidth(columnWidth);
-
-  const at = (region: { id: RegionId; x: number; y: number }, x: number, y: number, extra: Record<string, unknown> = {}) => ({
-    lcRegion: region.id,
-    lcRegionOx: x - region.x,
-    lcRegionOy: y - region.y,
-    ...extra,
-  });
 
   for (const region of Object.values(REGIONS)) {
     const isStatement = region.id === "constraints";
@@ -194,164 +160,10 @@ export function buildProblemTemplate(input: ProblemTemplateInput): Skeleton[] {
       customData: {
         lcRegion: region.id,
         lcRegionFrame: true,
-        /*
-         * The statement reads like a document, so it is fitted like one.
-         *
-         * Constraints is a wall of prose and examples that only ever gets read
-         * top to bottom. Fitting it on both axes shrinks the whole wall to the
-         * screen and makes it a picture of text rather than text; fitting the
-         * width lands it at the size the reading control names and leaves the
-         * rest to the scroll — the same treatment the markdown page gets, for
-         * the same reason.
-         */
         ...(isStatement ? { lcDocumentPage: true, lcReadingColumn: true } : {}),
       },
     });
   }
-
-  const constraints = REGIONS.constraints;
-  const textLeft = constraints.x + columnInset;
-
-  const titleFont = Math.round(STATEMENT_PROSE_BASE * 1.75);
-  const titleY = constraints.y + STATEMENT_TOP_PAD;
-  skeletons.push({
-    id: "lcregion-constraints-title",
-    type: "text",
-    x: textLeft,
-    y: titleY,
-    width: columnText,
-    text: input.title,
-    fontSize: titleFont,
-    fontFamily: FONT_UI,
-    strokeColor: ink.primary,
-    locked: true,
-    customData: {
-      ...at(constraints, textLeft, titleY),
-      lcFontBase: titleFont,
-      lcFixedSize: true,
-    },
-  });
-
-  const metaParts = [
-    input.difficulty?.trim() || null,
-    ...(input.tags ?? []).slice(0, 5).map((tag) => tag.trim()).filter(Boolean),
-    typeof input.caseCount === "number" && input.caseCount > 0
-      ? `${input.caseCount} sample cases`
-      : null,
-  ].filter((part): part is string => Boolean(part && part.length > 0));
-
-  let bodyY = titleY + Math.round(titleFont * 1.6);
-  if (metaParts.length > 0) {
-    const metaFont = Math.round(STATEMENT_PROSE_BASE * 0.78);
-    const padX = 8;
-    const padY = 5;
-    const gap = 8;
-    const boxH = metaFont + padY * 2 + 4;
-    let chipX = textLeft;
-    let chipY = titleY + Math.round(titleFont * 1.55);
-    const rowLeft = textLeft;
-    const rowRight = rowLeft + columnText;
-
-    metaParts.forEach((part, index) => {
-      const textW = Math.max(48, Math.ceil(part.length * metaFont * 0.56));
-      const boxW = textW + padX * 2;
-      if (index > 0 && chipX + boxW > rowRight) {
-        chipX = rowLeft;
-        chipY += boxH + gap;
-      }
-      const textX = chipX + padX;
-      const textY = chipY + padY;
-
-      skeletons.push({
-        id: `lcregion-constraints-meta-box-${index}`,
-        type: "rectangle",
-        x: chipX,
-        y: chipY,
-        width: boxW,
-        height: boxH,
-        strokeColor: ink.border,
-        backgroundColor: "transparent",
-        fillStyle: "solid",
-        strokeStyle: "solid",
-        strokeWidth: 1.5,
-        roughness: 0,
-        roundness: { type: 3 },
-        locked: true,
-        customData: { ...at(constraints, chipX, chipY), lcFixedSize: true },
-      });
-
-      skeletons.push({
-        id: `lcregion-constraints-meta-${index}`,
-        type: "text",
-        x: textX,
-        y: textY,
-        width: textW,
-        text: part,
-        fontSize: metaFont,
-        fontFamily: FONT_UI,
-        strokeColor: ink.hint,
-        locked: true,
-        customData: {
-          ...at(constraints, textX, textY),
-          lcFixedSize: true,
-          lcFontBase: metaFont,
-        },
-      });
-
-      chipX += boxW + gap;
-    });
-
-    const chipsBottom = chipY + boxH;
-    const ruleY = chipsBottom + 14;
-    const ruleX = rowLeft;
-    skeletons.push({
-      id: "lcregion-constraints-meta-rule",
-      type: "line",
-      x: ruleX,
-      y: ruleY,
-      width: columnText,
-      height: 0,
-      points: [
-        [0, 0],
-        [columnText, 0],
-      ],
-      strokeColor: ink.border,
-      strokeWidth: 1.5,
-      strokeStyle: "solid",
-      roughness: 0,
-      locked: true,
-      customData: { ...at(constraints, ruleX, ruleY), lcFixedSize: true },
-    });
-    bodyY = ruleY + 20;
-  }
-
-  // Statement body, block by block, so examples keep the monospace face.
-  let y = bodyY;
-  parseStatement(input.description, 48).forEach((block, index) => {
-    const fontSize = block.code ? STATEMENT_CODE_BASE : STATEMENT_PROSE_BASE;
-    const lineHeight = Math.round(fontSize * (block.code ? 1.42 : 1.43) * 10) / 10;
-    const x = textLeft;
-    skeletons.push({
-      id: `lcregion-constraints-body-${index}`,
-      type: "text",
-      x,
-      y,
-      width: columnText,
-      text: block.text,
-      fontSize,
-      fontFamily: block.code ? FONT_CODE : FONT_UI,
-      lineHeight: lineHeight / fontSize,
-      strokeColor: block.code ? ink.primary : ink.body,
-      locked: true,
-      customData: {
-        ...at(constraints, x, y),
-        lcFontBase: fontSize,
-        lcLineHeightBase: lineHeight / fontSize,
-        lcRegionOyBase: y - constraints.y,
-      },
-    });
-    y += block.text.split("\n").length * lineHeight + 14;
-  });
 
   return skeletons;
 }

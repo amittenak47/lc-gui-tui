@@ -37,15 +37,20 @@ export function applyMetadata<T extends ConvertedElement>(
     id?: string;
     customData?: SkeletonMeta | null;
     lineHeight?: number;
+    autoResize?: boolean;
   }>,
   fallback?: SkeletonMeta,
 ): T[] {
   const wanted = new Map<string, SkeletonMeta>();
   const lineHeights = new Map<string, number>();
+  const autoResize = new Map<string, boolean>();
   for (const source of sources) {
     if (source.id && source.customData) wanted.set(source.id, source.customData);
     if (source.id && typeof source.lineHeight === "number" && source.lineHeight > 0) {
       lineHeights.set(source.id, source.lineHeight);
+    }
+    if (source.id && typeof source.autoResize === "boolean") {
+      autoResize.set(source.id, source.autoResize);
     }
   }
 
@@ -59,12 +64,16 @@ export function applyMetadata<T extends ConvertedElement>(
       ...own,
     };
     const lineHeight = lineHeights.get(element.id);
-    const withMeta =
+    let next: T =
       Object.keys(merged).length > 0 ? { ...element, customData: merged } : element;
-    if (lineHeight != null && withMeta.lineHeight !== lineHeight) {
-      return { ...withMeta, lineHeight };
+    if (lineHeight != null && next.lineHeight !== lineHeight) {
+      next = { ...next, lineHeight };
     }
-    return withMeta;
+    const resize = autoResize.get(element.id);
+    if (resize != null && next.autoResize !== resize) {
+      next = { ...next, autoResize: resize };
+    }
+    return next;
   });
 }
 

@@ -746,6 +746,13 @@ export interface BoardProps {
    */
   pageContentHeight?: number | null;
   /**
+   * Monaco solution height in scene units — sizes the code region frame only.
+   *
+   * Kept separate from {@link pageContentHeight} so statement / md-ink paper
+   * never steals the code page's grow path (and the other way round).
+   */
+  codeContentHeight?: number | null;
+  /**
    * Let {@link pageContent} show through the canvas.
    *
    * Excalidraw paints an opaque viewport background, which would bury the
@@ -819,6 +826,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     pageTitle = null,
     pageContent = null,
     pageContentHeight = null,
+    codeContentHeight = null,
     transparentCanvas = false,
     annotateToggle = true,
     onAnnotateCodeChange,
@@ -1485,9 +1493,29 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const reportContentSlot = useCallback(() => {
     const api = apiRef.current;
-    const bounds = pageBoundsRef.current;
     const node = contentSlotNodeRef.current;
-    if (!pageContentRef.current || !api || !bounds) {
+    if (!pageContentRef.current || !api) {
+      lastContentSlotRef.current = null;
+      return;
+    }
+    let bounds = pageBoundsRef.current;
+    // Desktop / race: pageBoundsRef may lag one frame — measure the open page.
+    // Do not hardcode constraints: md-ink uses MD_INK_REGION.
+    if (!bounds) {
+      const live = api.getSceneElements() as unknown as PageableElement[];
+      const page = mobileRegionRef.current ?? "constraints";
+      const raw = pageBounds(live, page);
+      if (raw) {
+        const pad = REGION_GUTTER / 2;
+        bounds = {
+          minX: raw.minX + pad,
+          minY: raw.minY + pad,
+          maxX: raw.maxX - pad,
+          maxY: raw.maxY - pad,
+        };
+      }
+    }
+    if (!bounds) {
       lastContentSlotRef.current = null;
       return;
     }
@@ -3486,12 +3514,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
          * "not a document" and shrank the whole file onto one screen. The frame
          * carries the answer now, so it cannot arrive late.
          */
+        /*
+         * Width-only for draw pages too — fills the screen hole and zooms in
+         * when height used to cap the camera (letterboxed gutters). Frame width
+         * stays at the authored student column (not readingColumnWidth): shrinking
+         * it made fillHeight ≈ viewport and killed vertical scroll.
+         */
         const widthOnly =
           focus.some(
             (element) =>
               (element as { customData?: { lcDocumentPage?: boolean } }).customData
                 ?.lcDocumentPage === true,
-          ) || page === "code";
+          ) ||
+          page === "code" ||
+          isDrawPageRegion(page);
         const zoom = clampZoom(
           widthOnly
             ? availWidth / boxWidth
@@ -3622,18 +3658,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const frame = current.find((el) => {
       const meta = (el as { customData?: { lcMdInkFrame?: boolean; lcRegion?: string; lcRegionFrame?: boolean } })
         .customData;
-      // The markdown page has its own marker; the code page is just the frame
-      // of the region we are on. Both grow to the content they carry.
-      return meta?.lcMdInkFrame || (meta?.lcRegionFrame && meta.lcRegion === page);
+      // HTML paper only (md-ink / statement). Code frame grows via
+      // `codeContentHeight` → `codeContentHeightRef` → `syncRegionLayout`.
+      return (
+        meta?.lcMdInkFrame ||
+        (Boolean(pageContentRef.current) &&
+          meta?.lcRegionFrame &&
+          meta.lcRegion === "constraints" &&
+          (page === "constraints" || page === null))
+      );
     }) as (SceneElementLike & { height?: number }) | undefined;
     if (!frame) return;
     if (typeof frame.height === "number" && Math.abs(frame.height - pageContentHeight) < 1) {
+      // Height already matches — still refresh pan bounds. Skipping this left
+      // md-ink with a tall frame and a stale null/short pageBoundsRef, so the
+      // clamp treated the page as one screen until annotate toggle re-armed.
+      syncPageVisibility();
+      scheduleSlotReports();
       return;
     }
     const isMdFrame = Boolean(
       (frame as { customData?: { lcMdInkFrame?: boolean } }).customData?.lcMdInkFrame,
     );
-    const isCodePage = page === "code" && !isMdFrame;
     const grown = current.map((el) =>
       el === frame
         ? ({
@@ -3648,17 +3694,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           } as LayoutElement)
         : el,
     ) as LayoutElement[];
-    const synced = isCodePage
-      ? syncRegionLayout(grown, { codeContentHeight: pageContentHeight }) ?? grown
-      : grown;
     api.updateScene({
-      elements: synced as unknown[],
+      elements: grown as unknown[],
       captureUpdate: CaptureUpdateAction.NEVER,
     });
     syncPageVisibility();
     scheduleSlotReports();
-    if (isCodePage) requestAnimationFrame(reportCodeSlot);
-  }, [pageContent, pageContentHeight, reportCodeSlot, scheduleSlotReports, syncPageVisibility]);
+  }, [pageContent, pageContentHeight, scheduleSlotReports, syncPageVisibility]);
 
   // A toggle mid-gesture must not leave a stale pin behind.
   useEffect(() => {
@@ -4101,6 +4143,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
   }, []);
 
+  // Code page frame height — same contract as before, not mixed with HTML paper.
+  useEffect(() => {
+    if (codeContentHeight == null || codeContentHeight < 1) return;
+    if (
+      codeContentHeightRef.current !== null &&
+      Math.abs(codeContentHeightRef.current - codeContentHeight) < 1
+    ) {
+      return;
+    }
+    codeContentHeightRef.current = codeContentHeight;
+    applyRegionLayout();
+    requestAnimationFrame(reportCodeSlot);
+  }, [applyRegionLayout, codeContentHeight, reportCodeSlot]);
+
   /** Resolve once every seeded region frame is in the scene (and fonts are ready). */
   const waitForTemplate = useCallback((): Promise<void> => {
     const waitFrame = () =>
@@ -4210,10 +4266,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     void settleFitView().then(() => {
       reportCodeSlot();
       rasterInkRef.current?.syncCamera();
+      // Fit runs after view-mode exit and can wipe the hand tool. Re-arm so
+      // md-ink / reading scroll sticks without an annotate toggle (15912fe).
+      if (!annotateCodeRef.current) armReadingScroll();
     });
   }, [
     interactive,
     mobileRegion,
+    armReadingScroll,
     reportCodeSlot,
     settleFitView,
     syncPageVisibility,
@@ -4222,7 +4282,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /*
    * Leaving view mode (interactive false → true) resets Excalidraw.
    * Arm reading scroll only after that flip — same moment the toolbar toggle
-   * works. Retry a few times: Excalidraw finishes view-mode exit asynchronously.
+   * works. Retry past settleFitView: Excalidraw finishes view-mode exit
+   * asynchronously, and a fit that lands later must not leave selection armed.
    */
   useEffect(() => {
     if (!interactive || annotateCodeRef.current) return;
@@ -4231,12 +4292,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     arm();
     const raf = requestAnimationFrame(arm);
-    const t1 = window.setTimeout(arm, 50);
-    const t2 = window.setTimeout(arm, 200);
+    const timers = [50, 200, 500, 1000].map((ms) => window.setTimeout(arm, ms));
     return () => {
       cancelAnimationFrame(raf);
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
+      for (const id of timers) window.clearTimeout(id);
     };
   }, [interactive, armReadingScroll]);
 

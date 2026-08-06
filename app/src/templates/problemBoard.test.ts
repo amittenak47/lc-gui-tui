@@ -11,14 +11,8 @@ import { describe, expect, it } from "vitest";
 
 import { REGIONS } from "./regions";
 import { buildProblemTemplate, parseStatement, recolorTemplateElements } from "./problemBoard";
-import {
-  READING_COLUMN_MAX,
-  readingColumnWidth,
-  regionTextWidth,
-  STATEMENT_CODE_BASE,
-  STATEMENT_PROSE_BASE,
-} from "./readingColumn";
-import { FONT_CODE, FONT_UI, templatePalette } from "./skeleton";
+import { READING_COLUMN_MAX, readingColumnWidth } from "./readingColumn";
+import { FONT_UI, templatePalette } from "./skeleton";
 
 const DESCRIPTION = `Given an m x n binary matrix mat, return the distance of the nearest 0 for each cell.
 The distance between two cells sharing a common edge is 1.
@@ -97,35 +91,11 @@ describe("buildProblemTemplate", () => {
     caseCount: 67,
   });
 
-  it("uses no hand-drawn font anywhere", () => {
-    // Excalidraw font 1 is Virgil / 5 is Excalifont — both hand-drawn.
-    const fonts = skeletons
-      .map((skeleton) => skeleton.fontFamily)
-      .filter((font): font is number => typeof font === "number");
-    expect(fonts.length).toBeGreaterThan(0);
-    expect(fonts.every((font) => font === FONT_UI || font === FONT_CODE)).toBe(true);
-  });
-
-  it("monospaces the examples and constraints", () => {
-    const body = skeletons.filter((s) => s.id?.startsWith("lcregion-constraints-body-"));
-    const codeBlocks = body.filter((s) => s.fontFamily === FONT_CODE);
-    expect(codeBlocks.length).toBeGreaterThan(0);
-    expect(codeBlocks.some((s) => s.text?.includes("mat[i][j]"))).toBe(true);
-  });
-
-  it("sets the statement at reading-column sizes, not desk sizes", () => {
-    /*
-     * The page is a column roughly one screen wide, so its scene units are
-     * roughly CSS pixels and the authored size is the size you read. Desk-scale
-     * numbers here (the old 28/56) would come out five times too large.
-     */
-    const title = skeletons.find((s) => s.id === "lcregion-constraints-title");
-    expect(title?.fontSize).toBeGreaterThan(STATEMENT_PROSE_BASE);
-    expect(title?.fontSize).toBeLessThan(STATEMENT_PROSE_BASE * 3);
-    const body = skeletons.filter((s) => s.id?.startsWith("lcregion-constraints-body-"));
-    expect(body.length).toBeGreaterThan(0);
-    expect(body.every((s) => (s.fontSize ?? 0) <= STATEMENT_PROSE_BASE)).toBe(true);
-    expect(body.every((s) => (s.fontSize ?? 0) >= STATEMENT_CODE_BASE)).toBe(true);
+  it("seeds only region frames — statement prose is HTML", () => {
+    expect(skeletons.every((s) => s.id?.endsWith("-frame"))).toBe(true);
+    expect(skeletons.some((s) => s.id?.includes("-title"))).toBe(false);
+    expect(skeletons.some((s) => s.id?.includes("-body-"))).toBe(false);
+    expect(skeletons.some((s) => s.id?.includes("-meta-"))).toBe(false);
   });
 
   it("sizes the statement column to the screen it will be read on", () => {
@@ -144,7 +114,6 @@ describe("buildProblemTemplate", () => {
 
     expect(phone?.width).toBe(readingColumnWidth(400));
     expect(phone?.width).toBeLessThan(400);
-    // Capped, so a desk does not stretch the measure into a desktop line.
     expect(tablet?.width).toBe(READING_COLUMN_MAX);
     expect(phone?.customData?.lcDocumentPage).toBe(true);
     expect(phone?.customData?.lcReadingColumn).toBe(true);
@@ -157,8 +126,6 @@ describe("buildProblemTemplate", () => {
   it("draws no region chrome — no boxes, no labels, no hints", () => {
     const frames = skeletons.filter((s) => s.id?.endsWith("-frame"));
     expect(frames.length).toBeGreaterThan(0);
-    // The frames still exist: they are what the camera fits and the ink is
-    // clipped to. They are simply not something anybody can see.
     expect(frames.every((s) => s.strokeWidth === 0)).toBe(true);
     expect(frames.every((s) => s.strokeColor === "transparent")).toBe(true);
     expect(frames.every((s) => s.opacity === 0)).toBe(true);
@@ -170,8 +137,6 @@ describe("buildProblemTemplate", () => {
   });
 
   it("draws nothing for scaffolding it is handed", () => {
-    // The hints were template-box text. Accepting them keeps the scaffold
-    // round-trip intact; drawing them would put the boxes back.
     const custom = buildProblemTemplate({
       taskId: "two-sum",
       title: "Two Sum",
@@ -184,67 +149,10 @@ describe("buildProblemTemplate", () => {
     expect(custom.some((s) => s.text?.includes("O(1)"))).toBe(false);
     expect(custom.some((s) => s.id?.includes("-hint"))).toBe(false);
   });
-
-  it("locks statement text", () => {
-    const content = skeletons.filter((s) => !s.id?.endsWith("-frame"));
-    expect(content.length).toBeGreaterThan(0);
-    expect(content.every((s) => s.locked === true)).toBe(true);
-  });
-
-  it("uses light ink on dark boards", () => {
-    const dark = buildProblemTemplate({
-      taskId: "01-matrix",
-      title: "01 Matrix",
-      description: "Given a matrix.",
-      dark: true,
-    });
-    const title = dark.find((s) => s.id === "lcregion-constraints-title");
-    expect(title?.strokeColor).toMatch(/^#f/i);
-  });
-
-  it("puts difficulty, tags, and cases in separate chips", () => {
-    const withMeta = buildProblemTemplate({
-      taskId: "01-matrix",
-      title: "01 Matrix",
-      difficulty: "Medium",
-      tags: ["Array", "BFS"],
-      description: "Given a matrix.",
-      caseCount: 12,
-    });
-    const boxes = withMeta.filter((s) => s.id?.startsWith("lcregion-constraints-meta-box-"));
-    const texts = withMeta.filter((s) => /^lcregion-constraints-meta-\d+$/.test(s.id ?? ""));
-    expect(boxes).toHaveLength(4);
-    expect(texts.map((t) => t.text)).toEqual([
-      "Medium",
-      "Array",
-      "BFS",
-      "12 sample cases",
-    ]);
-    expect(boxes.every((box) => box.strokeColor === templatePalette(false).border)).toBe(true);
-    expect(texts.every((text) => text.customData?.lcFixedSize)).toBe(true);
-  });
-
-  it("wraps statement text to the reading column", () => {
-    const frame = skeletons.find((s) => s.id === "lcregion-constraints-frame")!;
-    const body = skeletons.filter((s) => s.id?.startsWith("lcregion-constraints-body-"));
-    expect(body.length).toBeGreaterThan(0);
-    expect(body.every((s) => (s.width ?? 0) < frame.width!)).toBe(true);
-    expect(body.every((s) => (s.width ?? 0) === regionTextWidth(frame.width!))).toBe(true);
-  });
-
-  it("starts the statement at the top of the page", () => {
-    const frame = skeletons.find((s) => s.id === "lcregion-constraints-frame")!;
-    const title = skeletons.find((s) => s.id === "lcregion-constraints-title")!;
-    // Nothing sits above the title any more, so nothing should be reserved
-    // above it either — the first thing on the page is the first thing to read.
-    expect(title.y - frame.y).toBeLessThan(40);
-  });
 });
 
 describe("recolorTemplateElements", () => {
   it("flips scaffold ink between light and dark without touching other ids", () => {
-    const lightInk = templatePalette(false);
-    const darkInk = templatePalette(true);
     const seeded = buildProblemTemplate({
       taskId: "01-matrix",
       title: "01 Matrix",
@@ -267,19 +175,17 @@ describe("recolorTemplateElements", () => {
       customData: null,
     });
 
-    const light = recolorTemplateElements(seeded, false)!;
-    const title = light.find((el) => el.id === "lcregion-constraints-title");
+    const light = recolorTemplateElements(seeded, false) ?? seeded;
     const frame = light.find((el) => el.id === "lcregion-constraints-frame");
     const student = light.find((el) => el.id === "student-stroke");
-    expect(title?.strokeColor).toBe(lightInk.primary);
     // A frame is never given a stroke by a theme change — that repaint is what
     // used to bring every page's dashed box back on screen at once.
     expect(frame?.strokeColor).toBe("transparent");
     expect(student?.strokeColor).toBe("#ff00aa");
 
-    const back = recolorTemplateElements(light, true)!;
-    expect(back.find((el) => el.id === "lcregion-constraints-title")?.strokeColor).toBe(
-      darkInk.primary,
+    const back = recolorTemplateElements(light, true) ?? light;
+    expect(back.find((el) => el.id === "lcregion-constraints-frame")?.strokeColor).toBe(
+      "transparent",
     );
   });
 

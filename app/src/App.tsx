@@ -98,6 +98,7 @@ import { useIsMobile } from "./util/mobile";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { MdInkDialog } from "./modes/MdInkDialog";
 import { MdInkDocument } from "./modes/MdInkDocument";
+import { StatementDocument } from "./modes/StatementDocument";
 import {
   buildMdInkTemplate,
   mdInkFrameWidthFromElements,
@@ -296,6 +297,13 @@ export function App() {
   const [mdInkPageWidth, setMdInkPageWidth] = useState(MD_INK_PAGE_W);
   const onMdInkMeasure = useCallback((height: number) => {
     setMdInkHeight((prev) =>
+      prev !== null && Math.abs(prev - height) < 1 ? prev : height,
+    );
+  }, []);
+  /** Problem statement HTML measure — same paper path as md-ink. */
+  const [statementHeight, setStatementHeight] = useState<number | null>(null);
+  const onStatementMeasure = useCallback((height: number) => {
+    setStatementHeight((prev) =>
       prev !== null && Math.abs(prev - height) < 1 ? prev : height,
     );
   }, []);
@@ -1078,6 +1086,7 @@ export function App() {
       const fromBrowse = !problem;
       const switching = Boolean(problem);
       setActiveRegion("constraints");
+      setStatementHeight(null);
       setBusy(offline ? "opening offline…" : "loading the workspace…");
       setError(null);
       setTests(null);
@@ -1099,8 +1108,12 @@ export function App() {
       if (fromBrowse) {
         setHoldBrowseOverlay(true);
         setBrowseMotion("busy");
+        setBoardPreparing(true);
       }
-      if (switching) setSwitchMotion("busy");
+      if (switching) {
+        setSwitchMotion("busy");
+        setBoardPreparing(true);
+      }
       try {
         if (offline) {
           const { loadOfflinePack, offlineGetProblem } = await import("./util/offlineCorpus");
@@ -1431,8 +1444,12 @@ export function App() {
       if (fromBrowse) {
         setHoldBrowseOverlay(true);
         setBrowseMotion("busy");
+        setBoardPreparing(true);
       }
-      if (switching) setSwitchMotion("busy");
+      if (switching) {
+        setSwitchMotion("busy");
+        setBoardPreparing(true);
+      }
 
       try {
         const hash = hashMarkdown(input.text);
@@ -1536,11 +1553,17 @@ export function App() {
 
         // Arm AFTER interactive flips true (Excalidraw left view mode).
         // Toggle worked because it ran here; open used to arm during prepare.
-        await waitMs(0);
+        // Double-rAF: let React commit interactive=true and attach listeners
+        // before we assert hand + page bounds (canvasLoading PE also clears).
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
         boardRef.current?.armReadingScroll();
         await waitMs(50);
         boardRef.current?.armReadingScroll();
-        await waitMs(150);
+        await waitMs(200);
+        boardRef.current?.armReadingScroll();
+        await waitMs(500);
         boardRef.current?.armReadingScroll();
 
         if (stale) {
@@ -3030,6 +3053,7 @@ export function App() {
       // underneath so save/API latency never leaves the modal stuck on screen.
       setLeavingPhase("exit");
       setSwitchMotion("busy");
+      setBoardPreparing(true);
       const fadeMs = prefersReducedMotion() ? 0 : LEAVE_DIALOG_FADE_MS;
       const fadeDone = waitMs(fadeMs);
 
@@ -3163,6 +3187,13 @@ export function App() {
     window.setTimeout(() => setBrowseMotion("idle"), slideDurationMs() || 1);
   }, [clearProblemState]);
 
+  const canvasLoading =
+    boardPreparing ||
+    switchMotion !== "idle" ||
+    browseMotion === "busy" ||
+    browseMotion === "exit" ||
+    (holdBrowseOverlay && boardPreparing);
+
   return (
     <div
       className={[
@@ -3170,6 +3201,7 @@ export function App() {
         mobile ? "lc-mobile" : "",
         problem ? "lc-app-problem" : "",
         coachOpen && problem ? "lc-app-coach-open" : "",
+        canvasLoading ? "lc-app-loading" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -3527,6 +3559,7 @@ export function App() {
           className={[
             "lc-canvas-wrap",
             entering && "lc-entering",
+            canvasLoading && "lc-canvas-loading",
             boardPreparing && "lc-canvas-preparing",
             !problem && "lc-canvas-idle",
             (switchMotion === "busy" || switchMotion === "done") && "lc-switching",
@@ -3543,7 +3576,12 @@ export function App() {
             readingSize={readingSize}
             interactive={Boolean(problem) && switchMotion === "idle" && !boardPreparing}
             onCodeSlot={onCodeSlot}
-            transparentCanvas={Boolean(problem && isMdInk(problem))}
+            transparentCanvas={Boolean(
+              problem &&
+                (isMdInk(problem) ||
+                  (!isLocalPad(problem) &&
+                    (!mobile || activeRegion === "constraints"))),
+            )}
             annotateToggle={Boolean(problem)}
             onAnnotateCodeChange={setAnnotateCode}
             // Ruled lines under somebody else's typography would be noise.
@@ -3582,21 +3620,39 @@ export function App() {
             pageContentHeight={
               problem && isMdInk(problem)
                 ? mdInkPageHeight(mdInkHeight)
-                : // The code page grows to the code for the same reason the
-                  // document page grows to the document: so the thing being
-                  // annotated and the ink on it move together.
-                  problem &&
+                : problem &&
                     !isLocalPad(problem) &&
-                    codeContentHeight &&
-                    (!mobile || activeRegion === "code")
-                  ? codeContentHeight + CODE_PAGE_TAIL
+                    !isMdInk(problem) &&
+                    (!mobile || activeRegion === "constraints")
+                  ? mdInkPageHeight(statementHeight)
                   : null
+            }
+            codeContentHeight={
+              // Same gate as before this session — code page only; not mixed
+              // into statement / md-ink pageContentHeight.
+              problem &&
+              !isLocalPad(problem) &&
+              codeContentHeight &&
+              (!mobile || activeRegion === "code")
+                ? codeContentHeight + CODE_PAGE_TAIL
+                : null
             }
             pageContent={
               problem && isMdInk(problem) && mdInkSource ? (
                 <MdInkDocument
                   source={mdInkSource.text}
                   onMeasure={onMdInkMeasure}
+                />
+              ) : problem &&
+                !isLocalPad(problem) &&
+                (!mobile || activeRegion === "constraints") ? (
+                <StatementDocument
+                  title={titleFromSlug(problem.task_id, problem.question_id)}
+                  difficulty={problem.difficulty}
+                  tags={problem.tags}
+                  caseCount={problem.cases?.length}
+                  description={problem.problem_description}
+                  onMeasure={onStatementMeasure}
                 />
               ) : null
             }
