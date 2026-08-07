@@ -91,6 +91,54 @@ describe("threadAnchorRef", () => {
     expect(anchor!.excerpt.length).toBeLessThan(long.length);
     expect(anchor!.excerpt.endsWith("…")).toBe(true);
   });
+
+  it("anchors a review-only root with empty content", () => {
+    const root = msg("root", {
+      role: "assistant",
+      content: "",
+      review: {
+        task_id: "t",
+        provider: "test",
+        understood_approach: "Two pointers from both ends",
+        verdict: "on_track",
+        rating: { correctness: 3, complexity: 3, clarity: 3 },
+        strengths: [],
+        gaps: [],
+        counterexample: null,
+        socratic_question: "What happens at the middle?",
+        offer_bridge: false,
+        counterexample_rejected: null,
+      },
+    });
+    const anchor = threadAnchorRef([root], "root");
+    expect(anchor).toEqual({
+      id: "root",
+      role: "assistant",
+      excerpt: "Two pointers from both ends",
+    });
+  });
+
+  it("falls back to Review · verdict when review text is empty", () => {
+    const root = msg("root", {
+      role: "assistant",
+      content: "",
+      review: {
+        task_id: "t",
+        provider: "test",
+        understood_approach: "",
+        verdict: "unclear",
+        rating: { correctness: 1, complexity: 1, clarity: 1 },
+        strengths: [],
+        gaps: [],
+        counterexample: null,
+        socratic_question: "",
+        offer_bridge: false,
+        counterexample_rejected: null,
+      },
+    });
+    const anchor = threadAnchorRef([root], "root");
+    expect(anchor?.excerpt).toBe("Review · unclear");
+  });
 });
 
 describe("showsReplyStub", () => {

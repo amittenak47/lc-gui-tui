@@ -2554,7 +2554,9 @@ export function App() {
   );
 
   /** `runTests` fires this and is defined above it — see the auto-forward. */
-  const askCoachRef = useRef<((question: string) => Promise<void>) | null>(null);
+  const askCoachRef = useRef<
+    ((question: string, threadAnchor?: CoachReplyRef | null) => Promise<void>) | null
+  >(null);
   askCoachRef.current = askCoach;
 
   const sendCoachChat = useCallback(
@@ -2766,7 +2768,14 @@ export function App() {
          * with nothing at the end of it.
          */
         if (!result.all_passed && forwardFailuresRef.current) {
-          void askCoachRef.current?.(describeRunFailure(report, pseudocodeRef.current));
+          const rootId = threadRootIdRef.current;
+          const threadAnchor = rootId
+            ? threadAnchorRef(coachMessagesRef.current, rootId)
+            : null;
+          void askCoachRef.current?.(
+            describeRunFailure(report, pseudocodeRef.current),
+            threadAnchor,
+          );
         }
         if (result.all_passed) {
           setAttemptState((current) => ({

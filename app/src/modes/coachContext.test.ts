@@ -75,4 +75,19 @@ describe("withConversationContext", () => {
   it("returns the bare question when there is no usable history", () => {
     expect(withConversationContext("Why?", [])).toBe("Why?");
   });
+
+  it("scopes history to the thread root when threadRootId is set", () => {
+    const root = msg("root", { role: "assistant", content: "About sliding window" });
+    const inThread = msg("user-1", {
+      content: "Why that window?",
+      replyTo: { id: "root", role: "assistant", excerpt: "About sliding window" },
+    });
+    const outside = msg("other", { role: "user", content: "Unrelated room turn" });
+    const asked = withConversationContext("Say more", [root, inThread, outside], {
+      threadRootId: "root",
+    });
+    expect(asked).toContain("Why that window?");
+    expect(asked).not.toContain("Unrelated room turn");
+    expect(asked).toContain("Say more");
+  });
 });

@@ -55,6 +55,29 @@ export function visibleThreadMessages(
   return root ? [root, ...replies] : replies;
 }
 
+/**
+ * One-line label for a turn used as a reply stub / thread anchor.
+ *
+ * Review cards often ship with empty `content` (the card is the body). Without
+ * a fallback, `threadAnchorRef` used to return null and in-thread sends fell
+ * out of the thread into the room root list.
+ */
+export function messageReplyExcerpt(message: CoachChatMessage): string {
+  const fromContent = replyExcerpt(message.content);
+  if (fromContent) return fromContent;
+  const review = message.review;
+  if (review) {
+    const approach = replyExcerpt(review.understood_approach);
+    if (approach) return approach;
+    const question = replyExcerpt(review.socratic_question);
+    if (question) return question;
+    return `Review · ${review.verdict}`;
+  }
+  if (message.drawing) return "Drawing";
+  if (message.flags && message.flags.length > 0) return message.flags.join(" · ");
+  return message.role === "assistant" ? "Coach message" : "Message";
+}
+
 /** A reply anchor for the thread root, for sends that did not quote a message. */
 export function threadAnchorRef(
   messages: readonly CoachChatMessage[],
@@ -62,9 +85,11 @@ export function threadAnchorRef(
 ): CoachReplyRef | null {
   const message = messages.find((candidate) => candidate.id === id);
   if (!message) return null;
-  const excerpt = replyExcerpt(message.content);
-  if (!excerpt) return null;
-  return { id: message.id, role: message.role, excerpt };
+  return {
+    id: message.id,
+    role: message.role,
+    excerpt: messageReplyExcerpt(message),
+  };
 }
 
 /** Whether a reply stub should render above a turn. */
