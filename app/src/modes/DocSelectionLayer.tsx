@@ -197,7 +197,10 @@ export function DocSelectionLayer({
       const anchor: DocAnchor = { start, end, ...(scope ? { scope } : {}) };
       const range = rangeFromAnchor(host, anchor);
       if (!range) return;
-      const quoted = range.toString();
+      // Sliced from the stream, not from the range: `Range.toString()` fuses
+      // across block boundaries, which is exactly what the stream's separators
+      // exist to prevent.
+      const quoted = text.slice(start, end);
       setRects(localRects(host, range));
       setSelection({ text: quoted, excerpt: excerptOf(quoted), anchor });
     },

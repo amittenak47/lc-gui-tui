@@ -129,6 +129,17 @@ export interface BoardHandle {
   /** Small PNGs of student template boxes that have content (for chat attachments). */
   exportRegionThumbs(): Promise<Array<{ region: RegionId; label: string; png: string }>>;
   /**
+   * One PNG of what the reader is looking at right now.
+   *
+   * The narrow half of Annotate. A whole board is the right thing to send when
+   * the question is about the shape of the work; it is the wrong thing when the
+   * question is about one figure on page forty, where every other crop is
+   * context the model has to rule out before it can answer. Cropped to the
+   * viewport in scene coordinates, so it is exactly what the writer could see
+   * when they asked. Null when there is no camera to read.
+   */
+  exportViewThumb(): Promise<{ label: string; png: string } | null>;
+  /**
    * PNG of one coach diagram, cropped to the group it drew.
    *
    * The post-draw review asks a vision model whether the picture says what the

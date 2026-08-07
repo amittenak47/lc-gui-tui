@@ -57,15 +57,25 @@ export interface PdfDocumentProps {
   onError?: (message: string) => void;
 }
 
-/** Loaded lazily: pdf.js is ~1 MB and no problem board ever needs it. */
+/**
+ * Loaded lazily: pdf.js is ~1 MB and no problem board ever needs it.
+ *
+ * The `legacy` build, not the default one. pdf.js 6 reaches for JavaScript that
+ * is newer than the runtime this ships on — `Map.prototype.getOrInsertComputed`
+ * among others — and the modern build assumes it is there, so a page render
+ * dies with a `not a function` on the Android WebView and on any browser more
+ * than a few months behind. The legacy build carries the polyfills. It is the
+ * same renderer and the same text layer; what it costs is a slightly larger
+ * chunk that is already lazy.
+ */
 async function loadPdfJs() {
   const [pdfjs, worker] = await Promise.all([
-    import("pdfjs-dist"),
+    import("pdfjs-dist/legacy/build/pdf.mjs") as Promise<typeof import("pdfjs-dist")>,
     // `?worker` rather than `new URL(..., import.meta.url)`: Vite only rewrites
     // the URL form for relative paths, and a bare specifier there silently
     // ships no worker chunk at all. Without a worker pdf.js parses on the main
     // thread, which locks the pen for seconds on a textbook.
-    import("pdfjs-dist/build/pdf.worker.mjs?worker"),
+    import("pdfjs-dist/legacy/build/pdf.worker.mjs?worker"),
   ]);
   pdfjs.GlobalWorkerOptions.workerPort = new worker.default();
   return pdfjs;
@@ -244,6 +254,12 @@ export function PdfDocument({
           }
         >
           <canvas className="lc-pdf-canvas" />
+          {/*
+            Each page's text layer is its own block, which is what puts a break
+            between page one's last word and page two's first in the character
+            stream — see `docAnchors`. Without one a quote that ran off the
+            bottom of a page came back as two sentences fused at the seam.
+          */}
           <div className="lc-pdf-text" />
         </div>
       ))}

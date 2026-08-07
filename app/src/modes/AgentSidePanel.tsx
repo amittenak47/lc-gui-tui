@@ -12,6 +12,7 @@ import { createPortal } from "react-dom";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
 import { STAGE_LABELS } from "../api/types";
+import { HoldButton } from "../components/HoldButton";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS } from "../util/gesture";
 import { useIsMobile } from "../util/mobile";
@@ -163,6 +164,9 @@ const NOT_ON_SCRATCHPAD = "Not available on this pad";
  */
 export type CoachSurface = "problem" | "pad";
 
+/** What Annotate attaches — see {@link CoachSendFlags.annotateScope}. */
+export type AnnotateScope = "board" | "view";
+
 interface MessageMenuState {
   messageId: string;
   top: number;
@@ -211,6 +215,16 @@ export interface CoachSendFlags {
    * Absent rather than empty when nothing was attached.
    */
   photos?: CoachAttachment[];
+  /**
+   * How much of the board {@link annotate} should attach.
+   *
+   * `board` is every page with the writer's marks on it, which is the right
+   * answer when the question is about the shape of the work. `view` is the one
+   * crop the writer could see when they asked, which is the right answer when
+   * the question is about one figure on page forty — there, every other crop is
+   * context the model has to rule out before it can answer.
+   */
+  annotateScope?: AnnotateScope;
   /** The message this turn is answering, when the writer quoted one. */
   replyTo?: CoachReplyRef;
   /** The thread this send belongs to, or null when it is addressed to the room. */
@@ -362,6 +376,15 @@ export function AgentSidePanel({
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
   const [annotate, setAnnotate] = useState(false);
+  /**
+   * Annotate's reach, chosen by holding it.
+   *
+   * Sticky across sends: a reader working through one chapter asks about this
+   * figure, then the next one, and re-choosing "this view" every time would be
+   * a tax on the mode they have already told us they are in.
+   */
+  const [annotateScope, setAnnotateScope] = useState<AnnotateScope>("board");
+  const [scopeMenuOpen, setScopeMenuOpen] = useState(false);
   /** Photos staged by (+), sent with the next message and cleared after. */
   const [photos, setPhotos] = useState<CoachAttachment[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -886,6 +909,7 @@ export function AgentSidePanel({
       reviewBoard,
       lazy,
       annotate,
+      ...(annotate ? { annotateScope } : {}),
       ...(photos.length > 0 ? { photos } : {}),
       threadRootId: openThreadId,
       ...(replyTo ? { replyTo } : {}),
@@ -989,8 +1013,18 @@ export function AgentSidePanel({
         >
           {messages.length === 0 && !children && !thinking && (
             <p className="lc-muted lc-coach-empty">
-              Ask a question with <strong>Ask</strong>, flag <strong>Review</strong> to run a
-              staged board review, or <strong>Draw</strong> to request a diagram.
+              {padSurface ? (
+                <>
+                  Ask about the page, or hold a passage to quote it. Flag{" "}
+                  <strong>Annotation</strong> to send your marks — hold it to send just
+                  the view you are on.
+                </>
+              ) : (
+                <>
+                  Ask a question with <strong>Ask</strong>, flag <strong>Review</strong> to
+                  run a staged board review, or <strong>Draw</strong> to request a diagram.
+                </>
+              )}
             </p>
           )}
           {visibleMessages.map((message) => {
@@ -1366,21 +1400,68 @@ export function AgentSidePanel({
                 tip={
                   annotateUnavailable
                     ? NOT_ON_SCRATCHPAD
-                    : "Attach board ink / annotated code to this send"
+                    : annotateScope === "view"
+                      ? "Attach what you can see — hold to send the whole board instead"
+                      : "Attach board ink / annotated code — hold to send this view only"
                 }
                 placement="left"
               >
-                <button
-                  type="button"
-                  className={`lc-flag${annotate ? " lc-flag-active" : ""}${
-                    annotateUnavailable ? " lc-flag-unavailable" : ""
-                  }`}
-                  aria-pressed={annotate}
-                  disabled={busy || annotateUnavailable}
-                  onClick={() => setAnnotate((current) => !current)}
-                >
-                  Annotation
-                </button>
+                <span className="lc-coach-annotate-wrap">
+                  <HoldButton
+                    label={annotateScope === "view" ? "View" : "Annotation"}
+                    className={`lc-flag lc-coach-annotate${
+                      annotate ? " lc-flag-active" : ""
+                    }${annotateUnavailable ? " lc-flag-unavailable" : ""}`}
+                    pressed={annotate}
+                    disabled={busy || annotateUnavailable}
+                    // Tap is the toggle it always was; the hold is the new
+                    // reach chooser, so neither gesture loses its old meaning.
+                    onTap={() => setAnnotate((current) => !current)}
+                    onConfirm={() => setScopeMenuOpen(true)}
+                    resetKey={scopeMenuOpen}
+                  />
+                  {scopeMenuOpen && (
+                    <>
+                      <button
+                        type="button"
+                        className="lc-doc-sheet-backdrop"
+                        aria-label="Dismiss annotate reach"
+                        onClick={() => setScopeMenuOpen(false)}
+                      />
+                      <div className="lc-coach-scope-menu" role="menu">
+                        {(
+                          [
+                            ["board", "Whole board", "Every page you have marked."],
+                            ["view", "This view", "Just the crop you are looking at."],
+                          ] as const
+                        ).map(([id, title, hint]) => (
+                          <button
+                            key={id}
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={annotateScope === id}
+                            className={
+                              annotateScope === id
+                                ? "lc-coach-scope-option is-active"
+                                : "lc-coach-scope-option"
+                            }
+                            onClick={() => {
+                              setAnnotateScope(id);
+                              // Choosing a reach is choosing to attach: making
+                              // the writer then tap the button they just held
+                              // would be a second confirmation of one decision.
+                              setAnnotate(true);
+                              setScopeMenuOpen(false);
+                            }}
+                          >
+                            <strong>{title}</strong>
+                            <span className="lc-muted">{hint}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </span>
               </Tip>
               {!padSurface && (
                 <>

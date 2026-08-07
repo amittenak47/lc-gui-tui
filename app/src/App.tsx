@@ -2721,6 +2721,9 @@ export function App() {
             reviewBoard: false,
             lazy: false,
             annotate: requestedFlags.annotate,
+            ...(requestedFlags.annotateScope
+              ? { annotateScope: requestedFlags.annotateScope }
+              : {}),
             ...(requestedFlags.photos ? { photos: requestedFlags.photos } : {}),
             ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}),
             ...(requestedFlags.threadRootId != null
@@ -2730,7 +2733,7 @@ export function App() {
         : requestedFlags;
       const flagBits = [
         flags.ask ? "Ask" : null,
-        flags.annotate ? "Annotation" : null,
+        flags.annotate ? (flags.annotateScope === "view" ? "View" : "Annotation") : null,
         flags.reviewBoard ? "Review" : null,
         flags.draw ? "Draw" : null,
         flags.lazy ? "Lazy" : null,
@@ -2810,7 +2813,24 @@ export function App() {
         })();
         if ((flags.reviewBoard || flags.lazy || flags.annotate) && boardRef.current) {
           try {
-            const thumbs = await boardRef.current.exportRegionThumbs();
+            /*
+             * How much board goes up.
+             *
+             * Review and Lazy always want the whole thing — they are reasoning
+             * about the shape of the work. Annotate asks, because a question
+             * about one figure on page forty is answered worse, not better, by
+             * five other crops the model has to rule out first.
+             */
+            const narrow =
+              flags.annotate &&
+              !flags.reviewBoard &&
+              !flags.lazy &&
+              flags.annotateScope === "view";
+            const thumbs = narrow
+              ? [await boardRef.current.exportViewThumb()].filter(
+                  (thumb): thumb is { label: string; png: string } => thumb != null,
+                )
+              : await boardRef.current.exportRegionThumbs();
             if (thumbs.length > 0) {
               attachments = [
                 ...(attachments ?? []),
@@ -3798,16 +3818,16 @@ export function App() {
 
         <div className="lc-header-right">
           {/*
-            Markdown icon, immediately left of the scratchpad's paper: tap picks
+            Document icon, immediately left of the scratchpad's paper: tap picks
             a file to annotate, hold opens the library. Same split as its
             neighbour, since it is the same kind of thing.
           */}
           {!problem && (
             <HoldButton
-              label="Markdown"
-              ariaLabel="Markdown Ink: tap to open a file, hold for recent documents"
+              label="Document"
+              ariaLabel="Document pad: tap to open a file, hold for recent documents"
               className="lc-icon lc-tip-target lc-hold-icon"
-              dataTip="Markdown — tap to open, hold for recent"
+              dataTip="Document — tap to open a .md, .pdf or .epub, hold for recent"
               dataTipPlacement="bottom"
               disabled={busy !== null}
               onTap={() => void pickAndOpenMdInk()}
