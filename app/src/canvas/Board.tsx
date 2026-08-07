@@ -516,6 +516,12 @@ const ZOOM_STEP = 1.15;
 const ZOOM_ANIM_MS = 220;
 /** Hand-tool pan inertia — exponential friction per ms (coast after flick). */
 const PAN_FRICTION = 0.0016;
+/**
+ * Coast after a flick. Flip false to isolate finger-drag scroll in profiles
+ * (no `Board.step` inertia rAF). End-state of the scroll-perf pass keeps this
+ * true — ride-only mid-gesture makes coast cheap again.
+ */
+const PAN_INERTIA_ENABLED = true;
 /** Faster decay when the reader taps mid-glide — stop smooth, not hard. */
 const PAN_BRAKE_FRICTION = 0.014;
 /** Minimum scroll speed (scene units/ms) to coast after a flick. */
@@ -2330,18 +2336,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     pulseCameraMotionRef.current();
 
     /*
-     * Ride, or rebase.
+     * Ride, or rebase on zoom only.
      *
-     * The ink measures the delta against its own last paint and the overlays
-     * against Excalidraw's appState — the same camera in the ordinary case, and
-     * each one right on its own terms when a mid-gesture repaint has moved one
-     * of them. Either can veto: a zoom (no translate expresses a rescale) or
-     * half a viewport of travel (past which the painted screenful runs out) go
-     * through a real paint instead.
+     * Distance past half a viewport used to force `updateScene` + ink reblit
+     * mid-gesture — that is what kept long flicks at ~30fps. Accept blank
+     * leading edges until settle; zoom still cannot be expressed as a translate.
      */
     const liveCam = { scrollX, scrollY, zoom };
     const committed = { scrollX: state.scrollX ?? 0, scrollY: state.scrollY ?? 0, zoom };
-    const delta = panDelta(liveCam, committed, { width: state.width, height: state.height });
+    const delta = panDelta(liveCam, committed, { width: state.width, height: state.height }, undefined, {
+      allowOverscroll: true,
+    });
     const inkRides = rasterInkRef.current?.setPanOffset(liveCam) ?? true;
     if (delta.rebase || !inkRides) {
       rebaseVisualScrollRef.current();
@@ -2735,7 +2740,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const probe = clampPanScroll(cam.scrollX, cam.scrollY + rawY * 16, cam.zoom);
         return Math.abs(probe.scrollY - cam.scrollY) < 0.5 ? 0 : rawY;
       })();
-      if (Math.abs(velY) >= PAN_FLICK_MIN) {
+      if (PAN_INERTIA_ENABLED && Math.abs(velY) >= PAN_FLICK_MIN) {
         startPanInertia(0, velY);
         return;
       }
@@ -5534,7 +5539,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         onStylusAccessory={interactive ? handleStylusAccessory : undefined}
       />
       <Excalidraw
-        viewModeEnabled={!interactive}
+        viewModeEnabled={!interactive || !annotateCode}
         handleKeyboardGlobally={interactive}
         excalidrawAPI={(api: unknown) => {
           apiRef.current = api as ExcalidrawApi;

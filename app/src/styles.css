@@ -594,6 +594,15 @@ input[type="checkbox"] {
   touch-action: none;
 }
 
+/*
+ * Reading mode: starve Excalidraw's interactive animation loop.
+ * Static scene canvas still rides `--lc-pan-*`; selection ants / scrollbars
+ * on the interactive layer are not needed while annotate is off.
+ */
+.lc-board-reading canvas.excalidraw__canvas.interactive {
+  visibility: hidden;
+}
+
 /* Delete control for a selected library stamp / capture image. */
 .lc-stamp-trash {
   position: absolute;

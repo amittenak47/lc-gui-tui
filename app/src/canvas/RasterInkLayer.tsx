@@ -699,7 +699,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           if (drawingRef.current) return true;
           const painted = paintedViewRef.current;
           if (!painted) return false;
-          const delta = panDelta(live, painted, painted);
+          // Ride through blank edges on a long flick — settle paints once.
+          const delta = panDelta(live, painted, painted, undefined, {
+            allowOverscroll: true,
+          });
           if (delta.rebase) return false;
           const next =
             delta.dx === 0 && delta.dy === 0
