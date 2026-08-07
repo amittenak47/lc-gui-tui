@@ -724,6 +724,13 @@ input[type="checkbox"] {
   will-change: transform;
 }
 
+.lc-raster-ink-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .lc-raster-ink {
   position: absolute;
   top: 0;
