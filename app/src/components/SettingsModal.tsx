@@ -9,6 +9,7 @@ import type { LcClient } from "../api/client";
 import type { CoachFlags, DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
 import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { HoldButton } from "./HoldButton";
+import { loadForwardFailures, saveForwardFailures } from "../util/coachPrefs";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import {
   loadInkPressureClip,
@@ -148,6 +149,15 @@ function emptyConfig(): LcConfig {
 /** Device-only prefs edited in Personalise — deferred until Save like config.toml. */
 interface DevicePrefs {
   handedness: InkHandedness;
+  /**
+   * Hand a failed run to the coach without being asked.
+   *
+   * Used to be a "Failures" toggle in the chat composer, which put it beside
+   * the flags that describe *this* message — but it describes what happens on a
+   * test run minutes later, and it does not apply to the reading pads at all.
+   * It belongs with the rest of the failure decision, under When a case fails.
+   */
+  forwardFailures: boolean;
   autoSaveCaptures: boolean;
   captureDestination: CaptureDestination;
   captureFolder: string;
@@ -162,6 +172,7 @@ interface DevicePrefs {
 function loadDevicePrefs(): DevicePrefs {
   return {
     handedness: loadInkHandedness(),
+    forwardFailures: loadForwardFailures(),
     autoSaveCaptures: loadAutoSaveCaptures(),
     captureDestination: loadCaptureDestination(),
     captureFolder: loadCaptureFolder(),
@@ -177,6 +188,7 @@ function loadDevicePrefs(): DevicePrefs {
 function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
   return (
     a.handedness === b.handedness &&
+    a.forwardFailures === b.forwardFailures &&
     a.autoSaveCaptures === b.autoSaveCaptures &&
     a.captureDestination === b.captureDestination &&
     a.captureFolder === b.captureFolder &&
@@ -231,6 +243,9 @@ export function SettingsModal({
     port: number;
   } | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
+  const [forwardFailures, setForwardFailures] = useState<boolean>(() =>
+    loadForwardFailures(),
+  );
   const [autoSaveCaptures, setAutoSaveCaptures] = useState(() => loadAutoSaveCaptures());
   const [captureDestination, setCaptureDestination] = useState<CaptureDestination>(() =>
     loadCaptureDestination(),
@@ -326,6 +341,7 @@ export function SettingsModal({
     setBusy("loading…");
     const prefs = loadDevicePrefs();
     setHandedness(prefs.handedness);
+    setForwardFailures(prefs.forwardFailures);
     setAutoSaveCaptures(prefs.autoSaveCaptures);
     setCaptureDestination(prefs.captureDestination);
     setCaptureFolder(prefs.captureFolder);
@@ -381,6 +397,7 @@ export function SettingsModal({
 
   const draftPrefs: DevicePrefs = {
     handedness,
+    forwardFailures,
     autoSaveCaptures,
     captureDestination,
     captureFolder,
@@ -416,6 +433,7 @@ export function SettingsModal({
       // Device prefs never need the daemon — persist them even if PUT /config fails.
       if (prefsDirty) {
         saveInkHandedness(handedness);
+        saveForwardFailures(forwardFailures);
         saveAutoSaveCaptures(autoSaveCaptures);
         saveCaptureDestination(captureDestination);
         saveCaptureFolder(captureFolder);
@@ -428,6 +446,11 @@ export function SettingsModal({
         setBaselinePrefs(draftPrefs);
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
+        );
+        window.dispatchEvent(
+          new CustomEvent<boolean>("lc-coach-forward-failures", {
+            detail: forwardFailures,
+          }),
         );
         window.dispatchEvent(new CustomEvent("lc-ink-pressure-clip"));
         window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
@@ -956,6 +979,48 @@ export function SettingsModal({
                 Applies to <strong>Run tests</strong>, <strong>Submit</strong>, and{" "}
                 <code>lc test</code>. Running every case is what lets the coach pick a real
                 counterexample, so leave it on unless a run is slow.
+              </p>
+              <div
+                className="lc-settings-choice"
+                role="radiogroup"
+                aria-label="Forward failed runs to the coach"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!forwardFailures}
+                  className={
+                    forwardFailures
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setForwardFailures(false)}
+                >
+                  <strong>Wait to be asked</strong>
+                  <span className="lc-muted">
+                    A red run is often a typo you are already halfway through fixing.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={forwardFailures}
+                  className={
+                    forwardFailures
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setForwardFailures(true)}
+                >
+                  <strong>Send failures to the coach</strong>
+                  <span className="lc-muted">
+                    Hand every failed run over the moment it goes red — one model call each.
+                  </span>
+                </button>
+              </div>
+              <p className="lc-settings-hint">
+                Saved on this device only. Problems only — the scratchpad and document pads
+                have no test run to forward.
               </p>
 
               <div className="lc-settings-subhead">Offline ↔ online boards</div>

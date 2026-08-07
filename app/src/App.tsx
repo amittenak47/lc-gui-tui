@@ -74,7 +74,7 @@ import { AttemptDialog } from "./modes/AttemptDialog";
 import { ScratchpadDialog } from "./modes/ScratchpadDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { threadAnchorRef } from "./modes/coachThreads";
-import { loadForwardFailures, saveForwardFailures } from "./util/coachPrefs";
+import { loadForwardFailures } from "./util/coachPrefs";
 import { ensureTypingImports } from "./util/pythonImports";
 
 /** Room under the last line of code so a note fits below it. */
@@ -862,10 +862,23 @@ export function App() {
    */
   const coachMessagesRef = useRef<CoachChatMessage[]>([]);
   coachMessagesRef.current = coachMessages;
-  /** Hand a failed run to the coach without being asked. Off by default. */
-  const [forwardFailures, setForwardFailures] = useState(() => loadForwardFailures());
-  const forwardFailuresRef = useRef(forwardFailures);
-  forwardFailuresRef.current = forwardFailures;
+  /**
+   * Hand a failed run to the coach without being asked. Off by default.
+   *
+   * Owned by Settings → When a case fails, not by the composer: it is read on a
+   * test run rather than on a send, so only the ref is ever consulted. The
+   * listener keeps it live while Settings is saved behind an open session.
+   */
+  const forwardFailuresRef = useRef(loadForwardFailures());
+  useEffect(() => {
+    const onChange = (event: Event) => {
+      const next = (event as CustomEvent<boolean>).detail;
+      forwardFailuresRef.current =
+        typeof next === "boolean" ? next : loadForwardFailures();
+    };
+    window.addEventListener("lc-coach-forward-failures", onChange);
+    return () => window.removeEventListener("lc-coach-forward-failures", onChange);
+  }, []);
   /** Thread the composer is inside, if any — narrows what the coach is told. */
   const threadRootIdRef = useRef<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -2566,15 +2579,17 @@ export function App() {
 
   const sendCoachChat = useCallback(
     (text: string, requestedFlags: CoachSendFlags) => {
-      // Scratchpad has no solution.py, no review pipeline and no board regions
-      // to draw into — Ask is the only flag that means anything there.
-      const flags: CoachSendFlags = isScratchpad(problem)
+      // A pad has no solution.py, no review pipeline and no board regions to
+      // draw into — Ask is the only pipeline flag that means anything there.
+      // Annotate is the exception: a pad does have a board with marks on it,
+      // and attaching them is the point of asking about a page you drew on.
+      const flags: CoachSendFlags = isLocalPad(problem)
         ? {
             ask: true,
             draw: false,
             reviewBoard: false,
             lazy: false,
-            annotate: false,
+            annotate: requestedFlags.annotate,
             ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}),
             ...(requestedFlags.threadRootId != null
               ? { threadRootId: requestedFlags.threadRootId }
@@ -3960,14 +3975,10 @@ export function App() {
             thinking={busy !== null || thinking}
             thinkingPhase={coachPhase}
             messages={coachMessages}
-            askOnly={isScratchpad(problem)}
+            askOnly={isLocalPad(problem)}
+            coachSurface={isLocalPad(problem) ? "pad" : "problem"}
             onThreadChange={(rootId) => {
               threadRootIdRef.current = rootId;
-            }}
-            forwardFailures={forwardFailures}
-            onForwardFailuresChange={(on) => {
-              setForwardFailures(on);
-              saveForwardFailures(on);
             }}
             onSend={sendCoachChat}
             onRequestBridge={(messageId) => {
