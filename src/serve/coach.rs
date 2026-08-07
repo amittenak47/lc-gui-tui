@@ -577,6 +577,16 @@ pub struct AskRequest {
     #[serde(default)]
     pub dataset: Option<String>,
     pub question: String,
+    /// Base64 PNGs the student attached to this question.
+    ///
+    /// A photo of a page, a screenshot, a diagram from somewhere else — things
+    /// the board cannot hold because they were never drawn. Unlike the board
+    /// PNGs the review pipeline sends, these are attached explicitly and are
+    /// the whole reason the question is being asked, so they go up whatever the
+    /// provider is: the endpoint picks its vision model when a message carries
+    /// images and falls back to the plain one when no vision model is set.
+    #[serde(default)]
+    pub images: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -605,6 +615,7 @@ pub async fn run_ask(
     }
     let task_id = request.task_id.clone();
     let dataset_slug = request.dataset.clone();
+    let images = request.images.clone();
     let scratchpad = crate::scratchpad::is_request(dataset_slug.as_deref(), &task_id);
     let dataset = if scratchpad {
         None
@@ -647,7 +658,7 @@ pub async fn run_ask(
         let prompt = build_ask_prompt(&meta, description.as_deref(), &question, &ctx);
         let reply = provider.chat_ex(&ChatRequest::new(vec![
             ChatMessage::system(ASK_SYSTEM_PROMPT),
-            ChatMessage::user(prompt),
+            ChatMessage::user(prompt).with_images(images),
         ]))?;
         events.stage("done", "");
         Ok(AskEnvelope {

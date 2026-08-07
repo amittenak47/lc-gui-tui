@@ -15,6 +15,7 @@ import { STAGE_LABELS } from "../api/types";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS } from "../util/gesture";
 import { useIsMobile } from "../util/mobile";
+import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
 import type { MessageDrawing } from "../viz/drawingState";
 import { Timeline } from "../viz/Timeline";
 import { BridgePanel } from "./RevealDialog";
@@ -201,6 +202,15 @@ export interface CoachSendFlags {
    * Independent of Review — Ask alone must not sneak annotations in.
    */
   annotate: boolean;
+  /**
+   * Images the writer attached with (+), as base64 PNGs.
+   *
+   * Not the same thing as `annotate`: those thumbnails are the board being
+   * described back to the coach, these are evidence from outside it — a photo
+   * of the page, a screenshot of an error, a diagram from somewhere else.
+   * Absent rather than empty when nothing was attached.
+   */
+  photos?: CoachAttachment[];
   /** The message this turn is answering, when the writer quoted one. */
   replyTo?: CoachReplyRef;
   /** The thread this send belongs to, or null when it is addressed to the room. */
@@ -336,6 +346,10 @@ export function AgentSidePanel({
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
   const [annotate, setAnnotate] = useState(false);
+  /** Photos staged by (+), sent with the next message and cleared after. */
+  const [photos, setPhotos] = useState<CoachAttachment[]>([]);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
 
   const [lightbox, setLightbox] = useState<CoachAttachment | null>(null);
   const [lightboxClosing, setLightboxClosing] = useState(false);
@@ -760,7 +774,15 @@ export function AgentSidePanel({
 
   if (!open && !mobile) return null;
 
-  const canSend = !busy && (draft.trim().length > 0 || ask || draw || reviewBoard || lazy || annotate);
+  const canSend =
+    !busy &&
+    (draft.trim().length > 0 ||
+      ask ||
+      draw ||
+      reviewBoard ||
+      lazy ||
+      annotate ||
+      photos.length > 0);
   const menuMessage = messageMenu
     ? messages.find((message) => message.id === messageMenu.messageId)
     : undefined;
@@ -812,6 +834,7 @@ export function AgentSidePanel({
       reviewBoard,
       lazy,
       annotate,
+      ...(photos.length > 0 ? { photos } : {}),
       threadRootId: openThreadId,
       ...(replyTo ? { replyTo } : {}),
     });
@@ -822,6 +845,8 @@ export function AgentSidePanel({
     setReviewBoard(false);
     setLazy(false);
     setAnnotate(false);
+    setPhotos([]);
+    setPhotoError(null);
     closeMessageMenu();
   };
 
@@ -1145,6 +1170,31 @@ export function AgentSidePanel({
               </button>
             </div>
           )}
+          {/*
+            Staged photos sit above the textarea, not beside Send: they are part
+            of the message being written, and an attachment you cannot see is an
+            attachment you forget you made. Each is removable until it is sent.
+          */}
+          {photos.length > 0 && (
+            <div className="lc-coach-photo-tray" aria-label="Attached photos">
+              {photos.map((photo, index) => (
+                <div className="lc-coach-photo-chip" key={`${photo.label}-${index}`}>
+                  <img src={`data:image/png;base64,${photo.png}`} alt={photo.label} />
+                  <button
+                    type="button"
+                    className="lc-coach-photo-chip-clear"
+                    aria-label={`Remove ${photo.label}`}
+                    onClick={() =>
+                      setPhotos((current) => current.filter((_, at) => at !== index))
+                    }
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {photoError && <p className="lc-warning">{photoError}</p>}
           <textarea
             ref={composerRef}
             value={draft}
@@ -1336,6 +1386,46 @@ export function AgentSidePanel({
                   </Tip>
                 </>
               )}
+              <Tip
+                tip={
+                  photos.length >= PHOTO_ATTACH_LIMIT
+                    ? `At most ${PHOTO_ATTACH_LIMIT} photos per message`
+                    : "Attach a photo — gallery or camera"
+                }
+                placement="left"
+              >
+                <button
+                  type="button"
+                  className="lc-flag lc-coach-attach"
+                  aria-label="Attach a photo"
+                  disabled={busy || picking || photos.length >= PHOTO_ATTACH_LIMIT}
+                  onClick={() => {
+                    setPhotoError(null);
+                    setPicking(true);
+                    void pickPhotos(PHOTO_ATTACH_LIMIT - photos.length)
+                      .then((picked) => {
+                        if (picked.length === 0) return;
+                        setPhotos((current) =>
+                          [
+                            ...current,
+                            ...picked.map((photo) => ({
+                              label: photo.name,
+                              png: photo.png,
+                            })),
+                          ].slice(0, PHOTO_ATTACH_LIMIT),
+                        );
+                      })
+                      .catch((cause: unknown) =>
+                        setPhotoError(
+                          cause instanceof Error ? cause.message : String(cause),
+                        ),
+                      )
+                      .finally(() => setPicking(false));
+                  }}
+                >
+                  +
+                </button>
+              </Tip>
               <button type="submit" disabled={!canSend}>
                 Send
               </button>
