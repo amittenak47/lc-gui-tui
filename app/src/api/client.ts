@@ -44,6 +44,18 @@ export class LcApiError extends Error {
   }
 }
 
+/** Cap how often failed fetches announce "server unreachable" to the UI. */
+let lastUnreachableEventAt = 0;
+const UNREACHABLE_EVENT_COOLDOWN_MS = 4_000;
+
+function announceUnreachable(message: string): void {
+  if (typeof window === "undefined") return;
+  const now = Date.now();
+  if (now - lastUnreachableEventAt < UNREACHABLE_EVENT_COOLDOWN_MS) return;
+  lastUnreachableEventAt = now;
+  window.dispatchEvent(new CustomEvent("lc-server-unreachable", { detail: message }));
+}
+
 export interface SearchOptions {
   /** Problem set to search. Omitted means the default LeetCode corpus. */
   dataset?: string;
@@ -171,9 +183,7 @@ export class LcClient {
     } catch (cause) {
       if (signal?.aborted) throw new LcApiError("Download cancelled", 0);
       const message = `cannot reach lc serve at ${this.pairing.baseUrl} — is the daemon running, and are you on the same network?`;
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("lc-server-unreachable", { detail: message }));
-      }
+      announceUnreachable(message);
       throw new LcApiError(message, 0);
     }
 
@@ -533,11 +543,7 @@ export class LcClient {
       });
     } catch (cause) {
       const message = `cannot reach lc serve at ${this.pairing.baseUrl} — is the daemon running, and are you on the same network?`;
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("lc-server-unreachable", { detail: message }),
-        );
-      }
+      announceUnreachable(message);
       throw new LcApiError(message, 0);
     }
 
