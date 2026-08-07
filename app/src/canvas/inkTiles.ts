@@ -56,7 +56,7 @@ export const IDLE_BUDGET_MS = 8;
  * a frame or two of softness during motion is invisible next to the stutter of
  * paying for sharpness on every one of them.
  */
-export const MOVING_BUDGET_MS = 1;
+export const MOVING_BUDGET_MS = 3.5;
 
 /**
  * How far, in levels, a gesture may drift from the level it pinned.
@@ -596,6 +596,10 @@ export class InkTileCache {
    * on screen when the frame that should have drawn it ran out of budget — a
    * just-appended op is composited into every cached tile it overlaps, at every
    * level, so the stand-in carries it too.
+   *
+   * A pan-missed tile at the pinned level has no same-level stale tile by
+   * construction — the miss is newly exposed ground, not a budget skip on a
+   * square that was ready a frame ago — so fallback walks other cached levels.
    */
   private blitFallback(
     ctx: CanvasRenderingContext2D,

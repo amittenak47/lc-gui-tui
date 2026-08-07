@@ -37,7 +37,14 @@ import {
   type ViewportTransform,
 } from "./rasterInk";
 import { InkTileCache, paintLiveOp } from "./inkTiles";
-import { panDelta, type PanCamera } from "./panOffset";
+import {
+  OVERDRAW_REBASE_HEADROOM,
+  overdrawMarginPx,
+  overdrawnViewport,
+  panDelta,
+  PAN_REBASE_FRACTION,
+  type PanCamera,
+} from "./panOffset";
 import {
   liveSmoothingTau,
   liveSmoothingWeight,
@@ -202,7 +209,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * short. Keep mapping and incremental paint on the stroke-start frame.
      */
     const strokeViewRef = useRef<ViewportTransform | null>(null);
-    const strokeBoxRef = useRef<{ width: number; height: number } | null>(null);
+    const strokeBoxRef = useRef<{ width: number; height: number; marginY: number } | null>(null);
     /**
      * The canvas rect, read once at pointerdown and reused for every sample.
      *
@@ -222,7 +229,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * times a second to re-learn a number that only a resize can change. Cached
      * here and dropped by the resize observer below.
      */
-    const alignedBoxRef = useRef<{ width: number; height: number } | null>(null);
+    const alignedBoxRef = useRef<{ width: number; height: number; marginY: number } | null>(null);
     /**
      * A background tile pass finished while the pen was down, so the overlay is
      * a frame behind the cache. Repaint once the stroke is off the paper.
@@ -240,6 +247,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       scrollY: number;
       width: number;
       height: number;
+      marginY: number;
       ops: number;
       clip: SceneBounds | null;
       live: boolean;
@@ -285,7 +293,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * it back up. Snap the box to the pixel grid and the mapping is 1:1.
      */
     const alignToExcalidraw = useCallback((canvas: HTMLCanvasElement) => {
-      const board = canvas.parentElement;
+      const board = canvas.closest(".lc-board");
       if (!board) return null;
       const excal = board.querySelector("canvas.excalidraw__canvas");
       if (!(excal instanceof HTMLCanvasElement)) return null;
@@ -307,12 +315,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const panX = panMatch ? Number(panMatch[1]) : 0;
       const panY = panMatch ? Number(panMatch[2]) : 0;
       const width = snap(excalRect.width);
-      const height = snap(excalRect.height);
+      const excalH = snap(excalRect.height);
+      const marginY = overdrawMarginPx(excalH, dpr);
+      const height = excalH + 2 * marginY;
       canvas.style.left = `${snap(excalRect.left - boardRect.left - panX)}px`;
-      canvas.style.top = `${snap(excalRect.top - boardRect.top - panY)}px`;
+      canvas.style.top = `${snap(excalRect.top - boardRect.top - panY - marginY)}px`;
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
-      return { width, height };
+      return { width, height, marginY };
     }, []);
 
     /**
@@ -320,6 +330,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * {@link paintLiveIncremental}.
      */
     const tilesRef = useRef<InkTileCache | null>(null);
+    const repaintPaintedRef = useRef<() => void>(() => {});
     const ensureTiles = useCallback(() => {
       if (!tilesRef.current) {
         tilesRef.current = new InkTileCache({
@@ -332,11 +343,19 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             // unblitted stayed invisible for as long as the pen kept writing.
             // Owe the repaint instead of skipping it — the lift is a moment
             // later and costs nothing, where a blit mid-glyph would hitch.
-            // Same during a camera gesture, and for the same reason the pan is
-            // a translate at all: a full clear-and-blit is the one thing a
-            // coast cannot afford. The settle repaints unconditionally.
-            if (drawingRef.current || cameraMovingRef.current) {
+            if (drawingRef.current) {
               tilesDirtyRef.current = true;
+              return;
+            }
+            // During a camera gesture the pan is a translate — a full clear-and-
+            // blit would hitch the coast. When tiles have settled, repaint at
+            // the painted base camera and keep the ride transform.
+            if (cameraMovingRef.current) {
+              if (tilesRef.current?.settled) {
+                repaintPaintedRef.current();
+              } else {
+                tilesDirtyRef.current = true;
+              }
               return;
             }
             repaintRef.current();
@@ -372,30 +391,39 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * Nothing here replays the page.
      */
     const paintFrame = useCallback(
-      (viewport: ViewportTransform, cssW: number, cssH: number) => {
+      (
+        viewport: ViewportTransform,
+        cssW: number,
+        visibleH: number,
+        marginY = 0,
+        preserveTransform = false,
+      ) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
         const dpr = window.devicePixelRatio || 1;
+        const cssH = visibleH + 2 * marginY;
         const { pixelW, pixelH } = sizeCanvas(canvas, cssW, cssH, dpr);
-        const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
+        const view: ViewportTransform = { ...viewport, width: cssW, height: visibleH };
+        const drawView = overdrawnViewport(view, marginY);
         // A paint is the thing a pan offset was standing in for. Whatever the
         // gesture had slid the bitmap to, these pixels are the honest answer at
-        // `viewport`, and they belong at the layer's own coordinates.
-        if (canvas.style.transform) canvas.style.transform = "";
+        // `viewport`, and they belong at the layer's own coordinates — unless
+        // this is a mid-gesture fill-in that must keep riding.
+        if (!preserveTransform && canvas.style.transform) canvas.style.transform = "";
 
         const tiles = ensureTiles();
         tiles.setClip(clipRef.current);
 
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, pixelW, pixelH);
-        tiles.draw(ctx, view, dpr);
+        tiles.draw(ctx, drawView, dpr);
 
         const live = liveRef.current;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         if (live) {
-          paintLiveOp(ctx, live, view, dpr, clipRef.current);
+          paintLiveOp(ctx, live, drawView, dpr, clipRef.current);
           liveDrawnIndexRef.current =
             live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
         } else {
@@ -409,7 +437,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           scrollX: viewport.scrollX,
           scrollY: viewport.scrollY,
           width: cssW,
-          height: cssH,
+          height: visibleH,
+          marginY,
           ops: opsRef.current.length,
           clip: clipRef.current,
           live: live !== null,
@@ -417,6 +446,19 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         };
       },
       [ensureTiles, sizeCanvas],
+    );
+
+    const paintFromBox = useCallback(
+      (
+        viewport: ViewportTransform,
+        box: { width: number; height: number; marginY: number },
+        preserveTransform = false,
+      ) => {
+        const marginY = box.marginY;
+        const visibleH = box.height - 2 * marginY;
+        paintFrame(viewport, box.width, visibleH, marginY, preserveTransform);
+      },
+      [paintFrame],
     );
 
     /** Full repaint of the overlay at the current (or frozen) camera. */
@@ -427,16 +469,59 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const box = strokeBoxRef.current;
       const viewport = frozen ?? getViewport();
       if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
-      let excalRect = frozen && box ? box : alignedBoxRef.current;
+      if (frozen && box) {
+        const marginY = box.marginY;
+        const baseView: ViewportTransform = {
+          ...frozen,
+          scrollY: frozen.scrollY - marginY / frozen.zoom,
+          height: frozen.height - 2 * marginY,
+        };
+        paintFromBox(baseView, box);
+        return;
+      }
+      let excalRect = alignedBoxRef.current;
       if (!excalRect) {
         excalRect = alignToExcalidraw(canvas);
-        if (!frozen) alignedBoxRef.current = excalRect;
+        alignedBoxRef.current = excalRect;
       }
-      paintFrame(viewport, excalRect?.width ?? viewport.width, excalRect?.height ?? viewport.height);
-    }, [alignToExcalidraw, getViewport, paintFrame]);
+      if (excalRect) {
+        paintFromBox(viewport, excalRect);
+      } else {
+        paintFrame(viewport, viewport.width, viewport.height);
+      }
+    }, [alignToExcalidraw, getViewport, paintFrame, paintFromBox]);
 
     const repaintRef = useRef(repaint);
     repaintRef.current = repaint;
+
+    /** Repaint at the last painted base camera, keeping a live-pan transform. */
+    const repaintPainted = useCallback(() => {
+      const painted = paintedViewRef.current;
+      const canvas = canvasRef.current;
+      if (!painted || !canvas) return;
+      const liveViewport = getViewport();
+      const viewport: ViewportTransform = {
+        zoom: painted.zoom,
+        scrollX: painted.scrollX,
+        scrollY: painted.scrollY,
+        offsetLeft: liveViewport?.offsetLeft ?? 0,
+        offsetTop: liveViewport?.offsetTop ?? 0,
+        width: painted.width,
+        height: painted.height,
+      };
+      let box = alignedBoxRef.current;
+      if (!box || box.marginY !== painted.marginY) {
+        box = alignToExcalidraw(canvas);
+        if (box) alignedBoxRef.current = box;
+      }
+      if (box) {
+        paintFromBox(viewport, { ...box, marginY: painted.marginY }, true);
+      } else {
+        paintFrame(viewport, painted.width, painted.height, painted.marginY, true);
+      }
+    }, [alignToExcalidraw, getViewport, paintFrame, paintFromBox]);
+
+    repaintPaintedRef.current = repaintPainted;
 
     /**
      * Camera moved. There is nothing cheaper to do than repaint now: tiles the
@@ -454,8 +539,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
       const excalRect = alignedBoxRef.current ?? alignToExcalidraw(canvas);
       alignedBoxRef.current = excalRect;
-      paintFrame(viewport, excalRect?.width ?? viewport.width, excalRect?.height ?? viewport.height);
-    }, [alignToExcalidraw, getViewport, paintFrame]);
+      if (excalRect) {
+        paintFromBox(viewport, excalRect);
+      } else {
+        paintFrame(viewport, viewport.width, viewport.height);
+      }
+    }, [alignToExcalidraw, getViewport, paintFrame, paintFromBox]);
 
     /** A camera repaint owed to the next frame, if one is already booked. */
     const cameraFrameRef = useRef(0);
@@ -702,7 +791,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           if (drawingRef.current) return true;
           const painted = paintedViewRef.current;
           if (!painted) return false;
-          const delta = panDelta(live, painted, painted);
+          const marginY = painted.marginY;
+          const delta =
+            marginY > 0
+              ? panDelta(live, painted, { width: painted.width, height: painted.height }, PAN_REBASE_FRACTION, {
+                  y: marginY * OVERDRAW_REBASE_HEADROOM,
+                })
+              : panDelta(live, painted, painted);
           if (delta.rebase) return false;
           const next =
             delta.dx === 0 && delta.dy === 0
@@ -726,7 +821,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      */
     useEffect(() => {
       const canvas = canvasRef.current;
-      const board = canvas?.parentElement;
+      const board = canvas?.closest(".lc-board");
       if (!board || typeof ResizeObserver !== "function") return;
       const observer = new ResizeObserver(() => {
         alignedBoxRef.current = null;
@@ -893,15 +988,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
          * we can afford, and a stroke in the wrong place is not.
          */
         if (canvas.style.transform) repaintRef.current();
+        const marginY = excalRect?.marginY ?? 0;
         const cssW = excalRect?.width ?? viewport.width;
-        const cssH = excalRect?.height ?? viewport.height;
-        const strokeView: ViewportTransform = {
-          ...viewport,
-          width: cssW,
-          height: cssH,
-        };
+        const visibleH = excalRect ? excalRect.height - 2 * marginY : viewport.height;
+        const cssH = visibleH + 2 * marginY;
+        const strokeView: ViewportTransform = overdrawnViewport(
+          { ...viewport, width: cssW, height: visibleH },
+          marginY,
+        );
         strokeViewRef.current = strokeView;
-        strokeBoxRef.current = { width: cssW, height: cssH };
+        strokeBoxRef.current = { width: cssW, height: cssH, marginY };
 
         const rect = canvas.getBoundingClientRect();
         strokeRectRef.current = rect;
@@ -966,9 +1062,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           painted.clip === clipRef.current &&
           painted.zoom === strokeView.zoom &&
           painted.scrollX === strokeView.scrollX &&
-          painted.scrollY === strokeView.scrollY &&
+          painted.scrollY === strokeView.scrollY - marginY / strokeView.zoom &&
           painted.width === cssW &&
-          painted.height === cssH;
+          painted.height === visibleH &&
+          painted.marginY === marginY;
         if (!reusable) repaintRef.current();
         drawingRef.current = true;
         activePointerRef.current = event.pointerId;
@@ -1201,18 +1298,20 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     if (!enabled) return null;
 
     return (
-      <canvas
-        ref={canvasRef}
-        className={
-          tool === "eraser"
-            ? "lc-raster-ink lc-raster-ink-eraser"
-            : tool === "pen"
-              ? "lc-raster-ink lc-raster-ink-pen"
-              : "lc-raster-ink"
-        }
-        style={{ pointerEvents: tool ? "auto" : "none" }}
-        aria-hidden
-      />
+      <div className="lc-raster-ink-clip">
+        <canvas
+          ref={canvasRef}
+          className={
+            tool === "eraser"
+              ? "lc-raster-ink lc-raster-ink-eraser"
+              : tool === "pen"
+                ? "lc-raster-ink lc-raster-ink-pen"
+                : "lc-raster-ink"
+          }
+          style={{ pointerEvents: tool ? "auto" : "none" }}
+          aria-hidden
+        />
+      </div>
     );
   },
 );

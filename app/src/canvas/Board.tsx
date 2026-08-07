@@ -109,7 +109,11 @@ import {
   type TextPlaceViewport,
 } from "./textPlacement";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
-import { panDelta } from "./panOffset";
+import {
+  INK_OVERDRAW_FRACTION,
+  OVERDRAW_REBASE_HEADROOM,
+  panDelta,
+} from "./panOffset";
 import { horizontalScrollHost } from "./scrollHost";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
@@ -2426,7 +2430,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       scrollY: committedScrollY,
       zoom,
     };
-    const delta = panDelta(liveCam, committed, { width, height });
+    const delta = panDelta(liveCam, committed, { width, height }, undefined, {
+      y: height * INK_OVERDRAW_FRACTION * OVERDRAW_REBASE_HEADROOM,
+    });
     const inkRides = rasterInkRef.current?.setPanOffset(liveCam) ?? true;
     if (delta.rebase || !inkRides) {
       if (!committingScrollRef.current) rebaseVisualScrollRef.current();
@@ -2935,8 +2941,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         root.querySelector("canvas.lc-raster-ink") ??
         root.querySelector("canvas.excalidraw__canvas");
       if (!(hitCanvas instanceof HTMLCanvasElement)) return;
-      const rect = hitCanvas.getBoundingClientRect();
-      if (
+      const boardRect = root.getBoundingClientRect();
+      let rect = hitCanvas.getBoundingClientRect();
+      if (hitCanvas.classList.contains("lc-raster-ink")) {
+        const left = Math.max(rect.left, boardRect.left);
+        const right = Math.min(rect.right, boardRect.right);
+        const top = Math.max(rect.top, boardRect.top);
+        const bottom = Math.min(rect.bottom, boardRect.bottom);
+        if (left >= right || top >= bottom) {
+          hide();
+          return;
+        }
+        if (
+          next.clientX < left ||
+          next.clientX > right ||
+          next.clientY < top ||
+          next.clientY > bottom
+        ) {
+          hide();
+          return;
+        }
+      } else if (
         next.clientX < rect.left ||
         next.clientX > rect.right ||
         next.clientY < rect.top ||
@@ -2945,7 +2970,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         hide();
         return;
       }
-      const boardRect = root.getBoundingClientRect();
       const { zoom } = clientToScene(next.clientX, next.clientY);
       brushZoomRef.current = zoom;
       brush.setDiameter(eraserScreenRadius(strokeWidthRef.current, zoom) * 2);
