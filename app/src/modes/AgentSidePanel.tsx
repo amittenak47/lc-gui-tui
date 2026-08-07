@@ -147,7 +147,20 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-const NOT_ON_SCRATCHPAD = "Not available on scratchpad";
+const NOT_ON_SCRATCHPAD = "Not available on this pad";
+
+/**
+ * Which surface the coach is attached to.
+ *
+ * `problem` has a solution file, a test run and a review pipeline behind it, so
+ * the full flag set means something. `pad` — scratchpad and the document pads —
+ * has none of that: Draw has no region to draw into, Review has nothing staged
+ * to review, Lazy has no `solution.py` to fill, and the analyse-on-send /
+ * ambient cadence is a property of a problem attempt rather than of a page
+ * being read. Rendering them disabled taught the writer nothing except that
+ * five of the seven controls are dead, so on a pad they are not rendered.
+ */
+export type CoachSurface = "problem" | "pad";
 
 interface MessageMenuState {
   messageId: string;
@@ -263,12 +276,14 @@ export interface AgentSidePanelProps {
    * into. Ask is pinned on and the other flags are disabled.
    */
   askOnly?: boolean;
+  /**
+   * Problem attempt or reading pad — decides which composer controls exist at
+   * all. Defaults to `problem` so nothing changes for the attempt flow.
+   */
+  coachSurface?: CoachSurface;
   onSend: (text: string, flags: CoachSendFlags) => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
-  /** Forward a failed test run to the coach without being asked. */
-  forwardFailures?: boolean;
-  onForwardFailuresChange?: (on: boolean) => void;
   /** Opens the hold-to-reveal dialog for the review on this message. */
   onRequestBridge?: (messageId: string) => void;
   /** Expand/collapse a message's drawing section (and sync the board). */
@@ -290,10 +305,9 @@ export function AgentSidePanel({
   thinkingPhase = null,
   messages,
   askOnly = false,
+  coachSurface = "problem",
   onSend,
   onThreadChange,
-  forwardFailures = false,
-  onForwardFailuresChange,
   onRequestBridge,
   onToggleDrawing,
   onDrawingFrame,
@@ -308,8 +322,15 @@ export function AgentSidePanel({
     [onClose, onOpenChange],
   );
   const [draft, setDraft] = useState("");
+  /**
+   * Pads keep Ask and Annotate; the pipeline flags and the cadence toggles are
+   * gone rather than greyed. See {@link CoachSurface}.
+   */
+  const padSurface = coachSurface === "pad";
   const [ask, setAsk] = useState(askOnly);
   const askActive = ask || askOnly;
+  /** Annotate is greyed only where there is genuinely nothing to attach. */
+  const annotateUnavailable = askOnly && !padSurface;
   const flagUnavailable = askOnly ? " lc-flag-unavailable" : "";
   const [draw, setDraw] = useState(false);
   const [reviewBoard, setReviewBoard] = useState(false);
@@ -421,14 +442,15 @@ export function AgentSidePanel({
   }, [mobile, open]);
 
   // Ask-only workspaces pin Ask on and clear the flags they cannot honour.
+  // Annotate is not one of them on a pad — see `annotateUnavailable`.
   useEffect(() => {
     if (!askOnly) return;
     setAsk(true);
     setDraw(false);
     setReviewBoard(false);
     setLazy(false);
-    setAnnotate(false);
-  }, [askOnly]);
+    if (!padSurface) setAnnotate(false);
+  }, [askOnly, padSurface]);
 
   const endSheetDrag = useCallback(
     (event: PointerEvent<HTMLElement>) => {
@@ -1139,21 +1161,14 @@ export function AgentSidePanel({
           />
           <div className="lc-coach-composer-bar">
             {/* Ambient stays greyed until AMBIENT_ENABLED is flipped. The
-                socket + 120s loop are already wired in App / coachSocket. */}
+                socket + 120s loop are already wired in App / coachSocket.
+
+                Forwarding failed runs used to sit here as a "Failures" toggle.
+                It is not a property of the message being composed — it decides
+                what happens on a test run minutes later — so it lives under
+                Settings → When a case fails, beside the rest of that decision. */}
+            {!padSurface && (
             <div className="lc-modes" role="group" aria-label="Coach mode">
-              {onForwardFailuresChange && (
-                <Tip tip="Send failed test runs to the coach automatically" placement="right">
-                  <button
-                    type="button"
-                    className={forwardFailures ? "lc-mode lc-mode-active" : "lc-mode"}
-                    aria-pressed={forwardFailures}
-                    disabled={busy}
-                    onClick={() => onForwardFailuresChange(!forwardFailures)}
-                  >
-                    Failures
-                  </button>
-                </Tip>
-              )}
               <Tip tip="Analyze on send" placement="right">
                 <button
                   type="button"
@@ -1189,6 +1204,7 @@ export function AgentSidePanel({
                 </button>
               </Tip>
             </div>
+            )}
             <div className="lc-coach-composer-actions">
               <Tip
                 tip={
@@ -1220,25 +1236,33 @@ export function AgentSidePanel({
                   Ask
                 </button>
               </Tip>
-              <Tip
-                tip={
-                  askOnly ? NOT_ON_SCRATCHPAD : "Allow coach to draw on the board"
-                }
-                placement="left"
-              >
-                <button
-                  type="button"
-                  className={`lc-flag${draw ? " lc-flag-active" : ""}${flagUnavailable}`}
-                  aria-pressed={draw}
-                  disabled={busy || askOnly}
-                  onClick={() => setDraw((current) => !current)}
+              {!padSurface && (
+                <Tip
+                  tip={
+                    askOnly ? NOT_ON_SCRATCHPAD : "Allow coach to draw on the board"
+                  }
+                  placement="left"
                 >
-                  Draw
-                </button>
-              </Tip>
+                  <button
+                    type="button"
+                    className={`lc-flag${draw ? " lc-flag-active" : ""}${flagUnavailable}`}
+                    aria-pressed={draw}
+                    disabled={busy || askOnly}
+                    onClick={() => setDraw((current) => !current)}
+                  >
+                    Draw
+                  </button>
+                </Tip>
+              )}
+              {/*
+                Annotate survives on a pad where the pipeline flags do not: a
+                reading pad has exactly the thing this attaches — a board with
+                the writer's marks on the page. It is the natural partner to Ask
+                there, so it stays live rather than inheriting askOnly's grey.
+              */}
               <Tip
                 tip={
-                  askOnly
+                  annotateUnavailable
                     ? NOT_ON_SCRATCHPAD
                     : "Attach board ink / annotated code to this send"
                 }
@@ -1246,66 +1270,72 @@ export function AgentSidePanel({
               >
                 <button
                   type="button"
-                  className={`lc-flag${annotate ? " lc-flag-active" : ""}${flagUnavailable}`}
+                  className={`lc-flag${annotate ? " lc-flag-active" : ""}${
+                    annotateUnavailable ? " lc-flag-unavailable" : ""
+                  }`}
                   aria-pressed={annotate}
-                  disabled={busy || askOnly}
+                  disabled={busy || annotateUnavailable}
                   onClick={() => setAnnotate((current) => !current)}
                 >
                   Annotation
                 </button>
               </Tip>
-              <Tip
-                tip={
-                  askOnly
-                    ? NOT_ON_SCRATCHPAD
-                    : ask
-                      ? "Turn off Ask to use Review"
-                      : "Run a staged review of the board"
-                }
-                placement="left"
-              >
-                <button
-                  type="button"
-                  className={`lc-flag${reviewBoard ? " lc-flag-active" : ""}${flagUnavailable}`}
-                  aria-pressed={reviewBoard}
-                  disabled={busy || askOnly || ask}
-                  onClick={() =>
-                    setReviewBoard((current) => {
-                      const next = !current;
-                      if (next) setAsk(false);
-                      return next;
-                    })
-                  }
-                >
-                  Review
-                </button>
-              </Tip>
-              <Tip
-                tip={
-                  askOnly
-                    ? NOT_ON_SCRATCHPAD
-                    : ask
-                      ? "Turn off Ask to use Lazy"
-                      : "Drawing-first: interpret the board and fill the correct earned parts of solution.py"
-                }
-                placement="left"
-              >
-                <button
-                  type="button"
-                  className={`lc-flag${lazy ? " lc-flag-active" : ""}${flagUnavailable}`}
-                  aria-pressed={lazy}
-                  disabled={busy || askOnly || ask}
-                  onClick={() =>
-                    setLazy((current) => {
-                      const next = !current;
-                      if (next) setAsk(false);
-                      return next;
-                    })
-                  }
-                >
-                  Lazy
-                </button>
-              </Tip>
+              {!padSurface && (
+                <>
+                  <Tip
+                    tip={
+                      askOnly
+                        ? NOT_ON_SCRATCHPAD
+                        : ask
+                          ? "Turn off Ask to use Review"
+                          : "Run a staged review of the board"
+                    }
+                    placement="left"
+                  >
+                    <button
+                      type="button"
+                      className={`lc-flag${reviewBoard ? " lc-flag-active" : ""}${flagUnavailable}`}
+                      aria-pressed={reviewBoard}
+                      disabled={busy || askOnly || ask}
+                      onClick={() =>
+                        setReviewBoard((current) => {
+                          const next = !current;
+                          if (next) setAsk(false);
+                          return next;
+                        })
+                      }
+                    >
+                      Review
+                    </button>
+                  </Tip>
+                  <Tip
+                    tip={
+                      askOnly
+                        ? NOT_ON_SCRATCHPAD
+                        : ask
+                          ? "Turn off Ask to use Lazy"
+                          : "Drawing-first: interpret the board and fill the correct earned parts of solution.py"
+                    }
+                    placement="left"
+                  >
+                    <button
+                      type="button"
+                      className={`lc-flag${lazy ? " lc-flag-active" : ""}${flagUnavailable}`}
+                      aria-pressed={lazy}
+                      disabled={busy || askOnly || ask}
+                      onClick={() =>
+                        setLazy((current) => {
+                          const next = !current;
+                          if (next) setAsk(false);
+                          return next;
+                        })
+                      }
+                    >
+                      Lazy
+                    </button>
+                  </Tip>
+                </>
+              )}
               <button type="submit" disabled={!canSend}>
                 Send
               </button>
