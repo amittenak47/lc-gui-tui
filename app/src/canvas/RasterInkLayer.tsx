@@ -43,7 +43,7 @@ import {
   smoothInkPoints,
   type InkSmoothingMode,
 } from "./inkSmoothing";
-import { inkMetrics } from "./inkMetrics";
+import { DEBUG_INK, inkMetrics } from "./inkMetrics";
 
 export interface RasterInkHandle {
   clear(): void;
@@ -741,27 +741,27 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
       const begin = (event: PointerEvent) => {
         if (!toolRef.current) {
-          inkMetrics.note("no-tool");
+          if (DEBUG_INK) inkMetrics.note("no-tool");
           return;
         }
         if (onStylusAccessoryRef.current?.(event)) {
-          inkMetrics.note("accessory");
+          if (DEBUG_INK) inkMetrics.note("accessory");
           event.preventDefault();
           event.stopPropagation();
           return;
         }
         // Primary tip only for drawing. Barrel / eraser tip are accessory.
         if (event.button !== 0) {
-          inkMetrics.note("not-primary");
+          if (DEBUG_INK) inkMetrics.note("not-primary");
           return;
         }
         const viewport = getViewportRef.current();
         if (!viewport) {
-          inkMetrics.note("no-viewport");
+          if (DEBUG_INK) inkMetrics.note("no-viewport");
           return;
         }
         if (!isCanvasTarget(event.target, canvas)) {
-          inkMetrics.note("off-canvas");
+          if (DEBUG_INK) inkMetrics.note("off-canvas");
           return;
         }
         event.preventDefault();
@@ -782,7 +782,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             active !== event.pointerId &&
             canvas.hasPointerCapture(active)
           ) {
-            inkMetrics.note("second-pointer");
+            if (DEBUG_INK) inkMetrics.note("second-pointer");
             return;
           }
           /*
@@ -795,7 +795,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
            * the letter that "randomly" fails to appear. Close it out first; a
            * stroke the writer finished belongs on the page either way.
            */
-          inkMetrics.note("orphan-commit");
+          if (DEBUG_INK) inkMetrics.note("orphan-commit");
           drawingRef.current = false;
           activePointerRef.current = null;
           settleLiveTip();
@@ -816,7 +816,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
            * Follow the pointer on the window for the length of this stroke
            * instead of quietly writing off everything past the edge.
            */
-          inkMetrics.note("no-capture");
+          if (DEBUG_INK) inkMetrics.note("no-capture");
           attachWindowFallback();
         }
         // Freeze camera + CSS box for the whole stroke before the first paint.
@@ -852,7 +852,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         smoothedPressureRef.current = hasStylusPressure(point.pressure) ? point.pressure : 0;
         smoothedSpeedRef.current = 0;
         lastSampleTimeRef.current = event.timeStamp;
-        inkMetrics.begin();
+        if (DEBUG_INK) inkMetrics.begin();
         const width = strokeWidthRef.current;
         const activeTool = toolRef.current;
         if (activeTool === "pen") {
@@ -934,7 +934,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         // The batch is in report order, so its first entry is the oldest ink in
         // hand — and the only sample here whose age reflects a stall, since the
         // dispatched event carries the newest one.
-        inkMetrics.move(batch.length, batch[0]?.timeStamp);
+        if (DEBUG_INK) inkMetrics.move(batch.length, batch[0]?.timeStamp);
 
         const width = strokeWidthRef.current;
         const pressureSensitive = live.kind === "draw" && live.pressureSensitive;
@@ -1033,7 +1033,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           lastPointRef.current = point;
         }
         paintLiveIncrementalRef.current();
-        inkMetrics.painted(event.timeStamp);
+        if (DEBUG_INK) inkMetrics.painted(event.timeStamp);
       };
 
       const end = (event: PointerEvent) => {
@@ -1053,7 +1053,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           /* ignore */
         }
         commitLiveRef.current();
-        inkMetrics.end();
+        if (DEBUG_INK) inkMetrics.end();
       };
 
       /*
@@ -1095,7 +1095,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
        */
       abandonStrokeRef.current = () => {
         if (!drawingRef.current) return;
-        inkMetrics.note("stroke-abandoned");
+        if (DEBUG_INK) inkMetrics.note("stroke-abandoned");
         drawingRef.current = false;
         activePointerRef.current = null;
         strokeViewRef.current = null;
