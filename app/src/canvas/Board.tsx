@@ -1113,6 +1113,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     sideScrollActive: boolean;
     sideScrollAnchorX: number;
     sideScrollStart: number;
+    /** Zoom frozen for the drag — avoid `getAppState` / `readScroll` per move. */
+    zoom: number;
   } | null>(null);
   /**
    * Live camera while reading-scroll is in flight.
@@ -1131,6 +1133,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     offsetTop: number;
     live: boolean;
   } | null>(null);
+  /**
+   * Excalidraw scroll the layers were last painted for during a live gesture.
+   * Updated on the first live sample and after each mid-gesture rebase — so
+   * `applyVisualScrollNow` can skip `getAppState` on every coalesced frame.
+   */
+  const committedPanCameraRef = useRef({ scrollX: 0, scrollY: 0, zoom: 1 });
+  const pendingVisualScrollRef = useRef<{ scrollX: number; scrollY: number } | null>(null);
+  const visualScrollRafRef = useRef(0);
   const slotReportFrameRef = useRef(0);
   /**
    * Wheel / scroll bursts must pin ink tiles the same way a pan does.
@@ -1138,7 +1148,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const cameraMotionTimerRef = useRef(0);
   const cameraMotionActiveRef = useRef(false);
-  const applyVisualScrollRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
+  const applyVisualScrollNowRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
+  const scheduleVisualScrollRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
+  const flushVisualScrollRef = useRef<() => void>(() => {});
   const commitVisualScrollRef = useRef<() => void>(() => {});
   const rebaseVisualScrollRef = useRef<() => void>(() => {});
 
@@ -2296,28 +2308,57 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * difference between a coast that costs `Board.step` and one that costs
    * `Board.step` plus a full raster pass.
    */
-  const applyVisualScroll = useCallback((scrollX: number, scrollY: number) => {
+  const applyVisualScrollNow = useCallback((scrollX: number, scrollY: number) => {
     const api = apiRef.current;
     if (!api) return;
-    const state = api.getAppState() as {
-      zoom?: { value?: number };
-      scrollX?: number;
-      scrollY?: number;
-      offsetLeft?: number;
-      offsetTop?: number;
-      width?: number;
-      height?: number;
-    };
-    if (typeof state.width !== "number" || typeof state.height !== "number") return;
-    const zoom = state.zoom?.value ?? 1;
+    const prev = liveCameraRef.current;
+    let zoom: number;
+    let width: number;
+    let height: number;
+    let offsetLeft: number;
+    let offsetTop: number;
+    let committedScrollX: number;
+    let committedScrollY: number;
+    if (prev?.live) {
+      zoom = prev.zoom;
+      width = prev.width;
+      height = prev.height;
+      offsetLeft = prev.offsetLeft;
+      offsetTop = prev.offsetTop;
+      committedScrollX = committedPanCameraRef.current.scrollX;
+      committedScrollY = committedPanCameraRef.current.scrollY;
+    } else {
+      const state = api.getAppState() as {
+        zoom?: { value?: number };
+        scrollX?: number;
+        scrollY?: number;
+        offsetLeft?: number;
+        offsetTop?: number;
+        width?: number;
+        height?: number;
+      };
+      if (typeof state.width !== "number" || typeof state.height !== "number") return;
+      zoom = state.zoom?.value ?? 1;
+      width = state.width;
+      height = state.height;
+      offsetLeft = state.offsetLeft ?? 0;
+      offsetTop = state.offsetTop ?? 0;
+      committedScrollX = state.scrollX ?? 0;
+      committedScrollY = state.scrollY ?? 0;
+      committedPanCameraRef.current = {
+        scrollX: committedScrollX,
+        scrollY: committedScrollY,
+        zoom,
+      };
+    }
     liveCameraRef.current = {
       scrollX,
       scrollY,
       zoom,
-      width: state.width,
-      height: state.height,
-      offsetLeft: state.offsetLeft ?? 0,
-      offsetTop: state.offsetTop ?? 0,
+      width,
+      height,
+      offsetLeft,
+      offsetTop,
       live: true,
     };
     const bounds = pageBoundsRef.current;
@@ -2344,17 +2385,49 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * of them. Either can veto: a zoom (no translate expresses a rescale) or a
      * drag past half a viewport (the painted screenful has run out). Rebase
      * then: one `updateScene` + ink reblit, then ride again from zero.
+     *
+     * Burst guard: while a rebase/commit `updateScene` is in flight, ink's
+     * paintedView can lag one rAF — `setPanOffset` keeps failing and must not
+     * re-arm another full settle per sample.
      */
     const liveCam = { scrollX, scrollY, zoom };
-    const committed = { scrollX: state.scrollX ?? 0, scrollY: state.scrollY ?? 0, zoom };
-    const delta = panDelta(liveCam, committed, { width: state.width, height: state.height });
+    const committed = {
+      scrollX: committedScrollX,
+      scrollY: committedScrollY,
+      zoom,
+    };
+    const delta = panDelta(liveCam, committed, { width, height });
     const inkRides = rasterInkRef.current?.setPanOffset(liveCam) ?? true;
     if (delta.rebase || !inkRides) {
-      rebaseVisualScrollRef.current();
+      if (!committingScrollRef.current) rebaseVisualScrollRef.current();
       return;
     }
     setPagePanOffsetRef.current(delta.dx, delta.dy);
   }, []);
+
+  const flushVisualScroll = useCallback(() => {
+    if (visualScrollRafRef.current) {
+      cancelAnimationFrame(visualScrollRafRef.current);
+      visualScrollRafRef.current = 0;
+    }
+    const pending = pendingVisualScrollRef.current;
+    pendingVisualScrollRef.current = null;
+    if (pending) applyVisualScrollNow(pending.scrollX, pending.scrollY);
+  }, [applyVisualScrollNow]);
+
+  const scheduleVisualScroll = useCallback(
+    (scrollX: number, scrollY: number) => {
+      pendingVisualScrollRef.current = { scrollX, scrollY };
+      if (visualScrollRafRef.current) return;
+      visualScrollRafRef.current = requestAnimationFrame(() => {
+        visualScrollRafRef.current = 0;
+        const pending = pendingVisualScrollRef.current;
+        pendingVisualScrollRef.current = null;
+        if (pending) applyVisualScrollNow(pending.scrollX, pending.scrollY);
+      });
+    },
+    [applyVisualScrollNow],
+  );
 
   /**
    * Mid-gesture repaint: adopt the live camera as the painted one and carry on.
@@ -2366,10 +2439,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * sample starts riding again from zero.
    */
   const rebaseVisualScroll = useCallback(() => {
+    if (committingScrollRef.current) return;
+    // Arm the burst guard before flush: applying a pending sample can still
+    // ask for rebase, and must not re-enter while this settle is in flight.
+    committingScrollRef.current = true;
+    flushVisualScroll();
     const live = liveCameraRef.current;
     const api = apiRef.current;
-    if (!live?.live || !api) return;
-    committingScrollRef.current = true;
+    if (!live?.live || !api) {
+      committingScrollRef.current = false;
+      return;
+    }
+    committedPanCameraRef.current = {
+      scrollX: live.scrollX,
+      scrollY: live.scrollY,
+      zoom: live.zoom,
+    };
     api.updateScene({
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
@@ -2381,7 +2466,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     landPanOffset(() => {
       committingScrollRef.current = false;
     });
-  }, [landPanOffset]);
+  }, [flushVisualScroll, landPanOffset]);
 
   /**
    * Push live camera into Excalidraw once the gesture settles.
@@ -2392,6 +2477,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * the top of the page) for one frame when a coast hits the bottom wall.
    */
   const commitVisualScroll = useCallback(() => {
+    flushVisualScroll();
     const live = liveCameraRef.current;
     if (!live?.live) {
       // Nothing was riding, but a gesture that never went live (a tap, a tool
@@ -2400,6 +2486,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     committingScrollRef.current = true;
+    committedPanCameraRef.current = {
+      scrollX: live.scrollX,
+      scrollY: live.scrollY,
+      zoom: live.zoom,
+    };
     apiRef.current?.updateScene({
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
@@ -2408,8 +2499,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       committingScrollRef.current = false;
       if (liveCameraRef.current === live) live.live = false;
     });
-  }, [landPanOffset]);
-  applyVisualScrollRef.current = applyVisualScroll;
+  }, [flushVisualScroll, landPanOffset]);
+  applyVisualScrollNowRef.current = applyVisualScrollNow;
+  scheduleVisualScrollRef.current = scheduleVisualScroll;
+  flushVisualScrollRef.current = flushVisualScroll;
   commitVisualScrollRef.current = commitVisualScroll;
   rebaseVisualScrollRef.current = rebaseVisualScroll;
 
@@ -2489,7 +2582,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const settle = () => {
         inertiaFrameRef.current = 0;
         inertiaBrakingRef.current = false;
-        applyVisualScrollRef.current(scrollX, scrollY);
+        applyVisualScrollNowRef.current(scrollX, scrollY);
         // Paint while live camera still holds the coast position, then push
         // into Excalidraw. Commit clears live on the next frame.
         rasterInkRef.current?.setCameraMoving(false);
@@ -2518,7 +2611,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           settle();
           return;
         }
-        applyVisualScrollRef.current(scrollX, scrollY);
+        applyVisualScrollNowRef.current(scrollX, scrollY);
         inertiaFrameRef.current = requestAnimationFrame(step);
       };
       rasterInkRef.current?.setCameraMoving(true);
@@ -2575,6 +2668,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         sideScrollActive: false,
         sideScrollAnchorX: event.clientX,
         sideScrollStart: sideScroll?.scrollLeft ?? 0,
+        zoom: cam.zoom,
       };
       if (!deferred) {
         try {
@@ -2646,6 +2740,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         drag.startClientY = event.clientY;
         drag.lastClientY = event.clientY;
         drag.lastT = performance.now();
+        drag.zoom = cam.zoom;
         drag.armed = true;
         if (drag.deferred) {
           drag.codeDockEl?.classList.add("lc-code-dock-scrolling");
@@ -2661,7 +2756,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       event.preventDefault();
       event.stopPropagation();
 
-      const zoom = readScroll().zoom;
+      const zoom = drag.zoom;
       const lockX = lockedScrollXRef.current;
       const nextY =
         drag.startScrollY +
@@ -2682,7 +2777,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       drag.lastT = now;
       lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
 
-      applyVisualScrollRef.current(scrollX, scrollY);
+      scheduleVisualScrollRef.current(scrollX, scrollY);
     };
 
     const onPointerUp = (event: PointerEvent) => {
@@ -2700,6 +2795,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!handPanningRef.current) return;
       handPanningRef.current = false;
       panDragRef.current = null;
+
+      // Apply the last scheduled sample before velocity / settle so the coast
+      // starts from where the finger actually was, not one rAF behind.
+      flushVisualScrollRef.current();
 
       if (!canOwnScroll()) {
         rasterInkRef.current?.setCameraMoving(false);
@@ -3513,17 +3612,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         event.preventDefault();
         event.stopPropagation();
         userAdjustedCameraRef.current = true;
-        // Prefer live camera when a gesture is already mid-flight.
+        // Prefer pending (scheduled) then live — wheel samples coalesce, so
+        // chaining off only `live` would drop travel still waiting on rAF.
+        const pending = pendingVisualScrollRef.current;
         const live = liveCameraRef.current;
-        const baseY = live?.live ? live.scrollY : (state.scrollY ?? 0);
-        const baseX = live?.live ? live.scrollX : (state.scrollX ?? 0);
+        const baseY = pending
+          ? pending.scrollY
+          : live?.live
+            ? live.scrollY
+            : (state.scrollY ?? 0);
+        const baseX = pending
+          ? pending.scrollX
+          : live?.live
+            ? live.scrollX
+            : (state.scrollX ?? 0);
         const wheeled = clampPanScroll(
           baseX,
           baseY - (event.deltaY / zoom) * SCROLL_WHEEL_GAIN,
           zoom,
         );
         if (scrollModeRef.current) lockedScrollXRef.current = wheeled.scrollX;
-        applyVisualScrollRef.current(wheeled.scrollX, wheeled.scrollY);
+        scheduleVisualScrollRef.current(wheeled.scrollX, wheeled.scrollY);
         return;
       }
 
