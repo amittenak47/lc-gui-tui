@@ -52,7 +52,6 @@ import {
   liveSmoothingTau,
   liveSmoothingWeight,
   LIVE_MAX_LAG_NIBS,
-  SIMPLIFY_LIVE_FRACTION,
   smoothInkPoints,
   type InkSmoothingMode,
 } from "./inkSmoothing";
@@ -700,22 +699,27 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       // In live mode the filter already ran under the nib; running it again on
       // the lift would move ink the writer has already watched settle.
       const isLive = smoothingModeRef.current === "live";
-      const smoothing = isLive ? 0 : smoothingRef.current;
-      // Unconditional for a pen stroke, even at zero smoothing: below the
-      // requested tolerance sits a storage floor that thins the stamp chain
-      // without moving the line — see SIMPLIFY_STORAGE_FRACTION. The eraser is
-      // left alone, its stamps being a coverage mask rather than a path.
+      const strength = smoothingRef.current;
+      /*
+       * Pressure strokes paint many translucent abutting runs. Storage RDP
+       * (always-on 1/15-nib thin) drops samples on lift, runs regroup, and the
+       * fill jumps — ugly on bold nibs. Keep every stamp when smoothing is off;
+       * when smoothing is on, thin only by the dial (minFraction 0), never the
+       * storage floor. Opaque constant-width strokes still get the cheap thin.
+       */
       const committed =
-        live.kind === "draw"
-          ? {
-              ...live,
-              points: smoothInkPoints(
-                live.points,
-                smoothing,
-                inkLineWidth(live.baseWidth, 0, false),
-                isLive ? SIMPLIFY_LIVE_FRACTION : undefined,
-              ),
-            }
+        live.kind === "draw" && !isLive
+          ? live.pressureSensitive && strength <= 0
+            ? live
+            : {
+                ...live,
+                points: smoothInkPoints(
+                  live.points,
+                  strength,
+                  inkLineWidth(live.baseWidth, 0, false),
+                  live.pressureSensitive ? 0 : undefined,
+                ),
+              }
           : live;
 
       opsRef.current = [...opsRef.current, committed];
@@ -1120,7 +1124,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               kind: "draw",
               color: inkColorRef.current,
               baseWidth: width,
-              maxFullness: pressureSensitive ? inkFullnessRef.current : 1,
+              // Top of dial stores 0.999 so a paragraph still dries; exactly 1
+              // is reserved for pressure-off (no reservoir).
+              maxFullness: pressureSensitive
+                ? Math.min(inkFullnessRef.current, 0.999)
+                : 1,
               pressureClip: pressureClipRef.current,
               pressureSensitive,
               speedInk: speed,
@@ -1132,7 +1140,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               kind: "draw",
               color: inkColorRef.current,
               baseWidth: width,
-              maxFullness: pressureSensitive ? inkFullnessRef.current : 1,
+              maxFullness: pressureSensitive
+                ? Math.min(inkFullnessRef.current, 0.999)
+                : 1,
               pressureClip: pressureClipRef.current,
               pressureSensitive,
               speedInk: speed,

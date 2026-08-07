@@ -44,14 +44,14 @@ export const INK_SMOOTHING_MODE_DEFAULT: InkSmoothingMode = "lift";
  * Converting through `1 - e^(-dt/tau)` makes the dial a promise about
  * milliseconds of lag, which is the thing the hand actually feels.
  *
- * Lag is capped in space via {@link clampLiveLag}, not by keeping tau short:
- * the nib may trail the pen but stays within about a nib of it, so tight loops
- * no longer close from over-smoothing alone.
+ * Lag is capped in space via {@link clampLiveLag}. The dial is compressed so
+ * the usable range sits in the bottom quarter of the UI: full strength is about
+ * two frames of lag, not a third of a second.
  */
-export const LIVE_SMOOTHING_MAX_TAU_MS = 90;
+export const LIVE_SMOOTHING_MAX_TAU_MS = 32;
 
 /** Max distance the smoothed nib may trail the pen, in nib widths. */
-export const LIVE_MAX_LAG_NIBS = 1.25;
+export const LIVE_MAX_LAG_NIBS = 0.85;
 
 /**
  * Pull the nib back toward the pen when it has lagged farther than `maxLag`.
@@ -265,6 +265,9 @@ function blendPoint(from: ScenePoint, to: ScenePoint, t: number): ScenePoint {
 /**
  * Smooth a committed stroke. `strength` is the settings dial (0–1); `nibWidth`
  * is the stroke's line width in scene units, which sets what counts as jitter.
+ *
+ * The dial is compressed: UI 100% ≈ the old default (~0.35). Writers treat the
+ * bottom quarter as the usable range; the top half used to over-round.
  */
 export function smoothInkPoints(
   points: readonly ScenePoint[],
@@ -272,14 +275,18 @@ export function smoothInkPoints(
   nibWidth: number,
   minFraction?: number,
 ): ScenePoint[] {
-  const amount = Math.max(0, Math.min(1, strength));
+  const dial = Math.max(0, Math.min(1, strength));
+  // Compress the UI dial: full travel ≈ old ~40% strength.
+  const amount = dial * 0.4;
   if (points.length < 3) return [...points];
 
   const width = Math.max(nibWidth, 1e-6);
   const floorFrac = minFraction ?? SIMPLIFY_STORAGE_FRACTION;
+  // Thin a bit harder than Chaikin rounds, so passes cannot explode point count.
+  const simplifyAmount = dial * 0.55;
   const tolerance = Math.max(
     width * floorFrac,
-    width * SIMPLIFY_MAX_FRACTION * amount,
+    width * SIMPLIFY_MAX_FRACTION * simplifyAmount,
   );
   let out = simplifyInkPoints(points, tolerance);
   for (let pass = roundingPasses(amount); pass > 0; pass--) {
