@@ -291,6 +291,20 @@ export interface AgentSidePanelProps {
    * all. Defaults to `problem` so nothing changes for the attempt flow.
    */
   coachSurface?: CoachSurface;
+  /**
+   * A quote pushed in from outside the panel — the document pad's "Coach" on a
+   * text selection.
+   *
+   * Carries a token rather than being cleared by the panel, so quoting the same
+   * sentence twice still lands: the effect keys off the token changing, and the
+   * caller owns the value. The panel never writes back to it.
+   */
+  quoteSeed?: { token: number; text: string } | null;
+  /**
+   * Open this thread — a footnote tapped on the page. Same token contract as
+   * {@link quoteSeed}; `null` id returns to the room.
+   */
+  focusThread?: { token: number; rootId: string | null } | null;
   onSend: (text: string, flags: CoachSendFlags) => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
@@ -316,6 +330,8 @@ export function AgentSidePanel({
   messages,
   askOnly = false,
   coachSurface = "problem",
+  quoteSeed = null,
+  focusThread = null,
   onSend,
   onThreadChange,
   onRequestBridge,
@@ -397,6 +413,42 @@ export function AgentSidePanel({
       }
     }
   }, [messages, openThreadId]);
+
+  /*
+   * A quote pushed in from the page.
+   *
+   * Appended rather than replacing the draft: the reader may already have half
+   * a question typed, and losing it to a selection they made to *support* that
+   * question would be the worst possible moment to lose it. Blockquoted so the
+   * coach can see where the writer's words stop and the document's begin.
+   */
+  const lastQuoteTokenRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!quoteSeed || quoteSeed.token === lastQuoteTokenRef.current) return;
+    lastQuoteTokenRef.current = quoteSeed.token;
+    const quoted = quoteSeed.text
+      .trim()
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    setDraft((current) => (current.trim() ? `${current.trimEnd()}\n\n${quoted}\n\n` : `${quoted}\n\n`));
+    window.setTimeout(() => {
+      const node = composerRef.current;
+      if (!node) return;
+      node.focus();
+      node.selectionStart = node.value.length;
+      node.selectionEnd = node.value.length;
+      node.scrollTop = node.scrollHeight;
+    }, 0);
+  }, [quoteSeed]);
+
+  /** A footnote tapped on the page — jump the panel to the thread it made. */
+  const lastFocusTokenRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!focusThread || focusThread.token === lastFocusTokenRef.current) return;
+    lastFocusTokenRef.current = focusThread.token;
+    setOpenThreadId(focusThread.rootId);
+  }, [focusThread]);
 
   useEffect(() => {
     threadMotionRef.current = threadMotion;

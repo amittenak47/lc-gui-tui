@@ -19,6 +19,7 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
+import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 
 export const MD_INK_LIBRARY_LIMIT = 30;
 
@@ -51,6 +52,15 @@ export interface MdInkDoc extends MdInkDocMeta {
    */
   source: string;
   board: BoardBlob;
+  /**
+   * Marks left by the reading session — see `docFootnotes`.
+   *
+   * Kept here rather than on the `BoardBlob` because a footnote is not a thing
+   * on the canvas: it is anchored to characters in the source, and it has to
+   * survive a board that gets cleared. Optional so entries saved before
+   * footnotes existed still load.
+   */
+  footnotes?: DocFootnote[];
 }
 
 const LIBRARY_KEY = "lc.md-ink.library.v1";
@@ -85,7 +95,8 @@ function readLibrary(): MdInkDoc[] {
         typeof entry.source === "string" &&
         entry.board?.v === 1 &&
         Array.isArray(entry.board.elements),
-    );
+    )
+    .map((entry) => ({ ...entry, footnotes: sanitizeFootnotes(entry.footnotes) }));
   } catch {
     return [];
   }
@@ -143,6 +154,7 @@ export function saveMdInkDoc(input: {
   hash: string;
   source: string;
   board: BoardBlob;
+  footnotes?: readonly DocFootnote[];
 }): MdInkDoc {
   const library = readLibrary();
   const now = Date.now();
@@ -165,6 +177,10 @@ export function saveMdInkDoc(input: {
     updatedAt: now,
     source: input.source,
     board: input.board,
+    // Undefined means "this caller does not track footnotes", not "there are
+    // none" — an autosave from a path that never loaded them must not wipe the
+    // set the reading session built up.
+    footnotes: input.footnotes ? [...input.footnotes] : existing?.footnotes ?? [],
   };
   writeLibrary([next, ...library.filter((entry) => entry.id !== id)]);
   return next;

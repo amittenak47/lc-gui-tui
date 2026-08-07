@@ -97,8 +97,18 @@ import {
 import { MOBILE_REGION_ORDER, REGION_BLURB, REGIONS, type RegionId } from "./templates/regions";
 import { splitProblemKey } from "./util/datasetKey";
 import { useIsMobile } from "./util/mobile";
+import {
+  addFootnote,
+  freshFootnoteId,
+  googleSearchUrl,
+  removeFootnote,
+  searchQueryFor,
+  type DocFootnote,
+} from "./util/docFootnotes";
 import { installHandednessAttr } from "./util/inkHandedness";
+import { openExternalUrl } from "./util/openExternal";
 import { installSafeAreaInsets } from "./util/safeArea";
+import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelectionLayer";
 import { MdInkDialog } from "./modes/MdInkDialog";
 import { MdInkDocument } from "./modes/MdInkDocument";
 import { StatementDocument } from "./modes/StatementDocument";
@@ -287,6 +297,32 @@ export function App() {
   } | null>(null);
   /** Library entry this session is writing to, once it has one. */
   const [mdInkDocId, setMdInkDocId] = useState<string | null>(null);
+  /**
+   * Marks this reading session has left on the page.
+   *
+   * State as well as a ref: the ribbons are rendered from it, and the autosave
+   * tick — which runs outside React — writes it to the library entry.
+   */
+  const [mdInkFootnotes, setMdInkFootnotes] = useState<DocFootnote[]>([]);
+  const mdInkFootnotesRef = useRef<DocFootnote[]>([]);
+  mdInkFootnotesRef.current = mdInkFootnotes;
+  /**
+   * A quote waiting for the send that will give it a thread to point at.
+   *
+   * "Coach" on a selection cannot make its footnote there and then: the thread
+   * it belongs to does not exist until the writer actually sends something, and
+   * a ribbon pointing at nothing is worse than no ribbon. So the anchor waits
+   * here, and the next send claims it.
+   */
+  const pendingQuoteRef = useRef<DocSelectionResult | null>(null);
+  const [coachQuoteSeed, setCoachQuoteSeed] = useState<{
+    token: number;
+    text: string;
+  } | null>(null);
+  const [coachFocusThread, setCoachFocusThread] = useState<{
+    token: number;
+    rootId: string | null;
+  } | null>(null);
   const [mdInkEntryOpen, setMdInkEntryOpen] = useState(false);
   // Read from the autosave interval, which must not be torn down and rebuilt
   // every time one of these changes — a restarted timer is a skipped save.
@@ -1110,7 +1146,10 @@ export function App() {
          * opening a document to read it never creates a library entry. Discard
          * on the way out undoes whatever these ticks committed.
          */
-        if (mdInkPristineHashRef.current === hash) {
+        // An untouched board is not an untouched document: a reading session
+        // can leave footnotes without ever putting the pen down, and those are
+        // exactly as worth keeping as ink.
+        if (mdInkPristineHashRef.current === hash && mdInkFootnotesRef.current.length === 0) {
           lastSavedHashRef.current = hash;
           return;
         }
@@ -1123,6 +1162,7 @@ export function App() {
             hash: source.hash,
             source: source.text,
             board: board.saveBoard(),
+            footnotes: mdInkFootnotesRef.current,
           });
           if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
           lastSavedHashRef.current = hash;
@@ -1670,6 +1710,11 @@ export function App() {
           boardRef.current?.seedTemplate(skeletons);
           setMdInkDocId(null);
         }
+        // Footnotes belong to the entry, so a fresh open of the same file gets
+        // its marks back and an unrelated document starts clean.
+        setMdInkFootnotes(existing?.footnotes ?? []);
+        mdInkFootnotesRef.current = existing?.footnotes ?? [];
+        pendingQuoteRef.current = null;
 
         mdInkBaselineRef.current = {
           id: existing?.id ?? null,
@@ -2119,11 +2164,15 @@ export function App() {
       >,
     ) => {
       dirtyRef.current = true;
+      // Minted here rather than inside the updater: callers need the id to
+      // hang things off the turn (a document footnote, for one), and an
+      // updater can be re-run by React without meaning a second message.
+      const id = `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       setCoachMessages((current) => {
         let next: CoachChatMessage[] = [
           ...current,
           {
-            id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            id,
             role,
             content,
             at: Date.now(),
@@ -2135,6 +2184,7 @@ export function App() {
         }
         return next;
       });
+      return id;
     },
     [],
   );
@@ -2718,13 +2768,37 @@ export function App() {
           attachments = [...(attachments ?? []), codeShot];
         }
 
-        pushCoachMessage("user", text || "Send", {
+        const userMessageId = pushCoachMessage("user", text || "Send", {
           ...(attachments ? { attachments } : {}),
           ...(flagBits.length > 0 ? { flags: flagBits } : {}),
           ...(flags.replyTo ?? threadAnchor
             ? { replyTo: flags.replyTo ?? threadAnchor ?? undefined }
             : {}),
         });
+
+        /*
+         * A quote taken from the page finally gets its ribbon.
+         *
+         * It waited for this turn because the thread it points at is this turn
+         * — either the root of a new one, or the root of whichever the writer
+         * was already inside. Either way the id exists now and did not when the
+         * selection was made.
+         */
+        const quoted = pendingQuoteRef.current;
+        pendingQuoteRef.current = null;
+        if (quoted) {
+          const rootId = anchorId ?? userMessageId;
+          setMdInkFootnotes((current) =>
+            addFootnote(current, {
+              id: freshFootnoteId(current),
+              kind: "coach",
+              anchor: quoted.anchor,
+              excerpt: quoted.excerpt,
+              createdAt: Date.now(),
+              threadRootId: rootId,
+            }),
+          );
+        }
 
         /*
          * Say what is being replied to, for the model as well as the reader.
@@ -3199,6 +3273,9 @@ export function App() {
     mdInkBaselineRef.current = { id: null, entry: null };
     mdInkPristineHashRef.current = null;
     setMdInkDocId(null);
+    setMdInkFootnotes([]);
+    mdInkFootnotesRef.current = [];
+    pendingQuoteRef.current = null;
   }, [mdInkDocId]);
 
   /** Commit the annotations to the library. Returns the entry, or null on failure. */
@@ -3215,6 +3292,7 @@ export function App() {
         hash: source.hash,
         source: source.text,
         board: blob,
+        footnotes: mdInkFootnotes,
       });
       setMdInkDocId(saved.id);
       // Discard now rolls back to this save, not past it.
@@ -3228,7 +3306,65 @@ export function App() {
       setError(messageOf(cause));
       return null;
     }
-  }, [mdInkDocId, mdInkSource]);
+  }, [mdInkDocId, mdInkFootnotes, mdInkSource]);
+
+
+  /*
+   * What a quote from the page can become.
+   *
+   * Three destinations, and only two of them leave a mark. Copy is the one that
+   * does not: nothing was created for a ribbon to point at, and a page dotted
+   * with "I copied this once" markers is a page you stop reading.
+   */
+  const onDocCoach = useCallback((selection: DocSelectionResult) => {
+    pendingQuoteRef.current = selection;
+    setCoachOpen(true);
+    setCoachQuoteSeed({ token: Date.now(), text: selection.text });
+  }, []);
+
+  const onDocCopy = useCallback((selection: DocSelectionResult) => {
+    void navigator.clipboard?.writeText(selection.text).catch(() => {
+      setError("this device would not let the app write to the clipboard");
+    });
+  }, []);
+
+  const onDocSearch = useCallback((selection: DocSelectionResult) => {
+    const query = searchQueryFor(selection.text);
+    if (!query) return;
+    const url = googleSearchUrl(query);
+    // The footnote is written before the browser opens, not after: leaving the
+    // app is exactly when a promise callback is least likely to be waited for.
+    setMdInkFootnotes((current) =>
+      addFootnote(current, {
+        id: freshFootnoteId(current),
+        kind: "search",
+        anchor: selection.anchor,
+        excerpt: selection.excerpt,
+        createdAt: Date.now(),
+        query,
+        url,
+      }),
+    );
+    void openExternalUrl(url).catch(() => {
+      setError("could not hand the search to a browser on this device");
+    });
+  }, []);
+
+  const onOpenFootnote = useCallback((footnote: DocFootnote) => {
+    if (footnote.kind === "search") {
+      const url = footnote.url ?? googleSearchUrl(footnote.query ?? footnote.excerpt);
+      void openExternalUrl(url).catch(() => {
+        setError("could not hand the search to a browser on this device");
+      });
+      return;
+    }
+    setCoachOpen(true);
+    setCoachFocusThread({ token: Date.now(), rootId: footnote.threadRootId ?? null });
+  }, []);
+
+  const onRemoveFootnote = useCallback((footnote: DocFootnote) => {
+    setMdInkFootnotes((current) => removeFootnote(current, footnote.id));
+  }, []);
 
   const leaveProblem = useCallback(
     (next: () => void) => {
@@ -3887,12 +4023,24 @@ export function App() {
                 ? codeContentHeight + CODE_PAGE_TAIL
                 : null
             }
+            selectableContent={Boolean(problem && isMdInk(problem) && mdInkSource)}
             pageContent={
               problem && isMdInk(problem) && mdInkSource ? (
-                <MdInkDocument
-                  source={mdInkSource.text}
-                  onMeasure={onMdInkMeasure}
-                />
+                <DocSelectionLayer
+                  enabled={!annotateCode}
+                  footnotes={mdInkFootnotes}
+                  onCoach={onDocCoach}
+                  onCopy={onDocCopy}
+                  onSearch={onDocSearch}
+                  onOpenFootnote={onOpenFootnote}
+                  onRemoveFootnote={onRemoveFootnote}
+                >
+                  <MdInkDocument
+                    source={mdInkSource.text}
+                    onMeasure={onMdInkMeasure}
+                    selectable={!annotateCode}
+                  />
+                </DocSelectionLayer>
               ) : problem &&
                 !isLocalPad(problem) &&
                 (!mobile || activeRegion === "constraints") ? (
@@ -4016,6 +4164,8 @@ export function App() {
             messages={coachMessages}
             askOnly={isLocalPad(problem)}
             coachSurface={isLocalPad(problem) ? "pad" : "problem"}
+            quoteSeed={coachQuoteSeed}
+            focusThread={coachFocusThread}
             onThreadChange={(rootId) => {
               threadRootIdRef.current = rootId;
             }}
