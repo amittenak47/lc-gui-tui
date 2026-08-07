@@ -109,6 +109,8 @@ import {
   type TextPlaceViewport,
 } from "./textPlacement";
 import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
+import { panDelta } from "./panOffset";
+import { horizontalScrollHost } from "./scrollHost";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
@@ -1092,6 +1094,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     /** Code dock: defer arming so taps still focus Monaco. */
     codeDock: boolean;
     codeDockEl: Element | null;
+    /** Arming (and with it `preventDefault` and capture) waited for a direction. */
+    deferred: boolean;
+    /**
+     * Wide codeblock under the finger.
+     *
+     * Same deal as the code dock: arming is deferred until the gesture says
+     * which way it is going. Mostly sideways scrolls the block, mostly down
+     * pans the page — the axis decides the owner, once, and it keeps it.
+     */
+    sideScroll: HTMLElement | null;
+    sideScrollActive: boolean;
+    sideScrollAnchorX: number;
+    sideScrollStart: number;
   } | null>(null);
   /**
    * Live camera while reading-scroll is in flight.
@@ -1119,6 +1134,40 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const cameraMotionActiveRef = useRef(false);
   const applyVisualScrollRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
   const commitVisualScrollRef = useRef<() => void>(() => {});
+  const rebaseVisualScrollRef = useRef<() => void>(() => {});
+
+  /**
+   * How far the page has been dragged from the camera everything was painted at.
+   *
+   * Reading scroll leaves Excalidraw's camera alone (see `applyVisualScroll`),
+   * so the ink bitmap, Excalidraw's own canvases, the lined paper and the page
+   * title are all still correct *relative to the page* and wrong only by this
+   * translation. Publishing it as a pair of custom properties on the board lets
+   * the stylesheet move all of them on the compositor — no reblit, no layout,
+   * no `updateScene` — which is the whole point of the exercise: a coast should
+   * cost a transform, not a repaint of every layer on the board.
+   */
+  const panOffsetRef = useRef({ x: 0, y: 0 });
+  const setPagePanOffset = useCallback((dx: number, dy: number) => {
+    const root = boardRef.current;
+    if (!root) return;
+    const current = panOffsetRef.current;
+    if (current.x === dx && current.y === dy) return;
+    panOffsetRef.current = { x: dx, y: dy };
+    root.style.setProperty("--lc-pan-x", `${dx}px`);
+    root.style.setProperty("--lc-pan-y", `${dy}px`);
+  }, []);
+
+  const setPagePanOffsetRef = useRef(setPagePanOffset);
+  setPagePanOffsetRef.current = setPagePanOffset;
+
+  /** Put every layer back on its painted coordinates. */
+  const clearPanOffsets = useCallback(() => {
+    setPagePanOffset(0, 0);
+    rasterInkRef.current?.setPanOffset(null);
+  }, [setPagePanOffset]);
+  const clearPanOffsetsRef = useRef(clearPanOffsets);
+  clearPanOffsetsRef.current = clearPanOffsets;
 
   const pulseCameraMotion = useCallback(() => {
     if (!cameraMotionActiveRef.current) {
@@ -1500,6 +1549,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       clear();
       return;
     }
+    // Committed camera: the title rides a live pan on the shared translate —
+    // see the note in `reportLinedSlot`.
     const state = api.getAppState() as {
       scrollX?: number;
       scrollY?: number;
@@ -1563,11 +1614,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       lastContentSlotRef.current = null;
       return;
     }
-    const state = api.getAppState() as {
-      scrollX?: number;
-      scrollY?: number;
-      zoom?: { value?: number };
-    };
+    /*
+     * The live camera wins while a gesture owns it.
+     *
+     * Unlike the ink and the overlays, this slot is not carried by the shared
+     * pan translate — `applyVisualScroll` writes its absolute transform every
+     * sample. A report that ran mid-gesture off Excalidraw's (deliberately
+     * frozen) appState would therefore drag the markdown back to where the
+     * gesture started, one frame before the next sample dragged it forward
+     * again: the page tearing away from the ink on top of it.
+     */
+    const live = liveCameraRef.current;
+    const state = live?.live
+      ? { scrollX: live.scrollX, scrollY: live.scrollY, zoom: { value: live.zoom } }
+      : (api.getAppState() as {
+          scrollX?: number;
+          scrollY?: number;
+          zoom?: { value?: number };
+        });
     const zoom = state.zoom?.value ?? 1;
     const next = {
       left: (bounds.minX + (state.scrollX ?? 0)) * zoom,
@@ -1672,6 +1736,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       return;
     }
+    /*
+     * Committed camera, deliberately — the rules ride the live pan on the
+     * shared `--lc-pan-*` translate (see `setPagePanOffset`). Reporting the
+     * live camera here as well would apply the gesture twice, and writing
+     * `left`/`top` per sample would lay out and repaint this gradient on the
+     * main thread at pointer rate, which is exactly what the translate exists
+     * to avoid. Mid-gesture the numbers below cannot change, so this early-outs.
+     */
     const state = api.getAppState() as {
       scrollX?: number;
       scrollY?: number;
@@ -1794,18 +1866,46 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return true;
   }, [syncPageVisibility]);
 
+  const runSlotReports = useCallback(() => {
+    // Code dock only exists on the code page — skip the scene walk elsewhere.
+    const page = mobileRegionRef.current;
+    if (page === null || page === "code") reportCodeSlot();
+    reportLinedSlot();
+    reportTitleSlot();
+    reportContentSlot();
+  }, [reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot]);
+
   const scheduleSlotReports = useCallback(() => {
     if (slotReportFrameRef.current) return;
     slotReportFrameRef.current = requestAnimationFrame(() => {
       slotReportFrameRef.current = 0;
-      // Code dock only exists on the code page — skip the scene walk elsewhere.
-      const page = mobileRegionRef.current;
-      if (page === null || page === "code") reportCodeSlot();
-      reportLinedSlot();
-      reportTitleSlot();
-      reportContentSlot();
+      runSlotReports();
     });
-  }, [reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot]);
+  }, [runSlotReports]);
+
+  /**
+   * End a live pan: drop the translates and put every slot back on absolute
+   * coordinates, in one frame.
+   *
+   * One frame is the whole requirement. The offsets and the slot reports
+   * describe the same position two different ways, so a frame that has applied
+   * one and not the other shows the page kicked by the length of the gesture —
+   * the snap that used to end every flick. Anything already booked for this
+   * frame is cancelled so this is the last word on it, and the ink's own
+   * repaint (queued by the caller) lands in the same batch.
+   */
+  const landPanOffset = useCallback(
+    (onLanded?: () => void) => {
+      if (slotReportFrameRef.current) cancelAnimationFrame(slotReportFrameRef.current);
+      slotReportFrameRef.current = requestAnimationFrame(() => {
+        slotReportFrameRef.current = 0;
+        clearPanOffsetsRef.current();
+        runSlotReports();
+        onLanded?.();
+      });
+    },
+    [runSlotReports],
+  );
 
   const clampPanScroll = useCallback((scrollX: number, scrollY: number, zoom: number) => {
     if (!mobileRef.current || mobileRegionRef.current == null) {
@@ -2180,7 +2280,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   /**
-   * Move markdown + ink for one scroll sample — no Excalidraw `updateScene`.
+   * Move the page for one scroll sample — no `updateScene`, no reblit.
+   *
+   * Everything on the board is bound to page coordinates for the duration of
+   * the gesture: the markdown slot takes its absolute transform, and the ink,
+   * Excalidraw's canvases and the overlays take the delta from the camera they
+   * were painted at. That is one compositor translate per layer per frame,
+   * against the clear-and-blit of the whole ink layer this used to do — the
+   * difference between a coast that costs `Board.step` and one that costs
+   * `Board.step` plus a full raster pass.
    */
   const applyVisualScroll = useCallback((scrollX: number, scrollY: number) => {
     const api = apiRef.current;
@@ -2220,10 +2328,54 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       };
     }
     pulseCameraMotionRef.current();
-    if (!rasterInkRef.current?.isDrawing()) {
-      rasterInkRef.current?.syncCamera();
+
+    /*
+     * Ride, or rebase.
+     *
+     * The ink measures the delta against its own last paint and the overlays
+     * against Excalidraw's appState — the same camera in the ordinary case, and
+     * each one right on its own terms when a mid-gesture repaint has moved one
+     * of them. Either can veto: a zoom (no translate expresses a rescale) or
+     * half a viewport of travel (past which the painted screenful runs out) go
+     * through a real paint instead.
+     */
+    const liveCam = { scrollX, scrollY, zoom };
+    const committed = { scrollX: state.scrollX ?? 0, scrollY: state.scrollY ?? 0, zoom };
+    const delta = panDelta(liveCam, committed, { width: state.width, height: state.height });
+    const inkRides = rasterInkRef.current?.setPanOffset(liveCam) ?? true;
+    if (delta.rebase || !inkRides) {
+      rebaseVisualScrollRef.current();
+      return;
     }
+    setPagePanOffsetRef.current(delta.dx, delta.dy);
   }, []);
+
+  /**
+   * Mid-gesture repaint: adopt the live camera as the painted one and carry on.
+   *
+   * A translate can only borrow against a screenful that has already been
+   * painted, so a long flick has to stop and pay for a real one somewhere. Do
+   * it as a normal settle — push the camera into Excalidraw, repaint the ink
+   * once, re-report the slots — except that the gesture stays live, so the next
+   * sample starts riding again from zero.
+   */
+  const rebaseVisualScroll = useCallback(() => {
+    const live = liveCameraRef.current;
+    const api = apiRef.current;
+    if (!live?.live || !api) return;
+    committingScrollRef.current = true;
+    api.updateScene({
+      appState: { scrollX: live.scrollX, scrollY: live.scrollY },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    // Coalesced into this frame's rAF, ahead of `landPanOffset`'s — the ink is
+    // repainted for the camera we just committed before the offsets that were
+    // standing in for it are dropped.
+    rasterInkRef.current?.syncCamera();
+    landPanOffset(() => {
+      committingScrollRef.current = false;
+    });
+  }, [landPanOffset]);
 
   /**
    * Push live camera into Excalidraw once the gesture settles.
@@ -2235,20 +2387,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const commitVisualScroll = useCallback(() => {
     const live = liveCameraRef.current;
-    if (!live?.live) return;
+    if (!live?.live) {
+      // Nothing was riding, but a gesture that never went live (a tap, a tool
+      // change) must not leave a stale translate on the board.
+      clearPanOffsetsRef.current();
+      return;
+    }
     committingScrollRef.current = true;
     apiRef.current?.updateScene({
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
-    requestAnimationFrame(() => {
+    landPanOffset(() => {
       committingScrollRef.current = false;
       if (liveCameraRef.current === live) live.live = false;
     });
-    scheduleSlotReports();
-  }, [scheduleSlotReports]);
+  }, [landPanOffset]);
   applyVisualScrollRef.current = applyVisualScroll;
   commitVisualScrollRef.current = commitVisualScroll;
+  rebaseVisualScrollRef.current = rebaseVisualScroll;
 
   useEffect(() => {
     if (!interactive) return;
@@ -2371,19 +2528,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const codeDockEl = onCodeDock
         ? resolveElement(event.target)?.closest(".lc-code-dock") ?? null
         : null;
+      // A wide codeblock defers the same way the dock does: which axis the
+      // gesture turns out to be is what decides who owns it.
+      const sideScroll = onCodeDock ? null : horizontalScrollHost(event.target);
+      const deferred = onCodeDock || sideScroll != null;
 
       if (inertiaFrameRef.current) {
         inertiaBrakingRef.current = true;
       }
 
       // Code dock: defer preventDefault until pan arms — taps must reach Monaco.
-      if (!onCodeDock) {
+      if (!deferred) {
         event.preventDefault();
         event.stopPropagation();
       }
 
       handPanningRef.current = true;
-      if (!onCodeDock) {
+      if (!deferred) {
         rasterInkRef.current?.setCameraMoving(true);
       }
       panVelocityRef.current = { x: 0, y: 0 };
@@ -2400,11 +2561,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         startScrollY: cam.scrollY,
         lastClientY: event.clientY,
         lastT: now,
-        armed: onCodeDock ? false : touchLike,
+        armed: deferred ? false : touchLike,
         codeDock: onCodeDock,
         codeDockEl,
+        deferred,
+        sideScroll,
+        sideScrollActive: false,
+        sideScrollAnchorX: event.clientX,
+        sideScrollStart: sideScroll?.scrollLeft ?? 0,
       };
-      if (!onCodeDock) {
+      if (!deferred) {
         try {
           root.setPointerCapture(event.pointerId);
         } catch {
@@ -2421,6 +2587,50 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       const dx = event.clientX - drag.startClientX;
       const dy = event.clientY - drag.startClientY;
+
+      /*
+       * A codeblock that has already claimed the gesture keeps it to the end.
+       *
+       * Scrolling it by hand rather than leaving it to the browser is not
+       * belt-and-braces: reading mode sets `touch-action: none` on the board so
+       * that our own pan can arm at all, and that intersects with anything a
+       * descendant asks for. Nothing native is going to scroll this box.
+       */
+      if (drag.sideScrollActive && drag.sideScroll) {
+        event.preventDefault();
+        event.stopPropagation();
+        drag.sideScroll.scrollLeft =
+          drag.sideScrollStart - (event.clientX - drag.sideScrollAnchorX);
+        return;
+      }
+      if (drag.sideScroll && !drag.armed) {
+        if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD_PX) return;
+        if (Math.abs(dx) > Math.abs(dy)) {
+          drag.sideScrollActive = true;
+          // Anchor on the sample that decided it, so the block does not jump
+          // by the threshold the moment it takes over.
+          drag.sideScrollAnchorX = event.clientX;
+          drag.sideScrollStart = drag.sideScroll.scrollLeft;
+          // A coast the finger landed on is over, and the page will not move
+          // again this gesture — settle it here rather than leaving the board
+          // sitting on a translate that no lift is going to come and clear.
+          stopPanInertia();
+          inertiaBrakingRef.current = false;
+          rasterInkRef.current?.setCameraMoving(false);
+          commitVisualScrollRef.current();
+          event.preventDefault();
+          event.stopPropagation();
+          try {
+            root.setPointerCapture(event.pointerId);
+          } catch {
+            /* capture is best-effort on some hosts */
+          }
+          return;
+        }
+        // Vertical: the page wins, and the block is out of it for this gesture.
+        drag.sideScroll = null;
+      }
+
       if (!drag.armed) {
         if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD_PX) return;
         stopPanInertia();
@@ -2431,7 +2641,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         drag.lastClientY = event.clientY;
         drag.lastT = performance.now();
         drag.armed = true;
-        if (drag.codeDock) {
+        if (drag.deferred) {
           drag.codeDockEl?.classList.add("lc-code-dock-scrolling");
           rasterInkRef.current?.setCameraMoving(true);
           try {
@@ -2488,6 +2698,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!canOwnScroll()) {
         rasterInkRef.current?.setCameraMoving(false);
         commitVisualScrollRef.current();
+        return;
+      }
+
+      // The codeblock had the gesture; the page never moved and has nothing to
+      // settle. Keep the lift away from Excalidraw all the same.
+      if (drag?.sideScrollActive) {
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
 
@@ -3246,6 +3464,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       // Reading mode mutes .excalidraw hits — wheel still lands on .lc-board.
       if (!target.closest(".lc-board")) return;
+
+      /*
+       * Sideways over a wide codeblock is the block's, not the page's.
+       *
+       * A trackpad and a shifted wheel are the two ways to ask for it. The
+       * first the browser can serve itself once we stop calling
+       * `preventDefault` on it; the second it only sometimes maps to `deltaX`,
+       * so do it by hand when it has not.
+       */
+      const sideScroll = horizontalScrollHost(target);
+      if (sideScroll) {
+        if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+        if (event.shiftKey && event.deltaY !== 0) {
+          event.preventDefault();
+          event.stopPropagation();
+          sideScroll.scrollLeft += event.deltaY;
+          return;
+        }
+      }
 
       const api = apiRef.current;
       if (!api) return;
@@ -5348,7 +5585,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 activeToolRef.current === "hand" &&
                 handPanningRef.current &&
                 inertiaFrameRef.current === 0 &&
-                !clampingScrollRef.current
+                !clampingScrollRef.current &&
+                // A mid-drag rebase is our own bookkeeping catching the camera
+                // up to where the finger already is — same trap as the clamp
+                // above. Sampled, it reads as a frame the hand did not move and
+                // damps the flick that follows.
+                !committingScrollRef.current
               ) {
                 const now = performance.now();
                 const last = lastPanScrollRef.current;
@@ -5368,6 +5610,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               if (!fittingCameraRef.current && !clampingScrollRef.current) {
                 pulseCameraMotionRef.current();
               }
+              /*
+               * A camera move nobody was riding — a fit, a pinch, a page turn —
+               * ends any live pan translate. The slots below are about to be
+               * re-reported at absolute coordinates and the ink repainted, so
+               * an offset left over from a gesture would double every one of
+               * them. A live gesture keeps its offsets: it clears them itself,
+               * in the same frame it lands (see `landPanOffset`).
+               */
+              if (!liveCameraRef.current?.live) clearPanOffsetsRef.current();
               if (!rasterInkRef.current?.isDrawing()) {
                 rasterInkRef.current?.syncCamera();
               }

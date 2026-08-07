@@ -547,6 +547,35 @@ input[type="checkbox"] {
 .lc-board {
   position: relative;
   height: 100%;
+  /*
+   * How far a live reading gesture has dragged the page from the camera the
+   * board was last painted at. Written by Board (`setPagePanOffset`) and zero
+   * whenever nothing is in flight.
+   */
+  --lc-pan-x: 0px;
+  --lc-pan-y: 0px;
+}
+
+/*
+ * Layers that ride the page instead of being repainted for it.
+ *
+ * A reading scroll deliberately does not move Excalidraw's camera — pushing
+ * `updateScene` per sample is what held the board at ~30fps — so the ink
+ * bitmap, Excalidraw's own canvases, the lined rules and the page title are all
+ * still correct relative to the page and wrong only by this translation. On the
+ * compositor that is free; the alternative is a full raster pass per frame.
+ * Board drops the offset and re-reports every slot in the frame the gesture
+ * lands, so nothing here is ever more than a gesture old.
+ */
+.lc-board .excalidraw__canvas,
+.lc-board-lined-overlay,
+.lc-page-title-slot {
+  transform: translate3d(var(--lc-pan-x, 0px), var(--lc-pan-y, 0px), 0);
+}
+
+.lc-board-lined-overlay,
+.lc-page-title-slot {
+  will-change: transform;
 }
 
 /*
@@ -703,6 +732,9 @@ input[type="checkbox"] {
   z-index: 3;
   touch-action: none;
   pointer-events: none;
+  /* Panned by an inline transform during a gesture — see RasterInkLayer's
+     `setPanOffset`. Keep the bitmap on its own layer so that is a composite. */
+  will-change: transform;
 }
 
 .lc-raster-ink-pen {
@@ -2303,6 +2335,28 @@ input[type="checkbox"] {
   border-radius: 8px;
   background: color-mix(in srgb, var(--ink) 8%, transparent);
   overflow-x: auto;
+}
+
+/*
+ * A wide code block is the one place in the note that scrolls sideways.
+ *
+ * The content slot is `pointer-events: none` so that a pen lands on the ink
+ * layer rather than on the text, which also means the `overflow-x` above had a
+ * scrollbar and nothing that could ever reach it. Hand the block its pointers
+ * back — only the block, never the prose — and Board's reading gatekeeper does
+ * the rest: a horizontal drag scrolls the code, a vertical one still pans the
+ * page (see `horizontalScrollHost`). `touch-action` is for the case where the
+ * board is not holding the gesture; under `.lc-board-reading` the ancestor's
+ * `touch-action: none` wins and the drag is ours to carry out by hand.
+ *
+ * Reading mode only. Annotating, the pointer belongs to whatever tool is up:
+ * a block that answered clicks itself would be a hole in the page where
+ * Excalidraw cannot be selected into and a rubber band cannot be started.
+ */
+.lc-board-reading .lc-page-content-slot .lc-md-ink-doc pre {
+  pointer-events: auto;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
 }
 
 .lc-md-ink-doc pre code {

@@ -37,6 +37,7 @@ import {
   type ViewportTransform,
 } from "./rasterInk";
 import { InkTileCache, paintLiveOp } from "./inkTiles";
+import { panDelta, type PanCamera } from "./panOffset";
 import {
   liveSmoothingTau,
   liveSmoothingWeight,
@@ -57,6 +58,19 @@ export interface RasterInkHandle {
   repaint(): void;
   /** Camera moved — reblit the visible tiles and rasterise what is exposed. */
   syncCamera(): void;
+  /**
+   * Ride the page on the compositor instead of reblitting for it.
+   *
+   * A reading gesture leaves Excalidraw's camera frozen and moves the markdown
+   * slot by a transform; this is the same move for the ink, and it is what
+   * keeps a coast off the raster path entirely. `null` puts the bitmap back on
+   * its painted coordinates.
+   *
+   * Returns false when the translate cannot honestly stand in for a repaint —
+   * the zoom changed, or the page has travelled past what one painted
+   * screenful can cover — and the caller should rebase onto a real paint.
+   */
+  setPanOffset(live: PanCamera | null): boolean;
   /** End of a pan, flick or zoom. Same work; kept apart for the call sites. */
   commitCamera(): void;
   /**
@@ -214,6 +228,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * a frame behind the cache. Repaint once the stroke is off the paper.
      */
     const tilesDirtyRef = useRef(false);
+    /** A pan / zoom gesture is open — see {@link RasterInkHandle.setCameraMoving}. */
+    const cameraMovingRef = useRef(false);
     /**
      * What `paintFrame` last put on the overlay, so a pointerdown that changes
      * nothing can skip the blit instead of paying for it at the worst moment.
@@ -277,10 +293,20 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const snap = (value: number) => Math.round(value * dpr) / dpr;
       const boardRect = board.getBoundingClientRect();
       const excalRect = excal.getBoundingClientRect();
+      /*
+       * Measure where the Excalidraw canvas *lives*, not where a pan is holding
+       * it. Excalidraw's canvases ride the same live-pan translate this layer
+       * does (see `setPanOffset`), so a re-measure mid-gesture — a rotation, the
+       * keyboard opening — would bake the gesture's offset into the overlay's
+       * own left/top and leave it there for good.
+       */
+      const boardStyle = board instanceof HTMLElement ? getComputedStyle(board) : null;
+      const panX = Number.parseFloat(boardStyle?.getPropertyValue("--lc-pan-x") ?? "") || 0;
+      const panY = Number.parseFloat(boardStyle?.getPropertyValue("--lc-pan-y") ?? "") || 0;
       const width = snap(excalRect.width);
       const height = snap(excalRect.height);
-      canvas.style.left = `${snap(excalRect.left - boardRect.left)}px`;
-      canvas.style.top = `${snap(excalRect.top - boardRect.top)}px`;
+      canvas.style.left = `${snap(excalRect.left - boardRect.left - panX)}px`;
+      canvas.style.top = `${snap(excalRect.top - boardRect.top - panY)}px`;
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       return { width, height };
@@ -303,7 +329,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             // unblitted stayed invisible for as long as the pen kept writing.
             // Owe the repaint instead of skipping it — the lift is a moment
             // later and costs nothing, where a blit mid-glyph would hitch.
-            if (drawingRef.current) {
+            // Same during a camera gesture, and for the same reason the pan is
+            // a translate at all: a full clear-and-blit is the one thing a
+            // coast cannot afford. The settle repaints unconditionally.
+            if (drawingRef.current || cameraMovingRef.current) {
               tilesDirtyRef.current = true;
               return;
             }
@@ -348,6 +377,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const dpr = window.devicePixelRatio || 1;
         const { pixelW, pixelH } = sizeCanvas(canvas, cssW, cssH, dpr);
         const view: ViewportTransform = { ...viewport, width: cssW, height: cssH };
+        // A paint is the thing a pan offset was standing in for. Whatever the
+        // gesture had slid the bitmap to, these pixels are the honest answer at
+        // `viewport`, and they belong at the layer's own coordinates.
+        if (canvas.style.transform) canvas.style.transform = "";
 
         const tiles = ensureTiles();
         tiles.setClip(clipRef.current);
@@ -416,7 +449,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const canvas = canvasRef.current;
       const viewport = getViewport();
       if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
-      canvas.style.transform = "";
       const excalRect = alignedBoxRef.current ?? alignToExcalidraw(canvas);
       alignedBoxRef.current = excalRect;
       paintFrame(viewport, excalRect?.width ?? viewport.width, excalRect?.height ?? viewport.height);
@@ -464,6 +496,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
     const setCameraMoving = useCallback(
       (moving: boolean) => {
+        cameraMovingRef.current = moving;
         if (moving) {
           // Re-measuring is a forced layout, and a gesture is the worst moment
           // for one. The box cannot change mid-pan anyway — only a resize moves
@@ -653,6 +686,28 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         },
         repaint,
         syncCamera,
+        setPanOffset(live) {
+          const canvas = canvasRef.current;
+          if (!canvas) return true;
+          if (!live) {
+            if (canvas.style.transform) canvas.style.transform = "";
+            return true;
+          }
+          // The pen owns the bitmap while it is down — the stroke is painted
+          // against a frozen camera, and sliding it would take the wet ink with
+          // it. Report success: there is nothing for the caller to rebase onto.
+          if (drawingRef.current) return true;
+          const painted = paintedViewRef.current;
+          if (!painted) return false;
+          const delta = panDelta(live, painted, painted);
+          if (delta.rebase) return false;
+          const next =
+            delta.dx === 0 && delta.dy === 0
+              ? ""
+              : `translate3d(${delta.dx}px, ${delta.dy}px, 0)`;
+          if (canvas.style.transform !== next) canvas.style.transform = next;
+          return true;
+        },
         commitCamera,
         setCameraMoving,
       }),
@@ -823,6 +878,18 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         // Align once here — never again on move (DOM writes mid-glyph hitch).
         const excalRect = alignToExcalidraw(canvas);
         alignedBoxRef.current = excalRect;
+        /*
+         * The pen lands on paper, not on a translate.
+         *
+         * A live pan slides this bitmap rather than repainting it (see
+         * `setPanOffset`), which leaves the committed ink drawn for one camera
+         * and the canvas standing at another. Everything below maps the stroke
+         * through the canvas's own box, so opening one on top of that offset
+         * would lay it down displaced by the length of the gesture. Repaint for
+         * the camera the writer is looking at — a nib touching down is a frame
+         * we can afford, and a stroke in the wrong place is not.
+         */
+        if (canvas.style.transform) repaintRef.current();
         const cssW = excalRect?.width ?? viewport.width;
         const cssH = excalRect?.height ?? viewport.height;
         const strokeView: ViewportTransform = {

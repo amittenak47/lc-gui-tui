@@ -55,6 +55,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the sidecar to disk automatically — export is explicit, so nothing appears
   next to the writer's files without them asking.
 
+### Changed — the page scrolls, the ink rides it
+
+- **A coast no longer repaints the ink sixty times a second.** Reading scroll
+  already left Excalidraw's camera alone — pushing `updateScene` per sample is
+  what held the board near 30fps — and moved the markdown with a CSS transform.
+  The ink did not get the same deal: it is a viewport-sized bitmap, so every
+  sample went through `syncCamera` → clear → re-blit the visible tiles, and
+  Excalidraw's own canvas simply froze and snapped at the end. Which is to say
+  the ink was behaving like a layer floating over the *viewport* on a board
+  whose whole premise is a layer bound to the *page*.
+
+  It is bound now. A gesture leaves everything painted for the camera it opened
+  on and slides it: the ink bitmap, Excalidraw's two canvases, the lined rules
+  and the page title all take the same translate, published as a pair of custom
+  properties the stylesheet reads. That is a compositor job. Nothing rasterises,
+  nothing lays out, nothing reconciles a scene until the finger comes off — one
+  paint and one `updateScene` on the settle, where before there were sixty of
+  each, and the marks stay glued to the words they were written on because they
+  are now moving for the same reason the words are.
+
+  A translate can only borrow against a screenful that has already been painted,
+  so half a viewport of travel mid-gesture rebases: commit the camera, repaint
+  once, carry on riding from there. A zoom does not translate at all — a pinch
+  rescales every stamp — and falls back to the repaint path it always used.
+
+- **A wide code block scrolls sideways.** It had `overflow-x: auto` and a
+  scrollbar, and no way on earth to reach it: the markdown layer is
+  `pointer-events: none` so a pen lands on the ink rather than the text, and the
+  reading gatekeeper takes every pointer on the board and turns it into a page
+  pan. The block gets its pointers back while reading — only the block, never
+  the prose — and the gatekeeper now waits for the gesture to say which way it
+  is going, the way it already did for the code dock: mostly sideways scrolls
+  the code, mostly down still pans the page, and the axis that wins keeps the
+  gesture to the lift. Trackpads and shift+wheel work too.
+
 ### Added — the ink palette is yours
 
 - **Hold a swatch to change what colour lives there.** The six swatches are
