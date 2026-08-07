@@ -14,9 +14,13 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
+import type { DocType } from "./mdInkStore";
 
 /** Extensions the picker offers, and what we accept when one is dropped in. */
 export const MARKDOWN_ACCEPT = ".md,.markdown,.mdown,.mkd,text/markdown";
+
+/** Everything the document pad will open. */
+export const DOCUMENT_ACCEPT = `${MARKDOWN_ACCEPT},.pdf,application/pdf,.epub,application/epub+zip`;
 
 const MARKDOWN_EXTENSIONS = [".md", ".markdown", ".mdown", ".mkd", ".txt"];
 
@@ -25,9 +29,42 @@ export interface OpenedMarkdown {
   source: string;
 }
 
+/**
+ * A file the pad has read, in whichever form its type needs.
+ *
+ * Markdown arrives as text because that is what gets rendered and stored;
+ * PDF and EPUB arrive as bytes because that is what their renderers parse and
+ * what goes into IndexedDB. One shape rather than two so the open path does not
+ * fork before it has to.
+ */
+export interface OpenedDocument {
+  name: string;
+  docType: DocType;
+  /** Markdown only. */
+  text?: string;
+  /** PDF and EPUB only. */
+  bytes?: ArrayBuffer;
+}
+
 export function isMarkdownName(name: string): boolean {
   const lower = name.toLowerCase();
   return MARKDOWN_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/**
+ * What kind of document a file is, by name.
+ *
+ * Extension rather than MIME type: a WebView file picker on Android hands back
+ * an empty or wrong `type` often enough that trusting it means refusing files
+ * the user can plainly see are PDFs. Anything unrecognised is treated as text,
+ * which is the harmless guess — markdown rendering of a non-markdown file is
+ * ugly, where refusing to open it is a dead end.
+ */
+export function docTypeForName(name: string): DocType {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".pdf")) return "pdf";
+  if (lower.endsWith(".epub")) return "epub";
+  return "markdown";
 }
 
 /**
@@ -177,4 +214,59 @@ export function exportMdInkSidecar(sidecar: MdInkSidecar): void {
   link.remove();
   // Revoking immediately races the download in some WebViews.
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+
+/**
+ * Ask for a document of any kind the pad understands, and read it.
+ *
+ * Same cancel contract as {@link pickMarkdownFile} — see the note there.
+ */
+export function pickDocumentFile(): Promise<OpenedDocument | null> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = DOCUMENT_ACCEPT;
+    input.style.position = "fixed";
+    input.style.left = "-10000px";
+    input.style.opacity = "0";
+
+    let settled = false;
+    const finish = (value: OpenedDocument | null) => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      resolve(value);
+    };
+    const fail = (cause: unknown) => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      reject(cause);
+    };
+
+    input.addEventListener("cancel", () => finish(null));
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (!file) {
+        finish(null);
+        return;
+      }
+      const docType = docTypeForName(file.name);
+      if (docType === "markdown") {
+        file
+          .text()
+          .then((text) => finish({ name: file.name, docType, text }))
+          .catch(fail);
+        return;
+      }
+      file
+        .arrayBuffer()
+        .then((bytes) => finish({ name: file.name, docType, bytes }))
+        .catch(fail);
+    });
+
+    document.body.append(input);
+    input.click();
+  });
 }

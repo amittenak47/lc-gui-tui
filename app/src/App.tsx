@@ -105,10 +105,13 @@ import {
   searchQueryFor,
   type DocFootnote,
 } from "./util/docFootnotes";
+import { getDocBytes, hashBytes, putDocBytes } from "./util/docBytes";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { openExternalUrl } from "./util/openExternal";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelectionLayer";
+import { EpubDocument } from "./modes/EpubDocument";
+import { PdfDocument } from "./modes/PdfDocument";
 import { MdInkDialog } from "./modes/MdInkDialog";
 import { MdInkDocument } from "./modes/MdInkDocument";
 import { StatementDocument } from "./modes/StatementDocument";
@@ -125,7 +128,7 @@ import {
 import {
   buildMdInkSidecar,
   exportMdInkSidecar,
-  pickMarkdownFile,
+  pickDocumentFile,
   pickSidecarFile,
   readMdInkSidecar,
 } from "./util/mdInkFs";
@@ -135,9 +138,11 @@ import {
   findStaleMdInkDoc,
   getMdInkDoc,
   hashMarkdown,
+  isBinaryDocType,
   MdInkLibraryFullError,
   restoreMdInkDoc,
   saveMdInkDoc,
+  type DocType,
   type MdInkDoc,
 } from "./util/mdInkStore";
 import {
@@ -195,7 +200,13 @@ function isScratchpad(problem: ProblemDetail | null | undefined): boolean {
   return problem?.task_id === SCRATCHPAD_TASK_ID;
 }
 
-/** Annotating a markdown file — a scratchpad whose paper is somebody's notes. */
+/**
+ * Annotating a document — a scratchpad whose paper is somebody else's pages.
+ *
+ * Markdown, PDF or EPUB: the ids keep their `MD_INK_*` spelling because they
+ * are persisted in saved boards and library entries, and renaming them would
+ * be a migration bought with nothing but tidiness.
+ */
 /** Hide under-header busy strip; keep `busy` for disable logic (re-enable later). */
 const SHOW_BUSY_BANNER = false;
 
@@ -206,7 +217,7 @@ const MD_INK_PROBLEM: ProblemDetail = {
   question_id: null,
   difficulty: null,
   tags: ["md-ink"],
-  problem_description: "Markdown annotation — no problem set.",
+  problem_description: "Document annotation — no problem set.",
   starter_code: null,
   entry_point: null,
   cases: [],
@@ -292,8 +303,19 @@ export function App() {
   /** The markdown being annotated: its text, its name, and its content hash. */
   const [mdInkSource, setMdInkSource] = useState<{
     name: string;
+    /** Markdown text; empty for PDF and EPUB. */
     text: string;
     hash: string;
+    docType: DocType;
+    /**
+     * The file's bytes for PDF and EPUB, held for as long as the pad is open.
+     *
+     * A copy is in IndexedDB under {@link hash} for the next session; this one
+     * is what the renderer parses now. Reading it back out of the store just to
+     * hand it to a component in the same tick would be a round trip for
+     * nothing.
+     */
+    bytes?: ArrayBuffer | null;
   } | null>(null);
   /** Library entry this session is writing to, once it has one. */
   const [mdInkDocId, setMdInkDocId] = useState<string | null>(null);
@@ -326,7 +348,12 @@ export function App() {
   const [mdInkEntryOpen, setMdInkEntryOpen] = useState(false);
   // Read from the autosave interval, which must not be torn down and rebuilt
   // every time one of these changes — a restarted timer is a skipped save.
-  const mdInkSourceRef = useRef<{ name: string; text: string; hash: string } | null>(null);
+  const mdInkSourceRef = useRef<{
+    name: string;
+    text: string;
+    hash: string;
+    docType: DocType;
+  } | null>(null);
   const mdInkDocIdRef = useRef<string | null>(null);
   /**
    * Measured document height, in scene units, driving the page frame.
@@ -1161,6 +1188,7 @@ export function App() {
             name: source.name,
             hash: source.hash,
             source: source.text,
+            docType: source.docType,
             board: board.saveBoard(),
             footnotes: mdInkFootnotesRef.current,
           });
@@ -1614,15 +1642,26 @@ export function App() {
   );
 
   /**
-   * Open a markdown document to annotate.
+   * Open a document to annotate — markdown, PDF or EPUB.
    *
-   * Either a file the writer just picked, or a library entry being reopened —
-   * both land here with the same three things: the text, its name, and its
-   * hash. Any annotation set already drawn over that exact text is restored
-   * with it, so picking the same file twice picks up where it left off.
+   * Either a file the writer just picked, or a library entry being reopened.
+   * The three types differ only in what "the document" is made of: markdown
+   * arrives as text and is stored with its entry, PDF and EPUB arrive as bytes
+   * and are stored in IndexedDB under the same content hash. Everything past
+   * that — the hash lookup, the restored ink, the stale-file warning, the
+   * loading transition — is deliberately one path, because a reader switching
+   * between a note and a textbook should not be switching between two apps.
    */
   const openMdInk = useCallback(
-    async (input: { name: string; text: string; docId?: string | null }) => {
+    async (input: {
+      name: string;
+      docType?: DocType;
+      /** Markdown only. */
+      text?: string;
+      /** PDF and EPUB only. */
+      bytes?: ArrayBuffer;
+      docId?: string | null;
+    }) => {
       if (busy !== null) return;
       /*
        * Same loading transition as pickProblem — do not invent a parallel path.
@@ -1650,10 +1689,25 @@ export function App() {
       }
 
       try {
-        const hash = hashMarkdown(input.text);
+        const docType = input.docType ?? "markdown";
+        const text = input.text ?? "";
+        const bytes = input.bytes ?? null;
+        const hash = bytes ? hashBytes(bytes) : hashMarkdown(text);
         const existing = input.docId
           ? getMdInkDoc(input.docId)
           : findMdInkDocByHash(hash);
+
+        /*
+         * The bytes go in before anything is restored over them.
+         *
+         * Reopening from the library needs them to already be there, and a
+         * write that failed — a full quota, a private window with no
+         * IndexedDB — has to stop the open rather than land the reader on a
+         * blank page with ink floating over nothing.
+         */
+        if (bytes) {
+          await putDocBytes(hash, bytes);
+        }
 
         /*
          * Say so when the file has moved on since it was last annotated.
@@ -1673,7 +1727,7 @@ export function App() {
         setPseudocode("");
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
-        setMdInkSource({ name: input.name, text: input.text, hash });
+        setMdInkSource({ name: input.name, text, hash, docType, bytes });
         setMdInkHeight(null);
         mdInkHeightRef.current = null;
 
@@ -1866,9 +1920,14 @@ export function App() {
   const pickAndOpenMdInk = useCallback(async () => {
     if (busy !== null) return;
     try {
-      const picked = await pickMarkdownFile();
+      const picked = await pickDocumentFile();
       if (!picked) return;
-      await openMdInk({ name: picked.name, text: picked.source });
+      await openMdInk({
+        name: picked.name,
+        docType: picked.docType,
+        text: picked.text,
+        bytes: picked.bytes,
+      });
     } catch (cause) {
       setError(messageOf(cause));
     }
@@ -3291,6 +3350,7 @@ export function App() {
         name: source.name,
         hash: source.hash,
         source: source.text,
+        docType: source.docType,
         board: blob,
         footnotes: mdInkFootnotes,
       });
@@ -3640,8 +3700,8 @@ export function App() {
               ) : isMdInk(problem) ? (
                 // The document is the thing being worked on, so it gets the
                 // slot the problem's name would have had.
-                <span className="lc-current" title={mdInkSource?.name ?? "Markdown"}>
-                  {mdInkSource?.name ?? "Markdown"}
+                <span className="lc-current" title={mdInkSource?.name ?? "Document"}>
+                  {mdInkSource?.name ?? "Document"}
                 </span>
               ) : (
                 <span className="lc-current" title="Scratchpad">
@@ -4035,11 +4095,28 @@ export function App() {
                   onOpenFootnote={onOpenFootnote}
                   onRemoveFootnote={onRemoveFootnote}
                 >
-                  <MdInkDocument
-                    source={mdInkSource.text}
-                    onMeasure={onMdInkMeasure}
-                    selectable={!annotateCode}
-                  />
+                  {mdInkSource.docType === "pdf" && mdInkSource.bytes ? (
+                    <PdfDocument
+                      bytes={mdInkSource.bytes}
+                      frameWidth={mdInkPageWidth}
+                      onMeasure={onMdInkMeasure}
+                      selectable={!annotateCode}
+                      onError={setError}
+                    />
+                  ) : mdInkSource.docType === "epub" && mdInkSource.bytes ? (
+                    <EpubDocument
+                      bytes={mdInkSource.bytes}
+                      onMeasure={onMdInkMeasure}
+                      selectable={!annotateCode}
+                      onError={setError}
+                    />
+                  ) : (
+                    <MdInkDocument
+                      source={mdInkSource.text}
+                      onMeasure={onMdInkMeasure}
+                      selectable={!annotateCode}
+                    />
+                  )}
                 </DocSelectionLayer>
               ) : problem &&
                 !isLocalPad(problem) &&
@@ -4321,7 +4398,37 @@ export function App() {
                 setError("That document is no longer in the library.");
                 return;
               }
-              void openMdInk({ name: entry.name, text: entry.source, docId: entry.id });
+              void (async () => {
+                if (!isBinaryDocType(entry.docType)) {
+                  await openMdInk({
+                    name: entry.name,
+                    docType: entry.docType,
+                    text: entry.source,
+                    docId: entry.id,
+                  });
+                  return;
+                }
+                /*
+                 * A binary entry is only half of itself in the library JSON.
+                 *
+                 * Its bytes live in IndexedDB, and they can be missing —
+                 * cleared storage, a device that never had them. Say so rather
+                 * than opening an entry whose ink has nothing under it.
+                 */
+                const bytes = await getDocBytes(entry.hash).catch(() => null);
+                if (!bytes) {
+                  setError(
+                    `“${entry.name}” is in the library but its file is not on this device — open it again to restore the annotations.`,
+                  );
+                  return;
+                }
+                await openMdInk({
+                  name: entry.name,
+                  docType: entry.docType,
+                  bytes,
+                  docId: entry.id,
+                });
+              })();
               return;
             }
             void pickAndOpenMdInk();

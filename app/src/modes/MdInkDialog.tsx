@@ -86,10 +86,10 @@ export function MdInkDialog(props: MdInkDialogProps) {
         className="lc-settings-modal lc-attempt-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={isLeave ? "Leave document?" : "Markdown Ink"}
+        aria-label={isLeave ? "Leave document?" : "Document pad"}
       >
         <div className="lc-settings-head">
-          <h2>{isLeave ? "Leave document?" : "Markdown"}</h2>
+          <h2>{isLeave ? "Leave document?" : "Document"}</h2>
           <p className="lc-muted">
             {pickingRecent
               ? "Hold a document to reopen it. The bin removes its annotations."
@@ -196,7 +196,7 @@ export function MdInkDialog(props: MdInkDialogProps) {
                     onConfirm={() => props.onChoose("open")}
                   >
                     <strong>Open markdown…</strong>
-                    <span className="lc-muted">Pick a .md file to annotate.</span>
+                    <span className="lc-muted">Pick a .md, .pdf or .epub to annotate.</span>
                   </HoldButton>
                   <HoldButton
                     label="Recent"
