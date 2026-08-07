@@ -20,13 +20,10 @@ export interface PanCamera {
 }
 
 export interface PanDelta {
-  /** Screen px to translate by. Zero when zoom/camera refuse a translate. */
+  /** Screen px to translate by. Zero when {@link PanDelta.rebase} is set. */
   dx: number;
   dy: number;
-  /**
-   * The translate cannot carry this — repaint at the live camera instead.
-   * Distance past half a viewport sets this unless {@link PanDeltaOptions.allowOverscroll}.
-   */
+  /** The translate cannot carry this — repaint at the live camera instead. */
   rebase: boolean;
 }
 
@@ -38,23 +35,11 @@ export interface PanDelta {
  * ground at the leading edge — half a viewport is where that stops reading as
  * "ink that has not caught up yet" and starts reading as a hole. Below it, a
  * pan or a coast never touches the raster path at all.
- *
- * Live reading pans pass {@link PanDeltaOptions.allowOverscroll} so a long
- * flick keeps riding (blank edge until settle) instead of rebasing every half
- * screen — that mid-gesture `updateScene` + reblit was the remaining ~30fps hitch.
  */
 export const PAN_REBASE_FRACTION = 0.5;
 
 /** Zoom is compared, not translated: a pinch has to go through a real repaint. */
 const ZOOM_EPSILON = 1e-4;
-
-export interface PanDeltaOptions {
-  /**
-   * Keep translating past {@link PAN_REBASE_FRACTION} (blank leading edge OK).
-   * Zoom changes still force `rebase: true`.
-   */
-  allowOverscroll?: boolean;
-}
 
 /**
  * Screen delta from the camera a layer was painted at to the live one.
@@ -67,7 +52,6 @@ export function panDelta(
   painted: PanCamera,
   viewport: { width: number; height: number },
   fraction: number = PAN_REBASE_FRACTION,
-  options?: PanDeltaOptions,
 ): PanDelta {
   const stop: PanDelta = { dx: 0, dy: 0, rebase: true };
   const zoom = live.zoom;
@@ -79,9 +63,6 @@ export function panDelta(
   const dx = (live.scrollX - painted.scrollX) * zoom;
   const dy = (live.scrollY - painted.scrollY) * zoom;
   if (!Number.isFinite(dx) || !Number.isFinite(dy)) return stop;
-  if (options?.allowOverscroll) {
-    return { dx, dy, rebase: false };
-  }
   const limitX = Math.max(1, viewport.width) * fraction;
   const limitY = Math.max(1, viewport.height) * fraction;
   return { dx, dy, rebase: Math.abs(dx) > limitX || Math.abs(dy) > limitY };

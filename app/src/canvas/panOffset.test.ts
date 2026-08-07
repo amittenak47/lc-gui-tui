@@ -42,28 +42,6 @@ describe("panDelta", () => {
     ).toBe(true);
   });
 
-  it("keeps translating past the limit when allowOverscroll is set", () => {
-    const delta = panDelta(
-      { scrollX: 0, scrollY: 900, zoom: 1 },
-      { scrollX: 0, scrollY: 0, zoom: 1 },
-      VIEW,
-      PAN_REBASE_FRACTION,
-      { allowOverscroll: true },
-    );
-    expect(delta).toEqual({ dx: 0, dy: 900, rebase: false });
-  });
-
-  it("still refuses a zoom change under allowOverscroll", () => {
-    const delta = panDelta(
-      { scrollX: 0, scrollY: 100, zoom: 1.2 },
-      { scrollX: 0, scrollY: 0, zoom: 1 },
-      VIEW,
-      PAN_REBASE_FRACTION,
-      { allowOverscroll: true },
-    );
-    expect(delta).toEqual({ dx: 0, dy: 0, rebase: true });
-  });
-
   it("scales the limit with zoom, because the delta does", () => {
     // 200 scene units is 400 screen px at 2x — past half of a 600px viewport.
     expect(

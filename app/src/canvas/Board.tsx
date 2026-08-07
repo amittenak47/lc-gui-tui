@@ -2336,17 +2336,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     pulseCameraMotionRef.current();
 
     /*
-     * Ride, or rebase on zoom only.
+     * Ride, or rebase.
      *
-     * Distance past half a viewport used to force `updateScene` + ink reblit
-     * mid-gesture — that is what kept long flicks at ~30fps. Accept blank
-     * leading edges until settle; zoom still cannot be expressed as a translate.
+     * The ink measures the delta against its own last paint and the overlays
+     * against Excalidraw's appState — the same camera in the ordinary case, and
+     * each one right on its own terms when a mid-gesture repaint has moved one
+     * of them. Either can veto: a zoom (no translate expresses a rescale) or a
+     * drag past half a viewport (the painted screenful has run out). Rebase
+     * then: one `updateScene` + ink reblit, then ride again from zero.
      */
     const liveCam = { scrollX, scrollY, zoom };
     const committed = { scrollX: state.scrollX ?? 0, scrollY: state.scrollY ?? 0, zoom };
-    const delta = panDelta(liveCam, committed, { width: state.width, height: state.height }, undefined, {
-      allowOverscroll: true,
-    });
+    const delta = panDelta(liveCam, committed, { width: state.width, height: state.height });
     const inkRides = rasterInkRef.current?.setPanOffset(liveCam) ?? true;
     if (delta.rebase || !inkRides) {
       rebaseVisualScrollRef.current();
