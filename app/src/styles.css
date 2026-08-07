@@ -679,19 +679,27 @@ input[type="checkbox"] {
   z-index: 14;
   pointer-events: none;
   display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.28rem;
   padding: 0.42rem 0.85rem;
-  border-radius: 999px;
+  border-radius: 1rem;
   border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
   background: color-mix(in srgb, var(--surface) 78%, transparent);
   backdrop-filter: blur(6px);
   color: var(--ink);
   line-height: 1;
-  white-space: nowrap;
+  max-width: min(90vw, 28rem);
   opacity: 0;
   transition: opacity 260ms ease-out;
   will-change: opacity;
+}
+
+.lc-page-indicator-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  white-space: nowrap;
 }
 
 .lc-page-indicator.is-visible {
@@ -709,6 +717,13 @@ input[type="checkbox"] {
   font-size: 0.8rem;
   opacity: 0.62;
   font-variant-numeric: tabular-nums;
+}
+
+.lc-page-indicator-blurb {
+  font-size: 0.78rem;
+  line-height: 1.25;
+  opacity: 0.62;
+  text-align: center;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -6064,6 +6079,12 @@ button.lc-row-selected:hover:not(:disabled) {
   max-width: 100%;
 }
 
+.lc-mobile .lc-pager-blurb {
+  font-size: 9px;
+  max-width: 100%;
+  -webkit-line-clamp: 2;
+}
+
 .lc-mobile .lc-pager-dots {
   gap: 4px;
   justify-content: center;
@@ -6677,6 +6698,19 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 40vw;
+}
+
+.lc-pager-blurb {
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  opacity: 0.72;
+  text-align: center;
+  max-width: 40vw;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .lc-pager-dots {

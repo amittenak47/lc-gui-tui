@@ -93,7 +93,7 @@ import {
   SCRATCHPAD_TASK_ID,
   scratchPageId,
 } from "./templates/scratchpad";
-import { MOBILE_REGION_ORDER, REGIONS, type RegionId } from "./templates/regions";
+import { MOBILE_REGION_ORDER, REGION_BLURB, REGIONS, type RegionId } from "./templates/regions";
 import { splitProblemKey } from "./util/datasetKey";
 import { useIsMobile } from "./util/mobile";
 import { installSafeAreaInsets } from "./util/safeArea";
@@ -734,6 +734,28 @@ export function App() {
     },
     [],
   );
+
+  /**
+   * Closing beats when returning to the problem browser — spinner until the
+   * list is ready, then checkmark, then idle. Mirrors the forward path's gate
+   * without sliding the browser away (we are revealing it, not hiding it).
+   */
+  const finishBrowseReady = useCallback(async () => {
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    setBrowseMotion("done");
+    await waitMs(doneHoldMs());
+    setBrowseMotion("idle");
+    setHoldBrowseOverlay(false);
+  }, []);
+
+  const browseReadyWaitRef = useRef<(() => void) | null>(null);
+
+  const onBrowseTableReady = useCallback(() => {
+    browseReadyWaitRef.current?.();
+    browseReadyWaitRef.current = null;
+  }, []);
 
   /**
    * The board's content width in CSS pixels, for sizing the statement column.
@@ -3318,19 +3340,24 @@ export function App() {
     ],
   );
 
-  const returnToBrowse = useCallback(() => {
+  const returnToBrowse = useCallback(async () => {
     setSwitchMotion("idle");
-    setBrowseMotion("enter");
+    setBrowseMotion("busy");
+    setHoldBrowseOverlay(true);
     setActiveRegion("constraints");
-    setProblem(null);
     setBoardPreparing(false);
-    setHoldBrowseOverlay(false);
     setEntering(false);
     clearProblemState();
     setError(null);
     setCodeSlot(null);
-    window.setTimeout(() => setBrowseMotion("idle"), slideDurationMs() || 1);
-  }, [clearProblemState]);
+
+    const ready = new Promise<void>((resolve) => {
+      browseReadyWaitRef.current = resolve;
+    });
+    setProblem(null);
+    await ready;
+    await finishBrowseReady();
+  }, [clearProblemState, finishBrowseReady]);
 
   const canvasLoading =
     boardPreparing ||
@@ -3365,7 +3392,7 @@ export function App() {
                 data-tip="Return to the problem list"
                 data-tip-placement="bottom"
                 disabled={busy !== null}
-                onClick={() => leaveProblem(returnToBrowse)}
+                onClick={() => leaveProblem(() => void returnToBrowse())}
               >
                 <span className="lc-label-long">
                   {isLocalPad(problem) ? "← Home" : "← Problems"}
@@ -3837,6 +3864,7 @@ export function App() {
                   offline={serverLink !== "online"}
                   themeId={themeId}
                   onThemePick={setThemeId}
+                  onReady={onBrowseTableReady}
                   onStartSession={(ids, bank) => void startFreshSession(ids, bank)}
                   onResetSession={() => {
                     setResetError(null);
@@ -4009,7 +4037,7 @@ export function App() {
         }}
         onBrowse={() => {
           setTests(null);
-          leaveProblem(returnToBrowse);
+          leaveProblem(() => void returnToBrowse());
         }}
         canNext={canStepNext}
       />
@@ -4374,6 +4402,7 @@ function RegionPager({
       </button>
       <div className="lc-pager-body">
         <span className="lc-pager-label">{REGIONS[active].label}</span>
+        <span className="lc-pager-blurb">{REGION_BLURB[active]}</span>
         <div className="lc-pager-dots" role="tablist" aria-label="Board pages">
           {MOBILE_REGION_ORDER.map((region) => (
             <button
