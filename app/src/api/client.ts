@@ -506,17 +506,25 @@ export class LcClient {
     }
   }
 
-  /** Single-turn Q&A — skips the staged review pipeline. */
+  /**
+   * Single-turn Q&A — skips the staged review pipeline.
+   *
+   * `images` are base64 PNGs the student attached with (+). Omitted from the
+   * body when there are none, so a daemon that predates the field sees exactly
+   * the request it always saw.
+   */
   async ask(
     taskId: string,
     question: string,
     dataset?: string,
+    images?: string[],
   ): Promise<{ task_id: string; provider: string; reply: string }> {
     try {
       return await this.request("POST", "/coach/ask", {
         task_id: taskId,
         dataset,
         question,
+        ...(images && images.length > 0 ? { images } : {}),
       });
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 404) {

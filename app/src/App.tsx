@@ -66,6 +66,7 @@ import { skeletonOf } from "./util/solutionSplit";
 import {
   AgentSidePanel,
   AMBIENT_ENABLED,
+  type CoachAttachment,
   type CoachChatMessage,
   type CoachReplyRef,
   type CoachSendFlags,
@@ -2528,7 +2529,11 @@ export function App() {
   );
 
   const askCoach = useCallback(
-    async (question: string, threadAnchor?: CoachReplyRef | null) => {
+    async (
+      question: string,
+      threadAnchor?: CoachReplyRef | null,
+      photos?: CoachAttachment[],
+    ) => {
       const note = question.trim();
       if (!problem || !note) {
         setError("type a question, or turn on Ask");
@@ -2556,11 +2561,19 @@ export function App() {
         const asked = withConversationContext(note, coachMessagesRef.current, {
           threadRootId: threadAnchor?.id ?? null,
         });
+        // Attached photos ride the same payload on both transports — the WS
+        // run frame and POST /coach/ask deserialize the one AskRequest.
+        const images = (photos ?? []).map((photo) => photo.png);
         const result = await runCoachJob<{ reply: string }>(
           "ask",
-          { task_id: problem.task_id, dataset: problem.dataset, question: asked },
+          {
+            task_id: problem.task_id,
+            dataset: problem.dataset,
+            question: asked,
+            ...(images.length > 0 ? { images } : {}),
+          },
           turnId,
-          () => client.ask(problem.task_id, asked, problem.dataset),
+          () => client.ask(problem.task_id, asked, problem.dataset, images),
         );
         finished = true;
         finishCoachTurn(turnId, [{ content: result.reply }]);
@@ -2577,7 +2590,12 @@ export function App() {
 
   /** `runTests` fires this and is defined above it — see the auto-forward. */
   const askCoachRef = useRef<
-    ((question: string, threadAnchor?: CoachReplyRef | null) => Promise<void>) | null
+    | ((
+        question: string,
+        threadAnchor?: CoachReplyRef | null,
+        photos?: CoachAttachment[],
+      ) => Promise<void>)
+    | null
   >(null);
   askCoachRef.current = askCoach;
 
@@ -2594,6 +2612,7 @@ export function App() {
             reviewBoard: false,
             lazy: false,
             annotate: requestedFlags.annotate,
+            ...(requestedFlags.photos ? { photos: requestedFlags.photos } : {}),
             ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}),
             ...(requestedFlags.threadRootId != null
               ? { threadRootId: requestedFlags.threadRootId }
@@ -2606,6 +2625,9 @@ export function App() {
         flags.reviewBoard ? "Review" : null,
         flags.draw ? "Draw" : null,
         flags.lazy ? "Lazy" : null,
+        flags.photos?.length
+          ? `${flags.photos.length} photo${flags.photos.length === 1 ? "" : "s"}`
+          : null,
       ].filter((bit): bit is string => Boolean(bit));
 
       // The root this send hangs off. An explicit quote from the room opens the
@@ -2617,7 +2639,16 @@ export function App() {
         : null;
 
       void (async () => {
-        let attachments: CoachChatMessage["attachments"];
+        /*
+         * Photos the writer attached lead the bubble.
+         *
+         * They are the reason the question exists — a picture of the page, an
+         * error on another screen — where the board thumbs that follow are the
+         * app describing itself back. Reading order should match that.
+         */
+        const photos = flags.photos ?? [];
+        let attachments: CoachChatMessage["attachments"] =
+          photos.length > 0 ? [...photos] : undefined;
 
         /*
          * Marks on the code go as a picture; the code itself always goes as
@@ -2672,10 +2703,10 @@ export function App() {
           try {
             const thumbs = await boardRef.current.exportRegionThumbs();
             if (thumbs.length > 0) {
-              attachments = thumbs.map((thumb) => ({
-                label: thumb.label,
-                png: thumb.png,
-              }));
+              attachments = [
+                ...(attachments ?? []),
+                ...thumbs.map((thumb) => ({ label: thumb.label, png: thumb.png })),
+              ];
             }
           } catch {
             /* thumbnails are best-effort */
@@ -2711,8 +2742,12 @@ export function App() {
         // skips it and does a single-turn Q&A.
         if (flags.reviewBoard) {
           await submitForReview(prompt, true, attachments, flags.lazy, threadAnchor);
-        } else if (flags.ask || text) {
-          await askCoach(prompt || "What should I focus on next?", threadAnchor);
+        } else if (flags.ask || text || photos.length > 0) {
+          await askCoach(
+            prompt || (photos.length > 0 ? "What am I looking at?" : "What should I focus on next?"),
+            threadAnchor,
+            photos,
+          );
         }
         if (flags.draw) {
           await askForDiagram(text, threadAnchor);
