@@ -21,6 +21,7 @@ import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
 import {
   groupThreads,
+  messageReplyExcerpt,
   messageThreadRoot,
   showsReplyStub,
   visibleThreadMessages,
@@ -92,10 +93,12 @@ export function replyExcerpt(content: string): string {
     : flat;
 }
 
-function replyRefFor(message: CoachChatMessage): CoachReplyRef | null {
-  const excerpt = replyExcerpt(message.content);
-  if (!excerpt) return null;
-  return { id: message.id, role: message.role, excerpt };
+function replyRefFor(message: CoachChatMessage): CoachReplyRef {
+  return {
+    id: message.id,
+    role: message.role,
+    excerpt: messageReplyExcerpt(message),
+  };
 }
 
 /**
@@ -668,7 +671,6 @@ export function AgentSidePanel({
   const quoteMessage = useCallback(
     (message: CoachChatMessage) => {
       const ref = replyRefFor(message);
-      if (!ref) return;
       setReplyTo(ref);
       const root = messageThreadRoot(messages, message);
       let opening = false;
