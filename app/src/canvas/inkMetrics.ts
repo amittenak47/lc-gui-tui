@@ -6,12 +6,10 @@
  * coalesced away, or arriving faster than they can be painted. This does: it
  * counts what the app actually receives per stroke and what it costs to draw.
  *
- * Off by default and free when off — `enabled` is read once, and every method
- * returns on a boolean before touching anything. Turn it on with
- *
- *   localStorage.setItem("lc.ink.metrics", "1")
- *
- * and reload. Each stroke logs one line to the console, and the running summary
+ * Off by default and free when off. Call sites in RasterInkLayer are behind
+ * `DEBUG_INK` so the hot path never touches this module (clear for performance
+ * profiling). Flip `DEBUG_INK` to `true` and rebuild to collect stroke-rate
+ * numbers. Each stroke logs one line to the console, and the running summary
  * is on `window.__lcInkMetrics` for a session-wide read.
  *
  * `pointermove` rate is *not* the tablet's report rate: the browser hands over
@@ -103,15 +101,16 @@ interface LongTask {
   end: number;
 }
 
-function readEnabled(): boolean {
-  try {
-    return localStorage.getItem("lc.ink.metrics") === "1";
-  } catch {
-    return false;
-  }
-}
+/**
+ * Master switch for ink metrics. `false` keeps RasterInkLayer call sites dead
+ * (out of profiles); flip to `true` and rebuild to collect stroke-rate numbers.
+ */
+export const DEBUG_INK = false;
 
-const enabled = typeof window !== "undefined" && readEnabled();
+function metricsActive(): boolean {
+  if (DEBUG_INK) return true;
+  return (globalThis as { __LC_INK_DEBUG__?: boolean }).__LC_INK_DEBUG__ === true;
+}
 
 const totals: Totals = {
   strokes: 0,
@@ -179,10 +178,13 @@ function watchLongTasks(): void {
 }
 
 export const inkMetrics = {
-  enabled,
+  get enabled() {
+    return metricsActive();
+  },
 
   begin(): void {
-    if (!enabled) return;
+    if (!metricsActive()) return;
+    ensureInstalled();
     startedAt = performance.now();
     lastMoveAt = startedAt;
     moves = 0;
@@ -216,7 +218,7 @@ export const inkMetrics = {
    * `off-canvas`, `no-capture` and `orphan-commit` are not.
    */
   note(reason: string): void {
-    if (!enabled) return;
+    if (!metricsActive()) return;
     totals.notes.set(reason, (totals.notes.get(reason) ?? 0) + 1);
     // eslint-disable-next-line no-console
     console.info(`[ink] ${reason}`);
@@ -231,7 +233,7 @@ export const inkMetrics = {
    * dispatching, and only the wall clock between handlers can see that.
    */
   move(sampleCount: number, oldestTimeMs?: number): void {
-    if (!enabled) return;
+    if (!metricsActive()) return;
     moves += 1;
     samples += sampleCount;
 
@@ -258,7 +260,7 @@ export const inkMetrics = {
    * drawn late from ink that was drawn on time and presented late.
    */
   painted(eventTimeMs: number): void {
-    if (!enabled) return;
+    if (!metricsActive()) return;
     const paintedAt = performance.now();
     if (!framePending && typeof requestAnimationFrame === "function") {
       framePending = true;
@@ -278,7 +280,7 @@ export const inkMetrics = {
   },
 
   end(): InkStrokeMetrics | null {
-    if (!enabled || startedAt === 0) return null;
+    if (!metricsActive() || startedAt === 0) return null;
     const endedAt = performance.now();
     const durationMs = endedAt - startedAt;
     const seconds = durationMs / 1000;
@@ -376,7 +378,12 @@ export const inkMetrics = {
   },
 };
 
-if (enabled) {
+let installed = false;
+function ensureInstalled(): void {
+  if (installed || !metricsActive() || typeof window === "undefined") return;
+  installed = true;
   (window as unknown as { __lcInkMetrics: typeof inkMetrics }).__lcInkMetrics = inkMetrics;
   watchLongTasks();
 }
+
+if (DEBUG_INK) ensureInstalled();

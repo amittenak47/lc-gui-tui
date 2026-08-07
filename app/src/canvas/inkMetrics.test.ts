@@ -4,7 +4,8 @@ import type { inkMetrics as InkMetrics } from "./inkMetrics";
 
 /**
  * `enabled` is read once at import, and the counters are module state, so every
- * case gets its own module instance with a clock it controls.
+ * case gets its own module instance with a clock it controls. Enabled cases set
+ * `globalThis.__LC_INK_DEBUG__` before import (Vitest only).
  *
  * The clock starts at {@link DOWN} rather than zero: `end` uses a zero start
  * time as its "no stroke is open" sentinel, and a real `performance.now()` is
@@ -23,11 +24,12 @@ function longTask(start: number, duration: number): void {
   });
 }
 
-async function loadMetrics(enabled = true): Promise<typeof InkMetrics> {
+async function loadMetrics(debugInk = true): Promise<typeof InkMetrics> {
   vi.resetModules();
   clock = DOWN;
   frameCallback = null;
   longTaskCallback = null;
+  vi.stubGlobal("__LC_INK_DEBUG__", debugInk);
   vi.stubGlobal(
     "PerformanceObserver",
     class {
@@ -42,9 +44,6 @@ async function loadMetrics(enabled = true): Promise<typeof InkMetrics> {
     },
   );
   vi.stubGlobal("window", {} as unknown as Window);
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => (enabled && key === "lc.ink.metrics" ? "1" : null),
-  });
   vi.stubGlobal("requestAnimationFrame", (cb: (time: number) => void) => {
     frameCallback = cb;
     return 1;
@@ -175,7 +174,7 @@ describe("inkMetrics", () => {
     expect(stroke?.blockedMs).toBe(0);
   });
 
-  it("stays inert when the flag is off", async () => {
+  it("stays inert when DEBUG_INK is off", async () => {
     const metrics = await loadMetrics(false);
     metrics.begin();
     clock = DOWN + 500;
