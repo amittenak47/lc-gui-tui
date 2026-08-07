@@ -18,7 +18,7 @@
  * a region, and a page has to follow the box they can see.
  */
 
-import { REGIONS, REGION_GUTTER, type RegionId } from "../templates/regions";
+import { PAGE_BREAK, REGIONS, REGION_GUTTER, type RegionId } from "../templates/regions";
 
 /** What an element needs to have for paging to place and hide it. */
 export interface PageableElement {
@@ -112,17 +112,23 @@ export function regionOfElement(
       nearest = region;
     }
   }
-  // A gutter is one board gutter wide; anything further out is off the board.
+  // A gap is one page break wide; anything further out is off the board.
   return nearestDistance <= GUTTER_REACH ? nearest : null;
 }
 
 /**
  * How far outside a frame still counts as that frame's page.
  *
- * One gutter (`REGION_GUTTER`) is the distance between two stacked frames, so
- * this claims the whole gap and nothing beyond it.
+ * Half a `PAGE_BREAK` is the distance from a frame edge to the middle of the gap
+ * below it, so the two neighbours split the break between them and every point
+ * in it belongs to somebody. Anything beyond that is off the board.
+ *
+ * It has to track `PAGE_BREAK` rather than `REGION_GUTTER`: when the vertical
+ * break grew past the gutter, the middle of every gap stopped belonging to any
+ * page — and an element that belongs to no page is shown on *all* of them, which
+ * is the one thing a page turner must not do.
  */
-const GUTTER_REACH = REGION_GUTTER;
+const GUTTER_REACH = Math.max(REGION_GUTTER, PAGE_BREAK / 2);
 
 /**
  * Hide everything that is not on `page`, or reveal everything when `page` is
@@ -200,6 +206,70 @@ function parkedState(element: PageableElement): ParkedState | null {
 
 function num(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * The band of scene the camera is showing, top to bottom.
+ *
+ * Excalidraw's screen→scene mapping is `sceneY = clientY / zoom - scrollY`, so
+ * the top of the viewport is `-scrollY` and the bottom is one viewport height
+ * further on *in scene units* — the height has to be divided by the zoom before
+ * it means anything on the board. Its own kept function because getting either
+ * the sign or the division wrong still produces a plausible-looking number, and
+ * the only symptom is a page label that names the wrong page.
+ *
+ * `null` for a camera that cannot be showing anything: no height yet (the board
+ * mounts before it is measured) or a zoom of zero.
+ */
+export function viewportBand(
+  scrollY: number,
+  zoom: number,
+  viewHeight: number,
+): { top: number; bottom: number } | null {
+  if (!(viewHeight > 0) || !(zoom > 0)) return null;
+  // `-0` is a distinct value in JavaScript: it survives arithmetic, fails an
+  // `Object.is` comparison against `0`, and renders as "-0" in a style string.
+  // An unscrolled board is the common case, so normalise it away here.
+  const top = scrollY === 0 ? 0 : -scrollY;
+  return { top, bottom: top + viewHeight / zoom };
+}
+
+/**
+ * Which page a freely-scrolling reader is looking at.
+ *
+ * Desktop does not turn pages — it scrolls the whole stack — so "where am I" has
+ * to be read back off the camera. The answer is the page filling most of the
+ * viewport, which is the one a reader would name: it changes at the halfway
+ * point of a scroll between two sheets, and a short page that fits entirely on
+ * screen still wins over the slivers of its neighbours above and below.
+ *
+ * Scene coordinates, so the caller converts once from the camera and this stays
+ * a pure function. Returns `null` when the viewport is over no page at all —
+ * off the top of the board, or in a page break wide enough to fill the screen.
+ */
+export function pageAtViewport(
+  elements: readonly PageableElement[],
+  order: readonly RegionId[],
+  viewTop: number,
+  viewBottom: number,
+): RegionId | null {
+  if (!(viewBottom > viewTop)) return null;
+  const rects = frameRects(elements);
+
+  let best: RegionId | null = null;
+  let bestOverlap = 0;
+  for (const region of order) {
+    const rect = rects.get(region);
+    if (!rect) continue;
+    const overlap =
+      Math.min(viewBottom, rect.y + rect.h) - Math.max(viewTop, rect.y);
+    // Strictly greater, so an exact tie keeps the earlier page in reading order.
+    if (overlap > bestOverlap) {
+      bestOverlap = overlap;
+      best = region;
+    }
+  }
+  return best;
 }
 
 /**

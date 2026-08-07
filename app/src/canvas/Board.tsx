@@ -93,12 +93,16 @@ import { applyMetadata, isCoachElement } from "./scene";
 import {
   applyPageVisibility,
   clearPageVisibility,
+  pageAtViewport,
   pageBounds,
+  viewportBand,
   type PageableElement,
 } from "./pageView";
 import { eraserScreenRadius } from "./rasterInk";
+import { reanchorInkOps } from "./reanchorInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import { ModeIndicator, type ModeIndicatorHandle } from "./ModeIndicator";
+import { PageIndicator, type PageIndicatorHandle } from "./PageIndicator";
 import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
 import {
   minTextBox,
@@ -1030,6 +1034,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
   const modeIndicatorRef = useRef<ModeIndicatorHandle | null>(null);
+  const pageIndicatorRef = useRef<PageIndicatorHandle | null>(null);
+  /** Last page named to the reader, so the pill fires on arrival only. */
+  const lastNamedPageRef = useRef<RegionId | null>(null);
+  /** Camera the page was last read from — skips the scene walk when still. */
+  const lastPageCameraRef = useRef<{ scrollY: number; zoom: number } | null>(null);
   const textPlaceGhostRef = useRef<TextPlaceGhostHandle | null>(null);
   const captureFeedbackRef = useRef<CaptureFeedbackHandle | null>(null);
   const rasterInkRef = useRef<RasterInkHandle>(null);
@@ -1914,6 +1923,46 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return true;
   }, [syncPageVisibility]);
 
+  /**
+   * Name the page the camera has arrived on, for boards that scroll freely.
+   *
+   * Only the desktop stack: when `mobileRegion` is set the board shows one page
+   * at a time and the pager already says which, so a second label would be
+   * noise. The agent lane is deliberately not in the running — it sits beside
+   * the column rather than below it, and spans the whole stack, so it would win
+   * every vertical-overlap test from the first screen to the last.
+   */
+  const reportPageIndicator = useCallback(() => {
+    const api = apiRef.current;
+    if (!api || mobileRegionRef.current !== null) return;
+
+    const state = api.getAppState() as {
+      scrollY?: number;
+      height?: number;
+      zoom?: { value?: number };
+    };
+    const zoom = state.zoom?.value ?? 1;
+    const scrollY = state.scrollY ?? 0;
+    const height = state.height ?? 0;
+
+    const camera = lastPageCameraRef.current;
+    if (camera && camera.scrollY === scrollY && camera.zoom === zoom) return;
+    lastPageCameraRef.current = { scrollY, zoom };
+
+    const band = viewportBand(scrollY, zoom, height);
+    if (!band) return;
+    const elements = api.getSceneElements() as unknown as PageableElement[];
+    const page = pageAtViewport(elements, STUDENT_REGION_ORDER, band.top, band.bottom);
+    if (!page || page === lastNamedPageRef.current) return;
+
+    lastNamedPageRef.current = page;
+    pageIndicatorRef.current?.show(
+      REGIONS[page].label,
+      STUDENT_REGION_ORDER.indexOf(page),
+      STUDENT_REGION_ORDER.length,
+    );
+  }, []);
+
   const runSlotReports = useCallback(() => {
     // Code dock only exists on the code page — skip the scene walk elsewhere.
     const page = mobileRegionRef.current;
@@ -1921,7 +1970,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     reportLinedSlot();
     reportTitleSlot();
     reportContentSlot();
-  }, [reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot]);
+    reportPageIndicator();
+  }, [
+    reportCodeSlot,
+    reportContentSlot,
+    reportLinedSlot,
+    reportPageIndicator,
+    reportTitleSlot,
+  ]);
 
   const scheduleSlotReports = useCallback(() => {
     if (slotReportFrameRef.current) return;
@@ -4168,6 +4224,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     reportTitleSlot();
   }, [mobileRegion, interactive, reportTitleSlot]);
 
+  /**
+   * A new board — or a switch into paging — starts the wayfinding over, so the
+   * first scroll on the next board names its page instead of staying silent
+   * because the old one happened to end on the same region.
+   */
+  useEffect(() => {
+    lastNamedPageRef.current = null;
+    lastPageCameraRef.current = null;
+    if (mobileRegion !== null) pageIndicatorRef.current?.hide();
+  }, [mobileRegion, interactive]);
+
   /** Page-locked boards: grow the frame and refit width on every board resize. */
   useEffect(() => {
     if (!interactive) return;
@@ -5392,7 +5459,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           ...(Object.keys(saved).length > 0 ? { appState: saved } : {}),
           captureUpdate: CaptureUpdateAction.NEVER,
         });
-        rasterInkRef.current?.setOps(options?.ink ?? []);
+        /*
+         * Ink is absolute scene points, so it has to be carried across the heal.
+         *
+         * `healBoardLayout` re-stacks the saved frames onto today's rules, and a
+         * board saved under different geometry lands with every page below the
+         * first at a new Y. Elements ride that out on their `lcRegionOy`
+         * offsets; pen strokes have no frame to hang off and would be left
+         * behind on the desk between pages.
+         */
+        rasterInkRef.current?.setOps(
+          reanchorInkOps(
+            chromeStripped as unknown as LayoutElement[],
+            healed as unknown as LayoutElement[],
+            options?.ink ?? [],
+          ),
+        );
         ensureReadingHand();
         requestAnimationFrame(() => {
           apiRef.current?.history?.clear();
@@ -5673,6 +5755,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       )}
       {interactive && activeTool === "eraser" && <EraserBrush ref={eraserBrushRef} />}
       {interactive && <ModeIndicator ref={modeIndicatorRef} />}
+      {interactive && mobileRegion === null && <PageIndicator ref={pageIndicatorRef} />}
       <RasterInkLayer
         ref={rasterInkRef}
         enabled={interactive}

@@ -4,11 +4,13 @@ import {
   applyPageVisibility,
   clearPageVisibility,
   hasPagedElements,
+  pageAtViewport,
   pageBounds,
   regionOfElement,
+  viewportBand,
   type PageableElement,
 } from "./pageView";
-import { REGIONS, REGION_GUTTER } from "../templates/regions";
+import { PAGE_BREAK, REGIONS, REGION_GUTTER, type RegionId } from "../templates/regions";
 
 /** A dashed region frame, as the template seeds it. */
 function frame(region: string, over?: Partial<PageableElement>): PageableElement {
@@ -126,5 +128,96 @@ describe("page visibility", () => {
 
     const onCoach = applyPageVisibility(onWalkthrough, "agent")!;
     expect(onCoach.find((el) => el.id === "lcviz-demo-cell-0")?.opacity).toBe(100);
+  });
+
+  /**
+   * The bug the widened reach prevents: once the vertical gap grew past one
+   * `REGION_GUTTER`, the middle of every break belonged to no page — and an
+   * element that belongs to no page is shown on *every* page.
+   */
+  it("claims the whole page break, right down its middle", () => {
+    const midBreak = drawn(
+      "mid",
+      200,
+      REGIONS.constraints.y + REGIONS.constraints.h + PAGE_BREAK / 2,
+    );
+    const scene = [...TEMPLATE, midBreak];
+
+    const shownSomewhere = ["constraints", "code", "approach"].map(
+      (page) => applyPageVisibility(scene, page)!.find((el) => el.id === "mid")?.opacity !== 0,
+    );
+    expect(shownSomewhere.filter(Boolean)).toHaveLength(1);
+  });
+});
+
+describe("viewportBand", () => {
+  it("reads the scene band off an Excalidraw camera", () => {
+    // Scrolled 500 down: scene y=500 is at the top of the screen.
+    expect(viewportBand(-500, 1, 800)).toEqual({ top: 500, bottom: 1300 });
+    // Origin.
+    expect(viewportBand(0, 1, 800)).toEqual({ top: 0, bottom: 800 });
+  });
+
+  /** Zoomed out, one screen covers more board — the bug is forgetting to divide. */
+  it("scales the band by the zoom", () => {
+    expect(viewportBand(0, 0.5, 800)).toEqual({ top: 0, bottom: 1600 });
+    expect(viewportBand(0, 2, 800)).toEqual({ top: 0, bottom: 400 });
+  });
+
+  it("has no band before the board is measured", () => {
+    expect(viewportBand(0, 1, 0)).toBeNull();
+    expect(viewportBand(0, 0, 800)).toBeNull();
+  });
+
+  /** The whole path, as Board runs it: camera in, page name out. */
+  it("names the page under a real camera", () => {
+    const onCode = viewportBand(-(REGIONS.code.y + 100), 1, 800)!;
+    expect(
+      pageAtViewport(TEMPLATE, ["constraints", "code", "approach"] as RegionId[], onCode.top, onCode.bottom),
+    ).toBe("code");
+
+    const onStatement = viewportBand(0, 1, 800)!;
+    expect(
+      pageAtViewport(TEMPLATE, ["constraints", "code", "approach"] as RegionId[], onStatement.top, onStatement.bottom),
+    ).toBe("constraints");
+  });
+});
+
+describe("pageAtViewport", () => {
+  const ORDER = ["constraints", "code", "approach"] as const;
+  /** Viewport spanning `height` scene units from `top`. */
+  const at = (top: number, height: number) =>
+    pageAtViewport(TEMPLATE, ORDER as unknown as RegionId[], top, top + height);
+
+  it("names the page filling the viewport", () => {
+    expect(at(REGIONS.constraints.y, 400)).toBe("constraints");
+    expect(at(REGIONS.code.y + 200, 400)).toBe("code");
+    expect(at(REGIONS.approach.y + 200, 400)).toBe("approach");
+  });
+
+  it("flips at the halfway point of a scroll between two pages", () => {
+    const boundary = REGIONS.constraints.y + REGIONS.constraints.h;
+    const view = 400;
+    // Mostly still on the statement…
+    expect(at(boundary - view * 0.75, view)).toBe("constraints");
+    // …and mostly onto the code page.
+    expect(at(boundary + PAGE_BREAK - view * 0.25, view)).toBe("code");
+  });
+
+  /** A short page wholly on screen beats the slivers of its neighbours. */
+  it("prefers a page that fits entirely in the viewport", () => {
+    const short = [
+      frame("constraints", { y: 0, height: 200 }),
+      frame("code", { y: 400, height: 300 }),
+      frame("approach", { y: 900, height: 200 }),
+    ];
+    expect(pageAtViewport(short, ORDER as unknown as RegionId[], 350, 750)).toBe("code");
+  });
+
+  it("names nothing when the viewport is off the board", () => {
+    expect(at(-50_000, 400)).toBeNull();
+    expect(at(REGIONS.approach.y + REGIONS.approach.h + 10_000, 400)).toBeNull();
+    // A degenerate camera is not a page.
+    expect(pageAtViewport(TEMPLATE, ORDER as unknown as RegionId[], 100, 100)).toBeNull();
   });
 });

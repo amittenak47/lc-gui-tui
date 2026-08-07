@@ -663,6 +663,60 @@ input[type="checkbox"] {
   }
 }
 
+/*
+ * Page title on the freely-scrolling desktop board — "Code · 2 of 6".
+ *
+ * Top of the canvas rather than the middle: it answers "where am I" while the
+ * reader is still moving, so it must not sit over what they are scrolling to.
+ * Shares the mode pill's z-index for the same reason — above the code dock,
+ * which fills the screen on the code page, and below the toolbars.
+ */
+.lc-page-indicator {
+  position: absolute;
+  left: 50%;
+  top: 0.85rem;
+  transform: translateX(-50%);
+  z-index: 14;
+  pointer-events: none;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.42rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: blur(6px);
+  color: var(--ink);
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 260ms ease-out;
+  will-change: opacity;
+}
+
+.lc-page-indicator.is-visible {
+  opacity: 1;
+  transition-duration: 90ms;
+}
+
+.lc-page-indicator-title {
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+}
+
+/* Secondary: the position is support for the name, not a peer of it. */
+.lc-page-indicator-count {
+  font-size: 0.8rem;
+  opacity: 0.62;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-page-indicator {
+    transition: none;
+  }
+}
+
 /* Eraser brush preview: circle + crosshair (pen uses crosshair; Excalidraw uses a fixed circle). */
 /*
  * Position comes from an inline `transform` written by Board's pointer handler

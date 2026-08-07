@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildProblemTemplate } from "./problemBoard";
 import { regionFrameId, syncRegionLayout } from "./regionLayout";
-import { REGIONS } from "./regions";
+import { PAGE_BREAK, REGIONS } from "./regions";
 
 function framesFromTemplate() {
   const skeletons = buildProblemTemplate({
@@ -100,8 +100,8 @@ describe("syncRegionLayout", () => {
     const synced = syncRegionLayout(elements)!;
     const code = synced.find((element) => element.id === regionFrameId("code"))!;
     const approach = synced.find((element) => element.id === regionFrameId("approach"))!;
-    expect(code.y).toBe(constraints.height! + 64);
-    expect(approach.y).toBe(code.y + code.height! + 64);
+    expect(code.y).toBe(constraints.height! + PAGE_BREAK);
+    expect(approach.y).toBe(code.y + code.height! + PAGE_BREAK);
   });
 
   it("keeps statement text inside the frame when resized from the top", () => {
@@ -141,7 +141,7 @@ describe("syncRegionLayout", () => {
     const nextCode = synced.find((element) => element.id === regionFrameId("code"))!;
     expect(nextCode.height).toBe(1800);
     const approach = synced.find((element) => element.id === regionFrameId("approach"))!;
-    expect(approach.y).toBe(nextCode.y + nextCode.height! + 64);
+    expect(approach.y).toBe(nextCode.y + nextCode.height! + PAGE_BREAK);
   });
 
   it("lets the student keep a code frame taller than the content", () => {

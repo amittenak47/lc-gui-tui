@@ -13,6 +13,7 @@
 import { DRAW_HEADER_BAND } from "./drawPageGrowth";
 import { regionTextWidth } from "./readingColumn";
 import {
+  PAGE_BREAK,
   REGIONS,
   REGION_GUTTER,
   REGION_MIN,
@@ -246,10 +247,13 @@ export function syncRegionLayout(
     }
     byId.set(frame.id, next);
     frames.set(region, next);
-    y += height + REGION_GUTTER;
+    // A page break, not a gutter: this is the gap a reader scrolls through
+    // between two sheets, and it is what keeps a grown page from reading as if
+    // it had run into the next one. See `PAGE_BREAK`.
+    y += height + PAGE_BREAK;
   }
 
-  const studentStackHeight = Math.max(0, y - REGION_GUTTER);
+  const studentStackHeight = Math.max(0, y - PAGE_BREAK);
   const agent = frames.get("agent");
   if (agent) {
     const agentWidth = Math.max(REGION_MIN.agent.minW, num(agent.width, REGIONS.agent.w));
