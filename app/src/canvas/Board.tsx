@@ -62,7 +62,7 @@ import {
 import { INK_REGION_GAP, INK_REGION_PAD, inkRegionSplit } from "./inkRegionSplit";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
-import { REGION_GUTTER, REGION_MIN, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
+import { REGION_GUTTER, REGION_MIN, REGION_BLURB, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
 import {
   BOARD_THEMES,
   DEFAULT_FONT_SIZE,
@@ -1270,6 +1270,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const scrollUnsubRef = useRef<(() => void) | null>(null);
   const layoutSyncingRef = useRef(false);
   const codeContentHeightRef = useRef<number | null>(null);
+  /** Measured statement / md-ink paper height — `runFit` must not shrink below this. */
+  const pageContentHeightRef = useRef<number | null>(null);
   /** Viewport page height from the last draw-page fit — drives ink growth steps. */
   const drawBasePageHRef = useRef<number | null>(null);
   const lastCodeSourceRef = useRef<string>("");
@@ -1428,8 +1430,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!api) return;
     const live = api.getSceneElements() as unknown as PageableElement[];
     const page = mobileRegionRef.current;
+    // Desktop free-scroll: page is null (show all), but the statement HTML still
+    // needs constraints bounds so the overlay can ride the camera mid-pan.
+    const boundsPage =
+      page ?? (pageContentRef.current ? "constraints" : null);
 
-    const bounds = pageBounds(live, page);
+    const bounds = pageBounds(live, boundsPage);
     // Pan clamp uses the tight frame (no gutter pad) so a fitted page cannot
     // drift off one edge. Ink clip keeps the half-gutter pad.
     if (bounds) {
@@ -1960,6 +1966,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       REGIONS[page].label,
       STUDENT_REGION_ORDER.indexOf(page),
       STUDENT_REGION_ORDER.length,
+      REGION_BLURB[page],
     );
   }, []);
 
@@ -2458,6 +2465,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         sceneWidth: Math.max(1, bounds.maxX - bounds.minX),
         zoom,
       };
+    } else if (!bounds && node && pageContentRef.current && api) {
+      // Same desktop fallback as reportContentSlot — live pan must not wait a
+      // slot-report frame before the markdown rides.
+      const liveEls = api.getSceneElements() as unknown as PageableElement[];
+      const page = mobileRegionRef.current ?? "constraints";
+      const raw = pageBounds(liveEls, page);
+      if (raw) {
+        const pad = REGION_GUTTER / 2;
+        const fallback = {
+          minX: raw.minX + pad,
+          minY: raw.minY + pad,
+          maxX: raw.maxX - pad,
+          maxY: raw.maxY - pad,
+        };
+        const left = (fallback.minX + scrollX) * zoom;
+        const top = (fallback.minY + scrollY) * zoom;
+        node.style.transform = `translate(${left}px, ${top}px) scale(${zoom})`;
+        lastContentSlotRef.current = {
+          left,
+          top,
+          sceneWidth: Math.max(1, fallback.maxX - fallback.minX),
+          zoom,
+        };
+      }
     }
     pulseCameraMotionRef.current();
 
@@ -3894,6 +3925,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 contentBottomRel,
               }),
             );
+          } else if (
+            Boolean(
+              (primary as { customData?: { lcDocumentPage?: boolean } }).customData
+                ?.lcDocumentPage,
+            )
+          ) {
+            // Statement / md-ink: keep at least the measured document height so
+            // settleFitView cannot shrink the page back to one viewport and kill
+            // vertical scroll (contentH <= visH → clamp locks Y).
+            const docH = pageContentHeightRef.current;
+            nextH = Math.max(
+              regionMin,
+              Math.round(fillHeight),
+              docH != null && docH > 0 ? Math.round(docH) : 0,
+            );
           } else {
             nextH = Math.max(regionMin, Math.round(fillHeight));
           }
@@ -4660,6 +4706,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     applyRegionLayout();
     requestAnimationFrame(reportCodeSlot);
   }, [applyRegionLayout, codeContentHeight, reportCodeSlot]);
+
+  // Keep the fit path honest about measured paper height (statement / md-ink).
+  useEffect(() => {
+    pageContentHeightRef.current =
+      pageContentHeight != null && pageContentHeight >= 1 ? pageContentHeight : null;
+  }, [pageContentHeight]);
 
   /** Resolve once every seeded region frame is in the scene (and fonts are ready). */
   const waitForTemplate = useCallback((): Promise<void> => {

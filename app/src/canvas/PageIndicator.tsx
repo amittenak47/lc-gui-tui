@@ -23,7 +23,7 @@ const HOLD_MS = 1100;
 
 export interface PageIndicatorHandle {
   /** Name the page just scrolled onto, restarting the fade. */
-  show(label: string, index: number, total: number): void;
+  show(label: string, index: number, total: number, blurb?: string): void;
   /** Drop the pill now — leaving the board, or paging took over. */
   hide(): void;
 }
@@ -45,13 +45,16 @@ export const PageIndicator = forwardRef<PageIndicatorHandle, PageIndicatorProps>
     useImperativeHandle(
       ref,
       (): PageIndicatorHandle => ({
-        show(label, index, total) {
+        show(label, index, total, blurb) {
           const node = nodeRef.current;
           if (!node) return;
-          node.replaceChildren(
-            titleSpan(label),
-            countSpan(`${index + 1} of ${total}`),
-          );
+          const head = document.createElement("div");
+          head.className = "lc-page-indicator-head";
+          head.append(titleSpan(label), countSpan(`${index + 1} of ${total}`));
+          node.replaceChildren(head);
+          if (blurb) {
+            node.append(blurbSpan(blurb));
+          }
           node.classList.add("is-visible");
           if (timerRef.current) window.clearTimeout(timerRef.current);
           timerRef.current = window.setTimeout(() => {
@@ -82,6 +85,13 @@ function titleSpan(label: string): HTMLSpanElement {
 function countSpan(text: string): HTMLSpanElement {
   const span = document.createElement("span");
   span.className = "lc-page-indicator-count";
+  span.textContent = text;
+  return span;
+}
+
+function blurbSpan(text: string): HTMLSpanElement {
+  const span = document.createElement("span");
+  span.className = "lc-page-indicator-blurb";
   span.textContent = text;
   return span;
 }

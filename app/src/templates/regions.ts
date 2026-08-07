@@ -183,6 +183,17 @@ export const REGIONS: Record<RegionId, Region> = {
   },
 };
 
+/** Short wayfinding lines — Scratchpad-tone, shown on page change (not on canvas). */
+export const REGION_BLURB: Record<RegionId, string> = {
+  constraints: "Read the statement — examples and limits live here.",
+  code: "Your solution in Python — the editor docks into this page.",
+  approach: "Sketch the plan before you code — data structures, loops, edge cases.",
+  complexity: "Justify time and space once the approach is clear.",
+  walkthrough: "Trace an example by hand — indices, window, stack contents.",
+  scratch: "Scratch work — diagrams, tables, anything that does not belong elsewhere.",
+  agent: "Coach diagrams land here — they never collide with your ink.",
+};
+
 export const AGENT_LANE = REGIONS.agent;
 
 /** Inner padding, so diagrams don't touch the lane's border. */

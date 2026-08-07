@@ -66,6 +66,8 @@ export interface ProblemBrowserProps {
   onRandomSession?: (bank: SearchOptions) => void;
   themeId: string;
   onThemePick: (id: string) => void;
+  /** Fires when the first search settles and the table can render. */
+  onReady?: () => void;
 }
 
 /** Step through a cycle of options, wrapping — the TUI's T/E/O behaviour. */
@@ -85,6 +87,7 @@ export function ProblemBrowser({
   onRandomSession,
   themeId,
   onThemePick,
+  onReady,
 }: ProblemBrowserProps) {
   const mobile = useIsMobile();
   const initial = useMemo(() => loadBrowsePosition(), []);
@@ -302,6 +305,10 @@ export function ProblemBrowser({
       clearTimeout(timer);
     };
   }, [client, dataset, query, difficulty, tag, sort, page, pageSize, offline, offlinePack]);
+
+  useEffect(() => {
+    if (tableReady) onReady?.();
+  }, [tableReady, onReady]);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
