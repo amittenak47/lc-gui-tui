@@ -519,7 +519,7 @@ const ZOOM_STEP = 1.15;
 /** Button zoom animation — retargets smoothly on repeat / hold. */
 const ZOOM_ANIM_MS = 220;
 /** Hand-tool pan inertia — exponential friction per ms (coast after flick). */
-const PAN_FRICTION = 0.0028;
+const PAN_FRICTION = 0.0045;
 /**
  * Coast after a flick. Flip false to isolate finger-drag scroll in profiles
  * (no `Board.step` inertia rAF). End-state of the scroll-perf pass keeps this
