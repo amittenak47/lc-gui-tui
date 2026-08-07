@@ -7444,3 +7444,95 @@ button.lc-row-selected:hover:not(:disabled) {
   opacity: 0;
   pointer-events: none;
 }
+
+
+/* ------------------------------------------------------ writing hand --- */
+
+/*
+ * Left hand: mirror the chrome across the Y-axis.
+ *
+ * The whole app is laid out for a right-handed writer — coach panel on the
+ * right, board dock reading left-to-right, tooltips opening away from the
+ * nearest edge. For a left-handed one every one of those sits under the palm.
+ * `data-handedness="left"` lands on `<html>` (see `installHandednessAttr`), so
+ * these rules also reach the chrome that portals out of the app subtree.
+ *
+ * Horizontal only. Vertical order is reading order and does not belong to the
+ * hand holding the pen — an island above a pager stays above it.
+ */
+
+/* Coach panel swaps edges, and with it the seam and the shadow that sells it. */
+[data-handedness="left"] .lc-side {
+  right: auto;
+  left: 0;
+  border-left: none;
+  border-right: 1px solid var(--chrome-edge);
+  box-shadow: 6px 0 18px rgb(0 0 0 / 18%);
+}
+
+[data-handedness="left"] .lc-app-coach-open .lc-side {
+  box-shadow: 6px 8px 18px rgb(0 0 0 / 14%);
+}
+
+/* The collapsed tab hangs off the panel's outer edge, so it flips too. */
+[data-handedness="left"] .lc-side-tab-wrap {
+  right: auto;
+  left: 0;
+}
+
+[data-handedness="left"] .lc-side-tab {
+  padding: 0 12px 0 14px;
+  border-radius: 0 8px 8px 0;
+  border-right: 1px solid var(--line);
+  border-left: none;
+  box-shadow: 2px 1px 6px rgb(0 0 0 / 8%);
+}
+
+/*
+ * Composer: flags and Send move under the writing hand, modes to the far side.
+ * `row-reverse` rather than reordering the JSX — the DOM order is the tab
+ * order, and Send should stay last for a keyboard.
+ */
+[data-handedness="left"] .lc-coach-composer-bar {
+  flex-direction: row-reverse;
+}
+
+[data-handedness="left"] .lc-coach-composer-actions {
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+  margin-left: 0;
+  margin-right: auto;
+}
+
+/* Tooltips open away from the panel's edge, which has just changed sides. */
+[data-handedness="left"] .lc-coach-composer-bar .lc-modes .lc-tip-target::after {
+  left: auto;
+  right: calc(100% + 5px);
+}
+
+[data-handedness="left"] .lc-coach-composer-actions .lc-tip-target::after {
+  right: auto;
+  left: calc(100% + 5px);
+}
+
+/* Board chrome: annotate island and the dock trade sides. */
+[data-handedness="left"] .lc-map-controls {
+  flex-direction: row-reverse;
+}
+
+[data-handedness="left"] .lc-map-chrome-left {
+  flex-direction: row-reverse;
+}
+
+[data-handedness="left"] .lc-map-chrome-right,
+[data-handedness="left"] .lc-map-controls-collapsed .lc-map-chrome-right {
+  align-items: flex-start;
+}
+
+/*
+ * Action sheets (selection, footnote) anchor to the hand rather than the page.
+ * The sheet itself is centred on its anchor, so only the rows inside flip.
+ */
+[data-handedness="left"] .lc-doc-sheet-actions {
+  flex-direction: row-reverse;
+}

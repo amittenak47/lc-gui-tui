@@ -613,8 +613,9 @@ export function SettingsModal({
             <div className="lc-settings-fields">
               <div className="lc-settings-subhead">Writing hand</div>
               <p className="lc-settings-hint">
-                Tilts the colour picker so swatches sit clear of your writing hand.
-                Saved on this device only — not in <code>config.toml</code>.
+                Tilts the colour picker so swatches sit clear of your writing hand, and
+                mirrors the chrome — coach panel, board dock, toolbars and action sheets —
+                to the same side. Saved on this device only — not in <code>config.toml</code>.
               </p>
               <div className="lc-settings-choice" role="radiogroup" aria-label="Writing hand">
                 <button
@@ -629,7 +630,7 @@ export function SettingsModal({
                   onClick={() => setHandedness("right")}
                 >
                   <strong>Right hand</strong>
-                  <span className="lc-muted">Chrome sits below-right of the tip.</span>
+                  <span className="lc-muted">Chrome sits below-right of the tip, panels on the right.</span>
                 </button>
                 <button
                   type="button"
@@ -643,7 +644,7 @@ export function SettingsModal({
                   onClick={() => setHandedness("left")}
                 >
                   <strong>Left hand</strong>
-                  <span className="lc-muted">Chrome sits below-left of the tip.</span>
+                  <span className="lc-muted">Chrome sits below-left of the tip, panels mirrored left.</span>
                 </button>
               </div>
 
