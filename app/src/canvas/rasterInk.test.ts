@@ -26,10 +26,8 @@ import {
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
   INK_TIP_MIN,
-  INK_TIP_STEP,
-  inkDryDepth,
-  inkFallLength,
-  inkLeadLength,
+  inkDryMid,
+  inkDryScale,
   NO_PRESSURE,
   normalizePressure,
   paintInkAtScale,
@@ -76,14 +74,11 @@ describe("rasterInk sizing", () => {
     expect(eraserScreenRadius(2, 0.5)).toBe(1.75);
   });
 
-  it("keeps tip width stable; ±one tip step under stylus pressure", () => {
+  it("keeps tip width fixed under stylus pressure (alpha only)", () => {
     const base = inkLineWidth(2, 0, false);
+    expect(inkLineWidth(2, 0, true)).toBeCloseTo(base);
     expect(inkLineWidth(2, 0.5, true)).toBeCloseTo(base);
-    const low = inkLineWidth(2, 0, true);
-    const high = inkLineWidth(2, 1, true);
-    expect(low).toBeCloseTo(Math.max(INK_TIP_MIN, base - INK_TIP_STEP));
-    expect(high).toBeCloseTo(base + INK_TIP_STEP);
-    expect(low).toBeLessThan(high);
+    expect(inkLineWidth(2, 1, true)).toBeCloseTo(base);
   });
 
   it("gives the finest tip a hairline, and never a negative one", () => {
@@ -107,80 +102,69 @@ describe("rasterInk sizing", () => {
 });
 
 describe("ink reservoir", () => {
-  it("starts every stroke at a full nib, whatever the dial says", () => {
+  it("starts every stroke near full, whatever the dial says", () => {
     expect(inkReservoirAlpha(0, 1)).toBe(1);
-    expect(inkReservoirAlpha(0, 0.2)).toBe(1);
-    expect(inkReservoirAlpha(0, 0)).toBe(1);
+    expect(inkReservoirAlpha(0, 0.2)).toBeGreaterThan(0.9);
+    expect(inkReservoirAlpha(0, 0)).toBeGreaterThan(0.9);
   });
 
-  it("holds a full dial at exactly 1 forever", () => {
+  it("treats fullness 1 as never-dry (pressure-off sentinel)", () => {
     expect(inkReservoirAlpha(1e9, 1)).toBe(1);
-    expect(inkDryDepth(1)).toBe(0);
+  });
+
+  it("still dries at the top of the dial (0.999)", () => {
+    expect(inkReservoirAlpha(1e9, 0.999)).toBeCloseTo(INK_DRY_FLOOR, 1);
   });
 
   it("fades along the stroke, never below the readable floor", () => {
     const dial = 0.4;
-    const lead = inkLeadLength(dial);
-    const fall = inkFallLength(dial);
-    const early = inkReservoirAlpha(lead, dial);
-    const late = inkReservoirAlpha(lead + fall + 50, dial);
-    expect(early).toBe(1);
+    const mid = inkDryMid(dial);
+    const early = inkReservoirAlpha(mid * 0.2, dial);
+    const late = inkReservoirAlpha(mid + inkDryScale(dial) * 4, dial);
     expect(late).toBeLessThan(early);
     expect(late).toBeGreaterThanOrEqual(INK_DRY_FLOOR);
-    expect(inkReservoirAlpha(1e9, dial)).toBeCloseTo(1 - inkDryDepth(dial));
-  });
-
-  it("keeps alpha at 1 on the flat lead", () => {
-    const dial = 0.4;
-    const lead = inkLeadLength(dial);
-    expect(inkReservoirAlpha(lead - 1, dial)).toBe(1);
-    expect(inkReservoirAlpha(5, dial)).toBe(1);
+    expect(inkReservoirAlpha(1e9, dial)).toBeCloseTo(INK_DRY_FLOOR, 1);
   });
 
   it("is monotone non-increasing as consumed grows", () => {
     const dial = 0.3;
     let prev = inkReservoirAlpha(0, dial);
-    for (let c = 10; c <= 2000; c += 10) {
+    for (let c = 10; c <= 4000; c += 10) {
       const next = inkReservoirAlpha(c, dial);
-      expect(next).toBeLessThanOrEqual(prev);
+      expect(next).toBeLessThanOrEqual(prev + 1e-12);
       prev = next;
     }
   });
 
   it("makes a fuller dial last longer at the same distance", () => {
-    const consumed = 1000;
+    const consumed = 800;
     expect(inkReservoirAlpha(consumed, 0.9)).toBeGreaterThan(inkReservoirAlpha(consumed, 0.3));
     expect(inkReservoirAlpha(consumed, 0.3)).toBeGreaterThan(inkReservoirAlpha(consumed, 0));
   });
 
-  // Distances in nib widths of pen travel: a letter is roughly 50-130 and a
-  // line of handwriting a couple of thousand.
+  // Distances in nib widths: letter ~60, word ~400, sentence ~1200, paragraph ~3500.
   const LETTER = 60;
   const WORD = 400;
-  const LINE = 2400;
+  const SENTENCE = 1200;
+  const PARAGRAPH = 3500;
 
-  it("does not dry out inside the first letter, even on an empty dial", () => {
-    // lead=90 at dial 0; LETTER=60 is still on the flat lead.
-    expect(inkReservoirAlpha(LETTER, 0)).toBe(1);
+  it("drops within a word or two on an empty dial", () => {
+    // Steep flipped sigmoid: still wet through a letter, dry by two words.
+    expect(inkReservoirAlpha(LETTER, 0)).toBeGreaterThan(0.5);
+    expect(inkReservoirAlpha(WORD, 0)).toBeLessThan(0.4);
+    expect(inkReservoirAlpha(WORD * 2, 0)).toBeCloseTo(INK_DRY_FLOOR, 1);
   });
 
-  it("spends the empty end of the dial over a word, and the middle over a line", () => {
-    // dial 0: lead=90, fall=260; WORD=400 past lead+fall (350) → near floor.
-    expect(inkReservoirAlpha(WORD, 0)).toBeLessThan(INK_DRY_FLOOR + 0.1);
-    // dial 0.5: lead=540, fall=1010; WORD=400 still on lead → full.
-    expect(inkReservoirAlpha(WORD, 0.5)).toBe(1);
+  it("spends the middle of the dial across a sentence", () => {
+    expect(inkReservoirAlpha(WORD, 0.5)).toBeGreaterThan(0.7);
+    expect(inkReservoirAlpha(SENTENCE, 0.5)).toBeLessThan(0.85);
+    expect(inkReservoirAlpha(SENTENCE * 2, 0.5)).toBeLessThan(0.5);
   });
 
-  it("settles dial 0.5 across a line and barely moves dial 0.75", () => {
-    // LINE=2400 past lead at dial 0.5 → settles near 0.67.
-    expect(inkReservoirAlpha(LINE, 0.5)).toBeCloseTo(0.67, 1);
-    // dial 0.75: lead=765; WORD=400 still on lead.
-    expect(inkReservoirAlpha(WORD, 0.75)).toBe(1);
-    // dial 0.75 barely moves across a line.
-    const early075 = inkReservoirAlpha(inkLeadLength(0.75), 0.75);
-    const late075 = inkReservoirAlpha(LINE, 0.75);
-    expect(early075).toBe(1);
-    expect(late075).toBeGreaterThan(0.8);
+  it("takes a short paragraph to dry at the top of the dial", () => {
+    expect(inkReservoirAlpha(SENTENCE, 0.999)).toBeGreaterThan(0.75);
+    expect(inkReservoirAlpha(PARAGRAPH, 0.999)).toBeLessThan(0.7);
+    expect(inkReservoirAlpha(PARAGRAPH * 2, 0.999)).toBeLessThan(0.45);
   });
 
   it("keeps a light touch light but present", () => {
@@ -238,8 +222,8 @@ describe("speed ink", () => {
   it("never asks for more than opaque ink on a full dial", () => {
     const maxSlow = inkStrokeAlpha(1, 0, false, 0, 1, 1);
     expect(maxSlow).toBeLessThanOrEqual(1);
-    expect(maxSlow).toBeGreaterThan(0.98);
-    expect(maxSlow).toBeCloseTo(0.992);
+    // BASE * (1 + RANGE) leaves headroom under the clip.
+    expect(maxSlow).toBeCloseTo(INK_SPEED_ALPHA_BASE * (1 + 0.45), 2);
   });
 
   it("reads neutral pace as the speed-alpha base when speed ink is on", () => {
@@ -320,7 +304,9 @@ describe("rasterInk pressure", () => {
     const firm = inkStrokeStyle(2, 0.8, 1, 1, true);
     expect(light.alpha).toBeLessThan(firm.alpha);
     expect(light.alpha).toBeGreaterThanOrEqual(INK_PRESSURE_FLOOR);
-    expect(light.lineWidth).toBeLessThan(firm.lineWidth);
+    // Width stays on the tip — pressure only modulates alpha.
+    expect(light.lineWidth).toBeCloseTo(firm.lineWidth);
+    expect(light.lineWidth).toBeCloseTo(inkLineWidth(2, 0, false));
   });
 });
 

@@ -275,7 +275,7 @@ describe("live smoothing", () => {
   });
 
   it("caps lag in nib widths so tight loops survive at full strength", () => {
-    expect(LIVE_SMOOTHING_MAX_TAU_MS).toBe(90);
+    expect(LIVE_SMOOTHING_MAX_TAU_MS).toBe(32);
     expect(liveSmoothingTau(1)).toBe(LIVE_SMOOTHING_MAX_TAU_MS);
 
     const nibWidth = 3;

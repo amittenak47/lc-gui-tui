@@ -41,16 +41,17 @@ export const NO_PRESSURE = -1;
 export const INK_DRY_FLOOR = 0.34;
 
 /**
- * Lead and fall lengths for the drying curve, in nib widths.
+ * Flipped-logistic drying curve, in nib-widths of continuous writing.
  *
- * After `lead` nib-widths of writing the charge begins to fall; over `fall` more
- * it eases down to `1 - inkDryDepth(dial)`. Distance is in nib widths so a fat
- * marker and a fine liner dry over the same amount of *writing*.
+ * Midpoint (`inkDryMid`) is where charge is halfway to the floor; scale
+ * (`inkDryScale`) is the logistic width — small = cliff, large = near-flat.
+ * Dial 0: drops within a word. Dial 0.5: across a sentence. Dial 1: across a
+ * short paragraph — still eventually dry, never an infinite reservoir.
  */
-export const INK_LEAD_MIN = 90;
-export const INK_LEAD_SPAN = 900;
-export const INK_FALL_MIN = 260;
-export const INK_FALL_SPAN = 1500;
+export const INK_DRY_MID_MIN = 70;
+export const INK_DRY_MID_SPAN = 3400;
+export const INK_DRY_SCALE_MIN = 22;
+export const INK_DRY_SCALE_SPAN = 800;
 
 /**
  * Floor on pressure's share of the deposit.
@@ -71,43 +72,47 @@ export const INK_PRESSURE_FLOOR = 0.45;
  */
 export const INK_MIN_DEVICE_PX = 1.15;
 
-function smoothstep(u: number): number {
-  if (u <= 0) return 0;
-  if (u >= 1) return 1;
-  return u * u * (3 - 2 * u);
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }
 
-/** Tail alpha at dial 0 — linear depth from dial to `1 - depth`. */
-export function inkDryDepth(dial: number): number {
-  const d = Math.max(0, Math.min(1, dial));
-  return (1 - INK_DRY_FLOOR) * (1 - d);
+function logistic(x: number): number {
+  if (x >= 20) return 1;
+  if (x <= -20) return 0;
+  return 1 / (1 + Math.exp(-x));
 }
 
-/** Nib-widths before the charge begins to fall. */
-export function inkLeadLength(dial: number): number {
-  const d = Math.max(0, Math.min(1, dial));
-  return INK_LEAD_MIN + INK_LEAD_SPAN * d;
+/** Nib-widths where the charge is halfway to the floor. */
+export function inkDryMid(dial: number): number {
+  const d = clamp01(dial);
+  // Superlinear so the top half of the dial buys paragraph length.
+  return INK_DRY_MID_MIN + INK_DRY_MID_SPAN * d ** 1.8;
 }
 
-/** Nib-widths over which alpha eases from full to the dry tail. */
-export function inkFallLength(dial: number): number {
-  const d = Math.max(0, Math.min(1, dial));
-  return INK_FALL_MIN + INK_FALL_SPAN * d;
+/** Logistic width — dial 0 is a cliff, dial 1 is near-flat. */
+export function inkDryScale(dial: number): number {
+  const d = clamp01(dial);
+  return INK_DRY_SCALE_MIN + INK_DRY_SCALE_SPAN * d ** 1.5;
 }
 
 /** Charge left after `consumed` nib-widths, for a dial at `fullness`. */
 export function inkReservoirAlpha(consumed: number, fullness: number): number {
-  const dial = Math.max(0, Math.min(1, fullness));
-  const depth = inkDryDepth(dial);
-  if (depth <= 0) return 1;
-  const lead = inkLeadLength(dial);
-  const fall = inkFallLength(dial);
-  return 1 - depth * smoothstep((consumed - lead) / fall);
+  // Exactly 1 means "do not dry" — pressure-off strokes record maxFullness: 1.
+  // Pressure-on at the dial's top stores 0.999 so a paragraph still fades.
+  if (!(fullness < 1)) return 1;
+  const c = Math.max(0, consumed);
+  if (c <= 0) return 1;
+  const dial = clamp01(fullness);
+  const depth = 1 - INK_DRY_FLOOR;
+  const mid = inkDryMid(dial);
+  const scale = Math.max(1e-6, inkDryScale(dial));
+  // Flipped sigmoid: full at the head, floor past the midpoint.
+  return 1 - depth * logistic((c - mid) / scale);
 }
 
 /** Pressure's share of the deposit — lighter, never invisible. */
 export function inkPressureAlpha(pNorm: number): number {
-  const p = Math.max(0, Math.min(1, pNorm));
+  const p = clamp01(pNorm);
   return INK_PRESSURE_FLOOR + (1 - INK_PRESSURE_FLOOR) * p;
 }
 
@@ -149,12 +154,12 @@ export const INK_SPEED_NEUTRAL_PX_MS = 1.2;
  * dial, which never dries — and width is what the eye reads as "more ink"
  * anyway.
  */
-export const INK_SPEED_WIDTH_RANGE = 0.6;
-export const INK_SPEED_ALPHA_BASE = 0.8;
-/** `INK_SPEED_ALPHA_BASE * (1 + RANGE) = 0.992` at full slow gain. */
-export const INK_SPEED_ALPHA_RANGE = 0.24;
-/** Log-span for mapping hand speed to slowness. */
-export const INK_SPEED_SPAN = 3.5;
+export const INK_SPEED_WIDTH_RANGE = 1.15;
+export const INK_SPEED_ALPHA_BASE = 0.65;
+/** Headroom under opaque at full slow: BASE * (1 + RANGE) ≈ 0.94. */
+export const INK_SPEED_ALPHA_RANGE = 0.45;
+/** Log-span for mapping hand speed to slowness — tighter so writing hits extremes. */
+export const INK_SPEED_SPAN = 2.2;
 
 /**
  * EMA weight for hand speed.
@@ -163,7 +168,7 @@ export const INK_SPEED_SPAN = 3.5;
  * so it is far noisier than pressure and gets filtered harder. Unfiltered, a
  * stroke's width shimmers with the sample jitter rather than with the hand.
  */
-export const SPEED_SMOOTHING = 0.25;
+export const SPEED_SMOOTHING = 0.45;
 
 /** Normalise a screen-space pace into the 0 (flat out) – 1 (stopped) range. */
 export function inkSlowness(pxPerMs: number): number {
@@ -265,8 +270,12 @@ export const INK_TIP_MIN = 0.9;
 export const INK_TIP_STEP = 1.35;
 
 /**
- * Scene-unit line width from tip geometry; ±one tip step when stylus pressure is
- * active, and a swell or a starve when speed ink is on.
+ * Scene-unit line width from tip geometry, plus swell/starve when speed ink is
+ * on. Stylus pressure does **not** change width — only alpha — so a fat tip
+ * stays a cylinder, not a pressure-swollen marker.
+ *
+ * `pNorm` / `pressureSensitive` stay in the signature so callers and older ops
+ * keep compiling; they are ignored for width.
  *
  * The two trailing arguments default to "speed ink off", so every caller that
  * only wants the nib's plain geometry — the reservoir's distance scale, the
@@ -274,16 +283,13 @@ export const INK_TIP_STEP = 1.35;
  */
 export function inkLineWidth(
   baseWidth: number,
-  pNorm: number,
-  pressureSensitive = false,
+  _pNorm: number,
+  _pressureSensitive = false,
   slowness = INK_SLOWNESS_NEUTRAL,
   speedInk = 0,
 ): number {
   const base = Math.max(INK_TIP_MIN, INK_TIP_MIN + (baseWidth - 1) * INK_TIP_STEP);
-  const center = base * inkSpeedWidthGain(slowness, speedInk);
-  if (!pressureSensitive) return center;
-  const p = Math.max(0, Math.min(1, pNorm));
-  return Math.max(INK_TIP_MIN, center + (p - 0.5) * 2 * INK_TIP_STEP);
+  return base * inkSpeedWidthGain(slowness, speedInk);
 }
 
 /**
@@ -623,9 +629,15 @@ function drawStrokeFrom(
   const runs = inkStrokeRuns(op, start);
   if (runs.length === 0) return;
 
-  const opaque = runs.every((run) => run.alpha >= RUN_OPAQUE_ALPHA);
+  // Round-cap fast path only for a whole committed stroke. Live incremental
+  // resumes (fromIndex > 0) must abut — a round start-cap at every resume is
+  // the "spokes on curves" artifact.
+  const opaqueFast =
+    fromIndex === 0 &&
+    capEnd &&
+    runs.every((run) => run.alpha >= RUN_OPAQUE_ALPHA);
 
-  if (opaque) {
+  if (opaqueFast) {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     for (const run of runs) {
