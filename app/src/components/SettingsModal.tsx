@@ -858,9 +858,12 @@ export function SettingsModal({
                   step={5}
                   value={smoothingToPercent(inkSmoothing)}
                   aria-label="Stroke smoothing"
-                  onChange={(event) =>
-                    setInkSmoothing(smoothingFromPercent(Number(event.target.value)))
-                  }
+                  onChange={(event) => {
+                    const next = smoothingFromPercent(Number(event.target.value));
+                    setInkSmoothing(next);
+                    saveInkSmoothing(next);
+                    window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
+                  }}
                 />
                 <span className="lc-settings-slider-value">
                   {smoothingToPercent(inkSmoothing) === 0
@@ -877,7 +880,7 @@ export function SettingsModal({
                     <strong> While you write</strong> smooths as it goes, which looks
                     steadier in the moment but leaves the ink trailing your hand — it stays
                     within about a nib of the pen, and loops no longer close from
-                    over-smoothing alone.
+                    over-smoothing alone. Changes apply immediately.
                   </p>
                   <div
                     className="lc-settings-choice lc-settings-choice-compact"
@@ -900,7 +903,11 @@ export function SettingsModal({
                             ? "lc-settings-choice-option is-active"
                             : "lc-settings-choice-option"
                         }
-                        onClick={() => setInkSmoothingMode(mode)}
+                        onClick={() => {
+                          setInkSmoothingMode(mode);
+                          saveInkSmoothingMode(mode);
+                          window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
+                        }}
                       >
                         <strong>{label}</strong>
                       </button>
