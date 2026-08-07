@@ -47,14 +47,7 @@ import {
   PAN_REBASE_FRACTION,
   type PanCamera,
 } from "./panOffset";
-import {
-  clampLiveLag,
-  liveSmoothingTau,
-  liveSmoothingWeight,
-  LIVE_MAX_LAG_NIBS,
-  smoothInkPoints,
-  type InkSmoothingMode,
-} from "./inkSmoothing";
+import { smoothInkPoints, type InkSmoothingMode } from "./inkSmoothing";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
 
 export interface RasterInkHandle {
@@ -199,6 +192,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * Speed is measured against this, and the lift settles onto it.
      */
     const rawPointRef = useRef<ScenePoint | null>(null);
+    /**
+     * Raw stamps for the open pen stroke when **While you write** is on.
+     *
+     * Display points are a reshape of this buffer (`smoothInkPoints`) every
+     * paint, so earlier bends can tidy while the tip still tracks the pen.
+     * Lift mode leaves this null and stamps straight into `live.points`.
+     */
+    const liveRawPointsRef = useRef<ScenePoint[] | null>(null);
     /** Running EMA of raw stylus pressure for the live stroke — see smoothPressure. */
     const smoothedPressureRef = useRef(0);
     /** Running EMA of hand speed in CSS px/ms — see smoothSpeed. */
@@ -676,6 +677,51 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }, [repaint]);
 
+    /**
+     * True when open-stroke ink must be re-derived from raw stamps each paint.
+     * Incremental paint cannot update earlier segments once they are stamped.
+     */
+    const liveReshapeActive = useCallback(() => {
+      return (
+        smoothingModeRef.current === "live" && smoothingRef.current > 0
+      );
+    }, []);
+
+    /** Rebuild display points from the raw buffer; returns whether reshape ran. */
+    const reshapeLiveStroke = useCallback(() => {
+      const live = liveRef.current;
+      const raw = liveRawPointsRef.current;
+      if (!live || live.kind !== "draw" || !raw || !liveReshapeActive()) return false;
+      live.points = smoothInkPoints(
+        raw,
+        smoothingRef.current,
+        inkLineWidth(live.baseWidth, 0, false),
+        0,
+      );
+      return true;
+    }, [liveReshapeActive]);
+
+    const paintLiveIncrementalRef = useRef(paintLiveIncremental);
+    paintLiveIncrementalRef.current = paintLiveIncremental;
+    const reshapeLiveStrokeRef = useRef(reshapeLiveStroke);
+    reshapeLiveStrokeRef.current = reshapeLiveStroke;
+    const liveReshapeActiveRef = useRef(liveReshapeActive);
+    liveReshapeActiveRef.current = liveReshapeActive;
+    const repaintLiveRef = useRef(repaint);
+    repaintLiveRef.current = repaint;
+
+    /** After appending stamps: reshape+full paint in live mode, else incremental. */
+    const paintLiveAfterChange = useCallback(() => {
+      if (reshapeLiveStrokeRef.current()) {
+        liveDrawnIndexRef.current = 0;
+        repaintLiveRef.current();
+        return;
+      }
+      paintLiveIncrementalRef.current();
+    }, []);
+    const paintLiveAfterChangeRef = useRef(paintLiveAfterChange);
+    paintLiveAfterChangeRef.current = paintLiveAfterChange;
+
     const commitLive = useCallback(() => {
       const live = liveRef.current;
       if (!live) return;
@@ -687,17 +733,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       redoRef.current = [];
 
       /*
-       * Smooth the pen stroke now that it is finished.
+       * Smooth the pen stroke now that it is finished (lift mode).
        *
-       * On commit rather than per sample: smoothing a live stroke means lagging
-       * the tip behind the nib, and ink that trails the pen is worse than ink
-       * that wobbles. Waiting for the lift buys a symmetric filter with no
-       * latency at all, at the cost of a settle nobody notices at the default
-       * strength. The eraser is left alone — its stamps are a coverage mask,
-       * not a line, and rounding them would leave crumbs behind.
+       * Live mode already reshaped the open stroke under the nib; re-running
+       * here would jump ink the writer has already watched settle. The eraser
+       * is left alone — its stamps are a coverage mask, not a line, and
+       * rounding them would leave crumbs behind.
        */
-      // In live mode the filter already ran under the nib; running it again on
-      // the lift would move ink the writer has already watched settle.
       const isLive = smoothingModeRef.current === "live";
       const strength = smoothingRef.current;
       /*
@@ -724,6 +766,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
       opsRef.current = [...opsRef.current, committed];
       liveRef.current = null;
+      liveRawPointsRef.current = null;
       liveDrawnIndexRef.current = 0;
       lastPointRef.current = null;
       rawPointRef.current = null;
@@ -735,8 +778,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       onChange?.();
     }, [ensureTiles, onChange, repaint]);
 
-    const paintLiveIncrementalRef = useRef(paintLiveIncremental);
-    paintLiveIncrementalRef.current = paintLiveIncremental;
     const commitLiveRef = useRef(commitLive);
     commitLiveRef.current = commitLive;
 
@@ -750,6 +791,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           redoRef.current = [];
           opsRef.current = [];
           liveRef.current = null;
+          liveRawPointsRef.current = null;
           liveDrawnIndexRef.current = 0;
           invalidateTiles();
           repaint();
@@ -761,6 +803,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           redoRef.current.push(snapshotOps(opsRef.current));
           opsRef.current = undoRef.current.pop() ?? [];
           liveRef.current = null;
+          liveRawPointsRef.current = null;
           liveDrawnIndexRef.current = 0;
           invalidateTiles();
           repaint();
@@ -773,6 +816,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           undoRef.current.push(snapshotOps(opsRef.current));
           opsRef.current = redoRef.current.pop() ?? [];
           liveRef.current = null;
+          liveRawPointsRef.current = null;
           liveDrawnIndexRef.current = 0;
           invalidateTiles();
           repaint();
@@ -799,6 +843,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           undoRef.current = [];
           redoRef.current = [];
           liveRef.current = null;
+          liveRawPointsRef.current = null;
           liveDrawnIndexRef.current = 0;
           invalidateTiles();
           repaint();
@@ -915,7 +960,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const pressureSensitive = live.pressureSensitive;
         const speedInk = live.speedInk ?? 0;
 
-        live.points = [buf[0]];
+        const stamps: ScenePoint[] = [buf[0]];
         let last = buf[0];
         lastPointRef.current = last;
         rawPointRef.current = buf[buf.length - 1];
@@ -939,22 +984,29 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             style.lineWidth * (dense ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
             0.5,
           );
-          live.points.push(...stampAlongSegment(last, point, step));
+          stamps.push(...stampAlongSegment(last, point, step));
           last = point;
         }
         lastPointRef.current = last;
-        paintLiveIncrementalRef.current();
+        if (liveReshapeActiveRef.current()) {
+          liveRawPointsRef.current = stamps;
+          live.points = stamps;
+        } else {
+          liveRawPointsRef.current = null;
+          live.points = stamps;
+        }
+        paintLiveAfterChangeRef.current();
       };
 
       /**
        * Land the nib where the pen actually lifted.
        *
-       * Live smoothing leaves the ink a fraction of a time constant behind the
-       * hand, so without this every stroke stops just short of where it was
-       * drawn — a descender that never reaches the line, a cross that misses
-       * its stem. The tail is at most a couple of frames of travel.
+       * Tip-lag live mode left the ink a fraction of a time constant behind;
+       * continuous reshape keeps endpoints on the pen, so this is a no-op then.
+       * Kept for any residual last≠raw gap (e.g. dwell vs coalesced tip).
        */
       const settleLiveTip = () => {
+        if (liveReshapeActiveRef.current()) return;
         const live = liveRef.current;
         const last = lastPointRef.current;
         const raw = rawPointRef.current;
@@ -1134,8 +1186,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               speedInk: speed,
               points: [],
             };
+            liveRawPointsRef.current = liveReshapeActiveRef.current() ? [] : null;
           } else {
             attackBufferRef.current = null;
+            liveRawPointsRef.current = liveReshapeActiveRef.current()
+              ? [point]
+              : null;
             liveRef.current = {
               kind: "draw",
               color: inkColorRef.current,
@@ -1152,6 +1208,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           liveDrawnIndexRef.current = 0;
         } else {
           attackBufferRef.current = null;
+          liveRawPointsRef.current = null;
           liveRef.current = {
             kind: "erase",
             radius: eraserSceneRadius(width),
@@ -1226,9 +1283,15 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                 (dwellDense ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
               0.5,
             );
-            liveOp.points.push(...stampAlongSegment(last, dwellPoint, dwellStep));
+            const dwellStamps = stampAlongSegment(last, dwellPoint, dwellStep);
+            if (liveReshapeActiveRef.current()) {
+              const raw = liveRawPointsRef.current ?? (liveRawPointsRef.current = []);
+              raw.push(...dwellStamps);
+            } else {
+              liveOp.points.push(...dwellStamps);
+            }
             lastPointRef.current = dwellPoint;
-            paintLiveIncrementalRef.current();
+            paintLiveAfterChangeRef.current();
           }, 32);
         }
       };
@@ -1270,15 +1333,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const maxFullness = live.kind === "draw" ? live.maxFullness : 1;
         const pressureClip = live.kind === "draw" ? live.pressureClip : 1;
         const speedInk = live.kind === "draw" ? (live.speedInk ?? 0) : 0;
-        // Live smoothing is a pen thing. The eraser's stamps are a coverage
-        // mask, and lagging them behind the hand only leaves crumbs.
-        const tau =
-          live.kind === "draw" && smoothingModeRef.current === "live"
-            ? liveSmoothingTau(smoothingRef.current)
-            : 0;
+        const reshapeLive =
+          live.kind === "draw" && liveReshapeActiveRef.current();
         const zoom = strokeView.zoom || 1;
-        const lagCap =
-          tau > 0 ? inkLineWidth(width, 0, false) * LIVE_MAX_LAG_NIBS : 0;
 
         if (attackBufferRef.current && live.kind === "draw") {
           for (const sample of batch) {
@@ -1378,20 +1435,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           }
           rawPointRef.current = raw;
 
-          // Under live smoothing the nib chases the pen rather than tracing it.
-          // Pressure and slowness are the hand's, and ride along unfiltered —
-          // only the path lags.
-          let point = raw;
-          if (tau > 0) {
-            const weight = liveSmoothingWeight(dt, tau);
-            point = {
-              ...raw,
-              x: last.x + (raw.x - last.x) * weight,
-              y: last.y + (raw.y - last.y) * weight,
-            };
-            const clamped = clampLiveLag(point.x, point.y, raw.x, raw.y, lagCap);
-            point = { ...point, x: clamped.x, y: clamped.y };
-          }
+          // Tip tracks the pen. Live reshape tidies earlier points on paint;
+          // lift mode keeps raw stamps until commit.
+          const point = raw;
 
           const step =
             live.kind === "erase"
@@ -1418,10 +1464,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                   );
                 })();
           const stamps = stampAlongSegment(last, point, step);
-          live.points.push(...stamps);
+          if (reshapeLive) {
+            const rawBuf =
+              liveRawPointsRef.current ?? (liveRawPointsRef.current = []);
+            rawBuf.push(...stamps);
+          } else {
+            live.points.push(...stamps);
+          }
           lastPointRef.current = point;
         }
-        paintLiveIncrementalRef.current();
+        paintLiveAfterChangeRef.current();
         if (DEBUG_INK) inkMetrics.painted(event.timeStamp);
       };
 
@@ -1489,6 +1541,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (DEBUG_INK) inkMetrics.note("stroke-abandoned");
         clearDwellTimer();
         attackBufferRef.current = null;
+        liveRawPointsRef.current = null;
         drawingRef.current = false;
         activePointerRef.current = null;
         strokeViewRef.current = null;

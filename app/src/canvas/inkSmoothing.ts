@@ -1,15 +1,17 @@
 /**
- * Vector smoothing for a finished pen stroke.
+ * Vector smoothing for a pen stroke (lift commit, or live reshape while down).
  *
  * A stylus samples where the nib actually was, jitter and all, and between two
  * fast samples there is nothing but a straight chord. Neither is what the hand
- * meant to draw. Smoothing runs when the pen lifts: drop the samples that carry
- * no shape, then round off what is left.
+ * meant to draw. Smoothing drops the samples that carry no shape, then rounds
+ * off what is left.
  *
- * It runs on commit rather than per sample on purpose. A causal filter can only
- * smooth by lagging the tip, and lag is the one thing a pen may not do — the
- * ink has to be under the nib. Waiting for the lift costs a barely visible
- * settle and buys a symmetric filter that adds no latency at all.
+ * **On the lift:** run once at commit. Ink stays under the nib while writing;
+ * the settle is barely visible at default strength.
+ *
+ * **While you write:** re-run on the open stroke's raw stamps every paint so
+ * earlier bends tidy before the pen lifts. Endpoints stay fixed, so the tip
+ * still tracks the pen — only the path behind it moves.
  *
  * Both passes keep the first and last point exactly where they were, so a
  * stroke never shortens or drifts off what it was written against.
@@ -24,29 +26,14 @@ export type InkSmoothingMode = "lift" | "live";
 
 export const INK_SMOOTHING_MODE_DEFAULT: InkSmoothingMode = "lift";
 
-/* ---------------------------------------------------------------- live --- */
+/* -------------------------------------------------------- tip-lag helpers --- */
 
 /**
- * Live smoothing: the ink chases the pen instead of tracing it.
+ * Causal tip-lag helpers (time-constant EMA + spatial clamp).
  *
- * This is the other way to do it, and the one Concepts uses. Each sample pulls
- * the nib a fraction of the way towards where the pen actually is, so the line
- * is smooth as it is laid down rather than tidied afterwards. What it costs is
- * lag, and lag is not free — the ink may trail the hand but must not drift
- * off into its own shape.
- *
- * Two choices keep it usable across the whole dial rather than the bottom half:
- *
- * The pull is a *time* constant, not a per-sample weight. A per-sample weight
- * means a 240 Hz stylus is filtered four times as hard as a 60 Hz mouse over
- * the same stretch of paper, so the dial means something different on every
- * device — and on a fast pen it means far more than the number suggests.
- * Converting through `1 - e^(-dt/tau)` makes the dial a promise about
- * milliseconds of lag, which is the thing the hand actually feels.
- *
- * Lag is capped in space via {@link clampLiveLag}. Dial maps with a floor so
- * the bottom of the usable range is already a visible trail, then ramps to
- * about three frames at full strength.
+ * Kept for tests and experiments. The board's **While you write** mode does
+ * not use these — it reshapes the open stroke with {@link smoothInkPoints}
+ * instead, so earlier letters tidy without the ink trailing the hand.
  */
 export const LIVE_SMOOTHING_MAX_TAU_MS = 55;
 /** Minimum tau once smoothing is on — below this the live trail is invisible. */

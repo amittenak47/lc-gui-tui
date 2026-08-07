@@ -877,10 +877,9 @@ export function SettingsModal({
                   <p className="lc-settings-hint">
                     When it is applied. <strong>On the lift</strong> tidies the stroke once
                     you finish it, so the ink is always exactly under the nib as you write.
-                    <strong> While you write</strong> smooths as it goes, which looks
-                    steadier in the moment but leaves the ink trailing your hand — it stays
-                    within about a nib of the pen, and loops no longer close from
-                    over-smoothing alone. Changes apply immediately.
+                    <strong> While you write</strong> keeps re-smoothing the stroke under
+                    your hand — earlier bends tidy before you lift, and the tip still
+                    tracks the pen. Changes apply immediately.
                   </p>
                   <div
                     className="lc-settings-choice lc-settings-choice-compact"
