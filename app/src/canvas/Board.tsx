@@ -526,8 +526,6 @@ const PAN_FRICTION = 0.0028;
  * true — ride-only mid-gesture makes coast cheap again.
  */
 const PAN_INERTIA_ENABLED = true;
-/** Faster decay when the reader taps mid-glide — stop smooth, not hard. */
-const PAN_BRAKE_FRICTION = 0.014;
 /** Minimum scroll speed (scene units/ms) to coast after a flick. */
 const PAN_FLICK_MIN = 0.035;
 /** Stop coasting below this scroll speed. */
@@ -1087,8 +1085,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const panVelocityRef = useRef({ x: 0, y: 0 });
   const lastPanScrollRef = useRef({ x: 0, y: 0, t: 0 });
   const inertiaFrameRef = useRef(0);
-  /** Mid-glide tap: raise friction until rest (smooth stop, not cancel). */
-  const inertiaBrakingRef = useRef(false);
   /**
    * Vertical-only drag we own. Excalidraw's hand pans in 2D; reading pages
    * must not. Capture phase + our own scrollY updates keep the column pinned.
@@ -1992,7 +1988,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       cancelAnimationFrame(inertiaFrameRef.current);
       inertiaFrameRef.current = 0;
     }
-    inertiaBrakingRef.current = false;
   }, []);
 
   /** Reading mode: Excalidraw must be on hand, or finger drag does nothing. */
@@ -2604,7 +2599,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const api = apiRef.current;
       if (!api) return;
       stopPanInertia();
-      inertiaBrakingRef.current = false;
       let velY = velocityY;
       let last = performance.now();
       const cam = readScroll();
@@ -2617,7 +2611,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       const settle = () => {
         inertiaFrameRef.current = 0;
-        inertiaBrakingRef.current = false;
         applyVisualScrollNowRef.current(scrollX, scrollY);
         // Paint while live camera still holds the coast position, then push
         // into Excalidraw. Commit clears live on the next frame.
@@ -2641,8 +2634,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         } else {
           scrollX = clamped.scrollX;
         }
-        const friction = inertiaBrakingRef.current ? PAN_BRAKE_FRICTION : PAN_FRICTION;
-        velY *= Math.exp(-friction * dt);
+        velY *= Math.exp(-PAN_FRICTION * dt);
         if (Math.abs(velY) < PAN_REST_SPEED) {
           settle();
           return;
@@ -2668,9 +2660,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const sideScroll = onCodeDock ? null : horizontalScrollHost(event.target);
       const deferred = onCodeDock || sideScroll != null;
 
-      if (inertiaFrameRef.current) {
-        inertiaBrakingRef.current = true;
-      }
+      // A finger on a coasting page is a full stop, and where it lands is where
+      // the page stays. Killing the loop (rather than raising its friction and
+      // letting it run) is also what leaves one writer on the camera: the drag
+      // below anchors on `readScroll()`, and a live inertia rAF would otherwise
+      // race it into `applyVisualScrollNow` on alternate frames — the page
+      // snapping between the touch point and the coast's projected stop.
+      flushVisualScrollRef.current();
+      stopPanInertia();
 
       // Code dock: defer preventDefault until pan arms — taps must reach Monaco.
       if (!deferred) {
@@ -2751,7 +2748,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           // again this gesture — settle it here rather than leaving the board
           // sitting on a translate that no lift is going to come and clear.
           stopPanInertia();
-          inertiaBrakingRef.current = false;
           rasterInkRef.current?.setCameraMoving(false);
           commitVisualScrollRef.current();
           event.preventDefault();
@@ -2770,7 +2766,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!drag.armed) {
         if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD_PX) return;
         stopPanInertia();
-        inertiaBrakingRef.current = false;
         const cam = readScroll();
         drag.startScrollY = cam.scrollY;
         drag.startClientY = event.clientY;
@@ -2899,7 +2894,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   useEffect(() => {
     stopPanInertia();
-    inertiaBrakingRef.current = false;
     handPanningRef.current = false;
     panDragRef.current = null;
     rasterInkRef.current?.setCameraMoving(false);
