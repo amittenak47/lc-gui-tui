@@ -73,13 +73,17 @@ import {
 import { BackgroundPalette } from "../components/BackgroundPalette";
 import { resolveInkColor } from "./inkColors";
 import { useIsMobile } from "../util/mobile";
+import { fetchNextColorHuntPalette } from "../util/colorHunt";
 import {
-  clearInkOverrides,
-  loadInkOverrides,
-  resolveSwatches,
-  setInkOverride,
-  type InkPaletteOverrides,
-} from "../util/inkPaletteStore";
+  appendInkPalette,
+  currentInkPalette,
+  cycleInkPaletteNext,
+  cycleInkPalettePrev,
+  normalizeInkPaletteHistory,
+  seedInkPaletteHistory,
+  setInkPaletteSlot,
+  type InkPaletteHistory,
+} from "../util/inkPaletteHistory";
 import { isDarkTheme } from "../theme/appThemes";
 import {
   type BoardReadingSize,
@@ -961,23 +965,52 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const annotateCodeRef = useRef(annotateCode);
   annotateCodeRef.current = annotateCode;
   /**
-   * Slot overrides for the ink palette, for the mode this theme is in.
-   *
-   * Held here rather than read straight from storage inside the toolbar so a
-   * change repaints the swatches: the store is the record, this is the copy
-   * React is allowed to see.
+   * Ink colour-wheel history for this annotation (saved on the board blob).
    */
-  const paletteMode: "light" | "dark" = isDarkTheme(themeId) ? "dark" : "light";
-  const [inkOverrides, setInkOverrides] = useState<InkPaletteOverrides>(() =>
-    loadInkOverrides(paletteMode),
+  const [inkPaletteHistory, setInkPaletteHistory] = useState<InkPaletteHistory>(() =>
+    seedInkPaletteHistory(themeId),
   );
-  useEffect(() => {
-    setInkOverrides(loadInkOverrides(paletteMode));
-  }, [paletteMode]);
+  const inkPaletteHistoryRef = useRef(inkPaletteHistory);
+  inkPaletteHistoryRef.current = inkPaletteHistory;
+  const inkPaletteFetchRef = useRef(false);
   const inkPalette = useMemo(
-    () => resolveSwatches(paletteMode, inkOverrides),
-    [inkOverrides, paletteMode],
+    () => currentInkPalette(inkPaletteHistory),
+    [inkPaletteHistory],
   );
+  const applyInkPaletteHistory = useCallback(
+    (next: InkPaletteHistory) => {
+      setInkPaletteHistory(next);
+      const palette = currentInkPalette(next);
+      const ink = resolveInkColor(themeId, inkColorRef.current, palette);
+      setInkColor(ink);
+      const prefs = { ...inkPrefsRef.current, inkColor: ink };
+      inkPrefsRef.current = prefs;
+      saveInkToolPrefs(prefs);
+      apiRef.current?.updateScene({ appState: { currentItemStrokeColor: ink } });
+    },
+    [themeId],
+  );
+  const cycleInkPaletteForward = useCallback(() => {
+    const { history, needsFetch } = cycleInkPaletteNext(inkPaletteHistoryRef.current);
+    if (!needsFetch) {
+      applyInkPaletteHistory(history);
+      return;
+    }
+    if (inkPaletteFetchRef.current) return;
+    inkPaletteFetchRef.current = true;
+    void fetchNextColorHuntPalette(inkPaletteHistoryRef.current)
+      .then((palette) => {
+        applyInkPaletteHistory(appendInkPalette(inkPaletteHistoryRef.current, palette));
+      })
+      .finally(() => {
+        inkPaletteFetchRef.current = false;
+      });
+  }, [applyInkPaletteHistory]);
+  const cycleInkPaletteBackward = useCallback(() => {
+    applyInkPaletteHistory(cycleInkPalettePrev(inkPaletteHistoryRef.current));
+  }, [applyInkPaletteHistory]);
+  const applyInkPaletteHistoryRef = useRef(applyInkPaletteHistory);
+  applyInkPaletteHistoryRef.current = applyInkPaletteHistory;
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
@@ -3519,7 +3552,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     const api = apiRef.current;
     const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
-    const ink = resolveInkColor(themeId, inkPrefsRef.current.inkColor);
+    const ink = resolveInkColor(
+      themeId,
+      inkPrefsRef.current.inkColor,
+      currentInkPalette(inkPaletteHistoryRef.current),
+    );
     setInkColor(ink);
     if (!api) return;
 
@@ -5192,6 +5229,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const next = applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M"));
         templateRef.current = next;
         rasterInkRef.current?.clear();
+        applyInkPaletteHistoryRef.current(seedInkPaletteHistory(themeId));
         apiRef.current?.updateScene({
           elements: next as unknown[],
           captureUpdate: CaptureUpdateAction.NEVER,
@@ -5457,6 +5495,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             zoom: state.zoom?.value ?? 1,
           },
           ink,
+          inkPalettes: {
+            items: inkPaletteHistoryRef.current.items,
+            index: inkPaletteHistoryRef.current.index,
+          },
           ...(Object.keys(files).length > 0 ? { files } : {}),
         };
       },
@@ -5532,6 +5574,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             options?.ink ?? [],
           ),
         );
+        applyInkPaletteHistoryRef.current(
+          normalizeInkPaletteHistory(options?.inkPalettes, themeId),
+        );
         ensureReadingHand();
         requestAnimationFrame(() => {
           apiRef.current?.history?.clear();
@@ -5545,7 +5590,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (!api) return;
         const dark = isDarkTheme(nextThemeId);
         const theme = BOARD_THEMES.find((candidate) => candidate.id === nextThemeId) ?? BOARD_THEMES[0];
-        const ink = resolveInkColor(nextThemeId, inkPrefsRef.current.inkColor);
+        const ink = resolveInkColor(
+          nextThemeId,
+          inkPrefsRef.current.inkColor,
+          currentInkPalette(inkPaletteHistoryRef.current),
+        );
         setInkColor(ink);
         const scene = api.getSceneElements() as SceneElementLike[];
         const recolored = recolorTemplateElements(scene, dark);
@@ -5708,11 +5757,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               <BoardToolbar
                 inkPalette={inkPalette}
                 onEditInkColor={(index, colour) => {
-                  setInkOverrides(setInkOverride(paletteMode, index, colour));
+                  applyInkPaletteHistory(
+                    setInkPaletteSlot(inkPaletteHistoryRef.current, index, colour),
+                  );
                 }}
-                onResetInkPalette={() => {
-                  setInkOverrides(clearInkOverrides(paletteMode));
-                }}
+                onCycleInkPaletteNext={cycleInkPaletteForward}
+                onCycleInkPalettePrev={cycleInkPaletteBackward}
                 active={activeTool}
                 onPick={setTool}
                 themeId={themeId}

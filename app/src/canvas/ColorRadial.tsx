@@ -1,6 +1,9 @@
 /**
- * Ink colour control — modern radial wheel (SVG donut wedges), not a fan of
- * floating circles. Hold or tap the centre dot to open; drag/tap a wedge to pick.
+ * Ink colour control — radial wheel (SVG donut wedges).
+ *
+ * Toolbar: tap cycles the next palette; hold opens the wheel.
+ * Open hub: tap cycles previous palettes; hold was reset (optional).
+ * Wedge: tap/drag picks; hold opens the OS colour editor for that slot.
  *
  * Portaled with `position: fixed` so the toolbar scroller cannot clip the ring.
  */
@@ -29,6 +32,10 @@ interface ColorRadialProps {
   colors: readonly string[];
   value: string;
   onPick: (color: string) => void;
+  /** Quick tap on the toolbar swatch — next palette (parent may fetch). */
+  onCycleNext?: () => void;
+  /** Quick tap on the open hub — previous palette in history. */
+  onCyclePrev?: () => void;
   /**
    * A wedge was held: the writer wants a different colour in that slot.
    *
@@ -36,14 +43,6 @@ interface ColorRadialProps {
    * the control still works exactly as it did.
    */
   onEditColor?: (index: number, color: string) => void;
-  /**
-   * The hub was held: put every slot back to its authored colour.
-   *
-   * Editing a slot has to be undoable by something other than remembering the
-   * hex that used to be there, and the hub is the one part of the ring that is
-   * about the palette as a whole rather than about one colour in it.
-   */
-  onResetPalette?: () => void;
   handedness: InkHandedness;
   compact?: boolean;
 }
@@ -131,8 +130,9 @@ export function ColorRadial({
   colors,
   value,
   onPick,
+  onCycleNext,
+  onCyclePrev,
   onEditColor,
-  onResetPalette,
   handedness,
   compact = false,
 }: ColorRadialProps) {
@@ -311,7 +311,7 @@ export function ColorRadial({
               r={OUTER_R - 0.5}
               filter="url(#lc-color-wheel-soft)"
             />
-            {wedges.map((wedge) => {
+            {wedges.map((wedge, wedgeIndex) => {
               const state =
                 wedge.color === hovered
                   ? " is-hovered"
@@ -320,7 +320,7 @@ export function ColorRadial({
                     : "";
               return (
                 <path
-                  key={wedge.color}
+                  key={`${wedge.color}-${wedgeIndex}`}
                   className={`lc-color-wedge${state}`}
                   d={wedge.path}
                   fill={wedge.color}
@@ -334,7 +334,7 @@ export function ColorRadial({
                     setHovered(wedge.color);
                     if (!onEditColor) return;
                     cancelEditHold();
-                    const slot = wedges.indexOf(wedge);
+                    const slot = wedgeIndex;
                     editTimerRef.current = window.setTimeout(() => {
                       editTimerRef.current = 0;
                       // The hold has won: this is no longer a pick.
@@ -381,29 +381,18 @@ export function ColorRadial({
             className="lc-color-wheel-hub"
             style={{ background: value }}
             aria-label={
-              onResetPalette
-                ? "Current ink colour — hold to restore the default palette"
+              onCyclePrev
+                ? "Current ink colour — tap for previous palette"
                 : "Current ink colour"
             }
-            title={onResetPalette ? "Hold to restore default colours" : undefined}
-            onPointerDown={() => {
-              if (!onResetPalette) return;
-              cancelEditHold();
-              editTimerRef.current = window.setTimeout(() => {
-                editTimerRef.current = 0;
-                // Mark it handled so the release does not also close the ring:
-                // the writer should see the palette change under their finger.
-                editingSlotRef.current = -1;
-                onResetPalette();
-                editingSlotRef.current = null;
-              }, EDIT_HOLD_MS);
-            }}
-            onPointerUp={cancelEditHold}
-            onPointerLeave={cancelEditHold}
-            onPointerCancel={cancelEditHold}
+            title={onCyclePrev ? "Tap for previous palette" : undefined}
             onClick={() => {
               if (editingSlotRef.current !== null) return;
               cancelEditHold();
+              if (onCyclePrev) {
+                onCyclePrev();
+                return;
+              }
               close();
             }}
           />
@@ -423,7 +412,11 @@ export function ColorRadial({
         aria-label="Ink colour"
         aria-haspopup="true"
         aria-expanded={open}
-        title="Ink colour — hold to open the wheel"
+        title={
+          onCycleNext
+            ? "Tap for next palette · hold to open the wheel"
+            : "Ink colour — hold to open the wheel"
+        }
         onPointerDown={() => {
           draggingRef.current = true;
           clearHold();
@@ -436,6 +429,10 @@ export function ColorRadial({
           if (holdTimerRef.current != null) {
             clearHold();
             draggingRef.current = false;
+            if (onCycleNext) {
+              onCycleNext();
+              return;
+            }
             setOpen((current) => !current);
           }
         }}

@@ -21,6 +21,11 @@ export interface BoardBlob {
   ink?: InkOp[];
   /** Excalidraw binary files (images) keyed by file id. */
   files?: Record<string, BoardBinaryFile>;
+  /**
+   * Ink colour-wheel history for this annotation.
+   * Optional on older saves — restore seeds the theme default palette.
+   */
+  inkPalettes?: { items: string[][]; index: number };
 }
 
 /** Persisted image binary — mirrors Excalidraw BinaryFileData fields we need. */
@@ -138,7 +143,12 @@ export interface BoardHandle {
   restoreBoard(
     elements: unknown[],
     appState?: unknown,
-    options?: { skeletons?: Skeleton[]; ink?: InkOp[]; files?: Record<string, BoardBinaryFile> },
+    options?: {
+      skeletons?: Skeleton[];
+      ink?: InkOp[];
+      files?: Record<string, BoardBinaryFile>;
+      inkPalettes?: { items: string[][]; index: number };
+    },
   ): void;
   /** Recolor template scaffolding for the current theme (after restore/seed). */
   applyThemeInk(themeId: string): void;
