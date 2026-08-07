@@ -35,11 +35,38 @@ export interface PanDelta {
  * ground at the leading edge — half a viewport is where that stops reading as
  * "ink that has not caught up yet" and starts reading as a hole. Below it, a
  * pan or a coast never touches the raster path at all.
+ *
+ * Overdrawn ink (see {@link INK_OVERDRAW_FRACTION}) passes {@link PanDeltaLimits}
+ * so the ride can use the painted margin instead of rebasing at half a screen.
  */
 export const PAN_REBASE_FRACTION = 0.5;
 
+/**
+ * Extra ink canvas margin per vertical side, as a fraction of the visible CSS
+ * height. Horizontal stays flush — reading pan is vertical.
+ */
+export const INK_OVERDRAW_FRACTION = 0.75;
+
+/**
+ * Rebase when the ride has consumed this fraction of the overdraw margin, so
+ * the next paint starts before the blank edge is on screen.
+ */
+export const OVERDRAW_REBASE_HEADROOM = 0.85;
+
+/** Cap on total ink backing height in device pixels (visible + both margins). */
+export const MAX_INK_CANVAS_DEVICE_PX = 6144;
+
+/** Below this CSS height, skip overdraw — same paint box as today. */
+const OVERDRAW_CSS_FLOOR_PX = 48;
+
 /** Zoom is compared, not translated: a pinch has to go through a real repaint. */
 const ZOOM_EPSILON = 1e-4;
+
+/** Optional per-axis screen-px rebase limits (override `viewport * fraction`). */
+export interface PanDeltaLimits {
+  x?: number;
+  y?: number;
+}
 
 /**
  * Screen delta from the camera a layer was painted at to the live one.
@@ -52,6 +79,7 @@ export function panDelta(
   painted: PanCamera,
   viewport: { width: number; height: number },
   fraction: number = PAN_REBASE_FRACTION,
+  limits?: PanDeltaLimits,
 ): PanDelta {
   const stop: PanDelta = { dx: 0, dy: 0, rebase: true };
   const zoom = live.zoom;
@@ -63,7 +91,37 @@ export function panDelta(
   const dx = (live.scrollX - painted.scrollX) * zoom;
   const dy = (live.scrollY - painted.scrollY) * zoom;
   if (!Number.isFinite(dx) || !Number.isFinite(dy)) return stop;
-  const limitX = Math.max(1, viewport.width) * fraction;
-  const limitY = Math.max(1, viewport.height) * fraction;
+  const limitX = limits?.x ?? Math.max(1, viewport.width) * fraction;
+  const limitY = limits?.y ?? Math.max(1, viewport.height) * fraction;
   return { dx, dy, rebase: Math.abs(dx) > limitX || Math.abs(dy) > limitY };
+}
+
+/**
+ * Vertical overdraw margin in CSS px for a visible ink height, or 0 to keep
+ * today's exact-viewport bitmap (tiny boards / absurd DPR caps).
+ */
+export function overdrawMarginPx(cssH: number, dpr: number): number {
+  if (!Number.isFinite(cssH) || cssH < OVERDRAW_CSS_FLOOR_PX) return 0;
+  const pixelRatio = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+  const want = cssH * INK_OVERDRAW_FRACTION;
+  // (cssH + 2*margin) * dpr <= MAX  →  margin <= (MAX/dpr - cssH) / 2
+  const maxMargin = Math.max(0, (MAX_INK_CANVAS_DEVICE_PX / pixelRatio - cssH) / 2);
+  if (maxMargin <= 0) return 0;
+  return Math.min(want, maxMargin);
+}
+
+/**
+ * Viewport used to paint/blit tiles into an overdrawn bitmap: shifted up by
+ * `marginYPx/zoom` in scene space and taller by `2*marginYPx` in CSS px so the
+ * visible screen maps to the middle band of the canvas.
+ */
+export function overdrawnViewport<
+  T extends { scrollY: number; height: number; zoom: number },
+>(viewport: T, marginYPx: number): T {
+  if (!(marginYPx > 0) || !(viewport.zoom > 0)) return viewport;
+  return {
+    ...viewport,
+    scrollY: viewport.scrollY + marginYPx / viewport.zoom,
+    height: viewport.height + 2 * marginYPx,
+  };
 }
