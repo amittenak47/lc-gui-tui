@@ -515,7 +515,7 @@ const ZOOM_STEP = 1.15;
 /** Button zoom animation — retargets smoothly on repeat / hold. */
 const ZOOM_ANIM_MS = 220;
 /** Hand-tool pan inertia — exponential friction per ms (coast after flick). */
-const PAN_FRICTION = 0.0016;
+const PAN_FRICTION = 0.0028;
 /**
  * Coast after a flick. Flip false to isolate finger-drag scroll in profiles
  * (no `Board.step` inertia rAF). End-state of the scroll-perf pass keeps this
@@ -527,7 +527,7 @@ const PAN_BRAKE_FRICTION = 0.014;
 /** Minimum scroll speed (scene units/ms) to coast after a flick. */
 const PAN_FLICK_MIN = 0.035;
 /** Stop coasting below this scroll speed. */
-const PAN_REST_SPEED = 0.0002;
+const PAN_REST_SPEED = 0.02;
 /** Px before a mouse press-during-glide becomes a new drag (touch arms immediately). */
 const PAN_DRAG_THRESHOLD_PX = 3;
 /** Finger/wheel travel multiplier — 1:1 felt sluggish vs Obsidian. */
