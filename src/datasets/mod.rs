@@ -24,6 +24,7 @@ pub mod inspect;
 pub mod kodcode;
 pub mod leetcode_with_tests;
 pub mod ms_python_q;
+pub mod statement_markdown;
 
 use serde_json::Value;
 
@@ -48,17 +49,19 @@ pub const SOLUTION_FIELDS: [&str; 9] = [
 /// Returning `None` is normal: these corpora contain rows with no usable
 /// statement or no id, and one bad row must not fail a 400k-record import.
 pub fn normalize(dataset: &Dataset, raw: &Value) -> Option<Problem> {
-    match dataset.shape {
+    let mut problem = match dataset.shape {
         Shape::Canonical => {
             let mut problem: Problem = serde_json::from_value(raw.clone()).ok()?;
             sanitize_entry_point(&mut problem);
-            Some(problem)
+            problem
         }
-        Shape::KodCode => kodcode::normalize(raw),
-        Shape::MorganStanleyPythonQ => ms_python_q::normalize(raw),
-        Shape::DeepSeekLeetCode => deepseek_leetcode::normalize(raw),
-        Shape::LeetCodeWithTests => leetcode_with_tests::normalize(raw),
-    }
+        Shape::KodCode => kodcode::normalize(raw)?,
+        Shape::MorganStanleyPythonQ => ms_python_q::normalize(raw)?,
+        Shape::DeepSeekLeetCode => deepseek_leetcode::normalize(raw)?,
+        Shape::LeetCodeWithTests => leetcode_with_tests::normalize(raw)?,
+    };
+    finalize_problem_description(&mut problem);
+    Some(problem)
 }
 
 /// Strip `Solution().foo()` down to the bare method the runner looks up.
@@ -66,6 +69,45 @@ pub(crate) fn sanitize_entry_point(problem: &mut Problem) {
     if let Some(raw) = problem.entry_point.take() {
         let cleaned = clean_entry_point(&raw);
         problem.entry_point = if cleaned.is_empty() {
+            None
+        } else {
+            Some(cleaned)
+        };
+    }
+}
+
+/// Everything a raw statement needs before anything displays it.
+///
+/// [`as_markdown`] drops the corpus boilerplate and settles the newlines;
+/// [`statement_markdown::normalize_statement_markdown`] lays out the sections
+/// and restores flattened exponents. Both are idempotent, so an adapter that
+/// already called `as_markdown` loses nothing by going through here.
+pub(crate) fn finalize_description(text: &str) -> String {
+    statement_markdown::normalize_statement_markdown(&as_markdown(text))
+}
+
+/// Tidy a [`Problem`] that serde just built from a canonical corpus record.
+///
+/// The canonical shape bypasses [`normalize`] — `load_task` / `load_all` hand
+/// the record straight to serde — so the fix-ups the adapters get for free have
+/// to be applied at each of those sites. Pairing them in one call is what keeps
+/// a new load path from picking up only half of them.
+pub(crate) fn finish_canonical(problem: &mut Problem) {
+    sanitize_entry_point(problem);
+    finalize_problem_description(problem);
+}
+
+/// Clean a problem's statement in place, on the way out of a load.
+///
+/// Called wherever a [`Problem`] is built from corpus text — [`normalize`] for
+/// the adapters, [`finish_canonical`] for the canonical serde paths — so the
+/// API, the coach, the TUI, an offline pack and the board all read the same
+/// cleaned description. Nothing is written back: the index stores only metadata
+/// and a `json_path`, so this needs no re-index and rewrites no corpus file.
+pub(crate) fn finalize_problem_description(problem: &mut Problem) {
+    if let Some(raw) = problem.problem_description.take() {
+        let cleaned = finalize_description(&raw);
+        problem.problem_description = if cleaned.is_empty() {
             None
         } else {
             Some(cleaned)
