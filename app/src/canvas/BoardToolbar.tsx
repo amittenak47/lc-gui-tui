@@ -679,7 +679,19 @@ export function BoardToolbar({
             />
             {active === "freedraw" && (
               <>
-                <InkFullnessSlider value={inkFullness} onChange={onInkFullness} />
+                <div
+                  className={
+                    pressureSensitive ? "lc-ink-fold is-open" : "lc-ink-fold"
+                  }
+                  inert={!pressureSensitive || undefined}
+                >
+                  <div className="lc-ink-fold-inner">
+                    <InkFullnessSlider
+                      value={inkFullness}
+                      onChange={onInkFullness}
+                    />
+                  </div>
+                </div>
                 <PressureSensitiveToggle
                   enabled={pressureSensitive}
                   onChange={onPressureSensitive}

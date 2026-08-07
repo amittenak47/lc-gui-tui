@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clampLiveLag,
   roundInkCorners,
   simplifyInkPoints,
   smoothInkPoints,
   liveSmoothingTau,
   liveSmoothingWeight,
   INK_SMOOTHING_DEFAULT,
+  LIVE_MAX_LAG_NIBS,
   LIVE_SMOOTHING_MAX_TAU_MS,
   SIMPLIFY_MAX_FRACTION,
   SIMPLIFY_STORAGE_FRACTION,
@@ -272,19 +274,75 @@ describe("live smoothing", () => {
     expect(chase(16, 2)).toBeCloseTo(chase(4, 8), 5);
   });
 
-  it("keeps the top of the dial inside the range a loop survives", () => {
-    // Concepts-style live smoothing stops being writable well before its dial
-    // runs out — a tight "e" never closes. Two frames of lag is the budget.
-    expect(LIVE_SMOOTHING_MAX_TAU_MS).toBeLessThanOrEqual(34);
+  it("caps lag in nib widths so tight loops survive at full strength", () => {
+    expect(LIVE_SMOOTHING_MAX_TAU_MS).toBe(90);
     expect(liveSmoothingTau(1)).toBe(LIVE_SMOOTHING_MAX_TAU_MS);
+
+    const nibWidth = 3;
+    const maxLag = nibWidth * LIVE_MAX_LAG_NIBS;
+    const cx = 100;
+    const cy = 100;
+    const r = 50;
+    const lagNibs = 5;
+
+    for (let angle = 0; angle < Math.PI * 2; angle += 0.1) {
+      const penX = cx + r * Math.cos(angle);
+      const penY = cy + r * Math.sin(angle);
+      const nibX = cx + r * Math.cos(angle - lagNibs * nibWidth / r);
+      const nibY = cy + r * Math.sin(angle - lagNibs * nibWidth / r);
+      const clamped = clampLiveLag(nibX, nibY, penX, penY, maxLag);
+      const dist = Math.hypot(clamped.x - penX, clamped.y - penY);
+      expect(dist).toBeLessThanOrEqual(maxLag + 1e-9);
+    }
+  });
+
+  it("no-ops clampLiveLag when the nib is already inside the budget", () => {
+    const penX = 10;
+    const penY = 20;
+    const nibX = 12;
+    const nibY = 21;
+    const clamped = clampLiveLag(nibX, nibY, penX, penY, 5);
+    expect(clamped.x).toBe(nibX);
+    expect(clamped.y).toBe(nibY);
+  });
+
+  it("keeps circle radius above 0.75r when chasing with lag clamping", () => {
+    const nibWidth = 3;
+    const maxLag = nibWidth * LIVE_MAX_LAG_NIBS;
+    const cx = 200;
+    const cy = 200;
+    const r = 40;
+    const tau = liveSmoothingTau(1);
+    let nibX = cx + r;
+    let nibY = cy;
+    const dt = 16;
+
+    for (let step = 0; step < 200; step++) {
+      const angle = (step / 200) * Math.PI * 2;
+      const penX = cx + r * Math.cos(angle);
+      const penY = cy + r * Math.sin(angle);
+      const w = liveSmoothingWeight(dt, tau);
+      nibX += (penX - nibX) * w;
+      nibY += (penY - nibY) * w;
+      const clamped = clampLiveLag(nibX, nibY, penX, penY, maxLag);
+      nibX = clamped.x;
+      nibY = clamped.y;
+      const distFromCenter = Math.hypot(nibX - cx, nibY - cy);
+      expect(distFromCenter).toBeGreaterThan(0.75 * r);
+    }
   });
 
   it("treats a stale or nonsense gap as a catch-up, not a stall", () => {
     const tau = liveSmoothingTau(1);
     // Coalesced samples can share a clock tick; the nib must still move.
     expect(liveSmoothingWeight(0, tau)).toBeGreaterThan(0);
-    // And after a long gap the pen is far away — close most of it at once.
-    expect(liveSmoothingWeight(500, tau)).toBeGreaterThan(0.6);
-    expect(liveSmoothingWeight(Number.NaN, tau)).toBeGreaterThan(0.6);
+    // Gaps past LIVE_SMOOTHING_MAX_DT_MS clamp — same pull as a long frame.
+    const catchUp = liveSmoothingWeight(500, tau);
+    expect(catchUp).toBe(liveSmoothingWeight(32, tau));
+    expect(catchUp).toBeGreaterThan(liveSmoothingWeight(4, tau));
+    expect(liveSmoothingWeight(Number.NaN, tau)).toBe(catchUp);
+    // clampLiveLag pulls the nib back when it trails too far.
+    const pulled = clampLiveLag(100, 100, 0, 0, 10);
+    expect(Math.hypot(pulled.x, pulled.y)).toBeCloseTo(10);
   });
 });

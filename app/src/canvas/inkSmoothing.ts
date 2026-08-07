@@ -32,11 +32,8 @@ export const INK_SMOOTHING_MODE_DEFAULT: InkSmoothingMode = "lift";
  * This is the other way to do it, and the one Concepts uses. Each sample pulls
  * the nib a fraction of the way towards where the pen actually is, so the line
  * is smooth as it is laid down rather than tidied afterwards. What it costs is
- * lag, and lag is not free: pull hard enough and a tight loop never closes,
- * because the nib is still climbing into the bowl of the "e" when the hand has
- * already come back down the other side. That is the failure mode to design
- * against, not a bug to fix — the filter cannot both round a corner off and
- * arrive at it.
+ * lag, and lag is not free — the ink may trail the hand but must not drift
+ * off into its own shape.
  *
  * Two choices keep it usable across the whole dial rather than the bottom half:
  *
@@ -47,11 +44,34 @@ export const INK_SMOOTHING_MODE_DEFAULT: InkSmoothingMode = "lift";
  * Converting through `1 - e^(-dt/tau)` makes the dial a promise about
  * milliseconds of lag, which is the thing the hand actually feels.
  *
- * And the top of the dial is 30 ms, which is about two frames. Deliberately
- * short of the range where loops start closing up: the dial should trade
- * steadiness for lag across its travel, not run off a cliff partway up.
+ * Lag is capped in space via {@link clampLiveLag}, not by keeping tau short:
+ * the nib may trail the pen but stays within about a nib of it, so tight loops
+ * no longer close from over-smoothing alone.
  */
-export const LIVE_SMOOTHING_MAX_TAU_MS = 30;
+export const LIVE_SMOOTHING_MAX_TAU_MS = 90;
+
+/** Max distance the smoothed nib may trail the pen, in nib widths. */
+export const LIVE_MAX_LAG_NIBS = 1.25;
+
+/**
+ * Pull the nib back toward the pen when it has lagged farther than `maxLag`.
+ * `maxLag` is in scene units (typically `nibWidth * LIVE_MAX_LAG_NIBS`).
+ */
+export function clampLiveLag(
+  nibX: number,
+  nibY: number,
+  penX: number,
+  penY: number,
+  maxLag: number,
+): { x: number; y: number } {
+  if (maxLag <= 0) return { x: nibX, y: nibY };
+  const dx = nibX - penX;
+  const dy = nibY - penY;
+  const dist = Math.hypot(dx, dy);
+  if (dist <= maxLag || dist < 1e-12) return { x: nibX, y: nibY };
+  const s = maxLag / dist;
+  return { x: penX + dx * s, y: penY + dy * s };
+}
 
 /**
  * Sample gaps outside this are not information about the hand.
@@ -111,6 +131,9 @@ export const SIMPLIFY_MAX_FRACTION = 0.5;
  * setting of zero.
  */
 export const SIMPLIFY_STORAGE_FRACTION = 1 / 15;
+
+/** Simplifier floor for live commits — looser than storage, still under the ink. */
+export const SIMPLIFY_LIVE_FRACTION = 1 / 6;
 
 /** Corner-cutting passes at full strength. */
 export const MAX_ROUNDING_PASSES = 3;
@@ -247,15 +270,15 @@ export function smoothInkPoints(
   points: readonly ScenePoint[],
   strength: number,
   nibWidth: number,
+  minFraction?: number,
 ): ScenePoint[] {
   const amount = Math.max(0, Math.min(1, strength));
   if (points.length < 3) return [...points];
 
   const width = Math.max(nibWidth, 1e-6);
-  // Never below the storage floor: a stroke committed with smoothing off is
-  // still a stamp chain that nobody needs at stamp density.
+  const floorFrac = minFraction ?? SIMPLIFY_STORAGE_FRACTION;
   const tolerance = Math.max(
-    width * SIMPLIFY_STORAGE_FRACTION,
+    width * floorFrac,
     width * SIMPLIFY_MAX_FRACTION * amount,
   );
   let out = simplifyInkPoints(points, tolerance);

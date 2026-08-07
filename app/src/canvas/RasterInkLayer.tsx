@@ -22,7 +22,9 @@ import {
   inkLineWidth,
   inkSlowness,
   inkStrokeStyle,
+  INK_ATTACK_MS,
   INK_SLOWNESS_NEUTRAL,
+  INK_SPEED_NEUTRAL_PX_MS,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
   NO_PRESSURE,
@@ -46,8 +48,11 @@ import {
   type PanCamera,
 } from "./panOffset";
 import {
+  clampLiveLag,
   liveSmoothingTau,
   liveSmoothingWeight,
+  LIVE_MAX_LAG_NIBS,
+  SIMPLIFY_LIVE_FRACTION,
   smoothInkPoints,
   type InkSmoothingMode,
 } from "./inkSmoothing";
@@ -201,6 +206,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const smoothedSpeedRef = useRef(0);
     /** `event.timeStamp` of the last sample consumed, for speed and live smoothing. */
     const lastSampleTimeRef = useRef(0);
+    /** Wall-clock time of the last real move/begin — dwell gate uses this, not DOMHighRes. */
+    const lastMoveWallRef = useRef(0);
+    /** Consecutive dwell samples since the last real move — caps runaway blobs. */
+    const dwellCountRef = useRef(0);
+    const dwellTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    /** Attack-window samples held before the first stamp (pressure-sensitive pen). */
+    const attackBufferRef = useRef<ScenePoint[] | null>(null);
+    const attackPeakRef = useRef(0);
+    const attackStartRef = useRef(0);
+    const attackCountRef = useRef(0);
     /**
      * Viewport + CSS box frozen at pointerdown for the whole stroke.
      *
@@ -256,7 +271,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     // Read through a ref so a page turn doesn't rebuild `repaint` and with it
     // every pointer listener on the layer.
     const clipRef = useRef<SceneBounds | null>(clip);
-    clipRef.current = clip;
+    const usable =
+      clip &&
+      clip.maxX - clip.minX > 0 &&
+      clip.maxY - clip.minY > 0
+        ? clip
+        : null;
+    clipRef.current = usable;
 
     // Keep the hot pointer path off React effect deps — rebinding mid-stroke
     // drops pointer capture and cuts ink short.
@@ -678,7 +699,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
        */
       // In live mode the filter already ran under the nib; running it again on
       // the lift would move ink the writer has already watched settle.
-      const smoothing = smoothingModeRef.current === "live" ? 0 : smoothingRef.current;
+      const isLive = smoothingModeRef.current === "live";
+      const smoothing = isLive ? 0 : smoothingRef.current;
       // Unconditional for a pen stroke, even at zero smoothing: below the
       // requested tolerance sits a storage floor that thins the stamp chain
       // without moving the line — see SIMPLIFY_STORAGE_FRACTION. The eraser is
@@ -691,6 +713,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                 live.points,
                 smoothing,
                 inkLineWidth(live.baseWidth, 0, false),
+                isLive ? SIMPLIFY_LIVE_FRACTION : undefined,
               ),
             }
           : live;
@@ -863,6 +886,62 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       /** Last move consumed, so the fallback and the canvas cannot double-stamp. */
       let lastHandledMove: PointerEvent | null = null;
 
+      const clearDwellTimer = () => {
+        if (dwellTimerRef.current !== null) {
+          clearInterval(dwellTimerRef.current);
+          dwellTimerRef.current = null;
+        }
+      };
+
+      /** Stamp the attack buffer into live ink and clear the hold. */
+      const flushAttackBuffer = () => {
+        const buf = attackBufferRef.current;
+        const live = liveRef.current;
+        if (!buf || !live || live.kind !== "draw") return;
+        const peak = attackPeakRef.current;
+        for (const p of buf) {
+          if (hasStylusPressure(p.pressure)) p.pressure = peak;
+        }
+        smoothedPressureRef.current = peak;
+        attackBufferRef.current = null;
+
+        const width = strokeWidthRef.current;
+        const maxFullness = live.maxFullness;
+        const pressureClip = live.pressureClip;
+        const pressureSensitive = live.pressureSensitive;
+        const speedInk = live.speedInk ?? 0;
+
+        live.points = [buf[0]];
+        let last = buf[0];
+        lastPointRef.current = last;
+        rawPointRef.current = buf[buf.length - 1];
+
+        for (let i = 1; i < buf.length; i++) {
+          const point = buf[i];
+          const style = inkStrokeStyle(
+            width,
+            maxFullness,
+            point.pressure,
+            pressureClip,
+            pressureSensitive,
+            0,
+            point.slowness ?? INK_SLOWNESS_NEUTRAL,
+            speedInk,
+          );
+          const dense =
+            speedInk > 0 ||
+            (pressureSensitive && hasStylusPressure(point.pressure));
+          const step = Math.max(
+            style.lineWidth * (dense ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
+            0.5,
+          );
+          live.points.push(...stampAlongSegment(last, point, step));
+          last = point;
+        }
+        lastPointRef.current = last;
+        paintLiveIncrementalRef.current();
+      };
+
       /**
        * Land the nib where the pen actually lifted.
        *
@@ -949,8 +1028,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
            * stroke the writer finished belongs on the page either way.
            */
           if (DEBUG_INK) inkMetrics.note("orphan-commit");
+          clearDwellTimer();
           drawingRef.current = false;
           activePointerRef.current = null;
+          if (attackBufferRef.current) flushAttackBuffer();
           settleLiveTip();
           strokeViewRef.current = null;
           strokeBoxRef.current = null;
@@ -1016,24 +1097,51 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         lastPointRef.current = point;
         rawPointRef.current = point;
         smoothedPressureRef.current = hasStylusPressure(point.pressure) ? point.pressure : 0;
-        smoothedSpeedRef.current = 0;
+        smoothedSpeedRef.current = speed > 0 ? INK_SPEED_NEUTRAL_PX_MS : 0;
         lastSampleTimeRef.current = event.timeStamp;
+        lastMoveWallRef.current = performance.now();
+        dwellCountRef.current = 0;
+        clearDwellTimer();
         if (DEBUG_INK) inkMetrics.begin();
         const width = strokeWidthRef.current;
         const activeTool = toolRef.current;
+        const pressureSensitive = pressureSensitiveRef.current;
+        const attackApplies =
+          activeTool === "pen" &&
+          pressureSensitive &&
+          hasStylusPressure(point.pressure);
         if (activeTool === "pen") {
-          liveRef.current = {
-            kind: "draw",
-            color: inkColorRef.current,
-            baseWidth: width,
-            maxFullness: inkFullnessRef.current,
-            pressureClip: pressureClipRef.current,
-            pressureSensitive: pressureSensitiveRef.current,
-            speedInk: speed,
-            points: [point],
-          };
+          if (attackApplies) {
+            attackBufferRef.current = [point];
+            attackPeakRef.current = point.pressure;
+            attackStartRef.current = event.timeStamp;
+            attackCountRef.current = 1;
+            liveRef.current = {
+              kind: "draw",
+              color: inkColorRef.current,
+              baseWidth: width,
+              maxFullness: pressureSensitive ? inkFullnessRef.current : 1,
+              pressureClip: pressureClipRef.current,
+              pressureSensitive,
+              speedInk: speed,
+              points: [],
+            };
+          } else {
+            attackBufferRef.current = null;
+            liveRef.current = {
+              kind: "draw",
+              color: inkColorRef.current,
+              baseWidth: width,
+              maxFullness: pressureSensitive ? inkFullnessRef.current : 1,
+              pressureClip: pressureClipRef.current,
+              pressureSensitive,
+              speedInk: speed,
+              points: [point],
+            };
+          }
           liveDrawnIndexRef.current = 0;
         } else {
+          attackBufferRef.current = null;
           liveRef.current = {
             kind: "erase",
             radius: eraserSceneRadius(width),
@@ -1069,6 +1177,50 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (!reusable) repaintRef.current();
         drawingRef.current = true;
         activePointerRef.current = event.pointerId;
+        if (activeTool === "pen" && speed > 0) {
+          dwellTimerRef.current = setInterval(() => {
+            if (!drawingRef.current) return;
+            if (attackBufferRef.current) return;
+            const liveOp = liveRef.current;
+            if (!liveOp || liveOp.kind !== "draw" || (liveOp.speedInk ?? 0) <= 0) return;
+            if (liveOp.points.length === 0) return;
+            if (performance.now() - lastMoveWallRef.current < 60) return;
+            if (dwellCountRef.current >= 40) return;
+            dwellCountRef.current++;
+            smoothedSpeedRef.current = smoothSpeed(smoothedSpeedRef.current, 0);
+            const last = lastPointRef.current;
+            if (!last) return;
+            const dwellPoint: ScenePoint = {
+              ...last,
+              slowness: inkSlowness(smoothedSpeedRef.current),
+            };
+            if (liveOp.pressureSensitive && hasStylusPressure(last.pressure)) {
+              dwellPoint.pressure = smoothedPressureRef.current;
+            }
+            const dwellWidth = strokeWidthRef.current;
+            const dwellStyle = inkStrokeStyle(
+              dwellWidth,
+              liveOp.maxFullness,
+              dwellPoint.pressure,
+              liveOp.pressureClip,
+              liveOp.pressureSensitive,
+              0,
+              dwellPoint.slowness ?? INK_SLOWNESS_NEUTRAL,
+              liveOp.speedInk ?? 0,
+            );
+            const dwellDense =
+              (liveOp.speedInk ?? 0) > 0 ||
+              (liveOp.pressureSensitive && hasStylusPressure(dwellPoint.pressure));
+            const dwellStep = Math.max(
+              dwellStyle.lineWidth *
+                (dwellDense ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
+              0.5,
+            );
+            liveOp.points.push(...stampAlongSegment(last, dwellPoint, dwellStep));
+            lastPointRef.current = dwellPoint;
+            paintLiveIncrementalRef.current();
+          }, 32);
+        }
       };
 
       const move = (event: PointerEvent) => {
@@ -1115,6 +1267,62 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             ? liveSmoothingTau(smoothingRef.current)
             : 0;
         const zoom = strokeView.zoom || 1;
+        const lagCap =
+          tau > 0 ? inkLineWidth(width, 0, false) * LIVE_MAX_LAG_NIBS : 0;
+
+        if (attackBufferRef.current && live.kind === "draw") {
+          for (const sample of batch) {
+            const rawLast = rawPointRef.current;
+            if (!rawLast) break;
+            const raw = scenePointFromPointer(
+              sample.clientX,
+              sample.clientY,
+              rect,
+              strokeView,
+              sample.pressure,
+              sample.pointerType,
+            );
+            const dt = sample.timeStamp - lastSampleTimeRef.current;
+            lastSampleTimeRef.current = sample.timeStamp;
+            lastMoveWallRef.current = performance.now();
+            dwellCountRef.current = 0;
+
+            if (pressureSensitive && hasStylusPressure(raw.pressure)) {
+              if (raw.pressure > attackPeakRef.current) {
+                attackPeakRef.current = raw.pressure;
+              }
+              smoothedPressureRef.current = smoothPressure(
+                smoothedPressureRef.current,
+                raw.pressure,
+              );
+              raw.pressure = smoothedPressureRef.current;
+            } else {
+              raw.pressure = NO_PRESSURE;
+            }
+
+            if (speedInk > 0) {
+              const travelled =
+                Math.hypot(raw.x - rawLast.x, raw.y - rawLast.y) * zoom;
+              if (dt > 0) {
+                smoothedSpeedRef.current = smoothSpeed(
+                  smoothedSpeedRef.current,
+                  travelled / dt,
+                );
+              }
+              raw.slowness = inkSlowness(smoothedSpeedRef.current);
+            }
+            rawPointRef.current = raw;
+            attackBufferRef.current.push(raw);
+            attackCountRef.current++;
+          }
+
+          const shouldFlush =
+            event.timeStamp - attackStartRef.current >= INK_ATTACK_MS ||
+            attackCountRef.current >= 3;
+          if (shouldFlush) flushAttackBuffer();
+          if (attackBufferRef.current) return;
+          return;
+        }
 
         for (const sample of batch) {
           const last = lastPointRef.current;
@@ -1130,6 +1338,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           );
           const dt = sample.timeStamp - lastSampleTimeRef.current;
           lastSampleTimeRef.current = sample.timeStamp;
+          lastMoveWallRef.current = performance.now();
+          dwellCountRef.current = 0;
 
           if (pressureSensitive && hasStylusPressure(raw.pressure)) {
             // Filter pressure, not position: smoothing the path would lag the
@@ -1169,6 +1379,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               x: last.x + (raw.x - last.x) * weight,
               y: last.y + (raw.y - last.y) * weight,
             };
+            const clamped = clampLiveLag(point.x, point.y, raw.x, raw.y, lagCap);
+            point = { ...point, x: clamped.x, y: clamped.y };
           }
 
           const step =
@@ -1207,6 +1419,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (!drawingRef.current) return;
         // A palm lifting off is not the pen lifting off.
         if (event.pointerId !== activePointerRef.current) return;
+        clearDwellTimer();
+        if (attackBufferRef.current) flushAttackBuffer();
         drawingRef.current = false;
         activePointerRef.current = null;
         settleLiveTip();
@@ -1263,6 +1477,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       abandonStrokeRef.current = () => {
         if (!drawingRef.current) return;
         if (DEBUG_INK) inkMetrics.note("stroke-abandoned");
+        clearDwellTimer();
+        attackBufferRef.current = null;
         drawingRef.current = false;
         activePointerRef.current = null;
         strokeViewRef.current = null;
@@ -1283,6 +1499,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       // release we do ourselves, since it clears `drawingRef` first.
       canvas.addEventListener("lostpointercapture", end, true);
       return () => {
+        clearDwellTimer();
         canvas.removeEventListener("pointerdown", begin, true);
         canvas.removeEventListener("pointermove", move, true);
         canvas.removeEventListener("pointerup", end, true);

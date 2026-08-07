@@ -827,6 +827,35 @@ input[type="checkbox"] {
   gap: 4px;
 }
 
+/* Ink % dial folds away when pressure is off — inline 0fr→1fr like .lc-banner-slot. */
+.lc-ink-fold {
+  display: grid;
+  grid-template-columns: 0fr;
+  transition: grid-template-columns 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  /* Cancel the row's 4px gap so a folded dial leaves no sliver. */
+  margin-inline-end: -4px;
+}
+
+.lc-ink-fold.is-open {
+  grid-template-columns: 1fr;
+  margin-inline-end: 0;
+}
+
+.lc-ink-fold-inner {
+  overflow: hidden;
+  min-width: 0;
+  opacity: 0;
+  transform: translateX(-6px);
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-ink-fold.is-open .lc-ink-fold-inner {
+  opacity: 1;
+  transform: translateX(0);
+}
+
 .lc-stroke-slider {
   display: flex;
   flex-direction: row;
@@ -2796,6 +2825,8 @@ input[type="checkbox"] {
   .lc-pairing-edit-enter,
   .lc-banner-slot,
   .lc-banner,
+  .lc-ink-fold,
+  .lc-ink-fold-inner,
   .lc-smart-tip,
   .lc-progress-fill.is-indeterminate .lc-hold-reveal-fill,
   .lc-gate-morph-to-dialog,

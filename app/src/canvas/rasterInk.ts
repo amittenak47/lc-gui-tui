@@ -20,9 +20,6 @@ export const STROKE_WIDTH_DEFAULT = 2;
 /** Sentinel: mouse / touch without stylus pressure — do not modulate from 0.5. */
 export const NO_PRESSURE = -1;
 
-/** Mild nib spread at full press — width stays mostly from the tip wheel. */
-export const INK_WIDTH_SPREAD = 0.12;
-
 /* ------------------------------------------------------------------ ink --- */
 
 /**
@@ -44,26 +41,16 @@ export const INK_WIDTH_SPREAD = 0.12;
 export const INK_DRY_FLOOR = 0.34;
 
 /**
- * Nib-widths of writing an empty dial lasts, and how sharply the dial buys more.
+ * Lead and fall lengths for the drying curve, in nib widths.
  *
- * Distance is in nib widths rather than scene units so a fat marker and a fine
- * liner drain over the same amount of *writing*, not the same geometric length.
- * Capacity is `MIN / (1 - dial)^EXPONENT`, which runs to infinity as the dial
- * reaches full — so "100%" means a nib that does not dry, exactly, with no
- * special case and no residual fade to split a stroke into pieces over.
- *
- * The floor used to be 14 nib widths, which is a *quarter of a letter* at the
- * default tip: the whole bottom half of the dial dried out before the first
- * character was finished, so the dial read as "broken" rather than as "dry".
- *
- * A letter is roughly 50–130 nib widths of pen travel and a line is a couple of
- * thousand, so the range worth spending the dial on is words and lines, not
- * letters. At 150 the empty end fades out over a word — dry enough to be a
- * deliberate look rather than a fault — the middle lasts a line, three-quarters
- * lasts several, and the top does not dry at all.
+ * After `lead` nib-widths of writing the charge begins to fall; over `fall` more
+ * it eases down to `1 - inkDryDepth(dial)`. Distance is in nib widths so a fat
+ * marker and a fine liner dry over the same amount of *writing*.
  */
-export const INK_CAPACITY_MIN = 150;
-export const INK_CAPACITY_EXPONENT = 2;
+export const INK_LEAD_MIN = 90;
+export const INK_LEAD_SPAN = 900;
+export const INK_FALL_MIN = 260;
+export const INK_FALL_SPAN = 1500;
 
 /**
  * Floor on pressure's share of the deposit.
@@ -84,16 +71,38 @@ export const INK_PRESSURE_FLOOR = 0.45;
  */
 export const INK_MIN_DEVICE_PX = 1.15;
 
+function smoothstep(u: number): number {
+  if (u <= 0) return 0;
+  if (u >= 1) return 1;
+  return u * u * (3 - 2 * u);
+}
+
+/** Tail alpha at dial 0 — linear depth from dial to `1 - depth`. */
+export function inkDryDepth(dial: number): number {
+  const d = Math.max(0, Math.min(1, dial));
+  return (1 - INK_DRY_FLOOR) * (1 - d);
+}
+
+/** Nib-widths before the charge begins to fall. */
+export function inkLeadLength(dial: number): number {
+  const d = Math.max(0, Math.min(1, dial));
+  return INK_LEAD_MIN + INK_LEAD_SPAN * d;
+}
+
+/** Nib-widths over which alpha eases from full to the dry tail. */
+export function inkFallLength(dial: number): number {
+  const d = Math.max(0, Math.min(1, dial));
+  return INK_FALL_MIN + INK_FALL_SPAN * d;
+}
+
 /** Charge left after `consumed` nib-widths, for a dial at `fullness`. */
 export function inkReservoirAlpha(consumed: number, fullness: number): number {
   const dial = Math.max(0, Math.min(1, fullness));
-  // Superlinear, so the top of the dial buys orders of magnitude more writing
-  // than the bottom — linear here spent most of the travel on strokes nobody
-  // writes that long. At the very top this is Infinity and the term below is
-  // exactly 1.
-  const capacity = INK_CAPACITY_MIN / (1 - dial) ** INK_CAPACITY_EXPONENT;
-  const left = Math.exp(-Math.max(0, consumed) / capacity);
-  return INK_DRY_FLOOR + (1 - INK_DRY_FLOOR) * left;
+  const depth = inkDryDepth(dial);
+  if (depth <= 0) return 1;
+  const lead = inkLeadLength(dial);
+  const fall = inkFallLength(dial);
+  return 1 - depth * smoothstep((consumed - lead) / fall);
 }
 
 /** Pressure's share of the deposit — lighter, never invisible. */
@@ -140,8 +149,12 @@ export const INK_SPEED_NEUTRAL_PX_MS = 1.2;
  * dial, which never dries — and width is what the eye reads as "more ink"
  * anyway.
  */
-export const INK_SPEED_WIDTH_RANGE = 0.35;
-export const INK_SPEED_ALPHA_RANGE = 0.3;
+export const INK_SPEED_WIDTH_RANGE = 0.6;
+export const INK_SPEED_ALPHA_BASE = 0.8;
+/** `INK_SPEED_ALPHA_BASE * (1 + RANGE) = 0.992` at full slow gain. */
+export const INK_SPEED_ALPHA_RANGE = 0.24;
+/** Log-span for mapping hand speed to slowness. */
+export const INK_SPEED_SPAN = 3.5;
 
 /**
  * EMA weight for hand speed.
@@ -155,7 +168,11 @@ export const SPEED_SMOOTHING = 0.25;
 /** Normalise a screen-space pace into the 0 (flat out) – 1 (stopped) range. */
 export function inkSlowness(pxPerMs: number): number {
   if (!Number.isFinite(pxPerMs) || pxPerMs <= 0) return 1;
-  return INK_SPEED_NEUTRAL_PX_MS / (INK_SPEED_NEUTRAL_PX_MS + pxPerMs);
+  const t = Math.max(
+    -1,
+    Math.min(1, Math.log(pxPerMs / INK_SPEED_NEUTRAL_PX_MS) / Math.log(INK_SPEED_SPAN)),
+  );
+  return 0.5 - 0.5 * t;
 }
 
 export function smoothSpeed(previous: number, sample: number): number {
@@ -175,7 +192,9 @@ export function inkSpeedWidthGain(slowness: number, strength: number): number {
 }
 
 export function inkSpeedAlphaGain(slowness: number, strength: number): number {
-  return speedGain(slowness, strength, INK_SPEED_ALPHA_RANGE);
+  const amount = Math.max(0, Math.min(1, strength));
+  if (amount <= 0) return 1;
+  return INK_SPEED_ALPHA_BASE * speedGain(slowness, amount, INK_SPEED_ALPHA_RANGE);
 }
 
 export interface ScenePoint {
@@ -246,7 +265,7 @@ export const INK_TIP_MIN = 0.9;
 export const INK_TIP_STEP = 1.35;
 
 /**
- * Scene-unit line width from tip geometry; mild spread when stylus pressure is
+ * Scene-unit line width from tip geometry; ±one tip step when stylus pressure is
  * active, and a swell or a starve when speed ink is on.
  *
  * The two trailing arguments default to "speed ink off", so every caller that
@@ -261,10 +280,10 @@ export function inkLineWidth(
   speedInk = 0,
 ): number {
   const base = Math.max(INK_TIP_MIN, INK_TIP_MIN + (baseWidth - 1) * INK_TIP_STEP);
-  const paced = base * inkSpeedWidthGain(slowness, speedInk);
-  if (!pressureSensitive) return paced;
-  const spread = 1 + INK_WIDTH_SPREAD * Math.max(0, Math.min(1, pNorm));
-  return paced * spread;
+  const center = base * inkSpeedWidthGain(slowness, speedInk);
+  if (!pressureSensitive) return center;
+  const p = Math.max(0, Math.min(1, pNorm));
+  return Math.max(INK_TIP_MIN, center + (p - 0.5) * 2 * INK_TIP_STEP);
 }
 
 /**
@@ -329,16 +348,19 @@ export const INK_STEP_FACTOR = 1.1;
 export const INK_STEP_FACTOR_PRESSURE = 0.55;
 
 /**
- * EMA weight for stylus pressure.
+ * EMA weight for stylus pressure on release — rise is instant, fall is smoothed.
  *
  * Raw pressure from a stylus is noisy at a few percent per sample, and width is
- * proportional to it, so an unsmoothed stroke shimmers along its edges. Low
- * enough to kill that, high enough that a deliberate press still lands within a
- * couple of samples.
+ * proportional to it, so an unsmoothed stroke shimmers along its edges. A press
+ * should land immediately; lifting should ease out rather than snap.
  */
 export const PRESSURE_SMOOTHING = 0.4;
 
+/** Attack time hint for RasterInkLayer (milliseconds). */
+export const INK_ATTACK_MS = 12;
+
 export function smoothPressure(previous: number, sample: number): number {
+  if (sample >= previous) return sample;
   return previous + (sample - previous) * PRESSURE_SMOOTHING;
 }
 
@@ -424,9 +446,9 @@ function consumedFor(op: InkDrawOp): number[] {
 
 /** A stretch of a stroke that can be laid down in one canvas path. */
 export interface InkStrokeRun {
-  /** First point index, inclusive. */
+  /** First polyline position, inclusive (fractional between samples). */
   start: number;
-  /** Last point index, inclusive — the next run starts here, so nothing gaps. */
+  /** Last polyline position, inclusive — the next run starts here, so nothing gaps. */
   end: number;
   lineWidth: number;
   alpha: number;
@@ -447,6 +469,32 @@ export interface InkStrokeRun {
  */
 const RUN_WIDTH_QUANTUM = 0.06;
 const RUN_ALPHA_QUANTUM = 1 / 48;
+/** Alpha at or above this uses the opaque round-cap fast path. */
+export const RUN_OPAQUE_ALPHA = 1 - RUN_ALPHA_QUANTUM / 2;
+
+/** Interpolate position, pressure, and slowness along a polyline at fractional `pos`. */
+export function strokePointAt(points: ScenePoint[], pos: number): ScenePoint {
+  const last = points.length - 1;
+  if (last <= 0) return points[0];
+  const index = Math.max(0, Math.min(pos, last));
+  const i = Math.floor(index);
+  const j = Math.min(i + 1, last);
+  if (i >= last) return points[last];
+  const t = index - i;
+  const a = points[i];
+  const b = points[j];
+  const point: ScenePoint = {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    pressure: a.pressure + (b.pressure - a.pressure) * t,
+  };
+  if (a.slowness !== undefined || b.slowness !== undefined) {
+    const slowA = a.slowness ?? INK_SLOWNESS_NEUTRAL;
+    const slowB = b.slowness ?? INK_SLOWNESS_NEUTRAL;
+    point.slowness = slowA + (slowB - slowA) * t;
+  }
+  return point;
+}
 
 /** Split a stroke into paintable runs, starting at `fromIndex`. */
 export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
@@ -485,8 +533,9 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
     const nextW = Math.round(next.lineWidth / widthQuantum);
     const nextA = Math.round(next.alpha / RUN_ALPHA_QUANTUM);
     if (nextW !== bucketW || nextA !== bucketA) {
-      runs.push({ start, end: index, lineWidth: sumWidth / count, alpha: sumAlpha / count });
-      start = index;
+      const split = index - 0.5;
+      runs.push({ start, end: split, lineWidth: sumWidth / count, alpha: sumAlpha / count });
+      start = split;
       bucketW = nextW;
       bucketA = nextA;
       sumWidth = next.lineWidth;
@@ -520,11 +569,25 @@ function paintedWidth(lineWidth: number, pixelScale: number): number {
   return Math.max(lineWidth, INK_MIN_DEVICE_PX / pixelScale);
 }
 
+/** Half-disc terminal cap — `outwardAngle` points out of the stroke body. */
+function inkTerminalCap(
+  ctx: CanvasRenderingContext2D,
+  at: { x: number; y: number },
+  outwardAngle: number,
+  radius: number,
+): void {
+  ctx.beginPath();
+  ctx.moveTo(at.x, at.y);
+  ctx.arc(at.x, at.y, radius, outwardAngle - Math.PI / 2, outwardAngle + Math.PI / 2);
+  ctx.fill();
+}
+
 function drawStrokeFrom(
   ctx: CanvasRenderingContext2D,
   op: InkDrawOp,
   fromIndex: number,
   pixelScale: number,
+  capEnd = true,
 ): void {
   const points = op.points;
   if (points.length === 0) return;
@@ -532,8 +595,6 @@ function drawStrokeFrom(
   ctx.globalCompositeOperation = "source-over";
   ctx.strokeStyle = op.color;
   ctx.fillStyle = op.color;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
 
   // A tap is a dot — dotting an "i" used to draw nothing at all.
   if (points.length === 1) {
@@ -558,15 +619,74 @@ function drawStrokeFrom(
 
   const start = Math.max(0, fromIndex);
   if (start >= points.length - 1) return;
-  for (const run of inkStrokeRuns(op, start)) {
-    ctx.lineWidth = paintedWidth(run.lineWidth, pixelScale);
-    ctx.globalAlpha = run.alpha;
-    ctx.beginPath();
-    ctx.moveTo(points[run.start].x, points[run.start].y);
-    for (let index = run.start + 1; index <= run.end; index++) {
-      ctx.lineTo(points[index].x, points[index].y);
+
+  const runs = inkStrokeRuns(op, start);
+  if (runs.length === 0) return;
+
+  const opaque = runs.every((run) => run.alpha >= RUN_OPAQUE_ALPHA);
+
+  if (opaque) {
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const run of runs) {
+      ctx.lineWidth = paintedWidth(run.lineWidth, pixelScale);
+      ctx.globalAlpha = run.alpha;
+      const iStart = Math.ceil(run.start);
+      const iEnd = Math.ceil(run.end);
+      ctx.beginPath();
+      ctx.moveTo(points[iStart].x, points[iStart].y);
+      for (let index = iStart + 1; index <= iEnd; index++) {
+        ctx.lineTo(points[index].x, points[index].y);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
+  } else {
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "round";
+    for (let ri = 0; ri < runs.length; ri++) {
+      const run = runs[ri];
+      ctx.lineWidth = paintedWidth(run.lineWidth, pixelScale);
+      ctx.globalAlpha = run.alpha;
+      const radius = paintedWidth(run.lineWidth, pixelScale) / 2;
+
+      const pStart = strokePointAt(points, run.start);
+      const pEnd = strokePointAt(points, run.end);
+
+      if (Math.hypot(pEnd.x - pStart.x, pEnd.y - pStart.y) < 1e-6) {
+        ctx.beginPath();
+        ctx.arc(pStart.x, pStart.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(pStart.x, pStart.y);
+      for (let i = Math.floor(run.start) + 1; i < run.end; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+      }
+      ctx.lineTo(pEnd.x, pEnd.y);
+      ctx.stroke();
+
+      if (fromIndex === 0 && ri === 0) {
+        const nextIdx = Math.floor(run.start) + 1;
+        const nextPt =
+          nextIdx < run.end && nextIdx < points.length
+            ? points[nextIdx]
+            : strokePointAt(points, Math.min(run.start + 0.001, run.end));
+        const headAngle = Math.atan2(pStart.y - nextPt.y, pStart.x - nextPt.x);
+        inkTerminalCap(ctx, pStart, headAngle, radius);
+      }
+
+      if (capEnd && ri === runs.length - 1) {
+        const prevIdx = Math.ceil(run.end) - 1;
+        const prevPt =
+          prevIdx > run.start && prevIdx >= 0
+            ? points[prevIdx]
+            : strokePointAt(points, Math.max(run.end - 0.001, run.start));
+        const tailAngle = Math.atan2(pEnd.y - prevPt.y, pEnd.x - prevPt.x);
+        inkTerminalCap(ctx, pEnd, tailAngle, radius);
+      }
+    }
   }
   ctx.globalAlpha = 1;
 }
@@ -594,12 +714,16 @@ function eraseStampsFrom(
 }
 
 /** Apply one committed or live op in scene space (caller sets the transform). */
+export type ApplyInkOptions = { capEnd?: boolean };
+
 export function applyInkOp(
   ctx: CanvasRenderingContext2D,
   op: InkOp,
   pixelScale = 0,
+  options?: ApplyInkOptions,
 ): void {
-  if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, pixelScale);
+  const capEnd = options?.capEnd ?? true;
+  if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, pixelScale, capEnd);
   else eraseStampsFrom(ctx, op, 0);
   ctx.globalCompositeOperation = "source-over";
 }
@@ -616,7 +740,7 @@ export function applyInkOpFrom(
   pixelScale = 0,
 ): number {
   if (op.kind === "draw") {
-    drawStrokeFrom(ctx, op, fromIndex, pixelScale);
+    drawStrokeFrom(ctx, op, fromIndex, pixelScale, false);
     ctx.globalCompositeOperation = "source-over";
     return Math.max(fromIndex, op.points.length - 1);
   }
