@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { PAN_REBASE_FRACTION, panDelta } from "./panOffset";
+import {
+  INK_OVERDRAW_FRACTION,
+  MAX_INK_CANVAS_DEVICE_PX,
+  OVERDRAW_REBASE_HEADROOM,
+  PAN_REBASE_FRACTION,
+  overdrawMarginPx,
+  overdrawnViewport,
+  panDelta,
+} from "./panOffset";
 
 const VIEW = { width: 800, height: 600 };
 
@@ -42,6 +50,28 @@ describe("panDelta", () => {
     ).toBe(true);
   });
 
+  it("honours per-axis limits over the fraction", () => {
+    const headroom = VIEW.height * INK_OVERDRAW_FRACTION * OVERDRAW_REBASE_HEADROOM;
+    expect(
+      panDelta(
+        { scrollX: 0, scrollY: headroom, zoom: 1 },
+        { scrollX: 0, scrollY: 0, zoom: 1 },
+        VIEW,
+        PAN_REBASE_FRACTION,
+        { y: headroom },
+      ).rebase,
+    ).toBe(false);
+    expect(
+      panDelta(
+        { scrollX: 0, scrollY: headroom + 1, zoom: 1 },
+        { scrollX: 0, scrollY: 0, zoom: 1 },
+        VIEW,
+        PAN_REBASE_FRACTION,
+        { y: headroom },
+      ).rebase,
+    ).toBe(true);
+  });
+
   it("scales the limit with zoom, because the delta does", () => {
     // 200 scene units is 400 screen px at 2x — past half of a 600px viewport.
     expect(
@@ -79,5 +109,51 @@ describe("panDelta", () => {
       { width: 0, height: 0 },
     );
     expect(delta.rebase).toBe(false);
+  });
+});
+
+describe("overdrawMarginPx", () => {
+  it("returns the fraction of CSS height at ordinary DPR", () => {
+    expect(overdrawMarginPx(600, 1)).toBe(600 * INK_OVERDRAW_FRACTION);
+    expect(overdrawMarginPx(600, 2)).toBe(600 * INK_OVERDRAW_FRACTION);
+  });
+
+  it("caps so total backing height stays under MAX_INK_CANVAS_DEVICE_PX", () => {
+    const cssH = 2000;
+    const dpr = 2;
+    const margin = overdrawMarginPx(cssH, dpr);
+    expect((cssH + 2 * margin) * dpr).toBeLessThanOrEqual(MAX_INK_CANVAS_DEVICE_PX + 1e-6);
+  });
+
+  it("returns 0 below the CSS floor (today's exact viewport)", () => {
+    expect(overdrawMarginPx(32, 2)).toBe(0);
+  });
+});
+
+describe("overdrawnViewport", () => {
+  it("round-trips a visible pixel to the same scene point under the base view", () => {
+    const base = { scrollX: 10, scrollY: -40, zoom: 2, width: 800, height: 600 };
+    const margin = 150;
+    const over = overdrawnViewport(base, margin);
+    // Screen y in the visible band is canvasY - margin; scene from overdrawn
+    // view at (x, y+margin) matches scene from base at (x, y).
+    const screenX = 100;
+    const screenY = 80;
+    const sceneFromBase = {
+      x: screenX / base.zoom - base.scrollX,
+      y: screenY / base.zoom - base.scrollY,
+    };
+    const sceneFromOver = {
+      x: screenX / over.zoom - over.scrollX,
+      y: (screenY + margin) / over.zoom - over.scrollY,
+    };
+    expect(sceneFromOver.x).toBeCloseTo(sceneFromBase.x, 10);
+    expect(sceneFromOver.y).toBeCloseTo(sceneFromBase.y, 10);
+    expect(over.height).toBe(base.height + 2 * margin);
+  });
+
+  it("is a no-op when margin is zero", () => {
+    const base = { scrollX: 1, scrollY: 2, zoom: 1.5, width: 10, height: 20 };
+    expect(overdrawnViewport(base, 0)).toBe(base);
   });
 });
