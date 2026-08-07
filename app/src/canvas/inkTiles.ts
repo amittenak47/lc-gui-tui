@@ -23,6 +23,7 @@
 import {
   applyInkOp,
   inkLineWidth,
+  INK_TIP_STEP,
   setInkSceneTransform,
   type InkOp,
   type SceneBounds,
@@ -152,7 +153,10 @@ export function inkOpBounds(op: InkOp): SceneBounds {
       ? op.radius
       : // Full press at a standstill spreads the nib as far as it goes; with
         // pressure and speed ink both off this is the same number it always was.
-        inkLineWidth(op.baseWidth, 1, op.pressureSensitive, 1, op.speedInk ?? 0) / 2;
+        // Extra tip-step pad so a borderline tile is never left blank forever
+        // after clear+append (reset-board invisible band).
+        inkLineWidth(op.baseWidth, 1, op.pressureSensitive, 1, op.speedInk ?? 0) / 2 +
+          INK_TIP_STEP;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -672,9 +676,9 @@ export function paintLiveOp(
     ctx.beginPath();
     ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
     ctx.clip();
-    applyInkOp(ctx, op, viewport.zoom * dpr);
+    applyInkOp(ctx, op, viewport.zoom * dpr, { capEnd: false });
     ctx.restore();
   } else {
-    applyInkOp(ctx, op, viewport.zoom * dpr);
+    applyInkOp(ctx, op, viewport.zoom * dpr, { capEnd: false });
   }
 }

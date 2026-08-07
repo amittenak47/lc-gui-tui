@@ -4657,8 +4657,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       },
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
+    // Reseeding undoes frame growth; without these the ink clip / pan bounds
+    // stay stale (short) until annotate toggle re-arms — invisible band below
+    // the new page edge.
+    maybeGrowDrawFrame();
+    syncPageVisibility();
     scheduleSlotReports();
-  }, [convert, scheduleSlotReports, themeId]);
+  }, [convert, maybeGrowDrawFrame, scheduleSlotReports, syncPageVisibility, themeId]);
 
   const applyRegionLayout = useCallback(() => {
     const api = apiRef.current;
