@@ -457,7 +457,7 @@ export function App() {
       );
     };
     void tick();
-    const timer = window.setInterval(() => void tick(), 2500);
+    const timer = window.setInterval(() => void tick(), 5000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -465,9 +465,13 @@ export function App() {
   }, [gateOpen, gateWaiting, pingServer, closeGate, gateKind]);
 
   // While online, notice a drop promptly (interval + focus / visibility).
+  // `lc-server-unreachable` can fire on every failed API call — debounce so a
+  // burst of timeouts does not reopen the gate / thrash React.
   useEffect(() => {
     if (serverLink !== "online") return;
     let cancelled = false;
+    let lastUnreachableAt = 0;
+    const UNREACHABLE_COOLDOWN_MS = 8_000;
     const tick = async () => {
       if (cancelled || gateOpenRef.current) return;
       const ok = await pingServer();
@@ -478,6 +482,9 @@ export function App() {
     const onUnreachable = () => {
       if (cancelled || gateOpenRef.current) return;
       if (serverLinkRef.current !== "online") return;
+      const now = Date.now();
+      if (now - lastUnreachableAt < UNREACHABLE_COOLDOWN_MS) return;
+      lastUnreachableAt = now;
       openGate("dropped");
     };
     const timer = window.setInterval(() => void tick(), 8000);
@@ -517,8 +524,9 @@ export function App() {
       ]);
       const provider = cfg.default_provider;
       if (provider === "openai" || provider === "groq") {
-        setLlmDetail(`${provider} via lc serve`);
-        setLlmLink("online");
+        const detail = `${provider} via lc serve`;
+        setLlmDetail((prev) => (prev === detail ? prev : detail));
+        setLlmLink((prev) => (prev === "online" ? prev : "online"));
         return true;
       }
       const status = await Promise.race([
@@ -528,12 +536,17 @@ export function App() {
         }),
       ]);
       const online = /LLM reachable/i.test(status.detail ?? "");
-      setLlmDetail(status.detail || null);
-      setLlmLink(online ? "online" : "offline");
+      const detail = status.detail || null;
+      setLlmDetail((prev) => (prev === detail ? prev : detail));
+      setLlmLink((prev) => {
+        const next = online ? "online" : "offline";
+        return prev === next ? prev : next;
+      });
       return online;
     } catch (cause) {
-      setLlmDetail(messageOf(cause));
-      setLlmLink("offline");
+      const detail = messageOf(cause);
+      setLlmDetail((prev) => (prev === detail ? prev : detail));
+      setLlmLink((prev) => (prev === "offline" ? prev : "offline"));
       return false;
     }
   }, [client]);
@@ -554,6 +567,11 @@ export function App() {
   // After lc serve is up, check whether a model is actually available for Coach.
   // While the boot overlay is still up, finish with the same spinner → check
   // beat used when opening a problem — no tap required when both are healthy.
+  //
+  // Poll backs off hard while the LLM is offline so we do not hammer
+  // `/config` + `/llm/status` every 12s (and re-render) when the daemon has
+  // no model. Online stays at 12s; offline grows to 2 minutes max. Focus /
+  // visibility still probes promptly.
   useEffect(() => {
     if (serverLink !== "online") {
       setLlmLink("unknown");
@@ -561,6 +579,34 @@ export function App() {
       return;
     }
     let cancelled = false;
+    let timer = 0;
+    let delayMs = 12_000;
+    const LLM_ONLINE_MS = 12_000;
+    const LLM_OFFLINE_MS = 60_000;
+    const LLM_OFFLINE_MAX_MS = 120_000;
+
+    const afterProbe = (ok: boolean) => {
+      if (ok) {
+        delayMs = LLM_ONLINE_MS;
+        return;
+      }
+      delayMs =
+        delayMs < LLM_OFFLINE_MS
+          ? LLM_OFFLINE_MS
+          : Math.min(Math.round(delayMs * 1.5), LLM_OFFLINE_MAX_MS);
+    };
+
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        void (async () => {
+          const ok = await probeLlm();
+          if (cancelled) return;
+          afterProbe(ok);
+          schedule();
+        })();
+      }, delayMs);
+    };
+
     void (async () => {
       const ok = await probeLlm();
       if (cancelled) return;
@@ -579,6 +625,8 @@ export function App() {
             openLlmGate();
           }
         }, serverGateExitMs());
+        afterProbe(ok);
+        schedule();
         return;
       }
 
@@ -586,13 +634,32 @@ export function App() {
         llmPromptedRef.current = true;
         openLlmGate();
       }
+      afterProbe(ok);
+      schedule();
     })();
-    const timer = window.setInterval(() => {
-      void probeLlm();
-    }, 12000);
+
+    const onFocus = () => {
+      if (cancelled) return;
+      window.clearTimeout(timer);
+      delayMs = LLM_ONLINE_MS;
+      void (async () => {
+        const ok = await probeLlm();
+        if (cancelled) return;
+        afterProbe(ok);
+        schedule();
+      })();
+    };
+    const onVis = () => {
+      if (document.visibilityState === "visible") onFocus();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVis);
     };
   }, [serverLink, probeLlm, openLlmGate]);
 

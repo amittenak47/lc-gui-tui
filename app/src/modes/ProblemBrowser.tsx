@@ -653,8 +653,9 @@ export function ProblemBrowser({
 
               <div className="lc-browser-foot">
                 {/*
-                  Corners: ‹ / ›. Center: Select | Start | Reset, status under.
-                  End column: › above inline page (`1–15 • 1 of 46`).
+                  Corners: ‹ / ›. Center cluster screen-centered (not mid-row):
+                  Select | Start | Reset, status under.
+                  End: › above inline page (`1–15 • 1 of 46`).
                 */}
                 <div className="lc-browser-foot-bar">
                   <button

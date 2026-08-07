@@ -4124,24 +4124,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const recolored = recolorTemplateElements(converted, dark) ?? converted;
     const sized = applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M"));
     templateRef.current = sized;
-    apiRef.current?.updateScene({
+    /*
+     * Keep the camera. Clearing marks is not "jump back to the top of the
+     * page" — the student was reading mid-document and Reset only promised
+     * a clean board. `refitToViewport` / `scheduleFitView` used to wipe
+     * scrollX/Y (and markdown slot) back to the start.
+     */
+    const api = apiRef.current;
+    const prior = api?.getAppState() as
+      | { scrollX?: number; scrollY?: number; zoom?: { value?: number } }
+      | undefined;
+    api?.updateScene({
       elements: sized as unknown[],
+      appState: {
+        scrollX: prior?.scrollX,
+        scrollY: prior?.scrollY,
+        zoom: prior?.zoom,
+        selectedElementIds: {},
+      },
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
-    /*
-     * Fit inside the same commit, not on the next frame.
-     *
-     * The seed skeletons are at their authored size, and the fit is what grows
-     * the page frame to the viewport and sets the camera. Deferring it by a
-     * frame let Excalidraw paint the authored layout once at the old camera —
-     * the snap-then-resize everyone sees. `updateScene` writes the elements
-     * synchronously and the camera is a state update, so doing both here lands
-     * them in one paint.
-     */
-    refitToViewport();
-    // Fonts and text metrics settle a beat later; these only nudge.
-    scheduleFitView();
-  }, [convert, refitToViewport, scheduleFitView, themeId]);
+    scheduleSlotReports();
+  }, [convert, scheduleSlotReports, themeId]);
 
   const applyRegionLayout = useCallback(() => {
     const api = apiRef.current;

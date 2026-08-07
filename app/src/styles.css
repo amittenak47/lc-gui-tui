@@ -188,7 +188,8 @@ body {
   z-index: 1;
 }
 
-/* Offline / host:IP — horizontally screen-centered; vertically matches row icons. */
+/* Offline / host:IP — horizontally centered on the header (full screen width),
+ * not on the middle grid column (left/right chrome are unequal). */
 .lc-header-pairing-anchor {
   position: absolute;
   left: 50%;
@@ -4129,32 +4130,55 @@ button.lc-row-selected:hover:not(:disabled) {
   padding-bottom: 4px;
 }
 
-/* Row 1: ‹ | actions | ›. Row 2: (empty) | stats | page label. */
+/*
+ * Corners: ‹ / › (+ page label under ›).
+ * Center cluster (Select | Begin | Reset + queue stats): screen-centered via
+ * absolute left 50% — not the midpoint of the flex row (wide page labels on
+ * the right used to shift that midpoint left).
+ */
 .lc-browser-foot-bar {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  grid-template-rows: auto auto;
-  align-items: center;
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   column-gap: 10px;
-  row-gap: 4px;
+  min-height: 3.25rem;
 }
 
-.lc-browser-foot-center,
+.lc-browser-foot-center {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  max-width: min(90vw, 28rem);
+  pointer-events: none;
+}
+
+.lc-browser-foot-center > * {
+  pointer-events: auto;
+}
+
 .lc-browser-foot-end {
-  display: contents;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+  z-index: 0;
 }
 
 .lc-browser-foot-prev,
 .lc-browser-foot-next {
   min-width: 2.75rem;
   padding: 0 8px;
-}
-
-.lc-browser-foot-prev {
-  grid-column: 1;
-  grid-row: 1;
-  justify-self: start;
-  align-self: start;
+  flex-shrink: 0;
+  z-index: 0;
 }
 
 .lc-browser-foot-actions {
@@ -4163,24 +4187,10 @@ button.lc-row-selected:hover:not(:disabled) {
   justify-content: center;
   gap: 6px;
   flex-wrap: wrap;
-  grid-column: 2;
-  grid-row: 1;
-  justify-self: center;
   min-width: 0;
 }
 
-.lc-browser-foot-next {
-  grid-column: 3;
-  grid-row: 1;
-  justify-self: end;
-  align-self: start;
-}
-
 .lc-browser-foot-stats {
-  grid-column: 2;
-  grid-row: 2;
-  justify-self: center;
-  align-self: start;
   white-space: nowrap;
   font-size: 11px;
   text-align: center;
@@ -4193,12 +4203,6 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-browser-page-label {
-  grid-column: 3;
-  grid-row: 2;
-  justify-self: end;
-  align-self: start;
-  /* Visual only — does not grow the row or move queue stats. */
-  transform: translateY(10px);
   min-width: 0;
   max-width: 14rem;
   text-align: right;
@@ -6183,7 +6187,7 @@ button.lc-row-selected:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-/* Corners: ‹ / ›. Center: Select|Start|Reset + status. Right: › + inline page. */
+/* Corners: ‹ / ›. Center: Select|Start|Reset + status (screen-centered). */
 .lc-mobile .lc-browser-foot {
   gap: 2px;
   padding-top: 2px;
@@ -6193,7 +6197,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-browser-foot-bar {
   column-gap: 4px;
-  row-gap: 2px;
+  min-height: 2.75rem;
 }
 
 .lc-mobile .lc-browser-foot-prev,
@@ -6217,8 +6221,6 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 7.5rem;
-  /* Visual only — queue stats stay on their baseline. */
-  transform: translateY(8px);
 }
 
 .lc-mobile .lc-browser-foot button,
