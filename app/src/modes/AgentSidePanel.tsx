@@ -19,6 +19,12 @@ import type { MessageDrawing } from "../viz/drawingState";
 import { Timeline } from "../viz/Timeline";
 import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
+import {
+  groupThreads,
+  messageThreadRoot,
+  showsReplyStub,
+  visibleThreadMessages,
+} from "./coachThreads";
 
 /** Visible strip when the mobile coach sheet is parked closed. */
 const COACH_SHEET_PEEK_PX = 52;
@@ -64,6 +70,13 @@ function isLongPressBlocked(target: EventTarget | null): boolean {
 
 /** Longest stub shown in a reply bubble before it is cut. */
 const REPLY_EXCERPT_MAX = 160;
+const THREAD_MOTION_IN_MS = 200;
+const THREAD_MOTION_OUT_MS = 170;
+/** Safety net: an interrupted animation must not strand the panel mid-transition. */
+const THREAD_MOTION_TIMEOUT_MS = THREAD_MOTION_IN_MS + THREAD_MOTION_OUT_MS + 50;
+
+/** How the transcript is moving between the room and a thread. */
+type ThreadMotion = "idle" | "enter" | "exit" | "back";
 
 /**
  * A one-line trace of the quoted turn.
@@ -77,23 +90,6 @@ export function replyExcerpt(content: string): string {
   return flat.length > REPLY_EXCERPT_MAX
     ? `${flat.slice(0, REPLY_EXCERPT_MAX - 1).trimEnd()}…`
     : flat;
-}
-
-/** The message a thread hangs off — walking up through any chain of replies. */
-function messageThreadRoot(
-  messages: readonly CoachChatMessage[],
-  message: CoachChatMessage,
-): string {
-  let current: CoachChatMessage | undefined = message;
-  const seen = new Set<string>();
-  while (current?.replyTo && !seen.has(current.id)) {
-    seen.add(current.id);
-    const parentId: string = current.replyTo.id;
-    const parent = messages.find((candidate) => candidate.id === parentId);
-    if (!parent) return parentId;
-    current = parent;
-  }
-  return current?.id ?? message.id;
 }
 
 function replyRefFor(message: CoachChatMessage): CoachReplyRef | null {
@@ -191,6 +187,8 @@ export interface CoachSendFlags {
   annotate: boolean;
   /** The message this turn is answering, when the writer quoted one. */
   replyTo?: CoachReplyRef;
+  /** The thread this send belongs to, or null when it is addressed to the room. */
+  threadRootId?: string | null;
 }
 
 export interface CoachAttachment {
@@ -331,49 +329,18 @@ export function AgentSidePanel({
    * message is what turns two turns into a conversation about it.
    */
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const [threadMotion, setThreadMotion] = useState<ThreadMotion>("idle");
+  /** The thread we are on our way out of — scrolled back to once the room returns. */
+  const exitedRootRef = useRef<string | null>(null);
+  const motionTimerRef = useRef<number | null>(null);
+  const threadMotionRef = useRef<ThreadMotion>("idle");
 
-  /**
-   * The conversation, grouped into roots and the threads hanging off them.
-   *
-   * A reply is threaded under the *root* of whatever it answers, not under the
-   * message it directly quotes, so a back-and-forth stays one thread instead of
-   * nesting a level deeper every turn. Nesting is what makes a quoted
-   * conversation unreadable, and the writer only ever sees one thing: a
-   * subconversation about a message.
-   */
-  const { threadReplies, rootMessages } = useMemo(() => {
-    const rootOf = new Map<string, string>();
-    const replies = new Map<string, CoachChatMessage[]>();
-    const roots: CoachChatMessage[] = [];
-    for (const message of messages) {
-      const parent = message.replyTo?.id;
-      if (!parent) {
-        roots.push(message);
-        continue;
-      }
-      // Follow the chain up: a reply to a reply belongs to the same thread.
-      const root = rootOf.get(parent) ?? parent;
-      rootOf.set(message.id, root);
-      const bucket = replies.get(root);
-      if (bucket) bucket.push(message);
-      else replies.set(root, [message]);
-    }
-    return { threadReplies: replies, rootMessages: roots };
-  }, [messages]);
+  const { threadReplies, rootMessages } = useMemo(() => groupThreads(messages), [messages]);
 
-  /**
-   * What the transcript shows: the room, or one thread within it.
-   *
-   * A thread that is open takes the whole panel — its root at the top and its
-   * replies under it — because a subconversation shown inline next to the
-   * conversation it came from is the interleaving this exists to remove.
-   */
-  const visibleMessages = useMemo(() => {
-    if (!openThreadId) return rootMessages;
-    const root = messages.find((message) => message.id === openThreadId);
-    const replies = threadReplies.get(openThreadId) ?? [];
-    return root ? [root, ...replies] : replies;
-  }, [messages, openThreadId, rootMessages, threadReplies]);
+  const visibleMessages = useMemo(
+    () => visibleThreadMessages(messages, openThreadId, { threadReplies, rootMessages }),
+    [messages, openThreadId, threadReplies, rootMessages],
+  );
 
   useEffect(() => {
     onThreadChange?.(openThreadId);
@@ -384,8 +351,18 @@ export function AgentSidePanel({
   useEffect(() => {
     if (openThreadId && !messages.some((message) => message.id === openThreadId)) {
       setOpenThreadId(null);
+      setThreadMotion("idle");
+      exitedRootRef.current = null;
+      if (motionTimerRef.current != null) {
+        window.clearTimeout(motionTimerRef.current);
+        motionTimerRef.current = null;
+      }
     }
   }, [messages, openThreadId]);
+
+  useEffect(() => {
+    threadMotionRef.current = threadMotion;
+  }, [threadMotion]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
@@ -625,18 +602,84 @@ export function AgentSidePanel({
     window.setTimeout(() => node.classList.remove("is-flashed"), 1400);
   }, []);
 
+  const clearMotionFallback = useCallback(() => {
+    if (motionTimerRef.current != null) {
+      window.clearTimeout(motionTimerRef.current);
+      motionTimerRef.current = null;
+    }
+  }, []);
+
+  const settleThreadMotionRef = useRef<() => void>(() => {});
+
+  const armMotionFallback = useCallback(() => {
+    clearMotionFallback();
+    motionTimerRef.current = window.setTimeout(() => {
+      settleThreadMotionRef.current();
+    }, THREAD_MOTION_TIMEOUT_MS);
+  }, [clearMotionFallback]);
+
+  const settleThreadMotion = useCallback(() => {
+    clearMotionFallback();
+    setThreadMotion((phase) => {
+      if (phase === "exit") {
+        setOpenThreadId(null);
+        setReplyTo(null);
+        window.queueMicrotask(() => armMotionFallback());
+        return "back";
+      }
+      return "idle";
+    });
+  }, [clearMotionFallback, armMotionFallback]);
+
+  settleThreadMotionRef.current = settleThreadMotion;
+
+  const enterThread = useCallback(
+    (id: string) => {
+      if (threadMotionRef.current === "exit") return;
+      setOpenThreadId(id);
+      setThreadMotion("enter");
+      armMotionFallback();
+    },
+    [armMotionFallback],
+  );
+
+  const leaveThread = useCallback(() => {
+    if (!openThreadId || threadMotionRef.current === "exit") return;
+    exitedRootRef.current = openThreadId;
+    setThreadMotion("exit");
+    armMotionFallback();
+  }, [openThreadId, armMotionFallback]);
+
+  useEffect(() => () => clearMotionFallback(), [clearMotionFallback]);
+
+  useLayoutEffect(() => {
+    const node = listRef.current;
+    if (!node) return;
+    if (openThreadId) {
+      node.scrollTop = node.scrollHeight;
+      return;
+    }
+    const returning = exitedRootRef.current;
+    if (!returning) return;
+    exitedRootRef.current = null;
+    requestAnimationFrame(() => jumpToMessage(returning));
+  }, [openThreadId, jumpToMessage]);
+
   const quoteMessage = useCallback(
     (message: CoachChatMessage) => {
       const ref = replyRefFor(message);
       if (!ref) return;
-      // The draft is left alone. Quoting used to paste the whole answer in as
-      // `>` prose, so replying to a long turn meant scrolling past a copy of it
-      // to reach your own cursor — and the copy was all that survived, since a
-      // sent message had no idea what it was answering.
       setReplyTo(ref);
-      // Answering a message *is* its thread, so go there: the reply and the
-      // ones before it belong in the same view, not scattered up the room.
-      setOpenThreadId((current) => current ?? messageThreadRoot(messages, message));
+      const root = messageThreadRoot(messages, message);
+      let opening = false;
+      setOpenThreadId((current) => {
+        if (!current) opening = true;
+        return current ?? root;
+      });
+      if (opening) {
+        setThreadMotion("enter");
+        armMotionFallback();
+      }
       closeMessageMenu();
       onOpenChange?.(true);
       requestAnimationFrame(() => {
@@ -647,7 +690,7 @@ export function AgentSidePanel({
         el.setSelectionRange(end, end);
       });
     },
-    [closeMessageMenu, onOpenChange],
+    [closeMessageMenu, onOpenChange, messages, armMotionFallback],
   );
 
   const copyMessage = useCallback(
@@ -745,6 +788,7 @@ export function AgentSidePanel({
       reviewBoard,
       lazy,
       annotate,
+      threadRootId: openThreadId,
       ...(replyTo ? { replyTo } : {}),
     });
     setReplyTo(null);
@@ -808,16 +852,21 @@ export function AgentSidePanel({
       >
         <span className="lc-coach-fold-bar" aria-hidden />
       </div>
-      <div className={openThreadId ? "lc-coach-chat is-threaded" : "lc-coach-chat"}>
+      <div
+        className={[
+          "lc-coach-chat",
+          openThreadId ? "is-threaded" : "",
+          threadMotion === "idle" ? "" : `lc-thread-motion-${threadMotion}`,
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
         {openThreadId && (
           <div className="lc-coach-thread-bar">
             <button
               type="button"
               className="lc-coach-thread-back"
-              onClick={() => {
-                setOpenThreadId(null);
-                setReplyTo(null);
-              }}
+              onClick={leaveThread}
             >
               ← Conversation
             </button>
@@ -827,14 +876,25 @@ export function AgentSidePanel({
             </span>
           </div>
         )}
-        <div className="lc-coach-messages" ref={listRef} aria-live="polite">
+        <div
+          className="lc-coach-messages"
+          ref={listRef}
+          key={openThreadId ?? "__room__"}
+          aria-live="polite"
+          onAnimationEnd={(event) => {
+            if (event.target !== event.currentTarget) return;
+            settleThreadMotion();
+          }}
+        >
           {messages.length === 0 && !children && !thinking && (
             <p className="lc-muted lc-coach-empty">
               Ask a question with <strong>Ask</strong>, flag <strong>Review</strong> to run a
               staged board review, or <strong>Draw</strong> to request a diagram.
             </p>
           )}
-          {visibleMessages.map((message) => (
+          {visibleMessages.map((message) => {
+            const replyStub = message.replyTo;
+            return (
             <div
               key={message.id}
               data-coach-message={message.id}
@@ -889,7 +949,7 @@ export function AgentSidePanel({
               {message.processEvents && message.processEvents.length > 0 && (
                 <ProcessBlock events={message.processEvents} running={Boolean(message.pending)} />
               )}
-              {message.replyTo && (
+              {showsReplyStub(message, openThreadId) && (
                 /*
                  * The quoted turn, above the reply that answers it.
                  *
@@ -901,16 +961,16 @@ export function AgentSidePanel({
                 <button
                   type="button"
                   className="lc-coach-reply-stub"
-                  title={`Go to ${ROLE_LABEL[message.replyTo.role]}'s message`}
+                  title={`Go to ${ROLE_LABEL[replyStub!.role]}'s message`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    jumpToMessage(message.replyTo!.id);
+                    jumpToMessage(replyStub!.id);
                   }}
                 >
                   <span className="lc-coach-reply-stub-role">
-                    {ROLE_LABEL[message.replyTo.role]}
+                    {ROLE_LABEL[replyStub!.role]}
                   </span>
-                  <span className="lc-coach-reply-stub-text">{message.replyTo.excerpt}</span>
+                  <span className="lc-coach-reply-stub-text">{replyStub!.excerpt}</span>
                 </button>
               )}
               {message.content ? (
@@ -931,7 +991,7 @@ export function AgentSidePanel({
                   className="lc-coach-thread-open"
                   onClick={(event) => {
                     event.stopPropagation();
-                    setOpenThreadId(message.id);
+                    enterThread(message.id);
                   }}
                 >
                   <span className="lc-coach-thread-open-count">
@@ -1026,7 +1086,8 @@ export function AgentSidePanel({
                 />
               )}
             </div>
-          ))}
+            );
+          })}
           {children}
           {thinking && !messages.some((message) => message.pending) && (
             <div className="lc-coach-turn lc-coach-turn-assistant lc-coach-thinking" role="status">

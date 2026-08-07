@@ -67,11 +67,13 @@ import {
   AgentSidePanel,
   AMBIENT_ENABLED,
   type CoachChatMessage,
+  type CoachReplyRef,
   type CoachSendFlags,
 } from "./modes/AgentSidePanel";
 import { AttemptDialog } from "./modes/AttemptDialog";
 import { ScratchpadDialog } from "./modes/ScratchpadDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
+import { threadAnchorRef } from "./modes/coachThreads";
 import { loadForwardFailures, saveForwardFailures } from "./util/coachPrefs";
 import { ensureTypingImports } from "./util/pythonImports";
 
@@ -1957,12 +1959,20 @@ export function App() {
    * somewhere to land and the student can see the work is theirs — not a
    * spinner that could belong to anything.
    */
-  const beginCoachTurn = useCallback((): string => {
+  const beginCoachTurn = useCallback((replyTo?: CoachReplyRef): string => {
     const id = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     dirtyRef.current = true;
     setCoachMessages((current) => [
       ...current,
-      { id, role: "assistant", content: "", at: Date.now(), pending: true, processEvents: [] },
+      {
+        id,
+        role: "assistant",
+        content: "",
+        at: Date.now(),
+        pending: true,
+        processEvents: [],
+        ...(replyTo ? { replyTo } : {}),
+      },
     ]);
     return id;
   }, []);
@@ -2001,8 +2011,7 @@ export function App() {
           id: offset === 0 ? placeholder.id : `${placeholder.id}-${offset}`,
           role: "assistant",
           at: Date.now(),
-          // The process block belongs to the first turn only — repeating it
-          // under every diagram would bury them.
+          ...(placeholder.replyTo ? { replyTo: placeholder.replyTo } : {}),
           ...(offset === 0 ? { processEvents: placeholder.processEvents } : {}),
           ...part,
         }));
@@ -2061,6 +2070,7 @@ export function App() {
         | "bridgePending"
         | "bridgeError"
         | "flags"
+        | "replyTo"
       >,
     ) => {
       dirtyRef.current = true;
@@ -2090,6 +2100,7 @@ export function App() {
     attachments?: CoachChatMessage["attachments"],
     /** Lazy composer: review the board only — code dock is filled separately. */
     layoutOnly = false,
+    threadAnchor?: CoachReplyRef | null,
   ) => {
     const board = boardRef.current;
     if (!board || !problem) return;
@@ -2131,10 +2142,15 @@ export function App() {
       setCoachPhase(`Thinking about ${topic}…`);
     }
 
-    const turnId = beginCoachTurn();
+    const turnId = beginCoachTurn(threadAnchor ?? undefined);
     let finished = false;
     try {
       await syncSolution();
+      const askedNote = note
+        ? withConversationContext(note, coachMessagesRef.current, {
+            threadRootId: threadAnchor?.id ?? null,
+          })
+        : note;
       let payload;
       let capturedIds: Set<string> | null = null;
       if (includeBoard) {
@@ -2149,7 +2165,7 @@ export function App() {
           lastPseudocodeHash: lastPseudocodeHashRef.current,
         });
         if (note) {
-          snapshot.board.recognized_text = `Student asks:\n${note}\n\n${snapshot.board.recognized_text ?? ""}`;
+          snapshot.board.recognized_text = `Student asks:\n${askedNote}\n\n${snapshot.board.recognized_text ?? ""}`;
         }
         // Recognized text is not the only evidence of work: shapes, stamps, pen
         // ink, and (with a vision model) a PNG of the handwriting all count.
@@ -2175,7 +2191,7 @@ export function App() {
           return;
         }
         payload = {
-          recognized_text: `Student asks:\n${note}`,
+          recognized_text: `Student asks:\n${askedNote}`,
           pseudocode: pseudocodeRef.current.trim() || undefined,
           turn_index: reviewTurnRef.current,
         };
@@ -2315,16 +2331,19 @@ export function App() {
     ],
   );
 
-  const askForDiagram = useCallback(async (ask = "") => {
+  const askForDiagram = useCallback(async (ask = "", threadAnchor?: CoachReplyRef | null) => {
     const board = boardRef.current;
     if (!board || !problem) return;
     setBusy("drawing…");
     setError(null);
     setCoachOpen(true);
-    const turnId = beginCoachTurn();
+    const turnId = beginCoachTurn(threadAnchor ?? undefined);
     let finished = false;
     try {
       await syncSolution();
+      const contextualAsk = withConversationContext(ask, coachMessagesRef.current, {
+        threadRootId: threadAnchor?.id ?? null,
+      });
       const snapshot = await buildSnapshot(board, recognizerRef.current, {
         pseudocode: pseudocodeRef.current,
         includePng: modeHasVision("viz"),
@@ -2332,9 +2351,9 @@ export function App() {
       const vizBoard = { ...snapshot.board, app_messages: appMessages() };
       const envelope = await runCoachJob<VizEnvelope>(
         "viz",
-        { task_id: problem.task_id, dataset: problem.dataset, board: vizBoard, ask },
+        { task_id: problem.task_id, dataset: problem.dataset, board: vizBoard, ask: contextualAsk },
         turnId,
-        () => client.viz(problem.task_id, vizBoard, ask, problem.dataset),
+        () => client.viz(problem.task_id, vizBoard, contextualAsk, problem.dataset),
       );
       const drawables = envelope.programs
         .map(parseVizProgram)
@@ -2361,7 +2380,7 @@ export function App() {
           queueMicrotask(() => syncDrawingsToBoard(current));
           return current;
         });
-        void reviewDrawings(drawables, ask);
+        void reviewDrawings(drawables, contextualAsk);
       }
 
       const api = sceneApi();
@@ -2387,11 +2406,12 @@ export function App() {
         pushCoachMessage(
           "assistant",
           `Case ${citation.case_number}:\n${citation.input.trim()}\n→ ${citation.expected.trim()}\n\n${citation.why}`,
+          threadAnchor ? { replyTo: threadAnchor } : undefined,
         );
       }
 
       for (const reason of envelope.rejected ?? []) {
-        pushCoachMessage("assistant", reason);
+        pushCoachMessage("assistant", reason, threadAnchor ? { replyTo: threadAnchor } : undefined);
       }
 
       if (
@@ -2433,7 +2453,7 @@ export function App() {
   ]);
 
   const applyFilledCode = useCallback(
-    async (filled: string, note: string) => {
+    async (filled: string, note: string, threadAnchor?: CoachReplyRef | null) => {
       if (!problem) return;
       /*
        * Repair the import the model forgot before it reaches the editor.
@@ -2451,7 +2471,11 @@ export function App() {
       try {
         await client.putSolution(problem.task_id, next, problem.dataset);
         setNotice(note.trim() || "Lazy fill applied to solution.py");
-        pushCoachMessage("assistant", note.trim() || "Filled the parts your board already justified.");
+        pushCoachMessage(
+          "assistant",
+          note.trim() || "Filled the parts your board already justified.",
+          threadAnchor ? { replyTo: threadAnchor } : undefined,
+        );
       } catch (cause) {
         setError(messageOf(cause));
       }
@@ -2460,7 +2484,7 @@ export function App() {
   );
 
   const askCoach = useCallback(
-    async (question: string) => {
+    async (question: string, threadAnchor?: CoachReplyRef | null) => {
       const note = question.trim();
       if (!problem || !note) {
         setError("type a question, or turn on Ask");
@@ -2471,7 +2495,7 @@ export function App() {
       setNotice(null);
       setCoachOpen(true);
       setCoachPhase("Thinking…");
-      const turnId = beginCoachTurn();
+      const turnId = beginCoachTurn(threadAnchor ?? undefined);
       let finished = false;
       try {
         await syncSolution();
@@ -2486,7 +2510,7 @@ export function App() {
          * turns rather than the whole room.
          */
         const asked = withConversationContext(note, coachMessagesRef.current, {
-          threadRootId: threadRootIdRef.current,
+          threadRootId: threadAnchor?.id ?? null,
         });
         const result = await runCoachJob<{ reply: string }>(
           "ask",
@@ -2523,6 +2547,9 @@ export function App() {
             lazy: false,
             annotate: false,
             ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}),
+            ...(requestedFlags.threadRootId != null
+              ? { threadRootId: requestedFlags.threadRootId }
+              : {}),
           }
         : requestedFlags;
       const flagBits = [
@@ -2532,6 +2559,14 @@ export function App() {
         flags.draw ? "Draw" : null,
         flags.lazy ? "Lazy" : null,
       ].filter((bit): bit is string => Boolean(bit));
+
+      // The root this send hangs off. An explicit quote from the room opens the
+      // thread first (see quoteMessage), so the panel's own openThreadId is the
+      // authority; replyTo is the fallback for the very first reply to a message.
+      const anchorId = flags.threadRootId ?? flags.replyTo?.id ?? null;
+      const threadAnchor = anchorId
+        ? threadAnchorRef(coachMessagesRef.current, anchorId) ?? flags.replyTo ?? null
+        : null;
 
       void (async () => {
         let attachments: CoachChatMessage["attachments"];
@@ -2607,7 +2642,9 @@ export function App() {
         pushCoachMessage("user", text || "Send", {
           ...(attachments ? { attachments } : {}),
           ...(flagBits.length > 0 ? { flags: flagBits } : {}),
-          ...(flags.replyTo ? { replyTo: flags.replyTo } : {}),
+          ...(flags.replyTo ?? threadAnchor
+            ? { replyTo: flags.replyTo ?? threadAnchor ?? undefined }
+            : {}),
         });
 
         /*
@@ -2625,12 +2662,12 @@ export function App() {
         // Review runs the staged pipeline. Ask (or bare text without Review)
         // skips it and does a single-turn Q&A.
         if (flags.reviewBoard) {
-          await submitForReview(prompt, true, attachments, flags.lazy);
+          await submitForReview(prompt, true, attachments, flags.lazy, threadAnchor);
         } else if (flags.ask || text) {
-          await askCoach(prompt || "What should I focus on next?");
+          await askCoach(prompt || "What should I focus on next?", threadAnchor);
         }
         if (flags.draw) {
-          await askForDiagram(text);
+          await askForDiagram(text, threadAnchor);
         }
         if (flags.lazy && problem) {
           setBusy("lazy fill…");
@@ -2655,7 +2692,7 @@ export function App() {
               null,
               () => client.lazyFill(problem.task_id, lazyBoard, problem.dataset),
             );
-            await applyFilledCode(fill.filled_code, fill.note);
+            await applyFilledCode(fill.filled_code, fill.note, threadAnchor);
           } catch (cause) {
             setError(messageOf(cause));
           } finally {

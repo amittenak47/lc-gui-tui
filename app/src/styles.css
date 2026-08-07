@@ -7245,24 +7245,76 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /* Opening a thread should feel like the bubble grew into the panel. */
-.lc-coach-chat.is-threaded .lc-coach-messages {
-  animation: lc-thread-in 180ms ease-out;
+/*
+ * Entering a thread is a push, leaving it a pop.
+ *
+ * The direction is the whole point: a thread arrives from the right because it
+ * is a level down from the room, and the room comes back from the left because
+ * that is where it was waiting. A crossfade would say the two views are
+ * alternatives rather than one inside the other.
+ */
+.lc-coach-chat {
+  /* The pushed views translate past the panel edge — never a scrollbar. */
+  overflow-x: clip;
 }
 
-@keyframes lc-thread-in {
-  from {
-    opacity: 0;
-    transform: scale(0.97) translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+.lc-thread-motion-enter .lc-coach-messages {
+  animation: lc-thread-push-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.lc-thread-motion-enter .lc-coach-thread-bar {
+  animation: lc-thread-bar-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lc-thread-motion-exit .lc-coach-messages {
+  animation: lc-thread-push-out 170ms ease-in both;
+}
+
+.lc-thread-motion-exit .lc-coach-thread-bar {
+  animation: lc-thread-bar-out 170ms ease-in both;
+}
+
+.lc-thread-motion-back .lc-coach-messages {
+  animation: lc-thread-pop-back 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes lc-thread-push-in {
+  from { opacity: 0; transform: translateX(18%); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes lc-thread-push-out {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: translateX(18%); }
+}
+
+@keyframes lc-thread-pop-back {
+  from { opacity: 0; transform: translateX(-14%); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes lc-thread-bar-in {
+  from { opacity: 0; transform: translateY(-100%); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes lc-thread-bar-out {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: translateY(-100%); }
+}
+
+/*
+ * Reduced motion collapses the duration rather than removing the animation:
+ * `animation: none` never fires `animationend`, and the exit leg commits on
+ * that event — a thread would open and never close again.
+ */
 @media (prefers-reduced-motion: reduce) {
-  .lc-coach-chat.is-threaded .lc-coach-messages {
-    animation: none;
+  .lc-thread-motion-enter .lc-coach-messages,
+  .lc-thread-motion-exit .lc-coach-messages,
+  .lc-thread-motion-back .lc-coach-messages,
+  .lc-thread-motion-enter .lc-coach-thread-bar,
+  .lc-thread-motion-exit .lc-coach-thread-bar {
+    animation-duration: 0.01s;
   }
 }
 
