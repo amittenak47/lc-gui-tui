@@ -547,13 +547,6 @@ input[type="checkbox"] {
 .lc-board {
   position: relative;
   height: 100%;
-  /*
-   * How far a live reading gesture has dragged the page from the camera the
-   * board was last painted at. Written by Board (`setPagePanOffset`) and zero
-   * whenever nothing is in flight.
-   */
-  --lc-pan-x: 0px;
-  --lc-pan-y: 0px;
 }
 
 /*
@@ -562,17 +555,14 @@ input[type="checkbox"] {
  * A reading scroll deliberately does not move Excalidraw's camera — pushing
  * `updateScene` per sample is what held the board at ~30fps — so the ink
  * bitmap, Excalidraw's own canvases, the lined rules and the page title are all
- * still correct relative to the page and wrong only by this translation. On the
- * compositor that is free; the alternative is a full raster pass per frame.
+ * still correct relative to the page and wrong only by a translation Board
+ * writes as inline `translate3d` on these nodes (not inherited `--lc-pan-*` on
+ * the board root — that invalidated style for the whole markdown subtree). On
+ * the compositor that is free; the alternative is a full raster pass per frame.
  * Board drops the offset and re-reports every slot in the frame the gesture
  * lands, so nothing here is ever more than a gesture old.
  */
 .lc-board .excalidraw__canvas,
-.lc-board-lined-overlay,
-.lc-page-title-slot {
-  transform: translate3d(var(--lc-pan-x, 0px), var(--lc-pan-y, 0px), 0);
-}
-
 .lc-board-lined-overlay,
 .lc-page-title-slot {
   will-change: transform;
@@ -596,8 +586,8 @@ input[type="checkbox"] {
 
 /*
  * Reading mode: starve Excalidraw's interactive animation loop.
- * Static scene canvas still rides `--lc-pan-*`; selection ants / scrollbars
- * on the interactive layer are not needed while annotate is off.
+ * Static scene canvas still rides the inline pan translate; selection ants /
+ * scrollbars on the interactive layer are not needed while annotate is off.
  */
 .lc-board-reading canvas.excalidraw__canvas.interactive {
   visibility: hidden;

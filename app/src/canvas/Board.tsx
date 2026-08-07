@@ -1157,24 +1157,52 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /**
    * How far the page has been dragged from the camera everything was painted at.
    *
-   * Reading scroll leaves Excalidraw's camera alone (see `applyVisualScroll`),
+   * Reading scroll leaves Excalidraw's camera alone (see `applyVisualScrollNow`),
    * so the ink bitmap, Excalidraw's own canvases, the lined paper and the page
    * title are all still correct *relative to the page* and wrong only by this
-   * translation. Publishing it as a pair of custom properties on the board lets
-   * the stylesheet move all of them on the compositor — no reblit, no layout,
-   * no `updateScene` — which is the whole point of the exercise: a coast should
-   * cost a transform, not a repaint of every layer on the board.
+   * translation. Writing `translate3d` on those few nodes (not a custom property
+   * on the board root) keeps the compositor cheap — `--lc-pan-*` on `.lc-board`
+   * invalidated style for the whole markdown subtree every sample.
    */
   const panOffsetRef = useRef({ x: 0, y: 0 });
-  const setPagePanOffset = useCallback((dx: number, dy: number) => {
+  const panRideNodesRef = useRef<HTMLElement[]>([]);
+
+  const refreshPanRideNodes = useCallback(() => {
     const root = boardRef.current;
-    if (!root) return;
-    const current = panOffsetRef.current;
-    if (current.x === dx && current.y === dy) return;
-    panOffsetRef.current = { x: dx, y: dy };
-    root.style.setProperty("--lc-pan-x", `${dx}px`);
-    root.style.setProperty("--lc-pan-y", `${dy}px`);
+    if (!root) {
+      panRideNodesRef.current = [];
+      return;
+    }
+    const nodes: HTMLElement[] = [];
+    root.querySelectorAll("canvas.excalidraw__canvas").forEach((el) => {
+      if (el instanceof HTMLElement) nodes.push(el);
+    });
+    if (linedSlotNodeRef.current) nodes.push(linedSlotNodeRef.current);
+    if (titleSlotNodeRef.current) nodes.push(titleSlotNodeRef.current);
+    panRideNodesRef.current = nodes;
   }, []);
+
+  const ensurePanRideNodes = useCallback(() => {
+    const cached = panRideNodesRef.current;
+    if (cached.length === 0 || cached.some((node) => !node.isConnected)) {
+      refreshPanRideNodes();
+    }
+    return panRideNodesRef.current;
+  }, [refreshPanRideNodes]);
+
+  const setPagePanOffset = useCallback(
+    (dx: number, dy: number) => {
+      const current = panOffsetRef.current;
+      if (current.x === dx && current.y === dy) return;
+      panOffsetRef.current = { x: dx, y: dy };
+      const next =
+        dx === 0 && dy === 0 ? "" : `translate3d(${dx}px, ${dy}px, 0)`;
+      for (const node of ensurePanRideNodes()) {
+        if (node.style.transform !== next) node.style.transform = next;
+      }
+    },
+    [ensurePanRideNodes],
+  );
 
   const setPagePanOffsetRef = useRef(setPagePanOffset);
   setPagePanOffsetRef.current = setPagePanOffset;
@@ -1190,6 +1218,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const pulseCameraMotion = useCallback(() => {
     if (!cameraMotionActiveRef.current) {
       cameraMotionActiveRef.current = true;
+      // Gesture open: Excalidraw may have remounted canvases since last ride.
+      refreshPanRideNodes();
       rasterInkRef.current?.setCameraMoving(true);
     }
     if (cameraMotionTimerRef.current) window.clearTimeout(cameraMotionTimerRef.current);
@@ -1755,12 +1785,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     /*
-     * Committed camera, deliberately — the rules ride the live pan on the
-     * shared `--lc-pan-*` translate (see `setPagePanOffset`). Reporting the
-     * live camera here as well would apply the gesture twice, and writing
-     * `left`/`top` per sample would lay out and repaint this gradient on the
-     * main thread at pointer rate, which is exactly what the translate exists
-     * to avoid. Mid-gesture the numbers below cannot change, so this early-outs.
+     * Committed camera, deliberately — the rules ride the live pan on an
+     * inline translate (see `setPagePanOffset`). Reporting the live camera
+     * here as well would apply the gesture twice, and writing `left`/`top` per
+     * sample would lay out and repaint this gradient on the main thread at
+     * pointer rate, which is exactly what the translate exists to avoid.
+     * Mid-gesture the numbers below cannot change, so this early-outs.
      */
     const state = api.getAppState() as {
       scrollX?: number;

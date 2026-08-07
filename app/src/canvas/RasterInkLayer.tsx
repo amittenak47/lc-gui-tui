@@ -298,11 +298,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
        * it. Excalidraw's canvases ride the same live-pan translate this layer
        * does (see `setPanOffset`), so a re-measure mid-gesture — a rotation, the
        * keyboard opening — would bake the gesture's offset into the overlay's
-       * own left/top and leave it there for good.
+       * own left/top and leave it there for good. Inline `translate3d` is the
+       * source of truth (Board no longer publishes `--lc-pan-*`).
        */
-      const boardStyle = board instanceof HTMLElement ? getComputedStyle(board) : null;
-      const panX = Number.parseFloat(boardStyle?.getPropertyValue("--lc-pan-x") ?? "") || 0;
-      const panY = Number.parseFloat(boardStyle?.getPropertyValue("--lc-pan-y") ?? "") || 0;
+      const panMatch = /translate3d\(\s*([-\d.]+)px\s*,\s*([-\d.]+)px/.exec(
+        excal.style.transform || "",
+      );
+      const panX = panMatch ? Number(panMatch[1]) : 0;
+      const panY = panMatch ? Number(panMatch[2]) : 0;
       const width = snap(excalRect.width);
       const height = snap(excalRect.height);
       canvas.style.left = `${snap(excalRect.left - boardRect.left - panX)}px`;
