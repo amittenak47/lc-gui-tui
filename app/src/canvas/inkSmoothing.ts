@@ -44,14 +44,16 @@ export const INK_SMOOTHING_MODE_DEFAULT: InkSmoothingMode = "lift";
  * Converting through `1 - e^(-dt/tau)` makes the dial a promise about
  * milliseconds of lag, which is the thing the hand actually feels.
  *
- * Lag is capped in space via {@link clampLiveLag}. The dial is compressed so
- * the usable range sits in the bottom quarter of the UI: full strength is about
- * two frames of lag, not a third of a second.
+ * Lag is capped in space via {@link clampLiveLag}. Dial maps with a floor so
+ * the bottom of the usable range is already a visible trail, then ramps to
+ * about three frames at full strength.
  */
-export const LIVE_SMOOTHING_MAX_TAU_MS = 32;
+export const LIVE_SMOOTHING_MAX_TAU_MS = 55;
+/** Minimum tau once smoothing is on — below this the live trail is invisible. */
+export const LIVE_SMOOTHING_MIN_TAU_MS = 14;
 
 /** Max distance the smoothed nib may trail the pen, in nib widths. */
-export const LIVE_MAX_LAG_NIBS = 0.85;
+export const LIVE_MAX_LAG_NIBS = 1.15;
 
 /**
  * Pull the nib back toward the pen when it has lagged farther than `maxLag`.
@@ -85,7 +87,12 @@ const LIVE_SMOOTHING_MAX_DT_MS = 32;
 
 /** Time constant, in ms, for a strength on the 0–1 dial. */
 export function liveSmoothingTau(strength: number): number {
-  return Math.max(0, Math.min(1, strength)) * LIVE_SMOOTHING_MAX_TAU_MS;
+  const s = Math.max(0, Math.min(1, strength));
+  if (s <= 0) return 0;
+  return (
+    LIVE_SMOOTHING_MIN_TAU_MS +
+    s * (LIVE_SMOOTHING_MAX_TAU_MS - LIVE_SMOOTHING_MIN_TAU_MS)
+  );
 }
 
 /**

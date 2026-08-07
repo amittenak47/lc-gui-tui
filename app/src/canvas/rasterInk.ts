@@ -154,12 +154,12 @@ export const INK_SPEED_NEUTRAL_PX_MS = 1.2;
  * dial, which never dries — and width is what the eye reads as "more ink"
  * anyway.
  */
-export const INK_SPEED_WIDTH_RANGE = 1.15;
-export const INK_SPEED_ALPHA_BASE = 0.65;
+export const INK_SPEED_WIDTH_RANGE = 1.35;
+export const INK_SPEED_ALPHA_BASE = 0.55;
 /** Headroom under opaque at full slow: BASE * (1 + RANGE) ≈ 0.94. */
-export const INK_SPEED_ALPHA_RANGE = 0.45;
+export const INK_SPEED_ALPHA_RANGE = 0.5;
 /** Log-span for mapping hand speed to slowness — tighter so writing hits extremes. */
-export const INK_SPEED_SPAN = 2.2;
+export const INK_SPEED_SPAN = 2.0;
 
 /**
  * EMA weight for hand speed.
@@ -168,7 +168,7 @@ export const INK_SPEED_SPAN = 2.2;
  * so it is far noisier than pressure and gets filtered harder. Unfiltered, a
  * stroke's width shimmers with the sample jitter rather than with the hand.
  */
-export const SPEED_SMOOTHING = 0.45;
+export const SPEED_SMOOTHING = 0.5;
 
 /** Normalise a screen-space pace into the 0 (flat out) – 1 (stopped) range. */
 export function inkSlowness(pxPerMs: number): number {
@@ -629,75 +629,53 @@ function drawStrokeFrom(
   const runs = inkStrokeRuns(op, start);
   if (runs.length === 0) return;
 
-  // Round-cap fast path only for a whole committed stroke. Live incremental
-  // resumes (fromIndex > 0) must abut — a round start-cap at every resume is
-  // the "spokes on curves" artifact.
-  const opaqueFast =
-    fromIndex === 0 &&
-    capEnd &&
-    runs.every((run) => run.alpha >= RUN_OPAQUE_ALPHA);
+  // Always abut. Live incremental cannot use round caps (spokes on curves).
+  // Matching commit to the same path stops the stroke from looking like it
+  // "smoothed" on lift when the overlay was abut and the tile was round-cap.
+  ctx.lineCap = "butt";
+  ctx.lineJoin = "round";
+  for (let ri = 0; ri < runs.length; ri++) {
+    const run = runs[ri];
+    ctx.lineWidth = paintedWidth(run.lineWidth, pixelScale);
+    ctx.globalAlpha = run.alpha;
+    const radius = paintedWidth(run.lineWidth, pixelScale) / 2;
 
-  if (opaqueFast) {
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    for (const run of runs) {
-      ctx.lineWidth = paintedWidth(run.lineWidth, pixelScale);
-      ctx.globalAlpha = run.alpha;
-      const iStart = Math.ceil(run.start);
-      const iEnd = Math.ceil(run.end);
+    const pStart = strokePointAt(points, run.start);
+    const pEnd = strokePointAt(points, run.end);
+
+    if (Math.hypot(pEnd.x - pStart.x, pEnd.y - pStart.y) < 1e-6) {
       ctx.beginPath();
-      ctx.moveTo(points[iStart].x, points[iStart].y);
-      for (let index = iStart + 1; index <= iEnd; index++) {
-        ctx.lineTo(points[index].x, points[index].y);
-      }
-      ctx.stroke();
+      ctx.arc(pStart.x, pStart.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
     }
-  } else {
-    ctx.lineCap = "butt";
-    ctx.lineJoin = "round";
-    for (let ri = 0; ri < runs.length; ri++) {
-      const run = runs[ri];
-      ctx.lineWidth = paintedWidth(run.lineWidth, pixelScale);
-      ctx.globalAlpha = run.alpha;
-      const radius = paintedWidth(run.lineWidth, pixelScale) / 2;
 
-      const pStart = strokePointAt(points, run.start);
-      const pEnd = strokePointAt(points, run.end);
+    ctx.beginPath();
+    ctx.moveTo(pStart.x, pStart.y);
+    for (let i = Math.floor(run.start) + 1; i < run.end; i++) {
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.lineTo(pEnd.x, pEnd.y);
+    ctx.stroke();
 
-      if (Math.hypot(pEnd.x - pStart.x, pEnd.y - pStart.y) < 1e-6) {
-        ctx.beginPath();
-        ctx.arc(pStart.x, pStart.y, radius, 0, Math.PI * 2);
-        ctx.fill();
-        continue;
-      }
+    if (fromIndex === 0 && ri === 0) {
+      const nextIdx = Math.floor(run.start) + 1;
+      const nextPt =
+        nextIdx < run.end && nextIdx < points.length
+          ? points[nextIdx]
+          : strokePointAt(points, Math.min(run.start + 0.001, run.end));
+      const headAngle = Math.atan2(pStart.y - nextPt.y, pStart.x - nextPt.x);
+      inkTerminalCap(ctx, pStart, headAngle, radius);
+    }
 
-      ctx.beginPath();
-      ctx.moveTo(pStart.x, pStart.y);
-      for (let i = Math.floor(run.start) + 1; i < run.end; i++) {
-        ctx.lineTo(points[i].x, points[i].y);
-      }
-      ctx.lineTo(pEnd.x, pEnd.y);
-      ctx.stroke();
-
-      if (fromIndex === 0 && ri === 0) {
-        const nextIdx = Math.floor(run.start) + 1;
-        const nextPt =
-          nextIdx < run.end && nextIdx < points.length
-            ? points[nextIdx]
-            : strokePointAt(points, Math.min(run.start + 0.001, run.end));
-        const headAngle = Math.atan2(pStart.y - nextPt.y, pStart.x - nextPt.x);
-        inkTerminalCap(ctx, pStart, headAngle, radius);
-      }
-
-      if (capEnd && ri === runs.length - 1) {
-        const prevIdx = Math.ceil(run.end) - 1;
-        const prevPt =
-          prevIdx > run.start && prevIdx >= 0
-            ? points[prevIdx]
-            : strokePointAt(points, Math.max(run.end - 0.001, run.start));
-        const tailAngle = Math.atan2(pEnd.y - prevPt.y, pEnd.x - prevPt.x);
-        inkTerminalCap(ctx, pEnd, tailAngle, radius);
-      }
+    if (capEnd && ri === runs.length - 1) {
+      const prevIdx = Math.ceil(run.end) - 1;
+      const prevPt =
+        prevIdx > run.start && prevIdx >= 0
+          ? points[prevIdx]
+          : strokePointAt(points, Math.max(run.end - 0.001, run.start));
+      const tailAngle = Math.atan2(pEnd.y - prevPt.y, pEnd.x - prevPt.x);
+      inkTerminalCap(ctx, pEnd, tailAngle, radius);
     }
   }
   ctx.globalAlpha = 1;

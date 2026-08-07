@@ -223,7 +223,7 @@ describe("speed ink", () => {
     const maxSlow = inkStrokeAlpha(1, 0, false, 0, 1, 1);
     expect(maxSlow).toBeLessThanOrEqual(1);
     // BASE * (1 + RANGE) leaves headroom under the clip.
-    expect(maxSlow).toBeCloseTo(INK_SPEED_ALPHA_BASE * (1 + 0.45), 2);
+    expect(maxSlow).toBeCloseTo(INK_SPEED_ALPHA_BASE * (1 + 0.5), 2);
   });
 
   it("reads neutral pace as the speed-alpha base when speed ink is on", () => {
@@ -622,6 +622,8 @@ function recordingContext() {
     },
     stroke() {},
     arc(x: number, y: number, r: number) {
+      // Draw terminal caps also use arc+fill; only erases are destination-out.
+      if (composite !== "destination-out") return;
       erased.push({ ...map(x, y), r: r * transform[0], composite });
     },
     fill() {},
