@@ -96,6 +96,7 @@ import {
 import { MOBILE_REGION_ORDER, REGION_BLURB, REGIONS, type RegionId } from "./templates/regions";
 import { splitProblemKey } from "./util/datasetKey";
 import { useIsMobile } from "./util/mobile";
+import { installHandednessAttr } from "./util/inkHandedness";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { MdInkDialog } from "./modes/MdInkDialog";
 import { MdInkDocument } from "./modes/MdInkDocument";
@@ -221,6 +222,9 @@ export function App() {
     if (!mobile) return;
     return installSafeAreaInsets();
   }, [mobile]);
+
+  // Writing hand mirrors the chrome across the Y-axis — see inkHandedness.
+  useEffect(() => installHandednessAttr(), []);
 
   /**
    * Mobile paging. Desktop keeps the one wide stacked canvas; on a tablet each
