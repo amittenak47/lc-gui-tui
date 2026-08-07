@@ -16,3 +16,14 @@ interface Window {
     getWorkerUrl?: (workerId: string, label: string) => string;
   };
 }
+
+/**
+ * Vite's `?worker` suffix, for the one dependency that needs it.
+ *
+ * pdf.js ships its worker as a plain module rather than something the bundler
+ * can find on its own — see the note in `PdfDocument`.
+ */
+declare module "*?worker" {
+  const WorkerFactory: new () => Worker;
+  export default WorkerFactory;
+}

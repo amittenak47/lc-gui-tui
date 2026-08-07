@@ -19,9 +19,28 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
+import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 
 export const MD_INK_LIBRARY_LIMIT = 30;
+
+/**
+ * What kind of document an entry was drawn over.
+ *
+ * Markdown carries its source in the entry; PDF and EPUB keep their bytes in
+ * IndexedDB under the same content hash (see `docBytes`), because a textbook
+ * does not fit in a synchronous string store. Everything else about an entry —
+ * the board, the footnotes, the hash it is keyed by — is identical across the
+ * three, which is the point: one library, one save/discard contract, one pad.
+ *
+ * Absent on entries written before PDF and EPUB existed, and those are all
+ * markdown, so a missing value reads as `"markdown"` rather than as corrupt.
+ */
+export type DocType = "markdown" | "pdf" | "epub";
+
+export function isBinaryDocType(docType: DocType): boolean {
+  return docType === "pdf" || docType === "epub";
+}
 
 export class MdInkLibraryFullError extends Error {
   readonly code = "md-ink-library-full" as const;
@@ -35,8 +54,9 @@ export interface MdInkDocMeta {
   id: string;
   /** File name as opened, for display. */
   name: string;
-  /** Hash of the markdown this was drawn over. */
+  /** Hash of the document this was drawn over — text for markdown, bytes otherwise. */
   hash: string;
+  docType: DocType;
   updatedAt: number;
 }
 
@@ -49,6 +69,9 @@ export interface MdInkDoc extends MdInkDocMeta {
    * drawn on — not a claim of ownership over it and never written back to disk.
    * Discard still only throws away annotations; the file on disk is untouched
    * by anything in this module.
+   *
+   * Empty for PDF and EPUB: their bytes are in IndexedDB under {@link hash},
+   * because a textbook is orders of magnitude past what this store can hold.
    */
   source: string;
   board: BoardBlob;
@@ -96,7 +119,12 @@ function readLibrary(): MdInkDoc[] {
         entry.board?.v === 1 &&
         Array.isArray(entry.board.elements),
     )
-    .map((entry) => ({ ...entry, footnotes: sanitizeFootnotes(entry.footnotes) }));
+    .map((entry) => ({
+      ...entry,
+      // Entries written before PDF and EPUB existed are all markdown.
+      docType: entry.docType ?? "markdown",
+      footnotes: sanitizeFootnotes(entry.footnotes),
+    }));
   } catch {
     return [];
   }
@@ -108,7 +136,13 @@ function writeLibrary(entries: MdInkDoc[]): void {
 
 export function listMdInkDocs(): MdInkDocMeta[] {
   return readLibrary()
-    .map(({ id, name, hash, updatedAt }) => ({ id, name, hash, updatedAt }))
+    .map(({ id, name, hash, docType, updatedAt }) => ({
+      id,
+      name,
+      hash,
+      docType,
+      updatedAt,
+    }))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -134,8 +168,8 @@ export function findMdInkDocByHash(hash: string): MdInkDoc | null {
 export function findStaleMdInkDoc(name: string, hash: string): MdInkDocMeta | null {
   const match = readLibrary().find((entry) => entry.name === name && entry.hash !== hash);
   if (!match) return null;
-  const { id, name: entryName, hash: entryHash, updatedAt } = match;
-  return { id, name: entryName, hash: entryHash, updatedAt };
+  const { id, name: entryName, hash: entryHash, docType, updatedAt } = match;
+  return { id, name: entryName, hash: entryHash, docType, updatedAt };
 }
 
 /** See the note on `freshId` in `scratchpadStore` — same millisecond, same trap. */
@@ -152,6 +186,7 @@ export function saveMdInkDoc(input: {
   id?: string;
   name: string;
   hash: string;
+  docType?: DocType;
   source: string;
   board: BoardBlob;
   footnotes?: readonly DocFootnote[];
@@ -174,6 +209,7 @@ export function saveMdInkDoc(input: {
     id,
     name: input.name.trim() || existing?.name || "Untitled.md",
     hash: input.hash,
+    docType: input.docType ?? existing?.docType ?? "markdown",
     updatedAt: now,
     source: input.source,
     board: input.board,
@@ -187,7 +223,22 @@ export function saveMdInkDoc(input: {
 }
 
 export function deleteMdInkDoc(id: string): void {
-  writeLibrary(readLibrary().filter((entry) => entry.id !== id));
+  const library = readLibrary();
+  const going = library.find((entry) => entry.id === id) ?? null;
+  const kept = library.filter((entry) => entry.id !== id);
+  writeLibrary(kept);
+  /*
+   * A binary document's bytes outlive its entry unless something removes them.
+   *
+   * They are keyed by content hash, so two entries can legitimately share one
+   * blob — check before dropping it, or deleting one annotation set of a
+   * textbook would take the textbook out from under the other. Best-effort:
+   * a stranded blob is wasted space, not a broken library, and refusing to
+   * delete the entry because IndexedDB was unhappy would be the worse trade.
+   */
+  if (going && isBinaryDocType(going.docType) && !kept.some((e) => e.hash === going.hash)) {
+    void deleteDocBytes(going.hash).catch(() => {});
+  }
 }
 
 /**

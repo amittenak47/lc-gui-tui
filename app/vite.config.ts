@@ -1,10 +1,54 @@
-import { defineConfig } from "vite";
+import { createReadStream, cpSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+
+/**
+ * pdf.js's data directories, served in dev and copied into the build.
+ *
+ * `standard_fonts` holds metrics for the base-14 fonts a PDF is allowed to
+ * assume the reader has, and `cmaps` maps the character encodings CJK and many
+ * scanned documents use. Neither is code, so neither can be imported — pdf.js
+ * fetches them by URL at render time, and without them a real textbook renders
+ * with wrong glyph widths or, for CJK, blank pages.
+ *
+ * Copied rather than added to `public/`: they belong to a dependency, and a
+ * checked-in copy would drift the moment pdfjs-dist is bumped.
+ */
+function pdfjsAssets(): Plugin {
+  const require = createRequire(import.meta.url);
+  const root = dirname(require.resolve("pdfjs-dist/package.json"));
+  const dirs = ["standard_fonts", "cmaps"] as const;
+  return {
+    name: "lc-pdfjs-assets",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = req.url?.split("?")[0] ?? "";
+        const dir = dirs.find((name) => url.startsWith(`/${name}/`));
+        if (!dir) return next();
+        const file = join(root, decodeURIComponent(url.slice(1)));
+        // The prefix check is the guard against `/cmaps/../../…` walking out
+        // of the package and serving the developer's disk over the dev server.
+        if (!file.startsWith(join(root, dir)) || !existsSync(file)) return next();
+        res.setHeader("Content-Type", "application/octet-stream");
+        createReadStream(file).pipe(res);
+      });
+    },
+    closeBundle() {
+      for (const dir of dirs) {
+        const from = join(root, dir);
+        if (existsSync(from)) cpSync(from, join("dist", dir), { recursive: true });
+      }
+    },
+  };
+}
 
 // Tauri serves the built assets from a fixed port in dev and expects a
 // relative base so the same bundle works from a file:// origin on Android.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), pdfjsAssets()],
   base: "./",
   clearScreen: false,
   server: {
