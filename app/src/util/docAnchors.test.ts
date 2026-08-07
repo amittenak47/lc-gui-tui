@@ -29,14 +29,60 @@ beforeEach(() => {
 });
 
 describe("textOf", () => {
-  it("concatenates text nodes in reading order, across elements", () => {
-    const root = mount("<p>Hash <em>maps</em></p><p> collide</p>");
+  it("runs inline elements together, the way they read", () => {
+    const root = mount("<p>Hash <em>maps</em> collide</p>");
     expect(textOf(root)).toBe("Hash maps collide");
+  });
+
+  it("breaks between blocks", () => {
+    // Raw concatenation gives "CollisionsHash maps…", and a quote taken across
+    // that seam is what gets asked about and searched for.
+    const root = mount("<h1>Collisions</h1><p>Hash maps collide</p>");
+    expect(textOf(root)).toBe("Collisions\nHash maps collide");
+  });
+
+  it("breaks between list items", () => {
+    const root = mount("<ul><li>one</li><li>two</li></ul>");
+    expect(textOf(root)).toBe("one\ntwo");
+  });
+
+  it("breaks between sibling roots — a PDF page, an EPUB chapter", () => {
+    const root = mount(
+      '<div class="page"><span>Hash maps collide</span></div>' +
+        '<div class="page"><span>Open addressing</span></div>',
+    );
+    expect(textOf(root)).toBe("Hash maps collide\nOpen addressing");
   });
 
   it("finds every text node under nesting", () => {
     const root = mount("<ul><li>a<span>b<b>c</b></span></li></ul>");
     expect(textNodesOf(root).map((node) => node.data)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("quotes across a block boundary", () => {
+  it("keeps the break in the quoted text", () => {
+    const root = mount("<h1>Collisions</h1><p>Hash maps collide</p>");
+    expect(textForAnchor(root, { start: 0, end: 15 })).toBe("Collisions\nHash");
+  });
+
+  it("resolves to a range that spans both blocks", () => {
+    const root = mount("<h1>Collisions</h1><p>Hash maps collide</p>");
+    const range = rangeFromAnchor(root, { start: 0, end: 15 });
+    expect(range).not.toBeNull();
+    expect(range!.startContainer.textContent).toBe("Collisions");
+    expect(range!.endContainer.textContent).toBe("Hash maps collide");
+  });
+
+  it("rolls an end that lands on the separator back to real text", () => {
+    const root = mount("<h1>Collisions</h1><p>Hash maps collide</p>");
+    // Offset 10 is the newline itself; the quote is still "Collisions".
+    expect(textForAnchor(root, { start: 0, end: 10 })).toBe("Collisions");
+  });
+
+  it("snaps words without crossing the break", () => {
+    const text = textOf(mount("<h1>Collisions</h1><p>Hash maps collide</p>"));
+    expect(snapToWords(text, 2, 5)).toEqual([0, 10]);
   });
 });
 

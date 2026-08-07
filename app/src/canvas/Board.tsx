@@ -5416,6 +5416,55 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // duplicated whatever the student already attached as Approach/etc.
         return thumbs;
       },
+      exportViewThumb: async () => {
+        const api = apiRef.current;
+        if (!api) return null;
+        const state = api.getAppState() as {
+          scrollX?: number;
+          scrollY?: number;
+          zoom?: { value?: number };
+          width?: number;
+          height?: number;
+        };
+        const zoom = num(state.zoom?.value, 1) || 1;
+        const viewW = num(state.width, 0);
+        const viewH = num(state.height, 0);
+        if (viewW <= 0 || viewH <= 0) return null;
+        // Excalidraw's camera: sceneX = viewportX / zoom - scrollX.
+        const crop = {
+          x: -num(state.scrollX, 0),
+          y: -num(state.scrollY, 0),
+          width: viewW / zoom,
+          height: viewH / zoom,
+        };
+
+        const all = api.getSceneElements() as SceneElementLike[];
+        const ops = rasterInkRef.current?.getOps() ?? [];
+        /*
+         * Anything *overlapping* the crop, not only what is centred in it.
+         *
+         * A region crop is a window onto a page, so a paragraph or a stroke that
+         * runs off the top of the screen is still part of what the reader is
+         * looking at — dropping it because its midpoint is above the fold would
+         * cut the sentence the question is about.
+         */
+        const visible = all.filter((el) => {
+          if (el.isDeleted) return false;
+          if (el.customData?.lcVizId) return false;
+          return (
+            el.x <= crop.x + crop.width &&
+            el.y <= crop.y + crop.height &&
+            el.x + el.width >= crop.x &&
+            el.y + el.height >= crop.y
+          );
+        });
+
+        const png = await captureImage(
+          () => exportRegionBlob(api, ops, visible, crop),
+          { maxEdge: 640, maxBase64: 2 * 1024 * 1024 },
+        );
+        return png ? { label: "This view", png } : null;
+      },
       exportVizPng: async (programId: string) => {
         const api = apiRef.current;
         if (!api) return "";
