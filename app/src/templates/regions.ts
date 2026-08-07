@@ -39,6 +39,27 @@ export interface Region {
  */
 export const REGION_GUTTER = 64;
 const GUTTER = REGION_GUTTER;
+
+/**
+ * Desk showing between two stacked pages.
+ *
+ * The board scrolls as one continuous document, so the only thing telling a
+ * reader that Code ended and Approach began is the gap between the sheets. At
+ * one `REGION_GUTTER` there was effectively none: 64 units under a 2352-unit
+ * page is a hairline at fit zoom, and the pages read as a single roll of paper.
+ *
+ * It also has to survive growth. A draw page keeps half a page of blank buffer
+ * below the ink so there is always somewhere to keep writing, and `growDrawHeight`
+ * adds another half-page whenever the ink reaches it. `syncRegionLayout` re-stacks
+ * everything below, so that buffer never *overlaps* its neighbour — but flush
+ * against the next sheet it is indistinguishable from it, and the page appears to
+ * bleed into the next one. A break wide enough to see is what makes growth read
+ * as "this page got longer" instead.
+ *
+ * Vertical only. Side by side, the coach lane still sits one `REGION_GUTTER`
+ * away — that gap is between columns, not between pages.
+ */
+export const PAGE_BREAK = 288;
 /** Student column — 40% larger than the original 2800 layout. */
 const STUDENT_WIDTH = 3920;
 /** Coach lane — same width as the student column (was far too narrow at 1400). */
@@ -77,11 +98,11 @@ export const REGION_MIN: Record<RegionId, { minW: number; minH: number }> = {
   agent: { minW: AGENT_WIDTH, minH: 1260 },
 };
 
-const CODE_Y = CONSTRAINTS_H + GUTTER;
-const APPROACH_Y = CODE_Y + CODE_H + GUTTER;
-const COMPLEXITY_Y = APPROACH_Y + APPROACH_H + GUTTER;
-const WALKTHROUGH_Y = COMPLEXITY_Y + COMPLEXITY_H + GUTTER;
-const SCRATCH_Y = WALKTHROUGH_Y + WALKTHROUGH_H + GUTTER;
+const CODE_Y = CONSTRAINTS_H + PAGE_BREAK;
+const APPROACH_Y = CODE_Y + CODE_H + PAGE_BREAK;
+const COMPLEXITY_Y = APPROACH_Y + APPROACH_H + PAGE_BREAK;
+const WALKTHROUGH_Y = COMPLEXITY_Y + COMPLEXITY_H + PAGE_BREAK;
+const SCRATCH_Y = WALKTHROUGH_Y + WALKTHROUGH_H + PAGE_BREAK;
 const SCRATCH_H = 1960;
 const TOTAL_H = SCRATCH_Y + SCRATCH_H;
 
