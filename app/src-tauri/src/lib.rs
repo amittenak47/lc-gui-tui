@@ -7,7 +7,14 @@ pub mod lc_client;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().invoke_handler(tauri::generate_handler![
+    let builder = tauri::Builder::default()
+        // Google Search from a document footnote hands the query to whatever
+        // browser the device already uses. Reading is a thing people do with
+        // tabs open; an in-app webview would be a worse browser with none of
+        // their logins, and would put the search result inside the annotation
+        // surface it is supposed to be a detour from.
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
         lc_client::lc_request,
         colorhunt::colorhunt_random,
         capture_save::save_png_bytes,

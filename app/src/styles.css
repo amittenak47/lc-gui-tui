@@ -7599,3 +7599,150 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 14px;
   font-weight: 600;
 }
+
+
+/* ------------------------------------------------- document selection --- */
+
+/*
+ * Scroll mode makes the page hit-testable so a hold can land on a word.
+ *
+ * Annotate mode never gets this class: there the pen owns the surface, and a
+ * paper layer that answered the pointer would take strokes off the ink layer.
+ * `user-select` stays off in both — the highlight below is painted from the
+ * range rather than by the platform, because a system selection draws its
+ * handles in screen space over a page that lives in a scaled scene.
+ */
+.lc-page-content-selectable {
+  pointer-events: auto;
+}
+
+.lc-doc-selectable {
+  position: relative;
+}
+
+/*
+ * The body is selectable to the *engine*, not to the platform.
+ *
+ * `caretRangeFromPoint` is how a hold finds the word under the finger, and it
+ * declines to return positions inside a `user-select: none` subtree — which is
+ * what the page slot sets, so the flag has to come back off here or the gesture
+ * has nothing to aim at. What that would normally also switch on is the system
+ * long-press selection UI, with handles drawn in screen space over a page that
+ * lives in a scaled scene; `selectstart` is cancelled in DocSelectionLayer to
+ * keep it off, and the callout below stops iOS offering its own menu.
+ */
+.lc-doc-selectable-body {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: none;
+}
+
+/*
+ * The overlay is a sibling of the document body, never a child.
+ *
+ * Anchors are character offsets into the body's text, so a ribbon's emoji
+ * living inside it would shift every offset that came after it.
+ */
+.lc-doc-select-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.lc-doc-select-rect {
+  position: absolute;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent, #6366f1) 30%, transparent);
+  /* Multiply keeps the words readable through the wash rather than tinting
+     them flat — the quote has to stay legible while it is being adjusted. */
+  mix-blend-mode: multiply;
+}
+
+.lc-board-carbon .lc-doc-select-rect,
+.lc-md-ink-carbon .lc-doc-select-rect {
+  mix-blend-mode: screen;
+}
+
+/*
+ * Sticker ribbon. Sits just past the end of the first line of the quote, small
+ * enough to read around and big enough to hit with a thumb.
+ */
+.lc-doc-footnote {
+  position: absolute;
+  transform: translate(-2px, -6px);
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  border-radius: 6px 6px 6px 1px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 18%);
+}
+
+.lc-doc-footnote-coach {
+  border-color: color-mix(in srgb, var(--accent, #6366f1) 55%, var(--line));
+}
+
+.lc-doc-footnote-search {
+  border-color: color-mix(in srgb, var(--ink) 35%, var(--line));
+}
+
+/* Action sheet — chrome, so it stays in screen space and does not scale. */
+.lc-doc-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 230;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.lc-doc-sheet {
+  position: fixed;
+  z-index: 231;
+  max-width: min(320px, 78vw);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--overlay-bg, var(--panel));
+  border: 1px solid var(--chrome-edge, var(--line));
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+  /* Hangs below the lift point, centred on it — the finger is still there. */
+  transform: translate(-50%, 10px);
+  animation: lc-coach-menu-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lc-doc-sheet-excerpt {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lc-doc-sheet-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.lc-doc-sheet-actions button {
+  flex: 1 1 auto;
+  min-height: 34px;
+  white-space: nowrap;
+}

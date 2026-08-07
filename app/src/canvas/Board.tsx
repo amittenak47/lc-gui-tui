@@ -122,6 +122,7 @@ import {
   OVERDRAW_REBASE_HEADROOM,
   panDelta,
 } from "./panOffset";
+import { selectionOwnsGesture } from "./docSelectionGesture";
 import { horizontalScrollHost } from "./scrollHost";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
@@ -775,6 +776,16 @@ export interface BoardProps {
    */
   pageContent?: ReactNode;
   /**
+   * The page is prose the reader may pick quotes out of.
+   *
+   * Flips {@link pageContent} from decoration to a hit-testable surface in
+   * Scroll mode, which is what lets a hold land on a word at all — see
+   * `DocSelectionLayer`. Annotate mode drops back to `pointer-events: none`
+   * whatever this says, because there the pen owns the surface and a stray
+   * hit-test on the paper would take a stroke away from the ink layer.
+   */
+  selectableContent?: boolean;
+  /**
    * Scene height the page frame should grow to — the measured document.
    *
    * A prop rather than a handle call because the imperative version had to
@@ -870,6 +881,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     bottomCenter = null,
     pageTitle = null,
     pageContent = null,
+    selectableContent = false,
     pageContentHeight = null,
     codeContentHeight = null,
     transparentCanvas = false,
@@ -2698,6 +2710,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
 
     const canOwnScroll = () => {
+      // A hold that turned into a text selection has taken this gesture — see
+      // docSelectionGesture. The pan may already be armed when the claim lands
+      // mid-drag, which is exactly why this is checked on every move and not
+      // only at pointerdown.
+      if (selectionOwnsGesture()) return false;
       if (!annotateCodeRef.current) return true;
       return activeToolRef.current === "hand";
     };
@@ -2778,7 +2795,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // A wide codeblock defers the same way the dock does: which axis the
       // gesture turns out to be is what decides who owns it.
       const sideScroll = onCodeDock ? null : horizontalScrollHost(event.target);
-      const deferred = onCodeDock || sideScroll != null;
+      /*
+       * Selectable prose defers for the same reason, on time rather than axis.
+       *
+       * Arming the pan immediately (which is what touch normally does, for 1:1
+       * tracking) would mean a hold-to-select still built up a pan velocity
+       * from the drag, and the page would fling away under the finished quote.
+       * Deferring costs the reader nothing they can feel: the pan still arms
+       * the moment the drag passes the same threshold a codeblock uses, and
+       * re-anchors there so the page does not jump by it.
+       */
+      const onSelectableDoc =
+        !onCodeDock && resolveElement(event.target)?.closest(".lc-doc-selectable") != null;
+      const deferred = onCodeDock || sideScroll != null || onSelectableDoc;
 
       // A finger on a coasting page is a full stop, and where it lands is where
       // the page stays. Killing the loop (rather than raising its friction and
@@ -5675,8 +5704,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       {pageContent && (
         <div
           ref={contentSlotNodeRef}
-          className="lc-page-content-slot"
-          aria-hidden
+          className={
+            selectableContent && !annotateCode
+              ? "lc-page-content-slot lc-page-content-selectable"
+              : "lc-page-content-slot"
+          }
+          // Selectable prose is content, not decoration: hiding it from the
+          // accessibility tree while the reader can pick quotes out of it would
+          // be a lie. Annotate mode goes back to being paper under the pen.
+          aria-hidden={selectableContent && !annotateCode ? undefined : true}
           style={{ width: contentSceneWidth }}
         >
           {pageContent}

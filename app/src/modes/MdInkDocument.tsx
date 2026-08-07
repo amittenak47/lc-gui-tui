@@ -28,6 +28,15 @@ export interface MdInkDocumentProps {
    * when the writer zooms.
    */
   onMeasure?: (height: number) => void;
+  /**
+   * Scroll mode lets the reader pick quotes out of the page.
+   *
+   * When that is on the markdown stops being decoration and becomes content a
+   * screen reader should see — so `aria-hidden` comes off. In Annotate mode it
+   * goes back on: the page is paper under the pen there, and the ink layer
+   * above it is what answers.
+   */
+  selectable?: boolean;
 }
 
 /**
@@ -48,7 +57,7 @@ export function renderMarkdown(source: string): string {
   });
 }
 
-export function MdInkDocument({ source, onMeasure }: MdInkDocumentProps) {
+export function MdInkDocument({ source, onMeasure, selectable = false }: MdInkDocumentProps) {
   const nodeRef = useRef<HTMLDivElement | null>(null);
   const html = useMemo(() => renderMarkdown(source), [source]);
   const onMeasureRef = useRef(onMeasure);
@@ -76,9 +85,10 @@ export function MdInkDocument({ source, onMeasure }: MdInkDocumentProps) {
     <div
       ref={nodeRef}
       className="lc-md-ink-doc lc-md-ink-carbon"
-      // Locked: the markdown is the page, and a page does not answer the pen.
-      // Pointer events belong to the ink layer above and the board beneath.
-      aria-hidden
+      // Locked under the pen; readable when the page is selectable. Pointer
+      // events still belong to the ink layer above in Annotate mode — the
+      // selection layer around this only takes them in Scroll mode.
+      aria-hidden={selectable ? undefined : true}
       // eslint-disable-next-line react/no-danger -- sanitised in renderMarkdown
       dangerouslySetInnerHTML={{ __html: html }}
     />
