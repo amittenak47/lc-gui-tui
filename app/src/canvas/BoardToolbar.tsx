@@ -84,14 +84,16 @@ const SHAPE_TOOLS: Array<{ tool: ToolName; label: string; glyph: string }> = [
 
 export interface BoardToolbarProps {
   /**
-   * Ink swatches with the writer's own slot overrides applied. Falls back to
-   * the authored palette, so a caller that has no opinion still gets one.
+   * Ink swatches for the colour wheel. Falls back to the authored palette when
+   * absent.
    */
   inkPalette?: readonly string[];
   /** A swatch was held — put a different colour in that slot. */
   onEditInkColor?: (index: number, color: string) => void;
-  /** The hub was held — restore every slot's authored colour. */
-  onResetInkPalette?: () => void;
+  /** Quick tap on the toolbar swatch — next palette. */
+  onCycleInkPaletteNext?: () => void;
+  /** Quick tap on the open hub — previous palette. */
+  onCycleInkPalettePrev?: () => void;
   active: ToolName;
   onPick: (tool: ToolName) => void;
   themeId: string;
@@ -133,7 +135,8 @@ export function BoardToolbar({
   themeId,
   inkPalette,
   onEditInkColor,
-  onResetInkPalette,
+  onCycleInkPaletteNext,
+  onCycleInkPalettePrev,
   inkColor,
   onInk,
   handedness,
@@ -661,7 +664,8 @@ export function BoardToolbar({
           <ColorRadial
             colors={inkPalette ?? inkSwatches(themeId)}
             onEditColor={onEditInkColor}
-            onResetPalette={onResetInkPalette}
+            onCycleNext={onCycleInkPaletteNext}
+            onCyclePrev={onCycleInkPalettePrev}
             value={inkColor}
             onPick={onInk}
             handedness={handedness}

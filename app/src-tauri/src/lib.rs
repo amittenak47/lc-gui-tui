@@ -2,12 +2,14 @@
 //! app; the plan's "desktop first" step is the same code pointed at localhost.
 
 pub mod capture_save;
+pub mod colorhunt;
 pub mod lc_client;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().invoke_handler(tauri::generate_handler![
         lc_client::lc_request,
+        colorhunt::colorhunt_random,
         capture_save::save_png_bytes,
         capture_save::share_png_bytes,
         ink_available,

@@ -1336,6 +1336,7 @@ export function App() {
               appState?: unknown;
               ink?: unknown[];
               files?: import("./canvas/BoardHandle").BoardBlob["files"];
+              inkPalettes?: import("./canvas/BoardHandle").BoardBlob["inkPalettes"];
             }
           | null;
         const hasSavedBoard =
@@ -1386,6 +1387,7 @@ export function App() {
             skeletons,
             ink: Array.isArray(saved.ink) ? (saved.ink as import("./canvas/rasterInk").InkOp[]) : [],
             files: saved.files,
+            inkPalettes: saved.inkPalettes,
           });
         } else {
           boardRef.current?.seedTemplate(skeletons);
@@ -1486,6 +1488,7 @@ export function App() {
               skeletons,
               ink: Array.isArray(notebook.board.ink) ? notebook.board.ink : [],
               files: notebook.board.files,
+              inkPalettes: notebook.board.inkPalettes,
             });
             setScratchPageCount(pages);
             setScratchNotebookId(notebook.id);
@@ -1629,6 +1632,7 @@ export function App() {
             skeletons,
             ink: savedInk,
             files: existing.board.files,
+            inkPalettes: existing.board.inkPalettes,
           });
           const live = boardRef.current?.getElements() ?? [];
           boardRef.current?.setElements(
@@ -1786,6 +1790,7 @@ export function App() {
         ),
         ink: Array.isArray(sidecar.board.ink) ? sidecar.board.ink : [],
         files: sidecar.board.files,
+        inkPalettes: sidecar.board.inkPalettes,
       });
       if (Array.isArray(sidecar.board.ink)) boardRef.current?.setInkOps(sidecar.board.ink);
       setNotice(`Imported annotations for “${sidecar.sourceName}”.`);
