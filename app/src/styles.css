@@ -2468,6 +2468,53 @@ input[type="checkbox"] {
   background: none;
 }
 
+/*
+ * Whole-file source on the document pad.
+ *
+ * Same carbon paper as markdown/EPUB, but the page *is* a pre — no prose
+ * wrap, monospace, and horizontal scroll in reading mode for long lines.
+ * Soft wrapping would put ink on the wrong visual column the moment a line
+ * folded.
+ */
+.lc-code-doc {
+  width: 100%;
+  padding: 28px 20px 64px;
+  box-sizing: border-box;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.55;
+  letter-spacing: 0;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.lc-code-doc-pre {
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow-x: auto;
+  white-space: pre;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 1em;
+  line-height: inherit;
+  tab-size: 4;
+}
+
+.lc-code-doc-pre code {
+  padding: 0;
+  background: none;
+  font-family: inherit;
+  font-size: inherit;
+  white-space: inherit;
+}
+
+.lc-board-reading .lc-page-content-slot .lc-code-doc-pre {
+  pointer-events: auto;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+}
+
 .lc-md-ink-doc table {
   border-collapse: collapse;
   width: 100%;
