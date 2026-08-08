@@ -27,16 +27,17 @@ export const MD_INK_LIBRARY_LIMIT = 30;
 /**
  * What kind of document an entry was drawn over.
  *
- * Markdown carries its source in the entry; PDF and EPUB keep their bytes in
- * IndexedDB under the same content hash (see `docBytes`), because a textbook
- * does not fit in a synchronous string store. Everything else about an entry —
- * the board, the footnotes, the hash it is keyed by — is identical across the
- * three, which is the point: one library, one save/discard contract, one pad.
+ * Markdown and code carry their source in the entry; PDF and EPUB keep their
+ * bytes in IndexedDB under the same content hash (see `docBytes`), because a
+ * textbook does not fit in a synchronous string store. Everything else about
+ * an entry — the board, the footnotes, the hash it is keyed by — is identical
+ * across the four, which is the point: one library, one save/discard contract,
+ * one pad.
  *
  * Absent on entries written before PDF and EPUB existed, and those are all
  * markdown, so a missing value reads as `"markdown"` rather than as corrupt.
  */
-export type DocType = "markdown" | "pdf" | "epub";
+export type DocType = "markdown" | "pdf" | "epub" | "code";
 
 export function isBinaryDocType(docType: DocType): boolean {
   return docType === "pdf" || docType === "epub";
@@ -62,8 +63,8 @@ export interface MdInkDocMeta {
 
 export interface MdInkDoc extends MdInkDocMeta {
   /**
-   * The markdown itself, so an entry can be reopened without hunting for the
-   * file again.
+   * The markdown or source text, so an entry can be reopened without hunting
+   * for the file again.
    *
    * This is a copy of the writer's document, kept as the backdrop the ink was
    * drawn on — not a claim of ownership over it and never written back to disk.

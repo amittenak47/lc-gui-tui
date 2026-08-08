@@ -1,28 +1,39 @@
 /**
- * Getting a markdown file into the app, and an annotation set back out.
+ * Getting a document file into the app, and an annotation set back out.
  *
  * Deliberately not a Tauri filesystem plugin in v1. The app runs in a WebView on
  * the tablet as well as on the desktop, and a hidden `<input type="file">` is
  * the one path that works in both without a Rust dependency, a capability
  * grant, or a permission prompt. Annotations live in `mdInkStore` keyed by the
- * markdown's content hash, so reopening the same file finds its ink again
+ * document's content hash, so reopening the same file finds its ink again
  * without ever knowing where on disk the file came from.
  *
  * {@link exportMdInkSidecar} is the escape hatch: it hands back a `.lc-ink.json`
- * the writer can keep beside the `.md`, so an annotation set is not trapped in
+ * the writer can keep beside the source, so an annotation set is not trapped in
  * one browser's storage. Reading one back is {@link readMdInkSidecar}.
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
+import { codeAcceptExtensions, isCodeName } from "./codeLanguages";
 import type { DocType } from "./mdInkStore";
+
+export { CODE_SOURCE_MAX_CHARS, languageForName } from "./codeLanguages";
 
 /** Extensions the picker offers, and what we accept when one is dropped in. */
 export const MARKDOWN_ACCEPT = ".md,.markdown,.mdown,.mkd,text/markdown";
 
-/** Everything the document pad will open. */
-export const DOCUMENT_ACCEPT = `${MARKDOWN_ACCEPT},.pdf,application/pdf,.epub,application/epub+zip`;
+const MARKDOWN_EXTENSIONS = [".md", ".markdown", ".mdown", ".mkd"];
 
-const MARKDOWN_EXTENSIONS = [".md", ".markdown", ".mdown", ".mkd", ".txt"];
+const CODE_ACCEPT = codeAcceptExtensions().join(",");
+
+/** Everything the document pad will open. */
+export const DOCUMENT_ACCEPT = [
+  MARKDOWN_ACCEPT,
+  ".pdf,application/pdf",
+  ".epub,application/epub+zip",
+  CODE_ACCEPT,
+  "text/plain",
+].join(",");
 
 export interface OpenedMarkdown {
   name: string;
@@ -32,15 +43,15 @@ export interface OpenedMarkdown {
 /**
  * A file the pad has read, in whichever form its type needs.
  *
- * Markdown arrives as text because that is what gets rendered and stored;
- * PDF and EPUB arrive as bytes because that is what their renderers parse and
- * what goes into IndexedDB. One shape rather than two so the open path does not
- * fork before it has to.
+ * Markdown and code arrive as text because that is what gets rendered and
+ * stored; PDF and EPUB arrive as bytes because that is what their renderers
+ * parse and what goes into IndexedDB. One shape rather than two so the open
+ * path does not fork before it has to.
  */
 export interface OpenedDocument {
   name: string;
   docType: DocType;
-  /** Markdown only. */
+  /** Markdown and code. */
   text?: string;
   /** PDF and EPUB only. */
   bytes?: ArrayBuffer;
@@ -56,15 +67,22 @@ export function isMarkdownName(name: string): boolean {
  *
  * Extension rather than MIME type: a WebView file picker on Android hands back
  * an empty or wrong `type` often enough that trusting it means refusing files
- * the user can plainly see are PDFs. Anything unrecognised is treated as text,
- * which is the harmless guess — markdown rendering of a non-markdown file is
- * ugly, where refusing to open it is a dead end.
+ * the user can plainly see are PDFs. Anything unrecognised opens as code
+ * (escaped plaintext) — safer than feeding unknown bytes through a markdown
+ * parser, and refusing to open is a dead end.
  */
 export function docTypeForName(name: string): DocType {
   const lower = name.toLowerCase();
   if (lower.endsWith(".pdf")) return "pdf";
   if (lower.endsWith(".epub")) return "epub";
-  return "markdown";
+  if (isMarkdownName(name)) return "markdown";
+  if (isCodeName(name)) return "code";
+  return "code";
+}
+
+/** True when the pad stores this type as a string in the library entry. */
+export function isTextDocType(docType: DocType): boolean {
+  return docType === "markdown" || docType === "code";
 }
 
 /**
@@ -216,7 +234,6 @@ export function exportMdInkSidecar(sidecar: MdInkSidecar): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-
 /**
  * Ask for a document of any kind the pad understands, and read it.
  *
@@ -253,7 +270,7 @@ export function pickDocumentFile(): Promise<OpenedDocument | null> {
         return;
       }
       const docType = docTypeForName(file.name);
-      if (docType === "markdown") {
+      if (isTextDocType(docType)) {
         file
           .text()
           .then((text) => finish({ name: file.name, docType, text }))
