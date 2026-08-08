@@ -94,10 +94,10 @@ export function MdInkDialog(props: MdInkDialogProps) {
             {pickingRecent
               ? "Hold a document to reopen it. The bin removes its annotations."
               : isLeave
-                ? "Discard throws away this session's annotations. The markdown file itself is never changed. Hold to confirm."
+                ? "Discard throws away this session's annotations. The file itself is never changed. Hold to confirm."
                 : allowSave
                   ? "Save these annotations, open another document, or reopen a recent one."
-                  : "Open a markdown file to annotate, or reopen a recent one."}
+                  : "Open a document to annotate, or reopen a recent one."}
           </p>
         </div>
 
@@ -173,7 +173,7 @@ export function MdInkDialog(props: MdInkDialogProps) {
                     resetKey={error}
                   >
                     <strong>Discard annotations</strong>
-                    <span className="lc-muted">The markdown file is left alone.</span>
+                    <span className="lc-muted">The file on disk is left alone.</span>
                   </HoldButton>
                 </>
               ) : (
@@ -190,13 +190,15 @@ export function MdInkDialog(props: MdInkDialogProps) {
                     </HoldButton>
                   )}
                   <HoldButton
-                    label="Open markdown"
+                    label="Open document"
                     className="lc-hold-choice"
                     disabled={locked}
                     onConfirm={() => props.onChoose("open")}
                   >
-                    <strong>Open markdown…</strong>
-                    <span className="lc-muted">Pick a .md, .pdf or .epub to annotate.</span>
+                    <strong>Open document…</strong>
+                    <span className="lc-muted">
+                      Pick a .md, source file, .pdf or .epub to annotate.
+                    </span>
                   </HoldButton>
                   <HoldButton
                     label="Recent"
@@ -210,7 +212,7 @@ export function MdInkDialog(props: MdInkDialogProps) {
                   {/*
                     Annotations live in this browser's storage, which is fine
                     until the tablet is not the device you have. The sidecar is
-                    the way out and back in — a file to keep beside the .md.
+                    the way out and back in — a file to keep beside the source.
                   */}
                   {allowSave && (
                     <HoldButton
@@ -220,7 +222,7 @@ export function MdInkDialog(props: MdInkDialogProps) {
                       onConfirm={() => props.onChoose("export")}
                     >
                       <strong>Export annotations…</strong>
-                      <span className="lc-muted">Save a sidecar file beside the .md.</span>
+                      <span className="lc-muted">Save a sidecar file beside the source.</span>
                     </HoldButton>
                   )}
                   <HoldButton

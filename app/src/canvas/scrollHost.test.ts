@@ -79,14 +79,25 @@ describe("horizontalScrollHost", () => {
     expect(horizontalScrollHost(window)).toBeNull();
   });
 
-  it("takes the nearest scroller when boxes nest", () => {
-    const { doc, code } = buildDoc();
-    const outer = document.createElement("div");
-    outer.style.overflowX = "auto";
-    sizeOf(outer, 1200, 400);
-    const pre = doc.querySelector("pre")!;
-    doc.append(outer);
-    outer.append(pre);
+  it("finds a scroller inside a whole-file code document", () => {
+    const board = document.createElement("div");
+    board.className = "lc-board";
+    const slot = document.createElement("div");
+    slot.className = "lc-page-content-slot";
+    const doc = document.createElement("div");
+    doc.className = "lc-code-doc";
+    const pre = document.createElement("pre");
+    pre.className = "lc-code-doc-pre";
+    pre.style.overflowX = "auto";
+    const code = document.createElement("code");
+    pre.append(code);
+    doc.append(pre);
+    slot.append(doc);
+    board.append(slot);
+    document.body.append(board);
+    sizeOf(doc, 400, 400);
+    sizeOf(pre, 900, 400);
+    sizeOf(code, 900, 900);
     expect(horizontalScrollHost(code)).toBe(pre);
   });
 });

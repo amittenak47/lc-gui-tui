@@ -109,6 +109,7 @@ import { getDocBytes, hashBytes, putDocBytes } from "./util/docBytes";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { openExternalUrl } from "./util/openExternal";
 import { installSafeAreaInsets } from "./util/safeArea";
+import { CodeDocument } from "./modes/CodeDocument";
 import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelectionLayer";
 import { EpubDocument } from "./modes/EpubDocument";
 import { PdfDocument } from "./modes/PdfDocument";
@@ -127,7 +128,9 @@ import {
 } from "./templates/mdInk";
 import {
   buildMdInkSidecar,
+  CODE_SOURCE_MAX_CHARS,
   exportMdInkSidecar,
+  languageForName,
   pickDocumentFile,
   pickSidecarFile,
   readMdInkSidecar,
@@ -203,9 +206,9 @@ function isScratchpad(problem: ProblemDetail | null | undefined): boolean {
 /**
  * Annotating a document — a scratchpad whose paper is somebody else's pages.
  *
- * Markdown, PDF or EPUB: the ids keep their `MD_INK_*` spelling because they
- * are persisted in saved boards and library entries, and renaming them would
- * be a migration bought with nothing but tidiness.
+ * Markdown, code, PDF or EPUB: the ids keep their `MD_INK_*` spelling because
+ * they are persisted in saved boards and library entries, and renaming them
+ * would be a migration bought with nothing but tidiness.
  */
 /** Hide under-header busy strip; keep `busy` for disable logic (re-enable later). */
 const SHOW_BUSY_BANNER = false;
@@ -300,10 +303,10 @@ export function App() {
    */
   const scratchPristineHashRef = useRef<number | null>(null);
 
-  /** The markdown being annotated: its text, its name, and its content hash. */
+  /** The document being annotated: its text, its name, and its content hash. */
   const [mdInkSource, setMdInkSource] = useState<{
     name: string;
-    /** Markdown text; empty for PDF and EPUB. */
+    /** Markdown/code text; empty for PDF and EPUB. */
     text: string;
     hash: string;
     docType: DocType;
@@ -1692,6 +1695,21 @@ export function App() {
         const docType = input.docType ?? "markdown";
         const text = input.text ?? "";
         const bytes = input.bytes ?? null;
+        /*
+         * Library entries keep a full copy of text sources in localStorage.
+         * A multi-megabyte dump fits in a file picker and then blows the
+         * quota — refuse early with a clear message rather than a blank pad.
+         */
+        if (
+          (docType === "code" || docType === "markdown") &&
+          text.length > CODE_SOURCE_MAX_CHARS
+        ) {
+          throw new Error(
+            `This file is too large to annotate here ` +
+              `(${Math.round(text.length / 1000)}k characters; max about ` +
+              `${Math.round(CODE_SOURCE_MAX_CHARS / 1000)}k).`,
+          );
+        }
         const hash = bytes ? hashBytes(bytes) : hashMarkdown(text);
         const existing = input.docId
           ? getMdInkDoc(input.docId)
@@ -1876,7 +1894,7 @@ export function App() {
   const importMdInkAnnotations = useCallback(async () => {
     const source = mdInkSourceRef.current;
     if (!source) {
-      setError("Open a markdown file first, then import its annotations.");
+      setError("Open a document first, then import its annotations.");
       return;
     }
     try {
@@ -1916,7 +1934,7 @@ export function App() {
     }
   }, [mdInkHeight, themeId]);
 
-  /** Pick a markdown file from disk and open it. */
+  /** Pick a document from disk and open it on the pad. */
   const pickAndOpenMdInk = useCallback(async () => {
     if (busy !== null) return;
     try {
@@ -3827,7 +3845,7 @@ export function App() {
               label="Document"
               ariaLabel="Document pad: tap to open a file, hold for recent documents"
               className="lc-icon lc-tip-target lc-hold-icon"
-              dataTip="Document — tap to open a .md, .pdf or .epub, hold for recent"
+              dataTip="Document — tap to open a .md, source file, .pdf or .epub, hold for recent"
               dataTipPlacement="bottom"
               disabled={busy !== null}
               onTap={() => void pickAndOpenMdInk()}
@@ -4129,6 +4147,13 @@ export function App() {
                       onMeasure={onMdInkMeasure}
                       selectable={!annotateCode}
                       onError={setError}
+                    />
+                  ) : mdInkSource.docType === "code" ? (
+                    <CodeDocument
+                      source={mdInkSource.text}
+                      language={languageForName(mdInkSource.name)}
+                      onMeasure={onMdInkMeasure}
+                      selectable={!annotateCode}
                     />
                   ) : (
                     <MdInkDocument

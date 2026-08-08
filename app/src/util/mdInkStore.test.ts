@@ -100,6 +100,21 @@ describe("saveMdInkDoc", () => {
       saveMdInkDoc({ name: "n0.md", hash: "hash-0", source: "# src", board: board("more") }),
     ).not.toThrow();
   });
+
+  it("stores code documents with docType code and their source text", () => {
+    const hash = hashMarkdown("def f():\n  return 1\n");
+    const saved = saveMdInkDoc({
+      name: "f.py",
+      hash,
+      docType: "code",
+      source: "def f():\n  return 1\n",
+      board: board("ink"),
+    });
+    const loaded = getMdInkDoc(saved.id);
+    expect(loaded?.docType).toBe("code");
+    expect(loaded?.source).toContain("def f()");
+    expect(findMdInkDocByHash(hash)?.id).toBe(saved.id);
+  });
 });
 
 describe("restoreMdInkDoc", () => {
