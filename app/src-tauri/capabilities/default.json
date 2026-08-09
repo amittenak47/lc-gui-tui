@@ -1,11 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Everything the whiteboard window needs. The daemon is reached through this crate's own commands, so no HTTP-scope permission is required.",
+  "description": "Everything the whiteboard window needs. The daemon is reached through this crate's own commands, so no HTTP-scope permission is required. `opener` needs both halves: allow-open-url grants the command, allow-default-urls grants the http/https scope it checks the URL against — with only the first, every open_url is refused at runtime and a footnote's Google search silently falls back to an in-app window.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:path:default",
-    "opener:allow-open-url"
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
   ]
 }

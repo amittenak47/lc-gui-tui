@@ -42,6 +42,20 @@ import {
   releaseSelectionGesture,
 } from "../canvas/docSelectionGesture";
 
+/**
+ * Controls painted over the page that own their own taps.
+ *
+ * The host's `pointerdown` listener is native and sits inside the React tree,
+ * so it runs *before* React's synthetic handlers — a `stopPropagation` on the
+ * control itself is too late, and the selection would already have been thrown
+ * away by the time its own click arrived. Everything the overlay draws on top
+ * of the words has to be named here.
+ */
+function isOverlayControl(target: EventTarget | null): boolean {
+  const element = target as Element | null;
+  return Boolean(element?.closest?.(".lc-doc-footnote, .lc-doc-confirm"));
+}
+
 /** Movement before the hold fires that means the writer meant to scroll. */
 const HOLD_SLOP_PX = 10;
 
@@ -199,8 +213,17 @@ export function DocSelectionLayer({
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [rects, setRects] = useState<LocalRect[]>([]);
   const [selection, setSelection] = useState<DocSelectionResult | null>(null);
-  /** Viewport point the action sheet hangs from; null while none is open. */
-  const [sheetAt, setSheetAt] = useState<{ x: number; y: number } | null>(null);
+  /**
+   * How far along the selection is: still being dragged, waiting to be
+   * confirmed, or confirmed and showing what can be done with it.
+   *
+   * The middle state is the one that was missing. The actions used to open the
+   * instant the finger lifted, which meant every hold that ended slightly wrong
+   * — and on a tablet that is most of them — put a menu on screen that had to be
+   * dismissed before the reader could try again. A tick and a cross beside the
+   * words is a chance to say "not that" without the menu ever appearing.
+   */
+  const [phase, setPhase] = useState<"idle" | "confirm" | "actions">("idle");
   const [ribbons, setRibbons] = useState<
     Array<{ footnote: DocFootnote; at: LocalRect; number: number }>
   >([]);
@@ -237,7 +260,7 @@ export function DocSelectionLayer({
 
   const dismiss = useCallback(() => {
     setSelection(null);
-    setSheetAt(null);
+    setPhase("idle");
     setRects([]);
     setBand(null);
     setCopied(false);
@@ -333,7 +356,7 @@ export function DocSelectionLayer({
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
-      if ((event.target as Element | null)?.closest?.(".lc-doc-footnote")) return;
+      if (isOverlayControl(event.target)) return;
       dismiss();
       bandRef.current = {
         pointerId: event.pointerId,
@@ -398,7 +421,9 @@ export function DocSelectionLayer({
       const text = textUnder(body, rect, scale, bodyBox);
       setBand(rect);
       setSelection({ text, excerpt: excerptOf(text), anchor });
-      setSheetAt({ x: event.clientX, y: event.clientY });
+      // Same confirmation step as a text quote — a swept band is at least as
+      // easy to get slightly wrong.
+      setPhase("confirm");
     };
 
     host.addEventListener("pointerdown", onPointerDown);
@@ -424,7 +449,7 @@ export function DocSelectionLayer({
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
       // A tap on a ribbon is that ribbon's, not the start of a new quote.
-      if ((event.target as Element | null)?.closest?.(".lc-doc-footnote")) return;
+      if (isOverlayControl(event.target)) return;
       dismiss();
       clearGesture();
       const startX = event.clientX;
@@ -448,6 +473,21 @@ export function DocSelectionLayer({
           hold.anchorOffset = at.offset;
           // Board's pan must let go before the drag below starts moving.
           claimSelectionGesture();
+          /*
+           * Take the pointer, now that the hold has earned it.
+           *
+           * Without capture the browser is still entitled to decide the gesture
+           * was a scroll and take it away — `pointercancel`, mid-word, and the
+           * quote is whatever single word the hold started on. That is the
+           * failure that made dragging feel like it only ever selected one
+           * word. Capture also routes moves that leave the element back here,
+           * so a drag off the end of a line keeps extending.
+           */
+          try {
+            host.setPointerCapture(hold.pointerId);
+          } catch {
+            /* the pointer may already be gone — the window listeners still run */
+          }
           try {
             navigator.vibrate?.(10);
           } catch {
@@ -481,12 +521,30 @@ export function DocSelectionLayer({
       applySelection(hold.root, hold.scope, hold.anchorOffset, offset);
     };
 
-    const onPointerUp = (event: PointerEvent) => {
+    /*
+     * The lift, and the snatch, are the same outcome.
+     *
+     * `pointercancel` used to be wired straight to this and treated as a normal
+     * end — including reading `clientX/clientY` off it, which a cancel is not
+     * obliged to fill in. A cancel carrying `0, 0` is how the actions ended up
+     * pinned to the top-left corner of the whole app. Nothing here reads the
+     * event's coordinates any more: what the reader selected is on screen, and
+     * that is what the confirmation hangs off.
+     */
+    const endGesture = (event: PointerEvent) => {
       const hold = holdRef.current;
       if (!hold || hold.pointerId !== event.pointerId) return;
       const held = hold.held;
+      try {
+        host.releasePointerCapture(hold.pointerId);
+      } catch {
+        /* already released */
+      }
       clearGesture();
-      if (held) setSheetAt({ x: event.clientX, y: event.clientY });
+      // A cancelled drag keeps whatever it had picked up rather than throwing
+      // it away — the words are selected, and the reader can accept or reject
+      // them. Only a hold that never landed leaves nothing behind.
+      if (held) setPhase("confirm");
     };
 
     /*
@@ -503,14 +561,14 @@ export function DocSelectionLayer({
     host.addEventListener("selectstart", onSelectStart);
     host.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointermove", onPointerMove, { passive: false });
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
+    window.addEventListener("pointerup", endGesture);
+    window.addEventListener("pointercancel", endGesture);
     return () => {
       host.removeEventListener("selectstart", onSelectStart);
       host.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
+      window.removeEventListener("pointerup", endGesture);
+      window.removeEventListener("pointercancel", endGesture);
       releaseSelectionGesture();
     };
   }, [enabled, highlighting, applySelection, clearGesture, dismiss, pointAt]);
@@ -589,6 +647,98 @@ export function DocSelectionLayer({
     dismiss();
   };
 
+  /**
+   * The selection's own box, in the same coordinates the marks are painted in.
+   *
+   * Everything that hangs off the selection hangs off this rather than off a
+   * pointer event: the tick and cross sit on it, and the action popup is placed
+   * from it. That is what makes the position honest after a gesture the browser
+   * took away, and what keeps the chip on the words when the page is scrolled
+   * or zoomed under it.
+   */
+  /**
+   * The highlight's box on screen.
+   *
+   * Asked of the painted rects rather than recomputed from the anchor: the
+   * overlay carries the page's transform, so its boxes already answer in
+   * viewport coordinates at whatever zoom the reader is at — which is what a
+   * fixed-position control needs, and what converting page coordinates by hand
+   * would have to reconstruct.
+   */
+  const highlightBox = (): DOMRect | null => {
+    const painted = Array.from(
+      document.querySelectorAll(".lc-doc-select-rect, .lc-doc-highlight-band"),
+    );
+    if (painted.length === 0) return null;
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const node of painted) {
+      const box = node.getBoundingClientRect();
+      left = Math.min(left, box.left);
+      top = Math.min(top, box.top);
+      right = Math.max(right, box.right);
+      bottom = Math.max(bottom, box.bottom);
+    }
+    return new DOMRect(left, top, right - left, bottom - top);
+  };
+
+  /** Clamp a measured box into the window, with a margin. */
+  const clampInto = (node: HTMLElement, left: number, top: number) => {
+    const box = node.getBoundingClientRect();
+    const margin = 8;
+    node.style.left = `${Math.round(
+      Math.min(Math.max(margin, left), Math.max(margin, window.innerWidth - box.width - margin)),
+    )}px`;
+    node.style.top = `${Math.round(
+      Math.min(Math.max(margin, top), Math.max(margin, window.innerHeight - box.height - margin)),
+    )}px`;
+    node.style.visibility = "visible";
+  };
+
+  /** Tick and cross, off the selection's top-right corner. */
+  const placeConfirm = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    const at = highlightBox();
+    const box = node.getBoundingClientRect();
+    if (!at) {
+      clampInto(node, window.innerWidth / 2 - box.width / 2, 12);
+      return;
+    }
+    // Just outside the corner, and above the line rather than over the next
+    // word — the same relationship a footnote marker has to its text.
+    clampInto(node, at.right + 4, at.top - box.height - 4);
+  }, []);
+
+  /**
+   * Put the popup below the selection, and inside the window.
+   *
+   * Measured on the node rather than computed from a guess at its size,
+   * because its width depends on which actions are offered — a plate with no
+   * words in it has two buttons, a quote has four. It is rendered hidden at the
+   * origin for exactly one frame so there is something real to measure; the
+   * alternative is a menu that visibly jumps into place.
+   *
+   * It used to be positioned from the pointer with a `translate(-50%, 10px)`
+   * and no clamp at all, which is why a quote near the right edge opened half
+   * off the screen and one near the bottom opened below it.
+   */
+  const placeSheet = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    const box = node.getBoundingClientRect();
+    const at = highlightBox();
+    if (!at) {
+      clampInto(node, window.innerWidth / 2 - box.width / 2, window.innerHeight / 2 - box.height / 2);
+      return;
+    }
+    // Below the quote by preference; above it when there is no room underneath,
+    // which is better than over the words the menu is about.
+    const below = at.bottom + 10;
+    const top = below + box.height + 8 > window.innerHeight ? at.top - box.height - 10 : below;
+    clampInto(node, at.left + at.width / 2 - box.width / 2, top);
+  }, []);
+
   return (
     <div className="lc-doc-selectable" ref={hostRef}>
       <div className="lc-doc-selectable-body" ref={bodyRef}>
@@ -641,8 +791,17 @@ export function DocSelectionLayer({
               data-region={isRegionAnchor(footnote.anchor) ? "" : undefined}
               title={footnoteTitle(footnote, number)}
               aria-label={footnoteTitle(footnote, number)}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={() => onOpenFootnote?.(footnote)}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                // Same reason as the confirm chip: in Scroll mode the board's
+                // gatekeeper captures the pointer, the up is retargeted, and no
+                // click is generated — so a ribbon tapped while reading did
+                // nothing at all. Primary button only, so a right-click still
+                // reaches the context menu below.
+                if (event.button !== 0) return;
+                event.preventDefault();
+                onOpenFootnote?.(footnote);
+              }}
               onContextMenu={(event) => {
                 event.preventDefault();
                 onRemoveFootnote?.(footnote);
@@ -653,7 +812,44 @@ export function DocSelectionLayer({
           ))}
         </div>,
       )}
-      {sheetAt &&
+      {/*
+        Accept or reject, at the top-right corner of what was picked.
+
+        Portalled to the body rather than painted into the page overlay, and
+        that is not a cosmetic choice: the overlay lives inside the board, where
+        the scroll gatekeeper takes pointer capture, and a control there gets no
+        `click` at all — its `pointerup` is retargeted to the capturing element.
+        Out here the chip is an ordinary button. It is positioned from the
+        highlight's on-screen box, so it still lands on the corner of the words
+        at any zoom; a selection does not outlive the gesture that made it, so
+        it has nothing to track.
+      */}
+      {phase === "confirm" &&
+        selection &&
+        createPortal(
+          <div className="lc-doc-confirm" ref={placeConfirm} style={{ visibility: "hidden" }}>
+            <button
+              type="button"
+              className="lc-doc-confirm-btn lc-doc-confirm-yes"
+              aria-label="Use this selection"
+              title="Use this selection"
+              onClick={() => setPhase("actions")}
+            >
+              ✓
+            </button>
+            <button
+              type="button"
+              className="lc-doc-confirm-btn lc-doc-confirm-no"
+              aria-label="Discard this selection"
+              title="Discard this selection"
+              onClick={dismiss}
+            >
+              ✕
+            </button>
+          </div>,
+          document.body,
+        )}
+      {phase === "actions" &&
         selection &&
         createPortal(
           <>
@@ -666,7 +862,8 @@ export function DocSelectionLayer({
             <div
               className="lc-doc-sheet"
               role="menu"
-              style={{ left: sheetAt.x, top: sheetAt.y }}
+              ref={placeSheet}
+              style={{ left: 0, top: 0, visibility: "hidden" }}
             >
               <p className="lc-doc-sheet-excerpt">
                 {selection.excerpt || "This area of the page"}

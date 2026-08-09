@@ -380,9 +380,49 @@ const WORD_BREAK = /[\s ]/;
 export function snapToWords(text: string, start: number, end: number): [number, number] {
   let from = Math.max(0, Math.min(start, text.length));
   let to = Math.max(from, Math.min(end, text.length));
+
+  /*
+   * A hit that landed in the gaps has to find a word first.
+   *
+   * The two loops below only ever grow *outward from a word*, so a caret that
+   * landed on a space — between two words, in the indent, at the end of a
+   * line — had nothing to grow from and the selection came back as the single
+   * space that was touched. On a tablet that is not a rare case: a fingertip is
+   * several characters wide and the gaps are a real fraction of a line.
+   *
+   * Searching forward first, then back, means a hold in the margin picks up the
+   * word the reader was reaching towards rather than the one behind their
+   * finger.
+   */
+  if (text.length === 0) return [0, 0];
+  if (from === to || isAllBreaks(text, from, to)) {
+    let word = from;
+    while (word < text.length && WORD_BREAK.test(text[word])) word += 1;
+    if (word >= text.length) {
+      // Nothing ahead to reach for — take the word behind the finger instead.
+      word = from;
+      while (word > 0 && WORD_BREAK.test(text[word - 1])) word -= 1;
+      if (word === 0) return [0, 0];
+      // Land *inside* that word, not on the break after it, so the widening
+      // below has a character to grow from.
+      word -= 1;
+    }
+    from = word;
+    // Reset the far end too. Keeping the caller's `to` here would drag the run
+    // of whitespace that was actually touched into the quote.
+    to = word + 1;
+  }
+
   while (from > 0 && !WORD_BREAK.test(text[from - 1])) from -= 1;
   while (to < text.length && !WORD_BREAK.test(text[to])) to += 1;
   return [from, to];
+}
+
+function isAllBreaks(text: string, from: number, to: number): boolean {
+  for (let index = from; index < to; index += 1) {
+    if (!WORD_BREAK.test(text[index])) return false;
+  }
+  return true;
 }
 
 /** One-line label for a quote — enough to recognise, short enough to sit under a bubble. */
