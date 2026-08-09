@@ -7971,9 +7971,67 @@ button.lc-row-selected:hover:not(:disabled) {
   border: 1px solid var(--chrome-edge, var(--line));
   border-radius: 12px;
   box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
-  /* Hangs below the lift point, centred on it — the finger is still there. */
-  transform: translate(-50%, 10px);
+  /*
+   * No transform. Position is measured and clamped in `placeSheet` — a
+   * `translate(-50%)` here would move the box after the clamp had decided it
+   * fitted, which is half of how this used to open off the side of the screen.
+   */
   animation: lc-coach-menu-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
+ * Accept or reject the selection, at its top-right corner.
+ *
+ * In the page's coordinate space with the ribbons, so it sits on the words at
+ * any zoom. Sized in page units for the same reason a footnote marker is: it is
+ * read at the scale of the type it belongs to.
+ */
+.lc-doc-confirm {
+  position: fixed;
+  z-index: 231;
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--overlay-bg, var(--panel));
+  border: 1px solid var(--chrome-edge, var(--line));
+  box-shadow: 0 6px 20px rgb(0 0 0 / 26%);
+  animation: lc-doc-footnote-pop 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
+ * A finger-sized target, unlike the footnote markers.
+ *
+ * Those are read at page scale and tapped rarely; these two are the gate every
+ * quote passes through, and one of them throws the selection away — a miss
+ * costs the reader the hold they just made.
+ */
+.lc-doc-confirm-btn {
+  min-width: 34px;
+  min-height: 0;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.lc-doc-confirm-yes {
+  background: #d7f5e3;
+  border-color: #3fa06a;
+  color: #14532d;
+}
+
+.lc-doc-confirm-no {
+  background: #fbe0e0;
+  border-color: #d06060;
+  color: #7f1d1d;
 }
 
 .lc-doc-sheet-excerpt {

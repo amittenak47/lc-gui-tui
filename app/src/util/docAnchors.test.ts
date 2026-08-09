@@ -251,3 +251,58 @@ describe("regionAnchorFromRect", () => {
     expect(regionAnchorFromRect(root, { left: 0, top: 0, width: 0, height: 10 })).toBeNull();
   });
 });
+
+describe("snapToWords on whitespace", () => {
+  /*
+   * A fingertip is several characters wide and the gaps between words are a
+   * real fraction of a line, so landing in one is not a rare case. The two
+   * widening loops only grow outward from a word, so a caret in a gap had
+   * nothing to grow from and the quote came back as the single space touched.
+   */
+  it("picks the following word when the hold lands on a space", () => {
+    const text = "alpha beta gamma";
+    const [start, end] = snapToWords(text, 5, 5);
+    expect(text.slice(start, end)).toBe("beta");
+  });
+
+  it("picks a word across a run of spaces", () => {
+    const text = "alpha     beta";
+    const [start, end] = snapToWords(text, 7, 7);
+    expect(text.slice(start, end)).toBe("beta");
+  });
+
+  it("falls back to the previous word at the end of the text", () => {
+    // Nothing ahead to reach for — the word behind the finger is the only
+    // honest answer, and is better than an empty quote.
+    const text = "alpha beta ";
+    const [start, end] = snapToWords(text, 11, 11);
+    expect(text.slice(start, end)).toBe("beta");
+  });
+
+  it("picks a word across a block separator", () => {
+    const text = "heading\n\nbody text";
+    const [start, end] = snapToWords(text, 7, 7);
+    expect(text.slice(start, end)).toBe("body");
+  });
+
+  it("still snaps a mid-word hit outward, unchanged", () => {
+    const text = "collision resolution";
+    const [start, end] = snapToWords(text, 3, 6);
+    expect(text.slice(start, end)).toBe("collision");
+  });
+
+  it("leaves a selection that already spans words alone", () => {
+    const text = "alpha beta gamma";
+    const [start, end] = snapToWords(text, 0, 10);
+    expect(text.slice(start, end)).toBe("alpha beta");
+  });
+
+  it("does not hang on text that is nothing but spaces", () => {
+    const [start, end] = snapToWords("     ", 2, 2);
+    expect(end).toBeGreaterThanOrEqual(start);
+  });
+
+  it("does not hang on empty text", () => {
+    expect(snapToWords("", 0, 0)).toEqual([0, 0]);
+  });
+});
