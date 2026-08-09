@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  simplifyModulatedInkPoints,
   clampLiveLag,
   roundInkCorners,
   simplifyInkPoints,
@@ -346,5 +347,120 @@ describe("live smoothing", () => {
     // clampLiveLag pulls the nib back when it trails too far.
     const pulled = clampLiveLag(100, 100, 0, 0, 10);
     expect(Math.hypot(pulled.x, pulled.y)).toBeCloseTo(10);
+  });
+});
+
+describe("simplifyModulatedInkPoints", () => {
+  /** A pen dragged in a straight line at a perfectly steady pressure. */
+  function steadyLine(count: number, pressure = 0.6): ScenePoint[] {
+    return Array.from({ length: count }, (_, i) => ({
+      x: i * 1.1,
+      y: 0,
+      pressure,
+      slowness: 0.5,
+    }));
+  }
+
+  it("collapses a line drawn at a steady pressure", () => {
+    // Nothing here is expressible: same direction, same alpha, same width.
+    expect(simplifyModulatedInkPoints(steadyLine(50), 0.05)).toHaveLength(2);
+  });
+
+  it("collapses an evenly rising pressure ramp, because the renderer rebuilds it", () => {
+    // Worth being explicit about, because it looks like data loss and is not:
+    // `stampAlongSegment` interpolates pressure and slowness linearly between
+    // stored points. A ramp that is already linear is therefore reproduced
+    // exactly from its two ends — every point in between is the renderer's own
+    // arithmetic, written down.
+    const ramp = steadyLine(50).map((point, i) => ({ ...point, pressure: i / 49 }));
+    expect(simplifyModulatedInkPoints(ramp, 0.05)).toHaveLength(2);
+  });
+
+  it("keeps the swell of a stroke whose pressure does not rise evenly", () => {
+    // The real case: pressed hardest in the middle. Two points would redraw
+    // this as a flat ramp from light to light, losing the swell entirely.
+    const swell = steadyLine(50).map((point, i) => ({
+      ...point,
+      pressure: Math.sin((i / 49) * Math.PI),
+    }));
+    const out = simplifyModulatedInkPoints(swell, 0.05);
+    // A handful of points, not two and not fifty: a sine is what piecewise
+    // linear interpolation is worst at, and eight segments hold it to inside
+    // the alpha quantum.
+    expect(out.length).toBeGreaterThan(5);
+    expect(out.length).toBeLessThan(20);
+    // The peak survives — it is the one sample the stroke is about.
+    const peak = Math.max(...out.map((p) => p.pressure));
+    expect(peak).toBeGreaterThan(0.98);
+  });
+
+  it("keeps a corner", () => {
+    const corner: ScenePoint[] = [
+      ...steadyLine(10),
+      ...Array.from({ length: 10 }, (_, i) => ({
+        x: 9.9,
+        y: (i + 1) * 1.1,
+        pressure: 0.6,
+        slowness: 0.5,
+      })),
+    ];
+    const out = simplifyModulatedInkPoints(corner, 0.05);
+    expect(out.some((p) => Math.abs(p.x - 9.9) < 1e-9 && Math.abs(p.y) < 1e-9)).toBe(true);
+  });
+
+  it("keeps a point whose slowness moves even when pressure does not", () => {
+    // Slowness drives width, so this is a stroke that gets fatter without
+    // getting darker — invisible to a pressure-only test.
+    const points = steadyLine(30).map((point, i) => ({
+      ...point,
+      slowness: i < 15 ? 0.1 : 0.9,
+    }));
+    expect(simplifyModulatedInkPoints(points, 0.05).length).toBeGreaterThan(2);
+  });
+
+  it("never moves the endpoints", () => {
+    const points = steadyLine(40);
+    const out = simplifyModulatedInkPoints(points, 0.05);
+    expect(out[0]).toEqual(points[0]);
+    expect(out[out.length - 1]).toEqual(points[39]);
+  });
+
+  it("keeps the original sample objects, so pressure is never interpolated", () => {
+    const points = steadyLine(40);
+    for (const point of simplifyModulatedInkPoints(points, 0.05)) {
+      expect(points).toContain(point);
+    }
+  });
+
+  it("does not collapse across the NO_PRESSURE sentinel", () => {
+    // -1 is "mouse or touch", not "pressed very lightly". Interpolating between
+    // it and a real reading would invent a pressure nobody applied.
+    const points: ScenePoint[] = [
+      { x: 0, y: 0, pressure: NO_PRESSURE },
+      { x: 1, y: 0, pressure: 0.5 },
+      { x: 2, y: 0, pressure: NO_PRESSURE },
+    ];
+    expect(simplifyModulatedInkPoints(points, 0.05)).toHaveLength(3);
+  });
+
+  it("does not collapse across an absent slowness", () => {
+    // Absent means "speed ink was off" and reads as neutral; mixing it with a
+    // real reading is not something to average.
+    const points: ScenePoint[] = [
+      { x: 0, y: 0, pressure: 0.5 },
+      { x: 1, y: 0, pressure: 0.5, slowness: 0.5 },
+      { x: 2, y: 0, pressure: 0.5 },
+    ];
+    expect(simplifyModulatedInkPoints(points, 0.05)).toHaveLength(3);
+  });
+
+  it("leaves a stroke of two points alone", () => {
+    const points = steadyLine(2);
+    expect(simplifyModulatedInkPoints(points, 0.05)).toEqual(points);
+  });
+
+  it("does nothing at a tolerance of zero", () => {
+    const points = steadyLine(20);
+    expect(simplifyModulatedInkPoints(points, 0)).toHaveLength(20);
   });
 });
