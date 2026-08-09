@@ -230,6 +230,14 @@ export interface CoachSendFlags {
    */
   photos?: CoachAttachment[];
   /**
+   * A passage picked off the page, in full.
+   *
+   * Carried beside the message rather than inside it — the writer's text is
+   * what they typed, and the quote is what they pointed at. The caller
+   * prefixes it onto the prompt, the same way it does a reply's excerpt.
+   */
+  pageQuote?: string;
+  /**
    * How much of the board {@link annotate} should attach.
    *
    * `board` is every page with the writer's marks on it, which is the right
@@ -422,6 +430,14 @@ export function AgentSidePanel({
   /** The turn the next send is answering, if the writer quoted one. */
   const [replyTo, setReplyTo] = useState<CoachReplyRef | null>(null);
   /**
+   * A passage picked off the page, waiting to be asked about.
+   *
+   * The full text goes to the coach; the excerpt is what the chip shows. They
+   * are kept apart so a paragraph-long quote is one line in the composer and
+   * still arrives whole.
+   */
+  const [pageQuote, setPageQuote] = useState<{ text: string; excerpt: string } | null>(null);
+  /**
    * The thread filling the panel, or null for the main conversation.
    *
    * A thread is identified by the message it hangs off rather than by an id of
@@ -472,20 +488,21 @@ export function AgentSidePanel({
   useEffect(() => {
     if (!quoteSeed || quoteSeed.token === lastQuoteTokenRef.current) return;
     lastQuoteTokenRef.current = quoteSeed.token;
-    const quoted = quoteSeed.text
-      .trim()
-      .split("\n")
-      .map((line) => `> ${line}`)
-      .join("\n");
-    setDraft((current) => (current.trim() ? `${current.trimEnd()}\n\n${quoted}\n\n` : `${quoted}\n\n`));
-    window.setTimeout(() => {
-      const node = composerRef.current;
-      if (!node) return;
-      node.focus();
-      node.selectionStart = node.value.length;
-      node.selectionEnd = node.value.length;
-      node.scrollTop = node.scrollHeight;
-    }, 0);
+    /*
+     * A quote from the page is a *reference*, not something typed.
+     *
+     * It used to be pasted into the draft as markdown blockquote lines, which
+     * made it the writer's problem: it had to be scrolled past to reach the
+     * cursor, it could be half-deleted, and a long passage filled the composer
+     * so the question being asked about it was off screen. Worse, it read as
+     * something they had written when they had not.
+     *
+     * The panel already has the right shape for this — the chip that says which
+     * message a reply is answering. Same idea, same place, one line high
+     * whatever the length of the passage, and a × to take it back off.
+     */
+    setPageQuote({ text: quoteSeed.text.trim(), excerpt: replyExcerpt(quoteSeed.text) });
+    window.setTimeout(() => composerRef.current?.focus(), 0);
   }, [quoteSeed]);
 
   /** A footnote tapped on the page — jump the panel to the thread it made. */
@@ -880,7 +897,9 @@ export function AgentSidePanel({
       reviewBoard ||
       lazy ||
       annotate ||
-      photos.length > 0);
+      photos.length > 0 ||
+      // A quote on its own is a question: "what is this?".
+      pageQuote != null);
   const menuMessage = messageMenu
     ? messages.find((message) => message.id === messageMenu.messageId)
     : undefined;
@@ -934,10 +953,12 @@ export function AgentSidePanel({
       annotate,
       ...(annotate ? { annotateScope } : {}),
       ...(photos.length > 0 ? { photos } : {}),
+      ...(pageQuote ? { pageQuote: pageQuote.text } : {}),
       threadRootId: openThreadId,
       ...(replyTo ? { replyTo } : {}),
     });
     setReplyTo(null);
+    setPageQuote(null);
     setDraft("");
     setAsk(askOnly);
     setDraw(false);
@@ -1259,6 +1280,24 @@ export function AgentSidePanel({
         </div>
 
         <form className="lc-coach-composer" onSubmit={submit}>
+          {pageQuote && (
+            <div className="lc-coach-reply-chip lc-coach-quote-chip">
+              <span className="lc-coach-reply-chip-mark" aria-hidden />
+              <div className="lc-coach-reply-chip-text">
+                <span className="lc-coach-reply-stub-role">Quoting the page</span>
+                <span className="lc-coach-reply-stub-text">{pageQuote.excerpt}</span>
+              </div>
+              <button
+                type="button"
+                className="lc-coach-reply-chip-clear"
+                aria-label="Drop the quote"
+                title="Drop the quote"
+                onClick={() => setPageQuote(null)}
+              >
+                ×
+              </button>
+            </div>
+          )}
           {replyTo && (
             <div className="lc-coach-reply-chip">
               <span className="lc-coach-reply-chip-mark" aria-hidden />
