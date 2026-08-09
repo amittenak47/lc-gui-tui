@@ -8,14 +8,17 @@
  * document's content hash, so reopening the same file finds its ink again
  * without ever knowing where on disk the file came from.
  *
- * {@link exportMdInkSidecar} is the escape hatch: it hands back a `.lc-ink.json`
- * the writer can keep beside the source, so an annotation set is not trapped in
- * one browser's storage. Reading one back is {@link readMdInkSidecar}.
+ * {@link exportMdInkSidecar} is the escape hatch: it hands back a
+ * `.lc-ink.json.gz` the writer can keep beside the source, so an annotation set
+ * is not trapped in one browser's storage. Reading one back is
+ * {@link readMdInkSidecar}, and the import path sniffs gzip rather than
+ * trusting the extension, so an uncompressed sidecar still opens.
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { codeAcceptExtensions, isCodeName } from "./codeLanguages";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
+import { canGzip, gzipText, textFromMaybeGzip } from "./gzip";
 import type { DocType } from "./mdInkStore";
 
 export { CODE_SOURCE_MAX_CHARS, languageForName } from "./codeLanguages";
@@ -147,7 +150,7 @@ export function pickSidecarFile(): Promise<{ name: string; text: string } | null
   return new Promise((resolve, reject) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".json,application/json";
+    input.accept = ".json,.gz,application/json,application/gzip";
     input.style.position = "fixed";
     input.style.left = "-10000px";
     input.style.opacity = "0";
@@ -167,8 +170,11 @@ export function pickSidecarFile(): Promise<{ name: string; text: string } | null
         finish(null);
         return;
       }
+      // Bytes, not text: a sidecar may be gzipped, and `File.text()` on
+      // compressed bytes yields mojibake rather than an error.
       file
-        .text()
+        .arrayBuffer()
+        .then((buffer) => textFromMaybeGzip(new Uint8Array(buffer)))
         .then((text) => finish({ name: file.name, text }))
         .catch((cause) => {
           if (settled) return;
@@ -244,9 +250,16 @@ export function buildMdInkSidecar(input: {
   };
 }
 
-/** File name a sidecar should be saved under, beside its markdown. */
-export function sidecarNameFor(sourceName: string): string {
-  return `${sourceName}.lc-ink.json`;
+/**
+ * File name a sidecar should be saved under, beside its markdown.
+ *
+ * The `.gz` is honest rather than decorative: the file really is gzip, and a
+ * name that said `.json` would have every tool that opens it by extension fail
+ * on the first byte. Import sniffs the content, so a sidecar written either way
+ * still opens either way.
+ */
+export function sidecarNameFor(sourceName: string, compressed = canGzip()): string {
+  return `${sourceName}.lc-ink.json${compressed ? ".gz" : ""}`;
 }
 
 /** Parse a sidecar, returning null for anything that is not one. */
@@ -262,13 +275,24 @@ export function readMdInkSidecar(raw: string): MdInkSidecar | null {
   }
 }
 
-/** Hand the annotation set to the writer as a file they can keep. */
-export function exportMdInkSidecar(sidecar: MdInkSidecar): void {
-  const blob = new Blob([JSON.stringify(sidecar)], { type: "application/json" });
+/**
+ * Hand the annotation set to the writer as a file they can keep.
+ *
+ * Gzipped where the browser can: the JSON is one field name per coordinate
+ * repeated tens of thousands of times, so an annotated page goes from ~78 KB to
+ * ~2 KB. That is the difference between a file someone can mail themselves and
+ * one they cannot.
+ */
+export async function exportMdInkSidecar(sidecar: MdInkSidecar): Promise<void> {
+  const compressed = canGzip();
+  const bytes = await gzipText(JSON.stringify(sidecar));
+  const blob = new Blob([bytes], {
+    type: compressed ? "application/gzip" : "application/json",
+  });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = sidecarNameFor(sidecar.sourceName);
+  link.download = sidecarNameFor(sidecar.sourceName, compressed);
   document.body.append(link);
   link.click();
   link.remove();

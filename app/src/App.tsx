@@ -1924,7 +1924,7 @@ export function App() {
     const board = boardRef.current;
     const source = mdInkSourceRef.current;
     if (!board || !source) return;
-    exportMdInkSidecar(
+    void exportMdInkSidecar(
       buildMdInkSidecar({
         sourceName: source.name,
         contentHash: source.hash,
@@ -1932,7 +1932,7 @@ export function App() {
         footnotes: mdInkFootnotesRef.current,
         frameWidth: mdInkPageWidthRef.current,
       }),
-    );
+    ).catch((cause: unknown) => setError(messageOf(cause)));
     setNotice(
       `Exported annotations for “${source.name}” — made at ` +
         `${Math.round(mdInkPageWidthRef.current)}px page width.`,
