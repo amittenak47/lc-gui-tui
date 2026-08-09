@@ -55,6 +55,21 @@ export interface DocFootnote {
   userNotes?: string;
   /** Extra links the writer saved on the overview card. */
   userLinks?: DocFootnoteUserLink[];
+  /**
+   * The ribbon's colour, chosen from a palette on the overview card.
+   *
+   * One value, not three: the edge and the label are derived from it in CSS
+   * where the rest of the theming lives, so a stored colour cannot drift out of
+   * step with how a ribbon is drawn. Absent means the default — a document
+   * whose marks are all one colour is the normal case, and colouring them is
+   * for when a reader wants to mean something by it.
+   */
+  color?: string;
+}
+
+/** `#rgb` or `#rrggbb`, which is all a palette ever produces. */
+export function isHexColor(value: unknown): value is string {
+  return typeof value === "string" && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value.trim());
 }
 
 /**
@@ -261,12 +276,16 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
       const userNotes =
         typeof candidate.userNotes === "string" ? candidate.userNotes : undefined;
       const userLinks = sanitizeUserLinks(candidate.userLinks);
+      // A colour that is not a colour is dropped rather than passed through to
+      // an inline style, where anything at all would be accepted.
+      const color = isHexColor(candidate.color) ? candidate.color.trim() : undefined;
       return [
         {
           ...(candidate as DocFootnote),
           anchor,
           ...(userNotes !== undefined ? { userNotes } : {}),
           ...(userLinks ? { userLinks } : {}),
+          ...(color ? { color } : {}),
         },
       ];
     })

@@ -17,6 +17,8 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import type { CSSProperties } from "react";
+
 import { HOLD_MS } from "../util/gesture";
 
 /** @deprecated Prefer {@link HOLD_MS} from `util/gesture`. */
@@ -55,6 +57,18 @@ export interface HoldButtonProps {
   dataTipPlacement?: "top" | "bottom" | "left" | "right";
   /** Reflected as `aria-pressed`, for a hold button that toggles a mode. */
   pressed?: boolean;
+  /**
+   * Positioning, for a hold button the caller places itself.
+   *
+   * The footnote ribbons are laid out in page coordinates by the selection
+   * layer; everything else here sits in ordinary flow. Merged *under* the
+   * hold's own `--lc-hold`, so a caller cannot accidentally freeze the fill.
+   */
+  style?: CSSProperties;
+  /** Reflected as a `data-region` attribute — a region mark is drawn as a box. */
+  dataRegion?: boolean;
+  /** The rendered node, for a caller that needs to anchor something to it. */
+  onMeasure?: (node: HTMLButtonElement | null) => void;
 }
 
 export function HoldButton({
@@ -72,6 +86,9 @@ export function HoldButton({
   dataTip,
   dataTipPlacement,
   pressed,
+  style,
+  dataRegion,
+  onMeasure,
 }: HoldButtonProps) {
   const [holdProgress, setHoldProgress] = useState(0);
   const holdingRef = useRef(false);
@@ -166,11 +183,13 @@ export function HoldButton({
       ]
         .filter(Boolean)
         .join(" ")}
+      ref={onMeasure}
       style={
         fillIndeterminate && holdProgress === 0
-          ? undefined
-          : { ["--lc-hold" as string]: String(displayProgress) }
+          ? style
+          : { ...style, ["--lc-hold" as string]: String(displayProgress) }
       }
+      data-region={dataRegion ? "" : undefined}
       disabled={disabled}
       aria-label={
         ariaLabel ??
