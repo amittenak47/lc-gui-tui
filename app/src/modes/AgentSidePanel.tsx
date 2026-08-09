@@ -151,6 +151,20 @@ async function copyToClipboard(text: string): Promise<boolean> {
 
 const NOT_ON_SCRATCHPAD = "Not available on this pad";
 
+/*
+ * Review and (+) are mutually exclusive, and the reason is that Review cannot
+ * carry an attachment.
+ *
+ * `images` rides `POST /coach/ask` and nothing else. A send with Review on goes
+ * to `submitForReview`, whose body is built from the board snapshot — the
+ * staged photos would stay on the local bubble and never leave the browser.
+ * Greying the pair out is the honest version of that: the alternative is
+ * showing someone their photo attached to a message the coach answers without
+ * having seen it. Only Review diverts; Lazy, Draw and Annotate all still reach
+ * `askCoach`, so photos are genuinely sent on those and they stay enabled.
+ */
+const REVIEW_DROPS_PHOTOS = "Review sends the board, not attachments";
+
 /**
  * Which surface the coach is attached to.
  *
@@ -1471,7 +1485,9 @@ export function AgentSidePanel({
                         ? NOT_ON_SCRATCHPAD
                         : ask
                           ? "Turn off Ask to use Review"
-                          : "Run a staged review of the board"
+                          : photos.length > 0
+                            ? REVIEW_DROPS_PHOTOS
+                            : "Run a staged review of the board"
                     }
                     placement="left"
                   >
@@ -1479,7 +1495,7 @@ export function AgentSidePanel({
                       type="button"
                       className={`lc-flag${reviewBoard ? " lc-flag-active" : ""}${flagUnavailable}`}
                       aria-pressed={reviewBoard}
-                      disabled={busy || askOnly || ask}
+                      disabled={busy || askOnly || ask || photos.length > 0}
                       onClick={() =>
                         setReviewBoard((current) => {
                           const next = !current;
@@ -1521,9 +1537,11 @@ export function AgentSidePanel({
               )}
               <Tip
                 tip={
-                  photos.length >= PHOTO_ATTACH_LIMIT
-                    ? `At most ${PHOTO_ATTACH_LIMIT} photos per message`
-                    : "Attach a photo — gallery or camera"
+                  reviewBoard
+                    ? REVIEW_DROPS_PHOTOS
+                    : photos.length >= PHOTO_ATTACH_LIMIT
+                      ? `At most ${PHOTO_ATTACH_LIMIT} photos per message`
+                      : "Attach a photo — gallery or camera"
                 }
                 placement="left"
               >
@@ -1531,7 +1549,9 @@ export function AgentSidePanel({
                   type="button"
                   className="lc-flag lc-coach-attach"
                   aria-label="Attach a photo"
-                  disabled={busy || picking || photos.length >= PHOTO_ATTACH_LIMIT}
+                  disabled={
+                    busy || picking || reviewBoard || photos.length >= PHOTO_ATTACH_LIMIT
+                  }
                   onClick={() => {
                     setPhotoError(null);
                     setPicking(true);

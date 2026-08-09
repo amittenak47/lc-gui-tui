@@ -3,6 +3,7 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
+import { setStorageItem } from "./storageQuota";
 
 export const SCRATCHPAD_LIBRARY_LIMIT = 20;
 export const SCRATCHPAD_PAGE_LIMIT = 5;
@@ -49,8 +50,9 @@ function readLibrary(): ScratchNotebook[] {
   }
 }
 
+/** Throws {@link StorageFullError} when the origin is out of room — see `storageQuota`. */
 function writeLibrary(entries: ScratchNotebook[]): void {
-  localStorage.setItem(LIBRARY_KEY, JSON.stringify(entries));
+  setStorageItem(LIBRARY_KEY, JSON.stringify(entries));
 }
 
 export function listScratchNotebooks(): ScratchNotebookMeta[] {

@@ -52,6 +52,7 @@ import {
 import { offlinePackMeta } from "../util/offlineCorpus";
 import { offlinePackDownloader } from "../util/offlinePackDownload";
 import { useIsMobile } from "../util/mobile";
+import { estimateStorage, formatBytes, type StorageUsage } from "../util/storageQuota";
 
 type TabId = "workspace" | "personalise" | "server";
 
@@ -242,6 +243,15 @@ export function SettingsModal({
     host: string | null;
     port: number;
   } | null>(null);
+  /**
+   * What this origin is using, read once when Personalise opens.
+   *
+   * Not polled: the numbers are deliberately coarse (the spec lets the browser
+   * pad them so storage cannot be used to fingerprint across origins), so a
+   * live counter would be false precision on a figure that only needs to answer
+   * "am I near the wall?".
+   */
+  const [storage, setStorage] = useState<(StorageUsage & { persisted: boolean }) | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [forwardFailures, setForwardFailures] = useState<boolean>(() =>
     loadForwardFailures(),
@@ -283,6 +293,26 @@ export function SettingsModal({
       setLlmStatus(null);
     }
   }, [client]);
+
+  /** Re-read on each visit to Personalise, so it reflects the session just saved. */
+  useEffect(() => {
+    if (tab !== "personalise") return;
+    let cancelled = false;
+    void (async () => {
+      const usage = await estimateStorage();
+      if (cancelled || !usage) return;
+      let persisted = false;
+      try {
+        persisted = (await navigator.storage?.persisted?.()) ?? false;
+      } catch {
+        /* absent in some WebViews — the bar is still worth showing */
+      }
+      if (!cancelled) setStorage({ ...usage, persisted });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
 
   useEffect(() => {
     return offlinePackDownloader.subscribe((snap) => {
@@ -1054,6 +1084,36 @@ export function SettingsModal({
                   </button>
                 ))}
               </div>
+
+              <div className="lc-settings-subhead">Storage on this device</div>
+              <p className="lc-settings-hint">
+                Annotated documents, scratchpad notebooks, board images and any offline
+                problem pack all share one budget. Handwriting is the expensive part — a
+                heavily annotated page costs far more than the document under it.
+              </p>
+              {storage ? (
+                <>
+                  <div
+                    className="lc-storage-bar"
+                    role="meter"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(storage.ratio * 100)}
+                    aria-label="Storage used"
+                  >
+                    <div
+                      className="lc-storage-bar-fill"
+                      style={{ width: `${Math.max(1, Math.round(storage.ratio * 100))}%` }}
+                    />
+                  </div>
+                  <p className="lc-muted">
+                    {formatBytes(storage.usage)} used of {formatBytes(storage.quota)}
+                    {storage.persisted ? " · kept when space runs short" : ""}
+                  </p>
+                </>
+              ) : (
+                <p className="lc-muted">This browser does not report a storage estimate.</p>
+              )}
             </div>
           )}
 
