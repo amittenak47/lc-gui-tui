@@ -212,8 +212,6 @@ export function DocSelectionLayer({
     startX: number;
     startY: number;
   } | null>(null);
-  /** Scopes currently near the viewport — the rolling window. */
-  const liveScopesRef = useRef<Set<string>>(new Set());
   /** Latest placement pass, so the window observer can re-run it. */
   const placeRef = useRef<(() => void) | null>(null);
 
@@ -529,11 +527,13 @@ export function DocSelectionLayer({
    * observer rather than a prop the renderers report through: the layer should
    * not have to know which of them is slow, and the next one will be too.
    *
-   * Only the scopes near the reader are placed. On a 1500-page textbook every
-   * other page is text that would have to be walked to resolve an offset in it,
-   * for a mark that is a thousand screens away — so an IntersectionObserver
-   * keeps a rolling window of live scopes and the rest wait their turn. An
-   * unscoped document (markdown, a source file) is one scope and is always in.
+   * The window comes for free from the renderer. Resolving a mark walks its own
+   * scope's text and nothing else, and a page the renderer has not painted has
+   * no text — so a mark a thousand pages away costs a failed lookup rather than
+   * a walk of the book, and lands the moment its page is painted and the
+   * mutation observer above notices. Keeping a second window here, on a
+   * different rule from the renderer's, is what previously left a mark on the
+   * next page unplaced while its text sat there ready.
    */
   useLayoutEffect(() => {
     const body = bodyRef.current;
@@ -547,11 +547,9 @@ export function DocSelectionLayer({
       const roots = scopeRootsIn(body);
       // Numbering follows the document, so the sort has to know page order.
       orderScopes(roots.map((root) => root.dataset.docScope ?? ""));
-      const live = liveScopesRef.current;
       const placed: Array<{ footnote: DocFootnote; at: LocalRect; number: number }> = [];
       for (const footnote of footnotes) {
         const scope = footnote.anchor.scope;
-        if (roots.length > 0 && scope && !live.has(scope)) continue;
         const root = scopeRootIn(body, scope) as HTMLElement | null;
         if (!root) continue;
         const at = rectForAnchor(body, root, footnote.anchor);
@@ -582,40 +580,7 @@ export function DocSelectionLayer({
     };
   }, [footnotes, children]);
 
-  /*
-   * The rolling window of scopes worth resolving marks in.
-   *
-   * `rootMargin` is a screen of slack either side, so a ribbon is already in
-   * place by the time its page is scrolled onto rather than popping in after.
-   */
-  useLayoutEffect(() => {
-    const body = bodyRef.current;
-    if (!body || typeof IntersectionObserver !== "function") return;
-    const roots = scopeRootsIn(body);
-    if (roots.length === 0) return;
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        let changed = false;
-        for (const entry of entries) {
-          const scope = (entry.target as HTMLElement).dataset.docScope;
-          if (!scope) continue;
-          const had = liveScopesRef.current.has(scope);
-          if (entry.isIntersecting && !had) {
-            liveScopesRef.current.add(scope);
-            changed = true;
-          } else if (!entry.isIntersecting && had) {
-            liveScopesRef.current.delete(scope);
-            changed = true;
-          }
-        }
-        if (changed) placeRef.current?.();
-      },
-      { rootMargin: "100% 0px" },
-    );
-    for (const root of roots) observer.observe(root);
-    return () => observer.disconnect();
-  }, [children, footnotes.length]);
 
   const act = (run: ((selection: DocSelectionResult) => void) | undefined) => {
     const current = selection;
@@ -631,7 +596,10 @@ export function DocSelectionLayer({
       </div>
       {overlay(
         marksHost,
-        <div className="lc-doc-select-overlay" aria-hidden={rects.length === 0}>
+        <div
+          className="lc-doc-select-overlay"
+          aria-hidden={rects.length === 0}
+        >
           {band && (
             <div
               className="lc-doc-highlight-band"
