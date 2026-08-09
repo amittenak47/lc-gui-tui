@@ -249,6 +249,15 @@ export interface CoachAttachment {
   label: string;
   /** Raw base64 PNG (no data: prefix). */
   png: string;
+  /**
+   * A small copy of the same image, when one exists.
+   *
+   * Present on photos the writer attached, where `png` is sized for a vision
+   * model and far too large to keep in the transcript — the bubble draws this
+   * and the persisted thread stores only this. Absent on board thumbs, which
+   * are already small by construction.
+   */
+  thumb?: string;
 }
 
 export interface CoachChatMessage {
@@ -1187,7 +1196,7 @@ export function AgentSidePanel({
                         aria-label={`Open ${att.label}`}
                       >
                         <img
-                          src={`data:image/png;base64,${att.png}`}
+                          src={`data:image/png;base64,${att.thumb ?? att.png}`}
                           alt={att.label}
                           title={att.label}
                         />
@@ -1279,7 +1288,10 @@ export function AgentSidePanel({
             <div className="lc-coach-photo-tray" aria-label="Attached photos">
               {photos.map((photo, index) => (
                 <div className="lc-coach-photo-chip" key={`${photo.label}-${index}`}>
-                  <img src={`data:image/png;base64,${photo.png}`} alt={photo.label} />
+                  <img
+                    src={`data:image/png;base64,${photo.thumb ?? photo.png}`}
+                    alt={photo.label}
+                  />
                   <button
                     type="button"
                     className="lc-coach-photo-chip-clear"
@@ -1564,6 +1576,7 @@ export function AgentSidePanel({
                             ...picked.map((photo) => ({
                               label: photo.name,
                               png: photo.png,
+                              thumb: photo.thumb,
                             })),
                           ].slice(0, PHOTO_ATTACH_LIMIT),
                         );

@@ -91,7 +91,12 @@ import {
 import { applyBoardReadingSize } from "../modes/applyBoardReadingSize";
 import { defaultLineHeight } from "../modes/textBaseline";
 import type { BoardBinaryFile, BoardHandle, ScreenRect, ToolName } from "./BoardHandle";
-import { captureImage, captureStrokes, type SceneElementLike } from "./capture";
+import {
+  captureImage,
+  captureStrokes,
+  shrinkImageDataURL,
+  type SceneElementLike,
+} from "./capture";
 import { TEXT_FONT_MAX, TEXT_FONT_MIN } from "./FontSizeSlider";
 import { applyMetadata, isCoachElement } from "./scene";
 import {
@@ -4538,12 +4543,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** Place an image element at viewport center (or an explicit scene rect). */
   const insertImageFromDataURL = useCallback(
     async (
-      dataURL: string,
+      rawDataURL: string,
       mimeType: string,
       place?: { x: number; y: number; width: number; height: number },
     ) => {
       const api = apiRef.current;
       if (!api) return;
+      // Every insert path — file picker, paste, board capture, region crop —
+      // arrives here, so this is the one place the cap has to be applied. It
+      // was applied nowhere: a 4 MB phone photo went into the saved blob at
+      // full size as a base64 dataURL stored in UTF-16, which is more than the
+      // whole origin's budget for one image.
+      const dataURL = await shrinkImageDataURL(rawDataURL);
       const fileId = newImageFileId();
       const created = Date.now();
       api.addFiles?.([
