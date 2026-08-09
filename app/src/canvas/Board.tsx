@@ -102,6 +102,7 @@ import {
   viewportBand,
   type PageableElement,
 } from "./pageView";
+import { encodeInkOps } from "./inkCodec";
 import { eraserScreenRadius } from "./rasterInk";
 import { reanchorInkOps } from "./reanchorInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
@@ -5635,7 +5636,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             scrollY: state.scrollY ?? 0,
             zoom: state.zoom?.value ?? 1,
           },
-          ink,
+          // Encoded, not raw — `ink` stays readable forever but is never
+          // written again. See `inkCodec`; read it back with `inkOpsFrom`.
+          inkC: encodeInkOps(ink),
           inkPalettes: {
             items: inkPaletteHistoryRef.current.items,
             index: inkPaletteHistoryRef.current.index,
