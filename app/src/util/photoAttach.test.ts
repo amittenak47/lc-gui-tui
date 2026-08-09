@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { fitWithin, PHOTO_MAX_EDGE } from "./photoAttach";
+import { fitWithin, PHOTO_MAX_EDGE, PHOTO_THUMB_EDGE } from "./photoAttach";
 
 describe("fitWithin", () => {
   it("leaves a small image alone", () => {
@@ -41,5 +41,22 @@ describe("fitWithin", () => {
 
   it("survives a zero-sized image", () => {
     expect(fitWithin(0, 0)).toEqual({ width: 1, height: 1 });
+  });
+});
+
+describe("thumbnail sizing", () => {
+  it("keeps the send size well clear of the stored size", () => {
+    // The two exist for different readers: PHOTO_MAX_EDGE is what a vision
+    // model needs to read a page, PHOTO_THUMB_EDGE is what the bubble draws
+    // and what the transcript keeps forever. Collapsing them in either
+    // direction is a regression — equal sizes mean either an unreadable
+    // attachment or a thread that cannot be stored.
+    expect(PHOTO_THUMB_EDGE).toBeLessThan(PHOTO_MAX_EDGE / 4);
+  });
+
+  it("clamps a phone photo to the thumbnail edge", () => {
+    const { width, height } = fitWithin(4032, 3024, PHOTO_THUMB_EDGE);
+    expect(width).toBe(PHOTO_THUMB_EDGE);
+    expect(height).toBe(Math.round(3024 * (PHOTO_THUMB_EDGE / 4032)));
   });
 });

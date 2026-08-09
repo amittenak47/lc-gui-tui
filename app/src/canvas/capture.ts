@@ -229,6 +229,52 @@ export async function shrinkImageBlob(blob: Blob, maxEdge: number): Promise<Blob
 }
 
 /**
+ * Longest edge for an image placed *on the board*.
+ *
+ * Smaller than {@link CAPTURE_MAX_EDGE} because the two answer different
+ * questions. A capture is shrunk to fit one request; a board image is stored in
+ * the saved blob and reloaded for the life of the document, so it is paid for
+ * on every save. 1600 is also well past what it can be seen at: an image is
+ * placed 420 scene units across and the board rarely zooms past 3×.
+ */
+export const BOARD_IMAGE_MAX_EDGE = 1400;
+
+/**
+ * Cap an image on its way onto the board.
+ *
+ * The insert paths handed a picked file's dataURL straight to `addFiles` with
+ * no downscale and no cap — so one photo off a modern phone is 4 MB of PNG,
+ * ~5.5 MB once base64'd, and dataURLs are stored as UTF-16, which is over the
+ * whole origin's localStorage budget for a single image. The coach paths always
+ * shrank; the board path was the outlier.
+ *
+ * Returns the original string unchanged when there is nothing to gain or no
+ * canvas to do it with (tests, workers), so callers can apply it blind.
+ */
+export async function shrinkImageDataURL(
+  dataURL: string,
+  maxEdge = BOARD_IMAGE_MAX_EDGE,
+): Promise<string> {
+  if (typeof fetch !== "function" || typeof FileReader === "undefined") return dataURL;
+  try {
+    const original = await (await fetch(dataURL)).blob();
+    const shrunk = await shrinkImageBlob(original, maxEdge);
+    if (shrunk === original) return dataURL;
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(shrunk);
+    });
+  } catch {
+    // A dataURL this cannot decode is one the board could not have drawn
+    // either — let the insert proceed and fail visibly rather than silently
+    // dropping the image here.
+    return dataURL;
+  }
+}
+
+/**
  * Image extractor. `exportToBlob` is passed in rather than imported so this
  * module stays free of Excalidraw and the caller has to make the deliberate
  * choice to spend a vision model's tokens.

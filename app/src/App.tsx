@@ -5280,8 +5280,28 @@ function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
 }
 
 /** Persist finished turns only — never an in-flight `pending` placeholder. */
+/**
+ * The thread as it should be stored, which is not the thread as it is shown.
+ *
+ * Pending turns go, because a turn that never finished is not a turn. And an
+ * attached photo drops to its thumbnail: `png` is sized for a vision model —
+ * 1568px, 3–5.5 MB base64 — and it has already been sent by the time anything
+ * persists. Keeping it would mean four photos on one message costing more than
+ * the entire localStorage budget, forever, to redisplay an image the bubble
+ * draws at 320px anyway.
+ */
 function persistableCoachMessages(messages: CoachChatMessage[]): CoachChatMessage[] {
-  return messages.filter((message) => !message.pending);
+  return messages
+    .filter((message) => !message.pending)
+    .map((message) => {
+      if (!message.attachments?.some((att) => att.thumb)) return message;
+      return {
+        ...message,
+        attachments: message.attachments.map((att) =>
+          att.thumb ? { ...att, png: att.thumb } : att,
+        ),
+      };
+    });
 }
 
 /**

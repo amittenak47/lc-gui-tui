@@ -18,6 +18,20 @@
 /** Longest edge kept, in pixels. Comfortably above any model's image tiling. */
 export const PHOTO_MAX_EDGE = 1568;
 
+/**
+ * Longest edge of the copy that is kept forever.
+ *
+ * {@link PHOTO_MAX_EDGE} is right for a vision model and wrong for the
+ * transcript. A photographic PNG at 1568px is 2–4 MB, so 3–5.5 MB once base64'd
+ * — and scratchpad coach threads are persisted into the notebook, in UTF-16, in
+ * a store with a ~5 MB budget for everything. One message with four photos was
+ * over the whole quota before the board was counted.
+ *
+ * So the full-size copy lives exactly as long as the request that needs it, and
+ * what stays behind is a thumbnail. 320px is what the bubble draws it at.
+ */
+export const PHOTO_THUMB_EDGE = 320;
+
 /** How many photos may ride along on one send. */
 export const PHOTO_ATTACH_LIMIT = 4;
 
@@ -28,6 +42,13 @@ export interface PickedPhoto {
   name: string;
   /** Raw base64 PNG, no `data:` prefix — the shape `CoachAttachment` wants. */
   png: string;
+  /**
+   * The same image at {@link PHOTO_THUMB_EDGE}, for the bubble and for storage.
+   *
+   * Never sent to the model: the point of attaching a photo of a page is that
+   * the model can read the page.
+   */
+  thumb: string;
 }
 
 /** Longest-edge clamp, preserving aspect and never scaling a small image up. */
@@ -63,12 +84,12 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   });
 }
 
-/** Decode, clamp the longest edge, re-encode as base64 PNG. */
-export async function photoFromFile(file: File): Promise<PickedPhoto> {
-  const image = await loadImage(file);
+/** Draw an already-decoded image at a clamped size and hand back raw base64 PNG. */
+function encodeAt(image: HTMLImageElement, maxEdge: number): string {
   const { width, height } = fitWithin(
     image.naturalWidth || image.width,
     image.naturalHeight || image.height,
+    maxEdge,
   );
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -79,7 +100,21 @@ export async function photoFromFile(file: File): Promise<PickedPhoto> {
   const dataUrl = canvas.toDataURL("image/png");
   const comma = dataUrl.indexOf(",");
   if (comma < 0) throw new Error("this device cannot re-encode the image");
-  return { name: file.name || "Photo", png: dataUrl.slice(comma + 1) };
+  return dataUrl.slice(comma + 1);
+}
+
+/**
+ * Decode once, encode twice: the size the model reads, and the size that is
+ * kept. Both come off the same decode because decoding a phone photo is the
+ * expensive half and doing it twice would be visible on a tablet.
+ */
+export async function photoFromFile(file: File): Promise<PickedPhoto> {
+  const image = await loadImage(file);
+  return {
+    name: file.name || "Photo",
+    png: encodeAt(image, PHOTO_MAX_EDGE),
+    thumb: encodeAt(image, PHOTO_THUMB_EDGE),
+  };
 }
 
 /**
