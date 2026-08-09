@@ -288,7 +288,14 @@ pub async fn put_board(
         let dir = runner::locate_workspace_in(&cfg, dataset, Some(&id))?;
         let meta = runner::read_meta(&dir)?;
         let path = dir.join("board.json");
-        let text = serde_json::to_string_pretty(&update.board).context("cannot encode board")?;
+        // Compact, not pretty. `board.json` is machine-written and machine-read
+        // — nobody edits it by hand — and it is the one file here that holds
+        // handwriting. Pretty-printing put every ink coordinate and pressure
+        // reading on its own indented line, which on an annotated page is most
+        // of the file: about 2.5x the bytes, to no reader's benefit. Every
+        // other `to_string_pretty` in the tree writes something a person may
+        // actually open, so they stay as they are.
+        let text = serde_json::to_string(&update.board).context("cannot encode board")?;
         std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
         Ok(BoardResponse {
             task_id: meta.task_id,
