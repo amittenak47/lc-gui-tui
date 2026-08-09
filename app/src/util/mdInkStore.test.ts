@@ -175,7 +175,7 @@ describe("footnotes on an entry", () => {
   const mark = (start: number, end: number) => ({
     id: `fn-${start}`,
     kind: "search" as const,
-    anchor: { start, end },
+    anchor: { kind: "text" as const, start, end },
     excerpt: "hash maps",
     createdAt: 1,
     query: "hash maps",

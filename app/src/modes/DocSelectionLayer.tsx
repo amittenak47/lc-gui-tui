@@ -23,12 +23,19 @@ import { createPortal } from "react-dom";
 import {
   anchorFromRange,
   excerptOf,
+  regionAnchorFromRect,
+  SCOPE_ATTR,
+  isRegionAnchor,
   rangeFromAnchor,
+  scopeOfNode,
+  scopeRootIn,
+  scopeRootsIn,
   snapToWords,
+  textNodesOf,
   textOf,
   type DocAnchor,
 } from "../util/docAnchors";
-import type { DocFootnote } from "../util/docFootnotes";
+import { numberFootnotes, orderScopes, type DocFootnote } from "../util/docFootnotes";
 import { LONG_PRESS_MS } from "../util/gesture";
 import {
   claimSelectionGesture,
@@ -37,6 +44,9 @@ import {
 
 /** Movement before the hold fires that means the writer meant to scroll. */
 const HOLD_SLOP_PX = 10;
+
+/** Thinnest a swept band may be, so a flat sweep is still visible and hittable. */
+const MIN_BAND_PX = 14;
 
 /** A rectangle in the document's own (unscaled) coordinate space. */
 interface LocalRect {
@@ -55,14 +65,30 @@ export interface DocSelectionResult {
 export interface DocSelectionLayerProps {
   /** The rendered document — markdown body, PDF page, EPUB chapter. */
   children: React.ReactNode;
-  /** Sub-document these offsets belong to; unset for a single-stream doc. */
-  scope?: string;
   /** Off in Annotate mode: the pen owns the surface there. */
   enabled?: boolean;
+  /**
+   * Where the marker layer paints, when the board offers one.
+   *
+   * Board's marks slot carries the same transform as the page but sits above
+   * the ink, so a mark stays reachable while the pen owns the surface. Falling
+   * back to rendering in place keeps the layer usable on its own.
+   */
+  marksHost?: HTMLElement | null;
+  /**
+   * Highlighter mode — sweep a rectangle instead of picking words.
+   *
+   * The one gesture that works where selection cannot: a scanned page, a
+   * figure, a diagram. No hold is needed because the tool *is* the mode, so a
+   * drag means this and nothing else while it is on.
+   */
+  highlighting?: boolean;
   footnotes?: readonly DocFootnote[];
   onCoach?: (selection: DocSelectionResult) => void;
   onCopy?: (selection: DocSelectionResult) => void;
   onSearch?: (selection: DocSelectionResult) => void;
+  /** Leave the mark and nothing else — the highlighter's plain outcome. */
+  onMark?: (selection: DocSelectionResult) => void;
   /** Tap on an existing ribbon — reopen the thread or the search. */
   onOpenFootnote?: (footnote: DocFootnote) => void;
   onRemoveFootnote?: (footnote: DocFootnote) => void;
@@ -103,6 +129,38 @@ function scaleOf(node: HTMLElement): number {
   return rendered > 0 ? rendered / width : 1;
 }
 
+/**
+ * Where a mark sits, in the body's own coordinates.
+ *
+ * Both anchor kinds end up here, because a ribbon does not care how its mark
+ * was made. A text anchor resolves to a range and takes its first line's box; a
+ * region already *is* a box, in its scope's coordinates, so it only needs
+ * shifting by where that scope sits in the body.
+ */
+function rectForAnchor(
+  body: HTMLElement,
+  root: HTMLElement,
+  anchor: DocAnchor,
+): LocalRect | null {
+  if (isRegionAnchor(anchor)) {
+    const scale = scaleOf(body) || 1;
+    const bodyBox = body.getBoundingClientRect();
+    const rootBox = root.getBoundingClientRect();
+    const offsetX = (rootBox.left - bodyBox.left) / scale;
+    const offsetY = (rootBox.top - bodyBox.top) / scale;
+    return {
+      left: anchor.x + offsetX,
+      top: anchor.y + offsetY,
+      width: anchor.w,
+      height: anchor.h,
+    };
+  }
+  const range = rangeFromAnchor(root, anchor);
+  if (!range) return null;
+  const [first] = localRects(body, range);
+  return first ?? null;
+}
+
 function localRects(host: HTMLElement, range: Range): LocalRect[] {
   const origin = host.getBoundingClientRect();
   const scale = scaleOf(host) || 1;
@@ -118,12 +176,14 @@ function localRects(host: HTMLElement, range: Range): LocalRect[] {
 
 export function DocSelectionLayer({
   children,
-  scope,
   enabled = true,
+  marksHost = null,
+  highlighting = false,
   footnotes = [],
   onCoach,
   onCopy,
   onSearch,
+  onMark,
   onOpenFootnote,
   onRemoveFootnote,
 }: DocSelectionLayerProps) {
@@ -141,10 +201,21 @@ export function DocSelectionLayer({
   const [selection, setSelection] = useState<DocSelectionResult | null>(null);
   /** Viewport point the action sheet hangs from; null while none is open. */
   const [sheetAt, setSheetAt] = useState<{ x: number; y: number } | null>(null);
-  const [ribbons, setRibbons] = useState<Array<{ footnote: DocFootnote; at: LocalRect }>>(
-    [],
-  );
+  const [ribbons, setRibbons] = useState<
+    Array<{ footnote: DocFootnote; at: LocalRect; number: number }>
+  >([]);
   const [copied, setCopied] = useState(false);
+  /** The band being swept right now, in body coordinates. */
+  const [band, setBand] = useState<LocalRect | null>(null);
+  const bandRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+  /** Scopes currently near the viewport — the rolling window. */
+  const liveScopesRef = useRef<Set<string>>(new Set());
+  /** Latest placement pass, so the window observer can re-run it. */
+  const placeRef = useRef<(() => void) | null>(null);
 
   /** Live gesture: null between holds. */
   const holdRef = useRef<{
@@ -153,6 +224,9 @@ export function DocSelectionLayer({
     startY: number;
     timer: number | null;
     held: boolean;
+    /** The scope the hold landed in — the drag stays inside it. */
+    root: HTMLElement | null;
+    scope: string | undefined;
     anchorOffset: number | null;
   } | null>(null);
 
@@ -167,59 +241,187 @@ export function DocSelectionLayer({
     setSelection(null);
     setSheetAt(null);
     setRects([]);
+    setBand(null);
     setCopied(false);
   }, []);
 
-  /** Offset of a viewport point in the document's character stream. */
-  const offsetAt = useCallback((x: number, y: number): number | null => {
-    const host = bodyRef.current;
-    if (!host) return null;
-    const caret = caretAt(x, y);
-    if (!caret || !host.contains(caret.node)) return null;
-    const range = document.createRange();
-    range.setStart(caret.node, caret.offset);
-    range.collapse(true);
-    return anchorFromRange(host, expandOne(host, range))?.start ?? null;
-  }, []);
+  /**
+   * Where a viewport point lands: which scope, and how far into its text.
+   *
+   * Offsets are local to a scope root — see `docAnchors`. That is what keeps
+   * resolving a mark on page 900 from walking the 899 pages in front of it.
+   */
+  const pointAt = useCallback(
+    (x: number, y: number): { root: HTMLElement; scope?: string; offset: number } | null => {
+      const body = bodyRef.current;
+      if (!body) return null;
+      const caret = caretAt(x, y);
+      if (!caret || !body.contains(caret.node)) return null;
+      const scope = scopeOfNode(body, caret.node);
+      const root = (scopeRootIn(body, scope) as HTMLElement | null) ?? body;
+      const range = document.createRange();
+      range.setStart(caret.node, caret.offset);
+      range.collapse(true);
+      const offset = anchorFromRange(root, expandOne(root, range))?.start;
+      return offset == null ? null : { root, scope, offset };
+    },
+    [],
+  );
 
-  /** Paint (and remember) the selection between two character offsets. */
+  /**
+   * Paint (and remember) the selection between two offsets in one scope.
+   *
+   * A drag that wanders onto the next page is clamped to the page it started
+   * on rather than being allowed to span both. Two pages are two offset
+   * spaces, so a quote across the seam has no single anchor that could name
+   * it — and a quote that silently stopped being storable would be worse than
+   * one that stops at the page break the reader can see.
+   */
   const applySelection = useCallback(
-    (from: number, to: number) => {
-      const host = bodyRef.current;
-      if (!host) return;
-      const text = textOf(host);
+    (root: HTMLElement, scope: string | undefined, from: number, to: number) => {
+      const text = textOf(root);
       const [start, end] = snapToWords(
         text,
         Math.min(from, to),
         Math.max(from, to) + (from === to ? 1 : 0),
       );
       if (end <= start) return;
-      const anchor: DocAnchor = { start, end, ...(scope ? { scope } : {}) };
-      const range = rangeFromAnchor(host, anchor);
+      const anchor: DocAnchor = { kind: "text", start, end, ...(scope ? { scope } : {}) };
+      const range = rangeFromAnchor(root, anchor);
       if (!range) return;
       // Sliced from the stream, not from the range: `Range.toString()` fuses
       // across block boundaries, which is exactly what the stream's separators
       // exist to prevent.
       const quoted = text.slice(start, end);
-      setRects(localRects(host, range));
+      const body = bodyRef.current;
+      setRects(body ? localRects(body, range) : []);
       setSelection({ text: quoted, excerpt: excerptOf(quoted), anchor });
     },
-    [scope],
+    [],
   );
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled && !highlighting) {
       clearGesture();
       dismiss();
     }
-  }, [enabled, clearGesture, dismiss]);
+  }, [enabled, highlighting, clearGesture, dismiss]);
+
+  /**
+   * The highlighter sweep.
+   *
+   * A rubber band rather than a stroke that follows the finger: a band is what
+   * both jobs want — dragged along a line it is a highlight, dragged around a
+   * figure it is a crop — and one gesture that does both is one thing to learn.
+   * A minimum height keeps a fast flat sweep from producing a hairline nobody
+   * can see or hit afterwards.
+   */
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !highlighting) return;
+
+    const rectOf = (x: number, y: number) => {
+      const start = bandRef.current;
+      const body = bodyRef.current;
+      if (!start || !body) return null;
+      const origin = body.getBoundingClientRect();
+      const scale = scaleOf(body) || 1;
+      const left = (Math.min(start.startX, x) - origin.left) / scale;
+      const top = (Math.min(start.startY, y) - origin.top) / scale;
+      const width = Math.abs(x - start.startX) / scale;
+      const height = Math.max(Math.abs(y - start.startY) / scale, MIN_BAND_PX);
+      return { left, top, width, height };
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      if ((event.target as Element | null)?.closest?.(".lc-doc-footnote")) return;
+      dismiss();
+      bandRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+      };
+      // The board must not pan under a sweep.
+      claimSelectionGesture();
+      event.preventDefault();
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      const start = bandRef.current;
+      if (!start || start.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      setBand(rectOf(event.clientX, event.clientY));
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      const start = bandRef.current;
+      if (!start || start.pointerId !== event.pointerId) return;
+      // Measured before the ref is cleared — `rectOf` reads it.
+      const rect = rectOf(event.clientX, event.clientY);
+      bandRef.current = null;
+      releaseSelectionGesture();
+      const body = bodyRef.current;
+      if (!rect || !body || rect.width < MIN_BAND_PX) {
+        setBand(null);
+        return;
+      }
+      /*
+       * The scope the sweep started in owns it.
+       *
+       * A band that strays onto the next page still belongs to the page the
+       * reader was working on — and a region anchor lives in one scope's
+       * coordinates, so there is no honest way to store one that spans two.
+       */
+      const scopeRoot =
+        (document.elementFromPoint(start.startX, start.startY) as Element | null)?.closest?.(
+          `[${SCOPE_ATTR}]`,
+        ) ?? null;
+      const root = (scopeRoot as HTMLElement | null) ?? body;
+      const scope = scopeRoot?.getAttribute(SCOPE_ATTR) ?? undefined;
+      const scale = scaleOf(body) || 1;
+      const bodyBox = body.getBoundingClientRect();
+      const anchor = regionAnchorFromRect(
+        root,
+        {
+          left: bodyBox.left + rect.left * scale,
+          top: bodyBox.top + rect.top * scale,
+          width: rect.width * scale,
+          height: rect.height * scale,
+        },
+        scope,
+      );
+      if (!anchor) {
+        setBand(null);
+        return;
+      }
+      // Words under the band, when there are any — a highlight over prose can
+      // still be quoted; over a scanned plate the excerpt is simply empty.
+      const text = textUnder(body, rect, scale, bodyBox);
+      setBand(rect);
+      setSelection({ text, excerpt: excerptOf(text), anchor });
+      setSheetAt({ x: event.clientX, y: event.clientY });
+    };
+
+    host.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      host.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      releaseSelectionGesture();
+    };
+  }, [highlighting, dismiss]);
 
   // The gesture. Listeners go on the window for move/up so a drag that leaves
   // the words — off the end of a paragraph, past the edge of the page — keeps
   // extending the selection instead of silently ending it.
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || !enabled) return;
+    if (!host || !enabled || highlighting) return;
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
@@ -236,14 +438,16 @@ export function DocSelectionLayer({
         timer: window.setTimeout(() => {
           const hold = holdRef.current;
           if (!hold) return;
-          const offset = offsetAt(startX, startY);
-          if (offset == null) {
+          const at = pointAt(startX, startY);
+          if (!at) {
             clearGesture();
             return;
           }
           hold.held = true;
           hold.timer = null;
-          hold.anchorOffset = offset;
+          hold.root = at.root;
+          hold.scope = at.scope;
+          hold.anchorOffset = at.offset;
           // Board's pan must let go before the drag below starts moving.
           claimSelectionGesture();
           try {
@@ -251,9 +455,11 @@ export function DocSelectionLayer({
           } catch {
             /* haptics are a nicety */
           }
-          applySelection(offset, offset);
+          applySelection(at.root, at.scope, at.offset, at.offset);
         }, LONG_PRESS_MS),
         held: false,
+        root: null,
+        scope: undefined,
         anchorOffset: null,
       };
     };
@@ -269,9 +475,12 @@ export function DocSelectionLayer({
         return;
       }
       event.preventDefault();
-      const offset = offsetAt(event.clientX, event.clientY);
-      if (offset == null || hold.anchorOffset == null) return;
-      applySelection(hold.anchorOffset, offset);
+      const at = pointAt(event.clientX, event.clientY);
+      if (!at || hold.anchorOffset == null || !hold.root) return;
+      // Wandered onto another page: hold the selection at this page's edge
+      // rather than following, since the two are different offset spaces.
+      const offset = at.root === hold.root ? at.offset : hold.anchorOffset;
+      applySelection(hold.root, hold.scope, hold.anchorOffset, offset);
     };
 
     const onPointerUp = (event: PointerEvent) => {
@@ -306,7 +515,7 @@ export function DocSelectionLayer({
       window.removeEventListener("pointercancel", onPointerUp);
       releaseSelectionGesture();
     };
-  }, [enabled, applySelection, clearGesture, dismiss, offsetAt]);
+  }, [enabled, highlighting, applySelection, clearGesture, dismiss, pointAt]);
 
   /*
    * Ribbons are placed from the live DOM, so they follow a re-render of the
@@ -319,26 +528,39 @@ export function DocSelectionLayer({
    * body is watched, and placement re-runs when its text changes. A mutation
    * observer rather than a prop the renderers report through: the layer should
    * not have to know which of them is slow, and the next one will be too.
+   *
+   * Only the scopes near the reader are placed. On a 1500-page textbook every
+   * other page is text that would have to be walked to resolve an offset in it,
+   * for a mark that is a thousand screens away — so an IntersectionObserver
+   * keeps a rolling window of live scopes and the rest wait their turn. An
+   * unscoped document (markdown, a source file) is one scope and is always in.
    */
   useLayoutEffect(() => {
-    const host = bodyRef.current;
-    if (!host) {
+    const body = bodyRef.current;
+    if (!body) {
       setRibbons([]);
       return;
     }
 
+      const numbers = numberFootnotes(footnotes);
     const place = () => {
-      const placed: Array<{ footnote: DocFootnote; at: LocalRect }> = [];
+      const roots = scopeRootsIn(body);
+      // Numbering follows the document, so the sort has to know page order.
+      orderScopes(roots.map((root) => root.dataset.docScope ?? ""));
+      const live = liveScopesRef.current;
+      const placed: Array<{ footnote: DocFootnote; at: LocalRect; number: number }> = [];
       for (const footnote of footnotes) {
-        if (scope && footnote.anchor.scope && footnote.anchor.scope !== scope) continue;
-        const range = rangeFromAnchor(host, footnote.anchor);
-        if (!range) continue;
-        const [first] = localRects(host, range);
-        if (!first) continue;
-        placed.push({ footnote, at: first });
+        const scope = footnote.anchor.scope;
+        if (roots.length > 0 && scope && !live.has(scope)) continue;
+        const root = scopeRootIn(body, scope) as HTMLElement | null;
+        if (!root) continue;
+        const at = rectForAnchor(body, root, footnote.anchor);
+        if (!at) continue;
+        placed.push({ footnote, at, number: numbers.get(footnote.id) ?? 0 });
       }
       setRibbons(placed);
     };
+    placeRef.current = place;
     place();
 
     if (footnotes.length === 0 || typeof MutationObserver !== "function") return;
@@ -352,12 +574,48 @@ export function DocSelectionLayer({
         place();
       });
     });
-    observer.observe(host, { childList: true, subtree: true, characterData: true });
+    observer.observe(body, { childList: true, subtree: true, characterData: true });
     return () => {
       observer.disconnect();
+      placeRef.current = null;
       if (frame != null) cancelAnimationFrame(frame);
     };
-  }, [footnotes, scope, children]);
+  }, [footnotes, children]);
+
+  /*
+   * The rolling window of scopes worth resolving marks in.
+   *
+   * `rootMargin` is a screen of slack either side, so a ribbon is already in
+   * place by the time its page is scrolled onto rather than popping in after.
+   */
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!body || typeof IntersectionObserver !== "function") return;
+    const roots = scopeRootsIn(body);
+    if (roots.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let changed = false;
+        for (const entry of entries) {
+          const scope = (entry.target as HTMLElement).dataset.docScope;
+          if (!scope) continue;
+          const had = liveScopesRef.current.has(scope);
+          if (entry.isIntersecting && !had) {
+            liveScopesRef.current.add(scope);
+            changed = true;
+          } else if (!entry.isIntersecting && had) {
+            liveScopesRef.current.delete(scope);
+            changed = true;
+          }
+        }
+        if (changed) placeRef.current?.();
+      },
+      { rootMargin: "100% 0px" },
+    );
+    for (const root of roots) observer.observe(root);
+    return () => observer.disconnect();
+  }, [children, footnotes.length]);
 
   const act = (run: ((selection: DocSelectionResult) => void) | undefined) => {
     const current = selection;
@@ -371,8 +629,20 @@ export function DocSelectionLayer({
       <div className="lc-doc-selectable-body" ref={bodyRef}>
         {children}
       </div>
-      {(rects.length > 0 || ribbons.length > 0) && (
+      {overlay(
+        marksHost,
         <div className="lc-doc-select-overlay" aria-hidden={rects.length === 0}>
+          {band && (
+            <div
+              className="lc-doc-highlight-band"
+              style={{
+                left: band.left,
+                top: band.top,
+                width: band.width,
+                height: band.height,
+              }}
+            />
+          )}
           {rects.map((rect, index) => (
             <div
               key={`sel-${index}`}
@@ -385,22 +655,24 @@ export function DocSelectionLayer({
               }}
             />
           ))}
-          {ribbons.map(({ footnote, at }) => (
+          {ribbons.map(({ footnote, at, number }) => (
             <button
               type="button"
               key={footnote.id}
               className={`lc-doc-footnote lc-doc-footnote-${footnote.kind}`}
-              style={{ left: at.left + at.width, top: at.top }}
-              title={
-                footnote.kind === "search"
-                  ? `Search: ${footnote.query ?? footnote.excerpt}`
-                  : `Coach: ${footnote.excerpt}`
+              style={
+                isRegionAnchor(footnote.anchor)
+                  ? {
+                      left: at.left,
+                      top: at.top,
+                      width: at.width,
+                      height: at.height,
+                    }
+                  : { left: at.left + at.width, top: at.top }
               }
-              aria-label={
-                footnote.kind === "search"
-                  ? `Reopen search for ${footnote.query ?? footnote.excerpt}`
-                  : `Open coach thread about ${footnote.excerpt}`
-              }
+              data-region={isRegionAnchor(footnote.anchor) ? "" : undefined}
+              title={footnoteTitle(footnote, number)}
+              aria-label={footnoteTitle(footnote, number)}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={() => onOpenFootnote?.(footnote)}
               onContextMenu={(event) => {
@@ -408,10 +680,10 @@ export function DocSelectionLayer({
                 onRemoveFootnote?.(footnote);
               }}
             >
-              {footnote.kind === "search" ? "🔎" : "💬"}
+              <span className="lc-doc-footnote-tag">{number}</span>
             </button>
           ))}
-        </div>
+        </div>,
       )}
       {sheetAt &&
         selection &&
@@ -428,24 +700,40 @@ export function DocSelectionLayer({
               role="menu"
               style={{ left: sheetAt.x, top: sheetAt.y }}
             >
-              <p className="lc-doc-sheet-excerpt">{selection.excerpt}</p>
+              <p className="lc-doc-sheet-excerpt">
+                {selection.excerpt || "This area of the page"}
+              </p>
               <div className="lc-doc-sheet-actions">
+                {/*
+                  A highlight over a scanned plate has no words in it, so Copy
+                  and Google have nothing to act on and are not offered. Coach
+                  always is — it gets the crop.
+                */}
+                {onMark && (
+                  <button type="button" role="menuitem" onClick={() => act(onMark)}>
+                    Mark
+                  </button>
+                )}
                 <button type="button" role="menuitem" onClick={() => act(onCoach)}>
                   Coach
                 </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setCopied(true);
-                    act(onCopy);
-                  }}
-                >
-                  {copied ? "Copied" : "Copy"}
-                </button>
-                <button type="button" role="menuitem" onClick={() => act(onSearch)}>
-                  Google
-                </button>
+                {selection.text.trim().length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setCopied(true);
+                        act(onCopy);
+                      }}
+                    >
+                      {copied ? "Copied" : "Copy"}
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => act(onSearch)}>
+                      Google
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </>,
@@ -474,4 +762,63 @@ function expandOne(host: HTMLElement, range: Range): Range {
     }
   }
   return host.contains(widened.startContainer) ? widened : range;
+}
+
+
+/** What a ribbon says on hover, and to a screen reader. */
+function footnoteTitle(footnote: DocFootnote, number: number): string {
+  const what = footnote.excerpt || "this area";
+  switch (footnote.kind) {
+    case "search":
+      return `${number}. Search — ${footnote.query ?? what}`;
+    case "note":
+      return `${number}. Highlight — ${what}`;
+    default:
+      return `${number}. Coach — ${what}`;
+  }
+}
+
+
+/**
+ * Paint the marker layer into the board's marks slot when there is one.
+ *
+ * In place otherwise, which is what the layer does on its own and what keeps it
+ * testable without a board around it.
+ */
+function overlay(host: HTMLElement | null, node: React.ReactNode): React.ReactNode {
+  return host ? createPortal(node, host) : node;
+}
+
+
+/**
+ * The words a swept band covers, if any.
+ *
+ * A highlight over prose should still be quotable — the coach can be told what
+ * it says as well as shown it — but over a scanned plate or a figure there is
+ * nothing there, and an empty string is the honest answer rather than a
+ * failure. Text nodes are tested by their own boxes, so a band that clips a
+ * line's descenders still counts that line.
+ */
+function textUnder(
+  body: HTMLElement,
+  rect: LocalRect,
+  scale: number,
+  bodyBox: DOMRect,
+): string {
+  const left = bodyBox.left + rect.left * scale;
+  const top = bodyBox.top + rect.top * scale;
+  const right = left + rect.width * scale;
+  const bottom = top + rect.height * scale;
+  const parts: string[] = [];
+  for (const node of textNodesOf(body)) {
+    if (!node.data.trim()) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const box = range.getBoundingClientRect();
+    if (box.width === 0 && box.height === 0) continue;
+    const overlaps =
+      box.left < right && box.right > left && box.top < bottom && box.bottom > top;
+    if (overlaps) parts.push(node.data);
+  }
+  return parts.join(" ").replace(/\s+/g, " ").trim();
 }

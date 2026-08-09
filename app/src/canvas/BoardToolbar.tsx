@@ -96,6 +96,16 @@ export interface BoardToolbarProps {
   onCycleInkPalettePrev?: () => void;
   active: ToolName;
   onPick: (tool: ToolName) => void;
+  /**
+   * Highlighter: sweep an area of the document and hand it to the coach.
+   *
+   * Not an Excalidraw tool, which is why it is a flag rather than a `ToolName`.
+   * What it produces is a footnote anchored to a rectangle of the *page* — the
+   * one kind of mark that works on a scanned plate or a figure, where there is
+   * no text to select. Absent on boards with no document under them.
+   */
+  highlighting?: boolean;
+  onToggleHighlight?: () => void;
   themeId: string;
   inkColor: string;
   onInk: (color: string) => void;
@@ -132,6 +142,8 @@ export interface BoardToolbarProps {
 export function BoardToolbar({
   active,
   onPick,
+  highlighting = false,
+  onToggleHighlight,
   themeId,
   inkPalette,
   onEditInkColor,
@@ -526,6 +538,21 @@ export function BoardToolbar({
 
         {INK_TOOLS.map(({ tool, label, hint, icon }) =>
           renderToolButton(tool, label, hint, icon),
+        )}
+
+        {onToggleHighlight && (
+          <button
+            type="button"
+            className={highlighting ? "lc-tool lc-tool-active" : "lc-tool"}
+            aria-pressed={highlighting}
+            aria-label="Highlighter"
+            title="Highlighter — sweep an area to ask about it"
+            onClick={onToggleHighlight}
+          >
+            <span className="lc-tool-emoji" aria-hidden>
+              🖍
+            </span>
+          </button>
         )}
 
         <div className="lc-tool-sep" />

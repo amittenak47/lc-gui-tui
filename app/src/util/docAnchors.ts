@@ -8,25 +8,156 @@
  * given document the concatenated character stream is fixed, so a `[start,end)`
  * offset into it names the same words in any rendering of it.
  *
- * All three document kinds render into a single root today — a PDF's pages and
- * an EPUB's chapters are laid end to end in one scrolling column — so one
- * offset space covers each of them and `scope` goes unused. It exists for the
- * day a renderer pages instead of scrolling, where an offset would only be
- * meaningful inside one page; an anchor that carries its scope keeps working
- * across that change, and one that does not would have to be re-derived.
+ * Offsets are **local to a scope** — a PDF page, an EPUB chapter — not to the
+ * whole book. A renderer marks its sub-documents with `data-doc-scope` and each
+ * becomes its own offset space. That costs a little (a quote cannot span a page
+ * break) and buys three things a 1500-page textbook needs: resolving an anchor
+ * walks one page's text instead of the whole book's, the marks near the reader
+ * can be found without touching the rest, and every note carries the page it
+ * belongs to — which is what lets the coach be told about *this* chapter rather
+ * than about everything ever highlighted. A document with no scope roots
+ * (markdown, a source file) is one unnamed scope, exactly as before.
+ *
+ * Not every mark is text. A highlighter sweep, a figure, a scanned page with no
+ * text layer at all: those anchor as a **region** — a rectangle in the scope's
+ * own coordinate space. It cannot follow reflowing text the way an offset can,
+ * which is the same trade the pen ink already makes, and in exchange it works
+ * on documents where there is nothing to select.
  *
  * The excerpt stored alongside is not used to find the range. It is what gets
  * shown when the range cannot be found at all — a document edited between
  * sessions should say "this is what you quoted" rather than lose the note.
  */
 
-export interface DocAnchor {
-  /** Character offset into the document's text where the quote starts. */
+/** Attribute a renderer puts on each page / chapter to name an offset space. */
+export const SCOPE_ATTR = "data-doc-scope";
+
+export interface TextAnchor {
+  kind: "text";
+  /** Character offset into the scope's text where the quote starts. */
   start: number;
   /** Exclusive end offset. */
   end: number;
-  /** Sub-document this offset belongs to — PDF page, EPUB spine href. */
+  /** Sub-document these offsets belong to — PDF page, EPUB spine href. */
   scope?: string;
+}
+
+/**
+ * A rectangle in the scope's own layout coordinates.
+ *
+ * Unscaled CSS pixels relative to the scope root's top-left, so it survives the
+ * board camera (which scales the whole subtree) but not a reflow of the page it
+ * sits on. Reflow is why the pad pins a document's frame width once anything
+ * has been drawn on it.
+ */
+export interface RegionAnchor {
+  kind: "region";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  scope?: string;
+}
+
+export type DocAnchor = TextAnchor | RegionAnchor;
+
+export function isTextAnchor(anchor: DocAnchor): anchor is TextAnchor {
+  return anchor.kind === "text";
+}
+
+export function isRegionAnchor(anchor: DocAnchor): anchor is RegionAnchor {
+  return anchor.kind === "region";
+}
+
+/**
+ * Read an anchor that may predate the union.
+ *
+ * Everything stored before regions existed was a text anchor with no `kind`.
+ * Normalising on the way in means the rest of the code can assume the tag, and
+ * an old library entry keeps working rather than being quietly dropped.
+ */
+export function normalizeAnchor(value: unknown): DocAnchor | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as {
+    kind?: unknown;
+    start?: unknown;
+    end?: unknown;
+    x?: unknown;
+    y?: unknown;
+    w?: unknown;
+    h?: unknown;
+    scope?: unknown;
+  };
+  const scope = typeof raw.scope === "string" ? raw.scope : undefined;
+  if (raw.kind === "region") {
+    if (
+      typeof raw.x !== "number" ||
+      typeof raw.y !== "number" ||
+      typeof raw.w !== "number" ||
+      typeof raw.h !== "number"
+    ) {
+      return null;
+    }
+    if (raw.w <= 0 || raw.h <= 0) return null;
+    return {
+      kind: "region",
+      x: raw.x,
+      y: raw.y,
+      w: raw.w,
+      h: raw.h,
+      ...(scope ? { scope } : {}),
+    };
+  }
+  if (typeof raw.start !== "number" || typeof raw.end !== "number") return null;
+  if (raw.end <= raw.start) return null;
+  return {
+    kind: "text",
+    start: raw.start,
+    end: raw.end,
+    ...(scope ? { scope } : {}),
+  };
+}
+
+/**
+ * Quote a scope for use inside an attribute selector.
+ *
+ * Not `CSS.escape`: an EPUB spine href is a path, which needs quoting rather
+ * than identifier-escaping, and `CSS.escape` is missing from older WebViews and
+ * from jsdom. Backslash and double quote are the only characters that can end
+ * the quoted string, so they are the only ones that need handling.
+ */
+function escapeAttr(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/**
+ * The element an anchor's offsets are measured against.
+ *
+ * The scope root when the document names one and the anchor belongs to it;
+ * otherwise the body itself. Returning the body for an unknown scope is
+ * deliberate: a footnote whose page has not rendered yet should fail to place
+ * quietly and be picked up when it does, not throw.
+ */
+export function scopeRootIn(body: Element, scope?: string): Element | null {
+  if (!scope) {
+    // A document that names scopes but an anchor that does not is from before
+    // scoping, or from a single-stream renderer — the body is its space.
+    return body;
+  }
+  return body.querySelector(`[${SCOPE_ATTR}="${escapeAttr(scope)}"]`);
+}
+
+/** Every scope root a rendered document declares, in document order. */
+export function scopeRootsIn(body: Element): HTMLElement[] {
+  return Array.from(body.querySelectorAll<HTMLElement>(`[${SCOPE_ATTR}]`));
+}
+
+/** The scope a node sits in, or undefined in an unscoped document. */
+export function scopeOfNode(body: Element, node: Node): string | undefined {
+  const start = node instanceof Element ? node : node.parentElement;
+  const host = start?.closest(`[${SCOPE_ATTR}]`);
+  if (!host || !body.contains(host)) return undefined;
+  return host.getAttribute(SCOPE_ATTR) ?? undefined;
 }
 
 /** Text nodes of a rendered document, in reading order. */
@@ -131,11 +262,40 @@ export function anchorFromRange(
   root: Node,
   range: Range,
   scope?: string,
-): DocAnchor | null {
+): TextAnchor | null {
   const start = offsetOfBoundary(root, range.startContainer, range.startOffset);
   const end = offsetOfBoundary(root, range.endContainer, range.endOffset);
   if (start == null || end == null || end <= start) return null;
-  return { start, end, ...(scope ? { scope } : {}) };
+  return { kind: "text", start, end, ...(scope ? { scope } : {}) };
+}
+
+/**
+ * A region anchor from a rectangle in viewport space.
+ *
+ * The board scales the whole document subtree, so a viewport rectangle is in
+ * scaled pixels; dividing by the scope root's own scale puts it back into the
+ * layout coordinates the anchor stores. Same conversion the highlight rects
+ * use, for the same reason — see `localRects` in `DocSelectionLayer`.
+ */
+export function regionAnchorFromRect(
+  scopeRoot: HTMLElement,
+  rect: { left: number; top: number; width: number; height: number },
+  scope?: string,
+): RegionAnchor | null {
+  const origin = scopeRoot.getBoundingClientRect();
+  const layoutWidth = scopeRoot.offsetWidth;
+  const scale = layoutWidth > 0 && origin.width > 0 ? origin.width / layoutWidth : 1;
+  const w = rect.width / scale;
+  const h = rect.height / scale;
+  if (w <= 0 || h <= 0) return null;
+  return {
+    kind: "region",
+    x: (rect.left - origin.left) / scale,
+    y: (rect.top - origin.top) / scale,
+    w,
+    h,
+    ...(scope ? { scope } : {}),
+  };
 }
 
 /**
@@ -148,6 +308,7 @@ export function anchorFromRange(
  * the close of the previous one.
  */
 export function rangeFromAnchor(root: Node, anchor: DocAnchor): Range | null {
+  if (!isTextAnchor(anchor)) return null;
   if (anchor.end <= anchor.start) return null;
   const doc = root.ownerDocument;
   if (!doc) return null;
@@ -196,6 +357,7 @@ export function rangeFromAnchor(root: Node, anchor: DocAnchor): Range | null {
  * "CollisionsHash maps…" the separators exist to prevent.
  */
 export function textForAnchor(root: Node, anchor: DocAnchor): string {
+  if (!isTextAnchor(anchor)) return "";
   const { text } = streamOf(root);
   if (anchor.start >= text.length || anchor.end <= anchor.start) return "";
   return rangeFromAnchor(root, anchor)
