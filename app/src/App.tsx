@@ -161,6 +161,7 @@ import {
   SCRATCHPAD_LIBRARY_LIMIT,
   type ScratchNotebook,
 } from "./util/scratchpadStore";
+import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
 import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
@@ -402,6 +403,19 @@ export function App() {
   const [pairing, setPairing] = useState<Pairing>(() => loadPairing());
   const [pairingEditing, setPairingEditing] = useState(false);
   const client = useMemo(() => new LcClient(pairing), [pairing]);
+
+  /**
+   * Ask once for storage the browser will not evict under pressure.
+   *
+   * Without the grant this origin is "best-effort", which iOS reads as fair
+   * game after seven idle days — and what it would take is the annotation
+   * library, the offline problem pack and every PDF's bytes at once. Fire and
+   * forget: a refusal changes nothing the writer can act on, and everything
+   * keeps working either way.
+   */
+  useEffect(() => {
+    void requestPersistentStorage();
+  }, []);
 
   /** Background offline pack download — survives leaving Settings; pauses on app background. */
   useEffect(() => {
@@ -1135,6 +1149,24 @@ export function App() {
   const lastTickInkOpsRef = useRef(-1);
   /** Ticks deferred in a row because writing was still going on. */
   const deferredSavesRef = useRef(0);
+  /** Has the "out of space" banner already been shown this session? */
+  const storageFullShownRef = useRef(false);
+  /**
+   * Report a full device once, and say whether that is what happened.
+   *
+   * Once, because the autosave fires every three seconds and the condition
+   * persists: the honest message becomes a stuck banner that hides everything
+   * said after it. Callers use the return value to decide whether they still
+   * have their own handling to do.
+   */
+  const noteStorageFull = useCallback((cause: unknown): boolean => {
+    if (!(cause instanceof StorageFullError)) return false;
+    if (!storageFullShownRef.current) {
+      storageFullShownRef.current = true;
+      setError(messageOf(cause));
+    }
+    return true;
+  }, []);
   useEffect(() => {
     if (!problem) return;
     const timer = window.setInterval(() => {
@@ -1205,9 +1237,17 @@ export function App() {
           });
           if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
           lastSavedHashRef.current = hash;
-        } catch {
-          // A full library is not worth interrupting a writing session for;
-          // the explicit Save on the way out reports it properly.
+        } catch (cause) {
+          // A *full library* is not worth interrupting a writing session for;
+          // the explicit Save on the way out reports it properly. A full
+          // *device* is, because nothing on the way out will succeed either.
+          noteStorageFull(cause);
+          // Either way, mark this scene attempted. `lastSavedHashRef` used to
+          // stay behind on failure, so every subsequent tick re-serialised the
+          // whole library into a store that had already refused it — full cost,
+          // no progress, three seconds apart, while someone is writing. One
+          // attempt per change is the most that can ever help.
+          lastSavedHashRef.current = hash;
         }
         return;
       }
@@ -1247,7 +1287,12 @@ export function App() {
           if (cause instanceof ScratchpadLibraryFullError) {
             scratchLibResumeRef.current = null;
             setScratchLibOpen(true);
+          } else {
+            noteStorageFull(cause);
           }
+          // See the md-ink tick: retrying an identical over-quota write every
+          // three seconds costs the full serialisation and cannot succeed.
+          lastSavedHashRef.current = hash;
         }
         return;
       }
@@ -1258,7 +1303,7 @@ export function App() {
       });
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [client, problem, scratchNotebookId, scratchPageCount, coachMessages]);
+  }, [client, problem, scratchNotebookId, scratchPageCount, coachMessages, noteStorageFull]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3172,6 +3217,8 @@ export function App() {
           if (cause instanceof ScratchpadLibraryFullError) {
             scratchLibResumeRef.current = null;
             setScratchLibOpen(true);
+          } else {
+            noteStorageFull(cause);
           }
         }
         return;

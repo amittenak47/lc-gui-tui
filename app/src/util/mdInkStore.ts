@@ -21,6 +21,7 @@
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
+import { setStorageItem } from "./storageQuota";
 
 export const MD_INK_LIBRARY_LIMIT = 30;
 
@@ -131,8 +132,9 @@ function readLibrary(): MdInkDoc[] {
   }
 }
 
+/** Throws {@link StorageFullError} when the origin is out of room — see `storageQuota`. */
 function writeLibrary(entries: MdInkDoc[]): void {
-  localStorage.setItem(LIBRARY_KEY, JSON.stringify(entries));
+  setStorageItem(LIBRARY_KEY, JSON.stringify(entries));
 }
 
 export function listMdInkDocs(): MdInkDocMeta[] {

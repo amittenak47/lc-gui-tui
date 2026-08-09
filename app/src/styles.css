@@ -4907,6 +4907,29 @@ button.lc-row-selected:hover:not(:disabled) {
   color: var(--hint);
 }
 
+/*
+ * How full this device is.
+ *
+ * A bar rather than a number because the question it answers is "how close am
+ * I to the wall" — and because the browser's own figure is padded, so showing
+ * it to the byte would be false precision. `--accent` all the way across: the
+ * fill going red near the top would read as a fault, and a full disk on a
+ * reading tablet is an ordinary thing to be told about, not an alarm.
+ */
+.lc-storage-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-3, rgba(127, 127, 127, 0.22));
+  overflow: hidden;
+}
+
+.lc-storage-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 240ms ease;
+}
+
 .lc-settings-callout {
   margin: 0 0 4px;
   padding: 10px 12px;
