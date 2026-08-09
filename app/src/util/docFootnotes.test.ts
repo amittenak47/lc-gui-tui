@@ -10,6 +10,8 @@ import {
   sanitizeFootnotes,
   searchQueryFor,
   type DocFootnote,
+  footnoteAtSamePlace,
+  overlappingFootnotes,
 } from "./docFootnotes";
 
 function footnote(patch: Partial<DocFootnote> = {}): DocFootnote {
@@ -217,5 +219,102 @@ describe("sanitizeFootnotes migration", () => {
         { id: "r", kind: "note", anchor: { kind: "region", x: 1, y: 2, w: 0, h: 4 } },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("overlappingFootnotes", () => {
+  const mark = (id: string, start: number, end: number, scope?: string): DocFootnote => ({
+    id,
+    kind: "note",
+    anchor: { kind: "text", start, end, ...(scope ? { scope } : {}) },
+    excerpt: id,
+    createdAt: 1,
+  });
+
+  it("finds a mark the selection runs across", () => {
+    const found = overlappingFootnotes([mark("a", 10, 20)], { kind: "text", start: 5, end: 15 });
+    expect(found.map((f) => f.id)).toEqual(["a"]);
+  });
+
+  it("finds a mark the selection swallows whole", () => {
+    const found = overlappingFootnotes([mark("a", 10, 20)], { kind: "text", start: 0, end: 40 });
+    expect(found.map((f) => f.id)).toEqual(["a"]);
+  });
+
+  it("finds a mark the selection sits inside", () => {
+    const found = overlappingFootnotes([mark("a", 0, 40)], { kind: "text", start: 10, end: 20 });
+    expect(found.map((f) => f.id)).toEqual(["a"]);
+  });
+
+  it("does not count a mark that merely touches end-to-start", () => {
+    // Adjacency is not overlap: a quote beginning where another ends shares no
+    // words with it, and offering it would be noise on every consecutive pair.
+    expect(overlappingFootnotes([mark("a", 0, 10)], { kind: "text", start: 10, end: 20 })).toEqual(
+      [],
+    );
+  });
+
+  it("ignores a mark on another page", () => {
+    // Offsets are per-scope, so the same numbers on page 41 mean nothing here.
+    const found = overlappingFootnotes([mark("a", 10, 20, "p41")], {
+      kind: "text",
+      start: 10,
+      end: 20,
+      scope: "p40",
+    });
+    expect(found).toEqual([]);
+  });
+
+  it("does not compare a region with a run of text", () => {
+    const region: DocFootnote = {
+      id: "r",
+      kind: "note",
+      anchor: { kind: "region", x: 0, y: 0, w: 100, h: 50 },
+      excerpt: "r",
+      createdAt: 1,
+    };
+    expect(overlappingFootnotes([region], { kind: "text", start: 0, end: 10 })).toEqual([]);
+  });
+
+  it("finds overlapping regions", () => {
+    const region: DocFootnote = {
+      id: "r",
+      kind: "note",
+      anchor: { kind: "region", x: 0, y: 0, w: 100, h: 50 },
+      excerpt: "r",
+      createdAt: 1,
+    };
+    expect(
+      overlappingFootnotes([region], { kind: "region", x: 50, y: 25, w: 100, h: 50 }),
+    ).toHaveLength(1);
+    expect(
+      overlappingFootnotes([region], { kind: "region", x: 200, y: 0, w: 10, h: 10 }),
+    ).toEqual([]);
+  });
+});
+
+describe("footnoteAtSamePlace", () => {
+  const mark = (id: string, start: number, end: number): DocFootnote => ({
+    id,
+    kind: "note",
+    anchor: { kind: "text", start, end },
+    excerpt: id,
+    createdAt: 1,
+  });
+
+  it("recognises the very same span", () => {
+    // This is the case that must not make a second ribbon: re-selecting words
+    // you already marked means you are trying to get back to the note.
+    expect(
+      footnoteAtSamePlace([mark("a", 10, 20)], { kind: "text", start: 10, end: 20 })?.id,
+    ).toBe("a");
+  });
+
+  it("does not match a span that merely overlaps", () => {
+    expect(footnoteAtSamePlace([mark("a", 10, 20)], { kind: "text", start: 10, end: 21 })).toBeNull();
+  });
+
+  it("returns null when the page is unmarked", () => {
+    expect(footnoteAtSamePlace([], { kind: "text", start: 0, end: 5 })).toBeNull();
   });
 });

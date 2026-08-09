@@ -109,6 +109,60 @@ export function addFootnote(
   return [...kept, entry].sort(sortByPosition);
 }
 
+/**
+ * Marks the reader has just selected over.
+ *
+ * The question this answers is what should happen when a new selection lands on
+ * words that are already annotated, and the honest answer is "it depends, so
+ * say so rather than guess":
+ *
+ *   - **Exactly the same span** is not a new annotation. Nobody marks the same
+ *     words twice on purpose; they are trying to get back to the note they
+ *     already made, and {@link samePlace} already knows what "the same" means.
+ *     That case opens the existing card instead of making a duplicate.
+ *   - **Overlapping but different** is a real new mark — selecting a paragraph
+ *     that happens to contain a marked phrase is a perfectly ordinary thing to
+ *     do — but it is also exactly when a reader is most likely to be making a
+ *     near-duplicate by accident. So the overlap is offered as a row in the
+ *     sheet, and choosing it goes to the existing note.
+ *
+ * What is deliberately *not* done is merging or extending. The reader chose a
+ * span; quietly widening it to swallow a mark they did not select would be a
+ * different quote from the one they are looking at.
+ */
+export function overlappingFootnotes(
+  footnotes: readonly DocFootnote[],
+  anchor: DocAnchor,
+): DocFootnote[] {
+  return footnotes.filter((entry) => anchorsOverlap(entry.anchor, anchor));
+}
+
+/** Does `a` share any of `b`'s span? Same scope only — see `docAnchors`. */
+export function anchorsOverlap(a: DocAnchor, b: DocAnchor): boolean {
+  if (a.scope !== b.scope) return false;
+  if (isTextAnchor(a) && isTextAnchor(b)) {
+    // Touching end-to-start is adjacency, not overlap: a quote that begins
+    // where another ends has nothing in common with it.
+    return a.start < b.end && b.start < a.end;
+  }
+  if (isRegionAnchor(a) && isRegionAnchor(b)) {
+    return (
+      a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    );
+  }
+  // A region and a run of text are not comparable — a band drawn over a
+  // paragraph is a picture of it, not a claim about its characters.
+  return false;
+}
+
+/** The mark this selection *is*, if the reader has already made it. */
+export function footnoteAtSamePlace(
+  footnotes: readonly DocFootnote[],
+  anchor: DocAnchor,
+): DocFootnote | null {
+  return footnotes.find((entry) => samePlace(entry.anchor, anchor)) ?? null;
+}
+
 export function removeFootnote(
   footnotes: readonly DocFootnote[],
   id: string,

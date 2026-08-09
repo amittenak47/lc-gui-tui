@@ -35,7 +35,13 @@ import {
   textOf,
   type DocAnchor,
 } from "../util/docAnchors";
-import { numberFootnotes, orderScopes, type DocFootnote } from "../util/docFootnotes";
+import {
+  footnoteAtSamePlace,
+  numberFootnotes,
+  orderScopes,
+  overlappingFootnotes,
+  type DocFootnote,
+} from "../util/docFootnotes";
 import { LONG_PRESS_MS } from "../util/gesture";
 import {
   claimSelectionGesture,
@@ -780,6 +786,17 @@ export function DocSelectionLayer({
 
 
 
+  /** Numbering, so an offered mark is named the way the page names it. */
+  const footnoteNumbers = numberFootnotes(footnotes);
+  /** The mark this selection already is, if any — see `footnoteAtSamePlace`. */
+  const existingHere = selection ? footnoteAtSamePlace(footnotes, selection.anchor) : null;
+  /** Marks it merely touches. The exact match is not repeated among them. */
+  const overlaps = selection
+    ? overlappingFootnotes(footnotes, selection.anchor).filter(
+        (entry) => entry.id !== existingHere?.id,
+      )
+    : [];
+
   const act = (run: ((selection: DocSelectionResult, anchorRect: DOMRect | null) => void) | undefined) => {
     const current = selection;
     const anchorRect = highlightBox();
@@ -948,15 +965,12 @@ export function DocSelectionLayer({
               data-region={isRegionAnchor(footnote.anchor) ? "" : undefined}
               title={footnoteTitle(footnote, number)}
               aria-label={footnoteTitle(footnote, number)}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-                // Same reason as the confirm chip: in Scroll mode the board's
-                // gatekeeper captures the pointer, the up is retargeted, and no
-                // click is generated — so a ribbon tapped while reading did
-                // nothing at all. Primary button only, so a right-click still
-                // reaches the context menu below.
-                if (event.button !== 0) return;
-                event.preventDefault();
+              // A plain click again. The board's gatekeeper used to swallow
+              // pointerdown one node above this, which made a tap on a ribbon
+              // do nothing at all while reading; `isScrollSurface` now excludes
+              // the chrome painted over the page, so ordinary clicks work here.
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
                 const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
                 onOpenFootnote?.(footnote, rect);
               }}
@@ -991,7 +1005,25 @@ export function DocSelectionLayer({
               className="lc-doc-confirm-btn lc-doc-confirm-yes"
               aria-label="Use this selection"
               title="Use this selection"
-              onClick={() => setPhase("actions")}
+              onClick={() => {
+                /*
+                 * Re-marking the very same words is not a new mark.
+                 *
+                 * Nobody annotates one span twice on purpose — they are trying
+                 * to get back to the note they already made — so this goes
+                 * straight to that card instead of offering to make a
+                 * duplicate beside it. Anything less than an exact match is a
+                 * real new selection and gets the sheet, with the overlap
+                 * listed in it.
+                 */
+                if (existingHere) {
+                  const rect = highlightBox();
+                  dismiss();
+                  onOpenFootnote?.(existingHere, rect);
+                  return;
+                }
+                setPhase("actions");
+              }}
             >
               ✓
             </button>
@@ -1026,6 +1058,36 @@ export function DocSelectionLayer({
               <p className="lc-doc-sheet-excerpt">
                 {selection.excerpt || "This area of the page"}
               </p>
+              {/*
+                Marks this selection has landed on.
+
+                Offered rather than assumed. Selecting a paragraph that happens
+                to contain a marked phrase is an ordinary thing to do and makes
+                a real new mark — but it is also exactly when a near-duplicate
+                gets made by accident, so the note already there is one tap
+                away. Built from the same rows the overview card uses.
+              */}
+              {overlaps.length > 0 && (
+                <ul className="lc-doc-sheet-marks" aria-label="Marks on this selection">
+                  {overlaps.map((footnote) => (
+                    <li key={footnote.id}>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="lc-coach-scope-option"
+                        onClick={() => {
+                          const rect = highlightBox();
+                          dismiss();
+                          onOpenFootnote?.(footnote, rect);
+                        }}
+                      >
+                        <strong>{`Open ${footnoteNumbers.get(footnote.id) ?? ""}`.trim()}</strong>
+                        <span className="lc-muted">{footnote.excerpt || "this area"}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <div className="lc-doc-sheet-actions">
                 {/*
                   A highlight over a scanned plate has no words in it, so Copy
