@@ -170,3 +170,44 @@ describe("findStaleMdInkDoc", () => {
     expect(findStaleMdInkDoc("other.md", "h2")).toBeNull();
   });
 });
+
+describe("footnotes on an entry", () => {
+  const mark = (start: number, end: number) => ({
+    id: `fn-${start}`,
+    kind: "search" as const,
+    anchor: { start, end },
+    excerpt: "hash maps",
+    createdAt: 1,
+    query: "hash maps",
+  });
+
+  it("saves and reloads the marks a reading session left", () => {
+    const saved = saveMdInkDoc({
+      name: "notes.md",
+      hash: "h",
+      source: "# src",
+      board: board(),
+      footnotes: [mark(0, 9)],
+    });
+    expect(getMdInkDoc(saved.id)?.footnotes).toEqual([mark(0, 9)]);
+  });
+
+  it("keeps the existing set when a caller does not track footnotes", () => {
+    // The autosave tick and the sidecar import both save without an opinion
+    // about footnotes; neither should wipe the set the session built up.
+    const saved = saveMdInkDoc({
+      name: "notes.md",
+      hash: "h",
+      source: "# src",
+      board: board(),
+      footnotes: [mark(0, 9)],
+    });
+    saveMdInkDoc({ id: saved.id, name: "notes.md", hash: "h", source: "# src", board: board() });
+    expect(getMdInkDoc(saved.id)?.footnotes).toHaveLength(1);
+  });
+
+  it("reads an entry written before footnotes existed as having none", () => {
+    const saved = saveMdInkDoc({ name: "old.md", hash: "h", source: "# src", board: board() });
+    expect(getMdInkDoc(saved.id)?.footnotes).toEqual([]);
+  });
+});

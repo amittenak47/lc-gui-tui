@@ -308,24 +308,55 @@ export function DocSelectionLayer({
     };
   }, [enabled, applySelection, clearGesture, dismiss, offsetAt]);
 
-  // Ribbons are placed from the live DOM, so they follow a re-render of the
-  // document (a theme change, a font landing) without storing any geometry.
+  /*
+   * Ribbons are placed from the live DOM, so they follow a re-render of the
+   * document — a theme change, a font landing — without storing any geometry.
+   *
+   * Placing them once on mount is not enough, because not every document *has*
+   * its text on mount. A PDF's words arrive with the text layer, seconds after
+   * the pages do, and a reopened book put its ribbons on a page that was still
+   * blank: every anchor failed to resolve, and nothing ever asked again. So the
+   * body is watched, and placement re-runs when its text changes. A mutation
+   * observer rather than a prop the renderers report through: the layer should
+   * not have to know which of them is slow, and the next one will be too.
+   */
   useLayoutEffect(() => {
     const host = bodyRef.current;
     if (!host) {
       setRibbons([]);
       return;
     }
-    const placed: Array<{ footnote: DocFootnote; at: LocalRect }> = [];
-    for (const footnote of footnotes) {
-      if (scope && footnote.anchor.scope && footnote.anchor.scope !== scope) continue;
-      const range = rangeFromAnchor(host, footnote.anchor);
-      if (!range) continue;
-      const [first] = localRects(host, range);
-      if (!first) continue;
-      placed.push({ footnote, at: first });
-    }
-    setRibbons(placed);
+
+    const place = () => {
+      const placed: Array<{ footnote: DocFootnote; at: LocalRect }> = [];
+      for (const footnote of footnotes) {
+        if (scope && footnote.anchor.scope && footnote.anchor.scope !== scope) continue;
+        const range = rangeFromAnchor(host, footnote.anchor);
+        if (!range) continue;
+        const [first] = localRects(host, range);
+        if (!first) continue;
+        placed.push({ footnote, at: first });
+      }
+      setRibbons(placed);
+    };
+    place();
+
+    if (footnotes.length === 0 || typeof MutationObserver !== "function") return;
+    // Coalesced to a frame: a text layer lands as hundreds of appended spans,
+    // and re-measuring on each one would be a layout read per span.
+    let frame: number | null = null;
+    const observer = new MutationObserver(() => {
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        place();
+      });
+    });
+    observer.observe(host, { childList: true, subtree: true, characterData: true });
+    return () => {
+      observer.disconnect();
+      if (frame != null) cancelAnimationFrame(frame);
+    };
   }, [footnotes, scope, children]);
 
   const act = (run: ((selection: DocSelectionResult) => void) | undefined) => {
