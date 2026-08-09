@@ -1148,8 +1148,6 @@ export function App() {
   const lastSavedHashRef = useRef<number | null>(null);
   /** Ink op count at the previous tick, for "is the hand still moving?". */
   const lastTickInkOpsRef = useRef(-1);
-  /** Ticks deferred in a row because writing was still going on. */
-  const deferredSavesRef = useRef(0);
   /** Has the "out of space" banner already been shown this session? */
   const storageFullShownRef = useRef(false);
   /**
@@ -1182,31 +1180,27 @@ export function App() {
       }
 
       /*
-       * Not while they are writing.
+       * Not while the tip is on the paper.
        *
-       * Saving walks every element and every ink point on the page and hands
-       * the lot to `JSON.stringify` on the main thread — the board goes on the
-       * wire, and the scratchpad goes to `localStorage`, which is a blocking
-       * write. On a timer that cost lands wherever it lands, and every so often
-       * that is under the nib: the stroke stops dead partway through a letter
-       * and the next one feels like it is catching up. It reads as random, but
-       * it is not — a long stroke takes longer, so the tick is likelier to
-       * land inside an "e" or a "p" than inside an "i".
+       * This used to be a much bigger deferral, and the reason it could shrink
+       * is that the cost it was hiding from is mostly gone. Saving meant
+       * walking every element and every ink point and handing the lot to
+       * `JSON.stringify` on the main thread — blocking, and landing wherever
+       * the timer put it, which every so often was under the nib: the stroke
+       * stopped dead partway through a letter. So the tick also waited out the
+       * gaps *between* letters, with a ceiling so a long burst still got saved.
        *
-       * So wait for a gap in the writing. The tip being down is the obvious
-       * one; the op count still moving means the pen is between letters, which
-       * is a gap far too short to spend on this. A ceiling keeps a long unbroken
-       * burst from going unsaved indefinitely, and even a forced save waits for
-       * the tip to come off the paper.
+       * Now the library write is one entry rather than thirty, it goes to
+       * IndexedDB rather than through a blocking string store, and the ink is
+       * encoded into typed arrays in a single pass instead of stringified. What
+       * is left on the main thread is small enough that the between-letters
+       * deferral was costing more in unsaved work than it was buying in
+       * smoothness. The tip being down is still worth waiting out: it is free
+       * to check, and there is nothing to gain from saving a stroke that is
+       * halfway drawn.
        */
-      const stillWriting =
-        lastTickInkOpsRef.current !== inkOps || board.isInking();
       lastTickInkOpsRef.current = inkOps;
-      if (board.isInking() || (stillWriting && deferredSavesRef.current < 4)) {
-        deferredSavesRef.current += 1;
-        return;
-      }
-      deferredSavesRef.current = 0;
+      if (board.isInking()) return;
 
       if (isMdInk(problem)) {
         /*
@@ -1226,30 +1220,31 @@ export function App() {
         }
         const source = mdInkSourceRef.current;
         if (!source) return;
-        try {
-          const saved = saveMdInkDoc({
-            id: mdInkDocIdRef.current ?? undefined,
-            name: source.name,
-            hash: source.hash,
-            source: source.text,
-            docType: source.docType,
-            board: board.saveBoard(),
-            footnotes: mdInkFootnotesRef.current,
+        // Marked attempted before the write rather than after it. The save is
+        // async now, so a tick three seconds later would otherwise start a
+        // second write of the same scene while the first was still in flight —
+        // and on failure, `lastSavedHashRef` staying behind used to mean every
+        // subsequent tick re-serialised a library the store had already
+        // refused. One attempt per change is the most that can ever help.
+        lastSavedHashRef.current = hash;
+        void saveMdInkDoc({
+          id: mdInkDocIdRef.current ?? undefined,
+          name: source.name,
+          hash: source.hash,
+          source: source.text,
+          docType: source.docType,
+          board: board.saveBoard(),
+          footnotes: mdInkFootnotesRef.current,
+        })
+          .then((saved) => {
+            if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
+          })
+          .catch((cause: unknown) => {
+            // A *full library* is not worth interrupting a writing session for;
+            // the explicit Save on the way out reports it properly. A full
+            // *device* is, because nothing on the way out will succeed either.
+            noteStorageFull(cause);
           });
-          if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
-          lastSavedHashRef.current = hash;
-        } catch (cause) {
-          // A *full library* is not worth interrupting a writing session for;
-          // the explicit Save on the way out reports it properly. A full
-          // *device* is, because nothing on the way out will succeed either.
-          noteStorageFull(cause);
-          // Either way, mark this scene attempted. `lastSavedHashRef` used to
-          // stay behind on failure, so every subsequent tick re-serialised the
-          // whole library into a store that had already refused it — full cost,
-          // no progress, three seconds apart, while someone is writing. One
-          // attempt per change is the most that can ever help.
-          lastSavedHashRef.current = hash;
-        }
         return;
       }
 
@@ -1272,29 +1267,26 @@ export function App() {
       const blob = board.saveBoard();
       dirtyRef.current = true;
       if (isScratchpad(problem)) {
-        try {
-          const saved = saveScratchNotebook({
-            id: scratchNotebookId ?? undefined,
-            board: blob,
-            agent: persistableCoachMessages(coachMessages),
-            pageCount: Math.max(
-              scratchPageCount,
-              countScratchPages(blob.elements),
-            ),
+        // Marked attempted before the write — see the md-ink tick above for
+        // both halves of why.
+        lastSavedHashRef.current = hash;
+        void saveScratchNotebook({
+          id: scratchNotebookId ?? undefined,
+          board: blob,
+          agent: persistableCoachMessages(coachMessages),
+          pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
+        })
+          .then((saved) => {
+            if (!scratchNotebookId) setScratchNotebookId(saved.id);
+          })
+          .catch((cause: unknown) => {
+            if (cause instanceof ScratchpadLibraryFullError) {
+              scratchLibResumeRef.current = null;
+              setScratchLibOpen(true);
+            } else {
+              noteStorageFull(cause);
+            }
           });
-          if (!scratchNotebookId) setScratchNotebookId(saved.id);
-          lastSavedHashRef.current = hash;
-        } catch (cause) {
-          if (cause instanceof ScratchpadLibraryFullError) {
-            scratchLibResumeRef.current = null;
-            setScratchLibOpen(true);
-          } else {
-            noteStorageFull(cause);
-          }
-          // See the md-ink tick: retrying an identical over-quota write every
-          // three seconds costs the full serialisation and cannot succeed.
-          lastSavedHashRef.current = hash;
-        }
         return;
       }
       void client.putBoard(problem.task_id, blob, problem.dataset).then(() => {
@@ -1612,7 +1604,7 @@ export function App() {
       boardSaveSuspendedRef.current = true;
       agentSaveSuspendedRef.current = true;
       try {
-        migrateLegacyScratchpad(countScratchPages);
+        await migrateLegacyScratchpad(countScratchPages);
         setBoardPreparing(true);
         setProblem(SCRATCHPAD_PROBLEM);
         setPseudocode("");
@@ -1623,8 +1615,12 @@ export function App() {
         let restored = false;
         let notebookId: string | null = opts?.notebookId ?? null;
 
-        if (!opts?.fresh && notebookId) {
-          const notebook = getScratchNotebook(notebookId);
+        // Read once and kept: the entry is used for the restore, for the
+        // discard baseline, and again for the ink re-apply after the layer
+        // mounts. Three reads of the same record would be three trips to the
+        // store for a value that cannot have changed in between.
+        const notebook = !opts?.fresh && notebookId ? await getScratchNotebook(notebookId) : null;
+        if (notebookId) {
           if (notebook) {
             const pages = Math.min(
               SCRATCHPAD_PAGE_LIMIT,
@@ -1658,7 +1654,7 @@ export function App() {
         // one means deleting whatever the autosave went on to create for it.
         scratchBaselineRef.current = {
           id: restored ? notebookId : null,
-          entry: restored && notebookId ? getScratchNotebook(notebookId) : null,
+          entry: restored ? notebook : null,
         };
 
         boardRef.current?.applyThemeInk(themeId);
@@ -1667,9 +1663,8 @@ export function App() {
         await boardRef.current?.waitForTemplate();
         await boardRef.current?.settleFitView();
         // Ink layer may have mounted after the first restore — re-apply saved strokes.
-        if (restored && notebookId) {
-          const notebook = getScratchNotebook(notebookId);
-          const notebookInk = notebook ? inkOpsFrom(notebook.board) : [];
+        if (restored && notebook) {
+          const notebookInk = inkOpsFrom(notebook.board);
           if (notebookInk.length > 0) boardRef.current?.setInkOps(notebookInk);
         }
 
@@ -1769,8 +1764,8 @@ export function App() {
         }
         const hash = bytes ? hashBytes(bytes) : hashMarkdown(text);
         const existing = input.docId
-          ? getMdInkDoc(input.docId)
-          : findMdInkDocByHash(hash);
+          ? await getMdInkDoc(input.docId)
+          : await findMdInkDocByHash(hash);
 
         /*
          * The bytes go in before anything is restored over them.
@@ -3211,22 +3206,23 @@ export function App() {
         const board = boardRef.current;
         const blob = board?.saveBoard();
         if (!blob) return;
-        try {
-          const saved = saveScratchNotebook({
-            id: scratchNotebookId ?? undefined,
-            board: blob,
-            agent,
-            pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
+        void saveScratchNotebook({
+          id: scratchNotebookId ?? undefined,
+          board: blob,
+          agent,
+          pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
+        })
+          .then((saved) => {
+            if (!scratchNotebookId) setScratchNotebookId(saved.id);
+          })
+          .catch((cause: unknown) => {
+            if (cause instanceof ScratchpadLibraryFullError) {
+              scratchLibResumeRef.current = null;
+              setScratchLibOpen(true);
+            } else {
+              noteStorageFull(cause);
+            }
           });
-          if (!scratchNotebookId) setScratchNotebookId(saved.id);
-        } catch (cause) {
-          if (cause instanceof ScratchpadLibraryFullError) {
-            scratchLibResumeRef.current = null;
-            setScratchLibOpen(true);
-          } else {
-            noteStorageFull(cause);
-          }
-        }
         return;
       }
       void client
@@ -3401,16 +3397,18 @@ export function App() {
    * the save the writer had just asked for — the worst possible reading of a
    * button labelled Discard.
    */
-  const rebaselineScratchSession = useCallback((id: string) => {
-    scratchBaselineRef.current = { id, entry: getScratchNotebook(id) };
+  const rebaselineScratchSession = useCallback(async (id: string) => {
+    scratchBaselineRef.current = { id, entry: await getScratchNotebook(id) };
   }, []);
 
   const discardScratchSession = useCallback(() => {
     const baseline = scratchBaselineRef.current;
+    // Fire-and-forget, as with the document pad: the session is torn down
+    // below regardless, and Discard should not wait on a store write.
     if (baseline.entry && baseline.id) {
-      restoreScratchNotebook(baseline.entry);
+      void restoreScratchNotebook(baseline.entry).catch(() => {});
     } else if (scratchNotebookId) {
-      deleteScratchNotebook(scratchNotebookId);
+      void deleteScratchNotebook(scratchNotebookId).catch(() => {});
     }
     scratchBaselineRef.current = { id: null, entry: null };
     scratchPristineHashRef.current = null;
@@ -3445,10 +3443,13 @@ export function App() {
    */
   const discardMdInkSession = useCallback(() => {
     const baseline = mdInkBaselineRef.current;
+    // Fire-and-forget: the in-memory session is torn down below either way, and
+    // making Discard wait on a store write would put a spinner on the one
+    // action whose whole point is that it costs nothing.
     if (baseline.entry && baseline.id) {
-      restoreMdInkDoc(baseline.entry);
+      void restoreMdInkDoc(baseline.entry).catch(() => {});
     } else if (mdInkDocId) {
-      deleteMdInkDoc(mdInkDocId);
+      void deleteMdInkDoc(mdInkDocId).catch(() => {});
     }
     mdInkBaselineRef.current = { id: null, entry: null };
     mdInkPristineHashRef.current = null;
@@ -3459,14 +3460,14 @@ export function App() {
   }, [mdInkDocId]);
 
   /** Commit the annotations to the library. Returns the entry, or null on failure. */
-  const saveMdInkSession = useCallback((): MdInkDoc | null => {
+  const saveMdInkSession = useCallback(async (): Promise<MdInkDoc | null> => {
     const board = boardRef.current;
     const source = mdInkSource;
     if (!board || !source) return null;
     const blob = board.saveBoard();
     if (!blob) return null;
     try {
-      const saved = saveMdInkDoc({
+      const saved = await saveMdInkDoc({
         id: mdInkDocId ?? undefined,
         name: source.name,
         hash: source.hash,
@@ -3476,8 +3477,9 @@ export function App() {
         footnotes: mdInkFootnotes,
       });
       setMdInkDocId(saved.id);
-      // Discard now rolls back to this save, not past it.
-      mdInkBaselineRef.current = { id: saved.id, entry: getMdInkDoc(saved.id) };
+      // Discard now rolls back to this save, not past it. `saved` is the entry
+      // just written, so there is nothing to be gained by reading it back.
+      mdInkBaselineRef.current = { id: saved.id, entry: saved };
       return saved;
     } catch (cause) {
       if (cause instanceof MdInkLibraryFullError) {
@@ -3631,7 +3633,7 @@ export function App() {
       try {
         if (isMdInk(problem)) {
           if (save) {
-            const saved = saveMdInkSession();
+            const saved = await saveMdInkSession();
             if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
           } else {
             discardMdInkSession();
@@ -3646,14 +3648,14 @@ export function App() {
             const blob = boardRef.current?.saveBoard();
             if (blob) {
               try {
-                const saved = saveScratchNotebook({
+                const saved = await saveScratchNotebook({
                   id: scratchNotebookId ?? undefined,
                   board: blob,
                   agent: persistableCoachMessages(coachMessages),
                   pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
                 });
                 setScratchNotebookId(saved.id);
-                rebaselineScratchSession(saved.id);
+                await rebaselineScratchSession(saved.id);
               } catch (cause) {
                 if (cause instanceof ScratchpadLibraryFullError) {
                   await dismissDialog();
@@ -4526,8 +4528,9 @@ export function App() {
           onChoose={(choice, docId) => {
             setMdInkEntryOpen(false);
             if (choice === "save") {
-              const saved = saveMdInkSession();
-              if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+              void saveMdInkSession().then((saved) => {
+                if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+              });
               return;
             }
             if (choice === "export") {
@@ -4539,12 +4542,12 @@ export function App() {
               return;
             }
             if (choice === "recent" && docId) {
-              const entry = getMdInkDoc(docId);
-              if (!entry) {
-                setError("That document is no longer in the library.");
-                return;
-              }
               void (async () => {
+                const entry = await getMdInkDoc(docId);
+                if (!entry) {
+                  setError("That document is no longer in the library.");
+                  return;
+                }
                 if (!isBinaryDocType(entry.docType)) {
                   await openMdInk({
                     name: entry.name,
@@ -4609,29 +4612,31 @@ export function App() {
             if (choice === "save") {
               const board = boardRef.current;
               if (!board || !problem || !isScratchpad(problem)) return;
-              try {
-                const blob = board.saveBoard();
-                const saved = saveScratchNotebook({
-                  id: scratchNotebookId ?? undefined,
-                  board: blob,
-                  agent: persistableCoachMessages(coachMessages),
-                  pageCount: Math.max(
-                    scratchPageCount,
-                    countScratchPages(blob.elements),
-                  ),
-                });
-                setScratchNotebookId(saved.id);
-                // Discard now rolls back to this save, not past it.
-                rebaselineScratchSession(saved.id);
-                setNotice(`Saved “${saved.title}”.`);
-              } catch (cause) {
-                if (cause instanceof ScratchpadLibraryFullError) {
-                  scratchLibResumeRef.current = () => setScratchEntryOpen(true);
-                  setScratchLibOpen(true);
-                  return;
+              void (async () => {
+                try {
+                  const blob = board.saveBoard();
+                  const saved = await saveScratchNotebook({
+                    id: scratchNotebookId ?? undefined,
+                    board: blob,
+                    agent: persistableCoachMessages(coachMessages),
+                    pageCount: Math.max(
+                      scratchPageCount,
+                      countScratchPages(blob.elements),
+                    ),
+                  });
+                  setScratchNotebookId(saved.id);
+                  // Discard now rolls back to this save, not past it.
+                  await rebaselineScratchSession(saved.id);
+                  setNotice(`Saved “${saved.title}”.`);
+                } catch (cause) {
+                  if (cause instanceof ScratchpadLibraryFullError) {
+                    scratchLibResumeRef.current = () => setScratchEntryOpen(true);
+                    setScratchLibOpen(true);
+                    return;
+                  }
+                  setError(messageOf(cause));
                 }
-                setError(messageOf(cause));
-              }
+              })();
               return;
             }
             if (choice === "load" && notebookId) {

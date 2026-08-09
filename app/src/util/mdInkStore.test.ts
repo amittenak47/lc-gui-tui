@@ -39,134 +39,134 @@ afterEach(() => {
 });
 
 describe("hashMarkdown", () => {
-  it("is stable for the same text and different for a change", () => {
+  it("is stable for the same text and different for a change", async () => {
     expect(hashMarkdown("# Notes\n")).toBe(hashMarkdown("# Notes\n"));
     expect(hashMarkdown("# Notes\n")).not.toBe(hashMarkdown("# Notes!\n"));
   });
 
-  it("separates texts of different length that would otherwise collide", () => {
+  it("separates texts of different length that would otherwise collide", async () => {
     expect(hashMarkdown("")).not.toBe(hashMarkdown("\0"));
   });
 });
 
 describe("saveMdInkDoc", () => {
-  it("updates the entry for markdown it has already seen", () => {
+  it("updates the entry for markdown it has already seen", async () => {
     const hash = hashMarkdown("# Notes");
-    const first = saveMdInkDoc({ name: "notes.md", hash, source: "# Notes", board: board("one") });
-    const second = saveMdInkDoc({ name: "notes.md", hash, source: "# Notes", board: board("two") });
+    const first = await saveMdInkDoc({ name: "notes.md", hash, source: "# Notes", board: board("one") });
+    const second = await saveMdInkDoc({ name: "notes.md", hash, source: "# Notes", board: board("two") });
 
     // The same document annotated twice is one library entry, not two.
     expect(second.id).toBe(first.id);
     expect(listMdInkDocs()).toHaveLength(1);
-    expect(getMdInkDoc(first.id)?.board.elements).toEqual([{ id: "two" }]);
+    expect((await getMdInkDoc(first.id))?.board.elements).toEqual([{ id: "two" }]);
   });
 
-  it("keeps annotations of different files apart", () => {
-    saveMdInkDoc({ name: "a.md", hash: hashMarkdown("# A"), source: "# src", board: board("a") });
-    saveMdInkDoc({ name: "b.md", hash: hashMarkdown("# B"), source: "# src", board: board("b") });
+  it("keeps annotations of different files apart", async () => {
+    await saveMdInkDoc({ name: "a.md", hash: hashMarkdown("# A"), source: "# src", board: board("a") });
+    await saveMdInkDoc({ name: "b.md", hash: hashMarkdown("# B"), source: "# src", board: board("b") });
     expect(listMdInkDocs()).toHaveLength(2);
   });
 
-  it("finds an annotation set by the markdown it was drawn over", () => {
+  it("finds an annotation set by the markdown it was drawn over", async () => {
     const hash = hashMarkdown("# Findable");
-    const saved = saveMdInkDoc({ name: "found.md", hash, source: "# Findable", board: board("ink") });
+    const saved = await saveMdInkDoc({ name: "found.md", hash, source: "# Findable", board: board("ink") });
     // Renaming or moving the file on disk must not lose its ink.
-    expect(findMdInkDocByHash(hash)?.id).toBe(saved.id);
-    expect(findMdInkDocByHash(hashMarkdown("# Different"))).toBeNull();
+    expect((await findMdInkDocByHash(hash))?.id).toBe(saved.id);
+    expect(await findMdInkDocByHash(hashMarkdown("# Different"))).toBeNull();
   });
 
-  it("gives two entries made in the same millisecond different ids", () => {
+  it("gives two entries made in the same millisecond different ids", async () => {
     vi.setSystemTime(new Date(1_700_000_000_000));
-    const a = saveMdInkDoc({ name: "a.md", hash: "h-a", source: "# src", board: board("a") });
-    const b = saveMdInkDoc({ name: "b.md", hash: "h-b", source: "# src", board: board("b") });
+    const a = await saveMdInkDoc({ name: "a.md", hash: "h-a", source: "# src", board: board("a") });
+    const b = await saveMdInkDoc({ name: "b.md", hash: "h-b", source: "# src", board: board("b") });
     expect(b.id).not.toBe(a.id);
     expect(listMdInkDocs()).toHaveLength(2);
   });
 
-  it("refuses a new document once the library is full", () => {
+  it("refuses a new document once the library is full", async () => {
     for (let i = 0; i < MD_INK_LIBRARY_LIMIT; i += 1) {
-      saveMdInkDoc({ name: `n${i}.md`, hash: `hash-${i}`, source: "# src", board: board() });
+      await saveMdInkDoc({ name: `n${i}.md`, hash: `hash-${i}`, source: "# src", board: board() });
     }
-    expect(() =>
+    await expect(
       saveMdInkDoc({ name: "extra.md", hash: "hash-extra", source: "# src", board: board() }),
-    ).toThrow(MdInkLibraryFullError);
+    ).rejects.toThrow(MdInkLibraryFullError);
   });
 
-  it("still updates a known document when the library is full", () => {
+  it("still updates a known document when the library is full", async () => {
     for (let i = 0; i < MD_INK_LIBRARY_LIMIT; i += 1) {
-      saveMdInkDoc({ name: `n${i}.md`, hash: `hash-${i}`, source: "# src", board: board() });
+      await saveMdInkDoc({ name: `n${i}.md`, hash: `hash-${i}`, source: "# src", board: board() });
     }
-    expect(() =>
+    await expect(
       saveMdInkDoc({ name: "n0.md", hash: "hash-0", source: "# src", board: board("more") }),
-    ).not.toThrow();
+    ).resolves.toBeTruthy();
   });
 
-  it("stores code documents with docType code and their source text", () => {
+  it("stores code documents with docType code and their source text", async () => {
     const hash = hashMarkdown("def f():\n  return 1\n");
-    const saved = saveMdInkDoc({
+    const saved = await saveMdInkDoc({
       name: "f.py",
       hash,
       docType: "code",
       source: "def f():\n  return 1\n",
       board: board("ink"),
     });
-    const loaded = getMdInkDoc(saved.id);
+    const loaded = await getMdInkDoc(saved.id);
     expect(loaded?.docType).toBe("code");
     expect(loaded?.source).toContain("def f()");
-    expect(findMdInkDocByHash(hash)?.id).toBe(saved.id);
+    expect((await findMdInkDocByHash(hash))?.id).toBe(saved.id);
   });
 });
 
 describe("restoreMdInkDoc", () => {
-  it("undoes a session's annotations without touching the rest", () => {
+  it("undoes a session's annotations without touching the rest", async () => {
     const hash = hashMarkdown("# Kept");
-    const original = saveMdInkDoc({ name: "kept.md", hash, source: "# Kept", board: board("original") });
-    const baseline = getMdInkDoc(original.id) as MdInkDoc;
-    saveMdInkDoc({ name: "other.md", hash: "other", source: "# src", board: board("other") });
+    const original = await saveMdInkDoc({ name: "kept.md", hash, source: "# Kept", board: board("original") });
+    const baseline = (await getMdInkDoc(original.id)) as MdInkDoc;
+    await saveMdInkDoc({ name: "other.md", hash: "other", source: "# src", board: board("other") });
 
-    saveMdInkDoc({ name: "kept.md", hash, source: "# Kept", board: board("scribbles") });
-    restoreMdInkDoc(baseline);
+    await saveMdInkDoc({ name: "kept.md", hash, source: "# Kept", board: board("scribbles") });
+    await restoreMdInkDoc(baseline);
 
-    expect(getMdInkDoc(original.id)).toEqual(baseline);
+    expect(await getMdInkDoc(original.id)).toEqual(baseline);
     expect(listMdInkDocs()).toHaveLength(2);
   });
 
-  it("does not freshen the timestamp the way a save does", () => {
-    const saved = saveMdInkDoc({ name: "a.md", hash: "h", source: "# src", board: board("a") });
-    const baseline = getMdInkDoc(saved.id) as MdInkDoc;
+  it("does not freshen the timestamp the way a save does", async () => {
+    const saved = await saveMdInkDoc({ name: "a.md", hash: "h", source: "# src", board: board("a") });
+    const baseline = (await getMdInkDoc(saved.id)) as MdInkDoc;
 
     vi.setSystemTime(new Date(Date.now() + 60_000));
-    saveMdInkDoc({ name: "a.md", hash: "h", source: "# src", board: board("b") });
-    restoreMdInkDoc(baseline);
+    await saveMdInkDoc({ name: "a.md", hash: "h", source: "# src", board: board("b") });
+    await restoreMdInkDoc(baseline);
 
-    expect(getMdInkDoc(saved.id)?.updatedAt).toBe(baseline.updatedAt);
+    expect((await getMdInkDoc(saved.id))?.updatedAt).toBe(baseline.updatedAt);
   });
 });
 
 describe("deleteMdInkDoc", () => {
-  it("is how an annotation set that was never wanted goes away", () => {
-    const saved = saveMdInkDoc({ name: "a.md", hash: "h", source: "# src", board: board() });
-    deleteMdInkDoc(saved.id);
-    expect(getMdInkDoc(saved.id)).toBeNull();
+  it("is how an annotation set that was never wanted goes away", async () => {
+    const saved = await saveMdInkDoc({ name: "a.md", hash: "h", source: "# src", board: board() });
+    await deleteMdInkDoc(saved.id);
+    expect(await getMdInkDoc(saved.id)).toBeNull();
     expect(listMdInkDocs()).toHaveLength(0);
   });
 });
 
 describe("findStaleMdInkDoc", () => {
-  it("names the old set when a file has been edited since", () => {
-    saveMdInkDoc({ name: "notes.md", hash: "old-hash", source: "# v1", board: board() });
+  it("names the old set when a file has been edited since", async () => {
+    await saveMdInkDoc({ name: "notes.md", hash: "old-hash", source: "# v1", board: board() });
     // Same file on disk, edited — the ink belongs to text that has moved.
     const stale = findStaleMdInkDoc("notes.md", "new-hash");
     expect(stale?.hash).toBe("old-hash");
   });
 
-  it("stays quiet when the text is unchanged", () => {
-    saveMdInkDoc({ name: "notes.md", hash: "same", source: "# v1", board: board() });
+  it("stays quiet when the text is unchanged", async () => {
+    await saveMdInkDoc({ name: "notes.md", hash: "same", source: "# v1", board: board() });
     expect(findStaleMdInkDoc("notes.md", "same")).toBeNull();
   });
 
-  it("does not confuse a different file that happens to be open", () => {
-    saveMdInkDoc({ name: "notes.md", hash: "h1", source: "# a", board: board() });
+  it("does not confuse a different file that happens to be open", async () => {
+    await saveMdInkDoc({ name: "notes.md", hash: "h1", source: "# a", board: board() });
     expect(findStaleMdInkDoc("other.md", "h2")).toBeNull();
   });
 });
@@ -181,33 +181,33 @@ describe("footnotes on an entry", () => {
     query: "hash maps",
   });
 
-  it("saves and reloads the marks a reading session left", () => {
-    const saved = saveMdInkDoc({
+  it("saves and reloads the marks a reading session left", async () => {
+    const saved = await saveMdInkDoc({
       name: "notes.md",
       hash: "h",
       source: "# src",
       board: board(),
       footnotes: [mark(0, 9)],
     });
-    expect(getMdInkDoc(saved.id)?.footnotes).toEqual([mark(0, 9)]);
+    expect((await getMdInkDoc(saved.id))?.footnotes).toEqual([mark(0, 9)]);
   });
 
-  it("keeps the existing set when a caller does not track footnotes", () => {
+  it("keeps the existing set when a caller does not track footnotes", async () => {
     // The autosave tick and the sidecar import both save without an opinion
     // about footnotes; neither should wipe the set the session built up.
-    const saved = saveMdInkDoc({
+    const saved = await saveMdInkDoc({
       name: "notes.md",
       hash: "h",
       source: "# src",
       board: board(),
       footnotes: [mark(0, 9)],
     });
-    saveMdInkDoc({ id: saved.id, name: "notes.md", hash: "h", source: "# src", board: board() });
-    expect(getMdInkDoc(saved.id)?.footnotes).toHaveLength(1);
+    await saveMdInkDoc({ id: saved.id, name: "notes.md", hash: "h", source: "# src", board: board() });
+    expect((await getMdInkDoc(saved.id))?.footnotes).toHaveLength(1);
   });
 
-  it("reads an entry written before footnotes existed as having none", () => {
-    const saved = saveMdInkDoc({ name: "old.md", hash: "h", source: "# src", board: board() });
-    expect(getMdInkDoc(saved.id)?.footnotes).toEqual([]);
+  it("reads an entry written before footnotes existed as having none", async () => {
+    const saved = await saveMdInkDoc({ name: "old.md", hash: "h", source: "# src", board: board() });
+    expect((await getMdInkDoc(saved.id))?.footnotes).toEqual([]);
   });
 });

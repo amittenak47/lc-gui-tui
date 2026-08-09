@@ -19,6 +19,7 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
+import { deleteContent, getContent, putContent } from "./contentStore";
 import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 import { setStorageItem } from "./storageQuota";
@@ -88,7 +89,23 @@ export interface MdInkDoc extends MdInkDocMeta {
   footnotes?: DocFootnote[];
 }
 
-const LIBRARY_KEY = "lc.md-ink.library.v1";
+/**
+ * The library as it was: whole entries, content and all, in one string.
+ *
+ * Still read, once, to bring an existing library across — see
+ * {@link adoptLegacyLibrary}. Never written again.
+ */
+const LEGACY_KEY = "lc.md-ink.library.v1";
+
+/** Meta only — thirty entries of a few hundred bytes each. */
+const LIBRARY_KEY = "lc.md-ink.index.v1";
+
+/** The heavy half of an entry, stored per-id in IndexedDB. See `contentStore`. */
+interface MdInkContent {
+  source: string;
+  board: BoardBlob;
+  footnotes: DocFootnote[];
+}
 
 /**
  * FNV-1a over the markdown source.
@@ -106,56 +123,120 @@ export function hashMarkdown(source: string): string {
   return `md${hash.toString(36)}-${source.length.toString(36)}`;
 }
 
-function readLibrary(): MdInkDoc[] {
+/**
+ * Bring a library written by the old build across, once.
+ *
+ * Read-old-write-new rather than a migration pass: this runs lazily on the
+ * first read, moves the meta over, and leaves the old key in place so a build
+ * rolled back still finds its library. Content is *not* moved eagerly — the
+ * legacy blob is left as a fallback for {@link readContent}, so nothing has to
+ * succeed at a bulk write for someone's annotations to still open.
+ */
+function adoptLegacyLibrary(): MdInkDocMeta[] {
   try {
-    const raw = localStorage.getItem(LIBRARY_KEY);
+    const raw = localStorage.getItem(LEGACY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as MdInkDoc[];
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (entry) =>
-        entry &&
-        typeof entry.id === "string" &&
-        typeof entry.hash === "string" &&
-        typeof entry.source === "string" &&
-        entry.board?.v === 1 &&
-        Array.isArray(entry.board.elements),
-    )
-    .map((entry) => ({
-      ...entry,
-      // Entries written before PDF and EPUB existed are all markdown.
-      docType: entry.docType ?? "markdown",
-      footnotes: sanitizeFootnotes(entry.footnotes),
-    }));
+    return parsed
+      .filter(
+        (entry) =>
+          entry &&
+          typeof entry.id === "string" &&
+          typeof entry.hash === "string" &&
+          entry.board?.v === 1,
+      )
+      .map(({ id, name, hash, docType, updatedAt }) => ({
+        id,
+        name,
+        hash,
+        // Entries written before PDF and EPUB existed are all markdown.
+        docType: docType ?? "markdown",
+        updatedAt,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/** The legacy entry for an id, if the old library is still on this device. */
+function legacyEntry(id: string): MdInkDoc | null {
+  try {
+    const raw = localStorage.getItem(LEGACY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as MdInkDoc[];
+    return Array.isArray(parsed) ? parsed.find((entry) => entry?.id === id) ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+function readIndex(): MdInkDocMeta[] {
+  try {
+    const raw = localStorage.getItem(LIBRARY_KEY);
+    if (!raw) return adoptLegacyLibrary();
+    const parsed = JSON.parse(raw) as MdInkDocMeta[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((entry) => entry && typeof entry.id === "string" && typeof entry.hash === "string")
+      .map((entry) => ({ ...entry, docType: entry.docType ?? "markdown" }));
   } catch {
     return [];
   }
 }
 
 /** Throws {@link StorageFullError} when the origin is out of room — see `storageQuota`. */
-function writeLibrary(entries: MdInkDoc[]): void {
+function writeIndex(entries: MdInkDocMeta[]): void {
   setStorageItem(LIBRARY_KEY, JSON.stringify(entries));
 }
 
+/**
+ * Listing is deliberately still synchronous.
+ *
+ * The library dialog renders thirty names; making it await would put a spinner
+ * on a list that is a few kilobytes of text. It reads only the index, which is
+ * the point of splitting content out — this used to `JSON.parse` every board in
+ * the store to show their file names.
+ */
 export function listMdInkDocs(): MdInkDocMeta[] {
-  return readLibrary()
-    .map(({ id, name, hash, docType, updatedAt }) => ({
-      id,
-      name,
-      hash,
-      docType,
-      updatedAt,
-    }))
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+  return readIndex().sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export function getMdInkDoc(id: string): MdInkDoc | null {
-  return readLibrary().find((entry) => entry.id === id) ?? null;
+/** Meta for one entry, without touching its content. */
+export function getMdInkDocMeta(id: string): MdInkDocMeta | null {
+  return readIndex().find((entry) => entry.id === id) ?? null;
+}
+
+async function readContent(meta: MdInkDocMeta): Promise<MdInkDoc | null> {
+  const content = await getContent<MdInkContent>(meta.id);
+  if (content?.board) {
+    return {
+      ...meta,
+      source: typeof content.source === "string" ? content.source : "",
+      board: content.board,
+      footnotes: sanitizeFootnotes(content.footnotes),
+    };
+  }
+  // Written by the old build, still whole in the legacy key.
+  const legacy = legacyEntry(meta.id);
+  if (!legacy) return null;
+  return {
+    ...meta,
+    source: typeof legacy.source === "string" ? legacy.source : "",
+    board: legacy.board,
+    footnotes: sanitizeFootnotes(legacy.footnotes),
+  };
+}
+
+export async function getMdInkDoc(id: string): Promise<MdInkDoc | null> {
+  const meta = getMdInkDocMeta(id);
+  return meta ? readContent(meta) : null;
 }
 
 /** The annotation set drawn over this exact markdown, if there is one. */
-export function findMdInkDocByHash(hash: string): MdInkDoc | null {
-  return readLibrary().find((entry) => entry.hash === hash) ?? null;
+export async function findMdInkDocByHash(hash: string): Promise<MdInkDoc | null> {
+  const meta = readIndex().find((entry) => entry.hash === hash);
+  return meta ? readContent(meta) : null;
 }
 
 /**
@@ -169,14 +250,11 @@ export function findMdInkDocByHash(hash: string): MdInkDoc | null {
  * lets the writer be told what happened.
  */
 export function findStaleMdInkDoc(name: string, hash: string): MdInkDocMeta | null {
-  const match = readLibrary().find((entry) => entry.name === name && entry.hash !== hash);
-  if (!match) return null;
-  const { id, name: entryName, hash: entryHash, docType, updatedAt } = match;
-  return { id, name: entryName, hash: entryHash, docType, updatedAt };
+  return readIndex().find((entry) => entry.name === name && entry.hash !== hash) ?? null;
 }
 
 /** See the note on `freshId` in `scratchpadStore` — same millisecond, same trap. */
-function freshId(library: readonly MdInkDoc[], now: number): string {
+function freshId(library: readonly MdInkDocMeta[], now: number): string {
   const base = `mdink-${now.toString(36)}`;
   if (!library.some((entry) => entry.id === base)) return base;
   for (let suffix = 1; ; suffix += 1) {
@@ -185,7 +263,20 @@ function freshId(library: readonly MdInkDoc[], now: number): string {
   }
 }
 
-export function saveMdInkDoc(input: {
+/**
+ * Save one entry.
+ *
+ * Async because content goes to IndexedDB, and that is the whole gain: a save
+ * now writes *this* entry rather than re-serialising the library, and the
+ * expensive half happens off the string path instead of under the nib.
+ *
+ * The index is written first and awaited last. If the content write fails, the
+ * throw propagates and the index has already recorded an entry whose content is
+ * missing — which reads back as `null` and is handled everywhere as "no saved
+ * board". The other order loses the entry entirely on a failure that only
+ * affected its payload.
+ */
+export async function saveMdInkDoc(input: {
   id?: string;
   name: string;
   hash: string;
@@ -193,43 +284,49 @@ export function saveMdInkDoc(input: {
   source: string;
   board: BoardBlob;
   footnotes?: readonly DocFootnote[];
-}): MdInkDoc {
-  const library = readLibrary();
+}): Promise<MdInkDoc> {
+  const index = readIndex();
   const now = Date.now();
   // An annotation set is identified by what it was drawn over, so re-saving the
   // same file updates its entry instead of stacking a second one beside it.
   const existing =
-    (input.id ? library.find((entry) => entry.id === input.id) : null) ??
-    library.find((entry) => entry.hash === input.hash) ??
+    (input.id ? index.find((entry) => entry.id === input.id) : null) ??
+    index.find((entry) => entry.hash === input.hash) ??
     null;
-  const id = existing?.id ?? input.id ?? freshId(library, now);
-  if (!existing && library.length >= MD_INK_LIBRARY_LIMIT) {
+  const id = existing?.id ?? input.id ?? freshId(index, now);
+  if (!existing && index.length >= MD_INK_LIBRARY_LIMIT) {
     throw new MdInkLibraryFullError(
       `At most ${MD_INK_LIBRARY_LIMIT} annotated documents — delete one to keep another.`,
     );
   }
-  const next: MdInkDoc = {
+  // Undefined means "this caller does not track footnotes", not "there are
+  // none" — an autosave from a path that never loaded them must not wipe the
+  // set the reading session built up.
+  const footnotes = input.footnotes
+    ? [...input.footnotes]
+    : (await getContent<MdInkContent>(id))?.footnotes ?? [];
+  const meta: MdInkDocMeta = {
     id,
     name: input.name.trim() || existing?.name || "Untitled.md",
     hash: input.hash,
     docType: input.docType ?? existing?.docType ?? "markdown",
     updatedAt: now,
+  };
+  writeIndex([meta, ...index.filter((entry) => entry.id !== id)]);
+  await putContent(id, {
     source: input.source,
     board: input.board,
-    // Undefined means "this caller does not track footnotes", not "there are
-    // none" — an autosave from a path that never loaded them must not wipe the
-    // set the reading session built up.
-    footnotes: input.footnotes ? [...input.footnotes] : existing?.footnotes ?? [],
-  };
-  writeLibrary([next, ...library.filter((entry) => entry.id !== id)]);
-  return next;
+    footnotes,
+  } satisfies MdInkContent);
+  return { ...meta, source: input.source, board: input.board, footnotes };
 }
 
-export function deleteMdInkDoc(id: string): void {
-  const library = readLibrary();
-  const going = library.find((entry) => entry.id === id) ?? null;
-  const kept = library.filter((entry) => entry.id !== id);
-  writeLibrary(kept);
+export async function deleteMdInkDoc(id: string): Promise<void> {
+  const index = readIndex();
+  const going = index.find((entry) => entry.id === id) ?? null;
+  const kept = index.filter((entry) => entry.id !== id);
+  writeIndex(kept);
+  await deleteContent(id);
   /*
    * A binary document's bytes outlive its entry unless something removes them.
    *
@@ -250,6 +347,12 @@ export function deleteMdInkDoc(id: string): void {
  * Same contract as the scratchpad's: no fresh timestamp, no limit check. See
  * `restoreScratchNotebook` for why both of those would be wrong here.
  */
-export function restoreMdInkDoc(entry: MdInkDoc): void {
-  writeLibrary([entry, ...readLibrary().filter((existing) => existing.id !== entry.id)]);
+export async function restoreMdInkDoc(entry: MdInkDoc): Promise<void> {
+  const { source, board, footnotes, ...meta } = entry;
+  writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
+  await putContent(entry.id, {
+    source,
+    board,
+    footnotes: footnotes ?? [],
+  } satisfies MdInkContent);
 }

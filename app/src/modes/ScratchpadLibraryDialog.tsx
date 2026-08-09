@@ -41,7 +41,7 @@ export function ScratchpadLibraryDialog({
   }, [onCancel]);
 
   const remove = (id: string) => {
-    deleteScratchNotebook(id);
+    void deleteScratchNotebook(id).catch(() => {});
     const next = listScratchNotebooks();
     setNotebooks(next);
     if (next.length < SCRATCHPAD_LIBRARY_LIMIT) onFreed();

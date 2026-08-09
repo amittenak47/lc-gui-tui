@@ -3,6 +3,7 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
+import { deleteContent, getContent, putContent } from "./contentStore";
 import { setStorageItem } from "./storageQuota";
 
 export const SCRATCHPAD_LIBRARY_LIMIT = 20;
@@ -30,11 +31,24 @@ export interface ScratchNotebook extends ScratchNotebookMeta {
   agent: unknown[];
 }
 
-const LIBRARY_KEY = "lc.scratchpad.library.v1";
+/**
+ * The library as it was: whole notebooks, boards and coach threads, in one
+ * string. Still read once to bring an existing library across; never written.
+ */
+const LEGACY_KEY = "lc.scratchpad.library.v1";
 
-function readLibrary(): ScratchNotebook[] {
+/** Meta only. See `contentStore` for why the two halves are separated. */
+const LIBRARY_KEY = "lc.scratchpad.index.v1";
+
+/** The heavy half: the board, and the coach thread that goes with it. */
+interface ScratchContent {
+  board: ScratchBoardBlob;
+  agent: unknown[];
+}
+
+function legacyLibrary(): ScratchNotebook[] {
   try {
-    const raw = localStorage.getItem(LIBRARY_KEY);
+    const raw = localStorage.getItem(LEGACY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as ScratchNotebook[];
     if (!Array.isArray(parsed)) return [];
@@ -50,23 +64,49 @@ function readLibrary(): ScratchNotebook[] {
   }
 }
 
+function readIndex(): ScratchNotebookMeta[] {
+  try {
+    const raw = localStorage.getItem(LIBRARY_KEY);
+    if (!raw) {
+      return legacyLibrary().map(({ id, title, updatedAt, pageCount }) => ({
+        id,
+        title,
+        updatedAt,
+        pageCount,
+      }));
+    }
+    const parsed = JSON.parse(raw) as ScratchNotebookMeta[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry) => entry && typeof entry.id === "string");
+  } catch {
+    return [];
+  }
+}
+
 /** Throws {@link StorageFullError} when the origin is out of room — see `storageQuota`. */
-function writeLibrary(entries: ScratchNotebook[]): void {
+function writeIndex(entries: ScratchNotebookMeta[]): void {
   setStorageItem(LIBRARY_KEY, JSON.stringify(entries));
 }
 
+/** Synchronous on purpose — the library dialog renders names, not boards. */
 export function listScratchNotebooks(): ScratchNotebookMeta[] {
-  return readLibrary()
-    .map(({ id, title, updatedAt, pageCount }) => ({ id, title, updatedAt, pageCount }))
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+  return readIndex().sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export function scratchLibraryCount(): number {
-  return readLibrary().length;
+  return readIndex().length;
 }
 
-export function getScratchNotebook(id: string): ScratchNotebook | null {
-  return readLibrary().find((entry) => entry.id === id) ?? null;
+export async function getScratchNotebook(id: string): Promise<ScratchNotebook | null> {
+  const meta = readIndex().find((entry) => entry.id === id);
+  if (!meta) return null;
+  const content = await getContent<ScratchContent>(id);
+  if (content?.board) {
+    return { ...meta, board: content.board, agent: Array.isArray(content.agent) ? content.agent : [] };
+  }
+  const legacy = legacyLibrary().find((entry) => entry.id === id);
+  if (!legacy) return null;
+  return { ...meta, board: legacy.board, agent: Array.isArray(legacy.agent) ? legacy.agent : [] };
 }
 
 /**
@@ -78,7 +118,7 @@ export function getScratchNotebook(id: string): ScratchNotebook | null {
  * quietly lost a notebook instead of gaining one. Rare by hand, routine when
  * anything creates notebooks in a loop.
  */
-function freshId(library: readonly ScratchNotebook[], now: number): string {
+function freshId(library: readonly ScratchNotebookMeta[], now: number): string {
   const base = `scratch-${now.toString(36)}`;
   if (!library.some((entry) => entry.id === base)) return base;
   for (let suffix = 1; ; suffix += 1) {
@@ -87,14 +127,14 @@ function freshId(library: readonly ScratchNotebook[], now: number): string {
   }
 }
 
-export function saveScratchNotebook(input: {
+export async function saveScratchNotebook(input: {
   id?: string;
   title?: string;
   board: ScratchBoardBlob;
   agent?: unknown[];
   pageCount: number;
-}): ScratchNotebook {
-  const library = readLibrary();
+}): Promise<ScratchNotebook> {
+  const library = readIndex();
   const now = Date.now();
   const id = input.id ?? freshId(library, now);
   const existing = library.find((entry) => entry.id === id);
@@ -112,24 +152,25 @@ export function saveScratchNotebook(input: {
       hour: "numeric",
       minute: "2-digit",
     })}`;
-  const next: ScratchNotebook = {
+  // An absent `agent` means "this caller has no opinion", not "the thread is
+  // empty" — the board autosave saves without one and must not wipe the chat.
+  const agent = Array.isArray(input.agent)
+    ? input.agent
+    : (await getContent<ScratchContent>(id))?.agent ?? [];
+  const meta: ScratchNotebookMeta = {
     id,
     title,
     updatedAt: now,
-    pageCount: Math.min(
-      SCRATCHPAD_PAGE_LIMIT,
-      Math.max(1, input.pageCount),
-    ),
-    board: input.board,
-    agent: Array.isArray(input.agent) ? input.agent : existing?.agent ?? [],
+    pageCount: Math.min(SCRATCHPAD_PAGE_LIMIT, Math.max(1, input.pageCount)),
   };
-  const without = library.filter((entry) => entry.id !== id);
-  writeLibrary([next, ...without]);
-  return next;
+  writeIndex([meta, ...library.filter((entry) => entry.id !== id)]);
+  await putContent(id, { board: input.board, agent } satisfies ScratchContent);
+  return { ...meta, board: input.board, agent };
 }
 
-export function deleteScratchNotebook(id: string): void {
-  writeLibrary(readLibrary().filter((entry) => entry.id !== id));
+export async function deleteScratchNotebook(id: string): Promise<void> {
+  writeIndex(readIndex().filter((entry) => entry.id !== id));
+  await deleteContent(id);
 }
 
 /**
@@ -142,19 +183,22 @@ export function deleteScratchNotebook(id: string): void {
  * writer just said they did not want to keep. The limit cannot bite either,
  * since this only ever restores an entry that was already in the library.
  */
-export function restoreScratchNotebook(entry: ScratchNotebook): void {
-  const without = readLibrary().filter((existing) => existing.id !== entry.id);
-  writeLibrary([entry, ...without]);
+export async function restoreScratchNotebook(entry: ScratchNotebook): Promise<void> {
+  const { board, agent, ...meta } = entry;
+  writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
+  await putContent(entry.id, { board, agent: agent ?? [] } satisfies ScratchContent);
 }
 
 /** Migrate the pre-library single-slot keys if present. */
-export function migrateLegacyScratchpad(pageCountFromElements: (elements: unknown[]) => number): void {
+export async function migrateLegacyScratchpad(
+  pageCountFromElements: (elements: unknown[]) => number,
+): Promise<void> {
   const LEGACY_BOARD = "lc.scratchpad.board.v1";
   const LEGACY_AGENT = "lc.scratchpad.agent.v1";
   try {
     const raw = localStorage.getItem(LEGACY_BOARD);
     if (!raw) return;
-    if (readLibrary().length > 0) {
+    if (readIndex().length > 0) {
       localStorage.removeItem(LEGACY_BOARD);
       localStorage.removeItem(LEGACY_AGENT);
       return;
@@ -171,7 +215,7 @@ export function migrateLegacyScratchpad(pageCountFromElements: (elements: unknow
     } catch {
       /* ignore */
     }
-    saveScratchNotebook({
+    await saveScratchNotebook({
       title: "Recovered scratchpad",
       board,
       agent,

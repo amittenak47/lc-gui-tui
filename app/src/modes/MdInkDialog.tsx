@@ -68,7 +68,10 @@ export function MdInkDialog(props: MdInkDialogProps) {
   const locked = pending || exiting;
 
   const removeDoc = (id: string) => {
-    deleteMdInkDoc(id);
+    // The index write is synchronous, so the list below is already correct;
+    // dropping the content is the async half and nothing on screen waits for
+    // it. A failure there strands a payload, not an entry.
+    void deleteMdInkDoc(id).catch(() => {});
     setDocs(listMdInkDocs());
   };
 
