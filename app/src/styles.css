@@ -7749,42 +7749,179 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * Sticker ribbon. Sits just past the end of the first line of the quote, small
- * enough to read around and big enough to hit with a thumb.
+ * Footnote markers, wearing the coach thread's clothes.
+ *
+ * A mark on the page and a turn in the chat are two views of one thing — the
+ * ribbon is where the conversation happened, the bubble is the conversation —
+ * so they use the same shape language: a tinted fill, a soft border, a tail off
+ * the corner, and the spring the chat menus pop with.
+ *
+ * Numbered, not iconographic. A magnifying glass says what kind of mark it is
+ * and nothing about *which* one, and "look at 12" is what a reader actually
+ * needs to say — to themselves on the way back, or to the coach.
+ *
+ * Colours are literal rather than themed. These live in the marks slot, which
+ * hangs off the board rather than off the page, so `--surface` and `--accent`
+ * there are the app chrome's — and the app chrome is light while the page under
+ * these is usually carbon. Naming the two palettes is shorter than teaching the
+ * slot to inherit the page's.
  */
 .lc-doc-footnote {
+  --lc-fn-fill: #dbe4ff;
+  --lc-fn-edge: #7c8cf8;
+  --lc-fn-text: #2c3a8c;
+
   position: absolute;
   /*
-   * Rides above the line, like the superscript it is standing in for.
+   * Rides above the line, like the superscript it stands in for. Sitting *in*
+   * the line put the marker on top of the next word, which is a mark that makes
+   * the page harder to read in the name of annotating it.
    *
-   * Anchored at the end of the quote's first line and lifted clear of it —
-   * sitting *in* the line put the marker on top of the next word, which is a
-   * mark that makes the page harder to read in the name of annotating it.
+   * Sized in page units, so it scales with the type it annotates rather than
+   * growing into a lozenge the moment the reader zooms in.
    */
-  transform: translate(1px, -58%);
-  width: 17px;
-  min-width: 17px;
-  height: 17px;
-  min-height: 17px;
-  padding: 0;
-  border-radius: 5px 5px 5px 1px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  font-size: 9px;
+  transform: translate(2px, -60%);
+  /* `min-height: 0` beats the base `button` rule's touch target — a marker is
+     read at page scale, not tapped at chrome scale. */
+  min-width: 13px;
+  min-height: 0;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px 7px 7px 2px;
+  border: 1px solid var(--lc-fn-edge);
+  background: var(--lc-fn-fill);
+  color: var(--lc-fn-text);
+  font-size: 8px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   pointer-events: auto;
-  box-shadow: 0 1px 4px rgb(0 0 0 / 18%);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
+  animation: lc-doc-footnote-pop 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.lc-doc-footnote-coach {
-  border-color: color-mix(in srgb, var(--accent, #6366f1) 55%, var(--line));
+/* The speech tail — a small wedge off the lower-left, as on a chat bubble. */
+.lc-doc-footnote::after {
+  content: "";
+  position: absolute;
+  left: -1px;
+  bottom: -3px;
+  width: 5px;
+  height: 5px;
+  background: var(--lc-fn-fill);
+  border-left: 1px solid var(--lc-fn-edge);
+  border-bottom: 1px solid var(--lc-fn-edge);
+  border-bottom-left-radius: 1px;
+  clip-path: polygon(0 100%, 100% 100%, 0 0);
 }
 
+@keyframes lc-doc-footnote-pop {
+  from {
+    opacity: 0;
+    transform: translate(2px, -60%) scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: translate(2px, -60%) scale(1);
+  }
+}
+
+.lc-doc-footnote-tag {
+  position: relative;
+  z-index: 1;
+}
+
+/* A search leads off the page rather than into the chat — ink, not accent. */
 .lc-doc-footnote-search {
-  border-color: color-mix(in srgb, var(--ink) 35%, var(--line));
+  --lc-fn-fill: #e6e8ec;
+  --lc-fn-edge: #9aa0aa;
+  --lc-fn-text: #33383f;
+}
+
+/* A highlight is the highlighter's own colour. */
+.lc-doc-footnote-note {
+  --lc-fn-fill: #ffe9a8;
+  --lc-fn-edge: #d9a400;
+  --lc-fn-text: #6b4b00;
+}
+
+/* Carbon paper: same hues, lifted so they read on a black page. */
+.lc-board-carbon .lc-doc-footnote {
+  --lc-fn-fill: #38408a;
+  --lc-fn-edge: #8f9dfb;
+  --lc-fn-text: #eef1ff;
+}
+
+.lc-board-carbon .lc-doc-footnote-search {
+  --lc-fn-fill: #33383f;
+  --lc-fn-edge: #8b929c;
+  --lc-fn-text: #eceef1;
+}
+
+.lc-board-carbon .lc-doc-footnote-note {
+  --lc-fn-fill: #6b4b00;
+  --lc-fn-edge: #e8b52a;
+  --lc-fn-text: #fff3d0;
+}
+
+/*
+ * A region mark is the area, not a point beside it.
+ *
+ * The button becomes the highlighted box — a translucent wash in the marker's
+ * own colour — and the numbered bubble tucks into its top-left corner. A
+ * highlighter sweep over a figure then reads as "this figure is annotated"
+ * rather than as a badge floating near it.
+ */
+.lc-doc-footnote[data-region] {
+  transform: none;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--lc-fn-edge) 22%, transparent);
+  border-color: color-mix(in srgb, var(--lc-fn-edge) 55%, transparent);
+  box-shadow: none;
+  align-items: flex-start;
+  justify-content: flex-start;
+  /*
+   * The wash does not pop; the number on it does.
+   *
+   * A translucent area fading in reads as the page changing rather than as a
+   * mark arriving, and an animation whose resting state comes from `fill-mode`
+   * is one more thing that can leave the box invisible if it never gets a first
+   * frame. The box is simply there, and the bubble springs in.
+   */
+  animation: none;
+  opacity: 1;
+}
+
+.lc-doc-footnote[data-region]::after {
+  content: none;
+}
+
+.lc-doc-footnote[data-region] .lc-doc-footnote-tag {
+  animation: lc-doc-footnote-pop 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  margin: -7px 0 0 -3px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px 7px 7px 2px;
+  border: 1px solid var(--lc-fn-edge);
+  background: var(--lc-fn-fill);
+  color: var(--lc-fn-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-doc-footnote {
+    animation-duration: 0.01s;
+  }
 }
 
 /* Action sheet — chrome, so it stays in screen space and does not scale. */
@@ -8045,4 +8182,70 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-coach-scope-option.is-active {
   border-color: color-mix(in srgb, var(--accent, #6366f1) 55%, var(--line));
   background: color-mix(in srgb, var(--accent, #6366f1) 12%, transparent);
+}
+
+
+/*
+ * The marker layer: the page's transform, the chrome's z-index.
+ *
+ * Footnote markers have to move with the words and sit over the ink. Those two
+ * cannot both be satisfied inside `.lc-page-content-slot` — that slot is opaque
+ * paper, so raising it above the ink would bury every stroke. A second slot,
+ * transformed in lockstep with the first (see `marksSlotNodeRef`), is what lets
+ * a mark be found in Annotate mode as well as Scroll.
+ */
+.lc-page-marks-slot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* Above `.lc-annotating-code .lc-raster-ink` (12) and the toolbar dock. */
+  z-index: 13;
+  transform-origin: 0 0;
+  will-change: transform;
+  pointer-events: none;
+}
+
+
+/*
+ * Highlighter: the document takes the pointer back for the length of a sweep.
+ *
+ * Annotate normally gives the whole surface to the ink layer, which is right
+ * for a pen and wrong for a tool whose mark belongs to the page rather than to
+ * the canvas. Turning the ink layer's pointers off — rather than raising the
+ * document above it — keeps the strokes visible where they are.
+ */
+/*
+ * `!important` because RasterInkLayer sets `pointer-events` inline from whether
+ * a tool is up, and an inline style beats an ordinary rule. Same reason
+ * `.lc-board-reading .excalidraw__canvas` above needs it.
+ */
+.lc-board-highlighting .lc-raster-ink {
+  pointer-events: none !important;
+}
+
+/*
+ * Excalidraw goes quiet too, the way it does in reading mode.
+ *
+ * Annotate un-mutes the canvas so the pen and the shape tools can be used, and
+ * that canvas sits over the page — so without this the sweep lands on it and
+ * the document never sees the pointer at all. Same rule as `.lc-board-reading`,
+ * for the same duration as the tool.
+ */
+.lc-board-highlighting .excalidraw,
+.lc-board-highlighting .excalidraw__canvas {
+  pointer-events: none !important;
+  touch-action: none;
+}
+
+.lc-board-highlighting .lc-page-content-slot {
+  cursor: crosshair;
+}
+
+/* The band being swept, before it is anything. */
+.lc-doc-highlight-band {
+  position: absolute;
+  border-radius: 3px;
+  background: color-mix(in srgb, #f5b301 26%, transparent);
+  border: 1px solid color-mix(in srgb, #f5b301 55%, transparent);
+  pointer-events: none;
 }

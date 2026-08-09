@@ -243,6 +243,13 @@ export function PdfDocument({
           key={page.pageNumber}
           className="lc-pdf-page"
           data-pdf-page={page.pageNumber}
+          /*
+            Each page is its own offset space — see `docAnchors`. On a textbook
+            that is the difference between resolving a mark on page 900 by
+            walking one page and walking nine hundred, and it is what lets a
+            footnote say which page it is on when the coach is told about it.
+          */
+          data-doc-scope={`p${page.pageNumber}`}
           style={
             {
               width: page.width,

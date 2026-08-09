@@ -89,6 +89,9 @@ export function EpubDocument({
           key={chapter.href}
           className="lc-epub-chapter"
           data-epub-href={chapter.href}
+          // One offset space per chapter — see `docAnchors`. The spine href is
+          // already the book's own name for this piece, so it is the scope.
+          data-doc-scope={chapter.href}
           // eslint-disable-next-line react/no-danger -- sanitised in chapterHtml
           dangerouslySetInnerHTML={{ __html: chapter.html }}
         />

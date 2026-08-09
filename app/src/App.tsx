@@ -129,6 +129,7 @@ import {
 import {
   buildMdInkSidecar,
   CODE_SOURCE_MAX_CHARS,
+  sidecarWidthWarning,
   exportMdInkSidecar,
   languageForName,
   pickDocumentFile,
@@ -348,6 +349,10 @@ export function App() {
     token: number;
     rootId: string | null;
   } | null>(null);
+  /** Board's marker layer — footnote ribbons paint into it, over the ink. */
+  const [marksSlot, setMarksSlot] = useState<HTMLElement | null>(null);
+  /** Highlighter mode, owned by the board toolbar and read by the doc layer. */
+  const [highlighting, setHighlighting] = useState(false);
   const [mdInkEntryOpen, setMdInkEntryOpen] = useState(false);
   // Read from the autosave interval, which must not be torn down and rebuilt
   // every time one of these changes — a restarted timer is a skipped save.
@@ -370,6 +375,9 @@ export function App() {
   mdInkHeightRef.current = mdInkHeight;
   /** Scene width of the open markdown page — viewport-sized on fresh opens. */
   const [mdInkPageWidth, setMdInkPageWidth] = useState(MD_INK_PAGE_W);
+  /** The width marks were placed at — recorded in an exported sidecar. */
+  const mdInkPageWidthRef = useRef(MD_INK_PAGE_W);
+  mdInkPageWidthRef.current = mdInkPageWidth;
   const onMdInkMeasure = useCallback((height: number) => {
     setMdInkHeight((prev) =>
       prev !== null && Math.abs(prev - height) < 1 ? prev : height,
@@ -1879,9 +1887,14 @@ export function App() {
         sourceName: source.name,
         contentHash: source.hash,
         board: board.saveBoard(),
+        footnotes: mdInkFootnotesRef.current,
+        frameWidth: mdInkPageWidthRef.current,
       }),
     );
-    setNotice(`Exported annotations for “${source.name}”.`);
+    setNotice(
+      `Exported annotations for “${source.name}” — made at ` +
+        `${Math.round(mdInkPageWidthRef.current)}px page width.`,
+    );
   }, []);
 
   /**
@@ -1911,6 +1924,12 @@ export function App() {
             `“${sidecar.sourceName}” — they would not line up with this text.`,
         );
         return;
+      }
+      const widthNote = sidecarWidthWarning(sidecar, mdInkPageWidthRef.current);
+      if (widthNote) setNotice(widthNote);
+      if (sidecar.footnotes) {
+        setMdInkFootnotes(sidecar.footnotes);
+        mdInkFootnotesRef.current = sidecar.footnotes;
       }
       boardRef.current?.restoreBoard(sidecar.board.elements, sidecar.board.appState, {
         skeletons: buildMdInkTemplate(
@@ -3471,6 +3490,19 @@ export function App() {
     setCoachFocusThread({ token: Date.now(), rootId: footnote.threadRootId ?? null });
   }, []);
 
+  /** The highlighter's plain outcome: a mark, pointing at nothing but itself. */
+  const onDocMark = useCallback((selection: DocSelectionResult) => {
+    setMdInkFootnotes((current) =>
+      addFootnote(current, {
+        id: freshFootnoteId(current),
+        kind: "note",
+        anchor: selection.anchor,
+        excerpt: selection.excerpt,
+        createdAt: Date.now(),
+      }),
+    );
+  }, []);
+
   const onRemoveFootnote = useCallback((footnote: DocFootnote) => {
     setMdInkFootnotes((current) => removeFootnote(current, footnote.id));
   }, []);
@@ -4133,14 +4165,19 @@ export function App() {
                 : null
             }
             selectableContent={Boolean(problem && isMdInk(problem) && mdInkSource)}
+            onMarksSlot={setMarksSlot}
+            onHighlightingChange={setHighlighting}
             pageContent={
               problem && isMdInk(problem) && mdInkSource ? (
                 <DocSelectionLayer
                   enabled={!annotateCode}
+                  highlighting={highlighting}
+                  marksHost={marksSlot}
                   footnotes={mdInkFootnotes}
                   onCoach={onDocCoach}
                   onCopy={onDocCopy}
                   onSearch={onDocSearch}
+                  onMark={highlighting ? onDocMark : undefined}
                   onOpenFootnote={onOpenFootnote}
                   onRemoveFootnote={onRemoveFootnote}
                 >

@@ -9,6 +9,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   anchorFromRange,
+  normalizeAnchor,
+  regionAnchorFromRect,
+  scopeOfNode,
+  scopeRootIn,
+  scopeRootsIn,
   excerptOf,
   rangeFromAnchor,
   snapToWords,
@@ -63,12 +68,12 @@ describe("textOf", () => {
 describe("quotes across a block boundary", () => {
   it("keeps the break in the quoted text", () => {
     const root = mount("<h1>Collisions</h1><p>Hash maps collide</p>");
-    expect(textForAnchor(root, { start: 0, end: 15 })).toBe("Collisions\nHash");
+    expect(textForAnchor(root, { kind: "text", start: 0, end: 15 })).toBe("Collisions\nHash");
   });
 
   it("resolves to a range that spans both blocks", () => {
     const root = mount("<h1>Collisions</h1><p>Hash maps collide</p>");
-    const range = rangeFromAnchor(root, { start: 0, end: 15 });
+    const range = rangeFromAnchor(root, { kind: "text", start: 0, end: 15 });
     expect(range).not.toBeNull();
     expect(range!.startContainer.textContent).toBe("Collisions");
     expect(range!.endContainer.textContent).toBe("Hash maps collide");
@@ -77,7 +82,7 @@ describe("quotes across a block boundary", () => {
   it("rolls an end that lands on the separator back to real text", () => {
     const root = mount("<h1>Collisions</h1><p>Hash maps collide</p>");
     // Offset 10 is the newline itself; the quote is still "Collisions".
-    expect(textForAnchor(root, { start: 0, end: 10 })).toBe("Collisions");
+    expect(textForAnchor(root, { kind: "text", start: 0, end: 10 })).toBe("Collisions");
   });
 
   it("snaps words without crossing the break", () => {
@@ -94,14 +99,14 @@ describe("anchor round trip", () => {
     range.setStart(first, 0);
     range.setEnd(first, 4);
     const anchor = anchorFromRange(root, range);
-    expect(anchor).toEqual({ start: 0, end: 4 });
+    expect(anchor).toEqual({ kind: "text", start: 0, end: 4 });
     expect(textForAnchor(root, anchor!)).toBe("Hash");
   });
 
   it("spans element boundaries", () => {
     const root = mount("<p>Hash <em>maps</em> collide</p>");
     // "maps collide" starts inside <em> and ends in the sibling text node.
-    expect(textForAnchor(root, { start: 5, end: 17 })).toBe("maps collide");
+    expect(textForAnchor(root, { kind: "text", start: 5, end: 17 })).toBe("maps collide");
   });
 
   it("carries a scope through unchanged", () => {
@@ -122,8 +127,8 @@ describe("anchor round trip", () => {
 
   it("returns null when the text has moved on under an old anchor", () => {
     const root = mount("<p>short</p>");
-    expect(rangeFromAnchor(root, { start: 400, end: 420 })).toBeNull();
-    expect(textForAnchor(root, { start: 400, end: 420 })).toBe("");
+    expect(rangeFromAnchor(root, { kind: "text", start: 400, end: 420 })).toBeNull();
+    expect(textForAnchor(root, { kind: "text", start: 400, end: 420 })).toBe("");
   });
 });
 
@@ -161,5 +166,88 @@ describe("excerptOf", () => {
     const short = excerptOf(long, 20);
     expect(short).toHaveLength(20);
     expect(short.endsWith("…")).toBe(true);
+  });
+});
+
+
+describe("scopes", () => {
+  const paged = () =>
+    mount(
+      '<div data-doc-scope="p1"><p>Hash maps collide</p></div>' +
+        '<div data-doc-scope="p2"><p>Open addressing</p></div>',
+    );
+
+  it("lists the scope roots in document order", () => {
+    const body = paged();
+    expect(scopeRootsIn(body).map((el) => el.dataset.docScope)).toEqual(["p1", "p2"]);
+  });
+
+  it("finds the root an anchor belongs to", () => {
+    const body = paged();
+    expect((scopeRootIn(body, "p2") as HTMLElement).textContent).toBe("Open addressing");
+  });
+
+  it("returns null for a page that has not rendered yet", () => {
+    // A windowed document only has some pages in the DOM; a mark on a page that
+    // is not there should fail to place quietly, not throw.
+    expect(scopeRootIn(paged(), "p900")).toBeNull();
+  });
+
+  it("falls back to the body for an anchor with no scope", () => {
+    const body = paged();
+    expect(scopeRootIn(body, undefined)).toBe(body);
+  });
+
+  it("names the scope a node sits in", () => {
+    const body = paged();
+    const node = textNodesOf(body)[1];
+    expect(scopeOfNode(body, node)).toBe("p2");
+  });
+
+  it("offsets are local to a scope, not to the whole document", () => {
+    const body = paged();
+    const page2 = scopeRootIn(body, "p2") as HTMLElement;
+    // "Open" is at 0 in its own page even though it is far into the book.
+    expect(textForAnchor(page2, { kind: "text", start: 0, end: 4, scope: "p2" })).toBe("Open");
+  });
+});
+
+describe("normalizeAnchor", () => {
+  it("tags an untagged legacy anchor as text", () => {
+    expect(normalizeAnchor({ start: 1, end: 5 })).toEqual({ kind: "text", start: 1, end: 5 });
+  });
+
+  it("keeps a scope", () => {
+    expect(normalizeAnchor({ start: 1, end: 5, scope: "p3" })?.scope).toBe("p3");
+  });
+
+  it("rejects a backwards range", () => {
+    expect(normalizeAnchor({ start: 9, end: 2 })).toBeNull();
+  });
+
+  it("rejects a region with a non-numeric side", () => {
+    expect(normalizeAnchor({ kind: "region", x: 0, y: 0, w: "10", h: 4 })).toBeNull();
+  });
+
+  it("rejects rubbish", () => {
+    expect(normalizeAnchor(null)).toBeNull();
+    expect(normalizeAnchor("nope")).toBeNull();
+  });
+});
+
+describe("regionAnchorFromRect", () => {
+  it("converts a viewport rect into the scope's own coordinates", () => {
+    const body = mount('<div data-doc-scope="p1" style="width:200px;height:100px"></div>');
+    const root = scopeRootIn(body, "p1") as HTMLElement;
+    // jsdom reports zero-size boxes, so scale falls back to 1 and the maths is
+    // a plain subtraction of the root's origin — which is what is being checked.
+    const anchor = regionAnchorFromRect(root, { left: 12, top: 8, width: 40, height: 20 }, "p1");
+    expect(anchor).toEqual({ kind: "region", x: 12, y: 8, w: 40, h: 20, scope: "p1" });
+  });
+
+  it("refuses a rectangle with no area", () => {
+    const body = mount('<div data-doc-scope="p1"></div>');
+    const root = scopeRootIn(body, "p1") as HTMLElement;
+    expect(regionAnchorFromRect(root, { left: 0, top: 0, width: 0, height: 10 })).toBeNull();
   });
 });

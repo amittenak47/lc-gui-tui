@@ -15,6 +15,7 @@
 
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { codeAcceptExtensions, isCodeName } from "./codeLanguages";
+import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 import type { DocType } from "./mdInkStore";
 
 export { CODE_SOURCE_MAX_CHARS, languageForName } from "./codeLanguages";
@@ -187,18 +188,59 @@ export interface MdInkSidecar {
   sourceName: string;
   contentHash: string;
   board: BoardBlob;
+  /** Marks anchored to the document — see `docFootnotes`. */
+  footnotes?: DocFootnote[];
+  /**
+   * The page width the annotations were made at, in scene units.
+   *
+   * Ink is stored in scene coordinates and region footnotes in page
+   * coordinates; neither follows text that reflows. The pad pins a document's
+   * frame width once anything has been drawn on it, so within the app this
+   * never drifts — but a sidecar can be carried to another device with a
+   * different screen, and there the same file may lay out at a different
+   * column. Recording the width is what lets {@link sidecarWidthWarning} say so
+   * rather than leaving the writer to wonder why a mark sits off its figure.
+   */
+  frameWidth?: number;
+}
+
+/**
+ * Warn when a sidecar was drawn at a different page width than this one.
+ *
+ * Text footnotes are fine either way — they follow the words. Ink and region
+ * marks are not, so the message names them specifically instead of implying
+ * everything has moved.
+ */
+export function sidecarWidthWarning(
+  sidecar: MdInkSidecar,
+  frameWidth: number | null,
+): string | null {
+  const was = sidecar.frameWidth;
+  if (!was || !frameWidth) return null;
+  if (Math.abs(was - frameWidth) < 2) return null;
+  return (
+    `These annotations were made on a ${Math.round(was)}px-wide page and this one is ` +
+    `${Math.round(frameWidth)}px. Quotes will follow the text; pen marks and ` +
+    `highlights are placed by position and may sit off their target.`
+  );
 }
 
 export function buildMdInkSidecar(input: {
   sourceName: string;
   contentHash: string;
   board: BoardBlob;
+  footnotes?: readonly DocFootnote[];
+  frameWidth?: number | null;
 }): MdInkSidecar {
   return {
     v: 1,
     sourceName: input.sourceName,
     contentHash: input.contentHash,
     board: input.board,
+    ...(input.footnotes && input.footnotes.length > 0
+      ? { footnotes: [...input.footnotes] }
+      : {}),
+    ...(input.frameWidth ? { frameWidth: Math.round(input.frameWidth) } : {}),
   };
 }
 
@@ -214,7 +256,7 @@ export function readMdInkSidecar(raw: string): MdInkSidecar | null {
     if (parsed?.v !== 1) return null;
     if (typeof parsed.sourceName !== "string") return null;
     if (parsed.board?.v !== 1 || !Array.isArray(parsed.board.elements)) return null;
-    return parsed;
+    return { ...parsed, footnotes: sanitizeFootnotes(parsed.footnotes) };
   } catch {
     return null;
   }

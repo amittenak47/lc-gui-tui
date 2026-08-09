@@ -786,6 +786,22 @@ export interface BoardProps {
    */
   selectableContent?: boolean;
   /**
+   * Handed the layer that footnote markers paint into, once it exists.
+   *
+   * The markers ride the page but must sit over the ink, so they live in their
+   * own transformed slot rather than inside the paper — see
+   * {@link marksSlotNodeRef}. The document layer portals into whatever this
+   * gives it.
+   */
+  onMarksSlot?: (node: HTMLElement | null) => void;
+  /**
+   * The highlighter is on — the document layer takes the pointer, not the pen.
+   *
+   * Reported up because the mark it makes belongs to the document rather than
+   * to the canvas, so the thing that draws it lives above Board.
+   */
+  onHighlightingChange?: (on: boolean) => void;
+  /**
    * Scene height the page frame should grow to — the measured document.
    *
    * A prop rather than a handle call because the imperative version had to
@@ -882,6 +898,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     pageTitle = null,
     pageContent = null,
     selectableContent = false,
+    onMarksSlot,
+    onHighlightingChange,
     pageContentHeight = null,
     codeContentHeight = null,
     transparentCanvas = false,
@@ -934,6 +952,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * Same class of fix as the zoom pill (camera perf pass).
    */
   const contentSlotNodeRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * A second slot, in the same place as the content slot but over the ink.
+   *
+   * Footnote markers are chrome *about* the page rather than part of it, so
+   * they belong above everything the page and the pen put down. They cannot
+   * simply be raised inside the content slot — that slot is opaque paper and
+   * lifting it would bury the ink — so they get their own transformed layer,
+   * kept in step with the content slot's, and the marks portal into it.
+   */
+  const marksSlotNodeRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Stable, because an inline ref callback is a new function every render —
+   * React would detach and re-attach the node each time, which remounts
+   * anything portalled into it and restarts its entry animation forever.
+   */
+  const onMarksSlotRef = useRef(onMarksSlot);
+  onMarksSlotRef.current = onMarksSlot;
+  const attachMarksSlot = useCallback((node: HTMLDivElement | null) => {
+    marksSlotNodeRef.current = node;
+    // Mirror whatever the content slot is showing right now, so a remount does
+    // not leave the marks a frame behind the page.
+    const from = contentSlotNodeRef.current;
+    if (node && from) node.style.transform = from.style.transform;
+    onMarksSlotRef.current?.(node);
+  }, []);
   const [contentSceneWidth, setContentSceneWidth] = useState(1);
   const lastContentSlotRef = useRef<{
     left: number;
@@ -974,6 +1017,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const lockedScrollXRef = useRef<number | null>(null);
   /** Pen goes to the code page instead of the editor. */
   const [annotateCode, setAnnotateCode] = useState(false);
+  /** Highlighter mode — see `onHighlightingChange`. Annotate-only. */
+  const [highlighting, setHighlighting] = useState(false);
   const annotateCodeRef = useRef(annotateCode);
   annotateCodeRef.current = annotateCode;
   /**
@@ -1766,6 +1811,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * (long notes = thousands of nodes). Transform stays on the compositor.
        */
       node.style.transform = `translate(${next.left}px, ${next.top}px) scale(${next.zoom})`;
+      if (marksSlotNodeRef.current) {
+        marksSlotNodeRef.current.style.transform = node.style.transform;
+      }
     }
     if (!last || Math.abs(last.sceneWidth - next.sceneWidth) >= 0.01) {
       setContentSceneWidth(next.sceneWidth);
@@ -1785,6 +1833,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     onAnnotateCodeChange?.(annotateCode);
   }, [annotateCode, onAnnotateCodeChange]);
+
+  // Leaving Annotate puts the pen down and the highlighter with it.
+  useEffect(() => {
+    if (!annotateCode && highlighting) setHighlighting(false);
+  }, [annotateCode, highlighting]);
+
+  useEffect(() => {
+    onHighlightingChange?.(highlighting);
+  }, [highlighting, onHighlightingChange]);
 
   /*
    * Entering annotate mode has to pick up a pen.
@@ -2504,6 +2561,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const left = (bounds.minX + scrollX) * zoom;
       const top = (bounds.minY + scrollY) * zoom;
       node.style.transform = `translate(${left}px, ${top}px) scale(${zoom})`;
+      if (marksSlotNodeRef.current) {
+        marksSlotNodeRef.current.style.transform = node.style.transform;
+      }
       lastContentSlotRef.current = {
         left,
         top,
@@ -2527,6 +2587,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const left = (fallback.minX + scrollX) * zoom;
         const top = (fallback.minY + scrollY) * zoom;
         node.style.transform = `translate(${left}px, ${top}px) scale(${zoom})`;
+        if (marksSlotNodeRef.current) {
+          marksSlotNodeRef.current.style.transform = node.style.transform;
+        }
         lastContentSlotRef.current = {
           left,
           top,
@@ -5740,6 +5803,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         interactive && !annotateCode && "lc-board-reading",
         transparentCanvas && "lc-board-paper",
         carbonPaper && "lc-board-carbon",
+        // Highlighting hands the surface back to the document for the length
+        // of the sweep — see the rules in styles.css.
+        highlighting && "lc-board-highlighting",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -5754,18 +5820,37 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         <div
           ref={contentSlotNodeRef}
           className={
-            selectableContent && !annotateCode
+            selectableContent && (!annotateCode || highlighting)
               ? "lc-page-content-slot lc-page-content-selectable"
               : "lc-page-content-slot"
           }
           // Selectable prose is content, not decoration: hiding it from the
           // accessibility tree while the reader can pick quotes out of it would
           // be a lie. Annotate mode goes back to being paper under the pen.
-          aria-hidden={selectableContent && !annotateCode ? undefined : true}
+          aria-hidden={
+            selectableContent && (!annotateCode || highlighting) ? undefined : true
+          }
           style={{ width: contentSceneWidth }}
         >
           {pageContent}
         </div>
+      )}
+      {/*
+        Footnote markers, over everything.
+
+        Same transform as the page slot above (kept in step imperatively, since
+        that one is moved per scroll frame), but above the ink layer — a mark is
+        chrome about the page, and one buried under the writer's own strokes is
+        a mark they cannot get back to. `pointer-events: none` on the layer so
+        the pen still reaches the canvas through it; the markers themselves opt
+        back in.
+      */}
+      {pageContent && (
+        <div
+          ref={attachMarksSlot}
+          className="lc-page-marks-slot"
+          style={{ width: contentSceneWidth }}
+        />
       )}
       {linedPaperOn && linedSlotOn && (
         <div ref={linedSlotNodeRef} className="lc-board-lined-overlay" aria-hidden />
@@ -5840,6 +5925,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               */}
               {!mapChromeHidden && annotateCode && (
               <BoardToolbar
+                highlighting={highlighting}
+                onToggleHighlight={
+                  selectableContent ? () => setHighlighting((on) => !on) : undefined
+                }
                 inkPalette={inkPalette}
                 onEditInkColor={(index, colour) => {
                   applyInkPaletteHistory(
