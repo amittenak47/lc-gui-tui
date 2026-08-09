@@ -47,7 +47,12 @@ import {
   PAN_REBASE_FRACTION,
   type PanCamera,
 } from "./panOffset";
-import { smoothInkPoints, type InkSmoothingMode } from "./inkSmoothing";
+import {
+  simplifyModulatedInkPoints,
+  SIMPLIFY_MODULATED_FRACTION,
+  smoothInkPoints,
+  type InkSmoothingMode,
+} from "./inkSmoothing";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
 
 export interface RasterInkHandle {
@@ -745,23 +750,41 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       /*
        * Pressure strokes paint many translucent abutting runs. Storage RDP
        * (always-on 1/15-nib thin) drops samples on lift, runs regroup, and the
-       * fill jumps — ugly on bold nibs. Keep every stamp when smoothing is off;
-       * when smoothing is on, thin only by the dial (minFraction 0), never the
-       * storage floor. Opaque constant-width strokes still get the cheap thin.
+       * fill jumps — ugly on bold nibs. So they are still kept off the storage
+       * floor: `minFraction 0` when smoothing is on, and the dial at zero means
+       * the geometric pass is skipped entirely.
+       *
+       * What they no longer escape is `simplifyModulatedInkPoints`. Those
+       * strokes used to be stored with *every* stamp — a point every 0.55 of a
+       * nib, for the life of the document — and the argument for that only ever
+       * covered points that carry modulation. A sample that sits on the line
+       * between its neighbours in position, pressure *and* slowness carries
+       * none: it cannot move a pixel, cannot shift a run boundary, and cannot
+       * change the fill. Dropping those leaves the swell of the stroke exactly
+       * where it was and takes out the pen sitting still.
        */
       const committed =
         live.kind === "draw" && !isLive
-          ? live.pressureSensitive && strength <= 0
-            ? live
-            : {
-                ...live,
-                points: smoothInkPoints(
-                  live.points,
-                  strength,
-                  inkLineWidth(live.baseWidth, 0, false),
-                  live.pressureSensitive ? 0 : undefined,
-                ),
+          ? (() => {
+              const nib = inkLineWidth(live.baseWidth, 0, false);
+              if (!live.pressureSensitive) {
+                return {
+                  ...live,
+                  points: smoothInkPoints(live.points, strength, nib),
+                };
               }
+              const shaped =
+                strength <= 0
+                  ? live.points
+                  : smoothInkPoints(live.points, strength, nib, 0);
+              return {
+                ...live,
+                points: simplifyModulatedInkPoints(
+                  shaped,
+                  nib * SIMPLIFY_MODULATED_FRACTION,
+                ),
+              };
+            })()
           : live;
 
       opsRef.current = [...opsRef.current, committed];
