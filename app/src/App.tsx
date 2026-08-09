@@ -3346,10 +3346,21 @@ export function App() {
   }, [scratchNotebookId]);
 
   /** Nothing drawn on this document since it opened. */
+  /**
+   * Nothing about this session is worth keeping.
+   *
+   * An untouched *board* is not an untouched *document*: a reading session can
+   * quote a passage to the coach or drop a search footnote without ever putting
+   * the pen down, and those are exactly as worth keeping as ink. Counting only
+   * the board here is what made leaving throw a footnote-only session away
+   * without so much as offering to save it — the leave dialog never appeared,
+   * because from the board's point of view nothing had happened.
+   */
   const mdInkUntouched = useCallback(() => {
     const board = boardRef.current;
     const pristine = mdInkPristineHashRef.current;
     if (!board || pristine === null) return false;
+    if (mdInkFootnotesRef.current.length > 0) return false;
     return sceneFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
   }, []);
 
