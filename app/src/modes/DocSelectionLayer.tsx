@@ -53,7 +53,9 @@ import {
  */
 function isOverlayControl(target: EventTarget | null): boolean {
   const element = target as Element | null;
-  return Boolean(element?.closest?.(".lc-doc-footnote, .lc-doc-confirm"));
+  return Boolean(
+    element?.closest?.(".lc-doc-footnote, .lc-doc-confirm, .lc-footnote-overview"),
+  );
 }
 
 /** Movement before the hold fires that means the writer meant to scroll. */
@@ -98,13 +100,13 @@ export interface DocSelectionLayerProps {
    */
   highlighting?: boolean;
   footnotes?: readonly DocFootnote[];
-  onCoach?: (selection: DocSelectionResult) => void;
-  onCopy?: (selection: DocSelectionResult) => void;
-  onSearch?: (selection: DocSelectionResult) => void;
+  onAnnotate?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
+  onCopy?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
+  onSearch?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
   /** Leave the mark and nothing else — the highlighter's plain outcome. */
-  onMark?: (selection: DocSelectionResult) => void;
-  /** Tap on an existing ribbon — reopen the thread or the search. */
-  onOpenFootnote?: (footnote: DocFootnote) => void;
+  onMark?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
+  /** Tap on an existing ribbon — reopen the overview for that mark. */
+  onOpenFootnote?: (footnote: DocFootnote, anchorRect: DOMRect | null) => void;
   onRemoveFootnote?: (footnote: DocFootnote) => void;
 }
 
@@ -194,7 +196,7 @@ export function DocSelectionLayer({
   marksHost = null,
   highlighting = false,
   footnotes = [],
-  onCoach,
+  onAnnotate,
   onCopy,
   onSearch,
   onMark,
@@ -244,16 +246,21 @@ export function DocSelectionLayer({
     startX: number;
     startY: number;
     timer: number | null;
+    /** Capture early so the compositor cannot cancel mid-hold. */
+    armTimer: number | null;
     held: boolean;
     /** The scope the hold landed in — the drag stays inside it. */
     root: HTMLElement | null;
     scope: string | undefined;
     anchorOffset: number | null;
+    /** Last resolved drag offset — used when caret hit-testing blanks out. */
+    lastOffset: number | null;
   } | null>(null);
 
   const clearGesture = useCallback(() => {
     const hold = holdRef.current;
     if (hold?.timer != null) window.clearTimeout(hold.timer);
+    if (hold?.armTimer != null) window.clearTimeout(hold.armTimer);
     holdRef.current = null;
     hostRef.current?.classList.remove("lc-doc-selecting");
     releaseSelectionGesture();
@@ -311,6 +318,31 @@ export function DocSelectionLayer({
 
       const direct = resolve(caretAt(x, y));
       if (direct) return direct;
+
+      /*
+       * Code `<pre>` blocks often miss at the raw finger point (scroll, indent,
+       * touch-action). Probe inside the pre's box at the finger's x before
+       * falling back to the whole column edges — that fallback is what made a
+       * drag freeze on `def` instead of reaching `__init__`.
+       */
+      const under = document.elementFromPoint(x, y);
+      const pre = under?.closest?.("pre");
+      if (pre instanceof HTMLElement && body.contains(pre)) {
+        const box = pre.getBoundingClientRect();
+        if (box.width > 0 && box.height > 0) {
+          const inset = Math.min(6, box.width / 4);
+          const clampedY = Math.min(Math.max(y, box.top + 1), box.bottom - 1);
+          const xs = [
+            Math.min(Math.max(x, box.left + inset), box.right - inset),
+            box.left + inset,
+            box.right - inset,
+          ];
+          for (const candidateX of xs) {
+            const hit = resolve(caretAt(candidateX, clampedY));
+            if (hit) return hit;
+          }
+        }
+      }
 
       /*
        * Retry inside the column the drag belongs to.
@@ -521,6 +553,15 @@ export function DocSelectionLayer({
         pointerId: event.pointerId,
         startX,
         startY,
+        armTimer: window.setTimeout(() => {
+          const hold = holdRef.current;
+          if (!hold || hold.held) return;
+          try {
+            host.setPointerCapture(hold.pointerId);
+          } catch {
+            /* pointer may already be gone */
+          }
+        }, 140),
         timer: window.setTimeout(() => {
           const hold = holdRef.current;
           if (!hold) return;
@@ -531,9 +572,14 @@ export function DocSelectionLayer({
           }
           hold.held = true;
           hold.timer = null;
+          if (hold.armTimer != null) {
+            window.clearTimeout(hold.armTimer);
+            hold.armTimer = null;
+          }
           hold.root = at.root;
           hold.scope = at.scope;
           hold.anchorOffset = at.offset;
+          hold.lastOffset = at.offset;
           // Board's pan must let go before the drag below starts moving.
           claimSelectionGesture();
           /*
@@ -574,6 +620,7 @@ export function DocSelectionLayer({
         root: null,
         scope: undefined,
         anchorOffset: null,
+        lastOffset: null,
       };
     };
 
@@ -590,25 +637,41 @@ export function DocSelectionLayer({
       event.preventDefault();
       // Resolved against the scope the hold started in, so a drag that strays
       // sideways off the column comes back to *this* page's text.
-      const at = pointAt(event.clientX, event.clientY, hold.root);
-      if (!at || hold.anchorOffset == null || !hold.root) return;
+      let at = pointAt(event.clientX, event.clientY, hold.root);
+      // Caret blanks in `<pre>` / indent gaps — probe nearby before freezing.
+      if (!at && hold.root) {
+        for (const dy of [0, -6, 6, -12, 12]) {
+          for (const dx of [0, -8, 8, -16, 16]) {
+            if (dx === 0 && dy === 0) continue;
+            at = pointAt(event.clientX + dx, event.clientY + dy, hold.root);
+            if (at) break;
+          }
+          if (at) break;
+        }
+      }
+      if (!at || hold.anchorOffset == null || !hold.root) {
+        // Keep the last good extent rather than shrinking back to one word.
+        if (hold.lastOffset != null) {
+          applySelection(hold.root!, hold.scope, hold.anchorOffset!, hold.lastOffset);
+        }
+        return;
+      }
       // Wandered onto another page: hold the selection at this page's edge
       // rather than following, since the two are different offset spaces.
       const offset = at.root === hold.root ? at.offset : hold.anchorOffset;
+      hold.lastOffset = offset;
       applySelection(hold.root, hold.scope, hold.anchorOffset, offset);
     };
 
     /*
-     * The lift, and the snatch, are the same outcome.
+     * Confirm only on a real lift.
      *
-     * `pointercancel` used to be wired straight to this and treated as a normal
-     * end — including reading `clientX/clientY` off it, which a cancel is not
-     * obliged to fill in. A cancel carrying `0, 0` is how the actions ended up
-     * pinned to the top-left corner of the whole app. Nothing here reads the
-     * event's coordinates any more: what the reader selected is on screen, and
-     * that is what the confirmation hangs off.
+     * `pointercancel` used to share this path and open ✓/✕ mid-drag whenever
+     * the compositor snatched the pointer (scroll claim, palm, second touch).
+     * Cancel clears the gesture but leaves the highlight; the writer lifts
+     * cleanly to accept or reject.
      */
-    const endGesture = (event: PointerEvent) => {
+    const finishHold = (event: PointerEvent, confirm: boolean) => {
       const hold = holdRef.current;
       if (!hold || hold.pointerId !== event.pointerId) return;
       const held = hold.held;
@@ -618,11 +681,11 @@ export function DocSelectionLayer({
         /* already released */
       }
       clearGesture();
-      // A cancelled drag keeps whatever it had picked up rather than throwing
-      // it away — the words are selected, and the reader can accept or reject
-      // them. Only a hold that never landed leaves nothing behind.
-      if (held) setPhase("confirm");
+      if (held && confirm) setPhase("confirm");
     };
+
+    const onPointerUp = (event: PointerEvent) => finishHold(event, true);
+    const onPointerCancel = (event: PointerEvent) => finishHold(event, false);
 
     /*
      * The platform's own selection stays off.
@@ -638,14 +701,14 @@ export function DocSelectionLayer({
     host.addEventListener("selectstart", onSelectStart);
     host.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointermove", onPointerMove, { passive: false });
-    window.addEventListener("pointerup", endGesture);
-    window.addEventListener("pointercancel", endGesture);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
     return () => {
       host.removeEventListener("selectstart", onSelectStart);
       host.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", endGesture);
-      window.removeEventListener("pointercancel", endGesture);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
       releaseSelectionGesture();
     };
   }, [enabled, highlighting, applySelection, clearGesture, dismiss, pointAt]);
@@ -717,10 +780,11 @@ export function DocSelectionLayer({
 
 
 
-  const act = (run: ((selection: DocSelectionResult) => void) | undefined) => {
+  const act = (run: ((selection: DocSelectionResult, anchorRect: DOMRect | null) => void) | undefined) => {
     const current = selection;
+    const anchorRect = highlightBox();
     if (!current || !run) return;
-    run(current);
+    run(current, anchorRect);
     dismiss();
   };
 
@@ -893,7 +957,8 @@ export function DocSelectionLayer({
                 // reaches the context menu below.
                 if (event.button !== 0) return;
                 event.preventDefault();
-                onOpenFootnote?.(footnote);
+                const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+                onOpenFootnote?.(footnote, rect);
               }}
               onContextMenu={(event) => {
                 event.preventDefault();
@@ -964,17 +1029,14 @@ export function DocSelectionLayer({
               <div className="lc-doc-sheet-actions">
                 {/*
                   A highlight over a scanned plate has no words in it, so Copy
-                  and Google have nothing to act on and are not offered. Coach
-                  always is — it gets the crop.
+                  and Google have nothing to act on. Annotate always is — it gets
+                  the crop and opens the overview card.
                 */}
                 {onMark && (
                   <button type="button" role="menuitem" onClick={() => act(onMark)}>
                     Mark
                   </button>
                 )}
-                <button type="button" role="menuitem" onClick={() => act(onCoach)}>
-                  Coach
-                </button>
                 {selection.text.trim().length > 0 && (
                   <>
                     <button
@@ -992,6 +1054,9 @@ export function DocSelectionLayer({
                     </button>
                   </>
                 )}
+                <button type="button" role="menuitem" onClick={() => act(onAnnotate)}>
+                  Annotate
+                </button>
               </div>
             </div>
           </>,

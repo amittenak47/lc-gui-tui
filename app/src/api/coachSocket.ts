@@ -221,6 +221,17 @@ export class AmbientCoach {
     this.send({ type: "cancel", request_id: requestId });
   }
 
+  /** Cancel every in-flight interactive run on this socket. */
+  cancelAll(): void {
+    const ids = Array.from(this.pending.keys());
+    for (const requestId of ids) {
+      this.send({ type: "cancel", request_id: requestId });
+    }
+    // Reject locally so callers do not hang waiting for a daemon that already
+    // dropped the run — merge-send needs the prior promise to settle now.
+    this.failPending("cancelled");
+  }
+
   /** Whether a run is waiting — the daemon allows one per socket. */
   get busy(): boolean {
     return this.pending.size > 0;

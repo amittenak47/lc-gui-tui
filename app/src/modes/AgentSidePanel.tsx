@@ -301,6 +301,8 @@ export interface CoachChatMessage {
   processEvents?: CoachProcessEvent[];
   /** The request is still in flight — this turn is a placeholder. */
   pending?: boolean;
+  /** User message waiting in the FIFO send queue while the coach is busy. */
+  queued?: boolean;
   /**
    * The turn this one is answering.
    *
@@ -350,9 +352,12 @@ export interface AgentSidePanelProps {
    * {@link quoteSeed}; `null` id returns to the room.
    */
   focusThread?: { token: number; rootId: string | null } | null;
-  onSend: (text: string, flags: CoachSendFlags) => void;
+  onSend: (text: string, flags: CoachSendFlags, mode?: "queue" | "merge") => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
+  /** Forward a failed test run to the coach without being asked. */
+  forwardFailures?: boolean;
+  onForwardFailuresChange?: (on: boolean) => void;
   /** Opens the hold-to-reveal dialog for the review on this message. */
   onRequestBridge?: (messageId: string) => void;
   /** Expand/collapse a message's drawing section (and sync the board). */
@@ -379,6 +384,8 @@ export function AgentSidePanel({
   focusThread = null,
   onSend,
   onThreadChange,
+  forwardFailures = false,
+  onForwardFailuresChange,
   onRequestBridge,
   onToggleDrawing,
   onDrawingFrame,
@@ -890,16 +897,15 @@ export function AgentSidePanel({
   if (!open && !mobile) return null;
 
   const canSend =
-    !busy &&
-    (draft.trim().length > 0 ||
-      ask ||
-      draw ||
-      reviewBoard ||
-      lazy ||
-      annotate ||
-      photos.length > 0 ||
-      // A quote on its own is a question: "what is this?".
-      pageQuote != null);
+    draft.trim().length > 0 ||
+    ask ||
+    draw ||
+    reviewBoard ||
+    lazy ||
+    annotate ||
+    photos.length > 0 ||
+    // A quote on its own is a question: "what is this?".
+    pageQuote != null;
   const menuMessage = messageMenu
     ? messages.find((message) => message.id === messageMenu.messageId)
     : undefined;
@@ -942,21 +948,25 @@ export function AgentSidePanel({
     }, LONG_PRESS_MS);
   };
 
-  const submit = (event?: FormEvent) => {
+  const submit = (mode: "queue" | "merge" = "queue", event?: FormEvent) => {
     event?.preventDefault();
     if (!canSend) return;
-    onSend(draft.trim(), {
-      ask,
-      draw,
-      reviewBoard,
-      lazy,
-      annotate,
-      ...(annotate ? { annotateScope } : {}),
-      ...(photos.length > 0 ? { photos } : {}),
-      ...(pageQuote ? { pageQuote: pageQuote.text } : {}),
-      threadRootId: openThreadId,
-      ...(replyTo ? { replyTo } : {}),
-    });
+    onSend(
+      draft.trim(),
+      {
+        ask,
+        draw,
+        reviewBoard,
+        lazy,
+        annotate,
+        ...(annotate ? { annotateScope } : {}),
+        ...(photos.length > 0 ? { photos } : {}),
+        ...(pageQuote ? { pageQuote: pageQuote.text } : {}),
+        threadRootId: openThreadId,
+        ...(replyTo ? { replyTo } : {}),
+      },
+      mode,
+    );
     setReplyTo(null);
     setPageQuote(null);
     setDraft("");
@@ -1125,6 +1135,9 @@ export function AgentSidePanel({
               >
                 {ROLE_LABEL[message.role]}
               </div>
+              {message.queued && (
+                <span className="lc-coach-queued" aria-label="Queued message">Queued</span>
+              )}
               {message.processEvents && message.processEvents.length > 0 && (
                 <ProcessBlock events={message.processEvents} running={Boolean(message.pending)} />
               )}
@@ -1279,7 +1292,7 @@ export function AgentSidePanel({
           )}
         </div>
 
-        <form className="lc-coach-composer" onSubmit={submit}>
+        <form className="lc-coach-composer" onSubmit={(event) => submit("queue", event)}>
           {pageQuote && (
             <div className="lc-coach-reply-chip lc-coach-quote-chip">
               <span className="lc-coach-reply-chip-mark" aria-hidden />
@@ -1351,25 +1364,33 @@ export function AgentSidePanel({
             value={draft}
             rows={6}
             placeholder="Ask the coach about your board or code…"
-            disabled={busy}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                event.preventDefault();
-                submit();
-              }
+              if (event.key !== "Enter") return;
+              if (event.shiftKey) return;
+              event.preventDefault();
+              if (event.metaKey || event.ctrlKey) submit("merge");
+              else submit("queue");
             }}
           />
           <div className="lc-coach-composer-bar">
             {/* Ambient stays greyed until AMBIENT_ENABLED is flipped. The
-                socket + 120s loop are already wired in App / coachSocket.
-
-                Forwarding failed runs used to sit here as a "Failures" toggle.
-                It is not a property of the message being composed — it decides
-                what happens on a test run minutes later — so it lives under
-                Settings → When a case fails, beside the rest of that decision. */}
+                socket + 120s loop are already wired in App / coachSocket. */}
             {!padSurface && (
             <div className="lc-modes" role="group" aria-label="Coach mode">
+              {onForwardFailuresChange && (
+                <Tip tip="Send failed test runs to the coach automatically" placement="right">
+                  <button
+                    type="button"
+                    className={forwardFailures ? "lc-mode lc-mode-active" : "lc-mode"}
+                    aria-pressed={forwardFailures}
+                    disabled={busy}
+                    onClick={() => onForwardFailuresChange(!forwardFailures)}
+                  >
+                    Failures
+                  </button>
+                </Tip>
+              )}
               <Tip tip="Analyze on send" placement="right">
                 <button
                   type="button"

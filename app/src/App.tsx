@@ -76,8 +76,8 @@ import {
 import { AttemptDialog } from "./modes/AttemptDialog";
 import { ScratchpadDialog } from "./modes/ScratchpadDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
-import { threadAnchorRef } from "./modes/coachThreads";
-import { loadForwardFailures } from "./util/coachPrefs";
+import { groupThreads, threadAnchorRef, visibleThreadMessages } from "./modes/coachThreads";
+import { loadForwardFailures, saveForwardFailures } from "./util/coachPrefs";
 import { ensureTypingImports } from "./util/pythonImports";
 
 /** Room under the last line of code so a note fits below it. */
@@ -103,6 +103,7 @@ import {
   addFootnote,
   freshFootnoteId,
   googleSearchUrl,
+  numberFootnotes,
   removeFootnote,
   searchQueryFor,
   type DocFootnote,
@@ -113,6 +114,7 @@ import { openExternalUrl } from "./util/openExternal";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { CodeDocument } from "./modes/CodeDocument";
 import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelectionLayer";
+import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
 import { PdfDocument } from "./modes/PdfDocument";
 import { MdInkDialog } from "./modes/MdInkDialog";
@@ -189,6 +191,19 @@ import { parseVizProgram, type VizProgram } from "./viz/schema";
 import type { CoachCapabilities } from "./api/types";
 
 type Mode = "review" | "ambient";
+
+/** One coach composer send, prepared and waiting in the FIFO queue. */
+interface CoachSendQueueItem {
+  text: string;
+  flags: CoachSendFlags;
+  userMessageId: string;
+  prompt: string;
+  attachments?: CoachChatMessage["attachments"];
+  threadAnchor: CoachReplyRef | null;
+  photos: CoachAttachment[];
+  quotedPassage?: string;
+  anchorId: string | null;
+}
 
 const SCRATCHPAD_PROBLEM: ProblemDetail = {
   dataset: SCRATCHPAD_DATASET,
@@ -344,10 +359,15 @@ export function App() {
    * here, and the next send claims it.
    */
   const pendingQuoteRef = useRef<DocSelectionResult | null>(null);
+  /** Footnote overview send upgrades this id from note → coach on first message. */
+  const footnoteCoachUpgradeRef = useRef<string | null>(null);
+  const [openFootnoteId, setOpenFootnoteId] = useState<string | null>(null);
+  const [footnoteAnchorRect, setFootnoteAnchorRect] = useState<DOMRect | null>(null);
   const [coachQuoteSeed, setCoachQuoteSeed] = useState<{
     token: number;
     text: string;
   } | null>(null);
+  void setCoachQuoteSeed;
   const [coachFocusThread, setCoachFocusThread] = useState<{
     token: number;
     rootId: string | null;
@@ -957,19 +977,34 @@ export function App() {
    */
   const coachMessagesRef = useRef<CoachChatMessage[]>([]);
   coachMessagesRef.current = coachMessages;
+  /** FIFO coach sends waiting while a turn is in flight. */
+  const coachSendQueueRef = useRef<CoachSendQueueItem[]>([]);
+  /** Bumped on interrupt/merge so late HTTP/WS results are ignored. */
+  const coachRunGenRef = useRef(0);
+  /** Pending assistant placeholder for the active coach run. */
+  const activeCoachTurnIdRef = useRef<string | null>(null);
+  /** Nested coach sends from one composer submit — defer queue drain until outermost ends. */
+  const coachSendDepthRef = useRef(0);
+  const busyRef = useRef<string | null>(null);
+  busyRef.current = busy;
+  const drainCoachSendQueueRef = useRef<() => void>(() => {});
+  const executeCoachSendRef = useRef<(item: CoachSendQueueItem) => Promise<void>>(
+    async () => {},
+  );
   /**
-   * Hand a failed run to the coach without being asked. Off by default.
-   *
-   * Owned by Settings → When a case fails, not by the composer: it is read on a
-   * test run rather than on a send, so only the ref is ever consulted. The
-   * listener keeps it live while Settings is saved behind an open session.
+   * Footnote overview already shows the thread. Opening the side panel from a
+   * send there reintroduces the "half open document" layout the overview was
+   * meant to avoid.
    */
-  const forwardFailuresRef = useRef(loadForwardFailures());
+  const suppressCoachPanelOpenRef = useRef(false);
+  /** Hand a failed run to the coach without being asked. Off by default. */
+  const [forwardFailures, setForwardFailures] = useState(() => loadForwardFailures());
+  const forwardFailuresRef = useRef(forwardFailures);
+  forwardFailuresRef.current = forwardFailures;
   useEffect(() => {
     const onChange = (event: Event) => {
       const next = (event as CustomEvent<boolean>).detail;
-      forwardFailuresRef.current =
-        typeof next === "boolean" ? next : loadForwardFailures();
+      setForwardFailures(typeof next === "boolean" ? next : loadForwardFailures());
     };
     window.addEventListener("lc-coach-forward-failures", onChange);
     return () => window.removeEventListener("lc-coach-forward-failures", onChange);
@@ -1034,10 +1069,11 @@ export function App() {
    * Coach open/close changes the canvas box (side panel or bottom sheet).
    * Nudge Excalidraw + our fit so the board fills the freed space.
    */
-  // Desktop: coach docks beside the board and changes width — refit page to new hole.
-  // Mobile: coach overlays; keep the template size (no vertical rescale).
+  // Desktop whiteboard: coach docks beside the board — refit to the new hole.
+  // Pads + mobile: coach overlays; refitting would reflow the reading column
+  // into a thin strip the width of whatever is left beside the panel.
   useEffect(() => {
-    if (!problem || mobile) return;
+    if (!problem || mobile || isLocalPad(problem)) return;
     const timer = window.setTimeout(() => {
       window.dispatchEvent(new Event("resize"));
       boardRef.current?.refitToViewport();
@@ -2191,6 +2227,7 @@ export function App() {
    */
   const beginCoachTurn = useCallback((replyTo?: CoachReplyRef): string => {
     const id = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    activeCoachTurnIdRef.current = id;
     dirtyRef.current = true;
     setCoachMessages((current) => [
       ...current,
@@ -2301,6 +2338,7 @@ export function App() {
         | "bridgeError"
         | "flags"
         | "replyTo"
+        | "queued"
       >,
     ) => {
       dirtyRef.current = true;
@@ -2339,10 +2377,11 @@ export function App() {
   ) => {
     const board = boardRef.current;
     if (!board || !problem) return;
+    const genAtStart = coachRunGenRef.current;
     setBusy("asking the coach…");
     setError(null);
     setNotice(null);
-    setCoachOpen(true);
+    if (!suppressCoachPanelOpenRef.current) setCoachOpen(true);
 
     const note = studentNote?.trim() ?? "";
     const topic =
@@ -2471,6 +2510,7 @@ export function App() {
       }
       // One structured card in the thread — do not also push a prose duplicate.
       // Attachments show what the coach saw (same layouts as the user turn).
+      if (coachRunGenRef.current !== genAtStart) return;
       finished = true;
       finishCoachTurn(turnId, [
         {
@@ -2488,14 +2528,20 @@ export function App() {
         lastSkeletonHashRef.current = await sha256Hex(skeletonOf(pseudocodeRef.current));
       }
     } catch (cause) {
-      setError(messageOf(cause));
+      if (coachRunGenRef.current === genAtStart) setError(messageOf(cause));
     } finally {
+      if (coachRunGenRef.current !== genAtStart) {
+        if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
+        return;
+      }
       // Every early return above — an empty board, a missing question — lands
       // here too, and none of them should leave a turn waiting forever.
       if (!finished) finishCoachTurn(turnId, null);
       for (const id of phaseTimers) window.clearTimeout(id);
       setCoachPhase(null);
       setBusy(null);
+      if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
+      if (coachSendDepthRef.current === 0) drainCoachSendQueueRef.current();
     }
   }, [
     client,
@@ -2569,9 +2615,10 @@ export function App() {
   const askForDiagram = useCallback(async (ask = "", threadAnchor?: CoachReplyRef | null) => {
     const board = boardRef.current;
     if (!board || !problem) return;
+    const genAtStart = coachRunGenRef.current;
     setBusy("drawing…");
     setError(null);
-    setCoachOpen(true);
+    if (!suppressCoachPanelOpenRef.current) setCoachOpen(true);
     const turnId = beginCoachTurn(threadAnchor ?? undefined);
     let finished = false;
     try {
@@ -2617,6 +2664,8 @@ export function App() {
         });
         void reviewDrawings(drawables, contextualAsk);
       }
+
+      if (coachRunGenRef.current !== genAtStart) return;
 
       const api = sceneApi();
 
@@ -2666,10 +2715,16 @@ export function App() {
         }
       }
     } catch (cause) {
-      setError(messageOf(cause));
+      if (coachRunGenRef.current === genAtStart) setError(messageOf(cause));
     } finally {
+      if (coachRunGenRef.current !== genAtStart) {
+        if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
+        return;
+      }
       if (!finished) finishCoachTurn(turnId, null);
       setBusy(null);
+      if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
+      if (coachSendDepthRef.current === 0) drainCoachSendQueueRef.current();
     }
   }, [
     client,
@@ -2729,10 +2784,11 @@ export function App() {
         setError("type a question, or turn on Ask");
         return;
       }
+      const genAtStart = coachRunGenRef.current;
       setBusy("asking…");
       setError(null);
       setNotice(null);
-      setCoachOpen(true);
+      if (!suppressCoachPanelOpenRef.current) setCoachOpen(true);
       setCoachPhase("Thinking…");
       const turnId = beginCoachTurn(threadAnchor ?? undefined);
       let finished = false;
@@ -2765,14 +2821,23 @@ export function App() {
           turnId,
           () => client.ask(problem.task_id, asked, problem.dataset, images),
         );
+        if (coachRunGenRef.current !== genAtStart) return;
         finished = true;
         finishCoachTurn(turnId, [{ content: result.reply }]);
       } catch (cause) {
-        setError(messageOf(cause));
+        if (coachRunGenRef.current === genAtStart) setError(messageOf(cause));
       } finally {
+        if (coachRunGenRef.current !== genAtStart) {
+          if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
+          suppressCoachPanelOpenRef.current = false;
+          return;
+        }
         if (!finished) finishCoachTurn(turnId, null);
         setCoachPhase(null);
         setBusy(null);
+        if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
+        suppressCoachPanelOpenRef.current = false;
+        if (coachSendDepthRef.current === 0) drainCoachSendQueueRef.current();
       }
     },
     [client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob],
@@ -2789,13 +2854,9 @@ export function App() {
   >(null);
   askCoachRef.current = askCoach;
 
-  const sendCoachChat = useCallback(
-    (text: string, requestedFlags: CoachSendFlags) => {
-      // A pad has no solution.py, no review pipeline and no board regions to
-      // draw into — Ask is the only pipeline flag that means anything there.
-      // Annotate is the exception: a pad does have a board with marks on it,
-      // and attaching them is the point of asking about a page you drew on.
-      const flags: CoachSendFlags = isLocalPad(problem)
+  const normalizeCoachFlags = useCallback(
+    (requestedFlags: CoachSendFlags): CoachSendFlags =>
+      isLocalPad(problem)
         ? {
             ask: true,
             draw: false,
@@ -2812,201 +2873,181 @@ export function App() {
               ? { threadRootId: requestedFlags.threadRootId }
               : {}),
           }
-        : requestedFlags;
-      const flagBits = [
-        flags.ask ? "Ask" : null,
-        flags.annotate ? (flags.annotateScope === "view" ? "View" : "Annotation") : null,
-        flags.reviewBoard ? "Review" : null,
-        flags.draw ? "Draw" : null,
-        flags.lazy ? "Lazy" : null,
-        flags.photos?.length
-          ? `${flags.photos.length} photo${flags.photos.length === 1 ? "" : "s"}`
-          : null,
-      ].filter((bit): bit is string => Boolean(bit));
+        : requestedFlags,
+    [problem],
+  );
 
-      // The root this send hangs off. An explicit quote from the room opens the
-      // thread first (see quoteMessage), so the panel's own openThreadId is the
-      // authority; replyTo is the fallback for the very first reply to a message.
+  const flagBitsFor = (flags: CoachSendFlags): string[] =>
+    [
+      flags.ask ? "Ask" : null,
+      flags.annotate ? (flags.annotateScope === "view" ? "View" : "Annotation") : null,
+      flags.reviewBoard ? "Review" : null,
+      flags.draw ? "Draw" : null,
+      flags.lazy ? "Lazy" : null,
+      flags.photos?.length
+        ? `${flags.photos.length} photo${flags.photos.length === 1 ? "" : "s"}`
+        : null,
+    ].filter((bit): bit is string => Boolean(bit));
+
+  const prepareCoachSend = useCallback(
+    async (text: string, flags: CoachSendFlags) => {
       const anchorId = flags.threadRootId ?? flags.replyTo?.id ?? null;
       const threadAnchor = anchorId
         ? threadAnchorRef(coachMessagesRef.current, anchorId) ?? flags.replyTo ?? null
         : null;
+      const flagBits = flagBitsFor(flags);
+      const photos = flags.photos ?? [];
+      const quotedExcerpt = flags.pageQuote ? replyExcerpt(flags.pageQuote) : "";
+      let attachments: CoachChatMessage["attachments"] =
+        photos.length > 0 ? [...photos] : undefined;
 
-      void (async () => {
-        /*
-         * Photos the writer attached lead the bubble.
-         *
-         * They are the reason the question exists — a picture of the page, an
-         * error on another screen — where the board thumbs that follow are the
-         * app describing itself back. Reading order should match that.
-         */
-        const photos = flags.photos ?? [];
-        const quotedExcerpt = flags.pageQuote ? replyExcerpt(flags.pageQuote) : "";
-        let attachments: CoachChatMessage["attachments"] =
-          photos.length > 0 ? [...photos] : undefined;
-
-        /*
-         * Marks on the code go as a picture; the code itself always goes as
-         * text.
-         *
-         * Only when there is something drawn. With no annotation an image adds
-         * nothing the source does not already say and costs a vision round-trip
-         * to say it, so the plain-text path is not just the cheaper answer, it
-         * is the better one. The picture is a re-render rather than a
-         * screenshot because Monaco is HTML: a canvas export would come back as
-         * marks floating over an empty rectangle, and a mark with nothing under
-         * it tells a model nothing.
-         */
-        const codeShot = (() => {
-          const board = boardRef.current;
-          if (!board) return null;
-          // Decoding what was just encoded, rather than reaching past the
-          // handle for the live ops. It costs one pass over the strokes on a
-          // send that is about to make a model call, and it keeps `saveBoard`
-          // the single place that knows how ink is written.
-          const ops = inkOpsFrom(board.saveBoard());
-          if (ops.length === 0) return null;
-          const frame = board
-            .getElements()
-            .find(
-              (el) =>
-                (el as { customData?: { lcRegion?: string; lcRegionFrame?: boolean } })
-                  .customData?.lcRegion === "code" &&
-                (el as { customData?: { lcRegionFrame?: boolean } }).customData
-                  ?.lcRegionFrame,
-            ) as { x?: number; y?: number; width?: number; height?: number } | undefined;
-          if (!frame || typeof frame.x !== "number" || typeof frame.y !== "number") {
-            return null;
-          }
-          const box = {
-            minX: frame.x,
-            minY: frame.y,
-            maxX: frame.x + (frame.width ?? 0),
-            maxY: frame.y + (frame.height ?? 0),
-          };
-          if (!hasCodeAnnotations(ops, box)) return null;
-          const theme =
-            BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
-          const png = renderAnnotatedCode({
-            source: pseudocodeRef.current,
-            ops,
-            box,
-            background: theme.background,
-            textColor: isDarkTheme(themeId) ? "#e6edf3" : "#1b1f24",
-            fontScene: statementLinePitch(readingSize) * 0.55,
-          });
-          return png ? { label: "Annotated code", png } : null;
-        })();
-        if ((flags.reviewBoard || flags.lazy || flags.annotate) && boardRef.current) {
-          try {
-            /*
-             * How much board goes up.
-             *
-             * Review and Lazy always want the whole thing — they are reasoning
-             * about the shape of the work. Annotate asks, because a question
-             * about one figure on page forty is answered worse, not better, by
-             * five other crops the model has to rule out first.
-             */
-            const narrow =
-              flags.annotate &&
-              !flags.reviewBoard &&
-              !flags.lazy &&
-              flags.annotateScope === "view";
-            const thumbs = narrow
-              ? [await boardRef.current.exportViewThumb()].filter(
-                  (thumb): thumb is { label: string; png: string } => thumb != null,
-                )
-              : await boardRef.current.exportRegionThumbs();
-            if (thumbs.length > 0) {
-              attachments = [
-                ...(attachments ?? []),
-                ...thumbs.map((thumb) => ({ label: thumb.label, png: thumb.png })),
-              ];
-            }
-          } catch {
-            /* thumbnails are best-effort */
-          }
+      const codeShot = (() => {
+        const board = boardRef.current;
+        if (!board) return null;
+        const ops = inkOpsFrom(board.saveBoard());
+        if (ops.length === 0) return null;
+        const frame = board
+          .getElements()
+          .find(
+            (el) =>
+              (el as { customData?: { lcRegion?: string; lcRegionFrame?: boolean } }).customData
+                ?.lcRegion === "code" &&
+              (el as { customData?: { lcRegionFrame?: boolean } }).customData?.lcRegionFrame,
+          ) as { x?: number; y?: number; width?: number; height?: number } | undefined;
+        if (!frame || typeof frame.x !== "number" || typeof frame.y !== "number") {
+          return null;
         }
-        // Annotated-code shot used to attach on every send (including Ask-only).
-        // Gate it with Annotation / Review / Lazy so Ask alone stays text-only.
-        if (codeShot && (flags.annotate || flags.reviewBoard || flags.lazy)) {
-          attachments = [...(attachments ?? []), codeShot];
-        }
-
-        // The bubble shows what was typed. With nothing typed it shows the
-        // passage instead of "Send", so the thread still reads as a
-        // conversation about something.
-        const bubble = text || (quotedExcerpt ? `“${quotedExcerpt}”` : "Send");
-        const userMessageId = pushCoachMessage("user", bubble, {
-          ...(attachments ? { attachments } : {}),
-          ...(flagBits.length > 0 ? { flags: flagBits } : {}),
-          ...(flags.replyTo ?? threadAnchor
-            ? { replyTo: flags.replyTo ?? threadAnchor ?? undefined }
-            : {}),
+        const box = {
+          minX: frame.x,
+          minY: frame.y,
+          maxX: frame.x + (frame.width ?? 0),
+          maxY: frame.y + (frame.height ?? 0),
+        };
+        if (!hasCodeAnnotations(ops, box)) return null;
+        const theme =
+          BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
+        const png = renderAnnotatedCode({
+          source: pseudocodeRef.current,
+          ops,
+          box,
+          background: theme.background,
+          textColor: isDarkTheme(themeId) ? "#e6edf3" : "#1b1f24",
+          fontScene: statementLinePitch(readingSize) * 0.55,
         });
+        return png ? { label: "Annotated code", png } : null;
+      })();
 
-        /*
-         * A quote taken from the page finally gets its ribbon.
-         *
-         * It waited for this turn because the thread it points at is this turn
-         * — either the root of a new one, or the root of whichever the writer
-         * was already inside. Either way the id exists now and did not when the
-         * selection was made.
-         */
-        const quoted = pendingQuoteRef.current;
-        pendingQuoteRef.current = null;
-        if (quoted) {
-          const rootId = anchorId ?? userMessageId;
-          setMdInkFootnotes((current) =>
-            addFootnote(current, {
-              id: freshFootnoteId(current),
-              kind: "coach",
-              anchor: quoted.anchor,
-              excerpt: quoted.excerpt,
-              createdAt: Date.now(),
-              threadRootId: rootId,
-            }),
-          );
+      if ((flags.reviewBoard || flags.lazy || flags.annotate) && boardRef.current) {
+        try {
+          const narrow =
+            flags.annotate &&
+            !flags.reviewBoard &&
+            !flags.lazy &&
+            flags.annotateScope === "view";
+          const thumbs = narrow
+            ? [await boardRef.current.exportViewThumb()].filter(
+                (thumb): thumb is { label: string; png: string } => thumb != null,
+              )
+            : await boardRef.current.exportRegionThumbs();
+          if (thumbs.length > 0) {
+            attachments = [
+              ...(attachments ?? []),
+              ...thumbs.map((thumb) => ({ label: thumb.label, png: thumb.png })),
+            ];
+          }
+        } catch {
+          /* thumbnails are best-effort */
         }
+      }
+      if (codeShot && (flags.annotate || flags.reviewBoard || flags.lazy)) {
+        attachments = [...(attachments ?? []), codeShot];
+      }
 
-        /*
-         * Say what is being replied to, for the model as well as the reader.
-         *
-         * The thread is a pointer, so without this the coach would get a bare
-         * "why?" with no idea which of its own paragraphs the student meant.
-         * Prefixed onto the prompt rather than stored in the message, so the
-         * bubble stays clean and the quote is not duplicated on screen.
-         */
-        /*
-         * What the coach is told, as opposed to what the writer typed.
-         *
-         * Both of these are pointers the panel shows as a chip rather than as
-         * text in the box, so neither is in `text` — and the coach cannot see
-         * chips. The page quote goes first because it is what the question is
-         * about; the reply excerpt says which of its own answers is being
-         * picked up.
-         */
-        const quotedPassage = flags.pageQuote?.trim();
-        const asked = flags.replyTo
-          ? `Replying to your earlier message: “${flags.replyTo.excerpt}”\n\n${text}`
-          : text;
-        const prompt = quotedPassage
-          ? `From the document:\n\n“${quotedPassage}”\n\n${asked}`.trimEnd()
-          : asked;
+      const bubble = text || (quotedExcerpt ? `“${quotedExcerpt}”` : "Send");
+      const quotedPassage = flags.pageQuote?.trim();
+      const asked = flags.replyTo
+        ? `Replying to your earlier message: “${flags.replyTo.excerpt}”\n\n${text}`
+        : text;
+      const prompt = quotedPassage
+        ? `From the document:\n\n“${quotedPassage}”\n\n${asked}`.trimEnd()
+        : asked;
 
-        // Review runs the staged pipeline. Ask (or bare text without Review)
-        // skips it and does a single-turn Q&A.
+      return {
+        text,
+        flags,
+        flagBits,
+        bubble,
+        attachments,
+        threadAnchor,
+        photos,
+        quotedPassage,
+        prompt,
+        anchorId,
+      };
+    },
+    [readingSize, themeId],
+  );
+
+  const applyCoachFootnote = useCallback((anchorId: string | null, userMessageId: string) => {
+    const quoted = pendingQuoteRef.current;
+    pendingQuoteRef.current = null;
+    const upgradeId = footnoteCoachUpgradeRef.current;
+    footnoteCoachUpgradeRef.current = null;
+    const rootId = anchorId ?? userMessageId;
+    if (quoted) {
+      setMdInkFootnotes((current) =>
+        addFootnote(current, {
+          id: freshFootnoteId(current),
+          kind: "coach",
+          anchor: quoted.anchor,
+          excerpt: quoted.excerpt,
+          createdAt: Date.now(),
+          threadRootId: rootId,
+        }),
+      );
+      return;
+    }
+    if (!upgradeId) return;
+    setMdInkFootnotes((current) =>
+      current.map((entry) =>
+        entry.id === upgradeId
+          ? {
+              ...entry,
+              kind: "coach" as const,
+              threadRootId: entry.threadRootId ?? rootId,
+            }
+          : entry,
+      ),
+    );
+    setCoachFocusThread({ token: Date.now(), rootId });
+  }, []);
+
+  const executeCoachSend = useCallback(
+    async (item: CoachSendQueueItem) => {
+      coachSendDepthRef.current += 1;
+      try {
+        const { text, flags, prompt, attachments, threadAnchor, photos, quotedPassage, userMessageId } =
+          item;
+
+        setCoachMessages((current) =>
+          current.map((message) =>
+            message.id === userMessageId ? { ...message, queued: undefined } : message,
+          ),
+        );
+
         if (flags.reviewBoard) {
           await submitForReview(prompt, true, attachments, flags.lazy, threadAnchor);
         } else if (flags.ask || text || photos.length > 0 || quotedPassage) {
-          // A quote with nothing typed is still a question, and a bare passage
-          // with no question attached gets answered as a request to summarise.
           const fallback = quotedPassage
             ? "What should I make of this?"
             : photos.length > 0
               ? "What am I looking at?"
               : "What should I focus on next?";
-          await askCoach(text ? prompt : `${prompt}\n\n${fallback}`.trim(), threadAnchor, photos);
+          await askCoach(
+            text ? prompt : `${prompt}\n\n${fallback}`.trim(),
+            threadAnchor,
+            photos,
+          );
         }
         if (flags.draw) {
           await askForDiagram(text, threadAnchor);
@@ -3016,8 +3057,6 @@ export function App() {
           try {
             await syncSolution();
             const board = boardRef.current;
-            // Lazy assumes drawing: send the board (and ink) without relying on
-            // the code dock as the source of truth.
             const snapshot = board
               ? await buildSnapshot(board, recognizerRef.current, {
                   pseudocode: undefined,
@@ -3041,10 +3080,14 @@ export function App() {
             setBusy(null);
           }
         }
-      })();
+      } finally {
+        coachSendDepthRef.current -= 1;
+        if (coachSendDepthRef.current === 0 && busyRef.current === null) {
+          drainCoachSendQueueRef.current();
+        }
+      }
     },
     [
-      pushCoachMessage,
       submitForReview,
       askCoach,
       askForDiagram,
@@ -3055,6 +3098,167 @@ export function App() {
       applyFilledCode,
       runCoachJob,
     ],
+  );
+
+  const enqueueCoachSend = useCallback(
+    async (text: string, flags: CoachSendFlags) => {
+      const prepared = await prepareCoachSend(text, flags);
+      const userMessageId = pushCoachMessage("user", prepared.bubble, {
+        ...(prepared.attachments ? { attachments: prepared.attachments } : {}),
+        ...(prepared.flagBits.length > 0 ? { flags: prepared.flagBits } : {}),
+        ...(flags.replyTo ?? prepared.threadAnchor
+          ? { replyTo: flags.replyTo ?? prepared.threadAnchor ?? undefined }
+          : {}),
+        queued: true,
+      });
+      applyCoachFootnote(prepared.anchorId, userMessageId);
+      coachSendQueueRef.current.push({
+        text: prepared.text,
+        flags: prepared.flags,
+        userMessageId,
+        prompt: prepared.prompt,
+        attachments: prepared.attachments,
+        threadAnchor: prepared.threadAnchor,
+        photos: prepared.photos,
+        quotedPassage: prepared.quotedPassage,
+        anchorId: prepared.anchorId,
+      });
+    },
+    [prepareCoachSend, pushCoachMessage, applyCoachFootnote],
+  );
+
+  const drainCoachSendQueue = useCallback(() => {
+    if (busyRef.current !== null) return;
+    const next = coachSendQueueRef.current.shift();
+    if (!next) return;
+    void executeCoachSendRef.current(next);
+  }, []);
+
+  executeCoachSendRef.current = executeCoachSend;
+  drainCoachSendQueueRef.current = drainCoachSendQueue;
+
+  const sendCoachChat = useCallback(
+    (text: string, requestedFlags: CoachSendFlags, mode: "queue" | "merge" = "queue") => {
+      const flags = normalizeCoachFlags(requestedFlags);
+
+      if (mode === "merge" && busyRef.current !== null) {
+        coachRef.current?.cancelAll();
+        coachRunGenRef.current += 1;
+        const activeTurn = activeCoachTurnIdRef.current;
+        if (activeTurn) {
+          finishCoachTurn(activeTurn, null);
+          activeCoachTurnIdRef.current = null;
+        }
+        setCoachPhase("Updating with your new messages…");
+        setBusy(null);
+        // Keep queued user bubbles on screen; drop the waiting jobs. One new
+        // ask sees them all via withConversationContext.
+        const queuedIds = new Set(
+          coachSendQueueRef.current.map((item) => item.userMessageId),
+        );
+        coachSendQueueRef.current = [];
+        setCoachMessages((current) =>
+          current.map((message) =>
+            message.queued || queuedIds.has(message.id)
+              ? { ...message, queued: undefined }
+              : message,
+          ),
+        );
+        void (async () => {
+          const prepared = await prepareCoachSend(text, flags);
+          const userMessageId = pushCoachMessage("user", prepared.bubble, {
+            ...(prepared.attachments ? { attachments: prepared.attachments } : {}),
+            ...(prepared.flagBits.length > 0 ? { flags: prepared.flagBits } : {}),
+            ...(flags.replyTo ?? prepared.threadAnchor
+              ? { replyTo: flags.replyTo ?? prepared.threadAnchor ?? undefined }
+              : {}),
+          });
+          applyCoachFootnote(prepared.anchorId, userMessageId);
+          await executeCoachSend({
+            text: prepared.text,
+            flags: prepared.flags,
+            userMessageId,
+            prompt: prepared.prompt,
+            attachments: prepared.attachments,
+            threadAnchor: prepared.threadAnchor,
+            photos: prepared.photos,
+            quotedPassage: prepared.quotedPassage,
+            anchorId: prepared.anchorId,
+          });
+        })();
+        return;
+      }
+
+      if (mode === "queue" && busyRef.current !== null) {
+        void enqueueCoachSend(text, flags);
+        suppressCoachPanelOpenRef.current = false;
+        return;
+      }
+
+      void (async () => {
+        const prepared = await prepareCoachSend(text, flags);
+        const userMessageId = pushCoachMessage("user", prepared.bubble, {
+          ...(prepared.attachments ? { attachments: prepared.attachments } : {}),
+          ...(prepared.flagBits.length > 0 ? { flags: prepared.flagBits } : {}),
+          ...(flags.replyTo ?? prepared.threadAnchor
+            ? { replyTo: flags.replyTo ?? prepared.threadAnchor ?? undefined }
+            : {}),
+        });
+        applyCoachFootnote(prepared.anchorId, userMessageId);
+        await executeCoachSend({
+          text: prepared.text,
+          flags: prepared.flags,
+          userMessageId,
+          prompt: prepared.prompt,
+          attachments: prepared.attachments,
+          threadAnchor: prepared.threadAnchor,
+          photos: prepared.photos,
+          quotedPassage: prepared.quotedPassage,
+          anchorId: prepared.anchorId,
+        });
+      })();
+    },
+    [
+      normalizeCoachFlags,
+      prepareCoachSend,
+      pushCoachMessage,
+      applyCoachFootnote,
+      executeCoachSend,
+      enqueueCoachSend,
+      finishCoachTurn,
+    ],
+  );
+
+  const sendCoachFromFootnote = useCallback(
+    (text: string) => {
+      const footnote = mdInkFootnotes.find((entry) => entry.id === openFootnoteId);
+      if (!footnote) return;
+      if (footnote.kind === "note" && !footnote.threadRootId) {
+        footnoteCoachUpgradeRef.current = footnote.id;
+      }
+      const threadRootId = footnote.threadRootId ?? null;
+      const replyTo = threadRootId
+        ? threadAnchorRef(coachMessagesRef.current, threadRootId) ?? undefined
+        : undefined;
+      // Stay in the overview card — do not dock the side coach over the page.
+      suppressCoachPanelOpenRef.current = true;
+      sendCoachChat(text, {
+        ask: true,
+        draw: false,
+        reviewBoard: false,
+        lazy: false,
+        annotate: false,
+        ...(footnote.excerpt ? { pageQuote: footnote.excerpt } : {}),
+        ...(replyTo ? { replyTo } : {}),
+        threadRootId,
+      });
+      // Cleared when the send finishes — not in a microtask, or askCoach opens
+      // the side panel before suppress is still set.
+      if (threadRootId) {
+        setCoachFocusThread({ token: Date.now(), rootId: threadRootId });
+      }
+    },
+    [mdInkFootnotes, openFootnoteId, sendCoachChat],
   );
 
   /**
@@ -3480,6 +3684,9 @@ export function App() {
     setMdInkFootnotes([]);
     mdInkFootnotesRef.current = [];
     pendingQuoteRef.current = null;
+    footnoteCoachUpgradeRef.current = null;
+    setOpenFootnoteId(null);
+    setFootnoteAnchorRect(null);
   }, [mdInkDocId]);
 
   /** Commit the annotations to the library. Returns the entry, or null on failure. */
@@ -3518,54 +3725,70 @@ export function App() {
   /*
    * What a quote from the page can become.
    *
-   * Three destinations, and only two of them leave a mark. Copy is the one that
-   * does not: nothing was created for a ribbon to point at, and a page dotted
-   * with "I copied this once" markers is a page you stop reading.
+   * Copy leaves no mark. Google and Annotate each drop a ribbon and open the
+   * overview card — the browser may still open once when a search is created.
    */
-  const onDocCoach = useCallback((selection: DocSelectionResult) => {
-    pendingQuoteRef.current = selection;
-    setCoachOpen(true);
-    setCoachQuoteSeed({ token: Date.now(), text: selection.text });
+  const openFootnoteOverview = useCallback((id: string, anchorRect: DOMRect | null) => {
+    setOpenFootnoteId(id);
+    setFootnoteAnchorRect(anchorRect);
   }, []);
 
-  const onDocCopy = useCallback((selection: DocSelectionResult) => {
-    void navigator.clipboard?.writeText(selection.text).catch(() => {
+  const onDocAnnotate = useCallback(
+    (selection: DocSelectionResult, anchorRect: DOMRect | null) => {
+      const id = freshFootnoteId(mdInkFootnotesRef.current);
+      setMdInkFootnotes((current) =>
+        addFootnote(current, {
+          id,
+          kind: "note",
+          anchor: selection.anchor,
+          excerpt: selection.excerpt,
+          createdAt: Date.now(),
+        }),
+      );
+      openFootnoteOverview(id, anchorRect);
+    },
+    [openFootnoteOverview],
+  );
+
+  const onDocCopy = useCallback((_selection: DocSelectionResult, _anchorRect: DOMRect | null) => {
+    void navigator.clipboard?.writeText(_selection.text).catch(() => {
       setError("this device would not let the app write to the clipboard");
     });
   }, []);
 
-  const onDocSearch = useCallback((selection: DocSelectionResult) => {
-    const query = searchQueryFor(selection.text);
-    if (!query) return;
-    const url = googleSearchUrl(query);
-    // The footnote is written before the browser opens, not after: leaving the
-    // app is exactly when a promise callback is least likely to be waited for.
-    setMdInkFootnotes((current) =>
-      addFootnote(current, {
-        id: freshFootnoteId(current),
-        kind: "search",
-        anchor: selection.anchor,
-        excerpt: selection.excerpt,
-        createdAt: Date.now(),
-        query,
-        url,
-      }),
-    );
-    void openExternalUrl(url).catch(() => {
-      setError("could not hand the search to a browser on this device");
-    });
-  }, []);
-
-  const onOpenFootnote = useCallback((footnote: DocFootnote) => {
-    if (footnote.kind === "search") {
-      const url = footnote.url ?? googleSearchUrl(footnote.query ?? footnote.excerpt);
+  const onDocSearch = useCallback(
+    (selection: DocSelectionResult, anchorRect: DOMRect | null) => {
+      const query = searchQueryFor(selection.text);
+      if (!query) return;
+      const url = googleSearchUrl(query);
+      // The footnote is written before the browser opens, not after: leaving the
+      // app is exactly when a promise callback is least likely to be waited for.
+      const id = freshFootnoteId(mdInkFootnotesRef.current);
+      setMdInkFootnotes((current) =>
+        addFootnote(current, {
+          id,
+          kind: "search",
+          anchor: selection.anchor,
+          excerpt: selection.excerpt,
+          createdAt: Date.now(),
+          query,
+          url,
+        }),
+      );
+      openFootnoteOverview(id, anchorRect);
       void openExternalUrl(url).catch(() => {
         setError("could not hand the search to a browser on this device");
       });
-      return;
-    }
-    setCoachOpen(true);
-    setCoachFocusThread({ token: Date.now(), rootId: footnote.threadRootId ?? null });
+    },
+    [openFootnoteOverview],
+  );
+
+  const onOpenFootnote = useCallback((footnote: DocFootnote, anchorRect: DOMRect | null) => {
+    openFootnoteOverview(footnote.id, anchorRect);
+  }, [openFootnoteOverview]);
+
+  const onFootnoteChange = useCallback((next: DocFootnote) => {
+    setMdInkFootnotes((current) => current.map((entry) => (entry.id === next.id ? next : entry)));
   }, []);
 
   /** The highlighter's plain outcome: a mark, pointing at nothing but itself. */
@@ -3790,12 +4013,28 @@ export function App() {
     browseMotion === "done" ||
     (holdBrowseOverlay && boardPreparing);
 
+  const groupedCoachThreads = useMemo(() => groupThreads(coachMessages), [coachMessages]);
+  const openFootnote = useMemo(
+    () => mdInkFootnotes.find((entry) => entry.id === openFootnoteId) ?? null,
+    [mdInkFootnotes, openFootnoteId],
+  );
+  const footnoteThreadMessages = useMemo(() => {
+    if (!openFootnote?.threadRootId) return [];
+    return visibleThreadMessages(
+      coachMessages,
+      openFootnote.threadRootId,
+      groupedCoachThreads,
+    );
+  }, [coachMessages, groupedCoachThreads, openFootnote]);
+  const footnoteNumbers = useMemo(() => numberFootnotes(mdInkFootnotes), [mdInkFootnotes]);
+
   return (
     <div
       className={[
         "lc-app",
         mobile ? "lc-mobile" : "",
         problem ? "lc-app-problem" : "",
+        problem && isLocalPad(problem) ? "lc-app-pad" : "",
         coachOpen && problem ? "lc-app-coach-open" : "",
         canvasLoading ? "lc-app-loading" : "",
       ]
@@ -4252,7 +4491,7 @@ export function App() {
                   highlighting={highlighting}
                   marksHost={marksSlot}
                   footnotes={mdInkFootnotes}
-                  onCoach={onDocCoach}
+                  onAnnotate={onDocAnnotate}
                   onCopy={onDocCopy}
                   onSearch={onDocSearch}
                   onMark={highlighting ? onDocMark : undefined}
@@ -4417,6 +4656,11 @@ export function App() {
             onThreadChange={(rootId) => {
               threadRootIdRef.current = rootId;
             }}
+            forwardFailures={forwardFailures}
+            onForwardFailuresChange={(on) => {
+              setForwardFailures(on);
+              saveForwardFailures(on);
+            }}
             onSend={sendCoachChat}
             onRequestBridge={(messageId) => {
               revealForMessageIdRef.current = messageId;
@@ -4446,6 +4690,26 @@ export function App() {
             )}
 
           </AgentSidePanel>
+        )}
+
+        {openFootnote && (
+          <FootnoteOverview
+            footnote={openFootnote}
+            number={footnoteNumbers.get(openFootnote.id)}
+            messages={footnoteThreadMessages}
+            anchorRect={footnoteAnchorRect}
+            onClose={() => {
+              setOpenFootnoteId(null);
+              setFootnoteAnchorRect(null);
+            }}
+            onChange={onFootnoteChange}
+            onSendCoach={sendCoachFromFootnote}
+            onOpenExternal={(url) => {
+              void openExternalUrl(url).catch(() => {
+                setError("could not hand the link to a browser on this device");
+              });
+            }}
+          />
         )}
 
       {resetOpen && (
