@@ -25,6 +25,11 @@ const FOOTNOTE_KINDS: ReadonlySet<DocFootnoteKind> = new Set([
   "note",
 ]);
 
+export interface DocFootnoteUserLink {
+  title?: string;
+  url: string;
+}
+
 export interface DocFootnote {
   id: string;
   kind: DocFootnoteKind;
@@ -46,6 +51,10 @@ export interface DocFootnote {
   /** Search: what was asked, and where it was asked. */
   query?: string;
   url?: string;
+  /** Writer notes in the footnote overview card. */
+  userNotes?: string;
+  /** Extra links the writer saved on the overview card. */
+  userLinks?: DocFootnoteUserLink[];
 }
 
 /**
@@ -167,6 +176,21 @@ export function numberFootnotes(
   return new Map(ordered.map((entry, index) => [entry.id, index + 1]));
 }
 
+function sanitizeUserLinks(value: unknown): DocFootnoteUserLink[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const links = value.flatMap((entry): DocFootnoteUserLink[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const candidate = entry as Partial<DocFootnoteUserLink>;
+    if (typeof candidate.url !== "string" || !candidate.url.trim()) return [];
+    const title =
+      typeof candidate.title === "string" && candidate.title.trim()
+        ? candidate.title.trim()
+        : undefined;
+    return [{ url: candidate.url.trim(), ...(title ? { title } : {}) }];
+  });
+  return links.length > 0 ? links : undefined;
+}
+
 /** Drop anything that is not a footnote, for reading untrusted stored JSON. */
 export function sanitizeFootnotes(value: unknown): DocFootnote[] {
   if (!Array.isArray(value)) return [];
@@ -180,7 +204,17 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
       // here is what keeps an old library entry from being silently dropped.
       const anchor = normalizeAnchor(candidate.anchor);
       if (!anchor) return [];
-      return [{ ...(candidate as DocFootnote), anchor }];
+      const userNotes =
+        typeof candidate.userNotes === "string" ? candidate.userNotes : undefined;
+      const userLinks = sanitizeUserLinks(candidate.userLinks);
+      return [
+        {
+          ...(candidate as DocFootnote),
+          anchor,
+          ...(userNotes !== undefined ? { userNotes } : {}),
+          ...(userLinks ? { userLinks } : {}),
+        },
+      ];
     })
     .sort(sortByPosition);
 }
@@ -188,6 +222,40 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
 /** Google Search URL for a quote — the query is the words, nothing added. */
 export function googleSearchUrl(query: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+}
+
+/**
+ * Quick links for a footnote overview — built from the excerpt or search query.
+ *
+ * Google is one row in the list, not the card's only action: the writer can
+ * open any suggestion or add their own.
+ */
+export function suggestedLinksFor(
+  excerpt: string,
+  footnote?: DocFootnote,
+): { title: string; url: string }[] {
+  const query = footnote?.query ?? searchQueryFor(footnote?.excerpt ?? excerpt);
+  const text = (query || excerpt || footnote?.excerpt || "").trim();
+  if (!text) return [];
+  const firstWord = text.split(/\s+/).filter(Boolean)[0] ?? text;
+  return [
+    {
+      title: "Wikipedia",
+      url: `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(text)}`,
+    },
+    {
+      title: "Wiktionary",
+      url: `https://en.wiktionary.org/wiki/${encodeURIComponent(firstWord)}`,
+    },
+    {
+      title: "DuckDuckGo",
+      url: `https://duckduckgo.com/?q=${encodeURIComponent(text)}`,
+    },
+    {
+      title: "Google",
+      url: footnote?.url ?? googleSearchUrl(text),
+    },
+  ];
 }
 
 /**
