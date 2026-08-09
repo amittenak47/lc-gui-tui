@@ -255,6 +255,7 @@ export function DocSelectionLayer({
     const hold = holdRef.current;
     if (hold?.timer != null) window.clearTimeout(hold.timer);
     holdRef.current = null;
+    hostRef.current?.classList.remove("lc-doc-selecting");
     releaseSelectionGesture();
   }, []);
 
@@ -271,20 +272,82 @@ export function DocSelectionLayer({
    *
    * Offsets are local to a scope root — see `docAnchors`. That is what keeps
    * resolving a mark on page 900 from walking the 899 pages in front of it.
+   *
+   * **The point does not have to be on a glyph.** `caretRangeFromPoint` answers
+   * for text and nothing else, and most of a real drag is not over text: the
+   * margins either side of the column, the gaps between paragraphs, the space
+   * past the end of a short line, everything below the last line. Taking `null`
+   * for an answer there is why a drag appeared to select one word and then stop
+   * — every move that left the run of letters it started on was discarded, so
+   * dragging *down* through a paragraph never extended anything.
+   *
+   * So a miss is retried against the column rather than given up on: the x is
+   * pulled inside the text's own box, which turns "somewhere in the left
+   * margin, four lines down" into "the start of that line". Past the bottom of
+   * the document it resolves to the end of the text, which is what dragging off
+   * the end of a page is asking for.
    */
   const pointAt = useCallback(
-    (x: number, y: number): { root: HTMLElement; scope?: string; offset: number } | null => {
+    (
+      x: number,
+      y: number,
+      preferred?: HTMLElement | null,
+    ): { root: HTMLElement; scope?: string; offset: number } | null => {
       const body = bodyRef.current;
       if (!body) return null;
-      const caret = caretAt(x, y);
-      if (!caret || !body.contains(caret.node)) return null;
-      const scope = scopeOfNode(body, caret.node);
-      const root = (scopeRootIn(body, scope) as HTMLElement | null) ?? body;
-      const range = document.createRange();
-      range.setStart(caret.node, caret.offset);
-      range.collapse(true);
-      const offset = anchorFromRange(root, expandOne(root, range))?.start;
-      return offset == null ? null : { root, scope, offset };
+
+      const resolve = (
+        at: { node: Node; offset: number } | null,
+      ): { root: HTMLElement; scope?: string; offset: number } | null => {
+        if (!at || !body.contains(at.node)) return null;
+        const scope = scopeOfNode(body, at.node);
+        const root = (scopeRootIn(body, scope) as HTMLElement | null) ?? body;
+        const range = document.createRange();
+        range.setStart(at.node, at.offset);
+        range.collapse(true);
+        const offset = anchorFromRange(root, expandOne(root, range))?.start;
+        return offset == null ? null : { root, scope, offset };
+      };
+
+      const direct = resolve(caretAt(x, y));
+      if (direct) return direct;
+
+      /*
+       * Retry inside the column the drag belongs to.
+       *
+       * The scope the hold started in when there is one, so a drag down the
+       * side of page 40 does not get pulled into page 41's margin; the whole
+       * body otherwise.
+       */
+      const column = preferred ?? body;
+      const box = column.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) return null;
+
+      const inset = Math.min(8, box.width / 4);
+      // Left edge first when the finger is left of the text, right edge when it
+      // is right of it — the reading order of the line either way.
+      const candidates =
+        x < box.left
+          ? [box.left + inset, box.right - inset]
+          : [box.right - inset, box.left + inset];
+      const clampedY = Math.min(Math.max(y, box.top + 1), box.bottom - 1);
+      for (const candidateX of candidates) {
+        const hit = resolve(caretAt(candidateX, clampedY));
+        if (hit) return hit;
+      }
+
+      // Below everything: the end of the text. Above it: the beginning. A drag
+      // that runs off the page should take the rest of the page with it.
+      if (y > box.bottom || y < box.top) {
+        const scope = column.getAttribute?.(SCOPE_ATTR) ?? undefined;
+        const root = column;
+        return {
+          root,
+          scope,
+          offset: y > box.bottom ? textOf(root).length : 0,
+        };
+      }
+      return null;
     },
     [],
   );
@@ -488,6 +551,18 @@ export function DocSelectionLayer({
           } catch {
             /* the pointer may already be gone — the window listeners still run */
           }
+          /*
+           * Nothing under the finger may scroll while the hold has it.
+           *
+           * A document is full of things that scroll on their own — a wide code
+           * block, a table, a PDF page too wide for the column. Drag sideways
+           * across one and the browser starts scrolling it, which both moves
+           * the words out from under the selection and ends the gesture with a
+           * `pointercancel`. Capture alone does not prevent that; `touch-action`
+           * is what tells the compositor there is no scroll to start. Set for
+           * the length of the hold only, so ordinary reading still scrolls.
+           */
+          host.classList.add("lc-doc-selecting");
           try {
             navigator.vibrate?.(10);
           } catch {
@@ -513,7 +588,9 @@ export function DocSelectionLayer({
         return;
       }
       event.preventDefault();
-      const at = pointAt(event.clientX, event.clientY);
+      // Resolved against the scope the hold started in, so a drag that strays
+      // sideways off the column comes back to *this* page's text.
+      const at = pointAt(event.clientX, event.clientY, hold.root);
       if (!at || hold.anchorOffset == null || !hold.root) return;
       // Wandered onto another page: hold the selection at this page's edge
       // rather than following, since the two are different offset spaces.
@@ -684,16 +761,32 @@ export function DocSelectionLayer({
     return new DOMRect(left, top, right - left, bottom - top);
   };
 
-  /** Clamp a measured box into the window, with a margin. */
+  /**
+   * Clamp a measured box into the window, with a margin.
+   *
+   * `offsetWidth`/`offsetHeight` rather than `getBoundingClientRect()`: the
+   * measurement happens in the ref callback, on the frame the pop animation
+   * starts, and a rect reports the box *as transformed* — 0.96 of its real
+   * width — so clamping against it leaves the element a little wider than the
+   * space that was reserved for it. The layout size is what it will settle at.
+   *
+   * The visual viewport, not the layout one, because on a tablet they differ
+   * exactly when it matters: a pinch-zoom or a soft keyboard leaves
+   * `innerWidth` describing a region larger than what the reader can see.
+   */
   const clampInto = (node: HTMLElement, left: number, top: number) => {
-    const box = node.getBoundingClientRect();
+    const width = node.offsetWidth;
+    const height = node.offsetHeight;
+    const view = window.visualViewport;
+    const viewWidth = view?.width ?? window.innerWidth;
+    const viewHeight = view?.height ?? window.innerHeight;
+    const originX = view?.offsetLeft ?? 0;
+    const originY = view?.offsetTop ?? 0;
     const margin = 8;
-    node.style.left = `${Math.round(
-      Math.min(Math.max(margin, left), Math.max(margin, window.innerWidth - box.width - margin)),
-    )}px`;
-    node.style.top = `${Math.round(
-      Math.min(Math.max(margin, top), Math.max(margin, window.innerHeight - box.height - margin)),
-    )}px`;
+    const maxLeft = Math.max(margin, originX + viewWidth - width - margin);
+    const maxTop = Math.max(margin, originY + viewHeight - height - margin);
+    node.style.left = `${Math.round(Math.min(Math.max(originX + margin, left), maxLeft))}px`;
+    node.style.top = `${Math.round(Math.min(Math.max(originY + margin, top), maxTop))}px`;
     node.style.visibility = "visible";
   };
 
@@ -701,14 +794,13 @@ export function DocSelectionLayer({
   const placeConfirm = useCallback((node: HTMLDivElement | null) => {
     if (!node) return;
     const at = highlightBox();
-    const box = node.getBoundingClientRect();
     if (!at) {
-      clampInto(node, window.innerWidth / 2 - box.width / 2, 12);
+      clampInto(node, window.innerWidth / 2 - node.offsetWidth / 2, 12);
       return;
     }
     // Just outside the corner, and above the line rather than over the next
     // word — the same relationship a footnote marker has to its text.
-    clampInto(node, at.right + 4, at.top - box.height - 4);
+    clampInto(node, at.right + 4, at.top - node.offsetHeight - 4);
   }, []);
 
   /**
@@ -726,17 +818,18 @@ export function DocSelectionLayer({
    */
   const placeSheet = useCallback((node: HTMLDivElement | null) => {
     if (!node) return;
-    const box = node.getBoundingClientRect();
+    const width = node.offsetWidth;
+    const height = node.offsetHeight;
     const at = highlightBox();
     if (!at) {
-      clampInto(node, window.innerWidth / 2 - box.width / 2, window.innerHeight / 2 - box.height / 2);
+      clampInto(node, window.innerWidth / 2 - width / 2, window.innerHeight / 2 - height / 2);
       return;
     }
     // Below the quote by preference; above it when there is no room underneath,
     // which is better than over the words the menu is about.
     const below = at.bottom + 10;
-    const top = below + box.height + 8 > window.innerHeight ? at.top - box.height - 10 : below;
-    clampInto(node, at.left + at.width / 2 - box.width / 2, top);
+    const top = below + height + 8 > window.innerHeight ? at.top - height - 10 : below;
+    clampInto(node, at.left + at.width / 2 - width / 2, top);
   }, []);
 
   return (

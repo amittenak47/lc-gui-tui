@@ -7254,6 +7254,17 @@ button.lc-row-selected:hover:not(:disabled) {
   background: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 
+/*
+ * A passage taken off the page, not a reply to a message.
+ *
+ * Same chip, different colour on the rule, because the two can be present at
+ * once — quoting a paragraph while answering something the coach said — and
+ * two identical chips stacked would read as one repeated.
+ */
+.lc-coach-quote-chip .lc-coach-reply-chip-mark {
+  background: color-mix(in srgb, var(--ok, #3fa06a) 75%, transparent);
+}
+
 .lc-coach-reply-chip-mark {
   flex: 0 0 auto;
   width: 2px;
@@ -7744,6 +7755,21 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
+ * While a hold owns the finger, nothing under it scrolls.
+ *
+ * Set on the host for the length of the gesture and taken off again, so a
+ * reader still scrolls the page normally. It has to reach descendants — the
+ * things that scroll are inside: a wide code block, a table, a PDF page broader
+ * than the column. Dragging sideways across one of those used to scroll it
+ * instead of extending the quote, and the scroll took the gesture with it.
+ */
+.lc-doc-selecting,
+.lc-doc-selecting * {
+  touch-action: none !important;
+  overscroll-behavior: contain;
+}
+
+/*
  * The overlay is a sibling of the document body, never a child.
  *
  * Anchors are character offsets into the body's text, so a ribbon's emoji
@@ -7972,11 +7998,30 @@ button.lc-row-selected:hover:not(:disabled) {
   border-radius: 12px;
   box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
   /*
-   * No transform. Position is measured and clamped in `placeSheet` — a
-   * `translate(-50%)` here would move the box after the clamp had decided it
-   * fitted, which is half of how this used to open off the side of the screen.
+   * Its own keyframes, and the reason is not decoration.
+   *
+   * `lc-coach-menu-pop` ends on `translate(-50%, 0)` and runs with
+   * `animation-fill-mode: both`, so that translate *persists*: whatever
+   * `placeSheet` measured and clamped, the box then moved half its own width to
+   * the left and sat there. A sheet clamped to the left margin ended up off the
+   * side of the screen — which is exactly the bug the clamp was added to fix,
+   * still happening, one layer further down. Anything positioned by
+   * measurement has to animate in opacity and scale only.
    */
-  animation: lc-coach-menu-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: lc-doc-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Grows in place. See the note above on why nothing here may translate. */
+@keyframes lc-doc-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 /*
@@ -7996,7 +8041,9 @@ button.lc-row-selected:hover:not(:disabled) {
   background: var(--overlay-bg, var(--panel));
   border: 1px solid var(--chrome-edge, var(--line));
   box-shadow: 0 6px 20px rgb(0 0 0 / 26%);
-  animation: lc-doc-footnote-pop 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  /* Not `lc-doc-footnote-pop`: it ends on `translate(2px, -60%)`, which would
+     move this off the position that was just measured for it. */
+  animation: lc-doc-pop 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /*

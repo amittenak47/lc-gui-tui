@@ -71,6 +71,7 @@ import {
   type CoachChatMessage,
   type CoachReplyRef,
   type CoachSendFlags,
+  replyExcerpt,
 } from "./modes/AgentSidePanel";
 import { AttemptDialog } from "./modes/AttemptDialog";
 import { ScratchpadDialog } from "./modes/ScratchpadDialog";
@@ -2805,6 +2806,7 @@ export function App() {
               ? { annotateScope: requestedFlags.annotateScope }
               : {}),
             ...(requestedFlags.photos ? { photos: requestedFlags.photos } : {}),
+            ...(requestedFlags.pageQuote ? { pageQuote: requestedFlags.pageQuote } : {}),
             ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}),
             ...(requestedFlags.threadRootId != null
               ? { threadRootId: requestedFlags.threadRootId }
@@ -2839,6 +2841,7 @@ export function App() {
          * app describing itself back. Reading order should match that.
          */
         const photos = flags.photos ?? [];
+        const quotedExcerpt = flags.pageQuote ? replyExcerpt(flags.pageQuote) : "";
         let attachments: CoachChatMessage["attachments"] =
           photos.length > 0 ? [...photos] : undefined;
 
@@ -2930,7 +2933,11 @@ export function App() {
           attachments = [...(attachments ?? []), codeShot];
         }
 
-        const userMessageId = pushCoachMessage("user", text || "Send", {
+        // The bubble shows what was typed. With nothing typed it shows the
+        // passage instead of "Send", so the thread still reads as a
+        // conversation about something.
+        const bubble = text || (quotedExcerpt ? `“${quotedExcerpt}”` : "Send");
+        const userMessageId = pushCoachMessage("user", bubble, {
           ...(attachments ? { attachments } : {}),
           ...(flagBits.length > 0 ? { flags: flagBits } : {}),
           ...(flags.replyTo ?? threadAnchor
@@ -2970,20 +2977,36 @@ export function App() {
          * Prefixed onto the prompt rather than stored in the message, so the
          * bubble stays clean and the quote is not duplicated on screen.
          */
-        const prompt = flags.replyTo
+        /*
+         * What the coach is told, as opposed to what the writer typed.
+         *
+         * Both of these are pointers the panel shows as a chip rather than as
+         * text in the box, so neither is in `text` — and the coach cannot see
+         * chips. The page quote goes first because it is what the question is
+         * about; the reply excerpt says which of its own answers is being
+         * picked up.
+         */
+        const quotedPassage = flags.pageQuote?.trim();
+        const asked = flags.replyTo
           ? `Replying to your earlier message: “${flags.replyTo.excerpt}”\n\n${text}`
           : text;
+        const prompt = quotedPassage
+          ? `From the document:\n\n“${quotedPassage}”\n\n${asked}`.trimEnd()
+          : asked;
 
         // Review runs the staged pipeline. Ask (or bare text without Review)
         // skips it and does a single-turn Q&A.
         if (flags.reviewBoard) {
           await submitForReview(prompt, true, attachments, flags.lazy, threadAnchor);
-        } else if (flags.ask || text || photos.length > 0) {
-          await askCoach(
-            prompt || (photos.length > 0 ? "What am I looking at?" : "What should I focus on next?"),
-            threadAnchor,
-            photos,
-          );
+        } else if (flags.ask || text || photos.length > 0 || quotedPassage) {
+          // A quote with nothing typed is still a question, and a bare passage
+          // with no question attached gets answered as a request to summarise.
+          const fallback = quotedPassage
+            ? "What should I make of this?"
+            : photos.length > 0
+              ? "What am I looking at?"
+              : "What should I focus on next?";
+          await askCoach(text ? prompt : `${prompt}\n\n${fallback}`.trim(), threadAnchor, photos);
         }
         if (flags.draw) {
           await askForDiagram(text, threadAnchor);
