@@ -53,6 +53,7 @@ import { SmartTips } from "./components/SmartTips";
 import { Board } from "./canvas/Board";
 import { saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
 import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
+import { inkOpsFrom } from "./canvas/inkCodec";
 import { studentAuthoredElements, studentElements } from "./canvas/capture";
 import type { StructureBaseline } from "./canvas/boardDelta";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
@@ -1524,10 +1525,14 @@ export function App() {
         // the template alone. Persisted boards can carry old region geometry,
         // so `restoreBoard` heals them against the current skeletons.
         lastSavedHashRef.current = null;
+        // Decoded once, here, and handed to both restore paths below. Never per
+        // frame: the renderer's caches are `WeakMap`s keyed on the op object,
+        // so fresh objects each frame would defeat them.
+        const savedInk = saved ? inkOpsFrom(saved) : [];
         if (hasSavedBoard && saved?.elements) {
           boardRef.current?.restoreBoard(saved.elements, saved.appState, {
             skeletons,
-            ink: Array.isArray(saved.ink) ? (saved.ink as import("./canvas/rasterInk").InkOp[]) : [],
+            ink: savedInk,
             files: saved.files,
             inkPalettes: saved.inkPalettes,
           });
@@ -1547,8 +1552,8 @@ export function App() {
         await boardRef.current?.waitForTemplate();
         await boardRef.current?.settleFitView();
         syncDrawingsToBoard(resumedMessages);
-        if (hasSavedBoard && saved && Array.isArray(saved.ink)) {
-          boardRef.current?.setInkOps(saved.ink as import("./canvas/rasterInk").InkOp[]);
+        if (hasSavedBoard && savedInk.length > 0) {
+          boardRef.current?.setInkOps(savedInk);
         }
 
         await finishLoadingTransition(fromBrowse, switching);
@@ -1628,7 +1633,7 @@ export function App() {
             const skeletons = buildScratchpadTemplate(pages, dark);
             boardRef.current?.restoreBoard(notebook.board.elements, notebook.board.appState, {
               skeletons,
-              ink: Array.isArray(notebook.board.ink) ? notebook.board.ink : [],
+              ink: inkOpsFrom(notebook.board),
               files: notebook.board.files,
               inkPalettes: notebook.board.inkPalettes,
             });
@@ -1664,9 +1669,8 @@ export function App() {
         // Ink layer may have mounted after the first restore — re-apply saved strokes.
         if (restored && notebookId) {
           const notebook = getScratchNotebook(notebookId);
-          if (notebook && Array.isArray(notebook.board.ink)) {
-            boardRef.current?.setInkOps(notebook.board.ink);
-          }
+          const notebookInk = notebook ? inkOpsFrom(notebook.board) : [];
+          if (notebookInk.length > 0) boardRef.current?.setInkOps(notebookInk);
         }
 
         // Taken after the template and any restored ink have landed, so it is
@@ -1803,7 +1807,7 @@ export function App() {
         mdInkHeightRef.current = null;
 
         const dark = isDarkTheme(themeId);
-        const savedInk = Array.isArray(existing?.board.ink) ? existing.board.ink : [];
+        const savedInk = existing ? inkOpsFrom(existing.board) : [];
         const pageWidth = mdInkPageWidthForViewport(
           typeof window !== "undefined" ? window.innerWidth : MD_INK_PAGE_W,
         );
@@ -1851,9 +1855,7 @@ export function App() {
         lastIdsRef.current = new Set();
         await boardRef.current?.waitForTemplate();
         await boardRef.current?.settleFitView();
-        if (existing && Array.isArray(existing.board.ink)) {
-          boardRef.current?.setInkOps(existing.board.ink);
-        }
+        if (savedInk.length > 0) boardRef.current?.setInkOps(savedInk);
 
         // Document must finish laying out (measure stable) before reveal.
         await waitForMdInkLaidOut(() => mdInkHeightRef.current);
@@ -1972,6 +1974,7 @@ export function App() {
       }
       const widthNote = sidecarWidthWarning(sidecar, mdInkPageWidthRef.current);
       if (widthNote) setNotice(widthNote);
+      const sidecarInk = inkOpsFrom(sidecar.board);
       if (sidecar.footnotes) {
         setMdInkFootnotes(sidecar.footnotes);
         mdInkFootnotesRef.current = sidecar.footnotes;
@@ -1987,11 +1990,11 @@ export function App() {
             }[],
           ) ?? mdInkPageWidth,
         ),
-        ink: Array.isArray(sidecar.board.ink) ? sidecar.board.ink : [],
+        ink: sidecarInk,
         files: sidecar.board.files,
         inkPalettes: sidecar.board.inkPalettes,
       });
-      if (Array.isArray(sidecar.board.ink)) boardRef.current?.setInkOps(sidecar.board.ink);
+      if (sidecarInk.length > 0) boardRef.current?.setInkOps(sidecarInk);
       setNotice(`Imported annotations for “${sidecar.sourceName}”.`);
     } catch (cause) {
       setError(messageOf(cause));
@@ -2859,8 +2862,11 @@ export function App() {
         const codeShot = (() => {
           const board = boardRef.current;
           if (!board) return null;
-          const blob = board.saveBoard();
-          const ops = Array.isArray(blob.ink) ? blob.ink : [];
+          // Decoding what was just encoded, rather than reaching past the
+          // handle for the live ops. It costs one pass over the strokes on a
+          // send that is about to make a model call, and it keeps `saveBoard`
+          // the single place that knows how ink is written.
+          const ops = inkOpsFrom(board.saveBoard());
           if (ops.length === 0) return null;
           const frame = board
             .getElements()

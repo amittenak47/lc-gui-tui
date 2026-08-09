@@ -11,14 +11,29 @@
 import type { RegionId } from "../templates/regions";
 import type { Skeleton } from "../templates/skeleton";
 import type { InkStroke, SceneElementLike } from "./capture";
+import type { EncodedInk } from "./inkCodec";
 import type { InkOp } from "./rasterInk";
 
 export interface BoardBlob {
+  /**
+   * Blob format, and deliberately still `1` now that ink is encoded.
+   *
+   * Five readers hard-compare `board.v === 1` and drop the entry when it does
+   * not match, so bumping this would make every library filter out every board
+   * saved by the new build — silently, since a filtered entry looks exactly
+   * like a library that never had it. The ink encoding announces itself with
+   * its own field instead, and both are read forever.
+   */
   v: 1;
   elements: unknown[];
   appState: { scrollX: number; scrollY: number; zoom: number };
-  /** Raster pen/eraser ops — optional for older saves. */
+  /** Raster pen/eraser ops as written before the codec — still read, never written. */
   ink?: InkOp[];
+  /**
+   * The same ops, encoded — see `inkCodec`. Read board ink through
+   * `inkOpsFrom(blob)` rather than either field.
+   */
+  inkC?: EncodedInk;
   /** Excalidraw binary files (images) keyed by file id. */
   files?: Record<string, BoardBinaryFile>;
   /**
