@@ -3,6 +3,13 @@ import { createPortal } from "react-dom";
 
 import type { CoachChatMessage } from "./AgentSidePanel";
 import { type DocFootnote, type DocFootnoteUserLink } from "../util/docFootnotes";
+import { fetchNextColorHuntPalette } from "../util/colorHunt";
+import {
+  appendInkPalette,
+  currentInkPalette,
+  seedInkPaletteHistory,
+  type InkPaletteHistory,
+} from "../util/inkPaletteHistory";
 import { isSafeExternalUrl } from "../util/openExternal";
 
 export interface FootnoteOverviewProps {
@@ -69,6 +76,16 @@ export function FootnoteOverview({
   const [draft, setDraft] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [addingLink, setAddingLink] = useState(false);
+  /**
+   * A palette to choose from, seeded the way the ink wheel seeds its own.
+   *
+   * Local to the open card rather than persisted: what is worth keeping is the
+   * colour the reader picked, which lives on the footnote. The palette is the
+   * means, and asking for another one is a tap.
+   */
+  const [history, setHistory] = useState<InkPaletteHistory>(() => seedInkPaletteHistory("light"));
+  const [shuffling, setShuffling] = useState(false);
+  const palette = currentInkPalette(history);
 
   const userLinks = footnote.userLinks ?? [];
   /** Search footnotes keep their own URL — not auto-suggestions. */
@@ -149,6 +166,63 @@ export function FootnoteOverview({
         style={{ visibility: "hidden", zIndex: 233 }}
       >
         <p className="lc-doc-sheet-excerpt">{title}</p>
+
+        {/*
+          The ribbon's colour, from the palette wheel the ink already uses.
+
+          Same mechanism, not a second one: `fetchNextColorHuntPalette` is what
+          the board's colour wheel pulls from, so "another palette" here means
+          exactly what it means there, and the offline fallback list is shared.
+          Four swatches, because that is what a ColorHunt palette is.
+        */}
+        <section className="lc-footnote-overview-section" aria-label="Colour">
+          <h3 className="lc-coach-turn-role">Colour</h3>
+          <div className="lc-footnote-overview-swatches">
+            {palette.map((color) => (
+              <button
+                key={color}
+                type="button"
+                className={`lc-footnote-overview-swatch${
+                  footnote.color === color ? " is-active" : ""
+                }`}
+                style={{ background: color }}
+                aria-label={`Colour this mark ${color}`}
+                aria-pressed={footnote.color === color}
+                title={color}
+                onClick={() => onChange({ ...footnote, color })}
+              />
+            ))}
+            <button
+              type="button"
+              className="lc-secondary"
+              aria-label="Another palette"
+              title="Another palette"
+              disabled={shuffling}
+              onClick={() => {
+                setShuffling(true);
+                void fetchNextColorHuntPalette(history)
+                  .then((next) => setHistory((current) => appendInkPalette(current, next)))
+                  .finally(() => setShuffling(false));
+              }}
+            >
+              ⟳
+            </button>
+            {footnote.color && (
+              <button
+                type="button"
+                className="lc-secondary"
+                aria-label="Use the default colour"
+                title="Use the default colour"
+                onClick={() => {
+                  const { color: _dropped, ...rest } = footnote;
+                  onChange(rest);
+                }}
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </section>
 
         <section className="lc-footnote-overview-section" aria-label="Links">
           <h3 className="lc-coach-turn-role">Links</h3>

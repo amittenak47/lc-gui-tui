@@ -42,7 +42,8 @@ import {
   overlappingFootnotes,
   type DocFootnote,
 } from "../util/docFootnotes";
-import { LONG_PRESS_MS } from "../util/gesture";
+import { HoldButton } from "../components/HoldButton";
+import { HOLD_SENSITIVE_MS, LONG_PRESS_MS } from "../util/gesture";
 import {
   claimSelectionGesture,
   releaseSelectionGesture,
@@ -243,6 +244,14 @@ export function DocSelectionLayer({
     startX: number;
     startY: number;
   } | null>(null);
+  /**
+   * Where each ribbon is on screen, so the card it opens can hang off it.
+   *
+   * Kept from the rendered node rather than recomputed: the ribbons live under
+   * the board's transform, and their own boxes already answer in the viewport
+   * coordinates a fixed-position card needs.
+   */
+  const ribbonRects = useRef(new Map<string, DOMRect>());
   /** Latest placement pass, so the window observer can re-run it. */
   const placeRef = useRef<(() => void) | null>(null);
 
@@ -948,39 +957,52 @@ export function DocSelectionLayer({
             />
           ))}
           {ribbons.map(({ footnote, at, number }) => (
-            <button
-              type="button"
+            /*
+             * Tap opens the mark; holding fills it and pops it.
+             *
+             * `HoldButton` is what the rest of the app already means by "this
+             * is destructive, so mean it" — and its fill rises from the bottom
+             * on `--lc-hold`, which is exactly the water-balloon read: the
+             * ribbon swells with colour and bursts. Nothing new to learn, and
+             * no delete button crowding a marker that is 13 pixels wide.
+             */
+            <HoldButton
               key={footnote.id}
+              label={String(number)}
               className={`lc-doc-footnote lc-doc-footnote-${footnote.kind}`}
-              style={
-                isRegionAnchor(footnote.anchor)
-                  ? {
-                      left: at.left,
-                      top: at.top,
-                      width: at.width,
-                      height: at.height,
-                    }
-                  : { left: at.left + at.width, top: at.top }
-              }
-              data-region={isRegionAnchor(footnote.anchor) ? "" : undefined}
-              title={footnoteTitle(footnote, number)}
-              aria-label={footnoteTitle(footnote, number)}
-              // A plain click again. The board's gatekeeper used to swallow
-              // pointerdown one node above this, which made a tap on a ribbon
-              // do nothing at all while reading; `isScrollSurface` now excludes
-              // the chrome painted over the page, so ordinary clicks work here.
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+              style={{
+                ...(isRegionAnchor(footnote.anchor)
+                  ? { left: at.left, top: at.top, width: at.width, height: at.height }
+                  : { left: at.left + at.width, top: at.top }),
+                // One value in; the edge and the label are derived in CSS.
+                ...(footnote.color ? { ["--lc-fn-color" as string]: footnote.color } : {}),
+              }}
+              dataRegion={isRegionAnchor(footnote.anchor)}
+              dataTip={footnoteTitle(footnote, number)}
+              ariaLabel={`${footnoteTitle(footnote, number)} — tap to open, hold to delete`}
+              onTap={() => {
+                const rect = ribbonRects.current.get(footnote.id) ?? null;
                 onOpenFootnote?.(footnote, rect);
               }}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                onRemoveFootnote?.(footnote);
+              /*
+               * The longer hold, not the default 333ms.
+               *
+               * A ribbon is sixteen pixels across and deleting it throws away a
+               * thread or a search the reader cannot get back. `HOLD_MS` is
+               * shorter than the app's own `LONG_PRESS_MS`, so a tap that
+               * merely lingered would have popped the mark. `HOLD_SENSITIVE_MS`
+               * is what the offline gate and the solution reveal already use
+               * for "mean it".
+               */
+              holdMs={HOLD_SENSITIVE_MS}
+              onConfirm={() => onRemoveFootnote?.(footnote)}
+              onMeasure={(node: HTMLButtonElement | null) => {
+                if (node) ribbonRects.current.set(footnote.id, node.getBoundingClientRect());
+                else ribbonRects.current.delete(footnote.id);
               }}
             >
               <span className="lc-doc-footnote-tag">{number}</span>
-            </button>
+            </HoldButton>
           ))}
         </div>,
       )}

@@ -7899,6 +7899,14 @@ button.lc-row-selected:hover:not(:disabled) {
   --lc-fn-edge: #7c8cf8;
   --lc-fn-text: #2c3a8c;
 
+  /*
+   * A ribbon the reader coloured.
+   *
+   * One value comes in from the footnote — `--lc-fn-color` — and the edge and
+   * the label are derived from it here rather than stored three times. That is
+   * what keeps a colour chosen months ago from drifting out of step with how a
+   * ribbon is drawn, and it means a palette only ever has to yield one hex.
+   */
   position: absolute;
   /*
    * Rides above the line, like the superscript it stands in for. Sitting *in*
@@ -7977,6 +7985,33 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /* Carbon paper: same hues, lifted so they read on a black page. */
+/*
+ * The water balloon.
+ *
+ * `.lc-hold-reveal-fill` already rises from the bottom on `--lc-hold`, so a
+ * ribbon held down swells with its own colour and pops. Overriding only the
+ * paint — the motion is the shared one every other hold button uses.
+ */
+.lc-doc-footnote {
+  /* The speech tail hangs outside the box — see `::after` below — so the fill
+     cannot be clipped by the button and rises by height instead. */
+  overflow: visible;
+}
+
+.lc-doc-footnote .lc-hold-reveal-fill {
+  inset: auto 0 0 0;
+  height: calc(var(--lc-hold, 0) * 100%);
+  transform: none;
+  background: var(--lc-fn-edge);
+  border-radius: inherit;
+}
+
+.lc-doc-footnote .lc-hold-reveal-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .lc-board-carbon .lc-doc-footnote {
   --lc-fn-fill: #38408a;
   --lc-fn-edge: #8f9dfb;
@@ -8003,6 +8038,21 @@ button.lc-row-selected:hover:not(:disabled) {
  * highlighter sweep over a figure then reads as "this figure is annotated"
  * rather than as a badge floating near it.
  */
+/*
+ * A colour the reader chose, and it beats everything above.
+ *
+ * Placed after the kind defaults and the board-theme overrides deliberately:
+ * they are all single-class rules of the same weight, so this only wins on
+ * source order. Put earlier — where it originally was — a coloured ribbon came
+ * out the carbon theme's blue on a dark page, which looks exactly like the
+ * colour not having been saved.
+ */
+.lc-doc-footnote[style*="--lc-fn-color"] {
+  --lc-fn-fill: var(--lc-fn-color);
+  --lc-fn-edge: color-mix(in srgb, var(--lc-fn-color) 62%, #000);
+  --lc-fn-text: color-mix(in srgb, var(--lc-fn-color) 22%, #000);
+}
+
 .lc-doc-footnote[data-region] {
   transform: none;
   padding: 0;
@@ -8289,6 +8339,52 @@ button.lc-row-selected:hover:not(:disabled) {
   min-height: 22px;
   padding: 0 4px;
   font-size: 10px;
+}
+
+/*
+ * Palette swatches on the overview card.
+ *
+ * Sized like the ink wheel's, and laid out as one row that wraps — a palette
+ * is four colours plus the two controls, which fits a card this width without
+ * a second row on anything but the narrowest phone.
+ */
+.lc-footnote-overview-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.lc-footnote-overview-swatch {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--chrome-edge);
+  cursor: pointer;
+}
+
+.lc-footnote-overview-swatch.is-active {
+  /* The ring rather than a tick: a tick would have to be legible on any of the
+     four colours, and a colour picked from a random palette makes no promises. */
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+/*
+ * The two controls beside the swatches, sized to the swatches.
+ *
+ * Left at the base button height they wrapped onto a second row the moment a
+ * colour was chosen, which made the section grow as soon as it was used.
+ */
+.lc-footnote-overview-swatches .lc-secondary {
+  min-height: 0;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1;
 }
 
 .lc-footnote-overview-add-link {
