@@ -2768,9 +2768,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const isScrollSurface = (target: EventTarget | null) => {
       const el = resolveElement(target);
       if (!el) return false;
+      /*
+       * Chrome painted over the page is not page.
+       *
+       * The marks slot lives inside `.lc-board`, so a footnote ribbon and the
+       * selection's own confirm both looked like bare scroll surface — and the
+       * gatekeeper's `stopPropagation()` on pointerdown meant the tap never
+       * reached them at all. Not "the handler ran and did nothing": the event
+       * stopped at this element, one node above the control, so React's
+       * listeners never saw it and no `click` was generated either, because the
+       * pointer had been captured by the board. A ribbon tapped while reading
+       * was simply dead, which is exactly what it looked like.
+       */
       if (
         el.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
+          ".lc-toolbar, .lc-map-controls, .lc-pager, .lc-stamp-trash, .lc-capture-overlay," +
+            " .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview",
         )
       ) {
         return false;
