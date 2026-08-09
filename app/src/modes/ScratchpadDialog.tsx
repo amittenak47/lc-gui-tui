@@ -65,7 +65,8 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
   const refreshList = () => setNotebooks(listScratchNotebooks());
 
   const removeNotebook = (id: string) => {
-    deleteScratchNotebook(id);
+    // See MdInkDialog: the index drops synchronously, the payload drops after.
+    void deleteScratchNotebook(id).catch(() => {});
     refreshList();
   };
 

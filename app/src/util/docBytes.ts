@@ -12,63 +12,24 @@
  * what makes reopening a file from the library work without ever having known
  * where on disk it came from, and it is also why two copies of the same
  * textbook in two folders cost one entry rather than two.
+ *
+ * The connection and the transaction wrapper moved to `idb` when board content
+ * needed the same database — they must share one open handle and one version
+ * number, or two opens at different versions deadlock against each other.
  */
 
-const DB_NAME = "lc.docs";
-const DB_VERSION = 1;
-const STORE = "bytes";
+import { run, STORE_BYTES } from "./idb";
 
-let dbPromise: Promise<IDBDatabase> | null = null;
-
-function openDb(): Promise<IDBDatabase> {
-  const existing = dbPromise;
-  if (existing) return existing;
-  const opened = new Promise<IDBDatabase>((resolve, reject) => {
-      if (typeof indexedDB === "undefined") {
-        reject(new Error("this device has no IndexedDB — PDF and EPUB need it"));
-        return;
-      }
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () =>
-        reject(request.error ?? new Error("could not open the document store"));
-  }).catch((cause: unknown) => {
-    // A failed open must not poison every later call — the next one retries.
-    dbPromise = null;
-    throw cause;
-  });
-  dbPromise = opened;
-  return opened;
-}
-
-function run<T>(
-  mode: IDBTransactionMode,
-  work: (store: IDBObjectStore) => IDBRequest<T>,
-): Promise<T> {
-  return openDb().then(
-    (db) =>
-      new Promise<T>((resolve, reject) => {
-        const tx = db.transaction(STORE, mode);
-        const request = work(tx.objectStore(STORE));
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () =>
-          reject(request.error ?? new Error("the document store refused the request"));
-      }),
-  );
-}
+const STORE = STORE_BYTES;
 
 export async function putDocBytes(hash: string, bytes: ArrayBuffer): Promise<void> {
   // Stored as a Blob rather than an ArrayBuffer: structured clone of a Blob is
   // a reference, so a 40 MB textbook is not copied through memory on save.
-  await run("readwrite", (store) => store.put(new Blob([bytes]), hash));
+  await run(STORE, "readwrite", (store) => store.put(new Blob([bytes]), hash));
 }
 
 export async function getDocBytes(hash: string): Promise<ArrayBuffer | null> {
-  const value = await run<Blob | ArrayBuffer | undefined>("readonly", (store) =>
+  const value = await run<Blob | ArrayBuffer | undefined>(STORE, "readonly", (store) =>
     store.get(hash),
   );
   if (!value) return null;
@@ -76,11 +37,11 @@ export async function getDocBytes(hash: string): Promise<ArrayBuffer | null> {
 }
 
 export async function deleteDocBytes(hash: string): Promise<void> {
-  await run("readwrite", (store) => store.delete(hash));
+  await run(STORE, "readwrite", (store) => store.delete(hash));
 }
 
 export async function hasDocBytes(hash: string): Promise<boolean> {
-  const key = await run<IDBValidKey | undefined>("readonly", (store) =>
+  const key = await run<IDBValidKey | undefined>(STORE, "readonly", (store) =>
     store.getKey(hash),
   );
   return key != null;
