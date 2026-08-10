@@ -462,18 +462,66 @@ describe("AmbientCoach.run — a run always settles", () => {
     coach.stop();
   });
 
-  it("rejects after a run goes silent, and tells the daemon to stop", async () => {
+  it("gives up quickly on a run the daemon never picks up", async () => {
     vi.useFakeTimers();
     const { socket, coach } = ready();
     const promise = coach.run("ask", { question: "hi" });
-    const expectation = expect(promise).rejects.toThrow(/stopped answering/i);
+    const expectation = expect(promise).rejects.toThrow(/never picked up/i);
 
-    await vi.advanceTimersByTimeAsync(130_000);
+    // Short budget: an unacknowledged request is already known to be lost, and
+    // waiting the full working budget only delays telling the reader.
+    await vi.advanceTimersByTimeAsync(25_000);
     await expectation;
 
     const cancels = socket.sent.map((raw) => JSON.parse(raw)).filter((f) => f.type === "cancel");
     expect(cancels).toHaveLength(1);
     expect(coach.busy).toBe(false);
+    coach.stop();
+    vi.useRealTimers();
+  });
+
+  it("gives a claimed run the long budget, and names where it stalled", async () => {
+    vi.useFakeTimers();
+    const { socket, coach } = ready();
+    const promise = coach.run("ask", { question: "hi" });
+    const requestId = requestIdOf(socket);
+    const expectation = expect(promise).rejects.toThrow(/during .drafting./i);
+
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "stage", request_id: requestId, stage: "drafting" }),
+    });
+    // Past the ack budget, inside the working one: an acknowledged run is not
+    // killed at 20s just because the model is slow.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(coach.busy).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(160_000);
+    await expectation;
+    coach.stop();
+    vi.useRealTimers();
+  });
+
+  it("blames the failed step when a stall follows one", async () => {
+    vi.useFakeTimers();
+    const { socket, coach } = ready();
+    const promise = coach.run("ask", { question: "hi" });
+    const requestId = requestIdOf(socket);
+    const expectation = expect(promise).rejects.toThrow(/after search failed/i);
+
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "stage", request_id: requestId, stage: "drafting" }),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "tool_event",
+        request_id: requestId,
+        name: "search",
+        status: "rejected",
+        summary: "no results",
+      }),
+    });
+    await vi.advanceTimersByTimeAsync(220_000);
+    await expectation;
     coach.stop();
     vi.useRealTimers();
   });
@@ -484,7 +532,11 @@ describe("AmbientCoach.run — a run always settles", () => {
     const promise = coach.run<{ reply: string }>("ask", { question: "hi" });
     const requestId = requestIdOf(socket);
 
-    // A stage every 90s: silent by no measure, but past a naive total deadline.
+    // Claimed straight away, then a stage every 90s: silent by no measure,
+    // but past any naive total deadline.
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "stage", request_id: requestId, stage: "claim" }),
+    });
     for (let i = 0; i < 4; i += 1) {
       await vi.advanceTimersByTimeAsync(90_000);
       socket.onmessage?.({
@@ -523,7 +575,7 @@ describe("AmbientCoach.run — a run always settles", () => {
     // Nothing left to fire: a late watchdog would send a cancel for a run that
     // already answered, which the daemon would apply to whatever replaced it.
     socket.sent.length = 0;
-    await vi.advanceTimersByTimeAsync(200_000);
+    await vi.advanceTimersByTimeAsync(300_000);
     expect(socket.sent).toEqual([]);
     coach.stop();
     vi.useRealTimers();
@@ -536,8 +588,8 @@ describe("AmbientCoach.run — a run always settles", () => {
     coach.connect("two-sum");
     // No `onopen` — the frame sits in the outbox.
     const promise = coach.run("ask", { question: "hi" });
-    const expectation = expect(promise).rejects.toThrow(/stopped answering/i);
-    await vi.advanceTimersByTimeAsync(130_000);
+    const expectation = expect(promise).rejects.toThrow(/never picked up/i);
+    await vi.advanceTimersByTimeAsync(25_000);
     await expectation;
     coach.stop();
     vi.useRealTimers();

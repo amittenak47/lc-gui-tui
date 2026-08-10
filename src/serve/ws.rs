@@ -201,6 +201,8 @@ async fn drive(state: Shared, socket: WebSocket) {
     });
 
     let mut in_flight: Option<InFlight> = None;
+    // The glance in progress, if any — see the `Snapshot` arm below.
+    let mut ambient: Option<tokio::task::JoinHandle<()>> = None;
 
     while let Some(Ok(message)) = stream.next().await {
         let text = match message {
@@ -255,9 +257,42 @@ async fn drive(state: Shared, socket: WebSocket) {
                 ));
             }
 
-            // Ambient stays inline: its whole point is the escalation ladder,
-            // and two snapshots in flight at once would read and write it out
-            // of order. The client already gates overlapping ticks.
+            /*
+             * An ambient glance must not stop the socket being read.
+             *
+             * This used to be awaited inline, on the grounds that the
+             * escalation ladder is read and written per nudge and two at once
+             * would order it wrongly. That is true, and it is not what awaiting
+             * here bought: `ambient_nudge` calls a model, whose HTTP client
+             * allows three minutes, and for all of that the loop above is not
+             * reading. A `run` frame sent during a glance therefore sat unread
+             * in the socket buffer — no stage frames, no error, nothing to
+             * cancel — which is a chat turn stuck on "Working…" for as long as
+             * the glance takes. Annotate makes it likely rather than rare: the
+             * board export delays the send by seconds, straight into the
+             * window where a tick is already in flight.
+             *
+             * Still one at a time. A snapshot that lands while one is running
+             * is skipped, which is what the client's own gate already does and
+             * exactly what `Skipped` exists to say.
+             */
+            frame @ ClientFrame::Snapshot { .. } => {
+                if ambient.as_ref().is_some_and(|task| !task.is_finished()) {
+                    let _ = outgoing.send(ServerFrame::Skipped {
+                        reason: "still looking at the last board".into(),
+                    });
+                    continue;
+                }
+                let state = state.clone();
+                let outgoing = outgoing.clone();
+                ambient = Some(tokio::spawn(async move {
+                    let reply = handle(&state, frame).await;
+                    let _ = outgoing.send(reply);
+                }));
+            }
+
+            // Hello and Reset answer from memory and a lock — cheap enough to
+            // stay on the loop, and Hello owes its `ready` before anything else.
             other => {
                 let reply = handle(&state, other).await;
                 if outgoing.send(reply).is_err() {
@@ -268,9 +303,13 @@ async fn drive(state: Shared, socket: WebSocket) {
     }
 
     // A dropped connection is an implicit cancel: no `result` frame is owed to
-    // a client that is no longer there.
+    // a client that is no longer there, and a glance answering into a closed
+    // socket is a model call nobody will read.
     if let Some(running) = in_flight {
         running.cancel();
+    }
+    if let Some(glance) = ambient {
+        glance.abort();
     }
     drop(outgoing);
     let _ = writer.await;

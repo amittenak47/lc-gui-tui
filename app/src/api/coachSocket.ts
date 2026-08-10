@@ -79,23 +79,43 @@ interface PendingRun {
   handlers: RunHandlers;
   resolve(body: unknown): void;
   reject(error: Error): void;
-  /** Idle watchdog — see {@link RUN_IDLE_TIMEOUT_MS}. */
+  /** Idle watchdog — see {@link RUN_ACK_TIMEOUT_MS}. */
   watchdog: ReturnType<typeof setTimeout> | null;
+  /** True once the daemon has named a stage — the run is picked up. */
+  acked: boolean;
+  /** The last stage named, so a stall can say where it happened. */
+  stage: string | null;
+  /** The last tool that reported, and whether it went badly. */
+  tool: { name: string; failed: boolean } | null;
 }
 
 /**
- * How long a run may go completely silent before it is declared lost.
+ * Picking the request up is a different promise from finishing it.
+ *
+ * The daemon names its first stage before it calls a model, so an
+ * acknowledgement is cheap and quick by construction. Waiting the full working
+ * budget for one is waiting two minutes to be told something that was already
+ * true at the first second — a request that was never claimed. So the clock
+ * runs short until the run answers for itself, and long afterwards.
+ */
+const RUN_ACK_TIMEOUT_MS = 20_000;
+
+/**
+ * How long a claimed run may go silent between stages.
  *
  * Idle, not total: a coach turn is allowed to take as long as it takes, and a
  * hard deadline would kill an answer that was still being written. What is not
- * allowed is *silence* — every stage and tool event resets this, so the only
- * thing it can fire on is a run producing nothing at all.
+ * allowed is *silence* — every stage and tool event restarts this, so the only
+ * thing it can fire on is a step producing nothing at all.
  *
- * Two minutes because the slowest legitimate first stage measured well inside
- * it, and because the failure this exists to end — a turn stuck on "Working…"
- * with no way back — costs the writer the whole session.
+ * Deliberately longer than the daemon's own ceiling. Its provider client allows
+ * 180s per model call (`llm/providers/http.rs`), and a single stage is one such
+ * call, so a budget under that would make this watchdog the thing that kills
+ * slow answers rather than the backstop for a daemon that has gone away. The
+ * daemon fails first, with a real reason; this only fires when nothing is left
+ * to fail.
  */
-const RUN_IDLE_TIMEOUT_MS = 120_000;
+const RUN_STAGE_TIMEOUT_MS = 210_000;
 
 export interface AmbientHandlers {
   onFrame(frame: ServerFrame): void;
@@ -227,6 +247,9 @@ export class AmbientCoach {
         resolve: (body) => resolve(body as T),
         reject,
         watchdog: null,
+        acked: false,
+        stage: null,
+        tool: null,
       });
       this.touch(requestId);
       /*
@@ -250,20 +273,20 @@ export class AmbientCoach {
    * Restart a run's idle watchdog. Called on every frame that names it.
    *
    * A stage or a tool event is proof the daemon is still working, so the clock
-   * starts again. Only silence counts against a run.
+   * starts again — and, the first time, switches from the acknowledgement
+   * budget to the working one. Only silence counts against a run.
    */
   private touch(requestId: string): void {
     const run = this.pending.get(requestId);
     if (!run) return;
     if (run.watchdog !== null) clearTimeout(run.watchdog);
+    const budget = run.acked ? RUN_STAGE_TIMEOUT_MS : RUN_ACK_TIMEOUT_MS;
     run.watchdog = setTimeout(() => {
       // Tell the daemon before giving up, so a run that is merely slow is
       // stopped rather than left writing into a turn nobody is waiting on.
       this.send({ type: "cancel", request_id: requestId });
-      this.settle(requestId, (run) =>
-        run.reject(new Error("the coach stopped answering — nothing came back for two minutes")),
-      );
-    }, RUN_IDLE_TIMEOUT_MS);
+      this.settle(requestId, (lost) => lost.reject(new Error(stallReason(lost))));
+    }, budget);
   }
 
   /** Take a run out of flight exactly once, cancelling its watchdog. */
@@ -305,6 +328,11 @@ export class AmbientCoach {
   private routeRunFrame(frame: ServerFrame): boolean {
     switch (frame.type) {
       case "stage": {
+        const run = this.pending.get(frame.request_id);
+        if (run) {
+          run.stage = frame.stage;
+          run.acked = true;
+        }
         this.touch(frame.request_id);
         this.pending.get(frame.request_id)?.handlers.onProcess?.({
           kind: "stage",
@@ -315,6 +343,15 @@ export class AmbientCoach {
         return true;
       }
       case "tool_event": {
+        const run = this.pending.get(frame.request_id);
+        if (run) {
+          // What the last step did, kept so a stall after it can say so. A
+          // rejected tool is the "previous subtask failed" case: the run may
+          // still recover, but if it then goes quiet that is the likeliest
+          // reason and the reader should not have to guess it.
+          run.tool = { name: frame.name, failed: frame.status === "rejected" };
+          run.acked = true;
+        }
         this.touch(frame.request_id);
         this.pending.get(frame.request_id)?.handlers.onProcess?.({
           kind: "tool",
@@ -444,6 +481,24 @@ export class AmbientCoach {
       return false;
     }
   }
+}
+
+/**
+ * Why a run was given up on, in the words of what it last managed to do.
+ *
+ * "Working…" forever tells the reader nothing; "stopped during draft, after
+ * search failed" tells them whether to retry, edit the question, or go and fix
+ * the tool. Two phases, so the two silences never read as the same fault.
+ */
+function stallReason(run: PendingRun): string {
+  if (!run.acked) {
+    return "the coach never picked up the request — it may be busy with another turn, or the board was too large to send";
+  }
+  const where = run.stage ? `during “${run.stage}”` : "mid-run";
+  if (run.tool?.failed) {
+    return `the coach stopped answering ${where}, after ${run.tool.name} failed`;
+  }
+  return `the coach stopped answering ${where} — nothing came back for two minutes`;
 }
 
 /** Older daemons reject `run`/`cancel` with a serde unknown-variant parse error. */
