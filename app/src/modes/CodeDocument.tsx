@@ -78,7 +78,7 @@ export function CodeDocument({
   return (
     <div
       ref={nodeRef}
-      className="lc-code-doc lc-md-ink-carbon"
+      className="lc-code-doc lc-md-ink-paper"
       aria-hidden={selectable ? undefined : true}
       // eslint-disable-next-line react/no-danger -- escaped in renderCode
       dangerouslySetInnerHTML={{ __html: html }}

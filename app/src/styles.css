@@ -2287,24 +2287,37 @@ input[type="checkbox"] {
   background: var(--board-paper, var(--surface, var(--bg)));
 }
 
-/* Carbon OLED paper — md-ink / statement / scratchpad / code, any chrome theme. */
-.lc-board-paper.lc-board-carbon,
-.lc-board.lc-board-carbon {
-  --board-paper: #0a0a0b;
+/*
+ * Document paper — md-ink / statement / scratchpad / code.
+ *
+ * The colour is the selected theme's background index, not a fixed OLED black.
+ * Carbon still comes out `#0a0a0b` because that *is* Carbon's background, which
+ * is the whole point: pinning the value here meant every other theme was
+ * ignored, so switching to a light paper left the page black and looked like
+ * the theme had not applied.
+ */
+.lc-board-paper.lc-board-doc-paper,
+.lc-board.lc-board-doc-paper {
+  --board-paper: var(--bg);
   background: var(--board-paper);
 }
 
-.lc-board.lc-board-carbon .lc-code-dock .lc-pseudo-dock .lc-pseudo-fallback,
-.lc-board.lc-board-carbon .lc-code-dock .lc-pseudo-dock .lc-pseudo-loading {
-  background: #0a0a0b;
+.lc-board.lc-board-doc-paper .lc-code-dock .lc-pseudo-dock .lc-pseudo-fallback,
+.lc-board.lc-board-doc-paper .lc-code-dock .lc-pseudo-dock .lc-pseudo-loading {
+  background: var(--bg);
   color: var(--ink);
 }
 
-.lc-md-ink-carbon {
-  --ink: #ededf0;
-  --accent: #a5b4fc;
+/*
+ * Document text, on whatever paper the theme chose.
+ *
+ * Ink and accent used to be pinned to the values that read on OLED black, so a
+ * light theme drew near-white text on near-white paper. Both now come from the
+ * theme, which is where every other surface in the app gets them.
+ */
+.lc-md-ink-paper {
   color: var(--ink);
-  background: #0a0a0b;
+  background: var(--bg);
 }
 
 .lc-page-content-slot {
@@ -2495,7 +2508,7 @@ input[type="checkbox"] {
 /*
  * Whole-file source on the document pad.
  *
- * Same carbon paper as markdown/EPUB, but the page *is* a pre — no prose
+ * Same document paper as markdown/EPUB, but the page *is* a pre — no prose
  * wrap, monospace, and horizontal scroll in reading mode for long lines.
  * Soft wrapping would put ink on the wrong visual column the moment a line
  * folded.
@@ -7887,9 +7900,9 @@ button.lc-row-selected:hover:not(:disabled) {
   mix-blend-mode: multiply;
 }
 
-/* `.lc-board-carbon` is on the board, an ancestor — the doc's own carbon class
-   is a descendant of the overlay and could never have matched. */
-.lc-board-carbon .lc-doc-select-rect {
+/* Screen over multiply, because the paper is dark — a mode question, not a
+   board-class one, now that document paper follows the theme. */
+:root[data-theme="dark"] .lc-doc-select-rect {
   mix-blend-mode: screen;
 }
 
@@ -7908,7 +7921,7 @@ button.lc-row-selected:hover:not(:disabled) {
  * Colours are literal rather than themed. These live in the marks slot, which
  * hangs off the board rather than off the page, so `--surface` and `--accent`
  * there are the app chrome's — and the app chrome is light while the page under
- * these is usually carbon. Naming the two palettes is shorter than teaching the
+ * these is usually dark. Naming the two palettes is shorter than teaching the
  * slot to inherit the page's.
  */
 .lc-doc-footnote {
@@ -8001,7 +8014,7 @@ button.lc-row-selected:hover:not(:disabled) {
   --lc-fn-text: #6b4b00;
 }
 
-/* Carbon paper: same hues, lifted so they read on a black page. */
+/* Dark paper: same hues, lifted so they read on a near-black page. */
 /*
  * The water balloon.
  *
@@ -8029,19 +8042,19 @@ button.lc-row-selected:hover:not(:disabled) {
   justify-content: center;
 }
 
-.lc-board-carbon .lc-doc-footnote {
+:root[data-theme="dark"] .lc-doc-footnote {
   --lc-fn-fill: #38408a;
   --lc-fn-edge: #8f9dfb;
   --lc-fn-text: #eef1ff;
 }
 
-.lc-board-carbon .lc-doc-footnote-search {
+:root[data-theme="dark"] .lc-doc-footnote-search {
   --lc-fn-fill: #33383f;
   --lc-fn-edge: #8b929c;
   --lc-fn-text: #eceef1;
 }
 
-.lc-board-carbon .lc-doc-footnote-note {
+:root[data-theme="dark"] .lc-doc-footnote-note {
   --lc-fn-fill: #6b4b00;
   --lc-fn-edge: #e8b52a;
   --lc-fn-text: #fff3d0;
@@ -8058,13 +8071,17 @@ button.lc-row-selected:hover:not(:disabled) {
 /*
  * A colour the reader chose, and it beats everything above.
  *
- * Placed after the kind defaults and the board-theme overrides deliberately:
- * they are all single-class rules of the same weight, so this only wins on
- * source order. Put earlier — where it originally was — a coloured ribbon came
- * out the carbon theme's blue on a dark page, which looks exactly like the
- * colour not having been saved.
+ * Placed after the kind defaults and the mode overrides deliberately: they are
+ * the same weight, so this wins on source order. Put earlier — where it
+ * originally was — a coloured ribbon came out the theme's blue on a dark page,
+ * which looks exactly like the colour not having been saved.
+ *
+ * The leading `:root` is load-bearing. The mode rules are
+ * `:root[data-theme="dark"] .lc-doc-footnote`, three selectors' worth; without
+ * this the reader's colour was two, and would have lost to them on every dark
+ * theme — the same bug one layer along, and invisible in light mode.
  */
-.lc-doc-footnote[style*="--lc-fn-color"] {
+:root .lc-doc-footnote[style*="--lc-fn-color"] {
   --lc-fn-fill: var(--lc-fn-color);
   --lc-fn-edge: color-mix(in srgb, var(--lc-fn-color) 62%, #000);
   --lc-fn-text: color-mix(in srgb, var(--lc-fn-color) 22%, #000);

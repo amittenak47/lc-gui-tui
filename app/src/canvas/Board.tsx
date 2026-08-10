@@ -491,19 +491,19 @@ function newImageFileId(): string {
   return `lcimg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-/** Carbon OLED board paper — same as graphite / Carbon theme. */
-const CARBON_BOARD_BG = "#0a0a0b";
-
-function boardViewBackground(
-  transparent: boolean,
-  carbon: boolean,
-  themeBackground: string,
-): string {
-  // Transparent must win when HTML (statement / md-ink) sits under the canvas —
-  // an opaque carbon fill would hide that layer. OLED black still comes from
-  // `.lc-board-carbon` / `.lc-md-ink-carbon` CSS behind the transparent canvas.
+function boardViewBackground(transparent: boolean, themeBackground: string): string {
+  /*
+   * Transparent must win when HTML (statement / md-ink) sits under the canvas —
+   * an opaque fill would hide that layer. The paper behind it comes from
+   * `.lc-board-doc-paper` / `.lc-md-ink-paper`, which now read `--bg` too.
+   *
+   * There used to be a third case: document pages were pinned to `#0a0a0b`
+   * whatever the theme said. That is Carbon's background and only Carbon's, so
+   * choosing any other theme left the page black — the theme looked broken
+   * rather than partly applied. Carbon still comes out black because that is
+   * what its background index holds.
+   */
   if (transparent) return "transparent";
-  if (carbon) return CARBON_BOARD_BG;
   return themeBackground;
 }
 
@@ -850,7 +850,7 @@ export interface BoardProps {
    * Carbon OLED paper (`graphite` / `#0a0a0b`) regardless of chrome theme.
    * Used for md-ink, statement, scratchpad, and the code page.
    */
-  carbonPaper?: boolean;
+  docPaper?: boolean;
   /**
    * Offer the toolbar toggle in the map chrome.
    *
@@ -920,7 +920,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     pageContentHeight = null,
     codeContentHeight = null,
     transparentCanvas = false,
-    carbonPaper = false,
+    docPaper = false,
     annotateToggle = true,
     onAnnotateCodeChange,
     linedPaperToggle = false,
@@ -1012,8 +1012,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const transparentCanvasRef = useRef(transparentCanvas);
   transparentCanvasRef.current = transparentCanvas;
-  const carbonPaperRef = useRef(carbonPaper);
-  carbonPaperRef.current = carbonPaper;
+  const docPaperRef = useRef(docPaper);
+  docPaperRef.current = docPaper;
   /** Reading mode: wheel scrolls, drags stay in the column. */
   /*
    * Column lock is always on. There is no free 2D pan on these pages — wheel
@@ -3780,7 +3780,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       appState: {
         viewBackgroundColor: boardViewBackground(
           transparentCanvasRef.current,
-          carbonPaperRef.current,
           theme.background,
         ),
         currentItemStrokeColor: ink,
@@ -4509,11 +4508,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         .background;
     api.updateScene({
       appState: {
-        viewBackgroundColor: boardViewBackground(transparentCanvas, carbonPaper, themeBg),
+        viewBackgroundColor: boardViewBackground(transparentCanvas, themeBg),
       },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
-  }, [transparentCanvas, carbonPaper, themeId]);
+  }, [transparentCanvas, docPaper, themeId]);
 
   useEffect(() => {
     reportTitleSlot();
@@ -5892,10 +5891,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         api.updateScene({
           appState: {
             viewBackgroundColor: boardViewBackground(
-          transparentCanvasRef.current,
-          carbonPaperRef.current,
-          theme.background,
-        ),
+              transparentCanvasRef.current,
+              theme.background,
+            ),
             currentItemStrokeColor: ink,
           },
           ...(recolored
@@ -5924,7 +5922,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const prefs = inkPrefsRef.current;
       return {
         appState: {
-          viewBackgroundColor: boardViewBackground(transparentCanvas, carbonPaper, theme.background),
+          viewBackgroundColor: boardViewBackground(transparentCanvas, theme.background),
           currentItemStrokeColor: resolveInkColor(themeId, prefs.inkColor),
           currentItemStrokeWidth: prefs.penWidth,
           currentItemRoughness: 1,
@@ -5939,7 +5937,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         scrollToContent: false,
       };
     },
-    [theme.background, themeId, transparentCanvas, carbonPaper],
+    [theme.background, themeId, transparentCanvas, docPaper],
   );
 
   return (
@@ -5952,7 +5950,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // (Gemini gatekeeper + CSS). Annotate restores normal canvas hits.
         interactive && !annotateCode && "lc-board-reading",
         transparentCanvas && "lc-board-paper",
-        carbonPaper && "lc-board-carbon",
+        docPaper && "lc-board-doc-paper",
         // Highlighting hands the surface back to the document for the length
         // of the sweep — see the rules in styles.css.
         highlighting && "lc-board-highlighting",

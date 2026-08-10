@@ -4497,7 +4497,7 @@ export function App() {
                   (!isLocalPad(problem) &&
                     (!mobile || activeRegion === "constraints"))),
             )}
-            carbonPaper={Boolean(
+            docPaper={Boolean(
               problem &&
                 (isMdInk(problem) ||
                   isScratchpad(problem) ||
