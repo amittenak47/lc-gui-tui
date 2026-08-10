@@ -128,8 +128,12 @@ import {
   OVERDRAW_REBASE_HEADROOM,
   panDelta,
 } from "./panOffset";
-import { selectionOwnsGesture } from "./docSelectionGesture";
+import {
+  onSelectionGestureClaimed,
+  selectionOwnsGesture,
+} from "./docSelectionGesture";
 import { horizontalScrollHost } from "./scrollHost";
+import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import { BoardToolbar } from "./BoardToolbar";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
@@ -1207,6 +1211,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     codeDockEl: Element | null;
     /** Arming (and with it `preventDefault` and capture) waited for a direction. */
     deferred: boolean;
+    /**
+     * Hold-to-select may still be pending under this finger.
+     *
+     * Arming pan / nested `scrollLeft` must wait for {@link SELECT_HOLD_SLOP_PX},
+     * matching DocSelectionLayer — a 3px sideways twitch used to rubber-band a
+     * wide `pre` and steal the gesture before the hold could claim it.
+     */
+    selectableDoc: boolean;
     /**
      * Wide codeblock under the finger.
      *
@@ -2801,6 +2813,33 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return activeToolRef.current === "hand";
     };
 
+    const armThresholdPx = (drag: { selectableDoc: boolean }) =>
+      drag.selectableDoc ? SELECT_HOLD_SLOP_PX : PAN_DRAG_THRESHOLD_PX;
+
+    /**
+     * Drop a deferred reading pan the moment selection claims the finger.
+     *
+     * Without this, a micro-move that armed side-scroll before the hold fired
+     * keeps driving `scrollLeft` (or holds capture) through the quote drag.
+     */
+    const dropPanForSelection = () => {
+      const drag = panDragRef.current;
+      if (!drag) return;
+      if (drag.codeDockEl) {
+        drag.codeDockEl.classList.remove("lc-code-dock-scrolling");
+      }
+      try {
+        root.releasePointerCapture(drag.pointerId);
+      } catch {
+        /* already released */
+      }
+      panDragRef.current = null;
+      handPanningRef.current = false;
+      panVelocityRef.current = { x: 0, y: 0 };
+      rasterInkRef.current?.setCameraMoving(false);
+    };
+    onSelectionGestureClaimed(dropPanForSelection);
+
     const readScroll = () => {
       const live = liveCameraRef.current;
       if (live?.live) return { scrollX: live.scrollX, scrollY: live.scrollY, zoom: live.zoom };
@@ -2883,9 +2922,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * Arming the pan immediately (which is what touch normally does, for 1:1
        * tracking) would mean a hold-to-select still built up a pan velocity
        * from the drag, and the page would fling away under the finished quote.
-       * Deferring costs the reader nothing they can feel: the pan still arms
-       * the moment the drag passes the same threshold a codeblock uses, and
-       * re-anchors there so the page does not jump by it.
+       * On selectable docs the arm threshold matches SELECT_HOLD_SLOP_PX so a
+       * sideways twitch cannot rubber-band a wide `pre` before the hold claims.
        */
       const onSelectableDoc =
         !onCodeDock && resolveElement(event.target)?.closest(".lc-doc-selectable") != null;
@@ -2928,6 +2966,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         codeDock: onCodeDock,
         codeDockEl,
         deferred,
+        selectableDoc: onSelectableDoc,
         sideScroll,
         sideScrollActive: false,
         sideScrollAnchorX: event.clientX,
@@ -2968,7 +3007,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return;
       }
       if (drag.sideScroll && !drag.armed) {
-        if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD_PX) return;
+        if (Math.hypot(dx, dy) < armThresholdPx(drag)) return;
         if (Math.abs(dx) > Math.abs(dy)) {
           drag.sideScrollActive = true;
           // Anchor on the sample that decided it, so the block does not jump
@@ -2995,7 +3034,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
 
       if (!drag.armed) {
-        if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD_PX) return;
+        if (Math.hypot(dx, dy) < armThresholdPx(drag)) return;
         stopPanInertia();
         const cam = readScroll();
         drag.startScrollY = cam.scrollY;
@@ -3115,6 +3154,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     root.addEventListener("pointerup", onPointerUp, true);
     root.addEventListener("pointercancel", onPointerUp, true);
     return () => {
+      onSelectionGestureClaimed(null);
       root.removeEventListener("pointerdown", onPointerDown, true);
       root.removeEventListener("pointermove", onPointerMove, true);
       root.removeEventListener("pointerup", onPointerUp, true);

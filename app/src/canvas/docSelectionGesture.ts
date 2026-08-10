@@ -17,10 +17,20 @@
  */
 
 let claimed = false;
+let onClaimed: (() => void) | null = null;
+
+/**
+ * Board registers here so a mid-gesture claim can drop a deferred pan /
+ * side-scroll that armed from the same finger before the hold landed.
+ */
+export function onSelectionGestureClaimed(handler: (() => void) | null): void {
+  onClaimed = handler;
+}
 
 /** The selection has taken this gesture — Board must not pan on it. */
 export function claimSelectionGesture(): void {
   claimed = true;
+  onClaimed?.();
 }
 
 /** Hand the pointer back, on lift or when the hold is abandoned. */
