@@ -342,3 +342,30 @@ export function searchQueryFor(text: string, maxWords = 24): string {
   const words = text.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
   return words.slice(0, maxWords).join(" ");
 }
+
+/**
+ * A cheap signature of everything about a set of marks that is worth saving.
+ *
+ * The autosave decides whether to write by comparing the board's scene
+ * fingerprint, which cannot see a footnote at all — so a note typed into a card,
+ * a link saved on one, or a colour chosen for a ribbon looked exactly like
+ * nothing having happened, and closing the document lost it. This is the other
+ * half of that comparison.
+ *
+ * Every field the reader can edit is in it. `createdAt` and the anchor are not:
+ * they cannot change without the id changing too.
+ */
+export function footnoteRevision(footnotes: readonly DocFootnote[]): string {
+  return footnotes
+    .map((entry) =>
+      [
+        entry.id,
+        entry.kind,
+        entry.color ?? "",
+        entry.userNotes ?? "",
+        entry.threadRootId ?? "",
+        (entry.userLinks ?? []).map((link) => `${link.title ?? ""}|${link.url}`).join("\x1f"),
+      ].join("\x1e"),
+    )
+    .join("\x1d");
+}
