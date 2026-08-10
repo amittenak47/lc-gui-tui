@@ -559,6 +559,37 @@ export function AgentSidePanel({
   const sheetHeight = () => panelRef.current?.offsetHeight ?? 0;
   const closedOffset = () => Math.max(0, sheetHeight() - COACH_SHEET_PEEK_PX);
 
+  /*
+   * Publish how far the sheet is open, for chrome that has to answer to it.
+   *
+   * The board's toolbar sits where the sheet rises, so dragging the coach up
+   * used to bury it — the controls were still there, still lit, under a panel.
+   * Fading it out is the honest reading of "the coach has the screen now", and
+   * it has to track the *drag*, not the end state, or the toolbar blinks off at
+   * the start of a gesture the reader may not finish.
+   *
+   * A custom property rather than a prop: this changes every frame of a drag,
+   * and threading it through App into Board would re-render the whole board
+   * for something only the compositor needs. `--lc-coach-open` is 0..1, and
+   * absent means desktop, where the coach is a side panel and covers nothing.
+   */
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!mobile) {
+      root.style.removeProperty("--lc-coach-open");
+      root.classList.remove("lc-coach-dragging");
+      return;
+    }
+    const closed = closedOffset();
+    const shut = closed > 0 ? Math.min(1, Math.max(0, sheetOffset / closed)) : open ? 0 : 1;
+    root.style.setProperty("--lc-coach-open", (1 - shut).toFixed(3));
+    root.classList.toggle("lc-coach-dragging", sheetDragging);
+    return () => {
+      root.style.removeProperty("--lc-coach-open");
+      root.classList.remove("lc-coach-dragging");
+    };
+  }, [mobile, open, sheetOffset, sheetDragging]);
+
   useLayoutEffect(() => {
     if (!mobile || sheetDragging) return;
     const apply = () => setSheetOffset(open ? 0 : closedOffset());

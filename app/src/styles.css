@@ -1243,6 +1243,57 @@ input[type="checkbox"] {
   display: none !important;
 }
 
+/* Mid-drag the fade is the gesture, so it must not lag behind the finger. */
+.lc-coach-dragging .lc-toolbar {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-toolbar {
+    transition: none;
+  }
+}
+
+/*
+ * Excalidraw's own long-press menu, scaled down.
+ *
+ * Reaching it by holding the canvas is fine — it is the way to Excalidraw's
+ * settings and nothing here replaces those. What does not fit is the size: it
+ * is drawn for a desktop app at desktop density and lands on the board as a
+ * slab of full-size rows over the page being annotated. Same menu, smaller,
+ * so it reads as part of this app rather than a window from another one.
+ *
+ * Sizes only. Colours are Excalidraw's, and overriding those is how a menu
+ * ends up unreadable the next time it changes its own theme.
+ */
+.lc-board .context-menu {
+  --default-button-size: 1.6rem;
+  border-radius: 10px;
+  padding: 3px;
+}
+
+.lc-board .context-menu-item {
+  min-height: 26px;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.lc-board .context-menu-item__label {
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.lc-board .context-menu-item__shortcut {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.lc-board .context-menu-item-separator {
+  margin: 2px 0;
+}
+
 /*
  * Floating tool island — one row, bottom-centre, over the canvas.
  *
@@ -1255,6 +1306,17 @@ input[type="checkbox"] {
   position: relative;
   /* Above `.lc-pager` (16) so flyouts / shape library rise over the page control. */
   z-index: 20;
+  /*
+   * Gets out of the way as the coach sheet comes up.
+   *
+   * The sheet rises from the bottom, which is where this island lives, so an
+   * open coach used to bury a lit toolbar. `--lc-coach-open` is written by
+   * `AgentSidePanel` every frame of the drag, so this tracks the gesture in
+   * both directions rather than snapping at the end of it — and is absent on
+   * desktop, where the coach is a side panel and covers nothing.
+   */
+  opacity: calc(1 - var(--lc-coach-open, 0));
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -1634,9 +1696,19 @@ input[type="checkbox"] {
   display: none !important;
 }
 
+/*
+ * Tool buttons: full-width targets, shorter than they are wide.
+ *
+ * A square 44px target left more empty room above and below each glyph than
+ * the island itself has padding, so the toolbar read as a tall bar with small
+ * icons floating in it. Height comes down, width does not — a row of icons is
+ * hit horizontally, and narrowing them is what would actually cost accuracy.
+ * The island's own padding and border are untouched; this is the icons only.
+ */
 .lc-tool {
   width: var(--touch);
-  min-height: var(--touch);
+  min-height: calc(var(--touch) - 10px);
+  height: calc(var(--touch) - 10px);
   padding: 0;
   font-size: 18px;
   background: transparent;
@@ -2255,6 +2327,49 @@ input[type="checkbox"] {
 /* Hidden chrome is a state, not a disabled control: keep it legible. */
 .lc-chrome-eye.is-dimmed {
   color: var(--muted);
+}
+
+/*
+ * The corner that brings the controls back.
+ *
+ * Invisible and finger-sized. It only exists while there is nothing else in
+ * that corner to tap, so it can be this big without ever covering a control —
+ * and it has to be, because the thing it is for is finding the controls again
+ * without looking for them.
+ */
+.lc-chrome-wake {
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+  min-height: 56px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * Chrome that is going quiet, rather than blinking out.
+ *
+ * The fade is the mode's whole character — "still there, just not in the way" —
+ * and a control that vanishes between frames reads as a bug. Mounting is not
+ * animated: it should be back the instant the corner is touched.
+ */
+.lc-map-chrome-stack > .lc-chrome-eye,
+.lc-map-chrome-stack > .lc-lined-toggle,
+.lc-map-chrome-row > .lc-lined-toggle {
+  transition: opacity 220ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-map-chrome-stack > .lc-chrome-eye,
+  .lc-map-chrome-stack > .lc-lined-toggle,
+  .lc-map-chrome-row > .lc-lined-toggle {
+    transition: none;
+  }
 }
 
 .lc-map-controls-collapsed {
@@ -4832,8 +4947,15 @@ button.lc-row-selected:hover:not(:disabled) {
   scrollbar-color: color-mix(in srgb, var(--ink) 32%, transparent) transparent;
 }
 
+/*
+ * Wide enough to catch with a thumb.
+ *
+ * 6px is a scrollbar you read, not one you drag — on a tablet it takes two or
+ * three tries to land on. The code dock already solved this; Settings is the
+ * page that still had the thin one, and it is the longer scroll of the two.
+ */
 .lc-settings-body::-webkit-scrollbar {
-  width: 6px;
+  width: 14px;
 }
 
 .lc-settings-body::-webkit-scrollbar-track {
@@ -4842,7 +4964,17 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-settings-body::-webkit-scrollbar-thumb {
   border-radius: 999px;
+  /* Padding via a transparent border so the thumb stays visually slim while
+     the draggable box is the full track width. */
+  border: 4px solid transparent;
+  background-clip: padding-box;
   background: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+
+.lc-settings-body::-webkit-scrollbar-thumb:hover,
+.lc-settings-body::-webkit-scrollbar-thumb:active {
+  border-width: 2px;
+  background: color-mix(in srgb, var(--ink) 46%, transparent);
 }
 
 .lc-settings-body::-webkit-scrollbar-button {
