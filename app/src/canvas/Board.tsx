@@ -143,6 +143,15 @@ import { horizontalScrollHost } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import { BoardToolbar } from "./BoardToolbar";
 import { isDeletableElement, type TrashEl } from "./selectionTrash";
+import {
+  CHROME_IDLE_MS,
+  chromeModeLabel,
+  chromeVisibility,
+  loadChromeMode,
+  nextChromeMode,
+  saveChromeMode,
+  type ChromeMode,
+} from "../util/chromeVisibility";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
@@ -1183,9 +1192,40 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   } | null>(null);
   const titleSlotNodeRef = useRef<HTMLDivElement | null>(null);
   const lastTitleSlotRef = useRef<{ left: number; top: number; fontPx: number } | null>(null);
-  const [mapChromeHidden, setMapChromeHidden] = useState(false);
+  /*
+   * Three settings, not a boolean — see `chromeVisibility`.
+   *
+   * `awake` is what a tap in the corner turns on and the idle timer turns off
+   * again; it means nothing in `visible`, and is the whole of the other two.
+   */
+  const [chromeMode, setChromeMode] = useState<ChromeMode>(loadChromeMode);
+  const [chromeAwake, setChromeAwake] = useState(true);
+  const chromeShown = chromeVisibility(chromeMode, chromeAwake);
+  /** Everything downstream still asks the one question it always asked. */
+  const mapChromeHidden = !chromeShown.chrome;
   const mapChromeHiddenRef = useRef(mapChromeHidden);
   mapChromeHiddenRef.current = mapChromeHidden;
+
+  /*
+   * The idle timer, and the tap that restarts it.
+   *
+   * Only the two quiet modes run one. Re-armed from `chromeAwake` so any wake —
+   * a corner tap, a mode change — starts the countdown again rather than
+   * inheriting whatever was left of the last one.
+   */
+  const wakeChrome = useCallback(() => setChromeAwake(true), []);
+  useEffect(() => {
+    if (chromeMode === "visible" || !chromeAwake) return;
+    const timer = window.setTimeout(() => setChromeAwake(false), CHROME_IDLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [chromeMode, chromeAwake]);
+  useEffect(() => {
+    saveChromeMode(chromeMode);
+    // A new mode always starts shown: cycling to "hidden" and having the eye
+    // vanish under the finger that was tapping it is how you lose the control
+    // you were using.
+    setChromeAwake(true);
+  }, [chromeMode]);
   const [pressureSensitive, setPressureSensitiveState] = useState(
     () => inkPrefsRef.current.pressureSensitive,
   );
@@ -6206,18 +6246,42 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 {!mapChromeHidden && onThemePick && (
                   <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
                 )}
-                <button
-                  type="button"
-                  className={
-                    mapChromeHidden ? "lc-chrome-eye is-dimmed" : "lc-chrome-eye"
-                  }
-                  aria-pressed={!mapChromeHidden}
-                  aria-label={mapChromeHidden ? "Show board chrome" : "Hide board chrome"}
-                  title={mapChromeHidden ? "Show controls" : "Hide controls"}
-                  onClick={() => setMapChromeHidden((current) => !current)}
-                >
-                  <EyeIcon closed={mapChromeHidden} />
-                </button>
+                {chromeShown.eye && (
+                  <button
+                    type="button"
+                    className={
+                      chromeMode === "visible" ? "lc-chrome-eye" : "lc-chrome-eye is-dimmed"
+                    }
+                    aria-pressed={chromeMode !== "hidden"}
+                    aria-label={`Board controls: ${chromeModeLabel(chromeMode)}`}
+                    title={chromeModeLabel(chromeMode)}
+                    onClick={() => {
+                      const next = nextChromeMode(chromeMode);
+                      setChromeMode(next);
+                      modeIndicatorRef.current?.show(chromeModeLabel(next));
+                    }}
+                  >
+                    <EyeIcon closed={chromeMode === "hidden"} half={chromeMode === "fade"} />
+                  </button>
+                )}
+                {/*
+                  The corner that brings it back.
+                  
+                  Only mounted when there is nothing else there to tap, so it
+                  never sits over a live control. Sized to a finger rather than
+                  to the eye it replaces — the whole point is finding it without
+                  looking.
+                */}
+                {!chromeShown.eye && (
+                  <button
+                    type="button"
+                    className="lc-chrome-wake"
+                    aria-label="Show board controls"
+                    title="Show controls"
+                    onPointerDown={wakeChrome}
+                    onClick={wakeChrome}
+                  />
+                )}
               </div>
             </div>
             {coachFold}
@@ -6508,7 +6572,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
 });
 
-function EyeIcon({ closed = false }: { closed?: boolean }) {
+function EyeIcon({ closed = false, half = false }: { closed?: boolean; half?: boolean }) {
+  if (half) {
+    // Fade mode: the same eye, lidded. Not the crossed-out one — the controls
+    // are still there, they just do not stay.
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M1 12s4-8 11-8 11 8 11 8" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    );
+  }
   if (closed) {
     return (
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
