@@ -20,8 +20,20 @@ const TIMEOUT: Duration = Duration::from_secs(12);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 const FEED_URL: &str = "https://colorhunt.co/php/feed.php";
 
+/// Tags the feed will accept, so a value from the front end cannot become an
+/// arbitrary request body. Empty means no preference, which is the default.
+const ALLOWED_TAGS: &[&str] = &[
+    "pastel", "vintage", "retro", "neon", "light", "dark", "warm", "cold", "nature", "earth",
+    "sunset", "space",
+];
+
 #[tauri::command]
-pub async fn colorhunt_random() -> Result<Vec<ColorHuntRow>, String> {
+pub async fn colorhunt_random(tags: Option<String>) -> Result<Vec<ColorHuntRow>, String> {
+    let tag = tags
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| ALLOWED_TAGS.contains(t))
+        .unwrap_or("");
     let client = reqwest::Client::builder()
         .timeout(TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
@@ -34,7 +46,7 @@ pub async fn colorhunt_random() -> Result<Vec<ColorHuntRow>, String> {
             "Content-Type",
             "application/x-www-form-urlencoded; charset=UTF-8",
         )
-        .body("step=0&sort=random&tags=")
+        .body(format!("step=0&sort=random&tags={tag}"))
         .send()
         .await
         .map_err(|err| format!("ColorHunt request failed: {err}"))?;

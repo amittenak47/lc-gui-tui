@@ -167,6 +167,18 @@ export const SLOWNESS_EPSILON = 1 / 45 / 2;
 /** Corner-cutting passes at full strength. */
 export const MAX_ROUNDING_PASSES = 3;
 
+/**
+ * What the top of the dial is worth, and how the travel gets there.
+ *
+ * `CEILING` is the rounding strength at 100%; `CURVE` above 1 keeps the bottom
+ * of the dial gentle so the settings most writers already have barely move,
+ * while the top quarter — which used to be indistinguishable from the middle —
+ * has somewhere to go.
+ */
+export const SMOOTHING_CEILING = 0.78;
+export const SIMPLIFY_CEILING = 0.85;
+export const SMOOTHING_CURVE = 1.4;
+
 function roundingPasses(strength: number): number {
   if (strength <= 0.02) return 0;
   return Math.min(MAX_ROUNDING_PASSES, Math.ceil(strength * MAX_ROUNDING_PASSES));
@@ -407,14 +419,25 @@ export function smoothInkPoints(
   minFraction?: number,
 ): ScenePoint[] {
   const dial = Math.max(0, Math.min(1, strength));
-  // Compress the UI dial: full travel ≈ old ~40% strength.
-  const amount = dial * 0.4;
+  /*
+   * The dial curves rather than scaling.
+   *
+   * It used to be `dial * 0.4`, which put the whole useful range in the bottom
+   * of the travel and left the top doing nothing you could see — worse with
+   * speed ink on, where the width variation is loud enough to hide the
+   * rounding entirely. A curve keeps the low end where writers already have it
+   * (a quarter turn lands within a hair of where it used to) and lets the last
+   * quarter actually arrive somewhere: at 100% this reaches every rounding pass
+   * there is, which the old ceiling of 0.4 never did — `ceil(0.4 * 3)` is two
+   * passes out of three, so maximum smoothing was never maximum.
+   */
+  const amount = SMOOTHING_CEILING * dial ** SMOOTHING_CURVE;
   if (points.length < 3) return [...points];
 
   const width = Math.max(nibWidth, 1e-6);
   const floorFrac = minFraction ?? SIMPLIFY_STORAGE_FRACTION;
   // Thin a bit harder than Chaikin rounds, so passes cannot explode point count.
-  const simplifyAmount = dial * 0.55;
+  const simplifyAmount = SIMPLIFY_CEILING * dial ** SMOOTHING_CURVE;
   const tolerance = Math.max(
     width * floorFrac,
     width * SIMPLIFY_MAX_FRACTION * simplifyAmount,

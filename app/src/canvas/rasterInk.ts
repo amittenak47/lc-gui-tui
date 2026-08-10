@@ -473,7 +473,59 @@ export interface InkStrokeRun {
  * The buckets are fine enough that the steps are invisible and coarse enough
  * that a pressure stroke lands in tens of runs rather than hundreds.
  */
-const RUN_WIDTH_QUANTUM = 0.06;
+const RUN_WIDTH_QUANTUM = 0.045;
+
+/**
+ * Half-width, in points, of the low-pass over a stroke's slowness.
+ *
+ * A run is painted at one constant width, so the width a stroke actually shows
+ * is a staircase over the slowness track. When that track swings quickly — and
+ * speed is a difference of two noisy positions over a difference of two clocks,
+ * so it does — the staircase becomes a chain of beads: fat where the hand
+ * paused at a letter join, thin either side. That is the "earthworm".
+ *
+ * Filtering harder at capture would fix the beads by making the pen sluggish,
+ * because that filter also decides how fast the nib may respond at all. This
+ * one runs over the committed stroke, where the whole path is known, so it can
+ * be symmetric: the width ramps into and out of a change instead of stepping,
+ * which is the slope the beads were missing. Five taps spans roughly a nib
+ * width of travel at normal stamp spacing — enough to bridge a join, short
+ * enough that a deliberate flick still thins.
+ */
+const SLOWNESS_WINDOW = 2;
+
+/**
+ * Slowness, low-passed along the stroke, cached per op.
+ *
+ * Keyed by identity like {@link consumedFor}, and for the same reason: this is
+ * asked for again by every tile the stroke crosses, on every repaint.
+ */
+const slownessCache = new WeakMap<InkDrawOp, Float32Array>();
+
+function slopedSlowness(op: InkDrawOp): Float32Array {
+  const points = op.points;
+  const cached = slownessCache.get(op);
+  if (cached && cached.length === points.length) return cached;
+
+  const raw = new Float32Array(points.length);
+  for (let i = 0; i < points.length; i++) {
+    raw[i] = points[i].slowness ?? INK_SLOWNESS_NEUTRAL;
+  }
+  const out = new Float32Array(points.length);
+  for (let i = 0; i < points.length; i++) {
+    // Clamped at the ends rather than shortened: a window that narrows toward
+    // the tip would leave the last stamps noisier than the rest, which is
+    // exactly where a terminal bead shows.
+    let sum = 0;
+    for (let k = -SLOWNESS_WINDOW; k <= SLOWNESS_WINDOW; k++) {
+      const j = Math.max(0, Math.min(points.length - 1, i + k));
+      sum += raw[j];
+    }
+    out[i] = sum / (SLOWNESS_WINDOW * 2 + 1);
+  }
+  slownessCache.set(op, out);
+  return out;
+}
 const RUN_ALPHA_QUANTUM = 1 / 48;
 /** Alpha at or above this uses the opaque round-cap fast path. */
 export const RUN_OPAQUE_ALPHA = 1 - RUN_ALPHA_QUANTUM / 2;
@@ -513,6 +565,9 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
   const pressureClip = op.pressureClip ?? 1;
   const speedInk = op.speedInk ?? 0;
   const widthQuantum = nibWidth(op) * RUN_WIDTH_QUANTUM;
+  // Only paid for when the stroke actually carries speed: without it every
+  // point is neutral and the filter would return the constant it started with.
+  const slowness = speedInk > 0 ? slopedSlowness(op) : null;
 
   const styleAt = (index: number) =>
     inkStrokeStyle(
@@ -522,7 +577,7 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
       pressureClip,
       op.pressureSensitive,
       consumed[index] ?? 0,
-      points[index].slowness ?? INK_SLOWNESS_NEUTRAL,
+      slowness ? slowness[index] : (points[index].slowness ?? INK_SLOWNESS_NEUTRAL),
       speedInk,
     );
 

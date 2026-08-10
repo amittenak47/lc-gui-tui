@@ -54,7 +54,6 @@ export function buildScratchPageSkeletons(
   const linePitch = SCRATCH_LINE_PITCH;
   const labelLh = defaultLineHeight(FONT_UI);
   const titleY = topYForLinedRow(y, 3, linePitch, 56, FONT_UI, labelLh);
-  const hintY = topYForLinedRow(y, 5, linePitch, 26, FONT_UI, labelLh);
 
   const at = (ox: number, oy: number, extra: Record<string, unknown> = {}) => ({
     lcRegion: region,
@@ -109,24 +108,15 @@ export function buildScratchPageSkeletons(
         lcLineHeightBase: labelLh,
       },
     });
-    skeletons.push({
-      id: `lcscratch-${index}-hint`,
-      type: "text",
-      x: x + 36,
-      y: hintY,
-      width: textWidth,
-      text: "Blank notebook — Next adds a page. Saves live on this device.",
-      fontSize: 26,
-      fontFamily: FONT_UI,
-      lineHeight: labelLh,
-      strokeColor: ink.hint,
-      locked: true,
-      customData: {
-        ...at(x + 36, hintY - y),
-        lcFontBase: 26,
-        lcLineHeightBase: labelLh,
-      },
-    });
+    /*
+     * No hint line.
+     *
+     * "Blank notebook — Next adds a page. Saves live on this device." was true
+     * and was printed on every page of every notebook forever, which makes it
+     * furniture rather than help: it is read once, on the first page you ever
+     * open, and from then on it is a sentence sitting where you were about to
+     * write.
+     */
   }
 
   return skeletons;

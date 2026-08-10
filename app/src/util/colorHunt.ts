@@ -12,6 +12,7 @@ import {
   type InkPalette,
   type InkPaletteHistory,
 } from "./inkPaletteHistory";
+import { loadPaletteTag, paletteTagQuery } from "./palettePref";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -56,25 +57,25 @@ function palettesFromFeed(body: unknown): InkPalette[] {
   return out;
 }
 
-async function fetchViaTauri(): Promise<InkPalette[]> {
+async function fetchViaTauri(tags: string): Promise<InkPalette[]> {
   const invoke = await loadInvoke();
   if (!invoke) return [];
   try {
-    const rows = await invoke<ColorHuntRow[]>("colorhunt_random", {});
+    const rows = await invoke<ColorHuntRow[]>("colorhunt_random", { tags });
     return palettesFromFeed(rows);
   } catch {
     return [];
   }
 }
 
-async function fetchViaBrowser(): Promise<InkPalette[]> {
+async function fetchViaBrowser(tags: string): Promise<InkPalette[]> {
   try {
     const response = await fetch("https://colorhunt.co/php/feed.php", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
       },
-      body: "step=0&sort=random&tags=",
+      body: `step=0&sort=random&tags=${encodeURIComponent(tags)}`,
     });
     if (!response.ok) return [];
     const text = await response.text();
@@ -87,11 +88,18 @@ async function fetchViaBrowser(): Promise<InkPalette[]> {
 /**
  * One new palette for this board's history. Prefers a live ColorHunt hit;
  * otherwise a bundled code the board has not used yet.
+ *
+ * The tag is the reader's standing answer to "what kind of colours" — see
+ * `palettePref`. It only reaches the live feed: the bundled fallback list is a
+ * fixed set of codes with no tags of its own, and pretending to filter it would
+ * mean returning nothing offline rather than returning something.
  */
 export async function fetchNextColorHuntPalette(
   history: InkPaletteHistory,
+  tag = loadPaletteTag(),
 ): Promise<InkPalette> {
-  const live = isTauriRuntime() ? await fetchViaTauri() : await fetchViaBrowser();
+  const tags = paletteTagQuery(tag);
+  const live = isTauriRuntime() ? await fetchViaTauri(tags) : await fetchViaBrowser(tags);
   if (live.length > 0) {
     const seen = new Set(history.items.map((p) => p.join(",").toLowerCase()));
     const fresh = live.find((p) => !seen.has(p.join(",").toLowerCase()));

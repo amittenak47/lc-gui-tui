@@ -464,3 +464,51 @@ describe("simplifyModulatedInkPoints", () => {
     expect(simplifyModulatedInkPoints(points, 0)).toHaveLength(20);
   });
 });
+
+/**
+ * The dial used to be `dial * 0.4`: the whole useful range sat in the bottom of
+ * the travel, and 100% never reached the last rounding pass. With speed ink on
+ * — where the width swing is loud — the top half did nothing you could see.
+ */
+describe("smoothing dial range", () => {
+  function zigzag(count: number): ScenePoint[] {
+    return Array.from({ length: count }, (_, i) => ({
+      x: i * 4,
+      y: i % 2 === 0 ? 0 : 3,
+      pressure: NO_PRESSURE,
+    }));
+  }
+
+  function wobble(points: readonly ScenePoint[]): number {
+    let total = 0;
+    for (let i = 1; i < points.length - 1; i += 1) {
+      const dx1 = points[i].x - points[i - 1].x;
+      const dy1 = points[i].y - points[i - 1].y;
+      const dx2 = points[i + 1].x - points[i].x;
+      const dy2 = points[i + 1].y - points[i].y;
+      total += Math.abs(Math.atan2(dy2, dx2) - Math.atan2(dy1, dx1));
+    }
+    return total;
+  }
+
+  it("keeps rounding harder all the way to the top of the dial", () => {
+    const raw = zigzag(40);
+    const half = wobble(smoothInkPoints(raw, 0.5, 3));
+    const full = wobble(smoothInkPoints(raw, 1, 3));
+    // The complaint was that these two looked the same.
+    expect(full).toBeLessThan(half);
+  });
+
+  it("barely moves the settings writers already have", () => {
+    const raw = zigzag(40);
+    // A quarter turn used to be 0.1; the curve puts it within a hair of that,
+    // so nobody's pen changes character because the ceiling went up.
+    const quarter = smoothInkPoints(raw, 0.25, 3);
+    expect(quarter.length).toBeGreaterThan(raw.length * 0.3);
+  });
+
+  it("still leaves a stroke alone at zero", () => {
+    const raw = zigzag(12);
+    expect(smoothInkPoints(raw, 0, 3)).toEqual([...raw]);
+  });
+});

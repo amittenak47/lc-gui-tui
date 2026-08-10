@@ -33,17 +33,27 @@ import {
   speedInkToPercent,
 } from "../util/inkSpeedPref";
 import {
-  loadAutoSaveCaptures,
+  captureModeLabel,
+  captureWritesFile,
+  loadCaptureMode,
   CAPTURE_COUNTDOWN_CHOICES,
   loadCaptureCountdown,
   loadCaptureDestination,
   loadCaptureFolder,
   saveCaptureCountdown,
   saveCaptureFolder,
-  saveAutoSaveCaptures,
+  saveCaptureMode,
   saveCaptureDestination,
   type CaptureDestination,
+  type CaptureMode,
 } from "../util/capturePrefs";
+import {
+  loadPaletteTag,
+  paletteTagLabel,
+  savePaletteTag,
+  PALETTE_TAGS,
+  type PaletteTag,
+} from "../util/palettePref";
 import {
   loadOfflineMergePolicy,
   saveOfflineMergePolicy,
@@ -67,33 +77,64 @@ const TABS: { id: TabId; label: string }[] = [
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
 const MODES = ["ambient", "review", "bridge", "viz", "planner"] as const;
 
-/** Settings → Coach, in the order they are worth explaining. */
-const COACH_FLAGS: Array<[keyof CoachFlags, string, string]> = [
-  [
-    "ws_runs",
-    "Answer over the live connection",
-    "Ask, Review, Draw and Lazy stream their stages back as they happen instead of arriving all at once.",
-  ],
-  [
-    "process_events_ui",
-    "Show what the coach is doing",
-    "A collapsible list of stages and diagram tool calls above each answer.",
-  ],
-  [
-    "approach_commitment",
-    "Stick to one approach per board",
-    "Coach the approach your board argues for, and say so when a change of board changes it — instead of quietly switching between valid approaches.",
-  ],
-  [
-    "planner_enabled",
-    "Plan the approaches first",
-    "One call per problem, to the planner provider below, cataloging the approach families it admits. Never sees or writes a solution.",
-  ],
-  [
-    "draw_review_enabled",
-    "Check drawn diagrams",
-    "After a diagram renders, look at the picture and redraw it once if it does not show what it claims. Needs a vision model on the viz provider.",
-  ],
+/**
+ * Settings → Coach, grouped by what the question actually is.
+ *
+ * Flat, these read as five unrelated switches, and "Plan the approaches first"
+ * in particular looked like a mystery toggle rather than the one setting that
+ * changes what the coach *knows* before it has seen anything. Three headings,
+ * because there are three questions: what does it know going in, how does it
+ * hold its ground, and how does it talk back.
+ */
+const COACH_FLAG_GROUPS: Array<{
+  title: string;
+  blurb: string;
+  flags: Array<[keyof CoachFlags, string, string]>;
+}> = [
+  {
+    title: "What the coach knows before it looks",
+    blurb:
+      "Extra model calls made once per problem, before your board is read. Both cost a call, so both start off.",
+    flags: [
+      [
+        "planner_enabled",
+        "Plan the approaches first",
+        "One call per problem, to the planner provider below, cataloging the approach families the problem admits — so a small local model is asked the narrow questions it is good at and a bigger one answers the broad one. Built from the statement and the sample cases only: it cannot reach a solution, and a test keeps it that way.",
+      ],
+      [
+        "draw_review_enabled",
+        "Check drawn diagrams",
+        "After a diagram renders, look at the picture and redraw it once if it does not show what it claims. Needs a vision model on the viz provider.",
+      ],
+    ],
+  },
+  {
+    title: "How it reads your board",
+    blurb: "What the coach does when the board argues for something.",
+    flags: [
+      [
+        "approach_commitment",
+        "Stick to one approach per board",
+        "Coach the approach your board argues for, and say so when a change of board changes it — instead of quietly switching between valid approaches.",
+      ],
+    ],
+  },
+  {
+    title: "How its answers arrive",
+    blurb: "Transport and transparency — neither changes what it says.",
+    flags: [
+      [
+        "ws_runs",
+        "Answer over the live connection",
+        "Ask, Review, Draw and Lazy stream their stages back as they happen instead of arriving all at once.",
+      ],
+      [
+        "process_events_ui",
+        "Show what the coach is doing",
+        "A collapsible list of stages and diagram tool calls above each answer.",
+      ],
+    ],
+  },
 ];
 
 /** What each coach mode is for, shown under its provider picker. */
@@ -159,7 +200,7 @@ interface DevicePrefs {
    * It belongs with the rest of the failure decision, under When a case fails.
    */
   forwardFailures: boolean;
-  autoSaveCaptures: boolean;
+  captureMode: CaptureMode;
   captureDestination: CaptureDestination;
   captureFolder: string;
   captureCountdown: number;
@@ -174,7 +215,7 @@ function loadDevicePrefs(): DevicePrefs {
   return {
     handedness: loadInkHandedness(),
     forwardFailures: loadForwardFailures(),
-    autoSaveCaptures: loadAutoSaveCaptures(),
+    captureMode: loadCaptureMode(),
     captureDestination: loadCaptureDestination(),
     captureFolder: loadCaptureFolder(),
     captureCountdown: loadCaptureCountdown(),
@@ -190,7 +231,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
   return (
     a.handedness === b.handedness &&
     a.forwardFailures === b.forwardFailures &&
-    a.autoSaveCaptures === b.autoSaveCaptures &&
+    a.captureMode === b.captureMode &&
     a.captureDestination === b.captureDestination &&
     a.captureFolder === b.captureFolder &&
     a.captureCountdown === b.captureCountdown &&
@@ -256,7 +297,7 @@ export function SettingsModal({
   const [forwardFailures, setForwardFailures] = useState<boolean>(() =>
     loadForwardFailures(),
   );
-  const [autoSaveCaptures, setAutoSaveCaptures] = useState(() => loadAutoSaveCaptures());
+  const [captureMode, setCaptureMode] = useState<CaptureMode>(() => loadCaptureMode());
   const [captureDestination, setCaptureDestination] = useState<CaptureDestination>(() =>
     loadCaptureDestination(),
   );
@@ -271,6 +312,9 @@ export function SettingsModal({
     loadInkSmoothingMode(),
   );
   const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
+  /* Applies the moment it is picked — the next ⟳ is the only thing that reads
+     it, so deferring to Save would mean a setting that looked ignored. */
+  const [paletteTag, setPaletteTag] = useState<PaletteTag>(() => loadPaletteTag());
   /** Last saved config + device prefs — Cancel restores these; Save advances them. */
   const [baselineConfig, setBaselineConfig] = useState<LcConfig>(emptyConfig);
   const [baselinePrefs, setBaselinePrefs] = useState<DevicePrefs>(loadDevicePrefs);
@@ -372,7 +416,7 @@ export function SettingsModal({
     const prefs = loadDevicePrefs();
     setHandedness(prefs.handedness);
     setForwardFailures(prefs.forwardFailures);
-    setAutoSaveCaptures(prefs.autoSaveCaptures);
+    setCaptureMode(prefs.captureMode);
     setCaptureDestination(prefs.captureDestination);
     setCaptureFolder(prefs.captureFolder);
     setCaptureCountdown(prefs.captureCountdown);
@@ -428,7 +472,7 @@ export function SettingsModal({
   const draftPrefs: DevicePrefs = {
     handedness,
     forwardFailures,
-    autoSaveCaptures,
+    captureMode,
     captureDestination,
     captureFolder,
     captureCountdown,
@@ -464,7 +508,7 @@ export function SettingsModal({
       if (prefsDirty) {
         saveInkHandedness(handedness);
         saveForwardFailures(forwardFailures);
-        saveAutoSaveCaptures(autoSaveCaptures);
+        saveCaptureMode(captureMode);
         saveCaptureDestination(captureDestination);
         saveCaptureFolder(captureFolder);
         saveCaptureCountdown(captureCountdown);
@@ -680,47 +724,49 @@ export function SettingsModal({
 
               <div className="lc-settings-subhead">Screen captures</div>
               <p className="lc-settings-hint">
-                When you capture the board (entire or a region), also save a PNG on this device.
-                Default destination is Photos. Saved on this device only.
+                What happens when you capture the board — entire or a region. Files are
+                saved on this device only; the default destination is Photos.
               </p>
               <div
                 className="lc-settings-choice"
                 role="radiogroup"
-                aria-label="Auto-save screen captures"
+                aria-label="What a capture does"
               >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={autoSaveCaptures}
-                  className={
-                    autoSaveCaptures
-                      ? "lc-settings-choice-option is-active"
-                      : "lc-settings-choice-option"
-                  }
-                  onClick={() => setAutoSaveCaptures(true)}
-                >
-                  <strong>Auto-save captures</strong>
-                  <span className="lc-muted">
-                    Also place the image on the board and save a PNG to this device.
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={!autoSaveCaptures}
-                  className={
-                    !autoSaveCaptures
-                      ? "lc-settings-choice-option is-active"
-                      : "lc-settings-choice-option"
-                  }
-                  onClick={() => setAutoSaveCaptures(false)}
-                >
-                  <strong>Board only</strong>
-                  <span className="lc-muted">Place the capture on the board; do not save a file.</span>
-                </button>
+                {(
+                  [
+                    [
+                      "board",
+                      "Place the capture on the board. No file is written.",
+                    ],
+                    [
+                      "board-save",
+                      "Place it on the board and save a PNG to this device.",
+                    ],
+                    [
+                      "save",
+                      "Save a PNG only — the board is left as it was.",
+                    ],
+                  ] as Array<[CaptureMode, string]>
+                ).map(([mode, blurb]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={captureMode === mode}
+                    className={
+                      captureMode === mode
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setCaptureMode(mode)}
+                  >
+                    <strong>{captureModeLabel(mode)}</strong>
+                    <span className="lc-muted">{blurb}</span>
+                  </button>
+                ))}
               </div>
 
-              {autoSaveCaptures && (
+              {captureWritesFile(captureMode) && (
                 <>
                   <div className="lc-settings-subhead">Capture save location</div>
                   <div
@@ -968,6 +1014,45 @@ export function SettingsModal({
                   </div>
                 </>
               )}
+
+              {/*
+                What the ⟳ on the colour wheel asks for.
+                
+                The feed was queried with no tag at all, which is not "no
+                preference" so much as "whatever the site sorts by" — and what
+                came back was pastel after pastel. Any stays the default: a
+                preference nobody asked for should not narrow what they get.
+              */}
+              <div className="lc-settings-subhead">Ink palettes</div>
+              <p className="lc-settings-hint">
+                What kind of colours the wheel pulls when you ask it for another
+                palette. Offline, the bundled palettes are used whatever this says.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-wrap"
+                role="radiogroup"
+                aria-label="Palette colours"
+              >
+                {PALETTE_TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    role="radio"
+                    aria-checked={paletteTag === tag}
+                    className={
+                      paletteTag === tag
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => {
+                      setPaletteTag(tag);
+                      savePaletteTag(tag);
+                    }}
+                  >
+                    <strong>{paletteTagLabel(tag)}</strong>
+                  </button>
+                ))}
+              </div>
 
               <div className="lc-settings-subhead">When a case fails</div>
               <div className="lc-settings-choice" role="radiogroup" aria-label="Test run mode">
@@ -1265,32 +1350,33 @@ export function SettingsModal({
                 <p className="lc-muted">API key from OPENAI_API_KEY env — not stored in config.toml.</p>
               )}
 
-              <div className="lc-settings-subhead">Coach behaviour</div>
-              <p className="lc-settings-hint">
-                Frontier plans the approaches; local executes. The planner and the drawn-diagram
-                check each cost an extra model call, so both start off.
-              </p>
-              {COACH_FLAGS.map(([key, label, hint]) => (
-                <label key={key} className="lc-settings-toggle">
-                  <input
-                    type="checkbox"
-                    checked={(draft.coach ?? DEFAULT_COACH_FLAGS)[key]}
-                    onChange={(e) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        coach: {
-                          ...DEFAULT_COACH_FLAGS,
-                          ...(prev.coach ?? {}),
-                          [key]: e.target.checked,
-                        },
-                      }))
-                    }
-                  />
-                  <span>
-                    <strong>{label}</strong>
-                    <span className="lc-muted">{hint}</span>
-                  </span>
-                </label>
+              {COACH_FLAG_GROUPS.map((group) => (
+                <div key={group.title}>
+                  <div className="lc-settings-subhead">{group.title}</div>
+                  <p className="lc-settings-hint">{group.blurb}</p>
+                  {group.flags.map(([key, label, hint]) => (
+                    <label key={key} className="lc-settings-toggle">
+                      <input
+                        type="checkbox"
+                        checked={(draft.coach ?? DEFAULT_COACH_FLAGS)[key]}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            coach: {
+                              ...DEFAULT_COACH_FLAGS,
+                              ...(prev.coach ?? {}),
+                              [key]: e.target.checked,
+                            },
+                          }))
+                        }
+                      />
+                      <span>
+                        <strong>{label}</strong>
+                        <span className="lc-muted">{hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
               ))}
 
               <div className="lc-settings-subhead">Coach mode providers</div>
