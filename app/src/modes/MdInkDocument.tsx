@@ -84,7 +84,7 @@ export function MdInkDocument({ source, onMeasure, selectable = false }: MdInkDo
   return (
     <div
       ref={nodeRef}
-      className="lc-md-ink-doc lc-md-ink-carbon"
+      className="lc-md-ink-doc lc-md-ink-paper"
       // Locked under the pen; readable when the page is selectable. Pointer
       // events still belong to the ink layer above in Annotate mode — the
       // selection layer around this only takes them in Scroll mode.

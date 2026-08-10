@@ -81,7 +81,7 @@ export function EpubDocument({
   return (
     <div
       ref={nodeRef}
-      className="lc-epub-doc lc-md-ink-carbon"
+      className="lc-epub-doc lc-md-ink-paper"
       aria-hidden={selectable ? undefined : true}
     >
       {chapters.map((chapter) => (
