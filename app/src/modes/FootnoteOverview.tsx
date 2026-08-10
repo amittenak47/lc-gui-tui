@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { createPortal } from "react-dom";
 
 import type { CoachChatMessage } from "./AgentSidePanel";
@@ -8,13 +16,12 @@ import {
   type DocFootnoteNote,
   type DocFootnoteUserLink,
 } from "../util/docFootnotes";
-import { fetchNextColorHuntPalette } from "../util/colorHunt";
 import {
-  appendInkPalette,
-  currentInkPalette,
-  seedInkPaletteHistory,
-  type InkPaletteHistory,
-} from "../util/inkPaletteHistory";
+  advanceInkPalette,
+  inkPaletteNow,
+  onInkPaletteChange,
+} from "../canvas/inkPaletteBridge";
+import { currentInkPalette } from "../util/inkPaletteHistory";
 import { isSafeExternalUrl } from "../util/openExternal";
 
 export interface FootnoteOverviewProps {
@@ -146,14 +153,14 @@ export function FootnoteOverview({
   const [linkUrl, setLinkUrl] = useState("");
   const [addingLink, setAddingLink] = useState(false);
   /**
-   * A palette to choose from, seeded the way the ink wheel seeds its own.
+   * The board's colour wheel — the pen's, not a second one.
    *
-   * Local to the open card rather than persisted: what is worth keeping is the
-   * colour the reader picked, which lives on the footnote. The palette is the
-   * means, and asking for another one is a tap.
+   * Read live rather than copied at open: shuffling here turns the same wheel
+   * the toolbar shows, and a palette pulled at the pen is already on offer when
+   * the reader comes to colour a mark. What is worth persisting is the colour
+   * they chose, and that lives on the footnote.
    */
-  const [history, setHistory] = useState<InkPaletteHistory>(() => seedInkPaletteHistory("light"));
-  const [shuffling, setShuffling] = useState(false);
+  const history = useSyncExternalStore(onInkPaletteChange, inkPaletteNow, inkPaletteNow);
   const palette = currentInkPalette(history);
 
   const userLinks = footnote.userLinks ?? [];
@@ -285,6 +292,15 @@ export function FootnoteOverview({
 
   const editing = bubble?.kind === "note" ? notes.find((note) => note.id === bubble.id) ?? null : null;
 
+  /*
+   * The card wears the mark's colour, the same variable the ribbon takes.
+   *
+   * One value in, everything derived in CSS — so the card, its bubble and the
+   * ribbon they came from cannot disagree, and a colour chosen months ago
+   * still reads the way the ribbon does. Absent means default chrome.
+   */
+  const tint = footnote.color ? ({ ["--lc-fn-color" as string]: footnote.color } as const) : {};
+
   return createPortal(
     <>
       {/*
@@ -314,17 +330,18 @@ export function FootnoteOverview({
         ref={panelRef}
         role="dialog"
         aria-label="Footnote"
-        style={{ visibility: "hidden", zIndex: 233 }}
+        style={{ visibility: "hidden", zIndex: 233, ...tint }}
       >
         <p className="lc-doc-sheet-excerpt">{title}</p>
 
         {/*
-          The ribbon's colour, from the palette wheel the ink already uses.
+          The ribbon's colour, from the wheel the pen draws from.
 
-          Same mechanism, not a second one: `fetchNextColorHuntPalette` is what
-          the board's colour wheel pulls from, so "another palette" here means
-          exactly what it means there, and the offline fallback list is shared.
-          Four swatches, because that is what a ColorHunt palette is.
+          Not the same *kind* of palette — the same palette. The swatches are
+          whatever is on the toolbar's colour wheel right now, and ⟳ is that
+          wheel's own forward cycle, so it fetches from ColorHunt, appends to
+          the board's history and is saved with the board exactly as a tap at
+          the pen would be.
         */}
         <section className="lc-footnote-overview-section" aria-label="Colour">
           <h3 className="lc-coach-turn-role">Colour</h3>
@@ -348,13 +365,7 @@ export function FootnoteOverview({
               className="lc-secondary"
               aria-label="Another palette"
               title="Another palette"
-              disabled={shuffling}
-              onClick={() => {
-                setShuffling(true);
-                void fetchNextColorHuntPalette(history)
-                  .then((next) => setHistory((current) => appendInkPalette(current, next)))
-                  .finally(() => setShuffling(false));
-              }}
+              onClick={advanceInkPalette}
             >
               ⟳
             </button>
@@ -548,7 +559,7 @@ export function FootnoteOverview({
           ref={bubbleRef}
           role="dialog"
           aria-label={bubble.kind === "note" ? "Note" : "Thread"}
-          style={{ visibility: "hidden", zIndex: 234 }}
+          style={{ visibility: "hidden", zIndex: 234, ...tint }}
         >
           {bubble.kind === "note" ? (
             <NoteBubble

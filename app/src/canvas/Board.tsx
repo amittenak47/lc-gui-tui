@@ -84,6 +84,11 @@ import {
   setInkPaletteSlot,
   type InkPaletteHistory,
 } from "../util/inkPaletteHistory";
+import {
+  provideInkPaletteAdvance,
+  publishInkPalette,
+  resetInkPaletteBridge,
+} from "./inkPaletteBridge";
 import { isDarkTheme } from "../theme/appThemes";
 import {
   type BoardReadingSize,
@@ -1080,6 +1085,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [applyInkPaletteHistory]);
   const applyInkPaletteHistoryRef = useRef(applyInkPaletteHistory);
   applyInkPaletteHistoryRef.current = applyInkPaletteHistory;
+  /*
+   * Publish the wheel, and lend out its forward cycle.
+   *
+   * The footnote overview card colours a mark from this palette — the same one
+   * the pen draws from, because there is one board and it has one set of
+   * colours. See `inkPaletteBridge`.
+   */
+  useEffect(() => {
+    publishInkPalette(inkPaletteHistory);
+  }, [inkPaletteHistory]);
+  useEffect(() => {
+    provideInkPaletteAdvance(cycleInkPaletteForward);
+    return () => provideInkPaletteAdvance(null);
+  }, [cycleInkPaletteForward]);
+  useEffect(() => resetInkPaletteBridge, []);
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
   linedPaperRef.current = linedPaper;
