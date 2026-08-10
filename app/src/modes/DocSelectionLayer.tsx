@@ -43,11 +43,12 @@ import {
   type DocFootnote,
 } from "../util/docFootnotes";
 import { HoldButton } from "../components/HoldButton";
-import { HOLD_SENSITIVE_MS, LONG_PRESS_MS } from "../util/gesture";
+import { HOLD_SENSITIVE_MS, LONG_PRESS_MS, SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import {
   claimSelectionGesture,
   releaseSelectionGesture,
 } from "../canvas/docSelectionGesture";
+import { horizontalScrollHost } from "../canvas/scrollHost";
 
 /**
  * Controls painted over the page that own their own taps.
@@ -65,11 +66,12 @@ function isOverlayControl(target: EventTarget | null): boolean {
   );
 }
 
-/** Movement before the hold fires that means the writer meant to scroll. */
-const HOLD_SLOP_PX = 10;
-
 /** Thinnest a swept band may be, so a flat sweep is still visible and hittable. */
 const MIN_BAND_PX = 14;
+
+/** Keep the caret under the finger when a wide `pre` would otherwise clip it. */
+const SELECT_EDGE_PX = 36;
+const SELECT_EDGE_STEP_PX = 24;
 
 /** A rectangle in the document's own (unscaled) coordinate space. */
 interface LocalRect {
@@ -365,19 +367,31 @@ export function DocSelectionLayer({
        * The scope the hold started in when there is one, so a drag down the
        * side of page 40 does not get pulled into page 41's margin; the whole
        * body otherwise.
+       *
+       * Same-line drags must keep the finger's x when the point is still inside
+       * the column — jumping straight to the left/right edges is what made a
+       * horizontal sweep look dead (every miss snapped to EOL / BOL).
        */
       const column = preferred ?? body;
       const box = column.getBoundingClientRect();
       if (box.width <= 0 || box.height <= 0) return null;
 
       const inset = Math.min(8, box.width / 4);
-      // Left edge first when the finger is left of the text, right edge when it
-      // is right of it — the reading order of the line either way.
-      const candidates =
-        x < box.left
+      const clampedY = Math.min(Math.max(y, box.top + 1), box.bottom - 1);
+      const insideX = x >= box.left && x <= box.right;
+      const candidates = insideX
+        ? [
+            Math.min(Math.max(x, box.left + inset), box.right - inset),
+            x - 8,
+            x + 8,
+            x - 16,
+            x + 16,
+            box.right - inset,
+            box.left + inset,
+          ]
+        : x < box.left
           ? [box.left + inset, box.right - inset]
           : [box.right - inset, box.left + inset];
-      const clampedY = Math.min(Math.max(y, box.top + 1), box.bottom - 1);
       for (const candidateX of candidates) {
         const hit = resolve(caretAt(candidateX, clampedY));
         if (hit) return hit;
@@ -645,11 +659,27 @@ export function DocSelectionLayer({
       if (!hold.held) {
         // Moved before the hold landed: the writer meant to scroll, and the
         // page has already started doing it. Get out of the way.
+        // Capture-phase on window so this still runs when Board would otherwise
+        // stopPropagation after arming a nested horizontal scroll.
         const moved = Math.hypot(event.clientX - hold.startX, event.clientY - hold.startY);
-        if (moved > HOLD_SLOP_PX) clearGesture();
+        if (moved > SELECT_HOLD_SLOP_PX) clearGesture();
         return;
       }
       event.preventDefault();
+      /*
+       * Dragging off the visible edge of a wide code block should bring more
+       * of the line into view — same idea as native text selection.
+       */
+      const under = document.elementFromPoint(event.clientX, event.clientY);
+      const side = horizontalScrollHost(under) ?? horizontalScrollHost(hold.root);
+      if (side) {
+        const box = side.getBoundingClientRect();
+        if (event.clientX > box.right - SELECT_EDGE_PX) {
+          side.scrollLeft += SELECT_EDGE_STEP_PX;
+        } else if (event.clientX < box.left + SELECT_EDGE_PX) {
+          side.scrollLeft -= SELECT_EDGE_STEP_PX;
+        }
+      }
       // Resolved against the scope the hold started in, so a drag that strays
       // sideways off the column comes back to *this* page's text.
       let at = pointAt(event.clientX, event.clientY, hold.root);
@@ -715,15 +745,17 @@ export function DocSelectionLayer({
 
     host.addEventListener("selectstart", onSelectStart);
     host.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("pointermove", onPointerMove, { passive: false });
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerCancel);
+    // Capture on window: Board's board-root capture may stopPropagation once it
+    // arms; we still need the pending-hold slop check and the held drag.
+    window.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerCancel, true);
     return () => {
       host.removeEventListener("selectstart", onSelectStart);
       host.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("pointermove", onPointerMove, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerCancel, true);
       releaseSelectionGesture();
     };
   }, [enabled, highlighting, applySelection, clearGesture, dismiss, pointAt]);

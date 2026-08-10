@@ -13,3 +13,12 @@ export const HOLD_SENSITIVE_MS = 666;
 
 /** Long-press to open a secondary menu (scratchpad load, coach message). */
 export const LONG_PRESS_MS = 580;
+
+/**
+ * Finger travel before a pending hold-to-select yields to scroll.
+ *
+ * Board's reading pan and DocSelectionLayer must share this: if the pan arms
+ * earlier (e.g. 3px), a sideways drag on a wide code block scrolls / rubber-
+ * bands the page and never becomes a same-line selection.
+ */
+export const SELECT_HOLD_SLOP_PX = 10;
