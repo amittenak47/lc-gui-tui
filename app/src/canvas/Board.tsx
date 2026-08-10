@@ -131,6 +131,7 @@ import {
 import {
   onSelectionGestureClaimed,
   selectionOwnsGesture,
+  onDocScrollRequest,
   setDocCameraLive,
 } from "./docSelectionGesture";
 import { horizontalScrollHost } from "./scrollHost";
@@ -1358,6 +1359,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }, 140);
   }, []);
   const pulseCameraMotionRef = useRef(pulseCameraMotion);
+  const readScrollRef = useRef<() => { scrollX: number; scrollY: number; zoom: number }>(
+    () => ({ scrollX: 0, scrollY: 0, zoom: 1 }),
+  );
+
   pulseCameraMotionRef.current = pulseCameraMotion;
   const readingSize = readingSizeProp ?? "M";
   const readingSizeRef = useRef(readingSize);
@@ -2170,6 +2175,34 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     );
   }, []);
 
+  /*
+   * A text selection dragged off the edge asks the page to come to it.
+   *
+   * Answered here rather than computed by the selection layer, because
+   * everything that makes a scroll correct — the zoom, the chrome insets, where
+   * the document actually ends — is already in `clampPanScroll`, and a second
+   * copy of that arithmetic would be wrong at precisely the top and bottom of
+   * the page, which is where a drag off the edge always finishes.
+   *
+   * Returns the distance granted. At the end of the document that is zero, and
+   * the caller stops asking instead of running a frame loop into a wall.
+   */
+  useEffect(() => {
+    onDocScrollRequest((dy) => {
+      if (annotateCodeRef.current) return 0;
+      const cam = readScrollRef.current();
+      // `dy > 0` is "show me what comes next", and Excalidraw's scrollY grows
+      // as the content moves *down* — so going forward means subtracting.
+      const next = clampPanScroll(cam.scrollX, cam.scrollY - dy, cam.zoom);
+      const moved = cam.scrollY - next.scrollY;
+      if (Math.abs(moved) < 0.5) return 0;
+      pulseCameraMotionRef.current();
+      applyVisualScrollNowRef.current(next.scrollX, next.scrollY);
+      return moved;
+    });
+    return () => onDocScrollRequest(null);
+  }, [clampPanScroll]);
+
   const stopPanInertia = useCallback(() => {
     if (inertiaFrameRef.current) {
       cancelAnimationFrame(inertiaFrameRef.current);
@@ -2844,6 +2877,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     onSelectionGestureClaimed(dropPanForSelection);
 
+    // Published so the edge auto-scroll above can read the same camera the pan
+    // does — the live one mid-gesture, Excalidraw's between gestures.
+    readScrollRef.current = () => readScroll();
     const readScroll = () => {
       const live = liveCameraRef.current;
       if (live?.live) return { scrollX: live.scrollX, scrollY: live.scrollY, zoom: live.zoom };

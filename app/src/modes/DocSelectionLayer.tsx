@@ -47,6 +47,7 @@ import { HOLD_SENSITIVE_MS, LONG_PRESS_MS, SELECT_HOLD_SLOP_PX } from "../util/g
 import {
   claimSelectionGesture,
   isDocCameraLive,
+  requestDocScroll,
   onDocCameraLiveChange,
   releaseSelectionGesture,
 } from "../canvas/docSelectionGesture";
@@ -71,9 +72,26 @@ function isOverlayControl(target: EventTarget | null): boolean {
 /** Thinnest a swept band may be, so a flat sweep is still visible and hittable. */
 const MIN_BAND_PX = 14;
 
-/** Keep the caret under the finger when a wide `pre` would otherwise clip it. */
+/** How far into the edge a drag has to reach before the page starts moving. */
 const SELECT_EDGE_PX = 36;
-const SELECT_EDGE_STEP_PX = 24;
+/** Per-frame travel at the boundary, and at full lean. */
+const SELECT_EDGE_STEP_MIN_PX = 2;
+const SELECT_EDGE_STEP_MAX_PX = 22;
+/** Lean past the edge, in pixels, at which the scroll reaches full speed. */
+const SELECT_EDGE_RAMP_PX = 90;
+
+/**
+ * Per-frame scroll for a finger `over` pixels past the edge.
+ *
+ * Ramped rather than constant so the boundary is usable: a fixed step fast
+ * enough to cross a page is far too fast to stop on a word, and one slow enough
+ * to be precise never gets anywhere. Nudging the edge creeps; pinning the screen
+ * edge moves at reading speed.
+ */
+function edgeStep(over: number): number {
+  const lean = Math.min(1, Math.abs(over) / SELECT_EDGE_RAMP_PX);
+  return SELECT_EDGE_STEP_MIN_PX + (SELECT_EDGE_STEP_MAX_PX - SELECT_EDGE_STEP_MIN_PX) * lean;
+}
 
 /** A rectangle in the document's own (unscaled) coordinate space. */
 interface LocalRect {
@@ -256,6 +274,8 @@ export function DocSelectionLayer({
    * coordinates a fixed-position card needs.
    */
   const ribbonRects = useRef(new Map<string, DOMRect>());
+  /** The edge auto-scroll's frame, null when the finger is not at an edge. */
+  const edgeFrameRef = useRef<number | null>(null);
   /** Latest placement pass, so the window observer can re-run it. */
   const placeRef = useRef<(() => void) | null>(null);
 
@@ -274,9 +294,26 @@ export function DocSelectionLayer({
     anchorOffset: number | null;
     /** Last resolved drag offset — used when caret hit-testing blanks out. */
     lastOffset: number | null;
+    /** Where the finger is now, so an auto-scroll can re-ask without a move. */
+    lastX: number;
+    lastY: number;
+    /**
+     * The sideways scroller the hold started inside, if any.
+     *
+     * Found once and kept, because it cannot be found again later: dragging to
+     * the right edge takes the finger *off* the block, and walking up from
+     * whatever is under it there finds the board, not the code. The box a
+     * selection began in is the one that should follow it out — the same rule
+     * the scope root already follows.
+     */
+    sideScroll: HTMLElement | null;
   } | null>(null);
 
   const clearGesture = useCallback(() => {
+    if (edgeFrameRef.current != null) {
+      cancelAnimationFrame(edgeFrameRef.current);
+      edgeFrameRef.current = null;
+    }
     const hold = holdRef.current;
     if (hold?.timer != null) window.clearTimeout(hold.timer);
     if (hold?.armTimer != null) window.clearTimeout(hold.armTimer);
@@ -611,6 +648,9 @@ export function DocSelectionLayer({
           hold.scope = at.scope;
           hold.anchorOffset = at.offset;
           hold.lastOffset = at.offset;
+          hold.sideScroll =
+            horizontalScrollHost(document.elementFromPoint(startX, startY)) ??
+            horizontalScrollHost(at.root);
           // Board's pan must let go before the drag below starts moving.
           claimSelectionGesture();
           /*
@@ -640,6 +680,9 @@ export function DocSelectionLayer({
            * the length of the hold only, so ordinary reading still scrolls.
            */
           host.classList.add("lc-doc-selecting");
+          if (edgeFrameRef.current == null) {
+            edgeFrameRef.current = requestAnimationFrame(autoScroll);
+          }
           try {
             navigator.vibrate?.(10);
           } catch {
@@ -652,7 +695,109 @@ export function DocSelectionLayer({
         scope: undefined,
         anchorOffset: null,
         lastOffset: null,
+        lastX: startX,
+        lastY: startY,
+        sideScroll: null,
       };
+    };
+
+    /**
+     * Extend the selection to a viewport point, wherever it landed.
+     *
+     * Split out of the move handler because the auto-scroll below has to run it
+     * too: once the page has moved under a finger that is holding still, the
+     * words beneath it are different ones, and without re-asking the selection
+     * would stop growing the moment the reader stopped moving.
+     */
+    const extendTo = (x: number, y: number) => {
+      const hold = holdRef.current;
+      if (!hold?.held || hold.anchorOffset == null || !hold.root) return;
+      let at = pointAt(x, y, hold.root);
+      // Caret blanks in `<pre>` / indent gaps — probe nearby before freezing.
+      if (!at) {
+        for (const dy of [0, -6, 6, -12, 12]) {
+          for (const dx of [0, -8, 8, -16, 16]) {
+            if (dx === 0 && dy === 0) continue;
+            at = pointAt(x + dx, y + dy, hold.root);
+            if (at) break;
+          }
+          if (at) break;
+        }
+      }
+      if (!at) {
+        // Keep the last good extent rather than shrinking back to one word.
+        if (hold.lastOffset != null) {
+          applySelection(hold.root, hold.scope, hold.anchorOffset, hold.lastOffset);
+        }
+        return;
+      }
+      // Wandered onto another page: hold the selection at this page's edge
+      // rather than following, since the two are different offset spaces.
+      const offset = at.root === hold.root ? at.offset : hold.anchorOffset;
+      hold.lastOffset = offset;
+      applySelection(hold.root, hold.scope, hold.anchorOffset, offset);
+    };
+
+    /*
+     * Drag to the edge and the page comes to you.
+     *
+     * A frame loop rather than a step per `pointermove`, because the finger
+     * that has run out of screen is usually the one that has *stopped* moving —
+     * it is already as far as it can go. Stepping only on movement meant the
+     * selection stopped exactly where the reader needed it to keep going, and
+     * "drag to the bottom of the screen to take the rest of the page" simply
+     * did not work.
+     *
+     * Horizontal is a nested scroller (a wide code block, an over-wide PDF
+     * page); vertical is the reading camera, which Board owns — see
+     * `requestDocScroll`. Speed ramps with how far past the edge the finger is,
+     * so nudging the boundary creeps and pinning the edge moves properly.
+     */
+    const autoScroll = () => {
+      const hold = holdRef.current;
+      if (!hold?.held) {
+        edgeFrameRef.current = null;
+        return;
+      }
+      const { lastX: x, lastY: y } = hold;
+      let moved = false;
+
+      const side = hold.sideScroll;
+      if (side) {
+        const box = side.getBoundingClientRect();
+        const over =
+          x > box.right - SELECT_EDGE_PX
+            ? x - (box.right - SELECT_EDGE_PX)
+            : x < box.left + SELECT_EDGE_PX
+              ? x - (box.left + SELECT_EDGE_PX)
+              : 0;
+        if (over !== 0) {
+          const before = side.scrollLeft;
+          side.scrollLeft += Math.sign(over) * edgeStep(over);
+          if (side.scrollLeft !== before) moved = true;
+        }
+      }
+
+      const view = hostRef.current?.getBoundingClientRect();
+      const top = view ? Math.max(view.top, 0) : 0;
+      const bottom = view ? Math.min(view.bottom, window.innerHeight) : window.innerHeight;
+      const overY =
+        y > bottom - SELECT_EDGE_PX
+          ? y - (bottom - SELECT_EDGE_PX)
+          : y < top + SELECT_EDGE_PX
+            ? y - (top + SELECT_EDGE_PX)
+            : 0;
+      // Positive `dy` means "bring later text into view", which is what a drag
+      // past the *bottom* edge is asking for — hence the sign follows `overY`
+      // rather than opposing it.
+      if (overY !== 0 && requestDocScroll(Math.sign(overY) * edgeStep(overY)) !== 0) {
+        moved = true;
+      }
+
+      // Only worth re-reading the caret when something actually moved; the
+      // page may simply have run out.
+      if (moved) extendTo(x, y);
+      edgeFrameRef.current = requestAnimationFrame(autoScroll);
     };
 
     const onPointerMove = (event: PointerEvent) => {
@@ -668,46 +813,9 @@ export function DocSelectionLayer({
         return;
       }
       event.preventDefault();
-      /*
-       * Dragging off the visible edge of a wide code block should bring more
-       * of the line into view — same idea as native text selection.
-       */
-      const under = document.elementFromPoint(event.clientX, event.clientY);
-      const side = horizontalScrollHost(under) ?? horizontalScrollHost(hold.root);
-      if (side) {
-        const box = side.getBoundingClientRect();
-        if (event.clientX > box.right - SELECT_EDGE_PX) {
-          side.scrollLeft += SELECT_EDGE_STEP_PX;
-        } else if (event.clientX < box.left + SELECT_EDGE_PX) {
-          side.scrollLeft -= SELECT_EDGE_STEP_PX;
-        }
-      }
-      // Resolved against the scope the hold started in, so a drag that strays
-      // sideways off the column comes back to *this* page's text.
-      let at = pointAt(event.clientX, event.clientY, hold.root);
-      // Caret blanks in `<pre>` / indent gaps — probe nearby before freezing.
-      if (!at && hold.root) {
-        for (const dy of [0, -6, 6, -12, 12]) {
-          for (const dx of [0, -8, 8, -16, 16]) {
-            if (dx === 0 && dy === 0) continue;
-            at = pointAt(event.clientX + dx, event.clientY + dy, hold.root);
-            if (at) break;
-          }
-          if (at) break;
-        }
-      }
-      if (!at || hold.anchorOffset == null || !hold.root) {
-        // Keep the last good extent rather than shrinking back to one word.
-        if (hold.lastOffset != null) {
-          applySelection(hold.root!, hold.scope, hold.anchorOffset!, hold.lastOffset);
-        }
-        return;
-      }
-      // Wandered onto another page: hold the selection at this page's edge
-      // rather than following, since the two are different offset spaces.
-      const offset = at.root === hold.root ? at.offset : hold.anchorOffset;
-      hold.lastOffset = offset;
-      applySelection(hold.root, hold.scope, hold.anchorOffset, offset);
+      hold.lastX = event.clientX;
+      hold.lastY = event.clientY;
+      extendTo(event.clientX, event.clientY);
     };
 
     /*
