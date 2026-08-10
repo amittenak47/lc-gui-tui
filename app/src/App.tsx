@@ -101,6 +101,7 @@ import { splitProblemKey } from "./util/datasetKey";
 import { useIsMobile } from "./util/mobile";
 import {
   addFootnote,
+  footnoteRevision,
   freshFootnoteId,
   googleSearchUrl,
   numberFootnotes,
@@ -1185,6 +1186,13 @@ export function App() {
   const lastSavedHashRef = useRef<number | null>(null);
   /** Ink op count at the previous tick, for "is the hand still moving?". */
   const lastTickInkOpsRef = useRef(-1);
+  /**
+   * What the marks looked like at the last save.
+   *
+   * Compared alongside the scene fingerprint so an edit that only touches a
+   * footnote — a note, a link, a colour — is still a reason to write.
+   */
+  const lastSavedMarksRef = useRef<string>("");
   /** Has the "out of space" banner already been shown this session? */
   const storageFullShownRef = useRef(false);
   /**
@@ -1211,7 +1219,18 @@ export function App() {
       const elements = board.getElements();
       const inkOps = board.getInkOpCount();
       const hash = sceneFingerprint(elements, inkOps);
-      if (lastSavedHashRef.current === hash) {
+      /*
+       * The board is not the only thing that changes.
+       *
+       * A reading session can edit a footnote's notes, save a link on it or
+       * colour its ribbon without ever touching the canvas — and the scene
+       * fingerprint cannot see any of that, so the tick returned here and none
+       * of it was ever written. Typing a note and closing the document lost the
+       * note. Mixing the marks into the same comparison is what makes them
+       * count as work.
+       */
+      const marks = isMdInk(problem) ? footnoteRevision(mdInkFootnotesRef.current) : "";
+      if (lastSavedHashRef.current === hash && lastSavedMarksRef.current === marks) {
         lastTickInkOpsRef.current = inkOps;
         return;
       }
@@ -1253,6 +1272,7 @@ export function App() {
         // exactly as worth keeping as ink.
         if (mdInkPristineHashRef.current === hash && mdInkFootnotesRef.current.length === 0) {
           lastSavedHashRef.current = hash;
+          lastSavedMarksRef.current = marks;
           return;
         }
         const source = mdInkSourceRef.current;
@@ -1264,6 +1284,7 @@ export function App() {
         // subsequent tick re-serialised a library the store had already
         // refused. One attempt per change is the most that can ever help.
         lastSavedHashRef.current = hash;
+        lastSavedMarksRef.current = marks;
         void saveMdInkDoc({
           id: mdInkDocIdRef.current ?? undefined,
           name: source.name,
