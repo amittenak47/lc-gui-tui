@@ -5,6 +5,9 @@ import {
   numberFootnotes,
   orderScopes,
   freshFootnoteId,
+  freshNoteId,
+  footnoteRevision,
+  threadTitleFrom,
   googleSearchUrl,
   removeFootnote,
   sanitizeFootnotes,
@@ -316,5 +319,97 @@ describe("footnoteAtSamePlace", () => {
 
   it("returns null when the page is unmarked", () => {
     expect(footnoteAtSamePlace([], { kind: "text", start: 0, end: 5 })).toBeNull();
+  });
+});
+
+describe("note entries", () => {
+  it("turns the old single note box into the first entry", () => {
+    const [kept] = sanitizeFootnotes([
+      { id: "a", kind: "note", anchor: { kind: "text", start: 0, end: 4 }, excerpt: "x",
+        createdAt: 1, userNotes: "one long blob" },
+    ]);
+    expect(kept.notes).toHaveLength(1);
+    expect(kept.notes?.[0].text).toBe("one long blob");
+    // Read once, never written again.
+    expect("userNotes" in kept).toBe(false);
+  });
+
+  it("leaves a mark with no notes without an empty list", () => {
+    const [kept] = sanitizeFootnotes([
+      { id: "a", kind: "note", anchor: { kind: "text", start: 0, end: 4 }, excerpt: "x",
+        createdAt: 1, userNotes: "   " },
+    ]);
+    expect(kept.notes).toBeUndefined();
+  });
+
+  it("keeps entries and drops malformed ones", () => {
+    const [kept] = sanitizeFootnotes([
+      { id: "a", kind: "note", anchor: { kind: "text", start: 0, end: 4 }, excerpt: "x", createdAt: 1,
+        notes: [
+          { id: "n1", text: "kept", createdAt: 5, updatedAt: 6 },
+          { text: "no id" },
+          { id: "n2" },
+        ] },
+    ]);
+    expect(kept.notes).toEqual([{ id: "n1", text: "kept", createdAt: 5, updatedAt: 6 }]);
+  });
+
+  it("prefers entries over a legacy box when both are present", () => {
+    const [kept] = sanitizeFootnotes([
+      { id: "a", kind: "note", anchor: { kind: "text", start: 0, end: 4 }, excerpt: "x", createdAt: 1,
+        userNotes: "legacy", notes: [{ id: "n1", text: "new", createdAt: 1, updatedAt: 1 }] },
+    ]);
+    expect(kept.notes?.map((note) => note.text)).toEqual(["new"]);
+  });
+
+  it("gives each new note its own id", () => {
+    const existing = [{ id: freshNoteId([], 100), text: "", createdAt: 100, updatedAt: 100 }];
+    expect(freshNoteId(existing, 100)).not.toBe(existing[0].id);
+  });
+});
+
+describe("saved threads", () => {
+  it("promotes a lone threadRootId into the list", () => {
+    const [kept] = sanitizeFootnotes([
+      { id: "a", kind: "coach", anchor: { kind: "text", start: 0, end: 4 }, excerpt: "hash maps",
+        createdAt: 1, threadRootId: "m-9" },
+    ]);
+    expect(kept.threads).toHaveLength(1);
+    expect(kept.threads?.[0].rootId).toBe("m-9");
+    expect(kept.threads?.[0].title).toBe("hash maps");
+  });
+
+  it("does not duplicate a root already listed", () => {
+    const [kept] = sanitizeFootnotes([
+      { id: "a", kind: "coach", anchor: { kind: "text", start: 0, end: 4 }, excerpt: "x",
+        createdAt: 1, threadRootId: "m-9",
+        threads: [{ rootId: "m-9", title: "asked", createdAt: 2 },
+                  { rootId: "m-12", title: "asked again", createdAt: 3 }] },
+    ]);
+    expect(kept.threads?.map((thread) => thread.rootId)).toEqual(["m-9", "m-12"]);
+  });
+
+  it("keeps a title to one scannable line", () => {
+    expect(threadTitleFrom("  what   is\na hash map?  ")).toBe("what is a hash map?");
+    expect(threadTitleFrom("x".repeat(80))).toHaveLength(60);
+    expect(threadTitleFrom("   ")).toBe("Thread");
+  });
+});
+
+describe("footnoteRevision", () => {
+  const base = footnote({ notes: [{ id: "n1", text: "a", createdAt: 1, updatedAt: 1 }] });
+
+  it("changes when a note is edited", () => {
+    const edited = { ...base, notes: [{ id: "n1", text: "b", createdAt: 1, updatedAt: 2 }] };
+    expect(footnoteRevision([edited])).not.toBe(footnoteRevision([base]));
+  });
+
+  it("changes when a thread is added", () => {
+    const withThread = { ...base, threads: [{ rootId: "m-1", title: "t", createdAt: 1 }] };
+    expect(footnoteRevision([withThread])).not.toBe(footnoteRevision([base]));
+  });
+
+  it("is stable when nothing the reader edits has changed", () => {
+    expect(footnoteRevision([{ ...base }])).toBe(footnoteRevision([base]));
   });
 });

@@ -107,6 +107,7 @@ import {
   numberFootnotes,
   removeFootnote,
   searchQueryFor,
+  threadTitleFrom,
   type DocFootnote,
 } from "./util/docFootnotes";
 import { getDocBytes, hashBytes, putDocBytes } from "./util/docBytes";
@@ -3009,39 +3010,51 @@ export function App() {
     [readingSize, themeId],
   );
 
-  const applyCoachFootnote = useCallback((anchorId: string | null, userMessageId: string) => {
-    const quoted = pendingQuoteRef.current;
-    pendingQuoteRef.current = null;
-    const upgradeId = footnoteCoachUpgradeRef.current;
-    footnoteCoachUpgradeRef.current = null;
-    const rootId = anchorId ?? userMessageId;
-    if (quoted) {
+  const applyCoachFootnote = useCallback(
+    (anchorId: string | null, userMessageId: string, asked: string) => {
+      const quoted = pendingQuoteRef.current;
+      pendingQuoteRef.current = null;
+      const upgradeId = footnoteCoachUpgradeRef.current;
+      footnoteCoachUpgradeRef.current = null;
+      const rootId = anchorId ?? userMessageId;
+      const now = Date.now();
+      const thread = { rootId, title: threadTitleFrom(asked), createdAt: now };
+      if (quoted) {
+        setMdInkFootnotes((current) =>
+          addFootnote(current, {
+            id: freshFootnoteId(current),
+            kind: "coach",
+            anchor: quoted.anchor,
+            excerpt: quoted.excerpt,
+            createdAt: now,
+            threadRootId: rootId,
+            threads: [thread],
+          }),
+        );
+        return;
+      }
+      if (!upgradeId) return;
       setMdInkFootnotes((current) =>
-        addFootnote(current, {
-          id: freshFootnoteId(current),
-          kind: "coach",
-          anchor: quoted.anchor,
-          excerpt: quoted.excerpt,
-          createdAt: Date.now(),
-          threadRootId: rootId,
+        current.map((entry) => {
+          if (entry.id !== upgradeId) return entry;
+          // A reply into an existing thread reaches here too (the anchor
+          // resolves to a rootId the mark already lists); only genuinely new
+          // conversations add a row.
+          const threads = entry.threads ?? [];
+          return {
+            ...entry,
+            kind: "coach" as const,
+            threadRootId: entry.threadRootId ?? rootId,
+            threads: threads.some((existing) => existing.rootId === rootId)
+              ? threads
+              : [...threads, thread],
+          };
         }),
       );
-      return;
-    }
-    if (!upgradeId) return;
-    setMdInkFootnotes((current) =>
-      current.map((entry) =>
-        entry.id === upgradeId
-          ? {
-              ...entry,
-              kind: "coach" as const,
-              threadRootId: entry.threadRootId ?? rootId,
-            }
-          : entry,
-      ),
-    );
-    setCoachFocusThread({ token: Date.now(), rootId });
-  }, []);
+      setCoachFocusThread({ token: now, rootId });
+    },
+    [],
+  );
 
   const executeCoachSend = useCallback(
     async (item: CoachSendQueueItem) => {
@@ -3132,7 +3145,7 @@ export function App() {
           : {}),
         queued: true,
       });
-      applyCoachFootnote(prepared.anchorId, userMessageId);
+      applyCoachFootnote(prepared.anchorId, userMessageId, prepared.text);
       coachSendQueueRef.current.push({
         text: prepared.text,
         flags: prepared.flags,
@@ -3194,7 +3207,7 @@ export function App() {
               ? { replyTo: flags.replyTo ?? prepared.threadAnchor ?? undefined }
               : {}),
           });
-          applyCoachFootnote(prepared.anchorId, userMessageId);
+          applyCoachFootnote(prepared.anchorId, userMessageId, prepared.text);
           await executeCoachSend({
             text: prepared.text,
             flags: prepared.flags,
@@ -3225,7 +3238,7 @@ export function App() {
             ? { replyTo: flags.replyTo ?? prepared.threadAnchor ?? undefined }
             : {}),
         });
-        applyCoachFootnote(prepared.anchorId, userMessageId);
+        applyCoachFootnote(prepared.anchorId, userMessageId, prepared.text);
         await executeCoachSend({
           text: prepared.text,
           flags: prepared.flags,
@@ -3251,13 +3264,13 @@ export function App() {
   );
 
   const sendCoachFromFootnote = useCallback(
-    (text: string) => {
+    (text: string, threadRootId: string | null) => {
       const footnote = mdInkFootnotes.find((entry) => entry.id === openFootnoteId);
       if (!footnote) return;
-      if (footnote.kind === "note" && !footnote.threadRootId) {
-        footnoteCoachUpgradeRef.current = footnote.id;
-      }
-      const threadRootId = footnote.threadRootId ?? null;
+      // Every send from the card claims the mark, not just the first: a second
+      // thread has to be recorded on the footnote the same way the first was,
+      // or the card lists one conversation however many were started.
+      footnoteCoachUpgradeRef.current = footnote.id;
       const replyTo = threadRootId
         ? threadAnchorRef(coachMessagesRef.current, threadRootId) ?? undefined
         : undefined;
@@ -4039,14 +4052,17 @@ export function App() {
     () => mdInkFootnotes.find((entry) => entry.id === openFootnoteId) ?? null,
     [mdInkFootnotes, openFootnoteId],
   );
-  const footnoteThreadMessages = useMemo(() => {
-    if (!openFootnote?.threadRootId) return [];
-    return visibleThreadMessages(
-      coachMessages,
-      openFootnote.threadRootId,
-      groupedCoachThreads,
-    );
-  }, [coachMessages, groupedCoachThreads, openFootnote]);
+  /**
+   * The turns of one saved thread, asked for by the card as it opens them.
+   *
+   * A footnote can hold several conversations now, and which one is on screen
+   * is the card's business — so this is a lookup rather than a precomputed
+   * list for whichever thread the mark happens to name first.
+   */
+  const footnoteThreadMessages = useCallback(
+    (rootId: string) => visibleThreadMessages(coachMessages, rootId, groupedCoachThreads),
+    [coachMessages, groupedCoachThreads],
+  );
   const footnoteNumbers = useMemo(() => numberFootnotes(mdInkFootnotes), [mdInkFootnotes]);
 
   return (
@@ -4717,7 +4733,7 @@ export function App() {
           <FootnoteOverview
             footnote={openFootnote}
             number={footnoteNumbers.get(openFootnote.id)}
-            messages={footnoteThreadMessages}
+            threadMessages={footnoteThreadMessages}
             anchorRect={footnoteAnchorRect}
             onClose={() => {
               setOpenFootnoteId(null);
