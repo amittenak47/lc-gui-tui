@@ -79,7 +79,23 @@ interface PendingRun {
   handlers: RunHandlers;
   resolve(body: unknown): void;
   reject(error: Error): void;
+  /** Idle watchdog — see {@link RUN_IDLE_TIMEOUT_MS}. */
+  watchdog: ReturnType<typeof setTimeout> | null;
 }
+
+/**
+ * How long a run may go completely silent before it is declared lost.
+ *
+ * Idle, not total: a coach turn is allowed to take as long as it takes, and a
+ * hard deadline would kill an answer that was still being written. What is not
+ * allowed is *silence* — every stage and tool event resets this, so the only
+ * thing it can fire on is a run producing nothing at all.
+ *
+ * Two minutes because the slowest legitimate first stage measured well inside
+ * it, and because the failure this exists to end — a turn stuck on "Working…"
+ * with no way back — costs the writer the whole session.
+ */
+const RUN_IDLE_TIMEOUT_MS = 120_000;
 
 export interface AmbientHandlers {
   onFrame(frame: ServerFrame): void;
@@ -210,9 +226,53 @@ export class AmbientCoach {
         handlers,
         resolve: (body) => resolve(body as T),
         reject,
+        watchdog: null,
       });
-      this.send({ type: "run", request_id: requestId, action, payload });
+      this.touch(requestId);
+      /*
+       * A frame that could not be written is a run that will never answer.
+       *
+       * `write` swallows the failure and reports it ambiently, which is right
+       * for a snapshot and wrong here: the promise stays in `pending` and the
+       * turn sits on "Working…" for the rest of the session. A big payload —
+       * Ask with the whole board annotated — is exactly what makes `send`
+       * throw, so this is the path the reader actually hits.
+       */
+      if (!this.send({ type: "run", request_id: requestId, action, payload })) {
+        this.settle(requestId, (run) =>
+          run.reject(new Error("the request was too large to send to the coach")),
+        );
+      }
     });
+  }
+
+  /**
+   * Restart a run's idle watchdog. Called on every frame that names it.
+   *
+   * A stage or a tool event is proof the daemon is still working, so the clock
+   * starts again. Only silence counts against a run.
+   */
+  private touch(requestId: string): void {
+    const run = this.pending.get(requestId);
+    if (!run) return;
+    if (run.watchdog !== null) clearTimeout(run.watchdog);
+    run.watchdog = setTimeout(() => {
+      // Tell the daemon before giving up, so a run that is merely slow is
+      // stopped rather than left writing into a turn nobody is waiting on.
+      this.send({ type: "cancel", request_id: requestId });
+      this.settle(requestId, (run) =>
+        run.reject(new Error("the coach stopped answering — nothing came back for two minutes")),
+      );
+    }, RUN_IDLE_TIMEOUT_MS);
+  }
+
+  /** Take a run out of flight exactly once, cancelling its watchdog. */
+  private settle(requestId: string, finish: (run: PendingRun) => void): void {
+    const run = this.pending.get(requestId);
+    if (!run) return;
+    this.pending.delete(requestId);
+    if (run.watchdog !== null) clearTimeout(run.watchdog);
+    finish(run);
   }
 
   /** Ask the daemon to stop a run. Its promise rejects when the daemon agrees. */
@@ -245,6 +305,7 @@ export class AmbientCoach {
   private routeRunFrame(frame: ServerFrame): boolean {
     switch (frame.type) {
       case "stage": {
+        this.touch(frame.request_id);
         this.pending.get(frame.request_id)?.handlers.onProcess?.({
           kind: "stage",
           label: frame.stage,
@@ -254,6 +315,7 @@ export class AmbientCoach {
         return true;
       }
       case "tool_event": {
+        this.touch(frame.request_id);
         this.pending.get(frame.request_id)?.handlers.onProcess?.({
           kind: "tool",
           label: frame.name,
@@ -264,10 +326,7 @@ export class AmbientCoach {
         return true;
       }
       case "result": {
-        const run = this.pending.get(frame.request_id);
-        if (!run) return true;
-        this.pending.delete(frame.request_id);
-        run.resolve(frame.body);
+        this.settle(frame.request_id, (run) => run.resolve(frame.body));
         return true;
       }
       case "error": {
@@ -282,10 +341,7 @@ export class AmbientCoach {
           }
           return false;
         }
-        const run = this.pending.get(frame.request_id);
-        if (!run) return true;
-        this.pending.delete(frame.request_id);
-        run.reject(new Error(frame.message));
+        this.settle(frame.request_id, (run) => run.reject(new Error(frame.message)));
         return true;
       }
       default:
@@ -296,7 +352,10 @@ export class AmbientCoach {
   private failPending(reason: string): void {
     const waiting = Array.from(this.pending.values());
     this.pending.clear();
-    for (const run of waiting) run.reject(new Error(reason));
+    for (const run of waiting) {
+      if (run.watchdog !== null) clearTimeout(run.watchdog);
+      run.reject(new Error(reason));
+    }
   }
 
   /** Look now, skipping the change check — the panel's "look now" button. */
@@ -356,23 +415,33 @@ export class AmbientCoach {
     await this.analyzeNow(taskId, capture, sampled.sceneHash);
   }
 
-  private send(payload: unknown): void {
-    const frame = JSON.stringify(payload);
+  /** Whether the frame reached the wire (or the outbox). */
+  private send(payload: unknown): boolean {
+    let frame: string;
+    try {
+      frame = JSON.stringify(payload);
+    } catch {
+      // A payload that will not even serialise cannot be queued for later.
+      return false;
+    }
     // A run can be requested in the same tick the panel mounts, before the
     // handshake finishes. Queue rather than drop: the alternative is a chat
-    // turn that silently never answers.
+    // turn that silently never answers. The run's watchdog covers a socket
+    // that then never opens.
     if (!this.open) {
       this.outbox.push(frame);
-      return;
+      return true;
     }
-    this.write(frame);
+    return this.write(frame);
   }
 
-  private write(frame: string): void {
+  private write(frame: string): boolean {
     try {
       this.socket?.send(frame);
+      return true;
     } catch {
       this.handlers.onError?.("could not reach the coach");
+      return false;
     }
   }
 }
