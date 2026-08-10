@@ -65,7 +65,7 @@ import { horizontalScrollHost } from "../canvas/scrollHost";
 function isOverlayControl(target: EventTarget | null): boolean {
   const element = target as Element | null;
   return Boolean(
-    element?.closest?.(".lc-doc-footnote, .lc-doc-confirm, .lc-footnote-overview"),
+    element?.closest?.(".lc-doc-footnote, .lc-doc-confirm, .lc-footnote-overview, .lc-footnote-bubble"),
   );
 }
 
@@ -1164,6 +1164,7 @@ export function DocSelectionLayer({
                * for "mean it".
                */
               holdMs={HOLD_SENSITIVE_MS}
+              holdThrough
               onConfirm={() => onRemoveFootnote?.(footnote)}
               onMeasure={(node: HTMLButtonElement | null) => {
                 if (node) ribbonRects.current.set(footnote.id, node.getBoundingClientRect());

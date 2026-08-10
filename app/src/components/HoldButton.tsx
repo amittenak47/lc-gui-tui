@@ -69,6 +69,20 @@ export interface HoldButtonProps {
   dataRegion?: boolean;
   /** The rendered node, for a caller that needs to anchor something to it. */
   onMeasure?: (node: HTMLButtonElement | null) => void;
+  /**
+   * Keep the press alive when the pointer strays outside the button.
+   *
+   * For targets too small to hold still on. A footnote ribbon is sixteen
+   * pixels across: a tap that drifts by three of them left the button, which
+   * cancelled without firing `onTap`, so the mark simply did not open — and
+   * because whether it drifted depended on which way the thumb rolled, it
+   * looked like it only worked if you tapped in a particular direction.
+   *
+   * Safe because `pointerdown` captures the pointer, so `pointerup` arrives
+   * here wherever the finger ends up. Off by default: on a full-size button,
+   * sliding off it is how you change your mind.
+   */
+  holdThrough?: boolean;
 }
 
 export function HoldButton({
@@ -89,6 +103,7 @@ export function HoldButton({
   style,
   dataRegion,
   onMeasure,
+  holdThrough = false,
 }: HoldButtonProps) {
   const [holdProgress, setHoldProgress] = useState(0);
   const holdingRef = useRef(false);
@@ -207,6 +222,7 @@ export function HoldButton({
       onPointerUp={() => stopHold({ reset: true, release: true })}
       onPointerCancel={() => stopHold({ reset: true })}
       onPointerLeave={() => {
+        if (holdThrough) return;
         if (holdingRef.current) stopHold({ reset: true });
       }}
       onContextMenu={(event) => event.preventDefault()}

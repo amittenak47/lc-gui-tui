@@ -30,6 +30,36 @@ export interface DocFootnoteUserLink {
   url: string;
 }
 
+/**
+ * One note on a mark — an entry, not a field.
+ *
+ * A single text box per footnote made the reader edit one growing blob: adding
+ * a second thought meant finding the end of the first and hoping the box was
+ * tall enough. Entries are how notes are actually written — one thing at a
+ * time, kept separately, deletable on their own.
+ */
+export interface DocFootnoteNote {
+  id: string;
+  text: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * A coach conversation this mark has led to.
+ *
+ * `rootId` is the id of the message the thread hangs off, which is the handle
+ * the transcript already uses ({@link visibleThreadMessages} takes exactly
+ * this). The title is stored rather than always derived because a thread can
+ * outlive the messages kept in memory, and a row in the list that cannot say
+ * what it is about is a row nobody taps.
+ */
+export interface DocFootnoteThread {
+  rootId: string;
+  title: string;
+  createdAt: number;
+}
+
 export interface DocFootnote {
   id: string;
   kind: DocFootnoteKind;
@@ -38,8 +68,14 @@ export interface DocFootnote {
   /** The words it was made from — shown when the anchor no longer resolves. */
   excerpt: string;
   createdAt: number;
-  /** Coach: the thread this quote opened. */
+  /**
+   * Coach: the thread this quote opened — the first one, kept as the ribbon's
+   * identity. Everything the reader has asked since lives in {@link threads},
+   * which includes this one.
+   */
   threadRootId?: string;
+  /** Every coach conversation started from this mark, oldest first. */
+  threads?: DocFootnoteThread[];
   /**
    * A crop of the page under a region mark, as a base64 PNG.
    *
@@ -51,8 +87,8 @@ export interface DocFootnote {
   /** Search: what was asked, and where it was asked. */
   query?: string;
   url?: string;
-  /** Writer notes in the footnote overview card. */
-  userNotes?: string;
+  /** Writer notes in the footnote overview card, oldest first. */
+  notes?: DocFootnoteNote[];
   /** Extra links the writer saved on the overview card. */
   userLinks?: DocFootnoteUserLink[];
   /**
@@ -103,6 +139,28 @@ export function freshFootnoteId(existing: readonly DocFootnote[], now = Date.now
     const candidate = `${base}-${suffix.toString(36)}`;
     if (!existing.some((entry) => entry.id === candidate)) return candidate;
   }
+}
+
+/** Ids are per-footnote, so the same timestamp-with-a-guard shape does. */
+export function freshNoteId(existing: readonly DocFootnoteNote[], now = Date.now()): string {
+  const base = `nt-${now.toString(36)}`;
+  if (!existing.some((entry) => entry.id === base)) return base;
+  for (let suffix = 1; ; suffix += 1) {
+    const candidate = `${base}-${suffix.toString(36)}`;
+    if (!existing.some((entry) => entry.id === candidate)) return candidate;
+  }
+}
+
+/**
+ * A one-line label for a saved thread, from what the reader asked.
+ *
+ * First line only, and short: the list is meant to be scanned, and a row that
+ * wraps to four lines is a row that pushes the next thread off the card.
+ */
+export function threadTitleFrom(text: string, maxChars = 60): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  if (!line) return "Thread";
+  return line.length > maxChars ? `${line.slice(0, maxChars - 1)}…` : line;
 }
 
 /**
@@ -260,6 +318,70 @@ function sanitizeUserLinks(value: unknown): DocFootnoteUserLink[] | undefined {
   return links.length > 0 ? links : undefined;
 }
 
+/**
+ * Note entries, migrating the single `userNotes` box entries replaced.
+ *
+ * Read-old-write-new, the same bargain the ink codec takes: a library written
+ * before entries existed still opens, and what it held becomes the first
+ * entry rather than being dropped on the floor.
+ */
+function sanitizeNotes(value: unknown, legacy: unknown, now: number): DocFootnoteNote[] | undefined {
+  const entries: DocFootnoteNote[] = Array.isArray(value)
+    ? value.flatMap((entry): DocFootnoteNote[] => {
+        if (!entry || typeof entry !== "object") return [];
+        const candidate = entry as Partial<DocFootnoteNote>;
+        if (typeof candidate.id !== "string" || !candidate.id) return [];
+        if (typeof candidate.text !== "string") return [];
+        const createdAt = typeof candidate.createdAt === "number" ? candidate.createdAt : now;
+        return [
+          {
+            id: candidate.id,
+            text: candidate.text,
+            createdAt,
+            updatedAt: typeof candidate.updatedAt === "number" ? candidate.updatedAt : createdAt,
+          },
+        ];
+      })
+    : [];
+  if (entries.length === 0 && typeof legacy === "string" && legacy.trim()) {
+    entries.push({ id: "nt-legacy", text: legacy, createdAt: now, updatedAt: now });
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
+/** Saved threads, promoting a lone `threadRootId` from before the list existed. */
+function sanitizeThreads(
+  value: unknown,
+  legacyRootId: unknown,
+  excerpt: string,
+  now: number,
+): DocFootnoteThread[] | undefined {
+  const entries: DocFootnoteThread[] = Array.isArray(value)
+    ? value.flatMap((entry): DocFootnoteThread[] => {
+        if (!entry || typeof entry !== "object") return [];
+        const candidate = entry as Partial<DocFootnoteThread>;
+        if (typeof candidate.rootId !== "string" || !candidate.rootId) return [];
+        return [
+          {
+            rootId: candidate.rootId,
+            title: typeof candidate.title === "string" && candidate.title ? candidate.title : "Thread",
+            createdAt: typeof candidate.createdAt === "number" ? candidate.createdAt : now,
+          },
+        ];
+      })
+    : [];
+  if (typeof legacyRootId === "string" && legacyRootId) {
+    if (!entries.some((entry) => entry.rootId === legacyRootId)) {
+      entries.unshift({
+        rootId: legacyRootId,
+        title: threadTitleFrom(excerpt),
+        createdAt: now,
+      });
+    }
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
 /** Drop anything that is not a footnote, for reading untrusted stored JSON. */
 export function sanitizeFootnotes(value: unknown): DocFootnote[] {
   if (!Array.isArray(value)) return [];
@@ -273,17 +395,23 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
       // here is what keeps an old library entry from being silently dropped.
       const anchor = normalizeAnchor(candidate.anchor);
       if (!anchor) return [];
-      const userNotes =
-        typeof candidate.userNotes === "string" ? candidate.userNotes : undefined;
+      const now = Date.now();
+      // `userNotes` was the single note box; it is read here and never written
+      // again, so the property is stripped from the spread rather than carried.
+      const { userNotes, ...rest } = candidate as DocFootnote & { userNotes?: unknown };
+      const notes = sanitizeNotes(candidate.notes, userNotes, now);
+      const excerpt = typeof candidate.excerpt === "string" ? candidate.excerpt : "";
+      const threads = sanitizeThreads(candidate.threads, candidate.threadRootId, excerpt, now);
       const userLinks = sanitizeUserLinks(candidate.userLinks);
       // A colour that is not a colour is dropped rather than passed through to
       // an inline style, where anything at all would be accepted.
       const color = isHexColor(candidate.color) ? candidate.color.trim() : undefined;
       return [
         {
-          ...(candidate as DocFootnote),
+          ...(rest as DocFootnote),
           anchor,
-          ...(userNotes !== undefined ? { userNotes } : {}),
+          notes,
+          threads,
           ...(userLinks ? { userLinks } : {}),
           ...(color ? { color } : {}),
         },
@@ -362,8 +490,9 @@ export function footnoteRevision(footnotes: readonly DocFootnote[]): string {
         entry.id,
         entry.kind,
         entry.color ?? "",
-        entry.userNotes ?? "",
+        (entry.notes ?? []).map((note) => `${note.id}:${note.updatedAt}:${note.text}`).join("\x1f"),
         entry.threadRootId ?? "",
+        (entry.threads ?? []).map((thread) => `${thread.rootId}|${thread.title}`).join("\x1f"),
         (entry.userLinks ?? []).map((link) => `${link.title ?? ""}|${link.url}`).join("\x1f"),
       ].join("\x1e"),
     )

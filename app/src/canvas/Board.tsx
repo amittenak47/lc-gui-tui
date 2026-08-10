@@ -2832,7 +2832,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (
         el.closest(
           ".lc-toolbar, .lc-map-controls, .lc-pager, .lc-stamp-trash, .lc-capture-overlay," +
-            " .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview",
+            " .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview" +
+            ", .lc-footnote-bubble",
         )
       ) {
         return false;
