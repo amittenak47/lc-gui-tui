@@ -7834,14 +7834,31 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * While a hold owns the finger, nothing under it scrolls.
+ * Nothing under the document scrolls itself. The board does all of it.
  *
- * Set on the host for the length of the gesture and taken off again, so a
- * reader still scrolls the page normally. It has to reach descendants — the
- * things that scroll are inside: a wide code block, a table, a PDF page broader
- * than the column. Dragging sideways across one of those used to scroll it
- * instead of extending the quote, and the scroll took the gesture with it.
+ * This has to be declared *before* a gesture starts, not when the hold fires,
+ * and that is the whole point of it living here rather than on a class the
+ * selection layer adds at 580ms. The browser decides who owns a gesture at
+ * `pointerdown`: if a wide code block, a table or an over-wide PDF page is
+ * scrollable at that moment, horizontal panning is already reserved for the
+ * compositor, and a class added half a second later cannot take it back. The
+ * finger then slides the box under itself instead of extending the quote —
+ * which reads exactly like a drag that only ever selects one word, because the
+ * words move with it.
+ *
+ * Reading mode already sets `touch-action: none` on `.lc-board` so the board's
+ * own pan can arm; this says the same thing about everything inside the
+ * document, where the scrollable boxes actually are. Nothing is lost: Board
+ * drives the sideways scroll of a wide block itself (`drag.sideScroll`), so
+ * there was never a native scroll worth keeping.
  */
+.lc-board-reading .lc-doc-selectable,
+.lc-board-reading .lc-doc-selectable * {
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+/* Belt and braces for the length of the hold, including outside reading mode. */
 .lc-doc-selecting,
 .lc-doc-selecting * {
   touch-action: none !important;
