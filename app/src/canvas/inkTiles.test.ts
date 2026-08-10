@@ -201,6 +201,77 @@ describe("InkTileCache", () => {
     return { cache, canvases, scheduled };
   }
 
+  /*
+   * Undo used to drop every tile, and `draw` stands a coarser *cached* tile in
+   * for anything that misses its time budget — so with the cache emptied the
+   * squares the budget never reached came back as holes, in a band across the
+   * lower half because tiles are walked top-to-bottom.
+   */
+  describe("setOps keeps the tiles a change did not touch", () => {
+    it("drops only the tiles the removed stroke covered", () => {
+      const { cache } = makeCache();
+      const far = draw([0, 0], [40, 40]);
+      const near = draw([700, 500], [740, 540]);
+      cache.setOps([far, near]);
+      const { ctx } = destinationContext();
+      cache.draw(ctx, screen(1), 1);
+      const before = cache.size;
+      expect(before).toBe(6);
+
+      // Undo the second stroke: the first stroke's corner is untouched.
+      cache.setOps([far]);
+      expect(cache.size).toBeGreaterThan(0);
+      expect(cache.size).toBeLessThan(before);
+    });
+
+    it("keeps every tile when the history did not change", () => {
+      const { cache } = makeCache();
+      const only = draw([0, 0], [40, 40]);
+      cache.setOps([only]);
+      const { ctx } = destinationContext();
+      cache.draw(ctx, screen(1), 1);
+      const before = cache.size;
+      // A fresh array of the same ops is what a re-render hands us.
+      cache.setOps([only]);
+      expect(cache.size).toBe(before);
+    });
+
+    it("composites an appended stroke instead of rebuilding", () => {
+      const { cache, canvases } = makeCache();
+      const first = draw([0, 0], [40, 40]);
+      cache.setOps([first]);
+      const { ctx } = destinationContext();
+      cache.draw(ctx, screen(1), 1);
+      const built = canvases.created.length;
+      cache.setOps([first, draw([100, 100], [140, 140])]);
+      expect(cache.size).toBe(6);
+      expect(canvases.created.length).toBe(built);
+    });
+
+    it("clears everything when the page is replaced wholesale", () => {
+      const { cache } = makeCache();
+      cache.setOps([draw([0, 0], [40, 40])]);
+      const { ctx } = destinationContext();
+      cache.draw(ctx, screen(1), 1);
+      expect(cache.size).toBe(6);
+      cache.setOps([draw([10, 10], [50, 50])]);
+      expect(cache.size).toBe(0);
+    });
+
+    it("drops the tiles under an undone erase, which paints nothing itself", () => {
+      const { cache } = makeCache();
+      const stroke = draw([0, 0], [40, 40]);
+      const rub = erase(20, [700, 500], [720, 520]);
+      cache.setOps([stroke, rub]);
+      const { ctx } = destinationContext();
+      cache.draw(ctx, screen(1), 1);
+      const before = cache.size;
+      cache.setOps([stroke]);
+      expect(cache.size).toBeLessThan(before);
+      expect(cache.size).toBeGreaterThan(0);
+    });
+  });
+
   it("blits one image per visible tile", () => {
     const { cache } = makeCache();
     cache.setOps([draw([0, 0], [50, 50])]);

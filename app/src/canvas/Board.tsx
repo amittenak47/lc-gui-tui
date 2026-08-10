@@ -142,6 +142,7 @@ import {
 import { horizontalScrollHost } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import { BoardToolbar } from "./BoardToolbar";
+import { isDeletableElement, type TrashEl } from "./selectionTrash";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
@@ -207,6 +208,24 @@ interface ExcalidrawApi {
 const EXPORT_PADDING = 10;
 
 /**
+ * Image pixels per scene unit for a capture the reader is going to keep.
+ *
+ * A screenshot taken by the tablet is in *device* pixels: a 2x display writes
+ * two of them per CSS pixel. Excalidraw's export defaults to one, so the
+ * board's own capture of a page came out at half the linear resolution of the
+ * system screenshot of the same page — legible on its own and visibly softer
+ * the moment the two sit side by side, which is what "should be identical"
+ * means here.
+ *
+ * Rounded, because a fractional ratio buys resampling rather than detail, and
+ * capped at 3 so a high-density phone does not turn one page into a canvas the
+ * browser refuses. `clampExportScale` still bounds the far end.
+ */
+function deviceExportScale(): number {
+  return Math.min(3, Math.max(1, Math.round(window.devicePixelRatio || 1)));
+}
+
+/**
  * Board PNG with the raster pen ink composited in.
  *
  * `exportToBlob` only knows about scene elements, so a pen-only board exports
@@ -219,9 +238,19 @@ const EXPORT_PADDING = 10;
  * its default margin is baked in here. Ink drawn outside the elements' box
  * extends the canvas rather than being cropped.
  */
-async function exportBoardBlob(api: ExcalidrawApi, ops: readonly InkOp[]): Promise<Blob> {
+async function exportBoardBlob(
+  api: ExcalidrawApi,
+  ops: readonly InkOp[],
+  /**
+   * Pixels per scene unit. One — Excalidraw's default — for anything that is
+   * about to be downscaled for the coach; {@link deviceExportScale} for a file
+   * the reader keeps. The ink composite reads the scale back off the canvas
+   * Excalidraw returns, so setting it here is enough for both layers.
+   */
+  exportScale = 1,
+): Promise<Blob> {
   const elements = api.getSceneElements();
-  const appState = api.getAppState();
+  const appState = { ...(api.getAppState() as object), exportScale } as Record<string, unknown>;
   const files = api.getFiles();
   const plain = () =>
     exportToBlob({
@@ -304,8 +333,10 @@ async function exportRegionBlob(
   ops: readonly InkOp[],
   elements: readonly SceneElementLike[],
   frame: { x: number; y: number; width: number; height: number },
+  /** See {@link exportBoardBlob}. */
+  exportScale = 1,
 ): Promise<Blob> {
-  const appState = api.getAppState();
+  const appState = { ...(api.getAppState() as object), exportScale } as Record<string, unknown>;
   const files = api.getFiles();
   const frameBounds: SceneBounds = {
     minX: frame.x,
@@ -406,8 +437,10 @@ async function exportSceneFrameBlob(
   api: ExcalidrawApi,
   ops: readonly InkOp[],
   frame: { x: number; y: number; width: number; height: number },
+  /** See {@link exportBoardBlob}. Sets the composite scale here, not just Excalidraw's. */
+  exportScale = 2,
 ): Promise<Blob> {
-  const appState = api.getAppState();
+  const appState = { ...(api.getAppState() as object), exportScale } as Record<string, unknown>;
   const files = api.getFiles();
   const all = api.getSceneElements() as SceneElementLike[];
   const background =
@@ -418,7 +451,9 @@ async function exportSceneFrameBlob(
     maxX: frame.x + frame.width,
     maxY: frame.y + frame.height,
   };
-  const drawScale = clampExportScale(2, bounds);
+  // Was a flat 2, which happened to match a 2x tablet and was wrong on
+  // everything else — half resolution on a 3x phone, double on a 1x desktop.
+  const drawScale = clampExportScale(exportScale, bounds);
   const width = Math.max(1, Math.round(frame.width * drawScale));
   const height = Math.max(1, Math.round(frame.height * drawScale));
 
@@ -2491,7 +2526,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => window.removeEventListener("lc-ink-speed", onSpeed);
   }, []);
 
-  const deleteSelectedStamps = useCallback(() => {
+  const deleteSelection = useCallback(() => {
     const api = apiRef.current;
     if (!api || !stampTrash) return;
     const kill = new Set(stampTrash.ids);
@@ -4797,7 +4832,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     feedback?.flash();
-    const blob = await exportBoardBlob(api, rasterInkRef.current?.getOps() ?? []);
+    const blob = await exportBoardBlob(
+      api,
+      rasterInkRef.current?.getOps() ?? [],
+      deviceExportScale(),
+    );
     if (!blob || blob.size === 0) {
       feedback?.toast("Nothing to capture", "error");
       return;
@@ -4856,6 +4895,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         api,
         rasterInkRef.current?.getOps() ?? [],
         { x, y, width, height },
+        deviceExportScale(),
       );
       if (!blob || blob.size === 0) {
         feedback?.toast("Nothing to capture", "error");
@@ -5336,8 +5376,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // it landed on; everything else goes back under.
       syncPageVisibility();
 
-      // Stamp trash: when a library stamp (or its group) is selected, float a
-      // delete control at the selection's top-right.
+      /*
+       * Selection trash: a delete control at the top-right of whatever is
+       * selected.
+       *
+       * It used to appear only for library stamps, which meant a rectangle you
+       * drew yourself could be selected, moved and resized but not removed —
+       * there is no keyboard on the tablet this is written on, and nothing else
+       * on screen deletes. Any element the reader could have put there is
+       * deletable now; the page's own scaffolding is not.
+       */
       {
         const selectedIds = new Set(
           Object.entries(appState?.selectedElementIds ?? {})
@@ -5347,31 +5395,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (selectedIds.size === 0) {
           setStampTrash((current) => (current ? null : current));
         } else {
-          type StampEl = {
-            id: string;
-            x: number;
-            y: number;
-            width?: number;
-            height?: number;
-            isDeleted?: boolean;
-            customData?: { lcStamp?: boolean; lcStampGroup?: string } | null;
-          };
-          const els = api.getSceneElements() as StampEl[];
-          const selected = els.filter((el) => selectedIds.has(el.id) && !el.isDeleted);
-          const stampSelected = selected.filter((el) => el.customData?.lcStamp);
-          if (stampSelected.length === 0) {
+          const els = api.getSceneElements() as TrashEl[];
+          const selected = els.filter(
+            (el) => selectedIds.has(el.id) && !el.isDeleted && isDeletableElement(el),
+          );
+          if (selected.length === 0) {
             setStampTrash((current) => (current ? null : current));
           } else {
+            // A stamp is drawn as several elements sharing a group id; deleting
+            // one has to take its siblings or half a stamp is left behind.
             const groupIds = new Set(
-              stampSelected
+              selected
                 .map((el) => el.customData?.lcStampGroup)
                 .filter((id): id is string => Boolean(id)),
             );
             const toDelete = els.filter((el) => {
-              if (el.isDeleted || !el.customData?.lcStamp) return false;
+              if (el.isDeleted || !isDeletableElement(el)) return false;
               if (selectedIds.has(el.id)) return true;
-              const g = el.customData.lcStampGroup;
-              return Boolean(g && groupIds.has(g));
+              const g = el.customData?.lcStampGroup;
+              return Boolean(g && groupIds.has(g) && el.customData?.lcStamp);
             });
             let minX = Infinity;
             let minY = Infinity;
@@ -6371,10 +6413,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           type="button"
           className="lc-stamp-trash"
           style={{ left: stampTrash.left, top: stampTrash.top }}
-          aria-label="Delete stamp"
-          title="Delete stamp"
+          aria-label="Delete selection"
+          title="Delete"
           onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => deleteSelectedStamps()}
+          onClick={() => deleteSelection()}
         >
           <svg
             viewBox="0 0 24 24"
