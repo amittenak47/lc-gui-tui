@@ -1147,7 +1147,6 @@ export function DocSelectionLayer({
                 ...(footnote.color ? { ["--lc-fn-color" as string]: footnote.color } : {}),
               }}
               dataRegion={isRegionAnchor(footnote.anchor)}
-              dataTip={footnoteTitle(footnote, number)}
               ariaLabel={`${footnoteTitle(footnote, number)} — tap to open, hold to delete`}
               onTap={() => {
                 const rect = ribbonRects.current.get(footnote.id) ?? null;
