@@ -131,6 +131,7 @@ import {
 import {
   onSelectionGestureClaimed,
   selectionOwnsGesture,
+  setDocCameraLive,
 } from "./docSelectionGesture";
 import { horizontalScrollHost } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
@@ -1338,11 +1339,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // Gesture open: Excalidraw may have remounted canvases since last ride.
       refreshPanRideNodes();
       rasterInkRef.current?.setCameraMoving(true);
+      // Footnote ribbons defer DOM place() while this is true — see DocSelectionLayer.
+      setDocCameraLive(true);
     }
     if (cameraMotionTimerRef.current) window.clearTimeout(cameraMotionTimerRef.current);
     cameraMotionTimerRef.current = window.setTimeout(() => {
       cameraMotionTimerRef.current = 0;
       cameraMotionActiveRef.current = false;
+      setDocCameraLive(false);
       // Wheel bursts use live camera — paint while live is still true, then
       // commit (clears live on the next frame).
       if (!handPanningRef.current && !inertiaFrameRef.current) {
