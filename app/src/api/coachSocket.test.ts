@@ -415,3 +415,131 @@ describe("AmbientCoach", () => {
     vi.useRealTimers();
   });
 });
+
+/**
+ * A run that never answers.
+ *
+ * This is the bug these cover: `run()` used to settle only on a frame naming
+ * its request id, so a daemon that accepted the frame and went quiet — or a
+ * frame that never made it onto the wire at all — left the promise pending and
+ * the turn on "Working…" for the rest of the session.
+ */
+describe("AmbientCoach.run — a run always settles", () => {
+  const pairing = { baseUrl: "http://127.0.0.1:7878", token: null };
+
+  function ready() {
+    const socket = fakeSocket();
+    const coach = new AmbientCoach(pairing, { onFrame: () => {} }, () => socket, "s1");
+    coach.connect("two-sum");
+    socket.onopen?.({});
+    socket.sent.length = 0;
+    return { socket, coach };
+  }
+
+  function requestIdOf(socket: ReturnType<typeof fakeSocket>): string {
+    const frame = socket.sent.map((raw) => JSON.parse(raw)).find((f) => f.type === "run");
+    return frame.request_id as string;
+  }
+
+  it("rejects when the frame is too large to put on the wire", async () => {
+    const socket = fakeSocket();
+    const errors: string[] = [];
+    const coach = new AmbientCoach(
+      pairing,
+      { onFrame: () => {}, onError: (message) => errors.push(message) },
+      () => socket,
+      "s1",
+    );
+    coach.connect("two-sum");
+    socket.onopen?.({});
+    socket.send = () => {
+      throw new Error("message too big");
+    };
+
+    await expect(coach.run("ask", { question: "hi" })).rejects.toThrow(/too large/i);
+    expect(errors).toContain("could not reach the coach");
+    expect(coach.busy).toBe(false);
+    coach.stop();
+  });
+
+  it("rejects after a run goes silent, and tells the daemon to stop", async () => {
+    vi.useFakeTimers();
+    const { socket, coach } = ready();
+    const promise = coach.run("ask", { question: "hi" });
+    const expectation = expect(promise).rejects.toThrow(/stopped answering/i);
+
+    await vi.advanceTimersByTimeAsync(130_000);
+    await expectation;
+
+    const cancels = socket.sent.map((raw) => JSON.parse(raw)).filter((f) => f.type === "cancel");
+    expect(cancels).toHaveLength(1);
+    expect(coach.busy).toBe(false);
+    coach.stop();
+    vi.useRealTimers();
+  });
+
+  it("keeps waiting while the daemon reports progress", async () => {
+    vi.useFakeTimers();
+    const { socket, coach } = ready();
+    const promise = coach.run<{ reply: string }>("ask", { question: "hi" });
+    const requestId = requestIdOf(socket);
+
+    // A stage every 90s: silent by no measure, but past a naive total deadline.
+    for (let i = 0; i < 4; i += 1) {
+      await vi.advanceTimersByTimeAsync(90_000);
+      socket.onmessage?.({
+        data: JSON.stringify({ type: "stage", request_id: requestId, stage: "thinking" }),
+      });
+    }
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "result",
+        request_id: requestId,
+        action: "ask",
+        body: { reply: "here" },
+      }),
+    });
+
+    await expect(promise).resolves.toEqual({ reply: "here" });
+    coach.stop();
+    vi.useRealTimers();
+  });
+
+  it("stops the watchdog once a run has answered", async () => {
+    vi.useFakeTimers();
+    const { socket, coach } = ready();
+    const promise = coach.run<{ reply: string }>("ask", { question: "hi" });
+    const requestId = requestIdOf(socket);
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "result",
+        request_id: requestId,
+        action: "ask",
+        body: { reply: "here" },
+      }),
+    });
+    await expect(promise).resolves.toEqual({ reply: "here" });
+
+    // Nothing left to fire: a late watchdog would send a cancel for a run that
+    // already answered, which the daemon would apply to whatever replaced it.
+    socket.sent.length = 0;
+    await vi.advanceTimersByTimeAsync(200_000);
+    expect(socket.sent).toEqual([]);
+    coach.stop();
+    vi.useRealTimers();
+  });
+
+  it("rejects a run queued on a socket that never opens", async () => {
+    vi.useFakeTimers();
+    const socket = fakeSocket();
+    const coach = new AmbientCoach(pairing, { onFrame: () => {} }, () => socket, "s1");
+    coach.connect("two-sum");
+    // No `onopen` — the frame sits in the outbox.
+    const promise = coach.run("ask", { question: "hi" });
+    const expectation = expect(promise).rejects.toThrow(/stopped answering/i);
+    await vi.advanceTimersByTimeAsync(130_000);
+    await expectation;
+    coach.stop();
+    vi.useRealTimers();
+  });
+});

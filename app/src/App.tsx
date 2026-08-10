@@ -2966,19 +2966,38 @@ export function App() {
             !flags.reviewBoard &&
             !flags.lazy &&
             flags.annotateScope === "view";
-          const thumbs = narrow
-            ? [await boardRef.current.exportViewThumb()].filter(
-                (thumb): thumb is { label: string; png: string } => thumb != null,
-              )
-            : await boardRef.current.exportRegionThumbs();
+          const board = boardRef.current;
+          /*
+           * Bounded, and loud when it fails.
+           *
+           * A canvas export that never settles used to take the whole send
+           * with it — the composer sat on "Working…" before a frame had even
+           * been written, which is indistinguishable from the coach hanging.
+           * And the bare `catch` meant an export that threw sent the question
+           * with no pictures at all and said nothing about it.
+           */
+          const exported = await withTimeout(
+            narrow
+              ? board
+                  .exportViewThumb()
+                  .then((thumb) => (thumb ? [thumb] : []))
+              : board.exportRegionThumbs(),
+            THUMB_EXPORT_TIMEOUT_MS,
+            "the board export took too long",
+          );
+          const thumbs: Array<{ label: string; png: string }> = exported;
           if (thumbs.length > 0) {
             attachments = [
               ...(attachments ?? []),
               ...thumbs.map((thumb) => ({ label: thumb.label, png: thumb.png })),
             ];
+          } else {
+            setNotice("nothing on the board to attach — sending the question on its own");
           }
-        } catch {
-          /* thumbnails are best-effort */
+        } catch (cause) {
+          // Best-effort still, but not silent: the question goes without the
+          // pictures and the writer is told which half arrived.
+          setNotice(`could not attach the board (${messageOf(cause)}) — sending the question alone`);
         }
       }
       if (codeShot && (flags.annotate || flags.reviewBoard || flags.lazy)) {
@@ -3077,10 +3096,24 @@ export function App() {
             : photos.length > 0
               ? "What am I looking at?"
               : "What should I focus on next?";
+          /*
+           * The board pictures go with the question, not just onto the bubble.
+           *
+           * `attachments` is what Annotate exported — the marked pages, or the
+           * current view. Review has always forwarded them; Ask rendered them
+           * under the turn and then sent a payload without them, so "Ask +
+           * Annotate > Whole board" asked the coach about pages it could not
+           * see. Same asymmetry the Review/photo interlock fixed, one endpoint
+           * over.
+           */
+          const boardShots: CoachAttachment[] = (attachments ?? []).map((shot) => ({
+            label: shot.label,
+            png: shot.png,
+          }));
           await askCoach(
             text ? prompt : `${prompt}\n\n${fallback}`.trim(),
             threadAnchor,
-            photos,
+            [...photos, ...boardShots],
           );
         }
         if (flags.draw) {
@@ -5522,6 +5555,32 @@ function serverGateExitMs(): number {
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * How long the board export gets before the send goes on without it.
+ *
+ * The pictures are worth waiting a few seconds for and never worth waiting
+ * forever for — this runs *before* the turn is on screen, so a stall here is a
+ * composer that appears to have swallowed the message.
+ */
+const THUMB_EXPORT_TIMEOUT_MS = 15_000;
+
+/** Reject with `label` if `work` has not settled in time. */
+function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(label)), ms);
+    work.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (cause) => {
+        window.clearTimeout(timer);
+        reject(cause);
+      },
+    );
+  });
 }
 
 /**

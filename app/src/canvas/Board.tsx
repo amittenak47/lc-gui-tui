@@ -5601,8 +5601,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           }
         }
 
-        // Region crops only (with ink). A full-board thumb was huge in chat and
-        // duplicated whatever the student already attached as Approach/etc.
+        /*
+         * A page with no regions is still a board.
+         *
+         * The loop above walks `STUDENT_REGION_ORDER` and needs an
+         * `lcRegionFrame` to crop against. A scratchpad and a document pad have
+         * none — they are one continuous surface — so "Whole board" came back
+         * empty and Annotate attached nothing at all. Falling back to what is
+         * actually drawn keeps the phrase honest on every kind of page.
+         *
+         * Region crops stay preferred where they exist: a full-board thumb is
+         * huge in chat and duplicates whatever was already sent as Approach.
+         */
+        if (thumbs.length === 0) {
+          const drawn = all.filter(
+            (el) => !el.isDeleted && !el.customData?.lcRegionFrame && !el.customData?.lcVizId,
+          );
+          if (drawn.length > 0 || ops.length > 0) {
+            const png = await captureImage(() => exportBoardBlob(api, ops), {
+              maxEdge: 640,
+              maxBase64: 2 * 1024 * 1024,
+            });
+            if (png) thumbs.push({ region: STUDENT_REGION_ORDER[0], label: "Board", png });
+          }
+        }
         return thumbs;
       },
       exportViewThumb: async () => {
