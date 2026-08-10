@@ -126,6 +126,16 @@ export function boundsOverlap(a: SceneBounds, b: SceneBounds): boolean {
   return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY;
 }
 
+/** The smallest box holding both — see the diverged range in `setOps`. */
+export function unionBounds(a: SceneBounds, b: SceneBounds): SceneBounds {
+  return {
+    minX: Math.min(a.minX, b.minX),
+    minY: Math.min(a.minY, b.minY),
+    maxX: Math.max(a.maxX, b.maxX),
+    maxY: Math.max(a.maxY, b.maxY),
+  };
+}
+
 export function intersectBounds(a: SceneBounds, b: SceneBounds): SceneBounds | null {
   const box = {
     minX: Math.max(a.minX, b.minX),
@@ -279,10 +289,69 @@ export class InkTileCache {
         : null;
   }
 
-  /** Replace the committed history — notebook restore, undo, clear. */
+  /**
+   * Replace the committed history — notebook restore, undo, clear.
+   *
+   * Only the tiles the change actually touched are dropped, because dropping
+   * all of them is what the undo flash was. `draw` renders misses against a
+   * time budget and stands a coarser *cached* tile in for anything that misses
+   * it — so with the cache emptied there is nothing to stand in, and the
+   * squares that ran out of budget come back as holes. Tiles are walked
+   * top-to-bottom, which is why the holes were a band across the lower half of
+   * the screen and not scattered: those rows are simply the ones the budget
+   * never reached.
+   *
+   * An undo removes the last stroke, which covers a few tiles out of a
+   * screenful. Rebuilding those costs one frame's worth of replay and leaves
+   * the rest of the page on screen, untouched, the whole time.
+   */
   setOps(ops: readonly InkOp[]): void {
-    this.ops = [...ops];
-    this.invalidate();
+    const prev = this.ops;
+    const next = [...ops];
+    // Ops are shared objects — a history array is rebuilt, its entries are not
+    // — so identity is enough to find where the two histories diverge.
+    let shared = 0;
+    while (shared < prev.length && shared < next.length && prev[shared] === next[shared]) {
+      shared += 1;
+    }
+
+    if (shared === prev.length && shared === next.length) {
+      this.ops = next;
+      return;
+    }
+    // Pure append: composite the new ops in, exactly as `appendOp` argues. It
+    // maintains `this.ops` itself, so the swap is left to it — assigning `next`
+    // first and then iterating it while `appendOp` pushed onto the same array
+    // is a loop that does not end.
+    if (shared === prev.length) {
+      const added = next.slice(shared);
+      for (const op of added) this.appendOp(op);
+      return;
+    }
+
+    this.ops = next;
+    // Nothing in common: a different notebook, or a clear. There is no cache
+    // worth keeping and no flash to avoid — the page is changing wholesale.
+    if (shared === 0) {
+      this.invalidate();
+      return;
+    }
+
+    // Ops were removed or replaced. Both sides of the divergence matter: the
+    // pixels that must come off, and the ones that must go on.
+    let dirty: SceneBounds | null = null;
+    const widen = (op: InkOp) => {
+      const bounds = inkOpBounds(op);
+      dirty = dirty ? unionBounds(dirty, bounds) : bounds;
+    };
+    for (let i = shared; i < prev.length; i += 1) widen(prev[i]);
+    for (let i = shared; i < next.length; i += 1) widen(next[i]);
+    if (!dirty) return;
+
+    for (const [key, tile] of [...this.tiles]) {
+      const box = this.tileBounds(tile.level, tile.tx, tile.ty);
+      if (boundsOverlap(dirty, box)) this.tiles.delete(key);
+    }
   }
 
   /**
