@@ -14,10 +14,17 @@
  * Module scope rather than a React context on purpose: the gatekeeper runs
  * inside a native listener installed once, and a context value read at render
  * time would be a frame stale exactly when it matters.
+ *
+ * The same module carries "camera is live" for footnote ribbon placement: a
+ * MutationObserver that re-measures ribbons mid-flick starves ink tile paint.
+ * DocSelectionLayer defers `place()` until the camera settles.
  */
 
 let claimed = false;
 let onClaimed: (() => void) | null = null;
+
+let cameraLive = false;
+let onCameraLiveChange: ((live: boolean) => void) | null = null;
 
 /**
  * Board registers here so a mid-gesture claim can drop a deferred pan /
@@ -40,4 +47,20 @@ export function releaseSelectionGesture(): void {
 
 export function selectionOwnsGesture(): boolean {
   return claimed;
+}
+
+/** Board's reading camera is mid-gesture (pulse / coast). */
+export function setDocCameraLive(live: boolean): void {
+  if (cameraLive === live) return;
+  cameraLive = live;
+  onCameraLiveChange?.(live);
+}
+
+export function isDocCameraLive(): boolean {
+  return cameraLive;
+}
+
+/** DocSelectionLayer flushes deferred ribbon placement when live goes false. */
+export function onDocCameraLiveChange(handler: ((live: boolean) => void) | null): void {
+  onCameraLiveChange = handler;
 }

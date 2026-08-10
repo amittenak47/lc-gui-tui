@@ -46,6 +46,8 @@ import { HoldButton } from "../components/HoldButton";
 import { HOLD_SENSITIVE_MS, LONG_PRESS_MS, SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import {
   claimSelectionGesture,
+  isDocCameraLive,
+  onDocCameraLiveChange,
   releaseSelectionGesture,
 } from "../canvas/docSelectionGesture";
 import { horizontalScrollHost } from "../canvas/scrollHost";
@@ -787,7 +789,7 @@ export function DocSelectionLayer({
       return;
     }
 
-      const numbers = numberFootnotes(footnotes);
+    const numbers = numberFootnotes(footnotes);
     const place = () => {
       const roots = scopeRootsIn(body);
       // Numbering follows the document, so the sort has to know page order.
@@ -804,26 +806,53 @@ export function DocSelectionLayer({
       setRibbons(placed);
     };
     placeRef.current = place;
+    // One-shot on deps: ribbons still ride marksSlot transform during pan.
     place();
 
-    if (footnotes.length === 0 || typeof MutationObserver !== "function") return;
+    /*
+     * Live mutation watching is for reading / highlight — text layers land
+     * after mount. Annotate keeps the layer mounted (`enabled=false`) so the
+     * pen can draw, but re-placing ribbons on every PDF window mutation mid-
+     * flick starves ink tile paint until scroll settle.
+     */
+    const watchMutations = enabled || highlighting;
+    if (!watchMutations || footnotes.length === 0 || typeof MutationObserver !== "function") {
+      return () => {
+        placeRef.current = null;
+      };
+    }
+
     // Coalesced to a frame: a text layer lands as hundreds of appended spans,
     // and re-measuring on each one would be a layout read per span.
     let frame: number | null = null;
+    let placementDeferred = false;
+    const schedulePlace = () => {
+      if (isDocCameraLive()) {
+        placementDeferred = true;
+        return;
+      }
+      place();
+    };
     const observer = new MutationObserver(() => {
       if (frame != null) return;
       frame = requestAnimationFrame(() => {
         frame = null;
-        place();
+        schedulePlace();
       });
     });
     observer.observe(body, { childList: true, subtree: true, characterData: true });
+    onDocCameraLiveChange((live) => {
+      if (live || !placementDeferred) return;
+      placementDeferred = false;
+      place();
+    });
     return () => {
       observer.disconnect();
+      onDocCameraLiveChange(null);
       placeRef.current = null;
       if (frame != null) cancelAnimationFrame(frame);
     };
-  }, [footnotes, children]);
+  }, [footnotes, children, enabled, highlighting]);
 
 
 
