@@ -64,3 +64,30 @@ export function isDocCameraLive(): boolean {
 export function onDocCameraLiveChange(handler: ((live: boolean) => void) | null): void {
   onCameraLiveChange = handler;
 }
+
+/* ----------------------------------------------------- edge auto-scroll --- */
+
+let onScrollRequest: ((dy: number) => number) | null = null;
+
+/**
+ * Board offers the reading camera a nudge, for a selection dragged off the edge.
+ *
+ * The same seam as the claim flag above, and for the same reason: the camera's
+ * clamping, its inertia and its idea of where the page ends all live in Board,
+ * and a selection layer that computed a scroll position itself would be a
+ * second implementation of that arithmetic — one that would go wrong at exactly
+ * the top and bottom of the document, which is where a drag off the edge always
+ * ends up.
+ *
+ * The handler returns how far it *actually* moved. At the end of the document
+ * that is zero, which is what tells the caller to stop asking rather than spin
+ * a frame loop against a wall.
+ */
+export function onDocScrollRequest(handler: ((dy: number) => number) | null): void {
+  onScrollRequest = handler;
+}
+
+/** Ask for `dy` pixels of page scroll. Returns what was granted. */
+export function requestDocScroll(dy: number): number {
+  return onScrollRequest?.(dy) ?? 0;
+}
