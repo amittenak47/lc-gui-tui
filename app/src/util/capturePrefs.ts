@@ -9,6 +9,7 @@
  */
 
 const AUTO_KEY = "lc.capture.autoSave";
+const MODE_KEY = "lc.capture.mode";
 const DEST_KEY = "lc.capture.destination";
 const FOLDER_KEY = "lc.capture.folder";
 const COUNTDOWN_KEY = "lc.capture.countdown";
@@ -32,6 +33,65 @@ export interface CaptureSaveResult {
   path?: string;
   /** Why it failed, for the toast. */
   detail?: string;
+}
+
+/**
+ * What a capture is *for*.
+ *
+ * There were two outcomes and a boolean between them, which left the third one
+ * unreachable: sometimes the shot is a file you want and not a picture you want
+ * pasted into the middle of the page you are writing on. Saving without
+ * inserting is a real thing to want, and "auto-save" could not say it.
+ */
+export type CaptureMode =
+  /** Insert on the board, write nothing. */
+  | "board"
+  /** Insert on the board and write a file. */
+  | "board-save"
+  /** Write a file only — the board is left alone. */
+  | "save";
+
+export function loadCaptureMode(): CaptureMode {
+  try {
+    const raw = localStorage.getItem(MODE_KEY);
+    if (raw === "board" || raw === "board-save" || raw === "save") return raw;
+    // Read-old-write-new: before the third option existed this was a boolean,
+    // meaning "save alongside the board" or "board only".
+    return localStorage.getItem(AUTO_KEY) === "1" ? "board-save" : "board";
+  } catch {
+    return "board";
+  }
+}
+
+export function saveCaptureMode(mode: CaptureMode): void {
+  try {
+    localStorage.setItem(MODE_KEY, mode);
+    // Kept in step so a rolled-back build still finds the old answer.
+    localStorage.setItem(AUTO_KEY, mode === "board" ? "0" : "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Does this mode put the shot on the board? */
+export function captureInserts(mode: CaptureMode): boolean {
+  return mode !== "save";
+}
+
+/** Does this mode write a file? */
+export function captureWritesFile(mode: CaptureMode): boolean {
+  return mode !== "board";
+}
+
+export function captureModeLabel(mode: CaptureMode): string {
+  switch (mode) {
+    case "board":
+      return "Board only";
+    case "board-save":
+      return "Board + Save";
+    default:
+      return "Save only";
+  }
 }
 
 export function loadAutoSaveCaptures(): boolean {

@@ -157,8 +157,11 @@ import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
 import { loadInkSpeed } from "../util/inkSpeedPref";
 import {
+  captureInserts,
+  captureWritesFile,
   describeCaptureResult,
-  loadAutoSaveCaptures,
+  loadCaptureMode,
+  type CaptureMode,
   loadCaptureCountdown,
   saveCaptureToDevice,
 } from "../util/capturePrefs";
@@ -4845,19 +4848,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * board" is still an outcome, and it is the one the student sees when
    * auto-save is off. Silence used to be the only feedback either way.
    */
-  const reportCapture = useCallback(async (blob: Blob) => {
-    if (!loadAutoSaveCaptures()) {
-      captureFeedbackRef.current?.toast("Added to the board");
+  const reportCapture = useCallback(async (blob: Blob, mode: CaptureMode) => {
+    const feedback = captureFeedbackRef.current;
+    if (!captureWritesFile(mode)) {
+      feedback?.toast("Added to the board");
       return;
     }
+    // The write is the slow half — asking for permission, copying into a
+    // gallery — and until it says so the reader cannot tell a save in progress
+    // from a save that silently did nothing.
+    feedback?.saving();
     try {
       const result = await saveCaptureToDevice(blob);
-      captureFeedbackRef.current?.toast(
+      feedback?.toast(
         describeCaptureResult(result),
         result.outcome === "failed" ? "error" : "ok",
       );
     } catch (cause) {
-      captureFeedbackRef.current?.toast(`Could not save — ${String(cause)}`, "error");
+      feedback?.toast(`Could not save — ${String(cause)}`, "error");
     }
   }, []);
 
@@ -4872,6 +4880,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     feedback?.flash();
+    const mode = loadCaptureMode();
     const blob = await exportBoardBlob(
       api,
       rasterInkRef.current?.getOps() ?? [],
@@ -4881,9 +4890,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       feedback?.toast("Nothing to capture", "error");
       return;
     }
-    const dataURL = await blobToDataURL(blob);
-    await insertImageFromDataURL(dataURL, "image/png");
-    await reportCapture(blob);
+    // "Save only" leaves the page alone: a shot taken to keep is not always a
+    // picture you want pasted into the middle of what you were writing.
+    if (captureInserts(mode)) {
+      const dataURL = await blobToDataURL(blob);
+      await insertImageFromDataURL(dataURL, "image/png");
+    }
+    await reportCapture(blob, mode);
   }, [insertImageFromDataURL, reportCapture]);
 
   const beginRegionCapture = useCallback(() => {
@@ -4931,6 +4944,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return;
       }
       feedback?.flash();
+      const mode = loadCaptureMode();
       const blob = await exportSceneFrameBlob(
         api,
         rasterInkRef.current?.getOps() ?? [],
@@ -4941,9 +4955,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         feedback?.toast("Nothing to capture", "error");
         return;
       }
-      const dataURL = await blobToDataURL(blob);
-      await insertImageFromDataURL(dataURL, "image/png", { x, y, width, height });
-      await reportCapture(blob);
+      if (captureInserts(mode)) {
+        const dataURL = await blobToDataURL(blob);
+        await insertImageFromDataURL(dataURL, "image/png", { x, y, width, height });
+      }
+      await reportCapture(blob, mode);
     },
     [clientToScene, insertImageFromDataURL, reportCapture],
   );

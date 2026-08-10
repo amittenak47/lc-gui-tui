@@ -1182,6 +1182,61 @@ input[type="checkbox"] {
   color: var(--bad);
 }
 
+/*
+ * "Taken", then "Saving…" — the two halves of a capture.
+ *
+ * Sits above the toast's slot rather than in it, because the toast is what
+ * replaces this and the two must not fight for the same line. Same pill
+ * chrome, smaller: it is a progress note, not the answer.
+ */
+.lc-capture-status {
+  position: absolute;
+  z-index: 81;
+  left: 50%;
+  bottom: calc(var(--lc-safe-bottom, 0px) + 128px);
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--chrome-edge);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+  pointer-events: none;
+  animation: lc-capture-toast-in 160ms ease-out;
+}
+
+.lc-capture-status-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--ink) 22%, transparent);
+  border-top-color: var(--accent);
+  animation: lc-capture-status-spin 700ms linear infinite;
+}
+
+@keyframes lc-capture-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-capture-status {
+    animation: none;
+  }
+
+  /* Still turns — a stopped spinner beside "Saving…" reads as a hang. */
+  .lc-capture-status-spinner {
+    animation-duration: 1400ms;
+  }
+}
+
 @keyframes lc-capture-toast-in {
   from {
     opacity: 0;
@@ -7172,6 +7227,24 @@ button.lc-row-selected:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/*
+ * Chips, for a choice with more options than it has explaining to do.
+ *
+ * The stacked cards are right when each option needs a sentence under it. A
+ * dozen one-word colour families do not, and thirteen full-width rows would be
+ * most of the Personalise tab.
+ */
+.lc-settings-choice-wrap {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lc-settings-choice-wrap .lc-settings-choice-option {
+  flex: 0 0 auto;
+  padding: 6px 12px;
 }
 
 /* A dial where the choice rows would be a list of arbitrary percentages. Same

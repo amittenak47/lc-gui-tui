@@ -2,7 +2,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  captureInserts,
+  captureModeLabel,
+  captureWritesFile,
   describeCaptureResult,
+  loadCaptureMode,
+  saveCaptureMode,
   loadCaptureCountdown,
   loadCaptureDestination,
   loadCaptureFolder,
@@ -111,3 +116,41 @@ describe("shortPath", () => {
     expect(short.startsWith("…")).toBe(true);
   });
 });
+
+describe("capture mode", () => {
+  it("says what each mode does", () => {
+    expect(captureInserts("board")).toBe(true);
+    expect(captureWritesFile("board")).toBe(false);
+
+    expect(captureInserts("board-save")).toBe(true);
+    expect(captureWritesFile("board-save")).toBe(true);
+
+    // The one the boolean could not express: a file, and the page left alone.
+    expect(captureInserts("save")).toBe(false);
+    expect(captureWritesFile("save")).toBe(true);
+  });
+
+  it("names each mode for the reader", () => {
+    expect(captureModeLabel("board")).toBe("Board only");
+    expect(captureModeLabel("board-save")).toBe("Board + Save");
+    expect(captureModeLabel("save")).toBe("Save only");
+  });
+
+  it("reads the old boolean when no mode was ever chosen", () => {
+    localStorage.clear();
+    expect(loadCaptureMode()).toBe("board");
+    localStorage.setItem("lc.capture.autoSave", "1");
+    expect(loadCaptureMode()).toBe("board-save");
+    localStorage.setItem("lc.capture.autoSave", "0");
+    expect(loadCaptureMode()).toBe("board");
+  });
+
+  it("round-trips, and keeps the old boolean in step for a rollback", () => {
+    localStorage.clear();
+    saveCaptureMode("save");
+    expect(loadCaptureMode()).toBe("save");
+    expect(localStorage.getItem("lc.capture.autoSave")).toBe("1");
+    saveCaptureMode("board");
+    expect(localStorage.getItem("lc.capture.autoSave")).toBe("0");
+  });
+})
