@@ -8440,6 +8440,30 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
+ * A card wearing the colour of the mark it belongs to.
+ *
+ * The same `--lc-fn-color` the ribbon takes, derived the same way — the edge
+ * from the colour, a wash of it behind the heading. The body stays `--panel`
+ * on purpose: a palette pulled at random makes no promise about contrast, and
+ * a note is text to read, not a swatch. Matched to the ribbon at its border,
+ * which is what makes the card look like it came from that mark.
+ */
+.lc-footnote-overview[style*="--lc-fn-color"],
+.lc-footnote-bubble[style*="--lc-fn-color"] {
+  border-color: color-mix(in srgb, var(--lc-fn-color) 62%, #000);
+  box-shadow:
+    0 8px 28px rgb(0 0 0 / 22%),
+    inset 0 2px 0 0 var(--lc-fn-color);
+}
+
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-doc-sheet-excerpt,
+.lc-footnote-bubble[style*="--lc-fn-color"] .lc-doc-sheet-excerpt {
+  background: color-mix(in srgb, var(--lc-fn-color) 26%, transparent);
+  border-radius: 5px;
+  padding: 3px 5px;
+}
+
+/*
  * A note or a thread, as a row.
  *
  * Bite-size on purpose: two lines is enough to recognise which note this is,
