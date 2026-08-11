@@ -17,6 +17,8 @@ export interface TrashEl {
   y: number;
   width?: number;
   height?: number;
+  /** Linear elements (arrow, line) carry their shape here, relative to x/y. */
+  points?: readonly (readonly [number, number])[];
   isDeleted?: boolean;
   locked?: boolean;
   customData?: {
@@ -43,4 +45,134 @@ export function isDeletableElement(el: TrashEl): boolean {
   const meta = el.customData;
   if (meta?.lcRegionFrame || meta?.lcRegion || meta?.lcMdInkFrame) return false;
   return !el.id.startsWith("lcregion-");
+}
+
+/* ------------------------------------------------------------- placement --- */
+
+/** Button edge in CSS px — must match `.lc-stamp-trash` in styles.css. */
+export const TRASH_SIZE_PX = 34;
+
+/** Clear air between the button and the selection it belongs to. */
+export const TRASH_GAP_PX = 8;
+
+/** A selection's extent in scene units. */
+export interface TrashBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+export interface TrashCamera {
+  scrollX: number;
+  scrollY: number;
+  zoom: number;
+}
+
+/** The board's own box in CSS px — what the button must stay inside. */
+export interface TrashViewport {
+  width: number;
+  height: number;
+}
+
+function num(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * Scene-space extent of everything about to be deleted.
+ *
+ * A linear element — an arrow, a line — carries its shape in `points` relative
+ * to `x`/`y`, and Excalidraw does not always normalise `width`/`height` to the
+ * drawn extent while the element is still being edited. Reading the points when
+ * they are there is what makes the trash land on the corner of an arrow rather
+ * than near where the arrow started.
+ */
+export function selectionBounds(els: readonly TrashEl[]): TrashBounds | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const el of els) {
+    const points = el.points;
+    if (points && points.length > 0) {
+      for (const [px, py] of points) {
+        if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+        minX = Math.min(minX, el.x + px);
+        minY = Math.min(minY, el.y + py);
+        maxX = Math.max(maxX, el.x + px);
+        maxY = Math.max(maxY, el.y + py);
+      }
+      continue;
+    }
+    // A negative width is a box drawn right-to-left; normalise so the "max"
+    // corner really is the far one.
+    const w = num(el.width, 0);
+    const h = num(el.height, 0);
+    minX = Math.min(minX, el.x, el.x + w);
+    minY = Math.min(minY, el.y, el.y + h);
+    maxX = Math.max(maxX, el.x, el.x + w);
+    maxY = Math.max(maxY, el.y, el.y + h);
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Where the delete button goes, in CSS px from the board's top-left.
+ *
+ * **Outside the selection, not on it.** It used to sit 36px in from the right
+ * edge and 40px up, which put it over the top-right corner of whatever was
+ * selected — so the control that deletes a thing covered the thing, and on a
+ * small shape it covered most of it. The corner it wants is diagonally out:
+ * clear to the right, clear above.
+ *
+ * That corner is not always on screen, so there are fallbacks, in the order a
+ * hand would look for the button: outside top-right, then outside bottom-right
+ * when the selection is against the top of the board, then outside top-left
+ * when it is against the right edge. Only if none of those fit does it clamp
+ * into the viewport, which can overlap the selection — at that point the
+ * selection fills the board and there is no clear air anywhere.
+ */
+export function trashAnchor(
+  bounds: TrashBounds,
+  camera: TrashCamera,
+  viewport: TrashViewport,
+): { left: number; top: number } {
+  const zoom = camera.zoom || 1;
+  const left = (bounds.minX + camera.scrollX) * zoom;
+  const right = (bounds.maxX + camera.scrollX) * zoom;
+  const top = (bounds.minY + camera.scrollY) * zoom;
+  const bottom = (bounds.maxY + camera.scrollY) * zoom;
+
+  const outRight = right + TRASH_GAP_PX;
+  const outLeft = left - TRASH_GAP_PX - TRASH_SIZE_PX;
+  const outAbove = top - TRASH_GAP_PX - TRASH_SIZE_PX;
+  const outBelow = bottom + TRASH_GAP_PX;
+
+  const fitsRight = outRight + TRASH_SIZE_PX <= viewport.width;
+  const fitsAbove = outAbove >= 0;
+
+  let x: number;
+  let y: number;
+  if (fitsRight && fitsAbove) {
+    x = outRight;
+    y = outAbove;
+  } else if (fitsRight && outBelow + TRASH_SIZE_PX <= viewport.height) {
+    x = outRight;
+    y = outBelow;
+  } else if (outLeft >= 0 && fitsAbove) {
+    x = outLeft;
+    y = outAbove;
+  } else {
+    x = outRight;
+    y = outAbove;
+  }
+
+  return {
+    left: Math.round(Math.max(0, Math.min(viewport.width - TRASH_SIZE_PX, x))),
+    top: Math.round(Math.max(0, Math.min(viewport.height - TRASH_SIZE_PX, y))),
+  };
 }

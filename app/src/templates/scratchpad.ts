@@ -77,7 +77,19 @@ export function buildScratchPageSkeletons(
       strokeWidth: 2,
       roughness: 0,
       opacity: 100,
-      locked: false,
+      /*
+       * Locked, like the markdown page's frame and for a sharper reason than
+       * marching ants.
+       *
+       * The page is a full-screen rectangle sitting under everything the writer
+       * draws. Unlocked, a shape-tool drag that started a few pixels off its
+       * mark grabbed the *page* instead of drawing on it and carried the whole
+       * note off screen — with no keyboard to undo it and no obvious way back.
+       * The frame is scaffolding, not something anyone means to move; the
+       * region machinery repositions it directly and does not need it
+       * selectable to do so.
+       */
+      locked: true,
       angle: 0,
       customData: {
         lcRegion: region,
