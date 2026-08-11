@@ -115,6 +115,16 @@ export interface BoardHandle {
   isInking(): boolean;
   /** Replace raster ink (notebook restore after the ink layer has mounted). */
   setInkOps(ops: InkOp[]): void;
+  /**
+   * Say something briefly over the board, then let it go.
+   *
+   * The same toast the annotate toggle uses. It exists on the handle so a
+   * notebook can name itself when it opens without that name having to live on
+   * the page — it used to be a locked text element at the top-left of every
+   * first page, which panned, zoomed, exported and sat where the writing wanted
+   * to go.
+   */
+  announce(label: string): void;
   setTool(tool: ToolName): void;
   undo(): void;
   scrollToContent(): void;

@@ -1796,6 +1796,12 @@ export function App() {
         setEntering(true);
         window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
         setCoachOpen(false);
+        // The notebook names itself over the board and then gets out of the
+        // way. It used to be a locked heading on the page — see
+        // `buildScratchPageSkeletons`.
+        boardRef.current?.announce(
+          restored && notebook ? notebook.title : "Scratchpad",
+        );
       } catch (cause) {
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;

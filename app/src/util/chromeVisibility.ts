@@ -78,14 +78,38 @@ export interface ChromeVisibility {
   eye: boolean;
 }
 
+/** What the caller knows about the moment, beyond the mode itself. */
+export interface ChromeContext {
+  /** The corner was touched (or anything else woke the chrome) recently. */
+  awake: boolean;
+  /**
+   * A drawing tool is up and the writer is annotating.
+   *
+   * Hiding the controls of the tool someone is *using* is the one case where
+   * "get out of the way" and "let me work" disagree, and the report that
+   * prompted this said so: in `hidden` the only way back is a tap on an
+   * invisible corner, and having to find it in order to change pen colour
+   * mid-annotation is not a trade anyone made knowingly. So annotate softens
+   * `hidden` into `fade` — still out of the way when the hand stops, still one
+   * touch from back, but never gone with no mark on screen to say where.
+   */
+  annotating?: boolean;
+}
+
 /**
- * What is on screen, given the mode and whether the corner was touched
- * recently.
+ * What is on screen, given the mode and what is going on.
  *
  * `awake` is meaningless in `visible` and is what the other two turn on.
  */
-export function chromeVisibility(mode: ChromeMode, awake: boolean): ChromeVisibility {
+export function chromeVisibility(
+  mode: ChromeMode,
+  context: ChromeContext | boolean,
+): ChromeVisibility {
+  // Boolean form kept for the callers (and tests) that only have `awake`.
+  const { awake, annotating = false } =
+    typeof context === "boolean" ? { awake: context, annotating: false } : context;
+
   if (mode === "visible") return { chrome: true, eye: true };
-  if (mode === "fade") return { chrome: awake, eye: awake };
+  if (mode === "fade" || annotating) return { chrome: awake, eye: awake };
   return { chrome: false, eye: awake };
 }

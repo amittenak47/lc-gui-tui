@@ -42,7 +42,9 @@ export function scratchPageOrigin(index: number): { x: number; y: number } {
   };
 }
 
-/** One blank page frame + title chrome. */
+/**
+ * One blank page frame. Nothing else — see the note where the title used to be.
+ */
 export function buildScratchPageSkeletons(
   index: number,
   dark = false,
@@ -50,18 +52,6 @@ export function buildScratchPageSkeletons(
   const ink = templatePalette(dark);
   const { x, y } = scratchPageOrigin(index);
   const region = scratchPageId(index);
-  const textWidth = SCRATCH_PAGE_W - 72;
-  const linePitch = SCRATCH_LINE_PITCH;
-  const labelLh = defaultLineHeight(FONT_UI);
-  const titleY = topYForLinedRow(y, 3, linePitch, 56, FONT_UI, labelLh);
-
-  const at = (ox: number, oy: number, extra: Record<string, unknown> = {}) => ({
-    lcRegion: region,
-    lcRegionOx: ox - x,
-    lcRegionOy: oy - y,
-    lcScratchPage: index,
-    ...extra,
-  });
 
   const skeletons: Skeleton[] = [
     {
@@ -101,25 +91,20 @@ export function buildScratchPageSkeletons(
   ];
 
   if (index === 0) {
-    skeletons.push({
-      id: `lcscratch-${index}-title`,
-      type: "text",
-      x: x + 36,
-      y: titleY,
-      width: textWidth,
-      text: "Scratchpad",
-      fontSize: 56,
-      fontFamily: FONT_UI,
-      lineHeight: labelLh,
-      strokeColor: ink.primary,
-      locked: true,
-      customData: {
-        ...at(x + 36, titleY - y),
-        lcFontBase: 56,
-        lcFixedSize: true,
-        lcLineHeightBase: labelLh,
-      },
-    });
+    /*
+     * No title on the page either.
+     *
+     * "Scratchpad" was a locked 56px text element pinned to the top-left of the
+     * first page, on every notebook, forever. Like the hint line below it, that
+     * makes it furniture: it names the thing you are already looking at, it
+     * never changes, and it sits exactly where the first line of writing wants
+     * to go. Worse, it is *scene* content — it pans, it zooms, it lands in the
+     * PNG export and in whatever the coach is shown.
+     *
+     * The notebook announces itself over the board instead, on open, and then
+     * gets out of the way — see the mode toast in Board. Same information, none
+     * of the page.
+     */
     /*
      * No hint line.
      *
