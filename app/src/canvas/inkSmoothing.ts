@@ -170,19 +170,25 @@ export const MAX_ROUNDING_PASSES = 3;
 /**
  * What the top of the dial is worth, and how the travel gets there.
  *
- * `CEILING` is the rounding strength at 100%; `CURVE` above 1 keeps the bottom
- * of the dial gentle so the settings most writers already have barely move,
- * while the top quarter — which used to be indistinguishable from the middle —
- * has somewhere to go.
+ * `CURVE` above 1 keeps the bottom of the dial gentle, so the settings most
+ * writers already have barely move.
  */
-export const SMOOTHING_CEILING = 0.78;
 export const SIMPLIFY_CEILING = 0.85;
 export const SMOOTHING_CURVE = 1.4;
 
-function roundingPasses(strength: number): number {
-  if (strength <= 0.02) return 0;
-  return Math.min(MAX_ROUNDING_PASSES, Math.ceil(strength * MAX_ROUNDING_PASSES));
+/** Corner-cutting passes the dial asks for — fractional, see {@link smoothInkPoints}. */
+export function roundingPasses(strength: number): number {
+  const dial = Math.max(0, Math.min(1, strength));
+  return MAX_ROUNDING_PASSES * dial ** SMOOTHING_CURVE;
 }
+
+/**
+ * A partial pass smaller than this is not worth the points it inserts.
+ *
+ * Below it the cut is under a thousandth of a segment, which no rasteriser can
+ * express, and skipping it keeps a dial at zero returning the stroke untouched.
+ */
+const MIN_ROUNDING_RATIO = 1e-3;
 
 /**
  * Ramer–Douglas–Peucker, iterative so a long stroke cannot blow the stack.
@@ -349,23 +355,38 @@ function spanIsPredictable(
   return true;
 }
 
+/** Chaikin's own cut: a quarter in from each end of every interior segment. */
+export const CHAIKIN_RATIO = 0.25;
+
 /**
  * One Chaikin corner-cutting pass.
  *
- * Each interior segment gives up its corner for two points a quarter in from
- * each end; repeated, the polyline converges on a quadratic B-spline. It cuts
- * corners rather than passing through them, which is the point — the corners
- * are where the wobble is. Cheaper than fitting a spline and it cannot
+ * Each interior segment gives up its corner for two points `ratio` of the way
+ * in from each end; repeated, the polyline converges on a quadratic B-spline.
+ * It cuts corners rather than passing through them, which is the point — the
+ * corners are where the wobble is. Cheaper than fitting a spline and it cannot
  * overshoot, so a sharp turn never grows a loop it did not have.
+ *
+ * **`ratio` is what makes the dial continuous.** A pass is otherwise an
+ * all-or-nothing thing, and a strength knob that can only buy whole passes has
+ * as many settings as it has passes — three, across a slider the writer reads
+ * as a hundred. A shallower cut is a fraction of a pass: at
+ * {@link CHAIKIN_RATIO} this is textbook Chaikin, and as the ratio goes to zero
+ * the new points converge on the corner they were cutting, so the pass fades
+ * out instead of switching off. See {@link smoothInkPoints}.
  */
-export function roundInkCorners(points: readonly ScenePoint[]): ScenePoint[] {
+export function roundInkCorners(
+  points: readonly ScenePoint[],
+  ratio: number = CHAIKIN_RATIO,
+): ScenePoint[] {
   if (points.length < 3) return [...points];
+  const t = Math.max(0, Math.min(0.5, ratio));
   const out: ScenePoint[] = [points[0]];
   for (let index = 0; index < points.length - 1; index++) {
     const a = points[index];
     const b = points[index + 1];
-    if (index > 0) out.push(blendPoint(a, b, 0.25));
-    if (index < points.length - 2) out.push(blendPoint(a, b, 0.75));
+    if (index > 0) out.push(blendPoint(a, b, t));
+    if (index < points.length - 2) out.push(blendPoint(a, b, 1 - t));
   }
   out.push(points[points.length - 1]);
   return out;
@@ -419,19 +440,6 @@ export function smoothInkPoints(
   minFraction?: number,
 ): ScenePoint[] {
   const dial = Math.max(0, Math.min(1, strength));
-  /*
-   * The dial curves rather than scaling.
-   *
-   * It used to be `dial * 0.4`, which put the whole useful range in the bottom
-   * of the travel and left the top doing nothing you could see — worse with
-   * speed ink on, where the width variation is loud enough to hide the
-   * rounding entirely. A curve keeps the low end where writers already have it
-   * (a quarter turn lands within a hair of where it used to) and lets the last
-   * quarter actually arrive somewhere: at 100% this reaches every rounding pass
-   * there is, which the old ceiling of 0.4 never did — `ceil(0.4 * 3)` is two
-   * passes out of three, so maximum smoothing was never maximum.
-   */
-  const amount = SMOOTHING_CEILING * dial ** SMOOTHING_CURVE;
   if (points.length < 3) return [...points];
 
   const width = Math.max(nibWidth, 1e-6);
@@ -443,8 +451,30 @@ export function smoothInkPoints(
     width * SIMPLIFY_MAX_FRACTION * simplifyAmount,
   );
   let out = simplifyInkPoints(points, tolerance);
-  for (let pass = roundingPasses(amount); pass > 0; pass--) {
+
+  /*
+   * Whole passes, then a fraction of one.
+   *
+   * The dial used to buy passes through `ceil`, and a slider whose output is an
+   * integer between 0 and 3 has three settings however many percent it shows.
+   * Measured across its travel it changed at 55% and at 90% and nowhere else,
+   * and under the bottom quarter the simplifier was still pinned at its storage
+   * floor — so most of the dial genuinely did nothing, which is exactly what it
+   * felt like. Speed ink made it worse by adding width variation loud enough to
+   * hide what little rounding there was.
+   *
+   * The fix is not a higher ceiling — three passes is already converged, and a
+   * fourth would quadruple the points every stroke carries for a shape nobody
+   * can see. It is that the last pass is now partial: `roundInkCorners` takes
+   * the cut ratio, so 1.4 passes is one full pass and one cutting 40% as deep.
+   * Continuous from end to end, same maximum, same points.
+   */
+  const passes = roundingPasses(dial);
+  const full = Math.floor(passes);
+  for (let pass = 0; pass < full; pass++) {
     out = roundInkCorners(out);
   }
+  const partial = (passes - full) * CHAIKIN_RATIO;
+  if (partial > MIN_ROUNDING_RATIO) out = roundInkCorners(out, partial);
   return out;
 }

@@ -19,6 +19,7 @@ import {
   applyInkOpFrom,
   eraserSceneRadius,
   hasStylusPressure,
+  inkBaseWidthForZoom,
   inkLineWidth,
   inkSlowness,
   inkStrokeStyle,
@@ -39,6 +40,7 @@ import {
   type ViewportTransform,
 } from "./rasterInk";
 import { InkTileCache, paintLiveOp } from "./inkTiles";
+import { opsAfterStrokeErase } from "./strokeEraser";
 import {
   OVERDRAW_REBASE_HEADROOM,
   overdrawMarginPx,
@@ -114,6 +116,12 @@ export interface RasterInkLayerProps {
   smoothingMode?: InkSmoothingMode;
   /** Speed-ink strength (0–1): a slow nib lays down more than a fast one. */
   speedInk?: number;
+  /**
+   * Eraser rubs pixels out (true) or takes whole strokes (false).
+   *
+   * See `util/eraserPartialPref` for which is the default and why.
+   */
+  partialErase?: boolean;
   getViewport: () => ViewportTransform | null;
   /**
    * Scene box the ink is allowed to show inside — the open page on a tablet,
@@ -160,6 +168,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       smoothing = 0,
       smoothingMode = "lift",
       speedInk = 0,
+      partialErase = true,
       getViewport,
       clip = null,
       onChange,
@@ -306,6 +315,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     smoothingModeRef.current = smoothingMode;
     const speedInkRef = useRef(speedInk);
     speedInkRef.current = speedInk;
+    const partialEraseRef = useRef(partialErase);
+    partialEraseRef.current = partialErase;
     const toolRef = useRef(tool);
     toolRef.current = tool;
 
@@ -730,6 +741,41 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const commitLive = useCallback(() => {
       const live = liveRef.current;
       if (!live) return;
+
+      /*
+       * Stroke-eraser mode: the rub removes whole strokes rather than pixels.
+       *
+       * Taken before the undo snapshot below because it is a different *kind*
+       * of edit — the page is a shorter list of ops afterwards, not the same
+       * list with a mask painted over it. A rub that touched nothing is not an
+       * edit at all and leaves the stack alone, so the writer's next undo does
+       * something they can see rather than rolling back a wave of the hand.
+       */
+      if (live.kind === "erase" && !partialEraseRef.current) {
+        const kept = opsAfterStrokeErase(opsRef.current, live);
+        liveRef.current = null;
+        liveRawPointsRef.current = null;
+        liveDrawnIndexRef.current = 0;
+        lastPointRef.current = null;
+        rawPointRef.current = null;
+        if (!kept) {
+          repaint();
+          return;
+        }
+        undoRef.current.push(snapshotOps(opsRef.current));
+        if (undoRef.current.length > 40) {
+          undoRef.current.splice(0, undoRef.current.length - 40);
+        }
+        redoRef.current = [];
+        opsRef.current = kept;
+        // Strokes vanished from under the page rather than being drawn over it,
+        // so there is no tile to append to — the cache has to be rebuilt.
+        tilesDirtyRef.current = true;
+        repaint();
+        onChange?.();
+        return;
+      }
+
       undoRef.current.push(snapshotOps(opsRef.current));
       // Cap undo depth — each snapshot clones every point, and erase stamps are dense.
       if (undoRef.current.length > 40) {
@@ -1183,6 +1229,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         clearDwellTimer();
         if (DEBUG_INK) inkMetrics.begin();
         const width = strokeWidthRef.current;
+        /*
+         * The pen's dial is in screen pixels; the eraser's is not, and should
+         * not be — its ring is already drawn in screen pixels and erases
+         * exactly what it covers, so the two agree at any zoom. The nib had no
+         * such agreement: a document opens fitted to a reading column and a pad
+         * does not, so the same setting wrote visibly fatter on the document.
+         */
+        const penWidth = inkBaseWidthForZoom(width, strokeView.zoom);
         const activeTool = toolRef.current;
         const pressureSensitive = pressureSensitiveRef.current;
         const attackApplies =
@@ -1198,7 +1252,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             liveRef.current = {
               kind: "draw",
               color: inkColorRef.current,
-              baseWidth: width,
+              baseWidth: penWidth,
               // Top of dial stores 0.999 so a paragraph still dries; exactly 1
               // is reserved for pressure-off (no reservoir).
               maxFullness: pressureSensitive
@@ -1218,7 +1272,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             liveRef.current = {
               kind: "draw",
               color: inkColorRef.current,
-              baseWidth: width,
+              baseWidth: penWidth,
               maxFullness: pressureSensitive
                 ? Math.min(inkFullnessRef.current, 0.999)
                 : 1,
