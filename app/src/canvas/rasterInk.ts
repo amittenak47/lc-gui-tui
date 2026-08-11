@@ -785,6 +785,27 @@ export function inkStrokePointStyles(
   return styles;
 }
 
+/** Unit tangent along the stroke at a polyline sample. */
+function strokeTangentAt(points: readonly ScenePoint[], index: number): { x: number; y: number } {
+  const last = points.length - 1;
+  if (last <= 0) return { x: 1, y: 0 };
+  let dx = 0;
+  let dy = 0;
+  if (index <= 0) {
+    dx = points[1].x - points[0].x;
+    dy = points[1].y - points[0].y;
+  } else if (index >= last) {
+    dx = points[last].x - points[last - 1].x;
+    dy = points[last].y - points[last - 1].y;
+  } else {
+    dx = points[index + 1].x - points[index - 1].x;
+    dy = points[index + 1].y - points[index - 1].y;
+  }
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return { x: 1, y: 0 };
+  return { x: dx / len, y: dy / len };
+}
+
 /** Unit normal perpendicular to the stroke at a polyline sample. */
 function strokeNormalAt(points: readonly ScenePoint[], index: number): { x: number; y: number } {
   const last = points.length - 1;
@@ -818,9 +839,15 @@ export function ribbonSides(
   let prevNy = 1;
   for (let index = 0; index < points.length; index++) {
     let { x: nx, y: ny } = strokeNormalAt(points, index);
-    if (index > 0 && nx * prevNx + ny * prevNy < 0) {
-      nx = -nx;
-      ny = -ny;
+    if (index > 0) {
+      const prevT = strokeTangentAt(points, index - 1);
+      const currT = strokeTangentAt(points, index);
+      const reversing = prevT.x * currT.x + prevT.y * currT.y < 0;
+      // Only force normal continuity for noise — not when direction reverses.
+      if (!reversing && nx * prevNx + ny * prevNy < 0) {
+        nx = -nx;
+        ny = -ny;
+      }
     }
     prevNx = nx;
     prevNy = ny;
@@ -859,6 +886,55 @@ function fillInkRibbon(
   ctx.fill();
 }
 
+function strokePathLength(points: readonly ScenePoint[], fromIndex = 0): number {
+  let len = 0;
+  for (let index = Math.max(1, fromIndex); index < points.length; index++) {
+    const prev = points[index - 1];
+    const next = points[index];
+    len += Math.hypot(next.x - prev.x, next.y - prev.y);
+  }
+  return len;
+}
+
+function paintInkDisc(
+  ctx: CanvasRenderingContext2D,
+  center: { x: number; y: number },
+  lineWidth: number,
+  alpha: number,
+  pixelScale: number,
+): void {
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.arc(center.x, center.y, paintedWidth(lineWidth, pixelScale) / 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+interface AlphaBucketSegment {
+  from: number;
+  to: number;
+  bucket: number;
+}
+
+function collectAlphaBucketSegments(styles: readonly InkStrokeStyle[]): AlphaBucketSegment[] {
+  if (styles.length === 0) return [];
+  const segments: AlphaBucketSegment[] = [];
+  let segStart = 0;
+  let bucketA = Math.round(styles[0].alpha / RUN_ALPHA_QUANTUM);
+  for (let index = 1; index < styles.length; index++) {
+    const nextA = Math.round(styles[index].alpha / RUN_ALPHA_QUANTUM);
+    if (nextA !== bucketA) {
+      segments.push({ from: segStart, to: index, bucket: bucketA });
+      segStart = index;
+      bucketA = nextA;
+    }
+  }
+  segments.push({ from: segStart, to: styles.length - 1, bucket: bucketA });
+  return segments;
+}
+
+/** |cross(t0, t1)| above this gets a round join disc at interior samples. */
+const RIBBON_CURVATURE_JOIN = 0.7;
+
 /** Variable-width ribbon fill for speed ink — per-point width, alpha-bucketed. */
 function drawRibbonStrokeFrom(
   ctx: CanvasRenderingContext2D,
@@ -874,16 +950,7 @@ function drawRibbonStrokeFrom(
   if (points.length === 1) {
     if (fromIndex > 0) return;
     const style = inkStrokePointStyles(op, 0)[0];
-    ctx.globalAlpha = style.alpha;
-    ctx.beginPath();
-    ctx.arc(
-      points[0].x,
-      points[0].y,
-      paintedWidth(style.lineWidth, pixelScale) / 2,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
+    paintInkDisc(ctx, points[0], style.lineWidth, style.alpha, pixelScale);
     ctx.globalAlpha = 1;
     return;
   }
@@ -895,40 +962,55 @@ function drawRibbonStrokeFrom(
   const styles = inkStrokePointStyles(op, start);
   if (slice.length < 2 || styles.length < 2) return;
 
-  let segStart = 0;
-  let bucketA = Math.round(styles[0].alpha / RUN_ALPHA_QUANTUM);
-  const segmentCount = styles.length;
-  let painted = 0;
-  for (let index = 1; index < styles.length; index++) {
-    const nextA = Math.round(styles[index].alpha / RUN_ALPHA_QUANTUM);
-    if (nextA !== bucketA) {
-      paintRibbonSegment(
-        ctx,
-        slice,
-        styles,
-        segStart,
-        index,
-        pixelScale,
-        bucketA,
-        capHead && fromIndex === 0 && painted === 0,
-        false,
-      );
-      painted += 1;
-      segStart = index;
-      bucketA = nextA;
+  const nib = nibWidth(op);
+  const pathLen = strokePathLength(slice);
+  if (pathLen < 1e-3 || (slice.length === 2 && pathLen < nib * 0.25)) {
+    let maxWidth = 0;
+    let maxAlpha = 0;
+    for (const style of styles) {
+      maxWidth = Math.max(maxWidth, style.lineWidth);
+      maxAlpha = Math.max(maxAlpha, style.alpha);
     }
+    paintInkDisc(ctx, slice[slice.length - 1], maxWidth, maxAlpha, pixelScale);
+    ctx.globalAlpha = 1;
+    return;
   }
-  paintRibbonSegment(
-    ctx,
-    slice,
-    styles,
-    segStart,
-    segmentCount - 1,
-    pixelScale,
-    bucketA,
-    capHead && fromIndex === 0 && painted === 0,
-    capEnd,
-  );
+
+  const segments = collectAlphaBucketSegments(styles);
+  const sorted = [...segments].sort((a, b) => a.bucket - b.bucket);
+  for (const seg of sorted) {
+    paintRibbonSegment(ctx, slice, styles, seg.from, seg.to, pixelScale, seg.bucket, false, false);
+  }
+
+  for (let si = 1; si < segments.length; si++) {
+    const prev = segments[si - 1];
+    const curr = segments[si];
+    const boundary = prev.to;
+    paintInkDisc(
+      ctx,
+      slice[boundary],
+      Math.max(styles[boundary].lineWidth, styles[curr.from].lineWidth),
+      Math.max(prev.bucket, curr.bucket) * RUN_ALPHA_QUANTUM,
+      pixelScale,
+    );
+  }
+
+  if (capHead && fromIndex === 0) {
+    const radius = paintedWidth(styles[0].lineWidth, pixelScale) / 2;
+    const next = slice[1];
+    const headAngle = Math.atan2(slice[0].y - next.y, slice[0].x - next.x);
+    ctx.globalAlpha = styles[0].alpha;
+    inkTerminalCap(ctx, slice[0], headAngle, radius);
+  }
+
+  if (capEnd) {
+    const last = slice.length - 1;
+    const radius = paintedWidth(styles[last].lineWidth, pixelScale) / 2;
+    const prev = slice[last - 1];
+    const tailAngle = Math.atan2(slice[last].y - prev.y, slice[last].x - prev.x);
+    ctx.globalAlpha = styles[last].alpha;
+    inkTerminalCap(ctx, slice[last], tailAngle, radius);
+  }
 
   ctx.globalAlpha = 1;
 }
@@ -966,6 +1048,17 @@ function paintRibbonSegment(
 
   const { left, right } = ribbonSides(segPoints, segStyles, pixelScale);
   fillInkRibbon(ctx, left, right, alpha);
+
+  if (segPoints.length >= 3) {
+    for (let i = 1; i < segPoints.length - 1; i++) {
+      const t0 = strokeTangentAt(segPoints, i - 1);
+      const t1 = strokeTangentAt(segPoints, i);
+      const cross = Math.abs(t0.x * t1.y - t0.y * t1.x);
+      if (cross > RIBBON_CURVATURE_JOIN) {
+        paintInkDisc(ctx, segPoints[i], segStyles[i].lineWidth, alpha, pixelScale);
+      }
+    }
+  }
 
   if (capHead) {
     const radius = paintedWidth(segStyles[0].lineWidth, pixelScale) / 2;
@@ -1124,6 +1217,22 @@ function drawStrokeFrom(
 
   const start = Math.max(0, fromIndex);
   if (start >= points.length - 1) return;
+
+  const nib = nibWidth(op);
+  const pathLen = strokePathLength(points, start);
+  if (pathLen < 1e-3 || (points.length - start === 2 && pathLen < nib * 0.25)) {
+    const tip = points[points.length - 1];
+    const styles = inkStrokePointStyles(op, start);
+    let maxWidth = 0;
+    let maxAlpha = 0;
+    for (const style of styles) {
+      maxWidth = Math.max(maxWidth, style.lineWidth);
+      maxAlpha = Math.max(maxAlpha, style.alpha);
+    }
+    paintInkDisc(ctx, tip, maxWidth, maxAlpha, pixelScale);
+    ctx.globalAlpha = 1;
+    return;
+  }
 
   const speedInk = op.speedInk ?? 0;
   if (speedInk > 0 && !op.highlight) {

@@ -1461,6 +1461,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (!reusable) repaintRef.current();
         drawingRef.current = true;
         activePointerRef.current = event.pointerId;
+        const liveAfterBegin = liveRef.current;
+        if (
+          liveAfterBegin &&
+          ((liveAfterBegin.kind === "draw" && liveAfterBegin.points.length > 0) ||
+            liveAfterBegin.kind === "erase")
+        ) {
+          paintLiveAfterChangeRef.current();
+        }
         if (activeTool === "pen" && speed > 0) {
           dwellTimerRef.current = setInterval(() => {
             if (!drawingRef.current) return;

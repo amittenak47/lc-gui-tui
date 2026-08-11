@@ -777,6 +777,16 @@ export class InkTileCache {
  * Live ink never goes through a tile: the stroke is still growing and the
  * pointer is waiting on it. Tiles only ever hold committed history.
  */
+function liveStrokePathLength(points: readonly { x: number; y: number }[]): number {
+  let len = 0;
+  for (let index = 1; index < points.length; index++) {
+    const prev = points[index - 1];
+    const next = points[index];
+    len += Math.hypot(next.x - prev.x, next.y - prev.y);
+  }
+  return len;
+}
+
 export function paintLiveOp(
   ctx: CanvasRenderingContext2D,
   op: InkOp,
@@ -787,6 +797,11 @@ export function paintLiveOp(
 ): void {
   setInkSceneTransform(ctx, viewport, dpr);
   const pixelScale = viewport.zoom * dpr;
+  const short =
+    op.kind === "draw" &&
+    (op.points.length < 3 ||
+      liveStrokePathLength(op.points) < inkLineWidth(op.baseWidth, 0, false) * 2);
+  const capOptions = { capEnd: false, capHead: short };
   const paint = () => {
     if (isHostBoundOp(op)) {
       const host = hosts.get(op.hostKey!);
@@ -797,14 +812,14 @@ export function paintLiveOp(
           host.bounds,
           hostScrollDx(op, host.scrollLeft),
           pixelScale,
-          { capEnd: false, capHead: false },
+          capOptions,
         );
       } else {
-        applyInkOp(ctx, op, pixelScale, { capEnd: false, capHead: false });
+        applyInkOp(ctx, op, pixelScale, capOptions);
       }
       return;
     }
-    applyInkOp(ctx, op, pixelScale, { capEnd: false, capHead: false });
+    applyInkOp(ctx, op, pixelScale, capOptions);
   };
   if (clip) {
     ctx.save();
