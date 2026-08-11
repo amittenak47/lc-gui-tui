@@ -621,8 +621,14 @@ export function AgentSidePanel({
     if (!mobile || sheetDragging) return;
     const apply = () => {
       const height = sheetHeight();
+      // Height 0 ⇒ closedOffset is 0 ⇒ translateY(0) paints the sheet fully open.
+      // Stay hidden (sheetOffset null) until layout knows the real height.
       if (height <= 0) return;
-      setSheetOffset(open ? 0 : closedOffset());
+      const next = open ? 0 : closedOffset();
+      // Never jump from "hidden" straight to open-height 0 while closed — that
+      // was the scratchpad flash when the panel mounted under a half-ready shell.
+      if (!open && next <= 0) return;
+      setSheetOffset(next);
     };
     apply();
     const id = window.requestAnimationFrame(apply);
@@ -644,7 +650,9 @@ export function AgentSidePanel({
       if (sheetDragRef.current) return;
       const height = sheetHeight();
       if (height <= 0) return;
-      setSheetOffset(open ? 0 : closedOffset());
+      const next = open ? 0 : closedOffset();
+      if (!open && next <= 0) return;
+      setSheetOffset(next);
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);

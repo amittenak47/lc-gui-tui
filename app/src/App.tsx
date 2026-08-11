@@ -1732,6 +1732,17 @@ export function App() {
         setScratchLibOpen(true);
         return;
       }
+      /*
+       * Same loading transition as pickProblem / openMdInk — do not invent a
+       * parallel path. Scratchpad used to skip the overlay and reveal the
+       * board (and coach sheet) mid-prep, which flashed the coach panel open
+       * for a frame before it parked at the peek strip.
+       *
+       * fromBrowse: browser overlay spinner → slide → checkmark → board under
+       * preparing → reveal. switching: WorkspaceLoadStatus blur spinner → check.
+       */
+      const fromBrowse = !problem;
+      const switching = Boolean(problem);
       setBusy("opening scratchpad…");
       setError(null);
       setTests(null);
@@ -1739,10 +1750,22 @@ export function App() {
       setCoachMessages([]);
       setScratchPageIndex(0);
       setScratchEntryOpen(false);
+      setCoachOpen(false);
       boardSaveSuspendedRef.current = true;
       agentSaveSuspendedRef.current = true;
+      if (fromBrowse) {
+        setHoldBrowseOverlay(true);
+        setBrowseMotion("busy");
+        setBoardPreparing(true);
+      }
+      if (switching) {
+        setSwitchMotion("busy");
+        setBoardPreparing(true);
+      }
       try {
         await migrateLegacyScratchpad(countScratchPages);
+        // Mount the board under the overlay / blur, but keep it invisible until
+        // fit settles — then crossfade so the coach sheet never paints mid-open.
         setBoardPreparing(true);
         setProblem(SCRATCHPAD_PROBLEM);
         setPseudocode("");
@@ -1825,9 +1848,17 @@ export function App() {
             : null;
         }
 
+        // Complete the loading transition (same beats and teardown as
+        // pickProblem / openMdInk). Coach stays closed through the reveal.
+        await finishLoadingTransition(fromBrowse, switching);
+
+        setBrowseMotion("idle");
+        setSwitchMotion("idle");
+        setHoldBrowseOverlay(false);
         setBoardPreparing(false);
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
+        setCoachOpen(false);
         setEntering(true);
         const fadeMs = boardFadeMs() || 1;
         window.setTimeout(() => {
@@ -1836,17 +1867,19 @@ export function App() {
             restored && notebook ? notebook.title : "ScratchPad",
           );
         }, fadeMs);
-        setCoachOpen(false);
       } catch (cause) {
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
+        setHoldBrowseOverlay(false);
         setBoardPreparing(false);
+        if (fromBrowse) setBrowseMotion("idle");
+        setSwitchMotion("idle");
       } finally {
         setBusy(null);
       }
     },
-    [busy, themeId],
+    [busy, finishLoadingTransition, problem, themeId],
   );
 
   /**
