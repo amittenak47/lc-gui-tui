@@ -1,38 +1,27 @@
 /**
- * Picking a quote out of the page, in Scroll mode.
+ * Picking a region (or the words under it) out of the page, in Scroll mode.
  *
- * The gesture is hold-then-drag, and it has to be, because every simpler one is
- * already taken: a drag is how the page scrolls, and a tap has to stay free or
- * reading turns into a minefield. Holding is the only thing a reader never does
- * by accident, which is what makes it safe to give it a mode.
+ * The gesture is hold-then-drag a marquee box. Drag alone scrolls the page; a
+ * tap must stay free for reading. Holding is the only thing a reader never does
+ * by accident, so it is safe to enter selection mode.
  *
- * Native selection is not used. On a tablet WebView it is a different control
- * on every platform, it fights `touch-action: none` (which reading mode needs
- * so the camera pan can arm at all), and its handles are drawn by the system in
- * screen space over a page that lives in a scaled scene — they would sit
- * visibly wrong the moment the writer zoomed. The highlight here is painted
- * from `Range.getClientRects()` into the page's own coordinate space instead,
- * so it scales and scrolls with the words like the ink does.
+ * Native text selection is not used. On a tablet WebView it fights
+ * `touch-action: none`, and system handles sit in screen space over a scaled
+ * scene. The marquee paints in the page's own coordinates (same idea as ink),
+ * and persists as a {@link RegionAnchor} — text under the box is optional.
  *
- * Annotate mode does not mount this at all. There the pen owns the surface.
+ * Annotate mode turns this layer off (`enabled=false`) unless the highlighter
+ * tool is on; there the pen owns the surface.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import {
-  anchorFromRange,
-  excerptOf,
-  regionAnchorFromRect,
-  SCOPE_ATTR,
   isRegionAnchor,
   rangeFromAnchor,
-  scopeOfNode,
   scopeRootIn,
   scopeRootsIn,
-  snapToWords,
-  textNodesOf,
-  textOf,
   type DocAnchor,
 } from "../util/docAnchors";
 import {
@@ -52,6 +41,16 @@ import {
   releaseSelectionGesture,
 } from "../canvas/docSelectionGesture";
 import { horizontalScrollHost } from "../canvas/scrollHost";
+import {
+  MIN_BAND_PX,
+  type LocalRect,
+  bandFromLocalPoints,
+  finalizeMarquee,
+  hitRectsUnder,
+  scaleOf,
+  scopeRootAtPoint,
+  viewportToLocal,
+} from "../util/docMarquee";
 
 /**
  * Controls painted over the page that own their own taps.
@@ -68,9 +67,6 @@ function isOverlayControl(target: EventTarget | null): boolean {
     element?.closest?.(".lc-doc-footnote, .lc-doc-confirm, .lc-footnote-overview, .lc-footnote-bubble"),
   );
 }
-
-/** Thinnest a swept band may be, so a flat sweep is still visible and hittable. */
-const MIN_BAND_PX = 14;
 
 /** How far into the edge a drag has to reach before the page starts moving. */
 const SELECT_EDGE_PX = 36;
@@ -93,14 +89,6 @@ function edgeStep(over: number): number {
   return SELECT_EDGE_STEP_MIN_PX + (SELECT_EDGE_STEP_MAX_PX - SELECT_EDGE_STEP_MIN_PX) * lean;
 }
 
-/** A rectangle in the document's own (unscaled) coordinate space. */
-interface LocalRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
 export interface DocSelectionResult {
   text: string;
   excerpt: string;
@@ -121,11 +109,10 @@ export interface DocSelectionLayerProps {
    */
   marksHost?: HTMLElement | null;
   /**
-   * Highlighter mode — sweep a rectangle instead of picking words.
+   * Highlighter mode — same marquee, but armed immediately (no hold).
    *
-   * The one gesture that works where selection cannot: a scanned page, a
-   * figure, a diagram. No hold is needed because the tool *is* the mode, so a
-   * drag means this and nothing else while it is on.
+   * Annotate-only: the tool *is* the mode, so a drag means this and nothing
+   * else while it is on. Reading mode uses hold-then-marquee instead.
    */
   highlighting?: boolean;
   footnotes?: readonly DocFootnote[];
@@ -137,41 +124,6 @@ export interface DocSelectionLayerProps {
   /** Tap on an existing ribbon — reopen the overview for that mark. */
   onOpenFootnote?: (footnote: DocFootnote, anchorRect: DOMRect | null) => void;
   onRemoveFootnote?: (footnote: DocFootnote) => void;
-}
-
-/** Caret hit-testing, spelled both ways browsers spell it. */
-function caretAt(x: number, y: number): { node: Node; offset: number } | null {
-  const doc = document as Document & {
-    caretRangeFromPoint?: (x: number, y: number) => Range | null;
-    caretPositionFromPoint?: (
-      x: number,
-      y: number,
-    ) => { offsetNode: Node; offset: number } | null;
-  };
-  if (typeof doc.caretRangeFromPoint === "function") {
-    const range = doc.caretRangeFromPoint(x, y);
-    return range ? { node: range.startContainer, offset: range.startOffset } : null;
-  }
-  if (typeof doc.caretPositionFromPoint === "function") {
-    const position = doc.caretPositionFromPoint(x, y);
-    return position ? { node: position.offsetNode, offset: position.offset } : null;
-  }
-  return null;
-}
-
-/**
- * The factor the board camera is scaling this subtree by.
- *
- * Asked of the DOM rather than plumbed down from the camera: the page slot is
- * transformed by Board and by nothing else, so its rendered width over its
- * layout width *is* the zoom, and a value read this way cannot drift out of
- * step with what is on screen.
- */
-function scaleOf(node: HTMLElement): number {
-  const width = node.offsetWidth;
-  if (width <= 0) return 1;
-  const rendered = node.getBoundingClientRect().width;
-  return rendered > 0 ? rendered / width : 1;
 }
 
 /**
@@ -261,6 +213,8 @@ export function DocSelectionLayer({
   const [copied, setCopied] = useState(false);
   /** The band being swept right now, in body coordinates. */
   const [band, setBand] = useState<LocalRect | null>(null);
+  /** Content blocks intersecting the live marquee (chrome only). */
+  const [hitRects, setHitRects] = useState<LocalRect[]>([]);
   const bandRef = useRef<{
     pointerId: number;
     startX: number;
@@ -279,33 +233,24 @@ export function DocSelectionLayer({
   /** Latest placement pass, so the window observer can re-run it. */
   const placeRef = useRef<(() => void) | null>(null);
 
-  /** Live gesture: null between holds. */
+  /**
+   * Live hold→marquee gesture.
+   *
+   * `startLocal` is body layout coords at hold-fire — fixed while the page
+   * scrolls under the finger, so edge auto-scroll can grow the band correctly.
+   */
   const holdRef = useRef<{
     pointerId: number;
     startX: number;
     startY: number;
     timer: number | null;
-    /** Capture early so the compositor cannot cancel mid-hold. */
     armTimer: number | null;
     held: boolean;
-    /** The scope the hold landed in — the drag stays inside it. */
     root: HTMLElement | null;
     scope: string | undefined;
-    anchorOffset: number | null;
-    /** Last resolved drag offset — used when caret hit-testing blanks out. */
-    lastOffset: number | null;
-    /** Where the finger is now, so an auto-scroll can re-ask without a move. */
+    startLocal: { x: number; y: number } | null;
     lastX: number;
     lastY: number;
-    /**
-     * The sideways scroller the hold started inside, if any.
-     *
-     * Found once and kept, because it cannot be found again later: dragging to
-     * the right edge takes the finger *off* the block, and walking up from
-     * whatever is under it there finds the board, not the code. The box a
-     * selection began in is the one that should follow it out — the same rule
-     * the scope root already follows.
-     */
     sideScroll: HTMLElement | null;
   } | null>(null);
 
@@ -318,7 +263,7 @@ export function DocSelectionLayer({
     if (hold?.timer != null) window.clearTimeout(hold.timer);
     if (hold?.armTimer != null) window.clearTimeout(hold.armTimer);
     holdRef.current = null;
-    hostRef.current?.classList.remove("lc-doc-selecting");
+    hostRef.current?.classList.remove("lc-doc-selecting", "lc-doc-select-mode");
     releaseSelectionGesture();
   }, []);
 
@@ -327,162 +272,16 @@ export function DocSelectionLayer({
     setPhase("idle");
     setRects([]);
     setBand(null);
+    setHitRects([]);
     setCopied(false);
   }, []);
 
-  /**
-   * Where a viewport point lands: which scope, and how far into its text.
-   *
-   * Offsets are local to a scope root — see `docAnchors`. That is what keeps
-   * resolving a mark on page 900 from walking the 899 pages in front of it.
-   *
-   * **The point does not have to be on a glyph.** `caretRangeFromPoint` answers
-   * for text and nothing else, and most of a real drag is not over text: the
-   * margins either side of the column, the gaps between paragraphs, the space
-   * past the end of a short line, everything below the last line. Taking `null`
-   * for an answer there is why a drag appeared to select one word and then stop
-   * — every move that left the run of letters it started on was discarded, so
-   * dragging *down* through a paragraph never extended anything.
-   *
-   * So a miss is retried against the column rather than given up on: the x is
-   * pulled inside the text's own box, which turns "somewhere in the left
-   * margin, four lines down" into "the start of that line". Past the bottom of
-   * the document it resolves to the end of the text, which is what dragging off
-   * the end of a page is asking for.
-   */
-  const pointAt = useCallback(
-    (
-      x: number,
-      y: number,
-      preferred?: HTMLElement | null,
-    ): { root: HTMLElement; scope?: string; offset: number } | null => {
-      const body = bodyRef.current;
-      if (!body) return null;
-
-      const resolve = (
-        at: { node: Node; offset: number } | null,
-      ): { root: HTMLElement; scope?: string; offset: number } | null => {
-        if (!at || !body.contains(at.node)) return null;
-        const scope = scopeOfNode(body, at.node);
-        const root = (scopeRootIn(body, scope) as HTMLElement | null) ?? body;
-        const range = document.createRange();
-        range.setStart(at.node, at.offset);
-        range.collapse(true);
-        const offset = anchorFromRange(root, expandOne(root, range))?.start;
-        return offset == null ? null : { root, scope, offset };
-      };
-
-      const direct = resolve(caretAt(x, y));
-      if (direct) return direct;
-
-      /*
-       * Code `<pre>` blocks often miss at the raw finger point (scroll, indent,
-       * touch-action). Probe inside the pre's box at the finger's x before
-       * falling back to the whole column edges — that fallback is what made a
-       * drag freeze on `def` instead of reaching `__init__`.
-       */
-      const under = document.elementFromPoint(x, y);
-      const pre = under?.closest?.("pre");
-      if (pre instanceof HTMLElement && body.contains(pre)) {
-        const box = pre.getBoundingClientRect();
-        if (box.width > 0 && box.height > 0) {
-          const inset = Math.min(6, box.width / 4);
-          const clampedY = Math.min(Math.max(y, box.top + 1), box.bottom - 1);
-          const xs = [
-            Math.min(Math.max(x, box.left + inset), box.right - inset),
-            box.left + inset,
-            box.right - inset,
-          ];
-          for (const candidateX of xs) {
-            const hit = resolve(caretAt(candidateX, clampedY));
-            if (hit) return hit;
-          }
-        }
-      }
-
-      /*
-       * Retry inside the column the drag belongs to.
-       *
-       * The scope the hold started in when there is one, so a drag down the
-       * side of page 40 does not get pulled into page 41's margin; the whole
-       * body otherwise.
-       *
-       * Same-line drags must keep the finger's x when the point is still inside
-       * the column — jumping straight to the left/right edges is what made a
-       * horizontal sweep look dead (every miss snapped to EOL / BOL).
-       */
-      const column = preferred ?? body;
-      const box = column.getBoundingClientRect();
-      if (box.width <= 0 || box.height <= 0) return null;
-
-      const inset = Math.min(8, box.width / 4);
-      const clampedY = Math.min(Math.max(y, box.top + 1), box.bottom - 1);
-      const insideX = x >= box.left && x <= box.right;
-      const candidates = insideX
-        ? [
-            Math.min(Math.max(x, box.left + inset), box.right - inset),
-            x - 8,
-            x + 8,
-            x - 16,
-            x + 16,
-            box.right - inset,
-            box.left + inset,
-          ]
-        : x < box.left
-          ? [box.left + inset, box.right - inset]
-          : [box.right - inset, box.left + inset];
-      for (const candidateX of candidates) {
-        const hit = resolve(caretAt(candidateX, clampedY));
-        if (hit) return hit;
-      }
-
-      // Below everything: the end of the text. Above it: the beginning. A drag
-      // that runs off the page should take the rest of the page with it.
-      if (y > box.bottom || y < box.top) {
-        const scope = column.getAttribute?.(SCOPE_ATTR) ?? undefined;
-        const root = column;
-        return {
-          root,
-          scope,
-          offset: y > box.bottom ? textOf(root).length : 0,
-        };
-      }
-      return null;
-    },
-    [],
-  );
-
-  /**
-   * Paint (and remember) the selection between two offsets in one scope.
-   *
-   * A drag that wanders onto the next page is clamped to the page it started
-   * on rather than being allowed to span both. Two pages are two offset
-   * spaces, so a quote across the seam has no single anchor that could name
-   * it — and a quote that silently stopped being storable would be worse than
-   * one that stops at the page break the reader can see.
-   */
-  const applySelection = useCallback(
-    (root: HTMLElement, scope: string | undefined, from: number, to: number) => {
-      const text = textOf(root);
-      const [start, end] = snapToWords(
-        text,
-        Math.min(from, to),
-        Math.max(from, to) + (from === to ? 1 : 0),
-      );
-      if (end <= start) return;
-      const anchor: DocAnchor = { kind: "text", start, end, ...(scope ? { scope } : {}) };
-      const range = rangeFromAnchor(root, anchor);
-      if (!range) return;
-      // Sliced from the stream, not from the range: `Range.toString()` fuses
-      // across block boundaries, which is exactly what the stream's separators
-      // exist to prevent.
-      const quoted = text.slice(start, end);
-      const body = bodyRef.current;
-      setRects(body ? localRects(body, range) : []);
-      setSelection({ text: quoted, excerpt: excerptOf(quoted), anchor });
-    },
-    [],
-  );
+  const paintMarquee = useCallback((rect: LocalRect, root: HTMLElement) => {
+    const body = bodyRef.current;
+    if (!body) return;
+    setBand(rect);
+    setHitRects(hitRectsUnder(body, root, rect));
+  }, []);
 
   useEffect(() => {
     if (!enabled && !highlighting) {
@@ -492,33 +291,12 @@ export function DocSelectionLayer({
   }, [enabled, highlighting, clearGesture, dismiss]);
 
   /**
-   * The highlighter sweep.
-   *
-   * A rubber band rather than a stroke that follows the finger: a band is what
-   * both jobs want — dragged along a line it is a highlight, dragged around a
-   * figure it is a crop — and one gesture that does both is one thing to learn.
-   * A minimum height keeps a fast flat sweep from producing a hairline nobody
-   * can see or hit afterwards.
+   * Annotate highlighter: immediate marquee (no hold).
+   * Same finalize path as reading-mode hold→marquee.
    */
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !highlighting) return;
-
-    const rectOf = (x: number, y: number) => {
-      const start = bandRef.current;
-      const body = bodyRef.current;
-      if (!start || !body) return null;
-      const origin = body.getBoundingClientRect();
-      const scale = scaleOf(body) || 1;
-      const left = (Math.min(start.startX, x) - origin.left) / scale;
-      const top = (Math.min(start.startY, y) - origin.top) / scale;
-      const width = Math.abs(x - start.startX) / scale;
-      // The floor is a *screen* measurement — a band you can see and hit —
-      // so it converts like everything else rather than being added raw to
-      // body units, where a zoomed-out page turns 14 into a stripe.
-      const height = Math.max(Math.abs(y - start.startY), MIN_BAND_PX) / scale;
-      return { left, top, width, height };
-    };
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
@@ -529,68 +307,52 @@ export function DocSelectionLayer({
         startX: event.clientX,
         startY: event.clientY,
       };
-      // The board must not pan under a sweep.
       claimSelectionGesture();
+      host.classList.add("lc-doc-selecting", "lc-doc-select-mode");
       event.preventDefault();
     };
 
     const onPointerMove = (event: PointerEvent) => {
       const start = bandRef.current;
-      if (!start || start.pointerId !== event.pointerId) return;
+      const body = bodyRef.current;
+      if (!start || start.pointerId !== event.pointerId || !body) return;
       event.preventDefault();
-      setBand(rectOf(event.clientX, event.clientY));
+      const a = viewportToLocal(body, start.startX, start.startY);
+      const b = viewportToLocal(body, event.clientX, event.clientY);
+      const rect = bandFromLocalPoints(body, a, b);
+      const { root } = scopeRootAtPoint(body, start.startX, start.startY);
+      paintMarquee(rect, root);
     };
 
     const onPointerUp = (event: PointerEvent) => {
       const start = bandRef.current;
       if (!start || start.pointerId !== event.pointerId) return;
-      // Measured before the ref is cleared — `rectOf` reads it.
-      const rect = rectOf(event.clientX, event.clientY);
       bandRef.current = null;
+      host.classList.remove("lc-doc-selecting", "lc-doc-select-mode");
       releaseSelectionGesture();
       const body = bodyRef.current;
-      if (!rect || !body || rect.width * (scaleOf(body) || 1) < MIN_BAND_PX) {
+      if (!body) {
         setBand(null);
+        setHitRects([]);
         return;
       }
-      /*
-       * The scope the sweep started in owns it.
-       *
-       * A band that strays onto the next page still belongs to the page the
-       * reader was working on — and a region anchor lives in one scope's
-       * coordinates, so there is no honest way to store one that spans two.
-       */
-      const found =
-        (document.elementFromPoint(start.startX, start.startY) as Element | null)?.closest?.(
-          `[${SCOPE_ATTR}]`,
-        ) ?? null;
-      const scopeRoot = found instanceof HTMLElement ? found : null;
-      const root = scopeRoot ?? body;
-      const scope = scopeRoot?.getAttribute(SCOPE_ATTR) ?? undefined;
-      const scale = scaleOf(body) || 1;
-      const bodyBox = body.getBoundingClientRect();
-      const anchor = regionAnchorFromRect(
-        root,
-        {
-          left: bodyBox.left + rect.left * scale,
-          top: bodyBox.top + rect.top * scale,
-          width: rect.width * scale,
-          height: rect.height * scale,
-        },
-        scope,
-        scale,
-      );
-      if (!anchor) {
+      const a = viewportToLocal(body, start.startX, start.startY);
+      const b = viewportToLocal(body, event.clientX, event.clientY);
+      const rect = bandFromLocalPoints(body, a, b);
+      if (rect.width * (scaleOf(body) || 1) < MIN_BAND_PX) {
         setBand(null);
+        setHitRects([]);
         return;
       }
-      // Words under the band, when there are any — a highlight over prose can
-      // still be quoted; over a scanned plate the excerpt is simply empty.
-      const text = textUnder(body, rect, scale, bodyBox);
-      setBand(rect);
-      setSelection({ text, excerpt: excerptOf(text), anchor });
-      // Same confirmation step as a text quote — a swept band is at least as
-      // easy to get slightly wrong.
+      const { root, scope } = scopeRootAtPoint(body, start.startX, start.startY);
+      const done = finalizeMarquee(body, rect, root, scope);
+      if (!done) {
+        setBand(null);
+        setHitRects([]);
+        return;
+      }
+      paintMarquee(rect, root);
+      setSelection({ text: done.text, excerpt: done.excerpt, anchor: done.anchor });
       setPhase("confirm");
     };
 
@@ -603,20 +365,26 @@ export function DocSelectionLayer({
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
+      host.classList.remove("lc-doc-selecting", "lc-doc-select-mode");
       releaseSelectionGesture();
     };
-  }, [highlighting, dismiss]);
+  }, [highlighting, dismiss, paintMarquee]);
 
-  // The gesture. Listeners go on the window for move/up so a drag that leaves
-  // the words — off the end of a paragraph, past the edge of the page — keeps
-  // extending the selection instead of silently ending it.
+  // Reading mode: hold to arm selection mode, then drag a marquee box.
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !enabled || highlighting) return;
 
+    const paintFromFinger = (hold: NonNullable<typeof holdRef.current>) => {
+      const body = bodyRef.current;
+      if (!body || !hold.startLocal || !hold.root) return;
+      const end = viewportToLocal(body, hold.lastX, hold.lastY);
+      const rect = bandFromLocalPoints(body, hold.startLocal, end);
+      paintMarquee(rect, hold.root);
+    };
+
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
-      // A tap on a ribbon is that ribbon's, not the start of a new quote.
       if (isOverlayControl(event.target)) return;
       dismiss();
       clearGesture();
@@ -637,54 +405,31 @@ export function DocSelectionLayer({
         }, 140),
         timer: window.setTimeout(() => {
           const hold = holdRef.current;
-          if (!hold) return;
-          const at = pointAt(startX, startY);
-          if (!at) {
-            clearGesture();
-            return;
-          }
+          const body = bodyRef.current;
+          if (!hold || !body) return;
+          // No caret required — empty margin / figure still arms selection.
+          const { root, scope } = scopeRootAtPoint(body, startX, startY);
           hold.held = true;
           hold.timer = null;
           if (hold.armTimer != null) {
             window.clearTimeout(hold.armTimer);
             hold.armTimer = null;
           }
-          hold.root = at.root;
-          hold.scope = at.scope;
-          hold.anchorOffset = at.offset;
-          hold.lastOffset = at.offset;
+          hold.root = root;
+          hold.scope = scope;
+          hold.startLocal = viewportToLocal(body, startX, startY);
           hold.sideScroll =
             horizontalScrollHost(document.elementFromPoint(startX, startY)) ??
-            horizontalScrollHost(at.root);
-          // Board's pan must let go before the drag below starts moving.
+            horizontalScrollHost(root);
           claimSelectionGesture();
-          /*
-           * Take the pointer, now that the hold has earned it.
-           *
-           * Without capture the browser is still entitled to decide the gesture
-           * was a scroll and take it away — `pointercancel`, mid-word, and the
-           * quote is whatever single word the hold started on. That is the
-           * failure that made dragging feel like it only ever selected one
-           * word. Capture also routes moves that leave the element back here,
-           * so a drag off the end of a line keeps extending.
-           */
           try {
             host.setPointerCapture(hold.pointerId);
           } catch {
-            /* the pointer may already be gone — the window listeners still run */
+            /* window listeners still run */
           }
-          /*
-           * Nothing under the finger may scroll while the hold has it.
-           *
-           * A document is full of things that scroll on their own — a wide code
-           * block, a table, a PDF page too wide for the column. Drag sideways
-           * across one and the browser starts scrolling it, which both moves
-           * the words out from under the selection and ends the gesture with a
-           * `pointercancel`. Capture alone does not prevent that; `touch-action`
-           * is what tells the compositor there is no scroll to start. Set for
-           * the length of the hold only, so ordinary reading still scrolls.
-           */
-          host.classList.add("lc-doc-selecting");
+          host.classList.add("lc-doc-selecting", "lc-doc-select-mode");
+          // Tiny starter band so the mode is visible before the drag grows it.
+          paintFromFinger(hold);
           if (edgeFrameRef.current == null) {
             edgeFrameRef.current = requestAnimationFrame(autoScroll);
           }
@@ -693,71 +438,17 @@ export function DocSelectionLayer({
           } catch {
             /* haptics are a nicety */
           }
-          applySelection(at.root, at.scope, at.offset, at.offset);
         }, LONG_PRESS_MS),
         held: false,
         root: null,
         scope: undefined,
-        anchorOffset: null,
-        lastOffset: null,
+        startLocal: null,
         lastX: startX,
         lastY: startY,
         sideScroll: null,
       };
     };
 
-    /**
-     * Extend the selection to a viewport point, wherever it landed.
-     *
-     * Split out of the move handler because the auto-scroll below has to run it
-     * too: once the page has moved under a finger that is holding still, the
-     * words beneath it are different ones, and without re-asking the selection
-     * would stop growing the moment the reader stopped moving.
-     */
-    const extendTo = (x: number, y: number) => {
-      const hold = holdRef.current;
-      if (!hold?.held || hold.anchorOffset == null || !hold.root) return;
-      let at = pointAt(x, y, hold.root);
-      // Caret blanks in `<pre>` / indent gaps — probe nearby before freezing.
-      if (!at) {
-        for (const dy of [0, -6, 6, -12, 12]) {
-          for (const dx of [0, -8, 8, -16, 16]) {
-            if (dx === 0 && dy === 0) continue;
-            at = pointAt(x + dx, y + dy, hold.root);
-            if (at) break;
-          }
-          if (at) break;
-        }
-      }
-      if (!at) {
-        // Keep the last good extent rather than shrinking back to one word.
-        if (hold.lastOffset != null) {
-          applySelection(hold.root, hold.scope, hold.anchorOffset, hold.lastOffset);
-        }
-        return;
-      }
-      // Wandered onto another page: hold the selection at this page's edge
-      // rather than following, since the two are different offset spaces.
-      const offset = at.root === hold.root ? at.offset : hold.anchorOffset;
-      hold.lastOffset = offset;
-      applySelection(hold.root, hold.scope, hold.anchorOffset, offset);
-    };
-
-    /*
-     * Drag to the edge and the page comes to you.
-     *
-     * A frame loop rather than a step per `pointermove`, because the finger
-     * that has run out of screen is usually the one that has *stopped* moving —
-     * it is already as far as it can go. Stepping only on movement meant the
-     * selection stopped exactly where the reader needed it to keep going, and
-     * "drag to the bottom of the screen to take the rest of the page" simply
-     * did not work.
-     *
-     * Horizontal is a nested scroller (a wide code block, an over-wide PDF
-     * page); vertical is the reading camera, which Board owns — see
-     * `requestDocScroll`. Speed ramps with how far past the edge the finger is,
-     * so nudging the boundary creeps and pinning the edge moves properly.
-     */
     const autoScroll = () => {
       const hold = holdRef.current;
       if (!hold?.held) {
@@ -792,16 +483,11 @@ export function DocSelectionLayer({
           : y < top + SELECT_EDGE_PX
             ? y - (top + SELECT_EDGE_PX)
             : 0;
-      // Positive `dy` means "bring later text into view", which is what a drag
-      // past the *bottom* edge is asking for — hence the sign follows `overY`
-      // rather than opposing it.
       if (overY !== 0 && requestDocScroll(Math.sign(overY) * edgeStep(overY)) !== 0) {
         moved = true;
       }
 
-      // Only worth re-reading the caret when something actually moved; the
-      // page may simply have run out.
-      if (moved) extendTo(x, y);
+      if (moved) paintFromFinger(hold);
       edgeFrameRef.current = requestAnimationFrame(autoScroll);
     };
 
@@ -809,10 +495,6 @@ export function DocSelectionLayer({
       const hold = holdRef.current;
       if (!hold || hold.pointerId !== event.pointerId) return;
       if (!hold.held) {
-        // Moved before the hold landed: the writer meant to scroll, and the
-        // page has already started doing it. Get out of the way.
-        // Capture-phase on window so this still runs when Board would otherwise
-        // stopPropagation after arming a nested horizontal scroll.
         const moved = Math.hypot(event.clientX - hold.startX, event.clientY - hold.startY);
         if (moved > SELECT_HOLD_SLOP_PX) clearGesture();
         return;
@@ -820,48 +502,50 @@ export function DocSelectionLayer({
       event.preventDefault();
       hold.lastX = event.clientX;
       hold.lastY = event.clientY;
-      extendTo(event.clientX, event.clientY);
+      paintFromFinger(hold);
     };
 
-    /*
-     * Confirm only on a real lift.
-     *
-     * `pointercancel` used to share this path and open ✓/✕ mid-drag whenever
-     * the compositor snatched the pointer (scroll claim, palm, second touch).
-     * Cancel clears the gesture but leaves the highlight; the writer lifts
-     * cleanly to accept or reject.
-     */
     const finishHold = (event: PointerEvent, confirm: boolean) => {
       const hold = holdRef.current;
       if (!hold || hold.pointerId !== event.pointerId) return;
       const held = hold.held;
+      const body = bodyRef.current;
+      const root = hold.root;
+      const scope = hold.scope;
+      const startLocal = hold.startLocal;
+      const lastX = hold.lastX;
+      const lastY = hold.lastY;
       try {
         host.releasePointerCapture(hold.pointerId);
       } catch {
         /* already released */
       }
       clearGesture();
-      if (held && confirm) setPhase("confirm");
+      if (!held || !confirm || !body || !root || !startLocal) return;
+      const end = viewportToLocal(body, lastX, lastY);
+      const rect = bandFromLocalPoints(body, startLocal, end);
+      if (rect.width * (scaleOf(body) || 1) < MIN_BAND_PX) {
+        setBand(null);
+        setHitRects([]);
+        return;
+      }
+      const done = finalizeMarquee(body, rect, root, scope);
+      if (!done) {
+        setBand(null);
+        setHitRects([]);
+        return;
+      }
+      paintMarquee(rect, root);
+      setSelection({ text: done.text, excerpt: done.excerpt, anchor: done.anchor });
+      setPhase("confirm");
     };
 
     const onPointerUp = (event: PointerEvent) => finishHold(event, true);
     const onPointerCancel = (event: PointerEvent) => finishHold(event, false);
-
-    /*
-     * The platform's own selection stays off.
-     *
-     * The body has to be `user-select: text` for `caretRangeFromPoint` to
-     * answer at all, and that is also what invites the system long-press
-     * handles — drawn in screen space, over a page that lives in a scaled
-     * scene, so they sit visibly wrong the moment the writer zooms. Cancelling
-     * `selectstart` keeps the hit-testing and drops the UI.
-     */
     const onSelectStart = (event: Event) => event.preventDefault();
 
     host.addEventListener("selectstart", onSelectStart);
     host.addEventListener("pointerdown", onPointerDown);
-    // Capture on window: Board's board-root capture may stopPropagation once it
-    // arms; we still need the pending-hold slop check and the held drag.
     window.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
     window.addEventListener("pointerup", onPointerUp, true);
     window.addEventListener("pointercancel", onPointerCancel, true);
@@ -873,7 +557,7 @@ export function DocSelectionLayer({
       window.removeEventListener("pointercancel", onPointerCancel, true);
       releaseSelectionGesture();
     };
-  }, [enabled, highlighting, applySelection, clearGesture, dismiss, pointAt]);
+  }, [enabled, highlighting, clearGesture, dismiss, paintMarquee]);
 
   /*
    * Ribbons are placed from the live DOM, so they follow a re-render of the
@@ -1037,7 +721,9 @@ export function DocSelectionLayer({
    */
   const highlightBox = (): DOMRect | null => {
     const painted = Array.from(
-      document.querySelectorAll(".lc-doc-select-rect, .lc-doc-highlight-band"),
+      document.querySelectorAll(
+        ".lc-doc-select-rect, .lc-doc-highlight-band, .lc-doc-marquee-band, .lc-doc-marquee-hit",
+      ),
     );
     if (painted.length === 0) return null;
     let left = Infinity;
@@ -1138,7 +824,9 @@ export function DocSelectionLayer({
         >
           {band && (
             <div
-              className="lc-doc-highlight-band"
+              className={
+                highlighting ? "lc-doc-highlight-band" : "lc-doc-marquee-band"
+              }
               style={{
                 left: band.left,
                 top: band.top,
@@ -1147,6 +835,18 @@ export function DocSelectionLayer({
               }}
             />
           )}
+          {hitRects.map((rect, index) => (
+            <div
+              key={`hit-${index}`}
+              className="lc-doc-marquee-hit"
+              style={{
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height,
+              }}
+            />
+          ))}
           {rects.map((rect, index) => (
             <div
               key={`sel-${index}`}
@@ -1353,28 +1053,6 @@ export function DocSelectionLayer({
   );
 }
 
-/**
- * Give a collapsed caret one character of body so it can be anchored.
- *
- * `anchorFromRange` refuses an empty range on purpose — a zero-length quote is
- * a bug everywhere else it could come from. A caret is the one legitimate
- * exception, and widening it here keeps that check strict.
- */
-function expandOne(host: HTMLElement, range: Range): Range {
-  const widened = range.cloneRange();
-  try {
-    widened.setEnd(range.endContainer, range.endOffset + 1);
-  } catch {
-    try {
-      widened.setStart(range.startContainer, Math.max(0, range.startOffset - 1));
-    } catch {
-      /* a caret with nothing either side of it — the anchor will be null */
-    }
-  }
-  return host.contains(widened.startContainer) ? widened : range;
-}
-
-
 /** What a ribbon says on hover, and to a screen reader. */
 function footnoteTitle(footnote: DocFootnote, number: number): string {
   const what = footnote.excerpt || "this area";
@@ -1397,38 +1075,4 @@ function footnoteTitle(footnote: DocFootnote, number: number): string {
  */
 function overlay(host: HTMLElement | null, node: React.ReactNode): React.ReactNode {
   return host ? createPortal(node, host) : node;
-}
-
-
-/**
- * The words a swept band covers, if any.
- *
- * A highlight over prose should still be quotable — the coach can be told what
- * it says as well as shown it — but over a scanned plate or a figure there is
- * nothing there, and an empty string is the honest answer rather than a
- * failure. Text nodes are tested by their own boxes, so a band that clips a
- * line's descenders still counts that line.
- */
-function textUnder(
-  body: HTMLElement,
-  rect: LocalRect,
-  scale: number,
-  bodyBox: DOMRect,
-): string {
-  const left = bodyBox.left + rect.left * scale;
-  const top = bodyBox.top + rect.top * scale;
-  const right = left + rect.width * scale;
-  const bottom = top + rect.height * scale;
-  const parts: string[] = [];
-  for (const node of textNodesOf(body)) {
-    if (!node.data.trim()) continue;
-    const range = document.createRange();
-    range.selectNodeContents(node);
-    const box = range.getBoundingClientRect();
-    if (box.width === 0 && box.height === 0) continue;
-    const overlaps =
-      box.left < right && box.right > left && box.top < bottom && box.bottom > top;
-    if (overlaps) parts.push(node.data);
-  }
-  return parts.join(" ").replace(/\s+/g, " ").trim();
 }

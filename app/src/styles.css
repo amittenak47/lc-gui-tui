@@ -1613,6 +1613,65 @@ input[type="checkbox"] {
   box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
 }
 
+/*
+ * MorphBar shell — Drawesome-style: container height/width morphs; panels
+ * stack and cross-fade. Used by toolbar flyouts (and reusable elsewhere).
+ */
+.lc-morph-bar {
+  overflow: hidden;
+  transition:
+    height 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-morph-bar.lc-shape-flyout {
+  /* flyout chrome lives on the morph shell when MorphBar carries the class */
+  display: block;
+}
+
+.lc-morph-panel {
+  opacity: 0;
+  transform: translateY(4px) scale(0.98);
+  filter: blur(2px);
+  pointer-events: none;
+  transition:
+    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-morph-panel.is-active {
+  opacity: 1;
+  transform: none;
+  filter: none;
+  pointer-events: auto;
+}
+
+.lc-morph-bar.lc-shape-flyout .lc-morph-panel.is-active {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lc-morph-bar[data-axis="height"] .lc-morph-panel:not(.is-active) {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-morph-bar,
+  .lc-morph-panel {
+    transition: none !important;
+  }
+  .lc-morph-panel {
+    filter: none;
+    transform: none;
+  }
+}
+
 .lc-shape-flyout button {
   display: flex;
   align-items: center;
@@ -8179,19 +8238,12 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * The body is selectable to the *engine*, not to the platform.
- *
- * `caretRangeFromPoint` is how a hold finds the word under the finger, and it
- * declines to return positions inside a `user-select: none` subtree — which is
- * what the page slot sets, so the flag has to come back off here or the gesture
- * has nothing to aim at. What that would normally also switch on is the system
- * long-press selection UI, with handles drawn in screen space over a page that
- * lives in a scaled scene; `selectstart` is cancelled in DocSelectionLayer to
- * keep it off, and the callout below stops iOS offering its own menu.
+ * The body no longer needs `user-select: text` for caret hit-testing.
+ * Marquee selection paints its own band; keep callout off on iOS.
  */
 .lc-doc-selectable-body {
-  user-select: text;
-  -webkit-user-select: text;
+  user-select: none;
+  -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
 
@@ -9255,6 +9307,12 @@ button.lc-row-selected:hover:not(:disabled) {
   cursor: crosshair;
 }
 
+/* Reading-mode marquee: hold armed → crosshair. */
+.lc-doc-select-mode,
+.lc-doc-select-mode * {
+  cursor: crosshair !important;
+}
+
 /* The band being swept, before it is anything. */
 /*
  * The band is the writer's current ink colour, not a fixed amber.
@@ -9271,4 +9329,35 @@ button.lc-row-selected:hover:not(:disabled) {
   border: 1px solid color-mix(in srgb, var(--lc-highlight, #f5b301) 55%, transparent);
   mix-blend-mode: multiply;
   pointer-events: none;
+}
+
+/*
+ * Reading marquee — own take inspired by Agentation multi-select:
+ * soft fill + dashed stroke, teal accent (not neon clone).
+ */
+.lc-doc-marquee-band {
+  position: absolute;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent, #0d9488) 14%, transparent);
+  border: 1.5px dashed color-mix(in srgb, var(--accent, #0d9488) 70%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, #0d9488) 18%, transparent);
+  pointer-events: none;
+}
+
+.lc-doc-marquee-hit {
+  position: absolute;
+  border-radius: 4px;
+  border: 1.5px solid color-mix(in srgb, var(--accent, #0d9488) 85%, #14b8a6);
+  background: color-mix(in srgb, var(--accent, #0d9488) 8%, transparent);
+  pointer-events: none;
+}
+
+:root[data-theme="dark"] .lc-doc-marquee-band {
+  background: color-mix(in srgb, var(--accent, #2dd4bf) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #2dd4bf) 65%, transparent);
+}
+
+:root[data-theme="dark"] .lc-doc-marquee-hit {
+  border-color: color-mix(in srgb, var(--accent, #2dd4bf) 80%, #5eead4);
+  background: color-mix(in srgb, var(--accent, #2dd4bf) 10%, transparent);
 }
