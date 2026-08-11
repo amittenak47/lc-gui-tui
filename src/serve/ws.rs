@@ -331,6 +331,87 @@ impl TakeIfMatching for Option<InFlight> {
     }
 }
 
+/// Short human detail for the immediate `received` stage — before any pool work.
+fn received_detail(action: RunAction, payload: &serde_json::Value) -> String {
+    match action {
+        RunAction::Ask => {
+            let has_question = payload
+                .get("question")
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| !text.trim().is_empty());
+            let photo_count = payload
+                .get("images")
+                .and_then(|value| value.as_array())
+                .map(|images| images.len())
+                .unwrap_or(0);
+            summarize_received(has_question, false, photo_count, None)
+        }
+        RunAction::Review => {
+            let board = payload_to_board(payload);
+            let has_board = !board.is_empty() || board.has_visual_evidence();
+            summarize_received(true, has_board, 0, Some("review"))
+        }
+        RunAction::Viz => {
+            let board = payload_to_board(payload);
+            let has_board = !board.is_empty() || board.has_visual_evidence();
+            let has_ask = payload
+                .get("ask")
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| !text.trim().is_empty());
+            summarize_received(has_ask, has_board, 0, Some("draw"))
+        }
+        RunAction::Lazy => {
+            let board = payload_to_board(payload);
+            let has_board = !board.is_empty() || board.has_visual_evidence();
+            summarize_received(false, has_board, 0, Some("lazy fill"))
+        }
+        RunAction::DrawReview => {
+            let has_png = payload
+                .get("png")
+                .and_then(|value| value.as_str())
+                .is_some_and(|png| !png.is_empty());
+            let has_ask = payload
+                .get("ask")
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| !text.trim().is_empty());
+            summarize_received(has_ask, has_png, 0, Some("draw review"))
+        }
+    }
+}
+
+fn payload_to_board(payload: &serde_json::Value) -> BoardSnapshot {
+    serde_json::from_value(payload.clone()).unwrap_or_default()
+}
+
+fn summarize_received(
+    has_text: bool,
+    has_board: bool,
+    photo_count: usize,
+    kind: Option<&str>,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if has_text {
+        parts.push("question".into());
+    }
+    if has_board {
+        parts.push("board".into());
+    }
+    if photo_count > 0 {
+        parts.push(if photo_count == 1 {
+            "1 photo".into()
+        } else {
+            format!("{} photos", photo_count)
+        });
+    }
+    if parts.is_empty() {
+        return match kind {
+            Some(label) => format!("got your {label}"),
+            None => "got your message".into(),
+        };
+    }
+    format!("got {}", parts.join(" + "))
+}
+
 fn spawn_run(
     state: Shared,
     outgoing: UnboundedSender<ServerFrame>,
@@ -339,6 +420,9 @@ fn spawn_run(
     payload: serde_json::Value,
 ) -> InFlight {
     let events = run_event_sink(outgoing.clone(), request_id.clone());
+    // Acknowledge the run before `run_action` schedules pool work — the client
+    // switches from its local ack line to stage frames on this one.
+    events.stage("received", received_detail(action, &payload));
     let cancel = events
         .cancel_handle()
         .expect("a wired sink is always cancellable");
@@ -720,5 +804,29 @@ mod tests {
         taken.cancel();
         assert!(taken.cancel.load(Ordering::Relaxed));
         assert!(in_flight.is_none());
+    }
+
+    #[test]
+    fn received_detail_summarizes_ask_payload() {
+        let payload = serde_json::json!({
+            "question": "why two pointers?",
+            "images": ["png1", "png2"]
+        });
+        assert_eq!(
+            received_detail(RunAction::Ask, &payload),
+            "got question + 2 photos"
+        );
+    }
+
+    #[test]
+    fn received_detail_summarizes_review_board() {
+        let payload = serde_json::json!({
+            "task_id": "two-sum",
+            "recognized_text": "hash map"
+        });
+        assert_eq!(
+            received_detail(RunAction::Review, &payload),
+            "got question + board"
+        );
     }
 }

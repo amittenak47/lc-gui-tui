@@ -689,6 +689,46 @@ input[type="checkbox"] {
 }
 
 /*
+ * ScratchPad open title — movie-bold, top-left of the pad.
+ * ModeIndicator keeps Annotation / Scroll in the center.
+ */
+.lc-pad-title {
+  position: absolute;
+  left: 1.1rem;
+  top: 1rem;
+  z-index: 65;
+  pointer-events: none;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: "Courier New", Courier, monospace;
+  font-size: clamp(1.35rem, 3.6vw, 1.85rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+  text-transform: none;
+  text-shadow:
+    0 0 12px color-mix(in srgb, var(--surface) 70%, transparent),
+    0 1px 0 color-mix(in srgb, var(--surface) 55%, transparent);
+  opacity: 0;
+  transition: opacity 420ms ease-out;
+  will-change: opacity;
+}
+
+.lc-pad-title.is-visible {
+  opacity: 1;
+  transition-duration: 120ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-pad-title {
+    transition: none;
+  }
+}
+
+/*
  * Page title on the freely-scrolling desktop board — "Code · 2 of 6".
  *
  * Top of the canvas rather than the middle: it answers "where am I" while the

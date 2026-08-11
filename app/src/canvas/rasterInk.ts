@@ -807,15 +807,23 @@ function strokeNormalAt(points: readonly ScenePoint[], index: number): { x: numb
 }
 
 /** Left and right offset polylines for a variable-width ribbon. */
-function ribbonSides(
+export function ribbonSides(
   points: readonly ScenePoint[],
   styles: readonly InkStrokeStyle[],
   pixelScale: number,
 ): { left: Array<{ x: number; y: number }>; right: Array<{ x: number; y: number }> } {
   const left: Array<{ x: number; y: number }> = [];
   const right: Array<{ x: number; y: number }> = [];
+  let prevNx = 0;
+  let prevNy = 1;
   for (let index = 0; index < points.length; index++) {
-    const { x: nx, y: ny } = strokeNormalAt(points, index);
+    let { x: nx, y: ny } = strokeNormalAt(points, index);
+    if (index > 0 && nx * prevNx + ny * prevNy < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    prevNx = nx;
+    prevNy = ny;
     const half = paintedWidth(styles[index].lineWidth, pixelScale) / 2;
     const center = points[index];
     left.push({ x: center.x + nx * half, y: center.y + ny * half });
@@ -858,6 +866,7 @@ function drawRibbonStrokeFrom(
   fromIndex: number,
   pixelScale: number,
   capEnd: boolean,
+  capHead = true,
 ): void {
   const points = op.points;
   if (points.length === 0) return;
@@ -901,7 +910,7 @@ function drawRibbonStrokeFrom(
         index,
         pixelScale,
         bucketA,
-        fromIndex === 0 && painted === 0,
+        capHead && fromIndex === 0 && painted === 0,
         false,
       );
       painted += 1;
@@ -917,7 +926,7 @@ function drawRibbonStrokeFrom(
     segmentCount - 1,
     pixelScale,
     bucketA,
-    fromIndex === 0 && painted === 0,
+    capHead && fromIndex === 0 && painted === 0,
     capEnd,
   );
 
@@ -1070,6 +1079,7 @@ function drawStrokeFrom(
   fromIndex: number,
   pixelScale: number,
   capEnd = true,
+  capHead = true,
 ): void {
   const points = op.points;
   if (points.length === 0) return;
@@ -1117,18 +1127,16 @@ function drawStrokeFrom(
 
   const speedInk = op.speedInk ?? 0;
   if (speedInk > 0 && !op.highlight) {
-    drawRibbonStrokeFrom(ctx, op, start, pixelScale, capEnd);
+    drawRibbonStrokeFrom(ctx, op, start, pixelScale, capEnd, capHead);
     return;
   }
 
   const runs = inkStrokeRuns(op, start);
   if (runs.length === 0) return;
 
-  // Always abut. Live incremental cannot use round caps (spokes on curves).
-  // Matching commit to the same path stops the stroke from looking like it
-  // "smoothed" on lift when the overlay was abut and the tile was round-cap.
+  // Butt caps + bevel joins — round joins fan into spokes on thick curves.
   ctx.lineCap = "butt";
-  ctx.lineJoin = "round";
+  ctx.lineJoin = "bevel";
   for (let ri = 0; ri < runs.length; ri++) {
     const run = runs[ri];
     ctx.lineWidth = paintedWidth(run.lineWidth, pixelScale);
@@ -1153,7 +1161,7 @@ function drawStrokeFrom(
     ctx.lineTo(pEnd.x, pEnd.y);
     ctx.stroke();
 
-    if (fromIndex === 0 && ri === 0) {
+    if (capHead && fromIndex === 0 && ri === 0) {
       const nextIdx = Math.floor(run.start) + 1;
       const nextPt =
         nextIdx < run.end && nextIdx < points.length
@@ -1199,7 +1207,7 @@ function eraseStampsFrom(
 }
 
 /** Apply one committed or live op in scene space (caller sets the transform). */
-export type ApplyInkOptions = { capEnd?: boolean };
+export type ApplyInkOptions = { capEnd?: boolean; capHead?: boolean };
 
 export function applyInkOp(
   ctx: CanvasRenderingContext2D,
@@ -1208,7 +1216,8 @@ export function applyInkOp(
   options?: ApplyInkOptions,
 ): void {
   const capEnd = options?.capEnd ?? true;
-  if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, pixelScale, capEnd);
+  const capHead = options?.capHead ?? true;
+  if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, pixelScale, capEnd, capHead);
   else eraseStampsFrom(ctx, op, 0);
   ctx.globalCompositeOperation = "source-over";
 }

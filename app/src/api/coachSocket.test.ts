@@ -480,6 +480,35 @@ describe("AmbientCoach.run — a run always settles", () => {
     vi.useRealTimers();
   });
 
+  it("acknowledges a run on the received stage", async () => {
+    vi.useFakeTimers();
+    const { socket, coach } = ready();
+    const promise = coach.run("ask", { question: "hi" });
+    const requestId = requestIdOf(socket);
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "stage",
+        request_id: requestId,
+        stage: "received",
+        detail: "got question",
+      }),
+    });
+    expect(coach.busy).toBe(true);
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "result",
+        request_id: requestId,
+        action: "ask",
+        body: { reply: "hello" },
+      }),
+    });
+    await expect(promise).resolves.toEqual({ reply: "hello" });
+    coach.stop();
+    vi.useRealTimers();
+  });
+
   it("gives a claimed run the long budget, and names where it stalled", async () => {
     vi.useFakeTimers();
     const { socket, coach } = ready();

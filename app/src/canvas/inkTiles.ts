@@ -797,14 +797,14 @@ export function paintLiveOp(
           host.bounds,
           hostScrollDx(op, host.scrollLeft),
           pixelScale,
-          { capEnd: false },
+          { capEnd: false, capHead: false },
         );
       } else {
-        applyInkOp(ctx, op, pixelScale, { capEnd: false });
+        applyInkOp(ctx, op, pixelScale, { capEnd: false, capHead: false });
       }
       return;
     }
-    applyInkOp(ctx, op, pixelScale, { capEnd: false });
+    applyInkOp(ctx, op, pixelScale, { capEnd: false, capHead: false });
   };
   if (clip) {
     ctx.save();

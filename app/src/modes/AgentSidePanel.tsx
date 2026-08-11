@@ -253,6 +253,14 @@ export interface CoachSendFlags {
   threadRootId?: string | null;
 }
 
+/** Mirrored on a pending assistant turn — flags + what the user sent. */
+export interface CoachPendingAck {
+  flags: string[];
+  hasQuestion: boolean;
+  boardAttached: boolean;
+  photoCount: number;
+}
+
 export interface CoachAttachment {
   label: string;
   /** Raw base64 PNG (no data: prefix). */
@@ -301,6 +309,8 @@ export interface CoachChatMessage {
   processEvents?: CoachProcessEvent[];
   /** The request is still in flight — this turn is a placeholder. */
   pending?: boolean;
+  /** While {@link pending} — local ack before the daemon's first stage frame. */
+  pendingAck?: CoachPendingAck;
   /** User message waiting in the FIFO send queue while the coach is busy. */
   queued?: boolean;
   /**
@@ -1279,7 +1289,7 @@ export function AgentSidePanel({
               {message.pending && !message.processEvents?.length && (
                 <div className="lc-coach-turn-body">
                   <span className="lc-coach-spinner" aria-hidden />
-                  Working…
+                  {pendingAckLine(message)}
                 </div>
               )}
               {message.attachments && message.attachments.length > 0 && (
@@ -1846,6 +1856,22 @@ function ProcessBlock({
       )}
     </div>
   );
+}
+
+/** Local ack while waiting for the daemon's `received` stage or the answer. */
+export function pendingAckLine(message: CoachChatMessage): string {
+  const ack = message.pendingAck;
+  if (!ack) return "Working…";
+  const inputs: string[] = [];
+  if (ack.hasQuestion) inputs.push("question");
+  if (ack.boardAttached) inputs.push("board");
+  if (ack.photoCount > 0) {
+    inputs.push(ack.photoCount === 1 ? "1 photo" : `${ack.photoCount} photos`);
+  }
+  const inputPart =
+    inputs.length > 0 ? `got ${inputs.join(" + ")}` : "got your message";
+  if (ack.flags.length > 0) return `${ack.flags.join(", ")} — ${inputPart}`;
+  return inputPart;
 }
 
 /** One process line. Unknown stage names fall back to the daemon's own text. */

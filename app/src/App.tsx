@@ -74,6 +74,7 @@ import {
   AMBIENT_ENABLED,
   type CoachAttachment,
   type CoachChatMessage,
+  type CoachPendingAck,
   type CoachReplyRef,
   type CoachSendFlags,
   replyExcerpt,
@@ -1823,8 +1824,8 @@ export function App() {
         const fadeMs = boardFadeMs() || 1;
         window.setTimeout(() => {
           setEntering(false);
-          boardRef.current?.announce(
-            restored && notebook ? notebook.title : "Scratchpad",
+          boardRef.current?.showPadTitle(
+            restored && notebook ? notebook.title : "ScratchPad",
           );
         }, fadeMs);
         setCoachOpen(false);
@@ -2335,7 +2336,8 @@ export function App() {
    * somewhere to land and the student can see the work is theirs — not a
    * spinner that could belong to anything.
    */
-  const beginCoachTurn = useCallback((replyTo?: CoachReplyRef): string => {
+  const beginCoachTurn = useCallback(
+    (replyTo?: CoachReplyRef, pendingAck?: CoachPendingAck): string => {
     const id = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     activeCoachTurnIdRef.current = id;
     dirtyRef.current = true;
@@ -2348,11 +2350,13 @@ export function App() {
         at: Date.now(),
         pending: true,
         processEvents: [],
+        ...(pendingAck ? { pendingAck } : {}),
         ...(replyTo ? { replyTo } : {}),
       },
     ]);
     return id;
-  }, []);
+  },
+  []);
 
   const appendProcessEvent = useCallback((messageId: string, event: CoachProcessEvent) => {
     setCoachMessages((current) =>
@@ -2484,6 +2488,7 @@ export function App() {
     /** Lazy composer: review the board only — code dock is filled separately. */
     layoutOnly = false,
     threadAnchor?: CoachReplyRef | null,
+    pendingAck?: CoachPendingAck,
   ) => {
     const board = boardRef.current;
     if (!board || !problem) return;
@@ -2526,7 +2531,7 @@ export function App() {
       setCoachPhase(`Thinking about ${topic}…`);
     }
 
-    const turnId = beginCoachTurn(threadAnchor ?? undefined);
+    const turnId = beginCoachTurn(threadAnchor ?? undefined, pendingAck);
     let finished = false;
     try {
       await syncSolution();
@@ -2729,7 +2734,12 @@ export function App() {
     setBusy("drawing…");
     setError(null);
     if (!suppressCoachPanelOpenRef.current) setCoachOpen(true);
-    const turnId = beginCoachTurn(threadAnchor ?? undefined);
+    const turnId = beginCoachTurn(threadAnchor ?? undefined, {
+      flags: ["Draw"],
+      hasQuestion: Boolean(ask.trim()),
+      boardAttached: true,
+      photoCount: 0,
+    });
     let finished = false;
     try {
       await syncSolution();
@@ -2888,6 +2898,7 @@ export function App() {
       question: string,
       threadAnchor?: CoachReplyRef | null,
       photos?: CoachAttachment[],
+      pendingAck?: CoachPendingAck,
     ) => {
       const note = question.trim();
       if (!problem || !note) {
@@ -2900,7 +2911,7 @@ export function App() {
       setNotice(null);
       if (!suppressCoachPanelOpenRef.current) setCoachOpen(true);
       setCoachPhase("Thinking…");
-      const turnId = beginCoachTurn(threadAnchor ?? undefined);
+      const turnId = beginCoachTurn(threadAnchor ?? undefined, pendingAck);
       let finished = false;
       try {
         await syncSolution();
@@ -3176,8 +3187,28 @@ export function App() {
           ),
         );
 
+        const flagBits = flagBitsFor(flags);
+        const pendingAck: CoachPendingAck = {
+          flags: flagBits,
+          hasQuestion: Boolean(text.trim() || quotedPassage),
+          boardAttached:
+            flags.reviewBoard ||
+            flags.annotate ||
+            flags.lazy ||
+            flags.draw ||
+            Boolean(attachments?.length),
+          photoCount: photos.length,
+        };
+
         if (flags.reviewBoard) {
-          await submitForReview(prompt, true, attachments, flags.lazy, threadAnchor);
+          await submitForReview(
+            prompt,
+            true,
+            attachments,
+            flags.lazy,
+            threadAnchor,
+            pendingAck,
+          );
         } else if (flags.ask || text || photos.length > 0 || quotedPassage) {
           const fallback = quotedPassage
             ? "What should I make of this?"
@@ -3202,6 +3233,7 @@ export function App() {
             text ? prompt : `${prompt}\n\n${fallback}`.trim(),
             threadAnchor,
             [...photos, ...boardShots],
+            pendingAck,
           );
         }
         if (flags.draw) {
@@ -3252,6 +3284,7 @@ export function App() {
       modeHasVision,
       applyFilledCode,
       runCoachJob,
+      flagBitsFor,
     ],
   );
 
