@@ -116,7 +116,11 @@ import { encodeInkOps } from "./inkCodec";
 import { eraserScreenRadius } from "./rasterInk";
 import { reanchorInkOps } from "./reanchorInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
-import { ModeIndicator, type ModeIndicatorHandle } from "./ModeIndicator";
+import {
+  ANNOUNCE_HOLD_MS,
+  ModeIndicator,
+  type ModeIndicatorHandle,
+} from "./ModeIndicator";
 import { PageIndicator, type PageIndicatorHandle } from "./PageIndicator";
 import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
 import {
@@ -1213,7 +1217,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const [chromeMode, setChromeMode] = useState<ChromeMode>(loadChromeMode);
   const [chromeAwake, setChromeAwake] = useState(true);
-  const chromeShown = chromeVisibility(chromeMode, chromeAwake);
+  const chromeShown = chromeVisibility(chromeMode, {
+    awake: chromeAwake,
+    annotating: annotateCode,
+  });
   /** Everything downstream still asks the one question it always asked. */
   const mapChromeHidden = !chromeShown.chrome;
   const mapChromeHiddenRef = useRef(mapChromeHidden);
@@ -1227,6 +1234,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * inheriting whatever was left of the last one.
    */
   const wakeChrome = useCallback(() => setChromeAwake(true), []);
+  // Read from a native listener installed once — see the tap-to-wake guard.
+  const wakeChromeRef = useRef(wakeChrome);
+  wakeChromeRef.current = wakeChrome;
   useEffect(() => {
     if (chromeMode === "visible" || !chromeAwake) return;
     const timer = window.setTimeout(() => setChromeAwake(false), CHROME_IDLE_MS);
@@ -3399,11 +3409,45 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       event.stopPropagation();
     };
 
+    /*
+     * A tap on the page brings the controls back too.
+     *
+     * `hidden` used to have exactly one way out — the corner where the eye
+     * would have been — and a control you cannot see is one you have to
+     * remember. The corner keeps its dot, but a plain tap anywhere on the board
+     * now does the same thing.
+     *
+     * Only with the scroll tool up, and only for a tap that did not travel: a
+     * drag is a pan and a pen is writing, and neither is someone asking for the
+     * toolbar. That restriction is also why this cannot fight the writer —
+     * while a drawing tool is active this listener does nothing at all.
+     */
+    let tapAt: { x: number; y: number } | null = null;
+
+    const onTapDown = (event: PointerEvent) => {
+      tapAt =
+        activeToolRef.current === "hand" ? { x: event.clientX, y: event.clientY } : null;
+    };
+
+    const onTapUp = (event: PointerEvent) => {
+      const from = tapAt;
+      tapAt = null;
+      if (!from || activeToolRef.current !== "hand") return;
+      if (Math.hypot(event.clientX - from.x, event.clientY - from.y) > SELECT_HOLD_SLOP_PX) {
+        return;
+      }
+      wakeChromeRef.current();
+    };
+
     root.addEventListener("contextmenu", onContextMenu, true);
     root.addEventListener("dblclick", onDoubleClick, true);
+    root.addEventListener("pointerdown", onTapDown);
+    root.addEventListener("pointerup", onTapUp);
     return () => {
       root.removeEventListener("contextmenu", onContextMenu, true);
       root.removeEventListener("dblclick", onDoubleClick, true);
+      root.removeEventListener("pointerdown", onTapDown);
+      root.removeEventListener("pointerup", onTapUp);
     };
   }, [interactive]);
 
@@ -6031,6 +6075,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       getInkStrokes: () => inkStrokesFromOps(rasterInkRef.current?.getOps() ?? []),
       getInkOpCount: () => (rasterInkRef.current?.getOps() ?? []).length,
       isInking: () => rasterInkRef.current?.isDrawing() ?? false,
+      announce: (label) => {
+        modeIndicatorRef.current?.show(label, ANNOUNCE_HOLD_MS);
+      },
       setInkOps: (ops) => {
         rasterInkRef.current?.setOps(ops);
         /*
@@ -6150,14 +6197,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
          * restore that kept them would put "APPROACH / What are you scanning?"
          * back on a page that is supposed to be blank.
          */
-        const chromeStripped = scratchHealed.filter(
-          (el) =>
-            !(
-              typeof el.id === "string" &&
-              el.id.startsWith("lcregion-") &&
-              (el.id.endsWith("-label") || el.id.endsWith("-hint"))
-            ),
-        );
+        const chromeStripped = scratchHealed.filter((el) => {
+          const id = typeof el.id === "string" ? el.id : "";
+          if (
+            id.startsWith("lcregion-") &&
+            (id.endsWith("-label") || id.endsWith("-hint"))
+          ) {
+            return false;
+          }
+          /*
+           * The scratchpad's baked "Scratchpad" heading, for the same reason.
+           * Every notebook ever saved carries one at the top-left of its first
+           * page; the name is announced over the board on open now instead of
+           * living on it. See `buildScratchPageSkeletons`.
+           */
+          return !/^lcscratch-\d+-title$/.test(id);
+        });
         const healed = healBoardLayout(chromeStripped, {
             readingSize: readingSizeRef.current,
             codeContentHeight: codeContentHeightRef.current ?? undefined,

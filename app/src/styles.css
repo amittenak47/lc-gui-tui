@@ -2219,10 +2219,18 @@ input[type="checkbox"] {
   pointer-events: auto;
 }
 
+/*
+ * One baseline across the row.
+ *
+ * The left row centred its items while the right column and the dock ended
+ * theirs, so the annotate toggle, the toolbar and the eye stack all finished at
+ * slightly different heights — near enough to look accidental rather than
+ * intentional. They share a bottom edge now.
+ */
 .lc-map-chrome-left {
   display: flex;
   flex-direction: row;
-  align-items: center;
+  align-items: flex-end;
   gap: 6px;
 }
 
@@ -2377,7 +2385,20 @@ input[type="checkbox"] {
  * and it has to be, because the thing it is for is finding the controls again
  * without looking for them.
  */
+/*
+ * The corner that brings the controls back — and says so.
+ *
+ * This was `background: transparent` and nothing else: a 56px hole in the
+ * screen that had to be found from memory. "You have to tap that invisible spot
+ * where the eye would be" is a fair description of a control with no pixels,
+ * and it is the reason `hidden` felt like a trap rather than a mode.
+ *
+ * A dot is enough. Faint enough that it is not chrome — that is the whole point
+ * of the mode — but present, so the corner is somewhere you can see rather than
+ * somewhere you have to remember.
+ */
 .lc-chrome-wake {
+  position: relative;
   width: 56px;
   height: 56px;
   min-width: 56px;
@@ -2389,6 +2410,25 @@ input[type="checkbox"] {
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+}
+
+.lc-chrome-wake::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: var(--ink);
+  opacity: 0.16;
+  transition: opacity 160ms ease-out;
+}
+
+.lc-chrome-wake:hover::after,
+.lc-chrome-wake:focus-visible::after {
+  opacity: 0.42;
 }
 
 /*
@@ -3965,13 +4005,29 @@ input[type="checkbox"] {
   min-height: 0;
 }
 
+/*
+ * A banner is opaque, and it is opaque on purpose.
+ *
+ * These float over the board rather than pushing it down (opening one must not
+ * resize Excalidraw mid-stroke), so anything see-through shows the writing
+ * sliding underneath the words — which reads as a rendering fault rather than
+ * as a notice, and is unreadable besides. Every colour here is mixed *into*
+ * `--surface` rather than into `transparent` for that reason: the tint stays,
+ * the transparency does not.
+ *
+ * The stacking is already right and is worth not breaking: the overlay sits at
+ * 48, above the board and the ink; the map controls and their theme popover at
+ * 50; dialogs and the settings sheet at 120. A banner must never cover the
+ * controls that dismiss it.
+ */
 .lc-banner {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: #fef2f2;
-  border-bottom: 1px solid #fecaca;
+  background: color-mix(in srgb, var(--bad, #b91c1c) 12%, var(--surface));
+  color: var(--ink);
+  border-bottom: 1px solid color-mix(in srgb, var(--bad, #b91c1c) 38%, var(--surface));
   transform: translateY(-40%);
   opacity: 0;
   transition:
@@ -3989,11 +4045,18 @@ input[type="checkbox"] {
   flex: 1;
 }
 
-/* Something worth saying that did not stop the request — not an error. */
+/*
+ * Something worth saying that did not stop the request — not an error.
+ *
+ * `color-mix(in srgb, var(--accent) 8%)` was not a faint tint, it was invalid:
+ * the function takes two colours and this one names a single colour and a
+ * percentage. The declaration was dropped, so a notice inherited the error
+ * banner's pink and none of the intent survived to the screen.
+ */
 .lc-notice {
-  background: color-mix(in srgb, var(--accent) 8%);
-  border-bottom-color: color-mix(in srgb, var(--accent) 34%);
-  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--accent) 34%, var(--surface));
+  color: var(--ink);
   font-size: 13px;
 }
 
@@ -4002,8 +4065,8 @@ input[type="checkbox"] {
   font-size: 13px;
   color: var(--muted);
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  backdrop-filter: blur(6px);
+  /* Opaque, for the same reason as `.lc-banner` — it sits over live ink. */
+  background: var(--surface);
   box-shadow: 0 4px 14px rgb(0 0 0 / 10%);
 }
 
@@ -6071,17 +6134,35 @@ button.lc-row-selected:hover:not(:disabled) {
   opacity: 0;
 }
 
+/*
+ * Board chrome sits on top of the coach panel, and rides it.
+ *
+ * The toolbar and the icon stack are anchored to the panel's top edge rather
+ * than to the bottom of the screen, so opening the coach lifts them with it
+ * instead of leaving them behind it. `bottom` is what animates — the sheet
+ * moves on a transform, and matching that here is what makes the two read as
+ * one thing rather than as a panel that grew and some buttons that jumped.
+ */
 .lc-mobile .lc-map-controls {
   /* Room for the parked coach peek handle under the chrome. */
   bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom));
+  transition: bottom 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-
+/*
+ * These used to be `opacity: 0` with the sheet open — the controls were moved
+ * clear of it and then hidden anyway, so asking the coach a question meant
+ * losing the pen, the eye and the theme chip until the sheet was dismissed.
+ * They are above the sheet; that is enough.
+ */
 .lc-mobile.lc-app-coach-open .lc-map-controls {
-  /* Sheet covers the bottom; keep controls from fighting the handle. */
   bottom: calc(4px + var(--lc-coach-sheet) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom));
-  opacity: 0;
-  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-mobile .lc-map-controls {
+    transition: none;
+  }
 }
 
 .lc-mobile.lc-app-coach-open .lc-side {

@@ -8,12 +8,20 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
-/** How long the pill lingers after the last show. */
+/**
+ * How long the pill lingers after the last show.
+ *
+ * Tuned for a mode toggle, where the reader already knows what they just did
+ * and the pill is confirming it. A label that is *telling* them something —
+ * which notebook they have opened — needs longer to be read at all, so callers
+ * can ask for it.
+ */
 const HOLD_MS = 620;
+export const ANNOUNCE_HOLD_MS = 1600;
 
 export interface ModeIndicatorHandle {
   /** Show a label, restarting the fade. */
-  show(label: string): void;
+  show(label: string, holdMs?: number): void;
 }
 
 export type ModeIndicatorProps = Record<never, never>;
@@ -33,7 +41,7 @@ export const ModeIndicator = forwardRef<ModeIndicatorHandle, ModeIndicatorProps>
     useImperativeHandle(
       ref,
       (): ModeIndicatorHandle => ({
-        show(label) {
+        show(label, holdMs = HOLD_MS) {
           const node = nodeRef.current;
           if (!node) return;
           node.textContent = label;
@@ -42,7 +50,7 @@ export const ModeIndicator = forwardRef<ModeIndicatorHandle, ModeIndicatorProps>
           timerRef.current = window.setTimeout(() => {
             timerRef.current = 0;
             nodeRef.current?.classList.remove("is-visible");
-          }, HOLD_MS);
+          }, holdMs);
         },
       }),
       [],
