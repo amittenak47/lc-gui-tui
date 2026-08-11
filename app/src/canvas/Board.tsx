@@ -145,6 +145,7 @@ import {
 } from "./docSelectionGesture";
 import { horizontalScrollHost } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
+import { applyGestureExclusions, edgeStrips } from "../util/gestureExclusion";
 import { BoardToolbar } from "./BoardToolbar";
 import {
   isDeletableElement,
@@ -3575,6 +3576,51 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       root.removeEventListener("pointercancel", onPointerUp);
     };
   }, [interactive]);
+
+  /*
+   * Take the screen edges back from Android's Back gesture while writing.
+   *
+   * The system owns a strip down each side, and that strip is where the margin
+   * of the page is — a downstroke started too near the edge leaves the app
+   * rather than leaving ink, and the stroke goes with it because no `pointerup`
+   * ever arrives. `setSystemGestureExclusionRects` asks for them back; see
+   * `util/gestureExclusion` for the budget Android imposes and the reason the
+   * bottom edge is left alone.
+   *
+   * Claimed only while a drawing tool is up. In scroll mode a swipe from the
+   * edge *should* be Back, and an app that quietly kept the gesture for a page
+   * being read would be taking something without offering anything for it. The
+   * strips are handed back on unmount for the same reason.
+   */
+  useEffect(() => {
+    const node = boardRef.current;
+    if (!interactive || !node || !annotateCode) {
+      void applyGestureExclusions([]);
+      return;
+    }
+
+    const claim = () => {
+      const box = node.getBoundingClientRect();
+      void applyGestureExclusions(
+        edgeStrips({
+          left: box.left,
+          top: box.top,
+          width: box.width,
+          height: box.height,
+        }),
+      );
+    };
+
+    claim();
+    const observer = new ResizeObserver(claim);
+    observer.observe(node);
+    window.addEventListener("orientationchange", claim);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("orientationchange", claim);
+      void applyGestureExclusions([]);
+    };
+  }, [interactive, annotateCode]);
 
   useEffect(() => {
     stopPanInertia();

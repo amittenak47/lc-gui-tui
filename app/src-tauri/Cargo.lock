@@ -1895,6 +1895,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-gallerysave",
+ "tauri-plugin-gestureguard",
  "tauri-plugin-inkrecognition",
  "tauri-plugin-opener",
  "tokio",
@@ -3663,6 +3664,17 @@ name = "tauri-plugin-gallerysave"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "tauri-plugin-gestureguard"
+version = "0.1.0"
+dependencies = [
  "serde",
  "serde_json",
  "tauri",
