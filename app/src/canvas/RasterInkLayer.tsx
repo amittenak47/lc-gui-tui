@@ -43,10 +43,10 @@ import type { ScrollHostPaintState } from "./scrollHost";
 import {
   DOC_PAGE_SELECTOR,
   docForScrollHost,
-  horizontalScrollHost,
   horizontalScrollHostsIn,
   hostKeyInDoc,
   hostSceneBounds,
+  scrollHostAtPoint,
   strokeBoundsInHost,
 } from "./scrollHost";
 import { InkTileCache, inkOpBounds, paintHostBoundPass, paintLiveOp } from "./inkTiles";
@@ -382,7 +382,19 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
     /** Attach host binding when the stroke's bounds land inside a scroll host. */
     function bindStrokeHost<T extends InkOp>(op: T): T {
-      const host = strokeHostRef.current;
+      let host = strokeHostRef.current;
+      /*
+       * Pointerdown can miss the host (empty hit stack mid-layout). Fall back
+       * to whichever live host the stroke's bounds overlap so marks still bind.
+       */
+      if (!host) {
+        const bounds = inkOpBounds(op);
+        host =
+          collectScrollHosts().find((candidate) =>
+            strokeBoundsInHost(bounds, candidate.bounds),
+          ) ?? null;
+        if (host) strokeHostRef.current = host;
+      }
       if (!host) return op;
       const bounds = inkOpBounds(op);
       if (!strokeBoundsInHost(bounds, host.bounds)) return op;
@@ -1325,7 +1337,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
         const rect = canvas.getBoundingClientRect();
         strokeRectRef.current = rect;
-        const hostEl = horizontalScrollHost(event.target);
+        /*
+         * Host under the nib, not under `event.target`.
+         *
+         * Annotate lands on the ink canvas (doc is pointer-events: none), so
+         * walking from the target never finds a scroll host. Point-hit the DOM
+         * under the canvas the same way DocSelectionLayer does for selection.
+         */
+        const hostEl = scrollHostAtPoint(event.clientX, event.clientY);
         if (hostEl) {
           const doc = docForScrollHost(hostEl);
           const key = doc ? hostKeyInDoc(hostEl, doc) : null;

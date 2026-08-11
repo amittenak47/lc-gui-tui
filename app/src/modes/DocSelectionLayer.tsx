@@ -923,22 +923,41 @@ export function DocSelectionLayer({
     place();
 
     /*
+     * Nested horizontal scroll moves the words under a fixed camera. Ribbons
+     * are placed from client rects — without re-measuring on host scroll they
+     * stay where the quote was when the mark was made. Capture on the body so
+     * late-mounted PDF/EPUB text layers still fire.
+     */
+    let placementDeferred = false;
+    const onHostScroll = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (!horizontalScrollHost(target)) return;
+      if (isDocCameraLive()) {
+        placementDeferred = true;
+        return;
+      }
+      place();
+    };
+    body.addEventListener("scroll", onHostScroll, { capture: true, passive: true });
+
+    /*
      * Live mutation watching is for reading / highlight — text layers land
      * after mount. Annotate keeps the layer mounted (`enabled=false`) so the
      * pen can draw, but re-placing ribbons on every PDF window mutation mid-
      * flick starves ink tile paint until scroll settle.
      */
     const watchMutations = enabled || highlighting;
+    let frame: number | null = null;
     if (!watchMutations || footnotes.length === 0 || typeof MutationObserver !== "function") {
       return () => {
+        body.removeEventListener("scroll", onHostScroll, true);
         placeRef.current = null;
       };
     }
 
     // Coalesced to a frame: a text layer lands as hundreds of appended spans,
     // and re-measuring on each one would be a layout read per span.
-    let frame: number | null = null;
-    let placementDeferred = false;
     const schedulePlace = () => {
       if (isDocCameraLive()) {
         placementDeferred = true;
@@ -962,6 +981,7 @@ export function DocSelectionLayer({
     return () => {
       observer.disconnect();
       onDocCameraLiveChange(null);
+      body.removeEventListener("scroll", onHostScroll, true);
       placeRef.current = null;
       if (frame != null) cancelAnimationFrame(frame);
     };

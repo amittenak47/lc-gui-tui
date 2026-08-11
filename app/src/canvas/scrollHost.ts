@@ -57,6 +57,27 @@ export function horizontalScrollHost(target: EventTarget | null): HTMLElement | 
 }
 
 /**
+ * Scroll host under a client point, skipping overlay chrome (ink canvas, etc.).
+ *
+ * Annotate pointers hit `canvas.lc-raster-ink`, which is not inside the doc
+ * tree — {@link horizontalScrollHost} on `event.target` always returns null
+ * there. Walk the hit stack and take the first real host underneath.
+ */
+export function scrollHostAtPoint(clientX: number, clientY: number): HTMLElement | null {
+  if (typeof document === "undefined" || typeof document.elementsFromPoint !== "function") {
+    return null;
+  }
+  for (const el of document.elementsFromPoint(clientX, clientY)) {
+    if (!(el instanceof HTMLElement)) continue;
+    if (el.classList.contains("lc-raster-ink")) continue;
+    if (el.closest?.(".lc-page-marks-slot")) continue;
+    const host = horizontalScrollHost(el);
+    if (host) return host;
+  }
+  return null;
+}
+
+/**
  * Every horizontally scrollable box inside a document page, in document order.
  *
  * The index in this list is the stable `hostKey` stored on ink ops. Order is
