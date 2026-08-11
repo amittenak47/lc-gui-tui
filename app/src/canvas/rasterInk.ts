@@ -10,6 +10,7 @@
  */
 
 import type { InkStroke } from "./capture";
+import { loadInkSpeedBlotBlend } from "../util/inkSpeedPref";
 
 export const STROKE_WIDTH_MIN = 1;
 export const STROKE_WIDTH_MAX = 32;
@@ -262,6 +263,11 @@ export interface InkDrawOp {
   pressureSensitive: boolean;
   /** Speed-ink strength the stroke was written with (0–1); absent means off. */
   speedInk?: number;
+  /**
+   * How soft speed-ink join/dwell discs are (0–1).
+   * 0 = hard circles; 1 = radial fade into the ribbon. Absent → paint uses device pref.
+   */
+  speedBlotBlend?: number;
   /**
    * A highlighter stroke rather than a pen one.
    *
@@ -896,17 +902,83 @@ function strokePathLength(points: readonly ScenePoint[], fromIndex = 0): number 
   return len;
 }
 
-function paintInkDisc(
+/**
+ * Parse `#rgb` / `#rrggbb` / `rgb()` / `rgba()` into RGB; fall back to black.
+ * Used so radial disc fades can share the stroke colour at varying alpha.
+ */
+export function inkColorRgb(color: string): { r: number; g: number; b: number } {
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+  if (hex) {
+    let h = hex[1];
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    return {
+      r: Number.parseInt(h.slice(0, 2), 16),
+      g: Number.parseInt(h.slice(2, 4), 16),
+      b: Number.parseInt(h.slice(4, 6), 16),
+    };
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i.exec(color.trim());
+  if (rgb) {
+    return { r: Number(rgb[1]), g: Number(rgb[2]), b: Number(rgb[3]) };
+  }
+  return { r: 0, g: 0, b: 0 };
+}
+
+function resolveSpeedBlotBlend(op: InkDrawOp): number {
+  if (op.speedBlotBlend !== undefined) return clamp01(op.speedBlotBlend);
+  return clamp01(loadInkSpeedBlotBlend());
+}
+
+/**
+ * Join / dwell disc for speed ink.
+ *
+ * `blotBlend` 0: hard circle (legacy Sharpie dot).
+ * `blotBlend` 1: radial fade (opaque-ish centre → transparent rim) and lower
+ * centre contrast so the blot melts into the ribbon instead of reading as a point.
+ */
+export function paintInkDisc(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
   lineWidth: number,
   alpha: number,
   pixelScale: number,
+  blotBlend = 0,
+  color?: string,
 ): void {
-  ctx.globalAlpha = alpha;
+  const radius = paintedWidth(lineWidth, pixelScale) / 2;
+  if (radius < 1e-6) return;
+  const blend = clamp01(blotBlend);
+  if (blend < 1e-3) {
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  // Slightly larger radius so the fade overlaps the ribbon instead of stopping
+  // on a hard rim inside it.
+  const fadeRadius = radius * (1 + 0.35 * blend);
+  const centerAlpha = alpha * (1 - 0.5 * blend);
+  const { r, g, b } = inkColorRgb(color ?? String(ctx.fillStyle));
+  const gradient = ctx.createRadialGradient(
+    center.x,
+    center.y,
+    0,
+    center.x,
+    center.y,
+    fadeRadius,
+  );
+  gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${centerAlpha})`);
+  gradient.addColorStop(0.55 + 0.25 * (1 - blend), `rgba(${r}, ${g}, ${b}, ${centerAlpha * 0.45})`);
+  gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+  ctx.globalAlpha = 1;
+  const prevFill = ctx.fillStyle;
+  ctx.fillStyle = gradient;
   ctx.beginPath();
-  ctx.arc(center.x, center.y, paintedWidth(lineWidth, pixelScale) / 2, 0, Math.PI * 2);
+  ctx.arc(center.x, center.y, fadeRadius, 0, Math.PI * 2);
   ctx.fill();
+  ctx.fillStyle = prevFill;
 }
 
 interface AlphaBucketSegment {
@@ -946,11 +1018,13 @@ function drawRibbonStrokeFrom(
 ): void {
   const points = op.points;
   if (points.length === 0) return;
+  const blotBlend = resolveSpeedBlotBlend(op);
+  const color = op.color;
 
   if (points.length === 1) {
     if (fromIndex > 0) return;
     const style = inkStrokePointStyles(op, 0)[0];
-    paintInkDisc(ctx, points[0], style.lineWidth, style.alpha, pixelScale);
+    paintInkDisc(ctx, points[0], style.lineWidth, style.alpha, pixelScale, blotBlend, color);
     ctx.globalAlpha = 1;
     return;
   }
@@ -971,7 +1045,15 @@ function drawRibbonStrokeFrom(
       maxWidth = Math.max(maxWidth, style.lineWidth);
       maxAlpha = Math.max(maxAlpha, style.alpha);
     }
-    paintInkDisc(ctx, slice[slice.length - 1], maxWidth, maxAlpha, pixelScale);
+    paintInkDisc(
+      ctx,
+      slice[slice.length - 1],
+      maxWidth,
+      maxAlpha,
+      pixelScale,
+      blotBlend,
+      color,
+    );
     ctx.globalAlpha = 1;
     return;
   }
@@ -979,7 +1061,19 @@ function drawRibbonStrokeFrom(
   const segments = collectAlphaBucketSegments(styles);
   const sorted = [...segments].sort((a, b) => a.bucket - b.bucket);
   for (const seg of sorted) {
-    paintRibbonSegment(ctx, slice, styles, seg.from, seg.to, pixelScale, seg.bucket, false, false);
+    paintRibbonSegment(
+      ctx,
+      slice,
+      styles,
+      seg.from,
+      seg.to,
+      pixelScale,
+      seg.bucket,
+      false,
+      false,
+      blotBlend,
+      color,
+    );
   }
 
   for (let si = 1; si < segments.length; si++) {
@@ -992,6 +1086,8 @@ function drawRibbonStrokeFrom(
       Math.max(styles[boundary].lineWidth, styles[curr.from].lineWidth),
       Math.max(prev.bucket, curr.bucket) * RUN_ALPHA_QUANTUM,
       pixelScale,
+      blotBlend,
+      color,
     );
   }
 
@@ -1025,6 +1121,8 @@ function paintRibbonSegment(
   alphaBucket: number,
   capHead = false,
   capTail = false,
+  blotBlend = 0,
+  color?: string,
 ): void {
   if (from > to) return;
   const segPoints = points.slice(from, to + 1);
@@ -1033,16 +1131,15 @@ function paintRibbonSegment(
 
   const alpha = alphaBucket * RUN_ALPHA_QUANTUM;
   if (segPoints.length === 1) {
-    ctx.globalAlpha = alpha;
-    ctx.beginPath();
-    ctx.arc(
-      segPoints[0].x,
-      segPoints[0].y,
-      paintedWidth(segStyles[0].lineWidth, pixelScale) / 2,
-      0,
-      Math.PI * 2,
+    paintInkDisc(
+      ctx,
+      segPoints[0],
+      segStyles[0].lineWidth,
+      alpha,
+      pixelScale,
+      blotBlend,
+      color,
     );
-    ctx.fill();
     return;
   }
 
@@ -1055,7 +1152,15 @@ function paintRibbonSegment(
       const t1 = strokeTangentAt(segPoints, i);
       const cross = Math.abs(t0.x * t1.y - t0.y * t1.x);
       if (cross > RIBBON_CURVATURE_JOIN) {
-        paintInkDisc(ctx, segPoints[i], segStyles[i].lineWidth, alpha, pixelScale);
+        paintInkDisc(
+          ctx,
+          segPoints[i],
+          segStyles[i].lineWidth,
+          alpha,
+          pixelScale,
+          blotBlend,
+          color,
+        );
       }
     }
   }
@@ -1229,7 +1334,15 @@ function drawStrokeFrom(
       maxWidth = Math.max(maxWidth, style.lineWidth);
       maxAlpha = Math.max(maxAlpha, style.alpha);
     }
-    paintInkDisc(ctx, tip, maxWidth, maxAlpha, pixelScale);
+    paintInkDisc(
+      ctx,
+      tip,
+      maxWidth,
+      maxAlpha,
+      pixelScale,
+      resolveSpeedBlotBlend(op),
+      op.color,
+    );
     ctx.globalAlpha = 1;
     return;
   }

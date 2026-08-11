@@ -39,6 +39,7 @@ import {
   NO_PRESSURE,
   normalizePressure,
   paintInkAtScale,
+  paintInkDisc,
   pointerPressure,
   scenePointFromCanvasPixel,
   scenePointFromPointer,
@@ -980,6 +981,7 @@ function inkDrawContext() {
   const caps: Array<{ x: number; y: number; r: number }> = [];
   let fillCount = 0;
   let strokeCount = 0;
+  let radialGradients = 0;
   let pen = { x: 0, y: 0 };
 
   const map = (x: number, y: number) => ({
@@ -1027,6 +1029,12 @@ function inkDrawContext() {
     fill() {
       fillCount++;
     },
+    createRadialGradient() {
+      radialGradients++;
+      return {
+        addColorStop() {},
+      };
+    },
     save() {},
     restore() {},
     rect() {},
@@ -1045,8 +1053,28 @@ function inkDrawContext() {
     get fillCount() {
       return fillCount;
     },
+    get radialGradients() {
+      return radialGradients;
+    },
   };
 }
+
+describe("paintInkDisc blot blend", () => {
+  it("keeps a hard disc when blend is 0", () => {
+    const draw = inkDrawContext();
+    draw.ctx.fillStyle = "#112233";
+    paintInkDisc(draw.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 0, "#112233");
+    expect(draw.radialGradients).toBe(0);
+    expect(draw.fillCount).toBe(1);
+  });
+
+  it("uses a radial fade when blend is high", () => {
+    const draw = inkDrawContext();
+    paintInkDisc(draw.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233");
+    expect(draw.radialGradients).toBe(1);
+    expect(draw.fillCount).toBe(1);
+  });
+});
 
 describe("ribbon normal stability", () => {
   function ribbonPolygonArea(

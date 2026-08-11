@@ -8,13 +8,18 @@
  */
 
 const KEY = "lc.inkSpeed";
+/** Soften speed-ink join/dwell discs into the ribbon (0 = hard dots, 1 = soft). */
+const BLOT_BLEND_KEY = "lc.inkSpeedBlotBlend";
 
 export const INK_SPEED_MIN = 0;
 export const INK_SPEED_MAX = 1;
 export const INK_SPEED_DEFAULT = 0;
 
-function clamp(value: number): number {
-  if (!Number.isFinite(value)) return INK_SPEED_DEFAULT;
+/** Default soft enough that dwell blots are not hard Sharpie dots. */
+export const INK_SPEED_BLOT_BLEND_DEFAULT = 0.55;
+
+function clamp(value: number, fallback = INK_SPEED_DEFAULT): number {
+  if (!Number.isFinite(value)) return fallback;
   return Math.min(INK_SPEED_MAX, Math.max(INK_SPEED_MIN, value));
 }
 
@@ -44,3 +49,33 @@ export function speedInkFromPercent(percent: number): number {
 export function speedInkToPercent(value: number): number {
   return Math.round(clamp(value) * 100);
 }
+
+/** 0 = hard join discs; 1 = radial fade + lower disc contrast. */
+export function loadInkSpeedBlotBlend(): number {
+  try {
+    const raw = localStorage.getItem(BLOT_BLEND_KEY);
+    if (raw == null) return INK_SPEED_BLOT_BLEND_DEFAULT;
+    return clamp(Number(raw), INK_SPEED_BLOT_BLEND_DEFAULT);
+  } catch {
+    return INK_SPEED_BLOT_BLEND_DEFAULT;
+  }
+}
+
+export function saveInkSpeedBlotBlend(value: number): void {
+  try {
+    localStorage.setItem(BLOT_BLEND_KEY, String(clamp(value, INK_SPEED_BLOT_BLEND_DEFAULT)));
+  } catch {
+    /* private browsing */
+  }
+}
+
+export function speedBlotBlendFromPercent(percent: number): number {
+  return clamp(percent / 100, INK_SPEED_BLOT_BLEND_DEFAULT);
+}
+
+export function speedBlotBlendToPercent(value: number): number {
+  return Math.round(clamp(value, INK_SPEED_BLOT_BLEND_DEFAULT) * 100);
+}
+
+/** Fired when Speed blot blend is saved so the board can re-read it. */
+export const INK_SPEED_BLOT_BLEND_EVENT = "lc-ink-speed-blot-blend";

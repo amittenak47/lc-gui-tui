@@ -40,9 +40,14 @@ import {
 } from "../util/eraserPartialPref";
 import {
   loadInkSpeed,
+  loadInkSpeedBlotBlend,
   saveInkSpeed,
+  saveInkSpeedBlotBlend,
+  speedBlotBlendFromPercent,
+  speedBlotBlendToPercent,
   speedInkFromPercent,
   speedInkToPercent,
+  INK_SPEED_BLOT_BLEND_EVENT,
 } from "../util/inkSpeedPref";
 import {
   captureModeLabel,
@@ -221,6 +226,8 @@ interface DevicePrefs {
   inkSmoothing: number;
   inkSmoothingMode: InkSmoothingMode;
   inkSpeed: number;
+  /** Soften speed-ink dwell/join discs into the ribbon (0–1). */
+  inkSpeedBlotBlend: number;
   /** Eraser rubs pixels out, rather than taking whole strokes. */
   eraserPartial: boolean;
   /** Milliseconds between board autosaves; 0 is off. */
@@ -242,6 +249,7 @@ function loadDevicePrefs(): DevicePrefs {
     inkSmoothing: loadInkSmoothing(),
     inkSmoothingMode: loadInkSmoothingMode(),
     inkSpeed: loadInkSpeed(),
+    inkSpeedBlotBlend: loadInkSpeedBlotBlend(),
     eraserPartial: loadEraserPartial(),
     autosaveMs: loadAutosaveInterval(),
     paletteTag: loadPaletteTag(),
@@ -261,6 +269,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.inkSmoothing === b.inkSmoothing &&
     a.inkSmoothingMode === b.inkSmoothingMode &&
     a.inkSpeed === b.inkSpeed &&
+    a.inkSpeedBlotBlend === b.inkSpeedBlotBlend &&
     a.eraserPartial === b.eraserPartial &&
     a.autosaveMs === b.autosaveMs &&
     a.paletteTag === b.paletteTag
@@ -336,6 +345,7 @@ export function SettingsModal({
     loadInkSmoothingMode(),
   );
   const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
+  const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() => loadInkSpeedBlotBlend());
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
   const [autosaveMs, setAutosaveMs] = useState<AutosaveInterval>(() =>
     loadAutosaveInterval(),
@@ -452,6 +462,7 @@ export function SettingsModal({
     setInkSmoothing(prefs.inkSmoothing);
     setInkSmoothingMode(prefs.inkSmoothingMode);
     setInkSpeed(prefs.inkSpeed);
+    setInkSpeedBlotBlend(prefs.inkSpeedBlotBlend);
     setEraserPartial(prefs.eraserPartial);
     setAutosaveMs(prefs.autosaveMs);
     setPaletteTag(prefs.paletteTag);
@@ -511,6 +522,7 @@ export function SettingsModal({
     inkSmoothing,
     inkSmoothingMode,
     inkSpeed,
+    inkSpeedBlotBlend,
     eraserPartial,
     autosaveMs,
     paletteTag,
@@ -553,6 +565,7 @@ export function SettingsModal({
         saveInkSmoothing(inkSmoothing);
         saveInkSmoothingMode(inkSmoothingMode);
         saveInkSpeed(inkSpeed);
+        saveInkSpeedBlotBlend(inkSpeedBlotBlend);
         saveEraserPartial(eraserPartial);
         saveAutosaveInterval(autosaveMs);
         savePaletteTag(paletteTag);
@@ -568,6 +581,7 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent("lc-ink-pressure-clip"));
         window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
         window.dispatchEvent(new CustomEvent("lc-ink-speed"));
+        window.dispatchEvent(new CustomEvent(INK_SPEED_BLOT_BLEND_EVENT));
         window.dispatchEvent(new CustomEvent(ERASER_PARTIAL_EVENT));
         window.dispatchEvent(new CustomEvent(AUTOSAVE_EVENT));
       }
@@ -983,6 +997,35 @@ export function SettingsModal({
                   {speedInkToPercent(inkSpeed) === 0 ? "Off" : `${speedInkToPercent(inkSpeed)}%`}
                 </span>
               </div>
+              {speedInkToPercent(inkSpeed) > 0 && (
+                <>
+                  <div className="lc-settings-subhead">Speed blot blend</div>
+                  <p className="lc-settings-hint">
+                    Soften the dark dwell / join discs into the ribbon — radial fade
+                    instead of a hard Sharpie point. 0% keeps hard dots; 100% fades them
+                    most. Saved on this device only.
+                  </p>
+                  <div className="lc-settings-slider">
+                    <input
+                      type="range"
+                      className="lc-settings-slider-input"
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={speedBlotBlendToPercent(inkSpeedBlotBlend)}
+                      aria-label="Speed blot blend"
+                      onChange={(event) =>
+                        setInkSpeedBlotBlend(
+                          speedBlotBlendFromPercent(Number(event.target.value)),
+                        )
+                      }
+                    />
+                    <span className="lc-settings-slider-value">
+                      {speedBlotBlendToPercent(inkSpeedBlotBlend)}%
+                    </span>
+                  </div>
+                </>
+              )}
 
               <div className="lc-settings-subhead">Autosave</div>
               <p className="lc-settings-hint">
