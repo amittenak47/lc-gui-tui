@@ -1049,6 +1049,19 @@ function inkDrawContext() {
 }
 
 describe("ribbon normal stability", () => {
+  function ribbonPolygonArea(
+    left: Array<{ x: number; y: number }>,
+    right: Array<{ x: number; y: number }>,
+  ): number {
+    const pts = [...left, ...right.slice().reverse()];
+    let area = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const j = (i + 1) % pts.length;
+      area += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+    }
+    return Math.abs(area) / 2;
+  }
+
   it("keeps ribbon width vectors from flipping on a sharp turn", () => {
     const pts = points([0, 0], [40, 0], [40, 40]);
     const style = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, INK_SLOWNESS_NEUTRAL, 0);
@@ -1061,6 +1074,28 @@ describe("ribbon normal stability", () => {
       const v1y = left[i].y - right[i].y;
       expect(v0x * v1x + v0y * v1y).toBeGreaterThan(0);
     }
+  });
+
+  it("does not bow-tie on a reverse / retrace path", () => {
+    const pts = points([0, 0], [100, 0], [50, 0]);
+    const style = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, INK_SLOWNESS_NEUTRAL, 0);
+    const styles = pts.map(() => style);
+    const { left, right } = ribbonSides(pts, styles, 1);
+
+    for (let i = 0; i < pts.length; i++) {
+      const midX = (left[i].x + right[i].x) / 2;
+      const midY = (left[i].y + right[i].y) / 2;
+      expect(midX).toBeCloseTo(pts[i].x);
+      expect(midY).toBeCloseTo(pts[i].y);
+    }
+
+    // At the reverse vertex the geometric normal is allowed to flip — not forced
+    // to match the outward leg, which would swap left/right and cancel fill.
+    expect(left[2].y - pts[2].y).toBeLessThan(0);
+    expect(right[2].y - pts[2].y).toBeGreaterThan(0);
+
+    // A bow-tie collapses area; a solid ribbon ~ length × width stays large.
+    expect(ribbonPolygonArea(left, right)).toBeGreaterThan(100);
   });
 });
 
@@ -1113,15 +1148,33 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
     expect(speed.fillCount).toBeGreaterThan(0);
   });
 
-  it("paintLiveOp passes capHead false for open strokes", () => {
+  it("paintLiveOp passes capHead false for long open strokes", () => {
+    const viewport = {
+      zoom: 1,
+      scrollX: 0,
+      scrollY: 0,
+      offsetLeft: 0,
+      offsetTop: 0,
+      width: 100,
+      height: 100,
+    };
     const { ctx, caps } = inkDrawContext();
-    paintLiveOp(
-      ctx,
-      draw([0, 0], [50, 0]),
-      { zoom: 1, scrollX: 0, scrollY: 0, offsetLeft: 0, offsetTop: 0, width: 100, height: 100 },
-      1,
-      null,
-    );
+    paintLiveOp(ctx, draw([0, 0], [50, 0], [100, 0]), viewport, 1, null);
     expect(caps).toHaveLength(0);
+  });
+
+  it("paintLiveOp gives short strokes a round head", () => {
+    const viewport = {
+      zoom: 1,
+      scrollX: 0,
+      scrollY: 0,
+      offsetLeft: 0,
+      offsetTop: 0,
+      width: 100,
+      height: 100,
+    };
+    const { ctx, caps, fillCount } = inkDrawContext();
+    paintLiveOp(ctx, draw([0, 0], [5, 0]), viewport, 1, null);
+    expect(caps.length + fillCount).toBeGreaterThan(0);
   });
 });
