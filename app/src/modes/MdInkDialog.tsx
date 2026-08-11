@@ -18,6 +18,12 @@ export type MdInkEntryChoice = "open" | "recent" | "save" | "export" | "import";
 
 interface LeaveProps {
   mode: "leave";
+  /**
+   * Anything has been annotated since the document was opened or last saved.
+   *
+   * When nothing has, Discard has nothing to discard — see the button below.
+   */
+  dirty?: boolean;
   /** Name of the document being annotated, for the prompt. */
   docName: string;
   pending: boolean;
@@ -61,6 +67,7 @@ export function MdInkDialog(props: MdInkDialogProps) {
   const exiting = Boolean(props.exiting);
   const error = props.error ?? null;
   const isLeave = props.mode === "leave";
+  const dirty = props.mode !== "leave" || props.dirty !== false;
   // Only the entry dialog lists documents — leaving one is a save/discard
   // decision about the ink in hand, not a moment to go opening another.
   const entry = props.mode === "entry" ? props : null;
@@ -95,9 +102,11 @@ export function MdInkDialog(props: MdInkDialogProps) {
           <h2>{isLeave ? "Leave document?" : "Document"}</h2>
           <p className="lc-muted">
             {pickingRecent
-              ? "Hold a document to reopen it. The bin removes its annotations."
+              ? "Hold a document to reopen it, or hold its bin to remove its annotations."
               : isLeave
-                ? "Discard throws away this session's annotations. The file itself is never changed. Hold to confirm."
+                ? dirty
+                  ? "Discard throws away this session's annotations. The file itself is never changed. Hold to confirm."
+                  : "Nothing annotated since the last save — leaving changes nothing."
                 : allowSave
                   ? "Save these annotations, open another document, or reopen a recent one."
                   : "Open a document to annotate, or reopen a recent one."}
@@ -124,13 +133,13 @@ export function MdInkDialog(props: MdInkDialogProps) {
                       Annotated {new Date(doc.updatedAt).toLocaleString()}
                     </span>
                   </HoldButton>
-                  <button
-                    type="button"
+                  {/* Hold to delete — see ScratchpadDialog for why. */}
+                  <HoldButton
+                    label={`Delete annotations for ${doc.name}`}
                     className="lc-scratch-load-trash"
-                    aria-label={`Delete annotations for ${doc.name}`}
-                    title={`Delete annotations for ${doc.name}`}
                     disabled={locked}
-                    onClick={() => removeDoc(doc.id)}
+                    onConfirm={() => removeDoc(doc.id)}
+                    resetKey={error}
                   >
                     <svg
                       viewBox="0 0 24 24"
@@ -148,7 +157,7 @@ export function MdInkDialog(props: MdInkDialogProps) {
                       <path d="M6 6l1 14h10l1-14" />
                       <path d="M10 10v7M14 10v7" />
                     </svg>
-                  </button>
+                  </HoldButton>
                 </div>
               ))}
             </div>
@@ -168,14 +177,18 @@ export function MdInkDialog(props: MdInkDialogProps) {
                       Keep this ink with “{(props as LeaveProps).docName}”.
                     </span>
                   </HoldButton>
+                  {/* Discard, or Exit when there is nothing to discard — see
+                      ScratchpadDialog for why the label moves. */}
                   <HoldButton
-                    label="Discard"
-                    className="lc-hold-choice lc-hold-danger"
+                    label={dirty ? "Discard" : "Exit"}
+                    className={
+                      dirty ? "lc-hold-choice lc-hold-danger" : "lc-hold-choice"
+                    }
                     disabled={locked}
                     onConfirm={() => props.onChoose("discard")}
                     resetKey={error}
                   >
-                    <strong>Discard annotations</strong>
+                    <strong>{dirty ? "Discard annotations" : "Exit"}</strong>
                     <span className="lc-muted">The file on disk is left alone.</span>
                   </HoldButton>
                 </>

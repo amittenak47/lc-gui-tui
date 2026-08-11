@@ -6033,6 +6033,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       isInking: () => rasterInkRef.current?.isDrawing() ?? false,
       setInkOps: (ops) => {
         rasterInkRef.current?.setOps(ops);
+        /*
+         * Restored ink has to grow the page, the same as drawn ink does.
+         *
+         * The frame starts at one screen and grows to whatever has been written
+         * on it — but only ever from `handleInkChange`, which the pen fires and
+         * a restore does not. So a notebook came back with its writing laid out
+         * for a page several screens tall inside a frame one screen high, and
+         * the camera fitted the frame. That is the gap the writer sees above
+         * their notes on open, and why it fixes itself the moment they draw
+         * anything: the first stroke is the first thing that ever asks the page
+         * how big it should be.
+         */
+        if (maybeGrowDrawFrame()) scheduleSlotReports();
+        syncPageVisibility();
       },
       setTool,
       undo: () => {
@@ -6239,7 +6253,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       },
       armReadingScroll,
     }),
-    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, refitToViewport, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll],
+    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, maybeGrowDrawFrame, refitToViewport, scheduleSlotReports, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];

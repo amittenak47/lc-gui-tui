@@ -48,6 +48,11 @@ import { LlmStatusDialog } from "./components/LlmStatusDialog";
 import { ServerStatusDialog, type ServerGateKind } from "./components/ServerStatusDialog";
 import { SettingsModal } from "./components/SettingsModal";
 import { offlinePackDownloader } from "./util/offlinePackDownload";
+import {
+  AUTOSAVE_EVENT,
+  loadAutosaveInterval,
+  type AutosaveInterval,
+} from "./util/autosavePref";
 import { StatusBanner } from "./components/StatusBanner";
 import { SmartTips } from "./components/SmartTips";
 import { Board } from "./canvas/Board";
@@ -233,6 +238,28 @@ function isScratchpad(problem: ProblemDetail | null | undefined): boolean {
  */
 /** Hide under-header busy strip; keep `busy` for disable logic (re-enable later). */
 const SHOW_BUSY_BANNER = false;
+
+/*
+ * How often the app reaches for the daemon and the model.
+ *
+ * These were 5s and 8s and 12s, chosen one at a time, and together they meant
+ * roughly twenty requests a minute leaving a tablet that was sitting there
+ * being written on. Nothing on the board needs the answer that promptly: the
+ * "Offline" chip is a status light, and every path that actually needs the
+ * daemon probes it directly and reports its own failure.
+ *
+ * So the cadence is one thing now, in one place, at two to six checks a minute
+ * — and the recovery paths that matter are untouched. A failed API call still
+ * raises `lc-server-unreachable` the moment it happens, and focus and
+ * visibility changes still probe immediately, so waking the app is as prompt as
+ * it ever was. Waiting on a daemon that is coming up is the one place a shorter
+ * interval buys something, and it keeps one.
+ */
+const SERVER_WAIT_POLL_MS = 10_000;
+const SERVER_LIVE_POLL_MS = 20_000;
+const LLM_ONLINE_POLL_MS = 20_000;
+const LLM_OFFLINE_POLL_MS = 60_000;
+const LLM_OFFLINE_POLL_MAX_MS = 120_000;
 
 const MD_INK_PROBLEM: ProblemDetail = {
   dataset: MD_INK_DATASET,
@@ -576,7 +603,7 @@ export function App() {
       );
     };
     void tick();
-    const timer = window.setInterval(() => void tick(), 5000);
+    const timer = window.setInterval(() => void tick(), SERVER_WAIT_POLL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -606,7 +633,7 @@ export function App() {
       lastUnreachableAt = now;
       openGate("dropped");
     };
-    const timer = window.setInterval(() => void tick(), 8000);
+    const timer = window.setInterval(() => void tick(), SERVER_LIVE_POLL_MS);
     const onFocus = () => void tick();
     const onVis = () => {
       if (document.visibilityState === "visible") void tick();
@@ -688,9 +715,8 @@ export function App() {
   // beat used when opening a problem — no tap required when both are healthy.
   //
   // Poll backs off hard while the LLM is offline so we do not hammer
-  // `/config` + `/llm/status` every 12s (and re-render) when the daemon has
-  // no model. Online stays at 12s; offline grows to 2 minutes max. Focus /
-  // visibility still probes promptly.
+  // `/config` + `/llm/status` (and re-render) when the daemon has no model.
+  // Offline grows to two minutes; focus / visibility still probes promptly.
   useEffect(() => {
     if (serverLink !== "online") {
       setLlmLink("unknown");
@@ -699,20 +725,17 @@ export function App() {
     }
     let cancelled = false;
     let timer = 0;
-    let delayMs = 12_000;
-    const LLM_ONLINE_MS = 12_000;
-    const LLM_OFFLINE_MS = 60_000;
-    const LLM_OFFLINE_MAX_MS = 120_000;
+    let delayMs = LLM_ONLINE_POLL_MS;
 
     const afterProbe = (ok: boolean) => {
       if (ok) {
-        delayMs = LLM_ONLINE_MS;
+        delayMs = LLM_ONLINE_POLL_MS;
         return;
       }
       delayMs =
-        delayMs < LLM_OFFLINE_MS
-          ? LLM_OFFLINE_MS
-          : Math.min(Math.round(delayMs * 1.5), LLM_OFFLINE_MAX_MS);
+        delayMs < LLM_OFFLINE_POLL_MS
+          ? LLM_OFFLINE_POLL_MS
+          : Math.min(Math.round(delayMs * 1.5), LLM_OFFLINE_POLL_MAX_MS);
     };
 
     const schedule = () => {
@@ -760,7 +783,7 @@ export function App() {
     const onFocus = () => {
       if (cancelled) return;
       window.clearTimeout(timer);
-      delayMs = LLM_ONLINE_MS;
+      delayMs = LLM_ONLINE_POLL_MS;
       void (async () => {
         const ok = await probeLlm();
         if (cancelled) return;
@@ -1056,6 +1079,9 @@ export function App() {
    * The coach thread has the same hazard and the same guard.
    */
   const boardSaveSuspendedRef = useRef(false);
+  const [autosaveMs, setAutosaveMs] = useState<AutosaveInterval>(() =>
+    loadAutosaveInterval(),
+  );
   const agentSaveSuspendedRef = useRef(false);
   const coachRef = useRef<AmbientCoach | null>(null);
   // The recognizer can be swapped after mount; read it through a ref so the
@@ -1213,7 +1239,15 @@ export function App() {
     return true;
   }, []);
   useEffect(() => {
+    const onAutosave = () => setAutosaveMs(loadAutosaveInterval());
+    window.addEventListener(AUTOSAVE_EVENT, onAutosave);
+    return () => window.removeEventListener(AUTOSAVE_EVENT, onAutosave);
+  }, []);
+
+  useEffect(() => {
     if (!problem) return;
+    // Off means off: no interval at all rather than one that ticks and returns.
+    if (autosaveMs <= 0) return;
     const timer = window.setInterval(() => {
       const board = boardRef.current;
       if (!board || boardSaveSuspendedRef.current) return;
@@ -1353,9 +1387,17 @@ export function App() {
       }).catch(() => {
         /* best-effort */
       });
-    }, 3000);
+    }, autosaveMs);
     return () => window.clearInterval(timer);
-  }, [client, problem, scratchNotebookId, scratchPageCount, coachMessages, noteStorageFull]);
+  }, [
+    autosaveMs,
+    client,
+    problem,
+    scratchNotebookId,
+    scratchPageCount,
+    coachMessages,
+    noteStorageFull,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1601,11 +1643,13 @@ export function App() {
         // Wait until every dashed region frame is in the scene before fitting
         // and revealing — otherwise the loading checkmark races an empty board.
         await boardRef.current?.waitForTemplate();
-        await boardRef.current?.settleFitView();
         syncDrawingsToBoard(resumedMessages);
+        // Ink first: the page grows to it, and a fit taken before that is a fit
+        // against a frame about to change size. See `openScratchpad`.
         if (hasSavedBoard && savedInk.length > 0) {
           boardRef.current?.setInkOps(savedInk);
         }
+        await boardRef.current?.settleFitView();
 
         await finishLoadingTransition(fromBrowse, switching);
 
@@ -1720,12 +1764,21 @@ export function App() {
         boardRef.current?.stripCoachViz();
         lastIdsRef.current = new Set();
         await boardRef.current?.waitForTemplate();
-        await boardRef.current?.settleFitView();
-        // Ink layer may have mounted after the first restore — re-apply saved strokes.
+        /*
+         * Ink before the camera, not after.
+         *
+         * The ink layer can mount after the first restore, so the strokes are
+         * re-applied here — and that has to happen *before* the fit, because
+         * the page frame grows to whatever has been written on it. Fitting
+         * first meant fitting a one-screen frame that was about to become
+         * several screens tall, which is the large gap above the writing on
+         * open, and why it came right the moment the pen touched down.
+         */
         if (restored && notebook) {
           const notebookInk = inkOpsFrom(notebook.board);
           if (notebookInk.length > 0) boardRef.current?.setInkOps(notebookInk);
         }
+        await boardRef.current?.settleFitView();
 
         // Taken after the template and any restored ink have landed, so it is
         // the notebook as the writer first sees it. Anything that moves this
@@ -1908,8 +1961,10 @@ export function App() {
         boardRef.current?.stripCoachViz();
         lastIdsRef.current = new Set();
         await boardRef.current?.waitForTemplate();
-        await boardRef.current?.settleFitView();
+        // Ink first — see `openScratchpad`. The second fit below still runs
+        // once the document itself has finished measuring.
         if (savedInk.length > 0) boardRef.current?.setInkOps(savedInk);
+        await boardRef.current?.settleFitView();
 
         // Document must finish laying out (measure stable) before reveal.
         await waitForMdInkLaidOut(() => mdInkHeightRef.current);
@@ -3693,7 +3748,60 @@ export function App() {
    */
   const rebaselineScratchSession = useCallback(async (id: string) => {
     scratchBaselineRef.current = { id, entry: await getScratchNotebook(id) };
+    /*
+     * Move the "have they written anything?" mark up to the save as well.
+     *
+     * That mark is what decides whether the leave dialog says Discard or Exit,
+     * and Discard is measured against the baseline just set above — so leaving
+     * it at the session's opening state would have the dialog offering to throw
+     * away work that has already been kept, which is precisely the thing the
+     * baseline exists to stop it doing.
+     */
+    const board = boardRef.current;
+    scratchPristineHashRef.current = board
+      ? sceneFingerprint(board.getElements(), board.getInkOpCount())
+      : null;
   }, []);
+
+  /**
+   * Commit the notebook to the library now.
+   *
+   * The same thing the Save entry in the scratchpad sheet does, lifted out so
+   * the header's paper icon can do it on a hold. Holding is the whole point:
+   * an explicit save was three taps through a menu, which is enough friction
+   * that people stop bothering and lean on the autosave — and the autosave
+   * deliberately does not decide what they meant to keep.
+   *
+   * `onFull` is how the caller says what to reopen once a full library has been
+   * pruned, since that differs between the sheet and the header.
+   */
+  const saveScratchpadNow = useCallback(
+    async (onFull?: () => void) => {
+      const board = boardRef.current;
+      if (!board || !problem || !isScratchpad(problem)) return;
+      try {
+        const blob = board.saveBoard();
+        const saved = await saveScratchNotebook({
+          id: scratchNotebookId ?? undefined,
+          board: blob,
+          agent: persistableCoachMessages(coachMessages),
+          pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
+        });
+        setScratchNotebookId(saved.id);
+        // Discard now rolls back to this save, not past it.
+        await rebaselineScratchSession(saved.id);
+        setNotice(`Saved “${saved.title}”.`);
+      } catch (cause) {
+        if (cause instanceof ScratchpadLibraryFullError) {
+          scratchLibResumeRef.current = onFull ?? null;
+          setScratchLibOpen(true);
+          return;
+        }
+        setError(messageOf(cause));
+      }
+    },
+    [coachMessages, problem, rebaselineScratchSession, scratchNotebookId, scratchPageCount],
+  );
 
   const discardScratchSession = useCallback(() => {
     const baseline = scratchBaselineRef.current;
@@ -4302,15 +4410,21 @@ export function App() {
             </HoldButton>
           )}
           {problem && isMdInk(problem) && (
-            <button
-              type="button"
-              className="lc-icon lc-tip-target is-active"
-              aria-label="Markdown documents"
-              data-tip="Markdown — save / open"
-              data-tip-placement="bottom"
-              aria-pressed="true"
+            /* Tap for the sheet, hold to save — as the scratchpad's does. */
+            <HoldButton
+              label="Markdown"
+              ariaLabel="Markdown documents: tap for save / open, hold to save now"
+              className="lc-icon lc-hold-icon lc-tip-target is-active"
+              dataTip="Markdown — tap for menu, hold to save"
+              dataTipPlacement="bottom"
+              pressed
               disabled={busy !== null}
-              onClick={() => setMdInkEntryOpen(true)}
+              onTap={() => setMdInkEntryOpen(true)}
+              onConfirm={() => {
+                void saveMdInkSession().then((saved) => {
+                  if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+                });
+              }}
             >
               <svg
                 className="lc-icon-svg lc-icon-svg-filled"
@@ -4327,7 +4441,7 @@ export function App() {
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <path d="M14 2v6h6" fill="none" />
               </svg>
-            </button>
+            </HoldButton>
           )}
           {/*
             Paper icon: tap for a blank notebook, hold for the library.
@@ -4365,15 +4479,24 @@ export function App() {
             </HoldButton>
           )}
           {problem && isScratchpad(problem) && (
-            <button
-              type="button"
-              className="lc-icon lc-tip-target is-active"
-              aria-label="Scratchpad notebooks"
-              data-tip="Scratchpad — save / load"
-              data-tip-placement="bottom"
-              aria-pressed="true"
+            /*
+              Tap for the sheet, hold to save.
+
+              An explicit save was three taps through a menu — enough friction
+              that it stops happening and the autosave gets leaned on instead,
+              which is exactly the job the autosave is not for. The sibling
+              paper icon below already splits tap and hold this way.
+            */
+            <HoldButton
+              label="Scratchpad"
+              ariaLabel="Scratchpad: tap for save / load, hold to save now"
+              className="lc-icon lc-hold-icon lc-tip-target is-active"
+              dataTip="Scratchpad — tap for menu, hold to save"
+              dataTipPlacement="bottom"
+              pressed
               disabled={busy !== null}
-              onClick={() => setScratchEntryOpen(true)}
+              onTap={() => setScratchEntryOpen(true)}
+              onConfirm={() => void saveScratchpadNow()}
             >
               <svg
                 className="lc-icon-svg lc-icon-svg-filled"
@@ -4390,7 +4513,7 @@ export function App() {
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <path d="M14 2v6h6" fill="none" />
               </svg>
-            </button>
+            </HoldButton>
           )}
           {/* On mobile the gear moves into the ⋯ menu — see HeaderOverflow. */}
           <button
@@ -4841,6 +4964,7 @@ export function App() {
       {leaving && problem && isScratchpad(problem) && (
         <ScratchpadDialog
           mode="leave"
+          dirty={!scratchUntouched()}
           pending={leavingPending}
           exiting={leavingPhase === "exit"}
           error={leavingError}
@@ -4864,6 +4988,7 @@ export function App() {
       {leaving && problem && isMdInk(problem) && (
         <MdInkDialog
           mode="leave"
+          dirty={!mdInkUntouched()}
           docName={mdInkSource?.name ?? "this document"}
           pending={leavingPending}
           exiting={leavingPhase === "exit"}
@@ -4967,33 +5092,7 @@ export function App() {
           onChoose={(choice, notebookId) => {
             setScratchEntryOpen(false);
             if (choice === "save") {
-              const board = boardRef.current;
-              if (!board || !problem || !isScratchpad(problem)) return;
-              void (async () => {
-                try {
-                  const blob = board.saveBoard();
-                  const saved = await saveScratchNotebook({
-                    id: scratchNotebookId ?? undefined,
-                    board: blob,
-                    agent: persistableCoachMessages(coachMessages),
-                    pageCount: Math.max(
-                      scratchPageCount,
-                      countScratchPages(blob.elements),
-                    ),
-                  });
-                  setScratchNotebookId(saved.id);
-                  // Discard now rolls back to this save, not past it.
-                  await rebaselineScratchSession(saved.id);
-                  setNotice(`Saved “${saved.title}”.`);
-                } catch (cause) {
-                  if (cause instanceof ScratchpadLibraryFullError) {
-                    scratchLibResumeRef.current = () => setScratchEntryOpen(true);
-                    setScratchLibOpen(true);
-                    return;
-                  }
-                  setError(messageOf(cause));
-                }
-              })();
+              void saveScratchpadNow(() => setScratchEntryOpen(true));
               return;
             }
             if (choice === "load" && notebookId) {
