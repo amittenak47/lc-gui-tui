@@ -8148,6 +8148,29 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
+ * Annotating: nothing on the page scrolls its own contents. Not even a `pre`.
+ *
+ * Ink is stored in the page's coordinates, so a box that scrolls internally
+ * slides the words out from under marks that stay put — a note drawn beside
+ * `if (x)` ends up beside something three tokens along the line. The document
+ * layer exists to avoid exactly that (it lays out at full height and rides the
+ * board camera rather than scrolling itself); a wide codeblock is the one place
+ * an inner scroller crept back in, and it brought the bug with it.
+ *
+ * So while a drawing tool is up the block shows its whole width and the board
+ * pans to the rest of the line, which is what every other overflow on the page
+ * already does. Reading mode keeps its scrollbar: there is no ink there to come
+ * off the words, and a horizontal drag is the natural way to read a long line.
+ */
+.lc-board-annotating .lc-doc-selectable-body pre,
+.lc-board-annotating .lc-doc-selectable-body table,
+.lc-board-annotating .lc-md-ink-doc pre,
+.lc-board-annotating .lc-md-ink-doc table,
+.lc-board-annotating .lc-code-doc pre {
+  overflow-x: visible;
+}
+
+/*
  * Nothing under the document scrolls itself. The board does all of it.
  *
  * This has to be declared *before* a gesture starts, not when the hold fires,

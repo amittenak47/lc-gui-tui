@@ -100,4 +100,36 @@ describe("horizontalScrollHost", () => {
     sizeOf(code, 900, 900);
     expect(horizontalScrollHost(code)).toBe(pre);
   });
+
+  /*
+   * The reported bug: ink drawn over a wide codeblock stayed put while the
+   * block scrolled under it, so the annotation ended up over tokens it was
+   * never about — and slid out past the block onto the prose beside it.
+   *
+   * The fix is the rule the rest of the document layer already follows: nothing
+   * on the page scrolls its own contents, the board camera does all of it. This
+   * is the half of that rule the gatekeeper enforces; the CSS shows the block's
+   * full width so there is still a way to reach the rest of the line.
+   */
+  it("gives no host at all while annotating", () => {
+    const board = document.createElement("div");
+    board.className = "lc-board";
+    const doc = document.createElement("div");
+    doc.className = "lc-code-doc";
+    const pre = document.createElement("pre");
+    pre.style.overflowX = "auto";
+    const code = document.createElement("code");
+    pre.append(code);
+    doc.append(pre);
+    board.append(doc);
+    document.body.append(board);
+    sizeOf(doc, 400, 400);
+    sizeOf(pre, 900, 400);
+    sizeOf(code, 900, 900);
+
+    // Reading: the block owns a sideways drag, as it always did.
+    expect(horizontalScrollHost(code, false)).toBe(pre);
+    // Annotating: it does not, because the ink cannot follow it.
+    expect(horizontalScrollHost(code, true)).toBeNull();
+  });
 });
