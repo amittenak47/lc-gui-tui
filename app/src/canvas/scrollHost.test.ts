@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { horizontalScrollHost, horizontalScrollHostsIn, hostKeyInDoc } from "./scrollHost";
+import { horizontalScrollHost, horizontalScrollHostsIn, hostKeyInDoc, scrollHostAtPoint } from "./scrollHost";
 
 /** jsdom lays nothing out, so overflow is stated rather than measured. */
 function sizeOf(el: HTMLElement, scrollWidth: number, clientWidth: number) {
@@ -135,5 +135,25 @@ describe("horizontalScrollHost", () => {
     expect(hosts).toEqual([pre, second]);
     expect(hostKeyInDoc(pre, doc)).toBe(0);
     expect(hostKeyInDoc(second, doc)).toBe(1);
+  });
+});
+
+describe("scrollHostAtPoint", () => {
+  it("finds the host under an ink canvas overlay", () => {
+    const { board, pre, code } = buildDoc();
+    const ink = document.createElement("canvas");
+    ink.className = "lc-raster-ink";
+    board.append(ink);
+    document.elementsFromPoint = () => [ink, code, pre];
+    expect(scrollHostAtPoint(10, 10)).toBe(pre);
+  });
+
+  it("returns null when the stack has no scroll host", () => {
+    const { board } = buildDoc();
+    const ink = document.createElement("canvas");
+    ink.className = "lc-raster-ink";
+    board.append(ink);
+    document.elementsFromPoint = () => [ink, board];
+    expect(scrollHostAtPoint(10, 10)).toBeNull();
   });
 });
