@@ -7341,6 +7341,36 @@ button.lc-row-selected:hover:not(:disabled) {
     color 120ms ease-out;
 }
 
+/*
+ * The bin is a hold now, like everything else on this list that cannot be
+ * undone — the row's two controls used to disagree about that, and the one
+ * that needed a deliberate gesture was *opening* a notebook rather than
+ * throwing one away.
+ *
+ * Compound selector because `.lc-hold-reveal` sets a 96px floor meant for a
+ * word of text, and this button is an icon in a 46px gutter.
+ */
+.lc-hold-reveal.lc-scratch-load-trash {
+  min-width: 0;
+  font-weight: inherit;
+}
+
+.lc-scratch-load-trash .lc-hold-reveal-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Filling red says which way this one goes before it gets there. */
+.lc-scratch-load-trash .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bad, #b91c1c) 78%, #fff 12%) 0%,
+    var(--bad, #b91c1c) 55%,
+    color-mix(in srgb, var(--bad, #b91c1c) 82%, #000 18%) 100%
+  );
+}
+
 .lc-scratch-load-trash:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bad, #b91c1c) 14%, transparent);
   color: var(--bad, #b91c1c);

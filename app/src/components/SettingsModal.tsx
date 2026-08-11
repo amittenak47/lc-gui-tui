@@ -27,6 +27,13 @@ import {
   type InkSmoothingMode,
 } from "../util/inkSmoothingPref";
 import {
+  AUTOSAVE_CHOICES,
+  AUTOSAVE_EVENT,
+  loadAutosaveInterval,
+  saveAutosaveInterval,
+  type AutosaveInterval,
+} from "../util/autosavePref";
+import {
   ERASER_PARTIAL_EVENT,
   loadEraserPartial,
   saveEraserPartial,
@@ -216,6 +223,8 @@ interface DevicePrefs {
   inkSpeed: number;
   /** Eraser rubs pixels out, rather than taking whole strokes. */
   eraserPartial: boolean;
+  /** Milliseconds between board autosaves; 0 is off. */
+  autosaveMs: AutosaveInterval;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -232,6 +241,7 @@ function loadDevicePrefs(): DevicePrefs {
     inkSmoothingMode: loadInkSmoothingMode(),
     inkSpeed: loadInkSpeed(),
     eraserPartial: loadEraserPartial(),
+    autosaveMs: loadAutosaveInterval(),
   };
 }
 
@@ -248,7 +258,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.inkSmoothing === b.inkSmoothing &&
     a.inkSmoothingMode === b.inkSmoothingMode &&
     a.inkSpeed === b.inkSpeed &&
-    a.eraserPartial === b.eraserPartial
+    a.eraserPartial === b.eraserPartial &&
+    a.autosaveMs === b.autosaveMs
   );
 }
 
@@ -322,6 +333,9 @@ export function SettingsModal({
   );
   const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
+  const [autosaveMs, setAutosaveMs] = useState<AutosaveInterval>(() =>
+    loadAutosaveInterval(),
+  );
   /* Applies the moment it is picked — the next ⟳ is the only thing that reads
      it, so deferring to Save would mean a setting that looked ignored. */
   const [paletteTag, setPaletteTag] = useState<PaletteTag>(() => loadPaletteTag());
@@ -436,6 +450,7 @@ export function SettingsModal({
     setInkSmoothingMode(prefs.inkSmoothingMode);
     setInkSpeed(prefs.inkSpeed);
     setEraserPartial(prefs.eraserPartial);
+    setAutosaveMs(prefs.autosaveMs);
     setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     void offlinePackMeta().then((meta) => {
@@ -493,6 +508,7 @@ export function SettingsModal({
     inkSmoothingMode,
     inkSpeed,
     eraserPartial,
+    autosaveMs,
   };
   const dirty =
     !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
@@ -530,6 +546,7 @@ export function SettingsModal({
         saveInkSmoothingMode(inkSmoothingMode);
         saveInkSpeed(inkSpeed);
         saveEraserPartial(eraserPartial);
+        saveAutosaveInterval(autosaveMs);
         setBaselinePrefs(draftPrefs);
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
@@ -543,6 +560,7 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
         window.dispatchEvent(new CustomEvent("lc-ink-speed"));
         window.dispatchEvent(new CustomEvent(ERASER_PARTIAL_EVENT));
+        window.dispatchEvent(new CustomEvent(AUTOSAVE_EVENT));
       }
       if (configDirty) {
         const saved = await client.putConfig(draft);
@@ -955,6 +973,36 @@ export function SettingsModal({
                 <span className="lc-settings-slider-value">
                   {speedInkToPercent(inkSpeed) === 0 ? "Off" : `${speedInkToPercent(inkSpeed)}%`}
                 </span>
+              </div>
+
+              <div className="lc-settings-subhead">Autosave</div>
+              <p className="lc-settings-hint">
+                How often the board writes itself down, so a crash or a closed lid
+                costs nothing. This is not the same as saving: Discard still rolls
+                back to where the session started, whatever the autosave has
+                written since. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Autosave interval"
+              >
+                {AUTOSAVE_CHOICES.map(([ms, label]) => (
+                  <button
+                    key={ms}
+                    type="button"
+                    role="radio"
+                    aria-checked={autosaveMs === ms}
+                    className={
+                      autosaveMs === ms
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setAutosaveMs(ms)}
+                  >
+                    <strong>{label}</strong>
+                  </button>
+                ))}
               </div>
 
               <div className="lc-settings-subhead">Eraser</div>

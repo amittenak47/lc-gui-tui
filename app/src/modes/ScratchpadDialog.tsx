@@ -16,6 +16,12 @@ export type ScratchEntryChoice = "new" | "load" | "save";
 
 interface LeaveProps {
   mode: "leave";
+  /**
+   * Anything has been written since the notebook was opened or last saved.
+   *
+   * When nothing has, Discard has nothing to discard — see the button below.
+   */
+  dirty?: boolean;
   pending: boolean;
   exiting?: boolean;
   error: string | null;
@@ -60,6 +66,7 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
   const error = props.error ?? null;
   const isLeave = props.mode === "leave";
   const allowSave = props.mode === "entry" && Boolean(props.allowSave);
+  const dirty = props.mode !== "leave" || props.dirty !== false;
   const locked = pending || exiting;
 
   const refreshList = () => setNotebooks(listScratchNotebooks());
@@ -90,9 +97,11 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
           <h2>{isLeave ? "Leave scratchpad?" : "Scratchpad"}</h2>
           <p className="lc-muted">
             {pickingLoad
-              ? "Hold an entry to open it. The bin deletes it."
+              ? "Hold an entry to open it, or hold its bin to delete it."
               : isLeave
-                ? "Discard undoes everything written since this notebook was opened. Hold to confirm."
+                ? dirty
+                  ? "Discard undoes everything written since this notebook was opened. Hold to confirm."
+                  : "Nothing written since the last save — leaving changes nothing."
                 : allowSave
                   ? "Save this notebook, load another, or start blank."
                   : "Start blank or load a saved notebook."}
@@ -131,13 +140,22 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                       {new Date(entry.updatedAt).toLocaleString()}
                     </span>
                   </HoldButton>
-                  <button
-                    type="button"
+                  {/*
+                    Hold to delete, the same as everything else that cannot be
+                    undone.
+
+                    The two controls on this row were the wrong way round:
+                    *opening* a notebook wanted a deliberate hold, and throwing
+                    one away was a single tap on a small target sitting right
+                    beside it. A slip on a list of notebooks is not a slip you
+                    can take back — the entry and its ink both go.
+                  */}
+                  <HoldButton
+                    label={`Delete ${entry.title}`}
                     className="lc-scratch-load-trash"
-                    aria-label={`Delete ${entry.title}`}
-                    title={`Delete ${entry.title}`}
                     disabled={locked}
-                    onClick={() => removeNotebook(entry.id)}
+                    onConfirm={() => removeNotebook(entry.id)}
+                    resetKey={error}
                   >
                     <svg
                       viewBox="0 0 24 24"
@@ -155,7 +173,7 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                       <path d="M6 6l1 14h10l1-14" />
                       <path d="M10 10v7M14 10v7" />
                     </svg>
-                  </button>
+                  </HoldButton>
                 </div>
               ))}
             </div>
@@ -181,14 +199,26 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                   >
                     Save
                   </HoldButton>
+                  {/*
+                    Discard, or Exit when there is nothing to discard.
+                    
+                    They do the same thing — roll back to the baseline — but
+                    when the board already *is* the baseline that rollback is a
+                    no-op, and calling it Discard asks the writer to confirm
+                    throwing away work that is not at risk. Worse, it teaches
+                    them to hold the red button on the way out, which is a habit
+                    that costs them the day they have not saved.
+                  */}
                   <HoldButton
-                    label="Discard"
-                    className="lc-hold-choice lc-hold-danger"
+                    label={dirty ? "Discard" : "Exit"}
+                    className={
+                      dirty ? "lc-hold-choice lc-hold-danger" : "lc-hold-choice"
+                    }
                     disabled={locked}
                     onConfirm={() => props.onChoose("discard")}
                     resetKey={error}
                   >
-                    Discard
+                    {dirty ? "Discard" : "Exit"}
                   </HoldButton>
                 </>
               ) : (
