@@ -99,7 +99,7 @@ export function SmartTips() {
       const text = el.getAttribute("data-tip")?.trim();
       if (!text) return null;
       const raw = el.getAttribute("data-tip-placement");
-      const preferred = isPlacement(raw) ? raw : "top";
+      const preferred = isPlacement(raw) ? raw : "bottom";
       return { text, preferred, anchor: el.getBoundingClientRect() };
     };
 

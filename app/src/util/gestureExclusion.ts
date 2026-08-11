@@ -89,10 +89,13 @@ export async function applyGestureExclusions(rects: ExclusionRect[]): Promise<vo
   const invoke = await loadInvoke();
   if (!invoke) return;
   try {
-    await invoke("set_gesture_exclusions", {
+    const applied = await invoke("set_gesture_exclusions", {
       rects,
       density: window.devicePixelRatio || 1,
     });
+    if (import.meta.env.DEV && typeof applied === "number") {
+      console.debug(`[gestureExclusion] applied ${applied} exclusion rect(s)`);
+    }
   } catch {
     /* not Android, or the window has gone — either way there is nothing to do */
   }

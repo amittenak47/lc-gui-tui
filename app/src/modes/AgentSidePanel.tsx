@@ -366,6 +366,8 @@ export interface AgentSidePanelProps {
   onDrawingFrame?: (programId: string, frameIndex: number) => void;
   /** Structured cards (tests, ambient, …) rendered in the thread. */
   children?: ReactNode;
+  /** When true, the mobile sheet handle ignores drag (header toggle still works). */
+  sheetDragLocked?: boolean;
 }
 
 export function AgentSidePanel({
@@ -390,6 +392,7 @@ export function AgentSidePanel({
   onToggleDrawing,
   onDrawingFrame,
   children,
+  sheetDragLocked = false,
 }: AgentSidePanelProps) {
   const mobile = useIsMobile();
   const setOpen = useCallback(
@@ -526,7 +529,8 @@ export function AgentSidePanel({
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
-  const [sheetOffset, setSheetOffset] = useState(0);
+  const [sheetOffset, setSheetOffset] = useState<number | null>(null);
+  const sheetReadyRef = useRef(false);
   const [sheetDragging, setSheetDragging] = useState(false);
   const sheetDragRef = useRef<{
     pointerId: number;
@@ -580,9 +584,22 @@ export function AgentSidePanel({
       root.classList.remove("lc-coach-dragging");
       return;
     }
+    if (sheetOffset === null) {
+      root.style.removeProperty("--lc-coach-open");
+      root.classList.toggle("lc-coach-dragging", sheetDragging);
+      return () => {
+        root.style.removeProperty("--lc-coach-open");
+        root.classList.remove("lc-coach-dragging");
+      };
+    }
     const closed = closedOffset();
-    const shut = closed > 0 ? Math.min(1, Math.max(0, sheetOffset / closed)) : open ? 0 : 1;
-    root.style.setProperty("--lc-coach-open", (1 - shut).toFixed(3));
+    const parked = !open && closed > 0 && sheetOffset >= closed - 0.5;
+    if (parked) {
+      root.style.removeProperty("--lc-coach-open");
+    } else {
+      const shut = closed > 0 ? Math.min(1, Math.max(0, sheetOffset / closed)) : open ? 0 : 1;
+      root.style.setProperty("--lc-coach-open", (1 - shut).toFixed(3));
+    }
     root.classList.toggle("lc-coach-dragging", sheetDragging);
     return () => {
       root.style.removeProperty("--lc-coach-open");
@@ -592,10 +609,22 @@ export function AgentSidePanel({
 
   useLayoutEffect(() => {
     if (!mobile || sheetDragging) return;
-    const apply = () => setSheetOffset(open ? 0 : closedOffset());
+    const apply = () => {
+      const offset = open ? 0 : closedOffset();
+      setSheetOffset(offset);
+    };
     apply();
     const id = window.requestAnimationFrame(apply);
-    return () => window.cancelAnimationFrame(id);
+    let readyId = 0;
+    if (!sheetReadyRef.current) {
+      readyId = window.requestAnimationFrame(() => {
+        sheetReadyRef.current = true;
+      });
+    }
+    return () => {
+      window.cancelAnimationFrame(id);
+      if (readyId) window.cancelAnimationFrame(readyId);
+    };
   }, [mobile, open, sheetDragging]);
 
   useEffect(() => {
@@ -659,7 +688,7 @@ export function AgentSidePanel({
 
   const onSheetHandlePointerDown = useCallback(
     (event: PointerEvent<HTMLElement>) => {
-      if (!mobile) return;
+      if (!mobile || sheetDragLocked) return;
       if (event.button !== 0) return;
       event.preventDefault();
       const startOffset = open ? 0 : closedOffset();
@@ -675,7 +704,7 @@ export function AgentSidePanel({
       setSheetOffset(startOffset);
       event.currentTarget.setPointerCapture(event.pointerId);
     },
-    [mobile, open],
+    [mobile, open, sheetDragLocked],
   );
 
   const onSheetHandlePointerMove = useCallback(
@@ -700,11 +729,12 @@ export function AgentSidePanel({
 
   const onSheetHandleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
+      if (sheetDragLocked) return;
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       setOpen(!open);
     },
-    [open, setOpen],
+    [open, setOpen, sheetDragLocked],
   );
 
   const clearLongPress = useCallback(() => {
@@ -1025,8 +1055,13 @@ export function AgentSidePanel({
   const sheetStyle =
     mobile
       ? {
-          transform: `translate3d(0, ${sheetOffset}px, 0)`,
-          transition: sheetDragging ? "none" : "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
+          ...(sheetOffset !== null
+            ? { transform: `translate3d(0, ${sheetOffset}px, 0)` }
+            : { visibility: "hidden" as const }),
+          transition:
+            sheetDragging || !sheetReadyRef.current
+              ? "none"
+              : "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
         }
       : undefined;
 

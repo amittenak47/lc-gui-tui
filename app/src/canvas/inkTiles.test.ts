@@ -9,6 +9,7 @@ import {
   pickRenderLevel,
   tileRangeFor,
   tileSceneSize,
+  tileVisitOrder,
   viewportSceneBounds,
   LEVEL_STEP,
   TILE_PX,
@@ -85,6 +86,18 @@ describe("tile ranges", () => {
       maxX: 250,
       maxY: 120,
     });
+  });
+});
+
+describe("tileVisitOrder", () => {
+  const range = { minTx: 0, maxTx: 1, minTy: 0, maxTy: 2 };
+
+  it("keeps top-first when the view moves toward earlier content", () => {
+    expect(tileVisitOrder(range, 1).map((t) => t.ty)).toEqual([0, 0, 1, 1, 2, 2]);
+  });
+
+  it("flips to bottom-first when the view moves toward later content", () => {
+    expect(tileVisitOrder(range, -1).map((t) => t.ty)).toEqual([2, 2, 1, 1, 0, 0]);
   });
 });
 

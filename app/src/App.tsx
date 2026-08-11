@@ -83,6 +83,11 @@ import { ScratchpadDialog } from "./modes/ScratchpadDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { groupThreads, threadAnchorRef, visibleThreadMessages } from "./modes/coachThreads";
 import { loadForwardFailures, saveForwardFailures } from "./util/coachPrefs";
+import {
+  COACH_SHEET_LOCK_EVENT,
+  loadCoachSheetLock,
+  saveCoachSheetLock,
+} from "./util/coachSheetLockPref";
 import { ensureTypingImports } from "./util/pythonImports";
 
 /** Room under the last line of code so a note fits below it. */
@@ -448,6 +453,8 @@ export function App() {
     entry: null,
   });
   const mdInkPristineHashRef = useRef<number | null>(null);
+  /** Footnote revision at open / last explicit save — not merely "any footnotes". */
+  const mdInkPristineMarksRef = useRef("");
   mdInkSourceRef.current = mdInkSource;
   mdInkDocIdRef.current = mdInkDocId;
 
@@ -1034,6 +1041,23 @@ export function App() {
     window.addEventListener("lc-coach-forward-failures", onChange);
     return () => window.removeEventListener("lc-coach-forward-failures", onChange);
   }, []);
+  /** Pin the mobile coach sheet — no drag-to-open/close from the handle. */
+  const [sheetDragLocked, setSheetDragLocked] = useState(() => loadCoachSheetLock());
+  useEffect(() => {
+    const onChange = (event: Event) => {
+      const next = (event as CustomEvent<boolean>).detail;
+      setSheetDragLocked(typeof next === "boolean" ? next : loadCoachSheetLock());
+    };
+    window.addEventListener(COACH_SHEET_LOCK_EVENT, onChange);
+    return () => window.removeEventListener(COACH_SHEET_LOCK_EVENT, onChange);
+  }, []);
+  const onToggleSheetLock = useCallback(() => {
+    setSheetDragLocked((current) => {
+      const next = !current;
+      saveCoachSheetLock(next);
+      return next;
+    });
+  }, []);
   /** Thread the composer is inside, if any — narrows what the coach is told. */
   const threadRootIdRef = useRef<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -1305,7 +1329,7 @@ export function App() {
         // An untouched board is not an untouched document: a reading session
         // can leave footnotes without ever putting the pen down, and those are
         // exactly as worth keeping as ink.
-        if (mdInkPristineHashRef.current === hash && mdInkFootnotesRef.current.length === 0) {
+        if (mdInkPristineHashRef.current === hash && footnoteRevision(mdInkFootnotesRef.current) === mdInkPristineMarksRef.current) {
           lastSavedHashRef.current = hash;
           lastSavedMarksRef.current = marks;
           return;
@@ -1331,6 +1355,7 @@ export function App() {
         })
           .then((saved) => {
             if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
+            setNotice(`Saved “${saved.name}”.`);
           })
           .catch((cause: unknown) => {
             // A *full library* is not worth interrupting a writing session for;
@@ -1371,6 +1396,7 @@ export function App() {
         })
           .then((saved) => {
             if (!scratchNotebookId) setScratchNotebookId(saved.id);
+            setNotice(`Saved “${saved.title}”.`);
           })
           .catch((cause: unknown) => {
             if (cause instanceof ScratchpadLibraryFullError) {
@@ -1794,14 +1820,14 @@ export function App() {
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
         setEntering(true);
-        window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
+        const fadeMs = boardFadeMs() || 1;
+        window.setTimeout(() => {
+          setEntering(false);
+          boardRef.current?.announce(
+            restored && notebook ? notebook.title : "Scratchpad",
+          );
+        }, fadeMs);
         setCoachOpen(false);
-        // The notebook names itself over the board and then gets out of the
-        // way. It used to be a locked heading on the page — see
-        // `buildScratchPageSkeletons`.
-        boardRef.current?.announce(
-          restored && notebook ? notebook.title : "Scratchpad",
-        );
       } catch (cause) {
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
@@ -1981,6 +2007,7 @@ export function App() {
           mdInkPristineHashRef.current = board
             ? sceneFingerprint(board.getElements(), board.getInkOpCount())
             : null;
+          mdInkPristineMarksRef.current = footnoteRevision(mdInkFootnotesRef.current);
         }
 
         // Complete the loading transition (same beats and teardown as
@@ -3730,8 +3757,11 @@ export function App() {
    */
   const scratchUntouched = useCallback(() => {
     const board = boardRef.current;
+    if (!board) return false;
     const pristine = scratchPristineHashRef.current;
-    if (!board || pristine === null) return false;
+    // Open race: pristine not snapshotted yet. Only claim untouched when the
+    // board still looks blank (no ink) — never show Discard for a mid-open board.
+    if (pristine === null) return board.getInkOpCount() === 0;
     return sceneFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
   }, []);
 
@@ -3773,10 +3803,10 @@ export function App() {
    * Commit the notebook to the library now.
    *
    * The same thing the Save entry in the scratchpad sheet does, lifted out so
-   * the header's paper icon can do it on a hold. Holding is the whole point:
-   * an explicit save was three taps through a menu, which is enough friction
-   * that people stop bothering and lean on the autosave — and the autosave
-   * deliberately does not decide what they meant to keep.
+   * the header's paper icon can do it on a tap. Hold opens the save / load
+   * sheet instead: an explicit save was three taps through a menu, which is
+   * enough friction that people stop bothering and lean on the autosave — and
+   * the autosave deliberately does not decide what they meant to keep.
    *
    * `onFull` is how the caller says what to reopen once a full library has been
    * pruned, since that differs between the sheet and the header.
@@ -3838,7 +3868,9 @@ export function App() {
     const board = boardRef.current;
     const pristine = mdInkPristineHashRef.current;
     if (!board || pristine === null) return false;
-    if (mdInkFootnotesRef.current.length > 0) return false;
+    if (footnoteRevision(mdInkFootnotesRef.current) !== mdInkPristineMarksRef.current) {
+      return false;
+    }
     return sceneFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
   }, []);
 
@@ -3861,6 +3893,7 @@ export function App() {
     }
     mdInkBaselineRef.current = { id: null, entry: null };
     mdInkPristineHashRef.current = null;
+    mdInkPristineMarksRef.current = "";
     setMdInkDocId(null);
     setMdInkFootnotes([]);
     mdInkFootnotesRef.current = [];
@@ -3891,6 +3924,11 @@ export function App() {
       // Discard now rolls back to this save, not past it. `saved` is the entry
       // just written, so there is nothing to be gained by reading it back.
       mdInkBaselineRef.current = { id: saved.id, entry: saved };
+      mdInkPristineHashRef.current = sceneFingerprint(
+        board.getElements(),
+        board.getInkOpCount(),
+      );
+      mdInkPristineMarksRef.current = footnoteRevision(mdInkFootnotes);
       return saved;
     } catch (cause) {
       if (cause instanceof MdInkLibraryFullError) {
@@ -4416,21 +4454,21 @@ export function App() {
             </HoldButton>
           )}
           {problem && isMdInk(problem) && (
-            /* Tap for the sheet, hold to save — as the scratchpad's does. */
+            /* Tap to save now, hold for the sheet. */
             <HoldButton
               label="Markdown"
-              ariaLabel="Markdown documents: tap for save / open, hold to save now"
+              ariaLabel="Markdown documents: tap to save now, hold for save / open menu"
               className="lc-icon lc-hold-icon lc-tip-target is-active"
-              dataTip="Markdown — tap for menu, hold to save"
+              dataTip="Markdown — tap to save, hold for menu"
               dataTipPlacement="bottom"
               pressed
               disabled={busy !== null}
-              onTap={() => setMdInkEntryOpen(true)}
-              onConfirm={() => {
+              onTap={() => {
                 void saveMdInkSession().then((saved) => {
                   if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
                 });
               }}
+              onConfirm={() => setMdInkEntryOpen(true)}
             >
               <svg
                 className="lc-icon-svg lc-icon-svg-filled"
@@ -4486,23 +4524,22 @@ export function App() {
           )}
           {problem && isScratchpad(problem) && (
             /*
-              Tap for the sheet, hold to save.
+              Tap to save now, hold for the sheet.
 
               An explicit save was three taps through a menu — enough friction
-              that it stops happening and the autosave gets leaned on instead,
-              which is exactly the job the autosave is not for. The sibling
-              paper icon below already splits tap and hold this way.
+              that it stops happening and the autosave gets leaned on instead.
+              One tap on the header is the short path; hold opens save / load.
             */
             <HoldButton
               label="Scratchpad"
-              ariaLabel="Scratchpad: tap for save / load, hold to save now"
+              ariaLabel="Scratchpad: tap to save now, hold for save / load menu"
               className="lc-icon lc-hold-icon lc-tip-target is-active"
-              dataTip="Scratchpad — tap for menu, hold to save"
+              dataTip="Scratchpad — tap to save, hold for menu"
               dataTipPlacement="bottom"
               pressed
               disabled={busy !== null}
-              onTap={() => setScratchEntryOpen(true)}
-              onConfirm={() => void saveScratchpadNow()}
+              onTap={() => void saveScratchpadNow()}
+              onConfirm={() => setScratchEntryOpen(true)}
             >
               <svg
                 className="lc-icon-svg lc-icon-svg-filled"
@@ -4558,8 +4595,8 @@ export function App() {
               type="button"
               className={[
                 coachOpen
-                  ? "lc-secondary lc-coach-toggle lc-coach-toggle-open"
-                  : "lc-secondary lc-coach-toggle",
+                  ? "lc-secondary lc-coach-toggle lc-coach-toggle-open lc-tip-target"
+                  : "lc-secondary lc-coach-toggle lc-tip-target",
                 llmLink === "online" && "lc-coach-toggle-llm-on",
                 llmLink === "offline" && "lc-coach-toggle-llm-off",
               ]
@@ -4567,13 +4604,14 @@ export function App() {
                 .join(" ")}
               aria-expanded={coachOpen}
               aria-controls="lc-coach-panel"
-              title={
+              data-tip={
                 llmLink === "online"
                   ? "Coach — LLM online"
                   : llmLink === "offline"
                     ? "Coach — LLM offline"
                     : "Coach"
               }
+              data-tip-placement="bottom"
               onClick={() => setCoachOpen((current) => !current)}
             >
               <span className="lc-coach-live-dot" aria-hidden />
@@ -4741,6 +4779,8 @@ export function App() {
               ) : null
             }
             coachFold={null}
+            sheetDragLocked={sheetDragLocked}
+            onToggleSheetLock={onToggleSheetLock}
           />
           {(!problem || holdBrowseOverlay) && (
             <div
@@ -4844,6 +4884,7 @@ export function App() {
             mode={mode}
             onModeChange={setMode}
             onOpenChange={setCoachOpen}
+            sheetDragLocked={sheetDragLocked}
             busy={busy !== null}
             thinking={busy !== null || thinking}
             thinkingPhase={coachPhase}

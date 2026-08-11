@@ -27,6 +27,27 @@ describe("isDeletableElement", () => {
     expect(isDeletableElement(el({ customData: { lcStamp: true } }))).toBe(true);
   });
 
+  it("takes every reader-placed Excalidraw type the board can hold", () => {
+    // Enumerate rather than spot-check: a new shape tool that slipped past the
+    // trash would be invisible on a tablet with no keyboard. Deletability does
+    // not key off `type` today — this list is the contract that none of these
+    // ids accidentally look like scaffolding.
+    for (const type of [
+      "rectangle",
+      "ellipse",
+      "diamond",
+      "arrow",
+      "line",
+      "freedraw",
+      "text",
+      "image",
+      "frame",
+      "embeddable",
+    ]) {
+      expect(isDeletableElement(el({ id: `reader-${type}` }))).toBe(true);
+    }
+  });
+
   it("leaves the page's own frames alone", () => {
     expect(isDeletableElement(el({ customData: { lcRegionFrame: true } }))).toBe(false);
     expect(isDeletableElement(el({ customData: { lcRegion: "approach" } }))).toBe(false);

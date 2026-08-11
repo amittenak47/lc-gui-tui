@@ -657,10 +657,11 @@ input[type="checkbox"] {
   transform: translate(-50%, -50%);
   /*
    * Above the code dock (8), which fills the screen on the code page and was
-   * hiding the readout completely. Below the toolbars, which the reader still
-   * has to be able to hit.
+   * hiding the readout completely. Above preparing overlays (60) so scratchpad
+   * announce lands after the board fade-in. Below the toolbars, which the
+   * reader still has to be able to hit.
    */
-  z-index: 14;
+  z-index: 65;
   pointer-events: none;
   padding: 0.5rem 0.9rem;
   border-radius: 999px;
@@ -2232,6 +2233,8 @@ input[type="checkbox"] {
   flex-direction: row;
   align-items: flex-end;
   gap: 6px;
+  opacity: calc(1 - var(--lc-coach-open, 0));
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .lc-map-chrome-right {
@@ -2248,6 +2251,8 @@ input[type="checkbox"] {
   align-items: flex-end;
   justify-content: flex-end;
   gap: 4px;
+  opacity: calc(1 - var(--lc-coach-open, 0));
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .lc-map-chrome-row {
@@ -6079,6 +6084,8 @@ button.lc-row-selected:hover:not(:disabled) {
   --lc-coach-sheet-lift: 32px;
   /* Peek tall enough that the grab bar sits above that band when parked. */
   --lc-coach-peek: 52px;
+  /* Gap between map chrome and the parked coach peek strip. */
+  --lc-map-above-coach: 10px;
 }
 
 @media (pointer: coarse) and (min-width: 768px) {
@@ -6145,19 +6152,17 @@ button.lc-row-selected:hover:not(:disabled) {
  */
 .lc-mobile .lc-map-controls {
   /* Room for the parked coach peek handle under the chrome. */
-  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom));
+  bottom: calc(
+    4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom) +
+      var(--lc-map-above-coach)
+  );
   transition: bottom 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /*
- * These used to be `opacity: 0` with the sheet open — the controls were moved
- * clear of it and then hidden anyway, so asking the coach a question meant
- * losing the pen, the eye and the theme chip until the sheet was dismissed.
- * They are above the sheet; that is enough.
+ * Map chrome stays anchored to the peek height when the coach opens — it fades
+ * out via `--lc-coach-open` instead of riding the full sheet up.
  */
-.lc-mobile.lc-app-coach-open .lc-map-controls {
-  bottom: calc(4px + var(--lc-coach-sheet) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom));
-}
 
 @media (prefers-reduced-motion: reduce) {
   .lc-mobile .lc-map-controls {
@@ -6428,7 +6433,10 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-map-controls {
   left: 4px;
   right: 4px;
-  bottom: calc(4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom));
+  bottom: calc(
+    4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom) +
+      var(--lc-map-above-coach)
+  );
   /*
    * Must stay end/flex-end — NOT center. Centre vertically lifts Theme /
    * Toolbar / Eye when the pen island grows (higher-specificity mobile rule
@@ -8148,27 +8156,10 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * Annotating: nothing on the page scrolls its own contents. Not even a `pre`.
- *
- * Ink is stored in the page's coordinates, so a box that scrolls internally
- * slides the words out from under marks that stay put — a note drawn beside
- * `if (x)` ends up beside something three tokens along the line. The document
- * layer exists to avoid exactly that (it lays out at full height and rides the
- * board camera rather than scrolling itself); a wide codeblock is the one place
- * an inner scroller crept back in, and it brought the bug with it.
- *
- * So while a drawing tool is up the block shows its whole width and the board
- * pans to the rest of the line, which is what every other overflow on the page
- * already does. Reading mode keeps its scrollbar: there is no ink there to come
- * off the words, and a horizontal drag is the natural way to read a long line.
+ * Annotating: nested horizontal scroll stays. Host-bound ink stores
+ * `hostKey` + `scrollLeftAtDraw` and paints with a translate + clip so marks
+ * stay on the tokens they were written against when the box scrolls.
  */
-.lc-board-annotating .lc-doc-selectable-body pre,
-.lc-board-annotating .lc-doc-selectable-body table,
-.lc-board-annotating .lc-md-ink-doc pre,
-.lc-board-annotating .lc-md-ink-doc table,
-.lc-board-annotating .lc-code-doc pre {
-  overflow-x: visible;
-}
 
 /*
  * Nothing under the document scrolls itself. The board does all of it.

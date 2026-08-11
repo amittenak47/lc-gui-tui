@@ -10,7 +10,7 @@ export interface TipProps {
 }
 
 /** Hover/focus tooltip target — {@link SmartTips} renders the floating label. */
-export function Tip({ tip, children, className, placement = "top" }: TipProps) {
+export function Tip({ tip, children, className, placement = "bottom" }: TipProps) {
   return (
     <span
       className={className ? `lc-tip-target ${className}` : "lc-tip-target"}

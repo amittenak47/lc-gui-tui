@@ -4,6 +4,8 @@ import android.app.Activity
 import android.graphics.Rect
 import android.os.Build
 import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebView
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -40,10 +42,10 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
 
     @InvokeArg
     class ExclusionArgs {
-        /** Rects in CSS pixels, in the WebView's own coordinate space. */
+        /** Rects in CSS pixels, relative to the browser viewport (`getBoundingClientRect`). */
         var rects: List<RectArg> = emptyList()
 
-        /** CSS px → device px. The WebView knows this; Android does not. */
+        /** CSS px → device px (`window.devicePixelRatio`). Do not also scale with `displayMetrics.density`. */
         var density: Double = 1.0
     }
 
@@ -66,31 +68,74 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
             return
         }
 
-        val root: View? = activity.window?.decorView?.findViewById(android.R.id.content)
-        if (root == null) {
+        val content: View? = activity.window?.decorView?.findViewById(android.R.id.content)
+        if (content == null) {
             invoke.reject("no content view")
             return
         }
+        val target = findWebView(content) ?: content
 
         val density = if (args.density > 0) args.density else 1.0
+        val loc = IntArray(2)
+        target.getLocationOnScreen(loc)
         val rects = args.rects
-            .map {
-                Rect(
-                    Math.round(it.x * density).toInt(),
-                    Math.round(it.y * density).toInt(),
-                    Math.round((it.x + it.width) * density).toInt(),
-                    Math.round((it.y + it.height) * density).toInt(),
-                )
-            }
+            .map { cssViewportToViewLocal(it, density, loc) }
             .filter { it.width() > 0 && it.height() > 0 }
 
-        val budget = Math.round(MAX_EXCLUSION_DP * activity.resources.displayMetrics.density)
-        val trimmed = withinBudget(rects, budget)
+        // Budget is per edge (left / right). `Math.round(Float)` is Int; the
+        // budget walk keeps a Long so a tall strip in device px cannot overflow.
+        val budget =
+            Math.round(MAX_EXCLUSION_DP * activity.resources.displayMetrics.density).toLong()
+        val viewWidth =
+            if (target.width > 0) target.width
+            else activity.window?.decorView?.width ?: rects.maxOfOrNull { it.right } ?: 0
+        val (leftRects, rightRects) = partitionByEdge(rects, viewWidth)
+        val trimmed = withinBudget(leftRects, budget) + withinBudget(rightRects, budget)
 
         activity.runOnUiThread {
-            root.systemGestureExclusionRects = trimmed
+            target.systemGestureExclusionRects = trimmed
         }
         invoke.resolve(JSObject().apply { put("applied", trimmed.size) })
+    }
+
+    /** First WebView under `content`, if any — that is where Tauri renders. */
+    private fun findWebView(root: View): View? {
+        if (root is WebView) return root
+        if (root is ViewGroup) {
+            for (i in 0 until root.childCount) {
+                findWebView(root.getChildAt(i))?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Viewport CSS px → view-local device px.
+     *
+     * `getBoundingClientRect` is in CSS px relative to the viewport;
+     * `getLocationOnScreen` is device px. Scale with the WebView's DPR, then
+     * subtract the view's screen offset.
+     */
+    private fun cssViewportToViewLocal(rect: RectArg, density: Double, viewLoc: IntArray): Rect {
+        return Rect(
+            Math.round(rect.x * density).toInt() - viewLoc[0],
+            Math.round(rect.y * density).toInt() - viewLoc[1],
+            Math.round((rect.x + rect.width) * density).toInt() - viewLoc[0],
+            Math.round((rect.y + rect.height) * density).toInt() - viewLoc[1],
+        )
+    }
+
+    /** Left-edge rects vs right-edge rects — Android budgets 200dp per edge. */
+    private fun partitionByEdge(rects: List<Rect>, viewWidth: Int): Pair<List<Rect>, List<Rect>> {
+        if (viewWidth <= 0) return rects to emptyList()
+        val mid = viewWidth / 2
+        val left = ArrayList<Rect>()
+        val right = ArrayList<Rect>()
+        for (rect in rects) {
+            val center = rect.left + rect.width() / 2
+            if (center < mid) left.add(rect) else right.add(rect)
+        }
+        return left to right
     }
 
     companion object {

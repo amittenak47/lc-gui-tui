@@ -14,11 +14,15 @@ import {
   inkReservoirAlpha,
   inkStrokeAlpha,
   inkStrokeRuns,
+  inkStrokePointStyles,
   inkStrokeStyle,
   inkSlowness,
   inkSpeedAlphaGain,
   inkSpeedWidthGain,
   inkStrokesFromOps,
+  hostScrollDx,
+  isHostBoundOp,
+  paintHostBoundOps,
   INK_DRY_FLOOR,
   INK_SLOWNESS_NEUTRAL,
   INK_SPEED_ALPHA_BASE,
@@ -505,23 +509,23 @@ describe("inkStrokeRuns", () => {
    */
   describe("speed ink slope", () => {
     /** Width at each sample, and how far along the stroke that sample sits. */
-    function widthTrack(spacing: number) {
-      // A hand that runs, stops dead half way, then runs again.
+    function widthTrackFromStyles(spacing: number) {
       const points = Array.from({ length: 240 }, (_, i) => ({
         x: i * spacing,
         y: 0,
         pressure: NO_PRESSURE,
         slowness: i < 120 ? 0 : 1,
       }));
-      const runs = inkStrokeRuns(stroke(points, { speedInk: 1 }) as never);
+      const op = stroke(points, { speedInk: 1 }) as never;
       const nib = inkLineWidth(2, 0, false);
-      return runs.map((run) => ({
-        at: (run.start * spacing) / nib,
-        width: run.lineWidth,
+      const styles = inkStrokePointStyles(op);
+      return styles.map((style, i) => ({
+        at: (i * spacing) / nib,
+        width: style.lineWidth,
       }));
     }
 
-    function steepest(track: ReturnType<typeof widthTrack>) {
+    function steepest(track: Array<{ at: number; width: number }>) {
       let worst = 0;
       for (let i = 1; i < track.length; i++) {
         const span = track[i].at - track[i - 1].at;
@@ -531,33 +535,55 @@ describe("inkStrokeRuns", () => {
       return worst;
     }
 
+    function maxSampleStep(track: Array<{ width: number }>) {
+      let worst = 0;
+      for (let i = 1; i < track.length; i++) {
+        worst = Math.max(worst, Math.abs(track[i].width - track[i - 1].width));
+      }
+      return worst;
+    }
+
     it("ramps the width instead of stepping it", () => {
-      const track = widthTrack(1);
+      const track = widthTrackFromStyles(1);
       const nib = inkLineWidth(2, 0, false);
       // The step is a full swing of slowness. Spread over the slope limit it
       // cannot arrive in less than a nib width, whatever the sample rate.
       expect(steepest(track)).toBeLessThan(nib);
       // …and it does still arrive: this is a ramp, not a flat line.
-      const widths = track.map((run) => run.width);
+      const widths = track.map((sample) => sample.width);
       expect(Math.max(...widths) / Math.min(...widths)).toBeGreaterThan(1.5);
     });
 
     it("holds the same slope when smoothing has doubled the point count", () => {
       // Chaikin's effect on this filter, reproduced directly: the same stroke
       // at half the spacing is the same drawing with twice the samples.
-      const coarse = steepest(widthTrack(1));
-      const dense = steepest(widthTrack(0.5));
+      const coarse = steepest(widthTrackFromStyles(1));
+      const dense = steepest(widthTrackFromStyles(0.5));
       expect(dense).toBeLessThan(coarse * 1.35 + 1e-6);
     });
 
     it("never asks for a width a canvas cannot draw", () => {
       // The raw multiplier goes negative past neutral at full strength; the
       // floor is what stops "fast" meaning "one pixel of hairline".
-      for (const track of [widthTrack(1), widthTrack(0.5)]) {
-        for (const run of track) expect(run.width).toBeGreaterThan(0);
+      for (const track of [widthTrackFromStyles(1), widthTrackFromStyles(0.5)]) {
+        for (const sample of track) expect(sample.width).toBeGreaterThan(0);
       }
       expect(inkSpeedWidthGain(0, 1)).toBeGreaterThan(0);
       expect(inkSpeedWidthGain(1, 1)).toBeGreaterThan(inkSpeedWidthGain(0, 1));
+    });
+
+    it("tapers thick to thin with small per-sample width steps", () => {
+      const points = Array.from({ length: 120 }, (_, i) => ({
+        x: i,
+        y: 0,
+        pressure: NO_PRESSURE,
+        slowness: 1 - i / 119,
+      }));
+      const op = stroke(points, { speedInk: 1 }) as never;
+      const track = inkStrokePointStyles(op).map((style) => ({ width: style.lineWidth }));
+      const nib = inkLineWidth(2, 0, false);
+      expect(maxSampleStep(track)).toBeLessThan(nib * 0.12);
+      expect(track[0].width).toBeGreaterThan(track[track.length - 1].width);
     });
   });
 });
@@ -846,5 +872,98 @@ describe("clampExportScale", () => {
     const scale = clampExportScale(1, bounds, 1000);
     expect(scale).toBeCloseTo(0.05);
     expect((bounds.maxX - bounds.minX) * scale).toBeCloseTo(1000);
+  });
+});
+
+describe("host-bound ink", () => {
+  it("shifts paint by the scrollLeft delta", () => {
+    const op = {
+      ...draw([10, 10], [40, 10]),
+      hostKey: 0,
+      scrollLeftAtDraw: 20,
+    };
+    expect(isHostBoundOp(op)).toBe(true);
+    expect(hostScrollDx(op, 20)).toBeCloseTo(0);
+    expect(hostScrollDx(op, 50)).toBe(-30);
+    expect(hostScrollDx(draw([0, 0], [1, 1]), 50)).toBe(0);
+  });
+
+  it("clips and translates host-bound paint", () => {
+    const calls: Array<[string, ...number[]]> = [];
+    const ctx = {
+      save() {
+        calls.push(["save"]);
+      },
+      restore() {
+        calls.push(["restore"]);
+      },
+      beginPath() {
+        calls.push(["beginPath"]);
+      },
+      rect(x: number, y: number, w: number, h: number) {
+        calls.push(["rect", x, y, w, h]);
+      },
+      clip() {
+        calls.push(["clip"]);
+      },
+      translate(x: number, y: number) {
+        calls.push(["translate", x, y]);
+      },
+      setTransform() {},
+      moveTo() {},
+      lineTo() {},
+      stroke() {},
+      fill() {},
+      arc() {},
+      globalCompositeOperation: "source-over",
+      globalAlpha: 1,
+      strokeStyle: "",
+      fillStyle: "",
+      lineCap: "",
+      lineJoin: "",
+      lineWidth: 0,
+    } as unknown as CanvasRenderingContext2D;
+
+    const op = {
+      ...draw([0, 0], [100, 0]),
+      hostKey: 0,
+      scrollLeftAtDraw: 0,
+    };
+    const hosts = new Map([
+      [0, { bounds: { minX: 10, minY: 0, maxX: 50, maxY: 20 }, scrollLeft: 30 }],
+    ]);
+    paintHostBoundOps(ctx, [op], hosts, 1);
+    expect(calls).toContainEqual(["rect", 10, 0, 40, 20]);
+    expect(calls).toContainEqual(["clip"]);
+    expect(calls).toContainEqual(["translate", -30, 0]);
+  });
+
+  it("leaves page-bound strokes alone", () => {
+    const calls: string[] = [];
+    const ctx = {
+      save() {
+        calls.push("save");
+      },
+      restore() {},
+      beginPath() {},
+      rect() {},
+      clip() {},
+      translate() {},
+      setTransform() {},
+      moveTo() {},
+      lineTo() {},
+      stroke() {},
+      fill() {},
+      arc() {},
+      globalCompositeOperation: "source-over",
+      globalAlpha: 1,
+      strokeStyle: "",
+      fillStyle: "",
+      lineCap: "",
+      lineJoin: "",
+      lineWidth: 0,
+    } as unknown as CanvasRenderingContext2D;
+    paintHostBoundOps(ctx, [draw([0, 0], [10, 0])], new Map(), 1);
+    expect(calls).toHaveLength(0);
   });
 });

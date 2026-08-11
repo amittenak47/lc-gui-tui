@@ -926,6 +926,9 @@ export interface BoardProps {
   linedPaperToggle?: boolean;
   /** Optional fold handle under the bottom chrome (coach closed → open). */
   coachFold?: ReactNode;
+  /** Pin the mobile coach sheet against drag gestures. */
+  sheetDragLocked?: boolean;
+  onToggleSheetLock?: () => void;
 }
 
 /** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
@@ -987,6 +990,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onAnnotateCodeChange,
     linedPaperToggle = false,
     coachFold = null,
+    sheetDragLocked = false,
+    onToggleSheetLock,
   },
   ref,
 ) {
@@ -1997,6 +2002,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     onAnnotateCodeChange?.(annotateCode);
   }, [annotateCode, onAnnotateCodeChange]);
+
+  const toggleAnnotate = useCallback(() => {
+    setAnnotateCode((current) => {
+      const next = !current;
+      modeIndicatorRef.current?.show(next ? "Annotation" : "Scroll mode");
+      return next;
+    });
+  }, []);
 
   // Leaving Annotate puts the pen down and the highlighter with it.
   useEffect(() => {
@@ -3124,7 +3137,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // gesture turns out to be is what decides who owns it.
       const sideScroll = onCodeDock
         ? null
-        : horizontalScrollHost(event.target, annotateCodeRef.current);
+        : horizontalScrollHost(event.target);
       /*
        * Selectable prose defers for the same reason, on time rather than axis.
        *
@@ -3548,6 +3561,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const selected: Record<string, true> = {};
       for (const el of kept) selected[el.id] = true;
 
+      const tool = activeToolRef.current;
       api.updateScene({
         elements: strays.size
           ? live.map((el) => (strays.has(el.id) ? { ...el, isDeleted: true } : el))
@@ -3562,6 +3576,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         },
         captureUpdate: CaptureUpdateAction.NEVER,
       });
+      /*
+       * Selecting the finished shape is what makes the trash appear, but
+       * Excalidraw treats that selection as a reason to drop back to the
+       * selection tool — undoing the `locked` we set when the tool was armed.
+       * Re-assert the shape tool so a second rectangle is one gesture, not
+       * three. The next drag clears the selection the way Excalidraw always
+       * does when a locked shape tool starts a new mark.
+       */
+      if (tool === "arrow" || tool === "rectangle" || tool === "ellipse") {
+        api.setActiveTool({ type: tool, locked: true });
+      }
     };
 
     const onPointerUp = () => {
@@ -3596,7 +3621,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   useEffect(() => {
     const node = boardRef.current;
-    if (!interactive || !node || !annotateCode) {
+    const drawing = DRAWING_TOOLS.has(activeTool);
+    if (!interactive || !node || !drawing) {
       void applyGestureExclusions([]);
       return;
     }
@@ -3622,7 +3648,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.removeEventListener("orientationchange", claim);
       void applyGestureExclusions([]);
     };
-  }, [interactive, annotateCode]);
+  }, [interactive, activeTool]);
 
   useEffect(() => {
     stopPanInertia();
@@ -4364,7 +4390,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * `preventDefault` on it; the second it only sometimes maps to `deltaX`,
        * so do it by hand when it has not.
        */
-      const sideScroll = horizontalScrollHost(target, annotateCodeRef.current);
+      const sideScroll = horizontalScrollHost(target);
       if (sideScroll) {
         if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
         if (event.shiftKey && event.deltaY !== 0) {
@@ -6491,32 +6517,42 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               .join(" ")}
           >
             <div className="lc-map-chrome-left">
-              {!mapChromeHidden && annotateToggle && (
+              {annotateToggle && (
                 <div className="lc-map-chrome-row">
-                  <button
-                    type="button"
-                    className={
-                      annotateCode ? "lc-lined-toggle is-active" : "lc-lined-toggle"
-                    }
-                    aria-pressed={annotateCode}
-                    aria-label={annotateCode ? "Hide toolbar" : "Show toolbar"}
-                    title={
-                      annotateCode
-                        ? "Toolbar on — tap to scroll the page"
-                        : "Toolbar — annotate this page"
-                    }
-                    onClick={() => {
-                      setAnnotateCode((current) => {
-                        const next = !current;
-                        modeIndicatorRef.current?.show(
-                          next ? "Annotation" : "Scroll mode",
-                        );
-                        return next;
-                      });
-                    }}
-                  >
-                    <AnnotateIcon on={annotateCode} />
-                  </button>
+                  {mapChromeHidden ? (
+                    <button
+                      type="button"
+                      className="lc-chrome-wake"
+                      aria-pressed={annotateCode}
+                      aria-label={annotateCode ? "Hide toolbar" : "Show toolbar"}
+                      title={
+                        annotateCode
+                          ? "Toolbar on — tap to scroll the page"
+                          : "Toolbar — annotate this page"
+                      }
+                      onClick={toggleAnnotate}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className={
+                        annotateCode
+                          ? "lc-lined-toggle lc-tip-target is-active"
+                          : "lc-lined-toggle lc-tip-target"
+                      }
+                      aria-pressed={annotateCode}
+                      aria-label={annotateCode ? "Hide toolbar" : "Show toolbar"}
+                      data-tip={
+                        annotateCode
+                          ? "Toolbar on — tap to scroll the page"
+                          : "Toolbar — annotate this page"
+                      }
+                      data-tip-placement="bottom"
+                      onClick={toggleAnnotate}
+                    >
+                      <AnnotateIcon on={annotateCode} />
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -6607,9 +6643,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 {!mapChromeHidden && (
                   <button
                     type="button"
-                    className="lc-lined-toggle"
+                    className="lc-lined-toggle lc-tip-target"
                     aria-label="Recentre the board"
-                    title="Recentre the board"
+                    data-tip="Recentre the board"
+                    data-tip-placement="bottom"
                     onClick={() => fitView()}
                   >
                     <RecentreIcon />
@@ -6621,11 +6658,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <button
                       type="button"
                       className={
-                        linedPaper ? "lc-lined-toggle is-active" : "lc-lined-toggle"
+                        linedPaper
+                          ? "lc-lined-toggle lc-tip-target is-active"
+                          : "lc-lined-toggle lc-tip-target"
                       }
                       aria-pressed={linedPaper}
                       aria-label="Lined paper"
-                      title="Lined paper"
+                      data-tip="Lined paper"
+                      data-tip-placement="bottom"
                       onClick={() => {
                         const next = !linedPaperRef.current;
                         linedPaperRef.current = next;
@@ -6640,15 +6680,42 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 {!mapChromeHidden && onThemePick && (
                   <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
                 )}
+                {onToggleSheetLock && (
+                  <button
+                    type="button"
+                    className={[
+                      "lc-lined-toggle lc-tip-target",
+                      sheetDragLocked ? "is-active" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    aria-pressed={sheetDragLocked}
+                    aria-label={
+                      sheetDragLocked ? "Unlock coach sheet" : "Lock coach sheet"
+                    }
+                    data-tip={
+                      sheetDragLocked
+                        ? "Coach sheet locked — tap to unlock"
+                        : "Lock coach sheet against drag"
+                    }
+                    data-tip-placement="bottom"
+                    onClick={onToggleSheetLock}
+                  >
+                    <LockIcon locked={sheetDragLocked} />
+                  </button>
+                )}
                 {chromeShown.eye && (
                   <button
                     type="button"
                     className={
-                      chromeMode === "visible" ? "lc-chrome-eye" : "lc-chrome-eye is-dimmed"
+                      chromeMode === "visible"
+                        ? "lc-chrome-eye lc-tip-target"
+                        : "lc-chrome-eye lc-tip-target is-dimmed"
                     }
                     aria-pressed={chromeMode !== "hidden"}
                     aria-label={`Board controls: ${chromeModeLabel(chromeMode)}`}
-                    title={chromeModeLabel(chromeMode)}
+                    data-tip={chromeModeLabel(chromeMode)}
+                    data-tip-placement="bottom"
                     onClick={() => {
                       const next = nextChromeMode(chromeMode);
                       setChromeMode(next);
@@ -6669,9 +6736,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 {!chromeShown.eye && (
                   <button
                     type="button"
-                    className="lc-chrome-wake"
+                    className="lc-chrome-wake lc-tip-target"
                     aria-label="Show board controls"
-                    title="Show controls"
+                    data-tip="Show controls"
+                    data-tip-placement="bottom"
                     onPointerDown={wakeChrome}
                     onClick={wakeChrome}
                   />
@@ -6968,6 +7036,29 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     </div>
   );
 });
+
+function LockIcon({ locked = false }: { locked?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      {locked ? (
+        <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+      ) : (
+        <path d="M8 11V8a4 4 0 0 1 7.5-1" />
+      )}
+    </svg>
+  );
+}
 
 /** Crosshair in a frame — "put the page back where it belongs". */
 function RecentreIcon() {

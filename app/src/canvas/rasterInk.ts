@@ -240,6 +240,17 @@ export interface ViewportTransform {
   height: number;
 }
 
+/** Scroll-host binding shared by draw and erase ops. */
+export interface InkHostBinding {
+  /**
+   * Document-order index among horizontal scroll hosts in the doc scope —
+   * see {@link horizontalScrollHostsIn} in `scrollHost.ts`.
+   */
+  hostKey: number;
+  /** `scrollLeft` of that host when the stroke was written. */
+  scrollLeftAtDraw: number;
+}
+
 export interface InkDrawOp {
   kind: "draw";
   color: string;
@@ -259,16 +270,37 @@ export interface InkDrawOp {
    * and a translucent stroke that did would band where the passes overlapped.
    */
   highlight?: boolean;
+  /** When set, the stroke tracks a nested horizontal scroller's `scrollLeft`. */
+  hostKey?: number;
+  scrollLeftAtDraw?: number;
   points: ScenePoint[];
 }
 
 export interface InkEraseOp {
   kind: "erase";
   radius: number;
+  hostKey?: number;
+  scrollLeftAtDraw?: number;
   points: ScenePoint[];
 }
 
 export type InkOp = InkDrawOp | InkEraseOp;
+
+/** True when an op was written inside a nested horizontal scroll host. */
+export function isHostBoundOp(op: InkOp): boolean {
+  return (
+    op.hostKey !== undefined &&
+    op.scrollLeftAtDraw !== undefined &&
+    Number.isFinite(op.hostKey) &&
+    Number.isFinite(op.scrollLeftAtDraw)
+  );
+}
+
+/** Scene-space X shift so host-bound ink stays on the tokens it was drawn over. */
+export function hostScrollDx(op: InkOp, scrollLeftNow: number): number {
+  if (!isHostBoundOp(op)) return 0;
+  return -(scrollLeftNow - op.scrollLeftAtDraw!);
+}
 
 export function hasStylusPressure(pressure: number): boolean {
   return Number.isFinite(pressure) && pressure >= 0 && pressure !== NO_PRESSURE;
@@ -713,6 +745,235 @@ export function strokePointAt(points: ScenePoint[], pos: number): ScenePoint {
   return point;
 }
 
+/**
+ * Width and alpha at every polyline sample — the values ribbon paint uses.
+ *
+ * Unlike {@link inkStrokeRuns}, widths are not averaged into buckets; each
+ * point keeps its own geometry after {@link slopedSlowness} and the speed gain
+ * floor.
+ */
+export function inkStrokePointStyles(
+  op: InkDrawOp,
+  fromIndex = 0,
+): InkStrokeStyle[] {
+  const points = op.points;
+  if (points.length === 0) return [];
+
+  const consumed = consumedFor(op);
+  const maxFullness = op.maxFullness ?? 1;
+  const pressureClip = op.pressureClip ?? 1;
+  const speedInk = op.speedInk ?? 0;
+  const slowness = speedInk > 0 ? slopedSlowness(op) : null;
+
+  const start = Math.max(0, Math.min(fromIndex, points.length - 1));
+  const styles: InkStrokeStyle[] = [];
+  for (let index = start; index < points.length; index++) {
+    styles.push(
+      inkStrokeStyle(
+        op.baseWidth,
+        maxFullness,
+        points[index].pressure,
+        pressureClip,
+        op.pressureSensitive,
+        consumed[index] ?? 0,
+        slowness ? slowness[index] : (points[index].slowness ?? INK_SLOWNESS_NEUTRAL),
+        speedInk,
+        op.highlight === true,
+      ),
+    );
+  }
+  return styles;
+}
+
+/** Unit normal perpendicular to the stroke at a polyline sample. */
+function strokeNormalAt(points: readonly ScenePoint[], index: number): { x: number; y: number } {
+  const last = points.length - 1;
+  if (last <= 0) return { x: 0, y: 1 };
+  let dx = 0;
+  let dy = 0;
+  if (index <= 0) {
+    dx = points[1].x - points[0].x;
+    dy = points[1].y - points[0].y;
+  } else if (index >= last) {
+    dx = points[last].x - points[last - 1].x;
+    dy = points[last].y - points[last - 1].y;
+  } else {
+    dx = points[index + 1].x - points[index - 1].x;
+    dy = points[index + 1].y - points[index - 1].y;
+  }
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return { x: 0, y: 1 };
+  return { x: -dy / len, y: dx / len };
+}
+
+/** Left and right offset polylines for a variable-width ribbon. */
+function ribbonSides(
+  points: readonly ScenePoint[],
+  styles: readonly InkStrokeStyle[],
+  pixelScale: number,
+): { left: Array<{ x: number; y: number }>; right: Array<{ x: number; y: number }> } {
+  const left: Array<{ x: number; y: number }> = [];
+  const right: Array<{ x: number; y: number }> = [];
+  for (let index = 0; index < points.length; index++) {
+    const { x: nx, y: ny } = strokeNormalAt(points, index);
+    const half = paintedWidth(styles[index].lineWidth, pixelScale) / 2;
+    const center = points[index];
+    left.push({ x: center.x + nx * half, y: center.y + ny * half });
+    right.push({ x: center.x - nx * half, y: center.y - ny * half });
+  }
+  return { left, right };
+}
+
+function fillInkRibbon(
+  ctx: CanvasRenderingContext2D,
+  left: readonly { x: number; y: number }[],
+  right: readonly { x: number; y: number }[],
+  alpha: number,
+): void {
+  if (left.length === 0) return;
+  ctx.globalAlpha = alpha;
+  if (left.length === 1) {
+    const radius = Math.hypot(left[0].x - right[0].x, left[0].y - right[0].y) / 2;
+    ctx.beginPath();
+    ctx.arc(left[0].x, left[0].y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  ctx.beginPath();
+  ctx.moveTo(left[0].x, left[0].y);
+  for (let index = 1; index < left.length; index++) {
+    ctx.lineTo(left[index].x, left[index].y);
+  }
+  for (let index = right.length - 1; index >= 0; index--) {
+    ctx.lineTo(right[index].x, right[index].y);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+/** Variable-width ribbon fill for speed ink — per-point width, alpha-bucketed. */
+function drawRibbonStrokeFrom(
+  ctx: CanvasRenderingContext2D,
+  op: InkDrawOp,
+  fromIndex: number,
+  pixelScale: number,
+  capEnd: boolean,
+): void {
+  const points = op.points;
+  if (points.length === 0) return;
+
+  if (points.length === 1) {
+    if (fromIndex > 0) return;
+    const style = inkStrokePointStyles(op, 0)[0];
+    ctx.globalAlpha = style.alpha;
+    ctx.beginPath();
+    ctx.arc(
+      points[0].x,
+      points[0].y,
+      paintedWidth(style.lineWidth, pixelScale) / 2,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  const start = Math.max(0, Math.min(fromIndex, points.length - 2));
+  if (start >= points.length - 1) return;
+
+  const slice = points.slice(start);
+  const styles = inkStrokePointStyles(op, start);
+  if (slice.length < 2 || styles.length < 2) return;
+
+  let segStart = 0;
+  let bucketA = Math.round(styles[0].alpha / RUN_ALPHA_QUANTUM);
+  const segmentCount = styles.length;
+  let painted = 0;
+  for (let index = 1; index < styles.length; index++) {
+    const nextA = Math.round(styles[index].alpha / RUN_ALPHA_QUANTUM);
+    if (nextA !== bucketA) {
+      paintRibbonSegment(
+        ctx,
+        slice,
+        styles,
+        segStart,
+        index,
+        pixelScale,
+        bucketA,
+        fromIndex === 0 && painted === 0,
+        false,
+      );
+      painted += 1;
+      segStart = index;
+      bucketA = nextA;
+    }
+  }
+  paintRibbonSegment(
+    ctx,
+    slice,
+    styles,
+    segStart,
+    segmentCount - 1,
+    pixelScale,
+    bucketA,
+    fromIndex === 0 && painted === 0,
+    capEnd,
+  );
+
+  ctx.globalAlpha = 1;
+}
+
+function paintRibbonSegment(
+  ctx: CanvasRenderingContext2D,
+  points: readonly ScenePoint[],
+  styles: readonly InkStrokeStyle[],
+  from: number,
+  to: number,
+  pixelScale: number,
+  alphaBucket: number,
+  capHead = false,
+  capTail = false,
+): void {
+  if (from > to) return;
+  const segPoints = points.slice(from, to + 1);
+  const segStyles = styles.slice(from, to + 1);
+  if (segPoints.length === 0) return;
+
+  const alpha = alphaBucket * RUN_ALPHA_QUANTUM;
+  if (segPoints.length === 1) {
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(
+      segPoints[0].x,
+      segPoints[0].y,
+      paintedWidth(segStyles[0].lineWidth, pixelScale) / 2,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+    return;
+  }
+
+  const { left, right } = ribbonSides(segPoints, segStyles, pixelScale);
+  fillInkRibbon(ctx, left, right, alpha);
+
+  if (capHead) {
+    const radius = paintedWidth(segStyles[0].lineWidth, pixelScale) / 2;
+    const next = segPoints[1];
+    const headAngle = Math.atan2(segPoints[0].y - next.y, segPoints[0].x - next.x);
+    inkTerminalCap(ctx, segPoints[0], headAngle, radius);
+  }
+
+  if (capTail) {
+    const last = segPoints.length - 1;
+    const radius = paintedWidth(segStyles[last].lineWidth, pixelScale) / 2;
+    const prev = segPoints[last - 1];
+    const tailAngle = Math.atan2(segPoints[last].y - prev.y, segPoints[last].x - prev.x);
+    inkTerminalCap(ctx, segPoints[last], tailAngle, radius);
+  }
+}
+
 /** Split a stroke into paintable runs, starting at `fromIndex`. */
 export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
   const points = op.points;
@@ -854,6 +1115,12 @@ function drawStrokeFrom(
   const start = Math.max(0, fromIndex);
   if (start >= points.length - 1) return;
 
+  const speedInk = op.speedInk ?? 0;
+  if (speedInk > 0 && !op.highlight) {
+    drawRibbonStrokeFrom(ctx, op, start, pixelScale, capEnd);
+    return;
+  }
+
   const runs = inkStrokeRuns(op, start);
   if (runs.length === 0) return;
 
@@ -947,6 +1214,64 @@ export function applyInkOp(
 }
 
 /**
+ * Paint one op clipped to a host and shifted for `scrollLeft` drift.
+ *
+ * Used by the second pass in {@link paintHostBoundOps} and for live ink
+ * inside a scrolling code block.
+ */
+export function applyInkOpInHost(
+  ctx: CanvasRenderingContext2D,
+  op: InkOp,
+  hostBounds: SceneBounds,
+  scrollDx: number,
+  pixelScale = 0,
+  options?: ApplyInkOptions,
+): void {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(
+    hostBounds.minX,
+    hostBounds.minY,
+    hostBounds.maxX - hostBounds.minX,
+    hostBounds.maxY - hostBounds.minY,
+  );
+  ctx.clip();
+  if (scrollDx !== 0) ctx.translate(scrollDx, 0);
+  applyInkOp(ctx, op, pixelScale, options);
+  ctx.restore();
+}
+
+/** Map from `hostKey` to live scroll state at paint time. */
+export type ScrollHostLookup = ReadonlyMap<
+  number,
+  { bounds: SceneBounds; scrollLeft: number }
+>;
+
+/**
+ * Second paint pass for ops bound to nested horizontal scroll hosts.
+ *
+ * Page-bound ops are already in the tile cache; host-bound ones cannot be
+ * baked there because their screen position moves when `scrollLeft` changes.
+ */
+export function paintHostBoundOps(
+  ctx: CanvasRenderingContext2D,
+  ops: readonly InkOp[],
+  hosts: ScrollHostLookup,
+  pixelScale: number,
+  options?: ApplyInkOptions,
+): void {
+  for (const op of ops) {
+    if (!isHostBoundOp(op)) continue;
+    const host = hosts.get(op.hostKey!);
+    if (!host) {
+      applyInkOp(ctx, op, pixelScale, options);
+      continue;
+    }
+    applyInkOpInHost(ctx, op, host.bounds, hostScrollDx(op, host.scrollLeft), pixelScale, options);
+  }
+}
+
+/**
  * Paint only the unpainted tail of a live op. `fromIndex` is the last point
  * already covered (draw) or the first undrawn stamp index (erase). Returns the
  * next `fromIndex` for a subsequent call — O(new points), not O(all points).
@@ -1015,10 +1340,11 @@ export function paintRasterInk(
 
   const pixelScale = viewport.zoom * dpr;
   for (const op of ops) {
+    if (isHostBoundOp(op)) continue;
     applyInkOp(ctx, op, pixelScale);
   }
 
-  if (liveOp) {
+  if (liveOp && !isHostBoundOp(liveOp)) {
     applyInkOp(ctx, liveOp, pixelScale);
   }
 
@@ -1106,6 +1432,7 @@ export function paintInkAtScale(
   // Chronological order: a pen stroke drawn *after* an erase must survive.
   // Applying every erase after every draw punched holes through later ink.
   for (const op of ops) {
+    if (isHostBoundOp(op)) continue;
     if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, scale);
     else eraseStampsFrom(ctx, op, 0);
   }
