@@ -70,9 +70,22 @@ export function scrollHostAtPoint(clientX: number, clientY: number): HTMLElement
   for (const el of document.elementsFromPoint(clientX, clientY)) {
     if (!(el instanceof HTMLElement)) continue;
     if (el.classList.contains("lc-raster-ink")) continue;
+    if (el.tagName === "CANVAS") continue;
     if (el.closest?.(".lc-page-marks-slot")) continue;
     const host = horizontalScrollHost(el);
-    if (host) return host;
+    if (!host) continue;
+    // Point must sit in the host's visible box — hit-stack can include ancestors
+    // that are not the scrolled surface under the nib.
+    const box = host.getBoundingClientRect();
+    if (
+      clientX < box.left ||
+      clientX > box.right ||
+      clientY < box.top ||
+      clientY > box.bottom
+    ) {
+      continue;
+    }
+    return host;
   }
   return null;
 }

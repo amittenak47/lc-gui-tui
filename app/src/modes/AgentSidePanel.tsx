@@ -540,6 +540,8 @@ export function AgentSidePanel({
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
   const [sheetOffset, setSheetOffset] = useState<number | null>(null);
+  /** Transitions armed only after the first measured park — avoids open→peek slide on mount. */
+  const [sheetMotionOn, setSheetMotionOn] = useState(false);
   const sheetReadyRef = useRef(false);
   const [sheetDragging, setSheetDragging] = useState(false);
   const sheetDragRef = useRef<{
@@ -625,22 +627,31 @@ export function AgentSidePanel({
       // Stay hidden (sheetOffset null) until layout knows the real height.
       if (height <= 0) return;
       const next = open ? 0 : closedOffset();
-      // Never jump from "hidden" straight to open-height 0 while closed — that
-      // was the scratchpad flash when the panel mounted under a half-ready shell.
       if (!open && next <= 0) return;
-      setSheetOffset(next);
+      setSheetOffset((prev) => {
+        /*
+         * First measured offset must snap. Arming transition before this paint
+         * made the sheet animate from translateY(0) (full open) down to the
+         * peek strip after the loading overlay lifted — "spawn mid-screen then
+         * close". Keep motion off until that snap has committed.
+         */
+        if (prev === null) {
+          setSheetMotionOn(false);
+          sheetReadyRef.current = false;
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              sheetReadyRef.current = true;
+              setSheetMotionOn(true);
+            });
+          });
+        }
+        return next;
+      });
     };
     apply();
     const id = window.requestAnimationFrame(apply);
-    let readyId = 0;
-    if (!sheetReadyRef.current) {
-      readyId = window.requestAnimationFrame(() => {
-        sheetReadyRef.current = true;
-      });
-    }
     return () => {
       window.cancelAnimationFrame(id);
-      if (readyId) window.cancelAnimationFrame(readyId);
     };
   }, [mobile, open, sheetDragging]);
 
@@ -1080,7 +1091,7 @@ export function AgentSidePanel({
             ? { transform: `translate3d(0, ${sheetOffset}px, 0)` }
             : { visibility: "hidden" as const }),
           transition:
-            sheetDragging || !sheetReadyRef.current
+            sheetDragging || !sheetMotionOn
               ? "none"
               : "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
         }

@@ -4952,7 +4952,7 @@ export function App() {
         </div>
       </main>
 
-        {problem && (
+        {problem && !canvasLoading && (
           <AgentSidePanel
             open={coachOpen}
             mode={mode}

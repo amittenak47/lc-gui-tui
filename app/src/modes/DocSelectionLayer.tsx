@@ -929,6 +929,7 @@ export function DocSelectionLayer({
      * late-mounted PDF/EPUB text layers still fire.
      */
     let placementDeferred = false;
+    let scrollFrame: number | null = null;
     const onHostScroll = (event: Event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
@@ -937,7 +938,13 @@ export function DocSelectionLayer({
         placementDeferred = true;
         return;
       }
-      place();
+      // Coalesce — scroll fires every frame and synchronous place() was
+      // thrashing ribbons / layout while ink tried to paint.
+      if (scrollFrame != null) return;
+      scrollFrame = requestAnimationFrame(() => {
+        scrollFrame = null;
+        place();
+      });
     };
     body.addEventListener("scroll", onHostScroll, { capture: true, passive: true });
 
@@ -952,6 +959,7 @@ export function DocSelectionLayer({
     if (!watchMutations || footnotes.length === 0 || typeof MutationObserver !== "function") {
       return () => {
         body.removeEventListener("scroll", onHostScroll, true);
+        if (scrollFrame != null) cancelAnimationFrame(scrollFrame);
         placeRef.current = null;
       };
     }
@@ -984,6 +992,7 @@ export function DocSelectionLayer({
       body.removeEventListener("scroll", onHostScroll, true);
       placeRef.current = null;
       if (frame != null) cancelAnimationFrame(frame);
+      if (scrollFrame != null) cancelAnimationFrame(scrollFrame);
     };
   }, [footnotes, children, enabled, highlighting]);
 
