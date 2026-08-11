@@ -22,6 +22,7 @@
 
 import {
   applyInkOp,
+  HIGHLIGHT_WIDTH_SCALE,
   inkLineWidth,
   INK_TIP_STEP,
   setInkSceneTransform,
@@ -165,8 +166,11 @@ export function inkOpBounds(op: InkOp): SceneBounds {
         // pressure and speed ink both off this is the same number it always was.
         // Extra tip-step pad so a borderline tile is never left blank forever
         // after clear+append (reset-board invisible band).
-        inkLineWidth(op.baseWidth, 1, op.pressureSensitive, 1, op.speedInk ?? 0) / 2 +
-          INK_TIP_STEP;
+        (op.highlight
+          ? inkLineWidth(op.baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE
+          : inkLineWidth(op.baseWidth, 1, op.pressureSensitive, 1, op.speedInk ?? 0)) /
+          2 +
+        INK_TIP_STEP;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;

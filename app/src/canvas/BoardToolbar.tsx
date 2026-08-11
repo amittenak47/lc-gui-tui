@@ -69,8 +69,19 @@ function dockAnchorRect(toolbar: HTMLElement | null): DOMRect | null {
 }
 
 /** Ink seats first, then Select after the divider. No Hand: scrolling is toolbar-off. */
-const INK_TOOLS: Array<{ tool: ToolName; label: string; hint: string; icon?: "pen" | "eraser" }> = [
+const INK_TOOLS: Array<{
+  tool: ToolName;
+  label: string;
+  hint: string;
+  icon?: "pen" | "eraser" | "highlighter";
+}> = [
   { tool: "freedraw", label: "Pen", hint: "Pen", icon: "pen" },
+  {
+    tool: "highlighter",
+    label: "Highlighter",
+    hint: "Highlighter — wide, translucent, in the pen's colour",
+    icon: "highlighter",
+  },
   { tool: "eraser", label: "Eraser", hint: "Eraser — only removes ink under the brush", icon: "eraser" },
 ];
 
@@ -179,6 +190,7 @@ export function BoardToolbar({
   // Stroke weight is for pen / shapes / eraser — text has its own wheel.
   const showStrokeSizes =
     active === "freedraw" ||
+    active === "highlighter" ||
     active === "rectangle" ||
     active === "ellipse" ||
     active === "arrow" ||
@@ -467,7 +479,7 @@ export function BoardToolbar({
     tool: ToolName,
     label: string,
     hint: string,
-    icon?: "pen" | "eraser",
+    icon?: "pen" | "eraser" | "highlighter",
   ) => (
     <button
       key={tool}
@@ -482,6 +494,8 @@ export function BoardToolbar({
         <PinkEraserIcon />
       ) : icon === "pen" ? (
         <PenIcon />
+      ) : icon === "highlighter" ? (
+        <HighlighterIcon />
       ) : tool === "selection" ? (
         <span className="lc-tool-emoji" aria-hidden>
           ⬚
@@ -545,12 +559,12 @@ export function BoardToolbar({
             type="button"
             className={highlighting ? "lc-tool lc-tool-active" : "lc-tool"}
             aria-pressed={highlighting}
-            aria-label="Highlighter"
-            title="Highlighter — sweep an area to ask about it"
+            aria-label="Ask about an area"
+            title="Sweep an area of the page to ask the coach about it"
             onClick={onToggleHighlight}
           >
             <span className="lc-tool-emoji" aria-hidden>
-              🖍
+              🔍
             </span>
           </button>
         )}
@@ -933,6 +947,30 @@ function PinkEraserIcon() {
         <rect x="4.5" y="7" width="15" height="3.8" rx="1.2" fill="#fb7185" />
         <rect x="4.5" y="15.2" width="15" height="2.8" fill="#fff1f2" opacity="0.95" />
       </g>
+    </svg>
+  );
+}
+
+/**
+ * A chisel-tipped marker, angled the way the pen is.
+ *
+ * Deliberately fatter than the pen's nib and drawn in the live ink colour, so
+ * the two are told apart by silhouette rather than by remembering which seat is
+ * which — `--lc-highlight` is published on the board and is the colour the
+ * stroke will actually be.
+ */
+function HighlighterIcon() {
+  return (
+    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+      <path
+        d="M15.5 3.5 20.5 8.5 10 19H5v-5z"
+        fill="var(--lc-highlight, currentColor)"
+        fillOpacity="0.42"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path d="M4 21.2h16" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
     </svg>
   );
 }

@@ -75,6 +75,8 @@ export interface EncodedOp {
   pc?: number;
   ps?: 0 | 1;
   si?: number;
+  /** Highlighter stroke — absent means an ordinary pen one. */
+  hl?: 1;
   /* erase only */
   r?: number;
   /** `dx, dy` in tenths for each point after the first — length `2 * (n - 1)`. */
@@ -193,6 +195,7 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       record.pc = op.pressureClip;
       record.ps = op.pressureSensitive ? 1 : 0;
       if (op.speedInk !== undefined) record.si = op.speedInk;
+      if (op.highlight) record.hl = 1;
       record.pr = pressures;
       record.sl = slownesses;
     } else {
@@ -269,6 +272,7 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
         points,
       };
       if (record.si !== undefined) op.speedInk = record.si;
+      if (record.hl === 1) op.highlight = true;
       ops.push(op);
     } else {
       ops.push({ kind: "erase", radius: record.r ?? 1, points });

@@ -143,6 +143,19 @@ describe("encodeInkOps / decodeInkOps", () => {
     expect(back.speedInk).toBeUndefined();
   });
 
+  it("remembers that a stroke was a highlighter one", () => {
+    // Without this the marks come back as very wide, very opaque pen strokes
+    // over the words they were meant to sit behind.
+    const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], { highlight: true });
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.highlight).toBe(true);
+  });
+
+  it("leaves the flag off a pen stroke, so old boards stay pen strokes", () => {
+    const [back] = roundTrip([stroke([{ x: 1, y: 2, pressure: 0.5 }])]) as [InkDrawOp];
+    expect(back.highlight).toBeUndefined();
+  });
+
   it("round-trips an erase op's geometry and radius", () => {
     const original: InkEraseOp = {
       kind: "erase",
