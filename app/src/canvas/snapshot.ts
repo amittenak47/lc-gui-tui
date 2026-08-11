@@ -21,7 +21,9 @@ import {
   captureVersions,
   elementIds,
   sceneHash,
+  studentAuthoredElements,
   truncateCaptureId,
+  type SceneElementLike,
 } from "./capture";
 import { mergeRecognized, type InkRecognizer } from "./ink";
 import { sha256Hex } from "../util/codeHash";
@@ -159,6 +161,51 @@ export function sceneFingerprint(
   inkOpsLen: number,
 ): number {
   const base = sceneHash(elements);
+  if (inkOpsLen === 0) return base;
+  return (base ^ (inkOpsLen * 0x9e3779b1)) >>> 0;
+}
+
+/**
+ * Fingerprint of student-authored board content, without Excalidraw version
+ * counters. Used for Discard/Exit pristine checks — a silent version bump after
+ * save must not make the board look dirty when it is visually unchanged.
+ */
+export function padContentHash(elements: readonly SceneElementLike[]): number {
+  let hash = 0x811c9dc5;
+  for (const el of studentAuthoredElements(elements)) {
+    const chunks = [
+      el.id,
+      ":",
+      el.type,
+      ":",
+      String(Math.round(el.x)),
+      ",",
+      String(Math.round(el.y)),
+      ",",
+      String(Math.round(el.width)),
+      ",",
+      String(Math.round(el.height)),
+      ";",
+    ];
+    if (el.text && el.text.trim().length > 0) {
+      chunks.push(el.text.trim(), ";");
+    }
+    for (const chunk of chunks) {
+      for (let i = 0; i < chunk.length; i++) {
+        hash ^= chunk.charCodeAt(i);
+        hash = (hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>> 0;
+      }
+    }
+  }
+  return hash >>> 0;
+}
+
+/** Mix student-authored content and raster-ink into one pristine fingerprint. */
+export function padContentFingerprint(
+  elements: readonly SceneElementLike[],
+  inkOpsLen: number,
+): number {
+  const base = padContentHash(elements);
   if (inkOpsLen === 0) return base;
   return (base ^ (inkOpsLen * 0x9e3779b1)) >>> 0;
 }

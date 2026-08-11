@@ -280,6 +280,19 @@ describe("ink reservoir", () => {
       inkStrokeAlpha(0.3, 1, true, 0),
     );
   });
+
+  it("scales deposit by ink boldness and clamps to opaque", () => {
+    const base = inkStrokeAlpha(1, 0, false, 0, INK_SLOWNESS_NEUTRAL, 0, 1);
+    const triple = inkStrokeAlpha(1, 0, false, 0, INK_SLOWNESS_NEUTRAL, 0, 3);
+    expect(base).toBeCloseTo(1);
+    expect(triple).toBeCloseTo(1);
+    // Mid-stroke charge so the boost has headroom before the opaque clamp.
+    const drained = inkStrokeAlpha(0.3, 0, false, 800, INK_SLOWNESS_NEUTRAL, 0, 1);
+    const boosted = inkStrokeAlpha(0.3, 0, false, 800, INK_SLOWNESS_NEUTRAL, 0, 3);
+    expect(drained).toBeLessThan(1);
+    expect(boosted).toBeCloseTo(Math.min(1, drained * 3));
+    expect(boosted).toBeGreaterThan(drained);
+  });
 });
 
 describe("speed ink", () => {

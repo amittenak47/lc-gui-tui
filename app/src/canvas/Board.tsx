@@ -172,6 +172,10 @@ import {
   loadInkSpeedBlotBlend,
 } from "../util/inkSpeedPref";
 import {
+  INK_BOLDNESS_EVENT,
+  loadInkBoldness,
+} from "../util/inkBoldnessPref";
+import {
   ERASER_PARTIAL_EVENT,
   loadEraserPartial,
 } from "../util/eraserPartialPref";
@@ -1033,6 +1037,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() =>
     loadInkSpeedBlotBlend(),
   );
+  const [inkBoldness, setInkBoldness] = useState(() => loadInkBoldness());
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
   const [stampTrash, setStampTrash] = useState<{
     left: number;
@@ -2664,6 +2669,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     window.addEventListener(INK_SPEED_BLOT_BLEND_EVENT, onBlotBlend);
     return () =>
       window.removeEventListener(INK_SPEED_BLOT_BLEND_EVENT, onBlotBlend);
+  }, []);
+
+  useEffect(() => {
+    const onBoldness = () => setInkBoldness(loadInkBoldness());
+    window.addEventListener(INK_BOLDNESS_EVENT, onBoldness);
+    return () => window.removeEventListener(INK_BOLDNESS_EVENT, onBoldness);
   }, []);
 
   useEffect(() => {
@@ -6790,6 +6801,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         smoothingMode={inkSmoothingMode}
         speedInk={inkSpeed}
         speedBlotBlend={inkSpeedBlotBlend}
+        inkBoldness={inkBoldness}
         partialErase={eraserPartial}
         pressureSensitive={pressureSensitive}
         getViewport={getViewport}
