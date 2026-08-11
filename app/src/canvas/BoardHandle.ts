@@ -55,6 +55,8 @@ export type ToolName =
   | "hand"
   | "selection"
   | "freedraw"
+  /** Wide translucent chisel — see `HIGHLIGHT_WIDTH_SCALE` in rasterInk. */
+  | "highlighter"
   | "eraser"
   | "text"
   | "rectangle"

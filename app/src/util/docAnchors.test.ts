@@ -245,6 +245,37 @@ describe("regionAnchorFromRect", () => {
     expect(anchor).toEqual({ kind: "region", x: 12, y: 8, w: 40, h: 20, scope: "p1" });
   });
 
+  /*
+   * A scope root with no laid-out width cannot say what its own scale is, and
+   * the old hard fallback of 1 did not mean "unscaled" — it meant the mark was
+   * stored in viewport pixels while every reader treated it as scope units. On
+   * a board zoomed to a fifth that is a box five times too big, in the same
+   * place every time. The caller knows a better number.
+   */
+  it("takes the caller's scale when the scope root has not laid out", () => {
+    const body = mount('<div data-doc-scope="p1"></div>');
+    const root = scopeRootIn(body, "p1") as HTMLElement;
+    const anchor = regionAnchorFromRect(
+      root,
+      { left: 20, top: 10, width: 40, height: 20 },
+      "p1",
+      0.5,
+    );
+    expect(anchor).toEqual({ kind: "region", x: 40, y: 20, w: 80, h: 40, scope: "p1" });
+  });
+
+  it("still defaults to 1 for callers with nothing better", () => {
+    const body = mount('<div data-doc-scope="p1"></div>');
+    const root = scopeRootIn(body, "p1") as HTMLElement;
+    expect(regionAnchorFromRect(root, { left: 1, top: 2, width: 3, height: 4 })).toEqual({
+      kind: "region",
+      x: 1,
+      y: 2,
+      w: 3,
+      h: 4,
+    });
+  });
+
   it("refuses a rectangle with no area", () => {
     const body = mount('<div data-doc-scope="p1"></div>');
     const root = scopeRootIn(body, "p1") as HTMLElement;

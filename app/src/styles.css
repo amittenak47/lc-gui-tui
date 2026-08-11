@@ -9202,10 +9202,19 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /* The band being swept, before it is anything. */
+/*
+ * The band is the writer's current ink colour, not a fixed amber.
+ *
+ * `--lc-highlight` is pushed onto the board by the ink palette; the amber is
+ * only what it falls back to on a surface that has no pen (a document opened
+ * for reading). Multiply so the words stay readable under the wash rather than
+ * being tinted flat — the same reason the quote rect uses it.
+ */
 .lc-doc-highlight-band {
   position: absolute;
   border-radius: 3px;
-  background: color-mix(in srgb, #f5b301 26%, transparent);
-  border: 1px solid color-mix(in srgb, #f5b301 55%, transparent);
+  background: color-mix(in srgb, var(--lc-highlight, #f5b301) 26%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lc-highlight, #f5b301) 55%, transparent);
+  mix-blend-mode: multiply;
   pointer-events: none;
 }

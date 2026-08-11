@@ -104,7 +104,7 @@ export interface RasterInkHandle {
 
 export interface RasterInkLayerProps {
   enabled: boolean;
-  tool: "pen" | "eraser" | null;
+  tool: "pen" | "eraser" | "highlighter" | null;
   strokeWidth: number;
   inkColor: string;
   inkFullness: number;
@@ -1243,7 +1243,27 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           activeTool === "pen" &&
           pressureSensitive &&
           hasStylusPressure(point.pressure);
-        if (activeTool === "pen") {
+        if (activeTool === "highlighter") {
+          /*
+           * A chisel: no attack buffer, no reservoir, no pressure, no pace.
+           * `inkStrokeStyle` short-circuits all of it on the `highlight` flag —
+           * the fields below are only carried so the op stays one shape.
+           */
+          attackBufferRef.current = null;
+          liveRawPointsRef.current = liveReshapeActiveRef.current() ? [point] : null;
+          liveRef.current = {
+            kind: "draw",
+            color: inkColorRef.current,
+            baseWidth: penWidth,
+            maxFullness: 1,
+            pressureClip: 1,
+            pressureSensitive: false,
+            speedInk: 0,
+            highlight: true,
+            points: [point],
+          };
+          liveDrawnIndexRef.current = 0;
+        } else if (activeTool === "pen") {
           if (attackApplies) {
             attackBufferRef.current = [point];
             attackPeakRef.current = point.pressure;

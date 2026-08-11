@@ -513,7 +513,10 @@ export function DocSelectionLayer({
       const left = (Math.min(start.startX, x) - origin.left) / scale;
       const top = (Math.min(start.startY, y) - origin.top) / scale;
       const width = Math.abs(x - start.startX) / scale;
-      const height = Math.max(Math.abs(y - start.startY) / scale, MIN_BAND_PX);
+      // The floor is a *screen* measurement — a band you can see and hit —
+      // so it converts like everything else rather than being added raw to
+      // body units, where a zoomed-out page turns 14 into a stripe.
+      const height = Math.max(Math.abs(y - start.startY), MIN_BAND_PX) / scale;
       return { left, top, width, height };
     };
 
@@ -546,7 +549,7 @@ export function DocSelectionLayer({
       bandRef.current = null;
       releaseSelectionGesture();
       const body = bodyRef.current;
-      if (!rect || !body || rect.width < MIN_BAND_PX) {
+      if (!rect || !body || rect.width * (scaleOf(body) || 1) < MIN_BAND_PX) {
         setBand(null);
         return;
       }
@@ -557,11 +560,12 @@ export function DocSelectionLayer({
        * reader was working on — and a region anchor lives in one scope's
        * coordinates, so there is no honest way to store one that spans two.
        */
-      const scopeRoot =
+      const found =
         (document.elementFromPoint(start.startX, start.startY) as Element | null)?.closest?.(
           `[${SCOPE_ATTR}]`,
         ) ?? null;
-      const root = (scopeRoot as HTMLElement | null) ?? body;
+      const scopeRoot = found instanceof HTMLElement ? found : null;
+      const root = scopeRoot ?? body;
       const scope = scopeRoot?.getAttribute(SCOPE_ATTR) ?? undefined;
       const scale = scaleOf(body) || 1;
       const bodyBox = body.getBoundingClientRect();
@@ -574,6 +578,7 @@ export function DocSelectionLayer({
           height: rect.height * scale,
         },
         scope,
+        scale,
       );
       if (!anchor) {
         setBand(null);

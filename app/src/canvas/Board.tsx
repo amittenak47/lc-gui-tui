@@ -592,6 +592,7 @@ function loadImageSize(dataURL: string): Promise<{ width: number; height: number
 /** Tools that put marks on the page — the ones annotate mode exists for. */
 const DRAWING_TOOLS = new Set<ToolName>([
   "freedraw",
+  "highlighter",
   "eraser",
   "text",
   "rectangle",
@@ -2443,7 +2444,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const setActiveToolRef = useRef<(tool: ToolName) => void>(() => {});
   const setTool = useCallback((tool: ToolName) => {
-    if (tool === "freedraw") {
+    if (tool === "freedraw" || tool === "highlighter") {
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcInk", locked: false });
       apiRef.current?.resetCursor?.();
     } else if (tool === "eraser") {
@@ -3583,7 +3584,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     commitVisualScrollRef.current();
   }, [activeTool, stopPanInertia]);
 
-  const inkToolActive = activeTool === "freedraw" || activeTool === "eraser";
+  const inkToolActive =
+    activeTool === "freedraw" ||
+    activeTool === "eraser" ||
+    activeTool === "highlighter";
 
   // Eraser ring follows the pointer via window listeners so a click-without-move
   // does not lose the brush (pointerleave on the board fired sporadically).
@@ -6353,6 +6357,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       ]
         .filter(Boolean)
         .join(" ")}
+      /*
+        The sweep band and the highlighter nib both wear the pen's colour, and
+        both are styled in CSS — so the colour is published as a custom property
+        rather than threaded through two component trees as a prop.
+      */
+      style={{ ["--lc-highlight" as string]: inkColor }}
     >
       {/*
         The markdown page, under everything.
@@ -6633,7 +6643,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           interactive && inkToolActive
             ? activeTool === "eraser"
               ? "eraser"
-              : "pen"
+              : activeTool === "highlighter"
+                ? "highlighter"
+                : "pen"
             : null
         }
         strokeWidth={strokeWidth}

@@ -281,10 +281,27 @@ export function regionAnchorFromRect(
   scopeRoot: HTMLElement,
   rect: { left: number; top: number; width: number; height: number },
   scope?: string,
+  fallbackScale = 1,
 ): RegionAnchor | null {
   const origin = scopeRoot.getBoundingClientRect();
   const layoutWidth = scopeRoot.offsetWidth;
-  const scale = layoutWidth > 0 && origin.width > 0 ? origin.width / layoutWidth : 1;
+  /*
+   * A scope root with no layout width cannot say what its own scale is.
+   *
+   * The fallback used to be a hard 1, and 1 does not mean "unscaled" — it means
+   * the rectangle is stored in *viewport* pixels while every reader of it
+   * treats the numbers as the scope's own units. On a board zoomed to a fifth
+   * that is a mark five times too big in both directions, in the same place
+   * every time, which is what a sweep that "draws the same large box off the
+   * page" looks like. A PDF page whose canvas has not painted yet is exactly
+   * that: an element with a client rect and no offset width.
+   *
+   * The caller knows a better number — the body shares the scope's transform
+   * and always has a width — so it can pass one. The default stays 1 for
+   * callers that have nothing better and for jsdom, which lays nothing out.
+   */
+  const scale =
+    layoutWidth > 0 && origin.width > 0 ? origin.width / layoutWidth : fallbackScale;
   const w = rect.width / scale;
   const h = rect.height / scale;
   if (w <= 0 || h <= 0) return null;

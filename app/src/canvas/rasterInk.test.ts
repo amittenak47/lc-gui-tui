@@ -6,6 +6,7 @@ import {
   eraserScreenRadius,
   exportScaleFrom,
   hasStylusPressure,
+  HIGHLIGHT_WIDTH_SCALE,
   inkBaseWidthForZoom,
   inkLineWidth,
   inkOpsBounds,
@@ -145,6 +146,44 @@ describe("rasterInk sizing", () => {
     const three = inkLineWidth(3, 0, false);
     expect(two - one).toBeCloseTo(three - two);
     expect(inkLineWidth(STROKE_WIDTH_MAX, 0, false)).toBeGreaterThan(40);
+  });
+
+  /*
+   * A highlighter is a chisel, not a nib.
+   *
+   * Real ones do not modulate, and a translucent stroke that did would band
+   * where two passes overlapped — which is the whole reason the reservoir,
+   * pressure and speed are all short-circuited rather than merely turned down.
+   */
+  describe("highlighter", () => {
+    const chisel = (pressure: number, consumed: number, slowness: number) =>
+      inkStrokeStyle(2, 0.2, pressure, 1, true, consumed, slowness, 1, true);
+
+    it("is one width and one wetness whatever the hand does", () => {
+      const start = chisel(0.1, 0, 0);
+      const later = chisel(1, 5000, 1);
+      expect(later.lineWidth).toBeCloseTo(start.lineWidth);
+      expect(later.alpha).toBeCloseTo(start.alpha);
+    });
+
+    it("is much wider than the pen it shares a dial with", () => {
+      const pen = inkStrokeStyle(2, 1, NO_PRESSURE, 1, false);
+      expect(chisel(NO_PRESSURE, 0, INK_SLOWNESS_NEUTRAL).lineWidth).toBeCloseTo(
+        pen.lineWidth * HIGHLIGHT_WIDTH_SCALE,
+      );
+    });
+
+    it("stays translucent enough to read through", () => {
+      const alpha = chisel(NO_PRESSURE, 0, INK_SLOWNESS_NEUTRAL).alpha;
+      expect(alpha).toBeGreaterThan(0);
+      expect(alpha).toBeLessThan(0.5);
+    });
+
+    it("still tracks the width dial", () => {
+      const thin = inkStrokeStyle(1, 1, NO_PRESSURE, 1, false, 0, 0.5, 0, true);
+      const fat = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.5, 0, true);
+      expect(fat.lineWidth).toBeGreaterThan(thin.lineWidth);
+    });
   });
 
   it("stamps denser under pressure than at constant width", () => {

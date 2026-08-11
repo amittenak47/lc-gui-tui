@@ -251,6 +251,14 @@ export interface InkDrawOp {
   pressureSensitive: boolean;
   /** Speed-ink strength the stroke was written with (0–1); absent means off. */
   speedInk?: number;
+  /**
+   * A highlighter stroke rather than a pen one.
+   *
+   * A chisel, not a nib: one width the whole way, one alpha the whole way, and
+   * neither pressure nor pace touches it. Real highlighters do not modulate,
+   * and a translucent stroke that did would band where the passes overlapped.
+   */
+  highlight?: boolean;
   points: ScenePoint[];
 }
 
@@ -284,6 +292,18 @@ export function normalizePressure(raw: number, clip: number): number {
  */
 export const INK_TIP_MIN = 0.9;
 export const INK_TIP_STEP = 1.35;
+
+/**
+ * How much wider than the pen the highlighter runs, and how much it deposits.
+ *
+ * Wide enough to cover a line of handwriting in one pass at a mid dial, and
+ * translucent enough that two passes over the same words do not turn them into
+ * a block. The alpha is fixed rather than dialled: it composites `multiply`, so
+ * what governs legibility is the product of the passes, and letting the ink
+ * dial push it up would make a second stroke opaque.
+ */
+export const HIGHLIGHT_WIDTH_SCALE = 8;
+export const HIGHLIGHT_ALPHA = 0.3;
 
 /**
  * Hard floor on a tip, for degenerate input only.
@@ -384,7 +404,15 @@ export function inkStrokeStyle(
   consumed = 0,
   slowness = INK_SLOWNESS_NEUTRAL,
   speedInk = 0,
+  highlight = false,
 ): InkStrokeStyle {
+  // A chisel has one width and one wetness — no reservoir, no pressure, no pace.
+  if (highlight) {
+    return {
+      lineWidth: inkLineWidth(baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE,
+      alpha: HIGHLIGHT_ALPHA,
+    };
+  }
   const stylus = pressureSensitive && hasStylusPressure(pressure);
   const pNorm = stylus ? normalizePressure(pressure, pressureClip) : 0;
   return {
@@ -710,6 +738,7 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
       consumed[index] ?? 0,
       slowness ? slowness[index] : (points[index].slowness ?? INK_SLOWNESS_NEUTRAL),
       speedInk,
+      op.highlight === true,
     );
 
   let start = Math.max(0, Math.min(fromIndex, points.length - 2));
@@ -787,6 +816,18 @@ function drawStrokeFrom(
   ctx.globalCompositeOperation = "source-over";
   ctx.strokeStyle = op.color;
   ctx.fillStyle = op.color;
+  /*
+   * A highlighter multiplies; a pen paints over.
+   *
+   * Multiply is what makes it read as a marker rather than as a translucent
+   * pen: writing already on the page stays legible through it, and two passes
+   * over the same words darken toward the colour instead of stacking toward
+   * opaque. It also means the op order in the tile cache does not have to be
+   * disturbed — a highlight laid over existing ink looks like a highlight over
+   * ink either way, which is why this is a blend mode rather than a second
+   * z-band the incremental tile append would have to learn about.
+   */
+  if (op.highlight) ctx.globalCompositeOperation = "multiply";
 
   // A tap is a dot — dotting an "i" used to draw nothing at all.
   if (points.length === 1) {
@@ -800,6 +841,7 @@ function drawStrokeFrom(
       0,
       points[0].slowness ?? INK_SLOWNESS_NEUTRAL,
       op.speedInk ?? 0,
+      op.highlight === true,
     );
     ctx.globalAlpha = style.alpha;
     ctx.beginPath();
@@ -1031,6 +1073,7 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
       0,
       1,
       op.speedInk ?? 0,
+      op.highlight === true,
     );
     const half = style.lineWidth / 2;
     for (const point of op.points) {
