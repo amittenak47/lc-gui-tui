@@ -6,6 +6,7 @@ import {
   eraserScreenRadius,
   exportScaleFrom,
   hasStylusPressure,
+  inkBaseWidthForZoom,
   inkLineWidth,
   inkOpsBounds,
   inkPressureAlpha,
@@ -82,9 +83,60 @@ describe("rasterInk sizing", () => {
   });
 
   it("gives the finest tip a hairline, and never a negative one", () => {
+    // The bottom of the *slider* still lands exactly here.
     expect(inkLineWidth(STROKE_WIDTH_MIN, 0, false)).toBeCloseTo(INK_TIP_MIN);
-    expect(inkLineWidth(0, 0, false)).toBeCloseTo(INK_TIP_MIN);
-    expect(inkLineWidth(-5, 0, false)).toBeCloseTo(INK_TIP_MIN);
+    /*
+     * Below it the tip keeps getting finer instead of clamping back up. Only
+     * zoom compensation asks for that (see `inkBaseWidthForZoom`) and clamping
+     * is what it exists to defeat: on a page opened at 2× the thinnest nib the
+     * writer could pick was twice as thick as the same nib on the scratchpad.
+     * How thin a stroke may be *drawn* is `paintedWidth`'s business, and it
+     * floors in device pixels wherever the camera is.
+     */
+    expect(inkLineWidth(0, 0, false)).toBeLessThan(INK_TIP_MIN);
+    expect(inkLineWidth(0, 0, false)).toBeGreaterThan(0);
+    expect(inkLineWidth(-5, 0, false)).toBeGreaterThan(0);
+  });
+
+  /*
+   * Nib parity: the dial is in screen pixels, wherever the camera is.
+   *
+   * Ink is stored in scene units and painted at the board's zoom, which is
+   * right — ink belongs to the page. The slider being in those units too was
+   * not: a document opens fitted to a reading column and a pad does not, so the
+   * same setting wrote a visibly fatter nib on the document.
+   */
+  describe("inkBaseWidthForZoom", () => {
+    const onScreen = (ui: number, zoom: number) =>
+      inkLineWidth(inkBaseWidthForZoom(ui, zoom), 0, false) * zoom;
+
+    it("draws the same thickness at any zoom", () => {
+      for (const ui of [STROKE_WIDTH_MIN, 2, 6, STROKE_WIDTH_MAX]) {
+        const reference = inkLineWidth(ui, 0, false);
+        for (const zoom of [0.35, 0.75, 1, 1.6, 3]) {
+          expect(onScreen(ui, zoom)).toBeCloseTo(reference, 6);
+        }
+      }
+    });
+
+    it("leaves an unzoomed board exactly where it was", () => {
+      for (const ui of [STROKE_WIDTH_MIN, 4, STROKE_WIDTH_MAX]) {
+        expect(inkBaseWidthForZoom(ui, 1)).toBeCloseTo(ui, 10);
+      }
+    });
+
+    it("lets the minimum nib get finer on a zoomed-in page", () => {
+      // The reported bug: the finest pen was not fine enough on a document.
+      expect(inkBaseWidthForZoom(STROKE_WIDTH_MIN, 2)).toBeLessThan(STROKE_WIDTH_MIN);
+      expect(
+        inkLineWidth(inkBaseWidthForZoom(STROKE_WIDTH_MIN, 2), 0, false),
+      ).toBeLessThan(inkLineWidth(STROKE_WIDTH_MIN, 0, false));
+    });
+
+    it("survives a degenerate camera", () => {
+      expect(Number.isFinite(inkBaseWidthForZoom(2, 0))).toBe(true);
+      expect(inkLineWidth(inkBaseWidthForZoom(2, 0), 0, false)).toBeGreaterThan(0);
+    });
   });
 
   it("still spreads the dial evenly above the finest tip", () => {
@@ -396,6 +448,78 @@ describe("inkStrokeRuns", () => {
     const runs = inkStrokeRuns(stroke(points, { maxFullness: 1 }) as never);
     expect(runs).toHaveLength(1);
     expect(runs[0].alpha).toBeGreaterThan(0.95);
+  });
+
+  /*
+   * The capsule, and why it survived the first fix.
+   *
+   * A bead is a width discontinuity: the hand stops dead at a letter join, the
+   * slowness track steps rather than ramps, and the runs either side of the
+   * step are painted at two very different constant widths. A five-tap box over
+   * the point *index* used to be the answer, and it worked until smoothing was
+   * turned on — Chaikin inserts points, so the same five taps covered a
+   * fraction of the distance they were tuned for. Hence a bead that got worse
+   * with the one setting that should have made it better.
+   *
+   * These tests are written in distance, not samples, so they hold at any
+   * point density — which is the property the old filter did not have.
+   */
+  describe("speed ink slope", () => {
+    /** Width at each sample, and how far along the stroke that sample sits. */
+    function widthTrack(spacing: number) {
+      // A hand that runs, stops dead half way, then runs again.
+      const points = Array.from({ length: 240 }, (_, i) => ({
+        x: i * spacing,
+        y: 0,
+        pressure: NO_PRESSURE,
+        slowness: i < 120 ? 0 : 1,
+      }));
+      const runs = inkStrokeRuns(stroke(points, { speedInk: 1 }) as never);
+      const nib = inkLineWidth(2, 0, false);
+      return runs.map((run) => ({
+        at: (run.start * spacing) / nib,
+        width: run.lineWidth,
+      }));
+    }
+
+    function steepest(track: ReturnType<typeof widthTrack>) {
+      let worst = 0;
+      for (let i = 1; i < track.length; i++) {
+        const span = track[i].at - track[i - 1].at;
+        if (span <= 0) continue;
+        worst = Math.max(worst, Math.abs(track[i].width - track[i - 1].width) / span);
+      }
+      return worst;
+    }
+
+    it("ramps the width instead of stepping it", () => {
+      const track = widthTrack(1);
+      const nib = inkLineWidth(2, 0, false);
+      // The step is a full swing of slowness. Spread over the slope limit it
+      // cannot arrive in less than a nib width, whatever the sample rate.
+      expect(steepest(track)).toBeLessThan(nib);
+      // …and it does still arrive: this is a ramp, not a flat line.
+      const widths = track.map((run) => run.width);
+      expect(Math.max(...widths) / Math.min(...widths)).toBeGreaterThan(1.5);
+    });
+
+    it("holds the same slope when smoothing has doubled the point count", () => {
+      // Chaikin's effect on this filter, reproduced directly: the same stroke
+      // at half the spacing is the same drawing with twice the samples.
+      const coarse = steepest(widthTrack(1));
+      const dense = steepest(widthTrack(0.5));
+      expect(dense).toBeLessThan(coarse * 1.35 + 1e-6);
+    });
+
+    it("never asks for a width a canvas cannot draw", () => {
+      // The raw multiplier goes negative past neutral at full strength; the
+      // floor is what stops "fast" meaning "one pixel of hairline".
+      for (const track of [widthTrack(1), widthTrack(0.5)]) {
+        for (const run of track) expect(run.width).toBeGreaterThan(0);
+      }
+      expect(inkSpeedWidthGain(0, 1)).toBeGreaterThan(0);
+      expect(inkSpeedWidthGain(1, 1)).toBeGreaterThan(inkSpeedWidthGain(0, 1));
+    });
   });
 });
 

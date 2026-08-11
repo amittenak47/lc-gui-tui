@@ -184,6 +184,19 @@ export function smoothSpeed(previous: number, sample: number): number {
   return previous + (sample - previous) * SPEED_SMOOTHING;
 }
 
+/**
+ * Thinnest a flick may leave the nib, as a fraction of its plain width.
+ *
+ * {@link INK_SPEED_WIDTH_RANGE} is 1.35, so at full strength the raw multiplier
+ * runs from −0.35 to 2.35 — the fast half of that is *negative*, and a negative
+ * width is not a thin line, it is whatever `paintedWidth`'s hairline floor
+ * happens to be. That is half of the capsule the writer sees: fat pools where
+ * the hand paused, one-pixel thread between them, and nothing in between
+ * because the arithmetic went through zero. A pen that runs dry still lays down
+ * a line, so the multiplier has a floor and the range compresses into it.
+ */
+export const INK_SPEED_MIN_WIDTH_GAIN = 0.45;
+
 /** Multiplier either side of 1: above when the nib drags, below when it flicks. */
 function speedGain(slowness: number, strength: number, range: number): number {
   const amount = Math.max(0, Math.min(1, strength));
@@ -193,7 +206,10 @@ function speedGain(slowness: number, strength: number, range: number): number {
 }
 
 export function inkSpeedWidthGain(slowness: number, strength: number): number {
-  return speedGain(slowness, strength, INK_SPEED_WIDTH_RANGE);
+  return Math.max(
+    INK_SPEED_MIN_WIDTH_GAIN,
+    speedGain(slowness, strength, INK_SPEED_WIDTH_RANGE),
+  );
 }
 
 export function inkSpeedAlphaGain(slowness: number, strength: number): number {
@@ -270,6 +286,24 @@ export const INK_TIP_MIN = 0.9;
 export const INK_TIP_STEP = 1.35;
 
 /**
+ * Hard floor on a tip, for degenerate input only.
+ *
+ * {@link INK_TIP_MIN} is the *slider's* minimum and used to be the clamp as
+ * well, which was fine while every stroke's base width came straight off the
+ * dial — the two are the same number at setting 1. Zoom compensation (see
+ * {@link inkBaseWidthForZoom}) asks for tips below that, and clamping them back
+ * up is precisely the bug it exists to fix: on a page opened at 2× the thinnest
+ * nib the writer can pick was twice the thickness of the same nib on the
+ * scratchpad, and no setting would bring it down.
+ *
+ * Nothing is lost by letting it go: how thin a stroke may be *drawn* is a
+ * rendering question and `paintedWidth` already answers it, flooring at
+ * {@link INK_MIN_DEVICE_PX} device pixels wherever the camera happens to be.
+ * This one only keeps the arithmetic away from zero.
+ */
+export const INK_TIP_FLOOR = 0.05;
+
+/**
  * Scene-unit line width from tip geometry, plus swell/starve when speed ink is
  * on. Stylus pressure does **not** change width — only alpha — so a fat tip
  * stays a cylinder, not a pressure-swollen marker.
@@ -288,8 +322,30 @@ export function inkLineWidth(
   slowness = INK_SLOWNESS_NEUTRAL,
   speedInk = 0,
 ): number {
-  const base = Math.max(INK_TIP_MIN, INK_TIP_MIN + (baseWidth - 1) * INK_TIP_STEP);
+  const base = Math.max(INK_TIP_FLOOR, INK_TIP_MIN + (baseWidth - 1) * INK_TIP_STEP);
   return base * inkSpeedWidthGain(slowness, speedInk);
+}
+
+/**
+ * The base width to store so a stroke *looks* `uiWidth` thick at this camera.
+ *
+ * Ink is stored in scene units and painted at the board's zoom, which is right
+ * — ink belongs to the page, so it scales when the page does. What was wrong is
+ * that the *slider* was in those units too. The scratchpad and an annotated
+ * document sit at different zooms by design (a document is fitted to a reading
+ * column, a pad is not), so the same setting drew a visibly fatter nib on the
+ * document, and at the bottom of the dial there was nowhere left to go.
+ *
+ * Converting at stroke start puts the dial in screen pixels and leaves
+ * everything downstream alone: the op still stores scene units, old strokes
+ * still mean what they meant, and zooming after the fact still scales the ink.
+ * Only "how thick is the pen I am holding" stops depending on where I am
+ * holding it.
+ */
+export function inkBaseWidthForZoom(uiWidth: number, zoom: number): number {
+  const scale = Math.max(0.05, zoom);
+  const tip = Math.max(INK_TIP_FLOOR, INK_TIP_MIN + (uiWidth - 1) * INK_TIP_STEP);
+  return 1 + (tip / scale - INK_TIP_MIN) / INK_TIP_STEP;
 }
 
 /**
@@ -426,19 +482,32 @@ export function stampAlongSegment(
  * widths rather than scene units so a marker and a liner drain over the same
  * amount of writing rather than the same geometric length.
  */
-const consumedCache = new WeakMap<InkDrawOp, number[]>();
+/*
+ * Keyed by the *points array*, not by the op.
+ *
+ * A live stroke keeps one op object for its whole life: the move path pushes
+ * stamps onto `points` in place, which is what makes an append-only total worth
+ * having. But live reshaping (smoothing under the nib) replaces `points`
+ * wholesale with a re-smoothed array on the same op — a different drawing under
+ * the same key. Keyed by the op, the running total would keep the prefix it had
+ * computed for the *old* geometry and only append past it, so every distance
+ * downstream of the reshape would be measured against points that are no longer
+ * there. Keyed by the array, an in-place push still hits the cache and a
+ * reshape misses it, which is exactly the distinction that matters.
+ */
+const consumedCache = new WeakMap<readonly ScenePoint[], number[]>();
 
 function nibWidth(op: InkDrawOp): number {
   return Math.max(inkLineWidth(op.baseWidth, 0, false), 1e-6);
 }
 
 function consumedFor(op: InkDrawOp): number[] {
-  let acc = consumedCache.get(op);
+  const points = op.points;
+  let acc = consumedCache.get(points);
   if (!acc) {
     acc = [0];
-    consumedCache.set(op, acc);
+    consumedCache.set(points, acc);
   }
-  const points = op.points;
   // Undo hands back a different array; a shortened stroke invalidates the tail.
   if (acc.length > points.length) acc.length = Math.max(1, points.length);
   const nib = nibWidth(op);
@@ -476,7 +545,8 @@ export interface InkStrokeRun {
 const RUN_WIDTH_QUANTUM = 0.045;
 
 /**
- * Half-width, in points, of the low-pass over a stroke's slowness.
+ * Half-width of the low-pass over a stroke's slowness, in **nib widths of
+ * travel**.
  *
  * A run is painted at one constant width, so the width a stroke actually shows
  * is a staircase over the slowness track. When that track swings quickly — and
@@ -487,12 +557,37 @@ const RUN_WIDTH_QUANTUM = 0.045;
  * Filtering harder at capture would fix the beads by making the pen sluggish,
  * because that filter also decides how fast the nib may respond at all. This
  * one runs over the committed stroke, where the whole path is known, so it can
- * be symmetric: the width ramps into and out of a change instead of stepping,
- * which is the slope the beads were missing. Five taps spans roughly a nib
- * width of travel at normal stamp spacing — enough to bridge a join, short
- * enough that a deliberate flick still thins.
+ * be symmetric: the width ramps into and out of a change instead of stepping.
+ *
+ * **Why distance and not samples.** This was a five-tap box over the point
+ * *index*, tuned on the assumption that five stamps span about a nib width.
+ * Smoothing breaks that assumption: Chaikin does not move points, it *inserts*
+ * them, roughly doubling the chain per pass — so with smoothing turned up the
+ * same five taps covered an eighth of the distance they were tuned for and the
+ * filter all but stopped working. Which is exactly the shape of the complaint:
+ * beads that get worse when smoothing goes on, the one combination that should
+ * have looked best. Measured in nib widths the window is what it says it is at
+ * any point density.
  */
-const SLOWNESS_WINDOW = 2;
+const SLOWNESS_WINDOW_NIBS = 0.5;
+
+/**
+ * Most the slowness track may change per nib width travelled.
+ *
+ * The low-pass takes the noise out; this takes the *cliff* out. A bead is a
+ * width discontinuity — the hand stopped dead at a letter join and the track
+ * stepped rather than ramped — and no amount of averaging forbids a step, it
+ * only makes a shorter one. A slope limit forbids it outright: full swing takes
+ * about three nib widths of travel, which is roughly the distance over which a
+ * real nib's deposit actually changes.
+ *
+ * The cap is on slowness rather than on width, which is what makes it scale for
+ * free: width is linear in slowness through {@link inkSpeedWidthGain}, so the
+ * width slope this permits is automatically proportional to how far the writer
+ * has turned speed ink up. At zero strength it constrains nothing, because
+ * there is nothing to constrain.
+ */
+const SLOWNESS_MAX_SLOPE = 0.35;
 
 /**
  * Slowness, low-passed along the stroke, cached per op.
@@ -500,30 +595,66 @@ const SLOWNESS_WINDOW = 2;
  * Keyed by identity like {@link consumedFor}, and for the same reason: this is
  * asked for again by every tile the stroke crosses, on every repaint.
  */
-const slownessCache = new WeakMap<InkDrawOp, Float32Array>();
+const slownessCache = new WeakMap<readonly ScenePoint[], Float32Array>();
 
 function slopedSlowness(op: InkDrawOp): Float32Array {
   const points = op.points;
-  const cached = slownessCache.get(op);
+  const cached = slownessCache.get(points);
   if (cached && cached.length === points.length) return cached;
 
   const raw = new Float32Array(points.length);
   for (let i = 0; i < points.length; i++) {
     raw[i] = points[i].slowness ?? INK_SLOWNESS_NEUTRAL;
   }
+
+  // Cumulative travel in nib widths — the same measure the reservoir uses, so
+  // the window and the slope cap below are both in units the nib understands.
+  const at = consumedFor(op);
   const out = new Float32Array(points.length);
+
+  /*
+   * Box filter over a window of *travel*, walked with two indices rather than
+   * searched per point, so this stays linear over a stroke however dense it is.
+   * The window is clamped at the ends rather than shortened: one that narrowed
+   * toward the tip would leave the last stamps noisier than the rest, which is
+   * exactly where a terminal bead shows.
+   */
+  let lo = 0;
+  let hi = 0;
+  let sum = 0;
   for (let i = 0; i < points.length; i++) {
-    // Clamped at the ends rather than shortened: a window that narrows toward
-    // the tip would leave the last stamps noisier than the rest, which is
-    // exactly where a terminal bead shows.
-    let sum = 0;
-    for (let k = -SLOWNESS_WINDOW; k <= SLOWNESS_WINDOW; k++) {
-      const j = Math.max(0, Math.min(points.length - 1, i + k));
-      sum += raw[j];
-    }
-    out[i] = sum / (SLOWNESS_WINDOW * 2 + 1);
+    const from = at[i] - SLOWNESS_WINDOW_NIBS;
+    const to = at[i] + SLOWNESS_WINDOW_NIBS;
+    while (hi < points.length && at[hi] <= to) sum += raw[hi++];
+    while (lo < hi - 1 && at[lo] < from) sum -= raw[lo++];
+    out[i] = sum / (hi - lo);
   }
-  slownessCache.set(op, out);
+
+  /*
+   * Slope limit, forward then backward.
+   *
+   * One pass alone is causal and would ramp *into* a change while still
+   * stepping out of it — a bead with one soft edge, which reads as a comma. The
+   * reverse pass makes it symmetric, and taking the value nearer neutral of the
+   * two keeps the pair from arguing: neither direction may push the track
+   * further from an ordinary pace than the unlimited one already was.
+   */
+  const limit = (order: readonly number[]) => {
+    for (let n = 1; n < order.length; n++) {
+      const i = order[n];
+      const prev = order[n - 1];
+      const span = Math.abs(at[i] - at[prev]);
+      const room = SLOWNESS_MAX_SLOPE * span;
+      const delta = out[i] - out[prev];
+      if (delta > room) out[i] = out[prev] + room;
+      else if (delta < -room) out[i] = out[prev] - room;
+    }
+  };
+  const forward = Array.from(out, (_, i) => i);
+  limit(forward);
+  limit(forward.slice().reverse());
+
+  slownessCache.set(points, out);
   return out;
 }
 const RUN_ALPHA_QUANTUM = 1 / 48;

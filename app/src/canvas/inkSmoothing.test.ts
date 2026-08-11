@@ -202,6 +202,49 @@ describe("smoothInkPoints", () => {
     expect(heavy).toBeLessThan(light);
   });
 
+  /*
+   * The dial has to move *everywhere*, not just twice.
+   *
+   * Rounding used to be bought in whole passes through `ceil`, so the slider's
+   * output was an integer 0–3: measured across its travel it changed at 55%
+   * and at 90% and nowhere else, and below 24% the simplifier was still pinned
+   * at its storage floor. A writer turning it from 10% to 50% was changing a
+   * number that fed into nothing, which is why the range could not be felt.
+   *
+   * These two tests are the guard on that. They do not care how smoothing is
+   * implemented — only that every part of the dial buys something.
+   */
+  it("moves at every step of its travel, not at two thresholds", () => {
+    const points = jitteryLine();
+    const steps = 12;
+    const lengths = Array.from({ length: steps + 1 }, (_, i) =>
+      pathLength(smoothInkPoints(points, i / steps, 3)),
+    );
+    for (let i = 1; i < lengths.length; i++) {
+      // Strictly shorter than the notch below it: no dead zones, no plateaus.
+      expect(lengths[i]).toBeLessThan(lengths[i - 1]);
+    }
+  });
+
+  it("has a bottom quarter that does something", () => {
+    const points = jitteryLine();
+    const off = pathLength(smoothInkPoints(points, 0, 3));
+    const nudged = pathLength(smoothInkPoints(points, 0.1, 3));
+    const quarter = pathLength(smoothInkPoints(points, 0.25, 3));
+    expect(nudged).toBeLessThan(off);
+    expect(quarter).toBeLessThan(nudged);
+  });
+
+  it("does not pay for the continuity in points", () => {
+    // The fractional pass must not be a fourth pass in disguise — a stroke at
+    // full smoothing carries no more points than three passes ever produced.
+    const points = jitteryLine();
+    const full = smoothInkPoints(points, 1, 3);
+    const justUnder = smoothInkPoints(points, 0.99, 3);
+    expect(justUnder.length).toBeLessThanOrEqual(full.length);
+    expect(full.length).toBeLessThan(points.length * 8);
+  });
+
   it("stays inside the ink the raw stroke would have laid down", () => {
     const points = jitteryLine();
     const nib = 3;

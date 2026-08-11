@@ -774,30 +774,15 @@ input[type="checkbox"] {
   box-sizing: border-box;
 }
 
-.lc-eraser-brush::before,
-.lc-eraser-brush::after {
-  content: "";
-  position: absolute;
-  background: var(--ink);
-  opacity: 0.4;
-  pointer-events: none;
-}
-
-.lc-eraser-brush::before {
-  left: 50%;
-  top: -6px;
-  width: 1px;
-  height: calc(100% + 12px);
-  transform: translateX(-50%);
-}
-
-.lc-eraser-brush::after {
-  top: 50%;
-  left: -6px;
-  height: 1px;
-  width: calc(100% + 12px);
-  transform: translateY(-50%);
-}
+/*
+ * No crosshair.
+ *
+ * The ring borrowed the pen's crosshair to say where the centre was, and on a
+ * tool whose whole job is "clear everything under this circle" the centre is
+ * not the useful information — the edge is. Two full-width hairlines over the
+ * writing being erased read as marks on the page rather than as a cursor, which
+ * is the opposite of what a pointer should do.
+ */
 
 /**
  * Text-tool placement preview — dashed rect like Excalidraw's selection drag,

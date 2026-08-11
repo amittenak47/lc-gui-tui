@@ -27,6 +27,11 @@ import {
   type InkSmoothingMode,
 } from "../util/inkSmoothingPref";
 import {
+  ERASER_PARTIAL_EVENT,
+  loadEraserPartial,
+  saveEraserPartial,
+} from "../util/eraserPartialPref";
+import {
   loadInkSpeed,
   saveInkSpeed,
   speedInkFromPercent,
@@ -209,6 +214,8 @@ interface DevicePrefs {
   inkSmoothing: number;
   inkSmoothingMode: InkSmoothingMode;
   inkSpeed: number;
+  /** Eraser rubs pixels out, rather than taking whole strokes. */
+  eraserPartial: boolean;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -224,6 +231,7 @@ function loadDevicePrefs(): DevicePrefs {
     inkSmoothing: loadInkSmoothing(),
     inkSmoothingMode: loadInkSmoothingMode(),
     inkSpeed: loadInkSpeed(),
+    eraserPartial: loadEraserPartial(),
   };
 }
 
@@ -239,7 +247,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.pressureClip === b.pressureClip &&
     a.inkSmoothing === b.inkSmoothing &&
     a.inkSmoothingMode === b.inkSmoothingMode &&
-    a.inkSpeed === b.inkSpeed
+    a.inkSpeed === b.inkSpeed &&
+    a.eraserPartial === b.eraserPartial
   );
 }
 
@@ -312,6 +321,7 @@ export function SettingsModal({
     loadInkSmoothingMode(),
   );
   const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
+  const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
   /* Applies the moment it is picked — the next ⟳ is the only thing that reads
      it, so deferring to Save would mean a setting that looked ignored. */
   const [paletteTag, setPaletteTag] = useState<PaletteTag>(() => loadPaletteTag());
@@ -425,6 +435,7 @@ export function SettingsModal({
     setInkSmoothing(prefs.inkSmoothing);
     setInkSmoothingMode(prefs.inkSmoothingMode);
     setInkSpeed(prefs.inkSpeed);
+    setEraserPartial(prefs.eraserPartial);
     setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     void offlinePackMeta().then((meta) => {
@@ -481,6 +492,7 @@ export function SettingsModal({
     inkSmoothing,
     inkSmoothingMode,
     inkSpeed,
+    eraserPartial,
   };
   const dirty =
     !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
@@ -517,6 +529,7 @@ export function SettingsModal({
         saveInkSmoothing(inkSmoothing);
         saveInkSmoothingMode(inkSmoothingMode);
         saveInkSpeed(inkSpeed);
+        saveEraserPartial(eraserPartial);
         setBaselinePrefs(draftPrefs);
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
@@ -529,6 +542,7 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent("lc-ink-pressure-clip"));
         window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
         window.dispatchEvent(new CustomEvent("lc-ink-speed"));
+        window.dispatchEvent(new CustomEvent(ERASER_PARTIAL_EVENT));
       }
       if (configDirty) {
         const saved = await client.putConfig(draft);
@@ -941,6 +955,42 @@ export function SettingsModal({
                 <span className="lc-settings-slider-value">
                   {speedInkToPercent(inkSpeed) === 0 ? "Off" : `${speedInkToPercent(inkSpeed)}%`}
                 </span>
+              </div>
+
+              <div className="lc-settings-subhead">Eraser</div>
+              <p className="lc-settings-hint">
+                <strong>Rub out</strong> clears whatever the ring covers, so a small
+                eraser takes a bite out of the side of a letter and leaves the rest —
+                the way a real one does. <strong>Whole strokes</strong> removes any
+                stroke you touch, which is what you want for pulling one wrong line out
+                of a diagram. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="What the eraser removes"
+              >
+                {(
+                  [
+                    [true, "Rub out"],
+                    [false, "Whole strokes"],
+                  ] as Array<[boolean, string]>
+                ).map(([partial, label]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    role="radio"
+                    aria-checked={eraserPartial === partial}
+                    className={
+                      eraserPartial === partial
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setEraserPartial(partial)}
+                  >
+                    <strong>{label}</strong>
+                  </button>
+                ))}
               </div>
 
               <div className="lc-settings-subhead">Stroke smoothing</div>

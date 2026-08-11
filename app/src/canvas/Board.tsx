@@ -162,6 +162,10 @@ import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
 import { loadInkSpeed } from "../util/inkSpeedPref";
 import {
+  ERASER_PARTIAL_EVENT,
+  loadEraserPartial,
+} from "../util/eraserPartialPref";
+import {
   captureInserts,
   captureWritesFile,
   describeCaptureResult,
@@ -1010,6 +1014,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
   const [inkSmoothingMode, setInkSmoothingMode] = useState(() => loadInkSmoothingMode());
   const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
+  const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
   const [stampTrash, setStampTrash] = useState<{
     left: number;
     top: number;
@@ -2612,6 +2617,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onSpeed = () => setInkSpeed(loadInkSpeed());
     window.addEventListener("lc-ink-speed", onSpeed);
     return () => window.removeEventListener("lc-ink-speed", onSpeed);
+  }, []);
+
+  useEffect(() => {
+    const onEraser = () => setEraserPartial(loadEraserPartial());
+    window.addEventListener(ERASER_PARTIAL_EVENT, onEraser);
+    return () => window.removeEventListener(ERASER_PARTIAL_EVENT, onEraser);
   }, []);
 
   const deleteSelection = useCallback(() => {
@@ -6563,6 +6574,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         smoothing={inkSmoothing}
         smoothingMode={inkSmoothingMode}
         speedInk={inkSpeed}
+        partialErase={eraserPartial}
         pressureSensitive={pressureSensitive}
         getViewport={getViewport}
         clip={inkClip}

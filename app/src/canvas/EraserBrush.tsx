@@ -1,8 +1,10 @@
 /**
- * On-canvas eraser preview — circle + crosshair, sized in screen pixels.
+ * On-canvas eraser preview — a circle, sized in screen pixels.
  *
  * Mirrors Excalidraw's `setEraserCursor` (filled circle with outline) but scales
- * with our Thin/Bold/Heavy presets and adds crosshair lines like the pen tool.
+ * with our Thin/Bold/Heavy presets. No crosshair: the ring's edge is what the
+ * hand aims with, and hairlines drawn across the writing being erased read as
+ * marks on the page rather than as a pointer.
  *
  * **Why this is imperative.** The ring follows `pointermove`, and a pen emits
  * those at the display's refresh rate. Driving it from React state re-rendered
