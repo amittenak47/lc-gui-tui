@@ -77,6 +77,10 @@ export interface EncodedOp {
   si?: number;
   /** Highlighter stroke — absent means an ordinary pen one. */
   hl?: 1;
+  /** Nested horizontal scroll host — document-order index in the doc scope. */
+  hk?: number;
+  /** Host `scrollLeft` when the stroke was written (not point slowness). */
+  hsl?: number;
   /* erase only */
   r?: number;
   /** `dx, dy` in tenths for each point after the first — length `2 * (n - 1)`. */
@@ -196,6 +200,8 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       record.ps = op.pressureSensitive ? 1 : 0;
       if (op.speedInk !== undefined) record.si = op.speedInk;
       if (op.highlight) record.hl = 1;
+      if (op.hostKey !== undefined) record.hk = op.hostKey;
+      if (op.scrollLeftAtDraw !== undefined) record.hsl = op.scrollLeftAtDraw;
       record.pr = pressures;
       record.sl = slownesses;
     } else {
@@ -211,6 +217,8 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
        * largest saving in this module.
        */
       record.r = op.radius;
+      if (op.hostKey !== undefined) record.hk = op.hostKey;
+      if (op.scrollLeftAtDraw !== undefined) record.hsl = op.scrollLeftAtDraw;
     }
     encoded.push(record);
   }
@@ -273,9 +281,14 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
       };
       if (record.si !== undefined) op.speedInk = record.si;
       if (record.hl === 1) op.highlight = true;
+      if (record.hk !== undefined) op.hostKey = record.hk;
+      if (typeof record.hsl === "number") op.scrollLeftAtDraw = record.hsl;
       ops.push(op);
     } else {
-      ops.push({ kind: "erase", radius: record.r ?? 1, points });
+      const erase: InkOp = { kind: "erase", radius: record.r ?? 1, points };
+      if (record.hk !== undefined) erase.hostKey = record.hk;
+      if (typeof record.hsl === "number") erase.scrollLeftAtDraw = record.hsl;
+      ops.push(erase);
     }
   }
 

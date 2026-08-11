@@ -6,6 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — punch-list leftovers (after coach-panel branch)
+
+- **Shape tools stay equipped after the trash appears.** Arming already used
+  Excalidraw's `locked` flag; selecting the finished shape on pointer-up dropped
+  it. The shape tool is re-asserted after settle.
+- **PDF pages and ink tiles paint the leading edge first.** The PDF pump walked
+  page numbers ascending, so scrolling up burned a render on the off-screen
+  neighbour before the page on screen. Ink tiles walked top-to-bottom, so a
+  downward pan deferred the newly exposed bottom band. Both follow pan/focus
+  now.
+- **Android edge-gesture exclusions cover every drawing tool**, not only
+  annotate mode — matching the comment that already said so.
+- **Autosave commits show “Saved”** on the status banner the way explicit saves
+  already did.
+- **Tabs / home-widget design note** landed under `docs/fix-log/` (build later).
+
 ### Fixed — the board stops being able to trap the pen
 
 - **A shape-tool drag could carry the whole note off screen.** The page frame is

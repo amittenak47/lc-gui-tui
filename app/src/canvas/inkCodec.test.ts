@@ -120,6 +120,16 @@ describe("encodeInkOps / decodeInkOps", () => {
     expect("slowness" in back.points[0]).toBe(true);
   });
 
+  it("round-trips hostKey and scrollLeftAtDraw", () => {
+    const original = stroke([{ x: 10, y: 10, pressure: 0.5 }], {
+      hostKey: 2,
+      scrollLeftAtDraw: 48,
+    });
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.hostKey).toBe(2);
+    expect(back.scrollLeftAtDraw).toBe(48);
+  });
+
   it("carries the draw op's settings across", () => {
     const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], {
       color: "#c0392b",

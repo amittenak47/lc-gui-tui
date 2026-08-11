@@ -22,12 +22,17 @@
 
 import {
   applyInkOp,
+  applyInkOpInHost,
   HIGHLIGHT_WIDTH_SCALE,
+  hostScrollDx,
   inkLineWidth,
   INK_TIP_STEP,
+  isHostBoundOp,
+  paintHostBoundOps,
   setInkSceneTransform,
   type InkOp,
   type SceneBounds,
+  type ScrollHostLookup,
   type ViewportTransform,
 } from "./rasterInk";
 
@@ -110,6 +115,36 @@ export function tileRangeFor(view: SceneBounds, tileScene: number): TileRange {
     maxTx: Math.floor((view.maxX - 1e-9) / tileScene),
     maxTy: Math.floor((view.maxY - 1e-9) / tileScene),
   };
+}
+
+/**
+ * Order tiles should be rasterised when the frame budget cannot cover them all.
+ *
+ * A fixed top-to-bottom walk left the leading edge of a downward pan — new
+ * tiles at the bottom of the screen — for the deferred pass, while an upward
+ * pan's new top tiles took the synchronous budget. That is why ink looked
+ * pre-painted scrolling one way and late the other. Match the visit order to
+ * the pan: whichever way the page is moving, the newly exposed band paints
+ * first.
+ *
+ * `scrollDeltaY` is live − previous Excalidraw `scrollY`. Positive means the
+ * view moved toward earlier content (new tiles at the top); negative toward
+ * later content (new tiles at the bottom).
+ */
+export function tileVisitOrder(
+  range: TileRange,
+  scrollDeltaY: number,
+): Array<{ tx: number; ty: number }> {
+  const rows: number[] = [];
+  for (let ty = range.minTy; ty <= range.maxTy; ty++) rows.push(ty);
+  if (scrollDeltaY < 0) rows.reverse();
+  const out: Array<{ tx: number; ty: number }> = [];
+  for (const ty of rows) {
+    for (let tx = range.minTx; tx <= range.maxTx; tx++) {
+      out.push({ tx, ty });
+    }
+  }
+  return out;
 }
 
 /** Scene rect the viewport shows. */
@@ -255,6 +290,8 @@ export class InkTileCache {
   private pinnedLevel: number | null = null;
   /** Level the last `draw` resolved to — what a gesture opening now would pin. */
   private lastLevel: number | null = null;
+  /** `scrollY` of the last draw — drives leading-edge visit order. */
+  private lastScrollY: number | null = null;
 
   constructor(options: InkTileCacheOptions = {}) {
     this.tilePx = options.tilePx ?? TILE_PX;
@@ -377,6 +414,7 @@ export class InkTileCache {
    */
   appendOp(op: InkOp): void {
     this.ops.push(op);
+    if (isHostBoundOp(op)) return;
     const bounds = inkOpBounds(op);
     for (const tile of [...this.tiles.values()]) {
       const box = this.tileBounds(tile.level, tile.tx, tile.ty);
@@ -504,6 +542,7 @@ export class InkTileCache {
       // Chronological, so a stroke drawn after an erase survives it. Ops that
       // miss the tile are skipped: an erase outside it cannot reach in.
       for (const op of this.ops) {
+        if (isHostBoundOp(op)) continue;
         if (!boundsOverlap(inkOpBounds(op), bounds)) continue;
         applyInkOp(ctx, op, scale);
       }
@@ -600,26 +639,28 @@ export class InkTileCache {
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
 
-    for (let ty = range.minTy; ty <= range.maxTy; ty++) {
-      for (let tx = range.minTx; tx <= range.maxTx; tx++) {
-        const bounds = this.tileBounds(level, tx, ty);
-        const key = tileKey(level, tx, ty);
-        let tile = this.tiles.get(key);
-        if (!tile && this.now() < deadline) {
-          tile = this.renderTile(level, tx, ty) ?? undefined;
-        }
-        if (!tile) {
-          missed.push({ level, tx, ty });
-          if (fallbacks === null) fallbacks = this.fallbackLevels(level);
-          this.blitFallback(ctx, bounds, toDeviceX, toDeviceY, fallbacks);
-          continue;
-        }
-        tile.usedAt = this.drawCount;
-        const dx = toDeviceX(bounds.minX);
-        const dy = toDeviceY(bounds.minY);
-        const size = tileScene * pixelScale;
-        ctx.drawImage(tile.canvas, dx, dy, size, size);
+    const scrollDeltaY =
+      this.lastScrollY == null ? 0 : viewport.scrollY - this.lastScrollY;
+    this.lastScrollY = viewport.scrollY;
+
+    for (const { tx, ty } of tileVisitOrder(range, scrollDeltaY)) {
+      const bounds = this.tileBounds(level, tx, ty);
+      const key = tileKey(level, tx, ty);
+      let tile = this.tiles.get(key);
+      if (!tile && this.now() < deadline) {
+        tile = this.renderTile(level, tx, ty) ?? undefined;
       }
+      if (!tile) {
+        missed.push({ level, tx, ty });
+        if (fallbacks === null) fallbacks = this.fallbackLevels(level);
+        this.blitFallback(ctx, bounds, toDeviceX, toDeviceY, fallbacks);
+        continue;
+      }
+      tile.usedAt = this.drawCount;
+      const dx = toDeviceX(bounds.minX);
+      const dy = toDeviceY(bounds.minY);
+      const size = tileScene * pixelScale;
+      ctx.drawImage(tile.canvas, dx, dy, size, size);
     }
 
     this.pending = missed;
@@ -742,16 +783,63 @@ export function paintLiveOp(
   viewport: ViewportTransform,
   dpr: number,
   clip: SceneBounds | null,
+  hosts: ScrollHostLookup = new Map(),
 ): void {
   setInkSceneTransform(ctx, viewport, dpr);
+  const pixelScale = viewport.zoom * dpr;
+  const paint = () => {
+    if (isHostBoundOp(op)) {
+      const host = hosts.get(op.hostKey!);
+      if (host) {
+        applyInkOpInHost(
+          ctx,
+          op,
+          host.bounds,
+          hostScrollDx(op, host.scrollLeft),
+          pixelScale,
+          { capEnd: false },
+        );
+      } else {
+        applyInkOp(ctx, op, pixelScale, { capEnd: false });
+      }
+      return;
+    }
+    applyInkOp(ctx, op, pixelScale, { capEnd: false });
+  };
   if (clip) {
     ctx.save();
     ctx.beginPath();
     ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
     ctx.clip();
-    applyInkOp(ctx, op, viewport.zoom * dpr, { capEnd: false });
+    paint();
     ctx.restore();
   } else {
-    applyInkOp(ctx, op, viewport.zoom * dpr, { capEnd: false });
+    paint();
+  }
+}
+
+/**
+ * Host-bound committed ops after the tile blit — see {@link paintHostBoundOps}.
+ */
+export function paintHostBoundPass(
+  ctx: CanvasRenderingContext2D,
+  ops: readonly InkOp[],
+  hosts: ScrollHostLookup,
+  viewport: ViewportTransform,
+  dpr: number,
+  clip: SceneBounds | null,
+): void {
+  if (hosts.size === 0 && !ops.some(isHostBoundOp)) return;
+  setInkSceneTransform(ctx, viewport, dpr);
+  const pixelScale = viewport.zoom * dpr;
+  if (clip) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+    ctx.clip();
+    paintHostBoundOps(ctx, ops, hosts, pixelScale);
+    ctx.restore();
+  } else {
+    paintHostBoundOps(ctx, ops, hosts, pixelScale);
   }
 }

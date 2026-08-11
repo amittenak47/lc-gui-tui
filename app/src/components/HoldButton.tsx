@@ -72,15 +72,9 @@ export interface HoldButtonProps {
   /**
    * Keep the press alive when the pointer strays outside the button.
    *
-   * For targets too small to hold still on. A footnote ribbon is sixteen
-   * pixels across: a tap that drifts by three of them left the button, which
-   * cancelled without firing `onTap`, so the mark simply did not open — and
-   * because whether it drifted depended on which way the thumb rolled, it
-   * looked like it only worked if you tapped in a particular direction.
-   *
-   * Safe because `pointerdown` captures the pointer, so `pointerup` arrives
-   * here wherever the finger ends up. Off by default: on a full-size button,
-   * sliding off it is how you change your mind.
+   * Capture is always taken on pointerdown now, so leave no longer cancels
+   * the hold either way — `pointerup` still lands here. The flag remains for
+   * callers that already pass it; it is a no-op alias for that capture rule.
    */
   holdThrough?: boolean;
 }
@@ -114,6 +108,8 @@ export function HoldButton({
   onConfirmRef.current = onConfirm;
   const onTapRef = useRef(onTap);
   onTapRef.current = onTap;
+  /** True between setPointerCapture and the matching up/cancel. */
+  const capturingRef = useRef(false);
 
   const stopHold = useCallback((opts: { reset: boolean; release?: boolean }) => {
     const wasHolding = holdingRef.current;
@@ -217,12 +213,21 @@ export function HoldButton({
       onPointerDown={(event) => {
         event.preventDefault();
         (event.currentTarget as HTMLButtonElement).setPointerCapture(event.pointerId);
+        capturingRef.current = true;
         startHold();
       }}
-      onPointerUp={() => stopHold({ reset: true, release: true })}
-      onPointerCancel={() => stopHold({ reset: true })}
+      onPointerUp={() => {
+        capturingRef.current = false;
+        stopHold({ reset: true, release: true });
+      }}
+      onPointerCancel={() => {
+        capturingRef.current = false;
+        stopHold({ reset: true });
+      }}
       onPointerLeave={() => {
-        if (holdThrough) return;
+        // Capture keeps `pointerup` on this node, so cancelling here used to
+        // kill `onTap` the moment a finger drifted off a 16px header icon.
+        if (holdThrough || capturingRef.current) return;
         if (holdingRef.current) stopHold({ reset: true });
       }}
       onContextMenu={(event) => event.preventDefault()}

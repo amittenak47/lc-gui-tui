@@ -33,7 +33,7 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
 
   // Map popover opens left of the chip; header opens below — tip on the far side.
   const tipPlacement =
-    variant === "map" ? "right" : variant === "header" ? "bottom" : "left";
+    variant === "map" ? "bottom" : variant === "header" ? "bottom" : "left";
 
   if (variant === "inline") {
     return (

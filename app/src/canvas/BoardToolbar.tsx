@@ -484,9 +484,14 @@ export function BoardToolbar({
     <button
       key={tool}
       type="button"
-      className={tool === active && !shapesOpen ? "lc-tool lc-tool-active" : "lc-tool"}
+      className={
+        tool === active && !shapesOpen
+          ? "lc-tool lc-tool-active lc-tip-target"
+          : "lc-tool lc-tip-target"
+      }
       aria-label={hint}
-      title={hint}
+      data-tip={hint}
+      data-tip-placement="bottom"
       aria-pressed={tool === active && !shapesOpen}
       onClick={() => pickTool(tool)}
     >
@@ -539,9 +544,10 @@ export function BoardToolbar({
       <div className="lc-toolbar-row">
         <button
           type="button"
-          className="lc-toolbar-grip"
+          className="lc-toolbar-grip lc-tip-target"
           aria-label="Hold and drag to move toolbar"
-          title="Hold and drag to move · drop on the dock to pin"
+          data-tip="Hold and drag to move · drop on the dock to pin"
+          data-tip-placement="bottom"
           onPointerDown={onGripPointerDown}
           onPointerMove={onGripPointerMove}
           onPointerUp={onGripPointerUp}
@@ -557,10 +563,13 @@ export function BoardToolbar({
         {onToggleHighlight && (
           <button
             type="button"
-            className={highlighting ? "lc-tool lc-tool-active" : "lc-tool"}
+            className={
+              highlighting ? "lc-tool lc-tool-active lc-tip-target" : "lc-tool lc-tip-target"
+            }
             aria-pressed={highlighting}
             aria-label="Ask about an area"
-            title="Sweep an area of the page to ask the coach about it"
+            data-tip="Sweep an area of the page to ask the coach about it"
+            data-tip-placement="bottom"
             onClick={onToggleHighlight}
           >
             <span className="lc-tool-emoji" aria-hidden>
@@ -577,10 +586,13 @@ export function BoardToolbar({
           <button
             type="button"
             className={
-              shapeMenuOpen || shapesOpen || shapeToolActive ? "lc-tool lc-tool-active" : "lc-tool"
+              shapeMenuOpen || shapesOpen || shapeToolActive
+                ? "lc-tool lc-tool-active lc-tip-target"
+                : "lc-tool lc-tip-target"
             }
             aria-label="Shapes"
-            title="Shapes — Square, Circle, Arrow, Text box"
+            data-tip="Shapes — Square, Circle, Arrow, Text box"
+            data-tip-placement="bottom"
             aria-expanded={shapeMenuOpen}
             aria-haspopup="menu"
             onClick={() => {
@@ -627,9 +639,10 @@ export function BoardToolbar({
 
         <button
           type="button"
-          className="lc-tool"
+          className="lc-tool lc-tip-target"
           aria-label="Add image"
-          title="Add image"
+          data-tip="Add image"
+          data-tip-placement="bottom"
           onClick={onPickImage}
         >
           <span className="lc-tool-emoji" aria-hidden>
@@ -640,10 +653,13 @@ export function BoardToolbar({
         <div className="lc-capture-wrap">
           <button
             type="button"
-            className={captureMenuOpen ? "lc-tool lc-tool-active" : "lc-tool"}
+            className={
+              captureMenuOpen ? "lc-tool lc-tool-active lc-tip-target" : "lc-tool lc-tip-target"
+            }
             aria-label="Capture board"
             aria-expanded={captureMenuOpen}
-            title="Capture board"
+            data-tip="Capture board"
+            data-tip-placement="bottom"
             onClick={() => {
               setShapeMenuOpen(false);
               onToggleCaptureMenu();
@@ -683,17 +699,32 @@ export function BoardToolbar({
 
         <div className="lc-tool-sep" />
 
-        <button type="button" className="lc-tool" aria-label="Undo" title="Undo" onClick={onUndo}>
+        <button
+          type="button"
+          className="lc-tool lc-tip-target"
+          aria-label="Undo"
+          data-tip="Undo"
+          data-tip-placement="bottom"
+          onClick={onUndo}
+        >
           <UndoIcon />
         </button>
-        <button type="button" className="lc-tool" aria-label="Redo" title="Redo" onClick={onRedo}>
+        <button
+          type="button"
+          className="lc-tool lc-tip-target"
+          aria-label="Redo"
+          data-tip="Redo"
+          data-tip-placement="bottom"
+          onClick={onRedo}
+        >
           <RedoIcon />
         </button>
         <button
           type="button"
-          className="lc-tool"
+          className="lc-tool lc-tip-target"
           aria-label="Reset board"
-          title="Reset board"
+          data-tip="Reset board"
+          data-tip-placement="bottom"
           onClick={onReset}
         >
           <ResetIcon />
@@ -755,8 +786,9 @@ export function BoardToolbar({
         {!mobile && (
           <button
             type="button"
-            className={helpOpen ? "lc-tool lc-tool-active" : "lc-tool"}
-            title="Keyboard shortcuts"
+            className={helpOpen ? "lc-tool lc-tool-active lc-tip-target" : "lc-tool lc-tip-target"}
+            data-tip="Keyboard shortcuts"
+            data-tip-placement="bottom"
             aria-label="Keyboard shortcuts"
             aria-expanded={helpOpen}
             onClick={() => setHelpOpen((open) => !open)}

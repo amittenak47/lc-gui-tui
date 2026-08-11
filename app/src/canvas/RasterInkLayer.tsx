@@ -28,6 +28,7 @@ import {
   INK_SPEED_NEUTRAL_PX_MS,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
+  isHostBoundOp,
   NO_PRESSURE,
   scenePointFromPointer,
   setInkSceneTransform,
@@ -37,9 +38,20 @@ import {
   type InkOp,
   type ScenePoint,
   type SceneBounds,
+  type ScrollHostLookup,
   type ViewportTransform,
 } from "./rasterInk";
-import { InkTileCache, paintLiveOp } from "./inkTiles";
+import type { ScrollHostPaintState } from "./scrollHost";
+import {
+  DOC_PAGE_SELECTOR,
+  docForScrollHost,
+  horizontalScrollHost,
+  horizontalScrollHostsIn,
+  hostKeyInDoc,
+  hostSceneBounds,
+  strokeBoundsInHost,
+} from "./scrollHost";
+import { InkTileCache, inkOpBounds, paintHostBoundPass, paintLiveOp } from "./inkTiles";
 import { opsAfterStrokeErase } from "./strokeEraser";
 import {
   OVERDRAW_REBASE_HEADROOM,
@@ -128,6 +140,8 @@ export interface RasterInkLayerProps {
    * `null` on the desktop's single stacked canvas.
    */
   clip?: SceneBounds | null;
+  /** Live nested scroll hosts for host-bound ink paint and stroke capture. */
+  getScrollHosts?: () => readonly ScrollHostPaintState[];
   onChange?: () => void;
   /**
    * Stylus barrel / eraser tip: toggle pen↔eraser. Return true if handled so
@@ -171,6 +185,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       partialErase = true,
       getViewport,
       clip = null,
+      getScrollHosts,
       onChange,
       onStylusAccessory,
     },
@@ -249,6 +264,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * anything to learn from asking again.
      */
     const strokeRectRef = useRef<DOMRect | null>(null);
+    /** Scroll host under the nib at pointerdown, if any. */
+    const strokeHostRef = useRef<ScrollHostPaintState | null>(null);
     /**
      * The overlay's CSS box, as last measured against the Excalidraw canvas.
      *
@@ -317,8 +334,70 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     speedInkRef.current = speedInk;
     const partialEraseRef = useRef(partialErase);
     partialEraseRef.current = partialErase;
+    const getScrollHostsRef = useRef(getScrollHosts);
+    getScrollHostsRef.current = getScrollHosts;
     const toolRef = useRef(tool);
     toolRef.current = tool;
+
+    function scrollHostLookup(): ScrollHostLookup {
+      const map = new Map<number, { bounds: SceneBounds; scrollLeft: number }>();
+      for (const host of collectScrollHosts()) {
+        map.set(host.key, { bounds: host.bounds, scrollLeft: host.scrollLeft });
+      }
+      return map;
+    }
+
+    /** Live host list — prefer Board's callback, else walk the document slot. */
+    function collectScrollHosts(): readonly ScrollHostPaintState[] {
+      const provided = getScrollHostsRef.current?.();
+      if (provided) return provided;
+      const canvas = canvasRef.current;
+      const view = strokeViewRef.current ?? getViewportRef.current();
+      if (!canvas || !view) return [];
+      const board = canvas.closest(".lc-board");
+      if (!board) return [];
+      const rect = canvas.getBoundingClientRect();
+      const out: ScrollHostPaintState[] = [];
+      for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
+        for (const [key, el] of horizontalScrollHostsIn(doc).entries()) {
+          out.push({
+            key,
+            scrollLeft: el.scrollLeft,
+            bounds: hostSceneBounds(el, rect, view),
+          });
+        }
+      }
+      return out;
+    }
+
+    /** Attach host binding when the stroke's bounds land inside a scroll host. */
+    function bindStrokeHost<T extends InkOp>(op: T): T {
+      const host = strokeHostRef.current;
+      if (!host) return op;
+      const bounds = inkOpBounds(op);
+      if (!strokeBoundsInHost(bounds, host.bounds)) return op;
+      return { ...op, hostKey: host.key, scrollLeftAtDraw: host.scrollLeft };
+    }
+
+    /** Keep live ink aligned with a host the nib is inside. */
+    function syncLiveHostBinding(live: InkOp): void {
+      const host = strokeHostRef.current;
+      if (!host) {
+        if (live.hostKey !== undefined) {
+          delete live.hostKey;
+          delete live.scrollLeftAtDraw;
+        }
+        return;
+      }
+      const bounds = inkOpBounds(live);
+      if (!strokeBoundsInHost(bounds, host.bounds)) {
+        delete live.hostKey;
+        delete live.scrollLeftAtDraw;
+        return;
+      }
+      live.hostKey = host.key;
+      live.scrollLeftAtDraw = host.scrollLeft;
+    }
 
     /**
      * Sit exactly on the Excalidraw canvas, on whole device pixels.
@@ -457,10 +536,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         ctx.clearRect(0, 0, pixelW, pixelH);
         tiles.draw(ctx, drawView, dpr);
 
+        const hosts = scrollHostLookup();
+        paintHostBoundPass(ctx, opsRef.current, hosts, drawView, dpr, clipRef.current);
+
         const live = liveRef.current;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         if (live) {
-          paintLiveOp(ctx, live, drawView, dpr, clipRef.current);
+          syncLiveHostBinding(live);
+          paintLiveOp(ctx, live, drawView, dpr, clipRef.current, hosts);
           liveDrawnIndexRef.current =
             live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
         } else {
@@ -675,6 +758,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const clipBox = clipRef.current;
       const from = liveDrawnIndexRef.current;
       const pixelScale = frame.zoom * dpr;
+      syncLiveHostBinding(live);
+      // Host-bound live ink needs clip+translate — fall back to a full frame.
+      if (isHostBoundOp(live)) {
+        repaint();
+        return;
+      }
       if (clipBox) {
         ctx.save();
         ctx.beginPath();
@@ -833,7 +922,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             })()
           : live;
 
-      opsRef.current = [...opsRef.current, committed];
+      const bound = bindStrokeHost(committed);
+      opsRef.current = [...opsRef.current, bound];
       liveRef.current = null;
       liveRawPointsRef.current = null;
       liveDrawnIndexRef.current = 0;
@@ -842,7 +932,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
       // Only the tiles the stroke landed on are dropped, so committing on a
       // full page costs the same as committing on an empty one.
-      ensureTiles().appendOp(committed);
+      ensureTiles().appendOp(bound);
+      strokeHostRef.current = null;
       repaint();
       onChange?.();
     }, [ensureTiles, onChange, repaint]);
@@ -993,6 +1084,31 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     }, [enabled, repaint]);
 
     useEffect(() => () => tilesRef.current?.dispose(), []);
+
+    /**
+     * Nested `scrollLeft` moves host-bound ink — repaint when any host scrolls.
+     */
+    useEffect(() => {
+      if (!enabled) return;
+      const board = canvasRef.current?.closest(".lc-board");
+      if (!board) return;
+      const hosts: HTMLElement[] = [];
+      for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
+        hosts.push(...horizontalScrollHostsIn(doc));
+      }
+      if (hosts.length === 0) return;
+      const onScroll = () => {
+        repaintRef.current();
+      };
+      for (const host of hosts) {
+        host.addEventListener("scroll", onScroll, { passive: true });
+      }
+      return () => {
+        for (const host of hosts) {
+          host.removeEventListener("scroll", onScroll);
+        }
+      };
+    }, [enabled, tool]);
 
     useEffect(() => {
       if (!enabled) return;
@@ -1207,6 +1323,25 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
         const rect = canvas.getBoundingClientRect();
         strokeRectRef.current = rect;
+        const hostEl = horizontalScrollHost(event.target);
+        if (hostEl) {
+          const doc = docForScrollHost(hostEl);
+          const key = doc ? hostKeyInDoc(hostEl, doc) : null;
+          if (key == null) {
+            strokeHostRef.current = null;
+          } else {
+            const listed = collectScrollHosts().find((host) => host.key === key);
+            strokeHostRef.current =
+              listed ??
+              ({
+                key,
+                scrollLeft: hostEl.scrollLeft,
+                bounds: hostSceneBounds(hostEl, rect, strokeView),
+              } satisfies ScrollHostPaintState);
+          }
+        } else {
+          strokeHostRef.current = null;
+        }
         const point = scenePointFromPointer(
           event.clientX,
           event.clientY,

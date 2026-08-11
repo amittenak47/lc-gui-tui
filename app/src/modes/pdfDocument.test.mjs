@@ -19,7 +19,7 @@ import { resolve } from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { pdfStackHeight, windowedPages } from "./PdfDocument";
+import { paintOrder, pdfStackHeight, windowedPages } from "./PdfDocument";
 
 const FIXTURE = resolve(process.cwd(), "src/modes/fixtures/two-pages.pdf");
 
@@ -162,5 +162,21 @@ describe("windowedPages", () => {
 
   it("stays a handful of pages however long the book is", () => {
     expect(windowedPages([900], 1500)).toHaveLength(3);
+  });
+});
+
+describe("paintOrder", () => {
+  it("paints the page on screen before its off-screen neighbours", () => {
+    // Scrolling up into page 5: window wants 4–6, only 5 is visible. Ascending
+    // order used to burn a full render on 4 first.
+    expect(paintOrder([4, 5, 6], [5])).toEqual([5, 4, 6]);
+  });
+
+  it("still prefers the focus when scrolling down", () => {
+    expect(paintOrder([9, 10, 11], [10])).toEqual([10, 9, 11]);
+  });
+
+  it("falls back to ascending when nothing is marked visible yet", () => {
+    expect(paintOrder([1, 2], [])).toEqual([1, 2]);
   });
 });

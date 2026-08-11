@@ -417,9 +417,9 @@ export function PdfDocument({
             paintedRef.current.delete(n);
           }
 
-          const next = [...wantedRef.current]
-            .sort((a, b) => a - b)
-            .find((n) => !paintedRef.current.has(n));
+          const next = paintOrder(wantedRef.current, visibleRef.current).find(
+            (n) => !paintedRef.current.has(n),
+          );
           if (next == null) return;
           await paintOne(next);
         }
@@ -525,6 +525,37 @@ export function windowedPages(
     if (lastPage >= 2) wanted.add(2);
   }
   return [...wanted].sort((a, b) => a - b);
+}
+
+/**
+ * Order the paint pump should fill the window.
+ *
+ * The pump used to walk page numbers ascending. Scrolling *down* the book
+ * already had the previous neighbour painted from the last window, so the next
+ * unpainted page was the one on screen. Scrolling *up* had neither the current
+ * page nor the neighbour above painted — and ascending order spent a full
+ * render on the off-screen neighbour before the page the reader was looking at.
+ * That is the "annotations arrive late when scrolling up" report on a PDF: the
+ * ink overlay was ready, the page under it was not.
+ *
+ * Distance from the visible focus first; ascending only to break ties.
+ */
+export function paintOrder(
+  wanted: Iterable<number>,
+  visible: Iterable<number>,
+): number[] {
+  const onScreen = [...visible];
+  const focus =
+    onScreen.length > 0
+      ? onScreen.reduce((sum, n) => sum + n, 0) / onScreen.length
+      : null;
+  return [...wanted].sort((a, b) => {
+    if (focus == null) return a - b;
+    const da = Math.abs(a - focus);
+    const db = Math.abs(b - focus);
+    if (da !== db) return da - db;
+    return a - b;
+  });
 }
 
 /** Total scene height of a stack of pages — the measure a test can assert. */
