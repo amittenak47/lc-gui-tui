@@ -164,6 +164,19 @@ describe("encodeInkOps / decodeInkOps", () => {
     expect(back.speedBlotBlend).toBeUndefined();
   });
 
+  it("carries boldness across", () => {
+    const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], {
+      boldness: 2.5,
+    });
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.boldness).toBe(2.5);
+  });
+
+  it("leaves boldness absent when the stroke had none", () => {
+    const [back] = roundTrip([stroke([{ x: 1, y: 2, pressure: 0.5 }])]) as [InkDrawOp];
+    expect(back.boldness).toBeUndefined();
+  });
+
   it("leaves speedInk absent when the stroke had none", () => {
     const [back] = roundTrip([stroke([{ x: 1, y: 2, pressure: 0.5 }])]) as [InkDrawOp];
     expect(back.speedInk).toBeUndefined();

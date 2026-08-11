@@ -10,6 +10,11 @@
  */
 
 import type { InkStroke } from "./capture";
+import {
+  INK_BOLDNESS_MIN,
+  INK_BOLDNESS_MAX,
+  loadInkBoldness,
+} from "../util/inkBoldnessPref";
 import { loadInkSpeedBlotBlend } from "../util/inkSpeedPref";
 
 export const STROKE_WIDTH_MIN = 1;
@@ -269,6 +274,11 @@ export interface InkDrawOp {
    */
   speedBlotBlend?: number;
   /**
+   * Opacity boost stamped at draw time (0–3). Absent → paint uses device pref.
+   * Pen strokes only — highlighters ignore this.
+   */
+  boldness?: number;
+  /**
    * A highlighter stroke rather than a pen one.
    *
    * A chisel, not a nib: one width the whole way, one alpha the whole way, and
@@ -418,11 +428,12 @@ export function inkStrokeAlpha(
   consumed = 0,
   slowness = INK_SLOWNESS_NEUTRAL,
   speedInk = 0,
+  boldness = 1,
 ): number {
   const charge = inkReservoirAlpha(consumed, maxFullness);
   const paced = charge * inkSpeedAlphaGain(slowness, speedInk);
   // A dawdling nib on a full dial would otherwise ask for more than opaque.
-  const deposit = Math.min(1, paced);
+  const deposit = Math.min(1, paced * boldness);
   if (!pressureSensitive) return deposit;
   return deposit * inkPressureAlpha(pNorm);
 }
@@ -443,6 +454,7 @@ export function inkStrokeStyle(
   slowness = INK_SLOWNESS_NEUTRAL,
   speedInk = 0,
   highlight = false,
+  boldness = 1,
 ): InkStrokeStyle {
   // A chisel has one width and one wetness — no reservoir, no pressure, no pace.
   if (highlight) {
@@ -455,7 +467,15 @@ export function inkStrokeStyle(
   const pNorm = stylus ? normalizePressure(pressure, pressureClip) : 0;
   return {
     lineWidth: inkLineWidth(baseWidth, pNorm, stylus, slowness, speedInk),
-    alpha: inkStrokeAlpha(maxFullness, pNorm, stylus, consumed, slowness, speedInk),
+    alpha: inkStrokeAlpha(
+      maxFullness,
+      pNorm,
+      stylus,
+      consumed,
+      slowness,
+      speedInk,
+      boldness,
+    ),
   };
 }
 
@@ -769,6 +789,7 @@ export function inkStrokePointStyles(
   const maxFullness = op.maxFullness ?? 1;
   const pressureClip = op.pressureClip ?? 1;
   const speedInk = op.speedInk ?? 0;
+  const boldness = op.highlight ? 1 : resolveInkBoldness(op);
   const slowness = speedInk > 0 ? slopedSlowness(op) : null;
 
   const start = Math.max(0, Math.min(fromIndex, points.length - 1));
@@ -785,6 +806,7 @@ export function inkStrokePointStyles(
         slowness ? slowness[index] : (points[index].slowness ?? INK_SLOWNESS_NEUTRAL),
         speedInk,
         op.highlight === true,
+        boldness,
       ),
     );
   }
@@ -927,6 +949,13 @@ export function inkColorRgb(color: string): { r: number; g: number; b: number } 
 function resolveSpeedBlotBlend(op: InkDrawOp): number {
   if (op.speedBlotBlend !== undefined) return clamp01(op.speedBlotBlend);
   return clamp01(loadInkSpeedBlotBlend());
+}
+
+function resolveInkBoldness(op: InkDrawOp): number {
+  if (op.boldness !== undefined) {
+    return Math.min(INK_BOLDNESS_MAX, Math.max(INK_BOLDNESS_MIN, op.boldness));
+  }
+  return loadInkBoldness();
 }
 
 /**
@@ -1191,6 +1220,7 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
   const maxFullness = op.maxFullness ?? 1;
   const pressureClip = op.pressureClip ?? 1;
   const speedInk = op.speedInk ?? 0;
+  const boldness = op.highlight ? 1 : resolveInkBoldness(op);
   const widthQuantum = nibWidth(op) * RUN_WIDTH_QUANTUM;
   // Only paid for when the stroke actually carries speed: without it every
   // point is neutral and the filter would return the constant it started with.
@@ -1207,6 +1237,7 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
       slowness ? slowness[index] : (points[index].slowness ?? INK_SLOWNESS_NEUTRAL),
       speedInk,
       op.highlight === true,
+      boldness,
     );
 
   let start = Math.max(0, Math.min(fromIndex, points.length - 2));
@@ -1301,6 +1332,7 @@ function drawStrokeFrom(
   // A tap is a dot — dotting an "i" used to draw nothing at all.
   if (points.length === 1) {
     if (fromIndex > 0) return;
+    const boldness = op.highlight ? 1 : resolveInkBoldness(op);
     const style = inkStrokeStyle(
       op.baseWidth,
       op.maxFullness ?? 1,
@@ -1311,6 +1343,7 @@ function drawStrokeFrom(
       points[0].slowness ?? INK_SLOWNESS_NEUTRAL,
       op.speedInk ?? 0,
       op.highlight === true,
+      boldness,
     );
     ctx.globalAlpha = style.alpha;
     ctx.beginPath();
@@ -1620,6 +1653,7 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
     if (op.kind !== "draw") continue;
     const maxFullness = op.maxFullness ?? 1;
     const pressureClip = op.pressureClip ?? 1;
+    const boldness = op.highlight ? 1 : resolveInkBoldness(op);
     // Full press at a standstill — the widest this nib can ever have been.
     const style = inkStrokeStyle(
       op.baseWidth,
@@ -1631,6 +1665,7 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
       1,
       op.speedInk ?? 0,
       op.highlight === true,
+      boldness,
     );
     const half = style.lineWidth / 2;
     for (const point of op.points) {

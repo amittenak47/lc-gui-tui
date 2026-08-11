@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { BoardHandle } from "./BoardHandle";
 import type { InkStroke, SceneElementLike } from "./capture";
 import { NoopRecognizer, type InkRecognizer } from "./ink";
-import { buildSnapshot, structureBaselineFromBoard } from "./snapshot";
+import {
+  buildSnapshot,
+  padContentFingerprint,
+  sceneFingerprint,
+  structureBaselineFromBoard,
+} from "./snapshot";
 import { sha256Hex } from "../util/codeHash";
 
 /** Only the four accessors `buildSnapshot` reaches for; the rest never runs. */
@@ -39,6 +44,43 @@ function spyRecognizer(): InkRecognizer & { seen: InkStroke[][] } {
 function stroke(...xs: number[]): InkStroke {
   return { points: xs.map((x) => ({ x, y: 0 })) };
 }
+
+describe("padContentFingerprint", () => {
+  const element = (
+    overrides: Partial<SceneElementLike> & { id: string },
+  ): SceneElementLike => ({
+    type: "rectangle",
+    x: 10,
+    y: 20,
+    width: 100,
+    height: 50,
+    version: 1,
+    ...overrides,
+  });
+
+  it("matches when only Excalidraw version changes", () => {
+    const base = [element({ id: "a", version: 3 })];
+    const bumped = [element({ id: "a", version: 7 })];
+    expect(padContentFingerprint(base, 0)).toBe(padContentFingerprint(bumped, 0));
+    expect(sceneFingerprint(base, 0)).not.toBe(sceneFingerprint(bumped, 0));
+  });
+
+  it("differs when student-authored geometry moves", () => {
+    const before = [element({ id: "a", x: 10 })];
+    const after = [element({ id: "a", x: 11 })];
+    expect(padContentFingerprint(before, 0)).not.toBe(padContentFingerprint(after, 0));
+  });
+
+  it("ignores template lcRegion and coach viz", () => {
+    const student = [element({ id: "theirs" })];
+    const withTemplate = [
+      element({ id: "frame", customData: { lcRegion: "approach" } }),
+      element({ id: "coach", customData: { lcVizId: "nums" } }),
+      ...student,
+    ];
+    expect(padContentFingerprint(withTemplate, 0)).toBe(padContentFingerprint(student, 0));
+  });
+});
 
 describe("buildSnapshot handwriting", () => {
   it("reads the raster pen, not just freedraw elements", async () => {

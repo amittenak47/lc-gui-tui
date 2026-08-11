@@ -620,8 +620,9 @@ export function AgentSidePanel({
   useLayoutEffect(() => {
     if (!mobile || sheetDragging) return;
     const apply = () => {
-      const offset = open ? 0 : closedOffset();
-      setSheetOffset(offset);
+      const height = sheetHeight();
+      if (height <= 0) return;
+      setSheetOffset(open ? 0 : closedOffset());
     };
     apply();
     const id = window.requestAnimationFrame(apply);
@@ -641,6 +642,8 @@ export function AgentSidePanel({
     if (!mobile) return;
     const onResize = () => {
       if (sheetDragRef.current) return;
+      const height = sheetHeight();
+      if (height <= 0) return;
       setSheetOffset(open ? 0 : closedOffset());
     };
     window.addEventListener("resize", onResize);

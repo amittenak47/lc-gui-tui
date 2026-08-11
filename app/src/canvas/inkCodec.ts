@@ -75,8 +75,10 @@ export interface EncodedOp {
   pc?: number;
   ps?: 0 | 1;
   si?: number;
-  /** Soften speed-ink join discs (0–1); absent → paint uses device pref. */
+  /** Soften speed-ink join/dwell discs (0–1); absent → paint uses device pref. */
   sbb?: number;
+  /** Opacity boost (0–3); absent → paint uses device pref. */
+  ib?: number;
   /** Highlighter stroke — absent means an ordinary pen one. */
   hl?: 1;
   /** Nested horizontal scroll host — document-order index in the doc scope. */
@@ -202,6 +204,7 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       record.ps = op.pressureSensitive ? 1 : 0;
       if (op.speedInk !== undefined) record.si = op.speedInk;
       if (op.speedBlotBlend !== undefined) record.sbb = op.speedBlotBlend;
+      if (op.boldness !== undefined) record.ib = op.boldness;
       if (op.highlight) record.hl = 1;
       if (op.hostKey !== undefined) record.hk = op.hostKey;
       if (op.scrollLeftAtDraw !== undefined) record.hsl = op.scrollLeftAtDraw;
@@ -284,6 +287,7 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
       };
       if (record.si !== undefined) op.speedInk = record.si;
       if (record.sbb !== undefined) op.speedBlotBlend = record.sbb;
+      if (record.ib !== undefined) op.boldness = record.ib;
       if (record.hl === 1) op.highlight = true;
       if (record.hk !== undefined) op.hostKey = record.hk;
       if (typeof record.hsl === "number") op.scrollLeftAtDraw = record.hsl;

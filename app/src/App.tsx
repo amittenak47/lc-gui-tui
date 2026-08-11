@@ -62,7 +62,12 @@ import { inkOpsFrom } from "./canvas/inkCodec";
 import { studentAuthoredElements, studentElements } from "./canvas/capture";
 import type { StructureBaseline } from "./canvas/boardDelta";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
-import { buildSnapshot, sceneFingerprint, structureBaselineFromBoard } from "./canvas/snapshot";
+import {
+  buildSnapshot,
+  padContentFingerprint,
+  sceneFingerprint,
+  structureBaselineFromBoard,
+} from "./canvas/snapshot";
 import { hasCodeAnnotations, renderAnnotatedCode } from "./canvas/codeAnnotation";
 import { BOARD_THEMES } from "./templates/skeleton";
 import { statementLinePitch } from "./modes/codeFontSize";
@@ -1330,7 +1335,10 @@ export function App() {
         // An untouched board is not an untouched document: a reading session
         // can leave footnotes without ever putting the pen down, and those are
         // exactly as worth keeping as ink.
-        if (mdInkPristineHashRef.current === hash && footnoteRevision(mdInkFootnotesRef.current) === mdInkPristineMarksRef.current) {
+        if (
+          mdInkPristineHashRef.current === padContentFingerprint(elements, inkOps) &&
+          footnoteRevision(mdInkFootnotesRef.current) === mdInkPristineMarksRef.current
+        ) {
           lastSavedHashRef.current = hash;
           lastSavedMarksRef.current = marks;
           return;
@@ -1377,7 +1385,7 @@ export function App() {
          * your mind, and three seconds later it is a permanent entry. There is
          * also nothing to protect: a crash here loses a blank page.
          */
-        if (scratchPristineHashRef.current === hash) {
+        if (scratchPristineHashRef.current === padContentFingerprint(elements, inkOps)) {
           lastSavedHashRef.current = hash;
           return;
         }
@@ -1813,7 +1821,7 @@ export function App() {
         {
           const board = boardRef.current;
           scratchPristineHashRef.current = board
-            ? sceneFingerprint(board.getElements(), board.getInkOpCount())
+            ? padContentFingerprint(board.getElements(), board.getInkOpCount())
             : null;
         }
 
@@ -2006,7 +2014,7 @@ export function App() {
         {
           const board = boardRef.current;
           mdInkPristineHashRef.current = board
-            ? sceneFingerprint(board.getElements(), board.getInkOpCount())
+            ? padContentFingerprint(board.getElements(), board.getInkOpCount())
             : null;
           mdInkPristineMarksRef.current = footnoteRevision(mdInkFootnotesRef.current);
         }
@@ -3795,7 +3803,7 @@ export function App() {
     // Open race: pristine not snapshotted yet. Only claim untouched when the
     // board still looks blank (no ink) — never show Discard for a mid-open board.
     if (pristine === null) return board.getInkOpCount() === 0;
-    return sceneFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
+    return padContentFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
   }, []);
 
   /**
@@ -3828,7 +3836,7 @@ export function App() {
      */
     const board = boardRef.current;
     scratchPristineHashRef.current = board
-      ? sceneFingerprint(board.getElements(), board.getInkOpCount())
+      ? padContentFingerprint(board.getElements(), board.getInkOpCount())
       : null;
   }, []);
 
@@ -3904,7 +3912,7 @@ export function App() {
     if (footnoteRevision(mdInkFootnotesRef.current) !== mdInkPristineMarksRef.current) {
       return false;
     }
-    return sceneFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
+    return padContentFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
   }, []);
 
   /**
@@ -3957,7 +3965,7 @@ export function App() {
       // Discard now rolls back to this save, not past it. `saved` is the entry
       // just written, so there is nothing to be gained by reading it back.
       mdInkBaselineRef.current = { id: saved.id, entry: saved };
-      mdInkPristineHashRef.current = sceneFingerprint(
+      mdInkPristineHashRef.current = padContentFingerprint(
         board.getElements(),
         board.getInkOpCount(),
       );
