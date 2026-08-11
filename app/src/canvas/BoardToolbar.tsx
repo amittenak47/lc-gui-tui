@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { MorphBar } from "../components/MorphBar";
 import {
   SHAPES,
   SHAPE_GROUPS,
@@ -605,35 +606,43 @@ export function BoardToolbar({
             </span>
           </button>
           {shapeMenuOpen && !shapesOpen && (
-            <div className="lc-shape-flyout" role="menu" aria-label="Shapes">
-              {SHAPE_TOOLS.map(({ tool, label, glyph }) => (
+            <MorphBar
+              active="shapes"
+              className="lc-shape-flyout"
+              axis="height"
+              role="menu"
+              aria-label="Shapes"
+            >
+              <div data-morph-id="shapes">
+                {SHAPE_TOOLS.map(({ tool, label, glyph }) => (
+                  <button
+                    key={`${tool}-${label}`}
+                    type="button"
+                    role="menuitem"
+                    className={tool === active ? "is-active" : undefined}
+                    onClick={() => pickTool(tool)}
+                  >
+                    <span className="lc-shape-flyout-glyph" aria-hidden>
+                      {glyph}
+                    </span>
+                    {label}
+                  </button>
+                ))}
                 <button
-                  key={`${tool}-${label}`}
                   type="button"
                   role="menuitem"
-                  className={tool === active ? "is-active" : undefined}
-                  onClick={() => pickTool(tool)}
+                  onClick={() => {
+                    setShapeMenuOpen(false);
+                    onToggleShapes();
+                  }}
                 >
                   <span className="lc-shape-flyout-glyph" aria-hidden>
-                    {glyph}
+                    ⊞
                   </span>
-                  {label}
+                  Data structures…
                 </button>
-              ))}
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setShapeMenuOpen(false);
-                  onToggleShapes();
-                }}
-              >
-                <span className="lc-shape-flyout-glyph" aria-hidden>
-                  ⊞
-                </span>
-                Data structures…
-              </button>
-            </div>
+              </div>
+            </MorphBar>
           )}
         </div>
 
@@ -670,30 +679,38 @@ export function BoardToolbar({
             </span>
           </button>
           {captureMenuOpen && (
-            <div className="lc-shape-flyout" role="menu" aria-label="Capture">
-              <button
-                type="button"
-                role="menuitem"
-                title="Shoot the whole board and drop the image on it"
-                onClick={onCaptureEntire}
-              >
-                <span className="lc-shape-flyout-glyph" aria-hidden>
-                  ▣
-                </span>
-                Entire board
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                title="Drag a rectangle to shoot part of the board"
-                onClick={onCaptureRegion}
-              >
-                <span className="lc-shape-flyout-glyph" aria-hidden>
-                  ⧉
-                </span>
-                Region…
-              </button>
-            </div>
+            <MorphBar
+              active="capture"
+              className="lc-shape-flyout"
+              axis="height"
+              role="menu"
+              aria-label="Capture"
+            >
+              <div data-morph-id="capture">
+                <button
+                  type="button"
+                  role="menuitem"
+                  title="Shoot the whole board and drop the image on it"
+                  onClick={onCaptureEntire}
+                >
+                  <span className="lc-shape-flyout-glyph" aria-hidden>
+                    ▣
+                  </span>
+                  Entire board
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  title="Drag a rectangle to shoot part of the board"
+                  onClick={onCaptureRegion}
+                >
+                  <span className="lc-shape-flyout-glyph" aria-hidden>
+                    ⧉
+                  </span>
+                  Region…
+                </button>
+              </div>
+            </MorphBar>
           )}
         </div>
 
