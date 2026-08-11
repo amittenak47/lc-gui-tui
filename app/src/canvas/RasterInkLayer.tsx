@@ -66,6 +66,7 @@ import {
   type InkSmoothingMode,
 } from "./inkSmoothing";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
+import { INK_SPEED_BLOT_BLEND_DEFAULT } from "../util/inkSpeedPref";
 
 export interface RasterInkHandle {
   clear(): void;
@@ -126,6 +127,8 @@ export interface RasterInkLayerProps {
   smoothingMode?: InkSmoothingMode;
   /** Speed-ink strength (0–1): a slow nib lays down more than a fast one. */
   speedInk?: number;
+  /** Soften speed-ink join/dwell discs (0–1). Stamped onto new pen strokes. */
+  speedBlotBlend?: number;
   /**
    * Eraser rubs pixels out (true) or takes whole strokes (false).
    *
@@ -180,6 +183,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       smoothing = 0,
       smoothingMode = "lift",
       speedInk = 0,
+      speedBlotBlend = INK_SPEED_BLOT_BLEND_DEFAULT,
       partialErase = true,
       getViewport,
       clip = null,
@@ -330,6 +334,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     smoothingModeRef.current = smoothingMode;
     const speedInkRef = useRef(speedInk);
     speedInkRef.current = speedInk;
+    const speedBlotBlendRef = useRef(speedBlotBlend);
+    speedBlotBlendRef.current = speedBlotBlend;
     const partialEraseRef = useRef(partialErase);
     partialEraseRef.current = partialErase;
     const getScrollHostsRef = useRef(getScrollHosts);
@@ -1336,6 +1342,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           event.pointerType,
         );
         const speed = speedInkRef.current;
+        const blotBlend = speedBlotBlendRef.current;
         // Start at the neutral pace rather than at rest: the nib has no history
         // yet, and seeding it "stopped" would open every stroke with a blob.
         if (speed > 0) point.slowness = INK_SLOWNESS_NEUTRAL;
@@ -1401,6 +1408,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               pressureClip: pressureClipRef.current,
               pressureSensitive,
               speedInk: speed,
+              ...(speed > 0 ? { speedBlotBlend: blotBlend } : {}),
               points: [],
             };
             liveRawPointsRef.current = liveReshapeActiveRef.current() ? [] : null;
@@ -1419,6 +1427,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               pressureClip: pressureClipRef.current,
               pressureSensitive,
               speedInk: speed,
+              ...(speed > 0 ? { speedBlotBlend: blotBlend } : {}),
               points: [point],
             };
           }

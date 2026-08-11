@@ -148,6 +148,22 @@ describe("encodeInkOps / decodeInkOps", () => {
     expect(back.speedInk).toBe(0.6);
   });
 
+  it("carries speedBlotBlend across", () => {
+    const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], {
+      speedInk: 0.6,
+      speedBlotBlend: 0.8,
+    });
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.speedBlotBlend).toBe(0.8);
+  });
+
+  it("leaves speedBlotBlend absent when the stroke had none", () => {
+    const [back] = roundTrip([
+      stroke([{ x: 1, y: 2, pressure: 0.5 }], { speedInk: 0.5 }),
+    ]) as [InkDrawOp];
+    expect(back.speedBlotBlend).toBeUndefined();
+  });
+
   it("leaves speedInk absent when the stroke had none", () => {
     const [back] = roundTrip([stroke([{ x: 1, y: 2, pressure: 0.5 }])]) as [InkDrawOp];
     expect(back.speedInk).toBeUndefined();
