@@ -16,7 +16,6 @@ import {
 } from "react";
 
 import {
-  applyInkOpFrom,
   eraserSceneRadius,
   hasStylusPressure,
   inkBaseWidthForZoom,
@@ -31,7 +30,6 @@ import {
   isHostBoundOp,
   NO_PRESSURE,
   scenePointFromPointer,
-  setInkSceneTransform,
   smoothPressure,
   smoothSpeed,
   stampAlongSegment,
@@ -196,7 +194,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const undoRef = useRef<InkOp[][]>([]);
     const redoRef = useRef<InkOp[][]>([]);
     const liveRef = useRef<InkOp | null>(null);
-    /** Next fromIndex for {@link applyInkOpFrom} — advances as live ink is painted. */
+    /** Last live point count painted — bookkeeping for callers, not a paint-from index. */
     const liveDrawnIndexRef = useRef(0);
     const drawingRef = useRef(false);
     /**
@@ -730,9 +728,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     }, [ensureTiles]);
 
     /**
-     * Hot path: paint only new live segments without clearing or re-blitting.
-     * Uses the stroke-start viewport so a camera jitter cannot force a full
-     * repaint mid-glyph.
+     * Hot path: full live redraw each frame under the stroke-start camera.
+     *
+     * Incremental tail paint stacked overlapping butt-cap segments into spoke
+     * artifacts on thick pens; clearing and repainting the whole live op avoids
+     * that without disturbing reshape/tip-lag callers.
      */
     const paintLiveIncremental = useCallback(() => {
       const canvas = canvasRef.current;
@@ -740,8 +740,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const box = strokeBoxRef.current;
       const live = liveRef.current;
       if (!canvas || !view || !box || !live || box.width < 1 || box.height < 1) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
       const dpr = window.devicePixelRatio || 1;
       // A resize mid-stroke resets the backing store and wipes what is drawn;
       // the only honest recovery is a full repaint under the frozen camera.
@@ -753,34 +751,21 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         return;
       }
 
-      const frame: ViewportTransform = { ...view, width: box.width, height: box.height };
-      setInkSceneTransform(ctx, frame, dpr);
-      const clipBox = clipRef.current;
-      const from = liveDrawnIndexRef.current;
-      const pixelScale = frame.zoom * dpr;
       syncLiveHostBinding(live);
       // Host-bound live ink needs clip+translate — fall back to a full frame.
       if (isHostBoundOp(live)) {
         repaint();
         return;
       }
-      if (clipBox) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(
-          clipBox.minX,
-          clipBox.minY,
-          clipBox.maxX - clipBox.minX,
-          clipBox.maxY - clipBox.minY,
-        );
-        ctx.clip();
-        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from, pixelScale);
-        ctx.restore();
-      } else {
-        liveDrawnIndexRef.current = applyInkOpFrom(ctx, live, from, pixelScale);
-      }
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-    }, [repaint]);
+
+      const marginY = box.marginY;
+      const baseView: ViewportTransform = {
+        ...view,
+        scrollY: view.scrollY - marginY / view.zoom,
+        height: view.height - 2 * marginY,
+      };
+      paintFromBox(baseView, box);
+    }, [paintFromBox, repaint]);
 
     /**
      * True when open-stroke ink must be re-derived from raw stamps each paint.
@@ -815,7 +800,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const repaintLiveRef = useRef(repaint);
     repaintLiveRef.current = repaint;
 
-    /** After appending stamps: reshape+full paint in live mode, else incremental. */
+    /** After appending stamps: reshape+full paint in live mode, else full live redraw. */
     const paintLiveAfterChange = useCallback(() => {
       if (reshapeLiveStrokeRef.current()) {
         liveDrawnIndexRef.current = 0;

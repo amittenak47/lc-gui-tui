@@ -225,6 +225,8 @@ interface DevicePrefs {
   eraserPartial: boolean;
   /** Milliseconds between board autosaves; 0 is off. */
   autosaveMs: AutosaveInterval;
+  /** ColourHunt tag the ink wheel asks for. */
+  paletteTag: PaletteTag;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -242,6 +244,7 @@ function loadDevicePrefs(): DevicePrefs {
     inkSpeed: loadInkSpeed(),
     eraserPartial: loadEraserPartial(),
     autosaveMs: loadAutosaveInterval(),
+    paletteTag: loadPaletteTag(),
   };
 }
 
@@ -259,7 +262,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.inkSmoothingMode === b.inkSmoothingMode &&
     a.inkSpeed === b.inkSpeed &&
     a.eraserPartial === b.eraserPartial &&
-    a.autosaveMs === b.autosaveMs
+    a.autosaveMs === b.autosaveMs &&
+    a.paletteTag === b.paletteTag
   );
 }
 
@@ -336,8 +340,7 @@ export function SettingsModal({
   const [autosaveMs, setAutosaveMs] = useState<AutosaveInterval>(() =>
     loadAutosaveInterval(),
   );
-  /* Applies the moment it is picked — the next ⟳ is the only thing that reads
-     it, so deferring to Save would mean a setting that looked ignored. */
+  /* Draft until Save — dirty detection includes this so Save enables. */
   const [paletteTag, setPaletteTag] = useState<PaletteTag>(() => loadPaletteTag());
   /** Last saved config + device prefs — Cancel restores these; Save advances them. */
   const [baselineConfig, setBaselineConfig] = useState<LcConfig>(emptyConfig);
@@ -451,6 +454,7 @@ export function SettingsModal({
     setInkSpeed(prefs.inkSpeed);
     setEraserPartial(prefs.eraserPartial);
     setAutosaveMs(prefs.autosaveMs);
+    setPaletteTag(prefs.paletteTag);
     setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     void offlinePackMeta().then((meta) => {
@@ -509,6 +513,7 @@ export function SettingsModal({
     inkSpeed,
     eraserPartial,
     autosaveMs,
+    paletteTag,
   };
   const dirty =
     !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
@@ -521,6 +526,9 @@ export function SettingsModal({
     // Nothing persisted mid-edit — closing drops the draft. Baseline stays on disk.
     onClose();
   };
+
+  /** How long Save waits on PUT /config before surfacing an error. */
+  const CONFIG_SAVE_TIMEOUT_MS = 30_000;
 
   const save = async () => {
     if (!dirty) {
@@ -547,6 +555,7 @@ export function SettingsModal({
         saveInkSpeed(inkSpeed);
         saveEraserPartial(eraserPartial);
         saveAutosaveInterval(autosaveMs);
+        savePaletteTag(paletteTag);
         setBaselinePrefs(draftPrefs);
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
@@ -563,15 +572,15 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent(AUTOSAVE_EVENT));
       }
       if (configDirty) {
-        const saved = await client.putConfig(draft);
+        const saved = await client.putConfig(draft, { timeoutMs: CONFIG_SAVE_TIMEOUT_MS });
         setDraft(saved);
         setBaselineConfig(saved);
       }
       onSaved?.();
-      setSaving(false);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
       setSaving(false);
     }
   };
@@ -1144,7 +1153,6 @@ export function SettingsModal({
                     }
                     onClick={() => {
                       setPaletteTag(tag);
-                      savePaletteTag(tag);
                     }}
                   >
                     <strong>{paletteTagLabel(tag)}</strong>

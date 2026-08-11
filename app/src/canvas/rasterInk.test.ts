@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyInkOp,
   clampExportScale,
   eraserSceneRadius,
   eraserScreenRadius,
@@ -23,6 +24,7 @@ import {
   hostScrollDx,
   isHostBoundOp,
   paintHostBoundOps,
+  ribbonSides,
   INK_DRY_FLOOR,
   INK_SLOWNESS_NEUTRAL,
   INK_SPEED_ALPHA_BASE,
@@ -48,6 +50,7 @@ import {
   type InkOp,
   type ScenePoint,
 } from "./rasterInk";
+import { paintLiveOp } from "./inkTiles";
 
 function points(...pairs: Array<[number, number]>): ScenePoint[] {
   return pairs.map(([x, y]) => ({ x, y, pressure: NO_PRESSURE }));
@@ -965,5 +968,160 @@ describe("host-bound ink", () => {
     } as unknown as CanvasRenderingContext2D;
     paintHostBoundOps(ctx, [draw([0, 0], [10, 0])], new Map(), 1);
     expect(calls).toHaveLength(0);
+  });
+});
+
+/** Mock 2D context for ink stroke / cap / join assertions. */
+function inkDrawContext() {
+  let transform = [1, 0, 0, 1, 0, 0];
+  let composite = "source-over";
+  let alpha = 1;
+  const strokes: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }> = [];
+  const caps: Array<{ x: number; y: number; r: number }> = [];
+  let fillCount = 0;
+  let strokeCount = 0;
+  let pen = { x: 0, y: 0 };
+
+  const map = (x: number, y: number) => ({
+    x: transform[0] * x + transform[2] * y + transform[4],
+    y: transform[1] * x + transform[3] * y + transform[5],
+  });
+
+  const ctx = {
+    get globalCompositeOperation() {
+      return composite;
+    },
+    set globalCompositeOperation(value: string) {
+      composite = value;
+    },
+    get globalAlpha() {
+      return alpha;
+    },
+    set globalAlpha(value: number) {
+      alpha = value;
+    },
+    strokeStyle: "",
+    fillStyle: "",
+    lineCap: "",
+    lineJoin: "",
+    lineWidth: 0,
+    setTransform(a: number, b: number, c: number, d: number, e: number, f: number) {
+      transform = [a, b, c, d, e, f];
+    },
+    beginPath() {},
+    moveTo(x: number, y: number) {
+      pen = map(x, y);
+    },
+    lineTo(x: number, y: number) {
+      strokes.push({ from: pen, to: map(x, y) });
+      pen = map(x, y);
+    },
+    stroke() {
+      strokeCount++;
+    },
+    arc(x: number, y: number, r: number) {
+      if (composite !== "destination-out") {
+        caps.push({ ...map(x, y), r: r * transform[0] });
+      }
+    },
+    fill() {
+      fillCount++;
+    },
+    save() {},
+    restore() {},
+    rect() {},
+    clip() {},
+    closePath() {},
+    translate() {},
+  };
+
+  return {
+    ctx: ctx as unknown as CanvasRenderingContext2D,
+    strokes,
+    caps,
+    get strokeCount() {
+      return strokeCount;
+    },
+    get fillCount() {
+      return fillCount;
+    },
+  };
+}
+
+describe("ribbon normal stability", () => {
+  it("keeps ribbon width vectors from flipping on a sharp turn", () => {
+    const pts = points([0, 0], [40, 0], [40, 40]);
+    const style = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, INK_SLOWNESS_NEUTRAL, 0);
+    const styles = pts.map(() => style);
+    const { left, right } = ribbonSides(pts, styles, 1);
+    for (let i = 1; i < left.length; i++) {
+      const v0x = left[i - 1].x - right[i - 1].x;
+      const v0y = left[i - 1].y - right[i - 1].y;
+      const v1x = left[i].x - right[i].x;
+      const v1y = left[i].y - right[i].y;
+      expect(v0x * v1x + v0y * v1y).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("drawStrokeFrom / applyInkOp live options", () => {
+  it("uses bevel joins on the run path", () => {
+    const { ctx } = inkDrawContext();
+    applyInkOp(ctx, draw([0, 0], [50, 0], [50, 50]), 1);
+    expect(ctx.lineJoin).toBe("bevel");
+  });
+
+  it("skips head caps when capHead is false", () => {
+    const { ctx, caps } = inkDrawContext();
+    applyInkOp(ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: true });
+    expect(caps).toHaveLength(1);
+    applyInkOp(ctx, draw([0, 0], [50, 0]), 1, { capHead: true, capEnd: true });
+    expect(caps).toHaveLength(3);
+    applyInkOp(ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: false });
+    expect(caps).toHaveLength(3);
+  });
+
+  it("paints constant-width and speed-ink strokes without incremental tail paint", () => {
+    const constant = inkDrawContext();
+    applyInkOp(
+      constant.ctx,
+      draw([0, 0], [50, 0], [50, 50]),
+      1,
+      { capHead: false, capEnd: false },
+    );
+    expect(constant.strokeCount).toBeGreaterThan(0);
+
+    const speed = inkDrawContext();
+    applyInkOp(
+      speed.ctx,
+      {
+        kind: "draw",
+        color: "#000",
+        baseWidth: 4,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0.5,
+        points: stylusPoints(0.5, [0, 0], [50, 0], [50, 50]).map((p) => ({
+          ...p,
+          slowness: INK_SLOWNESS_NEUTRAL,
+        })),
+      },
+      1,
+      { capHead: false, capEnd: false },
+    );
+    expect(speed.fillCount).toBeGreaterThan(0);
+  });
+
+  it("paintLiveOp passes capHead false for open strokes", () => {
+    const { ctx, caps } = inkDrawContext();
+    paintLiveOp(
+      ctx,
+      draw([0, 0], [50, 0]),
+      { zoom: 1, scrollX: 0, scrollY: 0, offsetLeft: 0, offsetTop: 0, width: 100, height: 100 },
+      1,
+      null,
+    );
+    expect(caps).toHaveLength(0);
   });
 });

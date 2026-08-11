@@ -90,6 +90,9 @@ function concatBytes(chunks: Uint8Array[]): Uint8Array {
   return out;
 }
 
+/** Align with the daemon provider ceiling (`llm/providers/http.rs`). */
+const COACH_HTTP_TIMEOUT_MS = 180_000;
+
 export class LcClient {
   constructor(
     private pairing: Pairing,
@@ -264,8 +267,11 @@ export class LcClient {
     return this.request("GET", "/config");
   }
 
-  async putConfig(config: LcConfig): Promise<LcConfig> {
-    return this.request("PUT", "/config", config);
+  async putConfig(
+    config: LcConfig,
+    opts?: { timeoutMs?: number },
+  ): Promise<LcConfig> {
+    return this.request("PUT", "/config", config, opts);
   }
 
   async llmStatus(): Promise<LlmStatus> {
@@ -407,14 +413,19 @@ export class LcClient {
     taskId: string,
     board: BoardSnapshot,
     dataset?: string,
-    opts?: { layoutOnly?: boolean },
+    opts?: { layoutOnly?: boolean; timeoutMs?: number },
   ): Promise<ReviewResponse> {
-    return this.request("POST", "/coach/review", {
-      task_id: taskId,
-      dataset,
-      layout_only: opts?.layoutOnly === true,
-      ...board,
-    });
+    return this.request(
+      "POST",
+      "/coach/review",
+      {
+        task_id: taskId,
+        dataset,
+        layout_only: opts?.layoutOnly === true,
+        ...board,
+      },
+      { timeoutMs: opts?.timeoutMs ?? COACH_HTTP_TIMEOUT_MS },
+    );
   }
 
   /**
@@ -518,14 +529,20 @@ export class LcClient {
     question: string,
     dataset?: string,
     images?: string[],
+    opts?: { timeoutMs?: number },
   ): Promise<{ task_id: string; provider: string; reply: string }> {
     try {
-      return await this.request("POST", "/coach/ask", {
-        task_id: taskId,
-        dataset,
-        question,
-        ...(images && images.length > 0 ? { images } : {}),
-      });
+      return await this.request(
+        "POST",
+        "/coach/ask",
+        {
+          task_id: taskId,
+          dataset,
+          question,
+          ...(images && images.length > 0 ? { images } : {}),
+        },
+        { timeoutMs: opts?.timeoutMs ?? COACH_HTTP_TIMEOUT_MS },
+      );
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 404) {
         throw new LcApiError(
@@ -537,10 +554,25 @@ export class LcClient {
     }
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    opts?: { timeoutMs?: number },
+  ): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (this.pairing.token) headers["X-LC-Token"] = this.pairing.token;
     if (body !== undefined) headers["Content-Type"] = "application/json";
+
+    const timeoutMs = opts?.timeoutMs;
+    const controller =
+      timeoutMs != null && timeoutMs > 0 && typeof AbortController !== "undefined"
+        ? new AbortController()
+        : null;
+    const timer =
+      controller && timeoutMs != null
+        ? window.setTimeout(() => controller.abort(), timeoutMs)
+        : null;
 
     let response: Response;
     try {
@@ -548,12 +580,21 @@ export class LcClient {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller?.signal,
       });
     } catch (cause) {
+      if (timer != null) window.clearTimeout(timer);
+      if (cause instanceof DOMException && cause.name === "AbortError") {
+        throw new LcApiError(
+          `lc serve did not answer ${method} ${path} within ${Math.round((timeoutMs ?? 0) / 1000)}s`,
+          0,
+        );
+      }
       const message = `cannot reach lc serve at ${this.pairing.baseUrl} — is the daemon running, and are you on the same network?`;
       announceUnreachable(message);
       throw new LcApiError(message, 0);
     }
+    if (timer != null) window.clearTimeout(timer);
 
     const text = await response.text();
     if (!response.ok) {

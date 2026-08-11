@@ -1,0 +1,267 @@
+{
+  "base": "http://127.0.0.1:7878",
+  "task": "01-matrix",
+  "dataset": "leetcode",
+  "pass": 43,
+  "fail": 0,
+  "results": [
+    {
+      "id": "2c.config.get",
+      "pass": true,
+      "detail": "GET /config returned coach block",
+      "snippet": "{\n  \"ws_runs\": true,\n  \"process_events_ui\": true,\n  \"planner_enabled\": true,\n  \"draw_review_enabled\": true,\n  \"approach_commitment\": false\n}"
+    },
+    {
+      "id": "2c.modes.map",
+      "pass": true,
+      "detail": "ambient=local review=local bridge=local viz=local planner=local",
+      "snippet": "{\n  \"ambient\": \"local\",\n  \"review\": \"local\",\n  \"bridge\": \"local\",\n  \"viz\": \"local\",\n  \"planner\": \"local\"\n}"
+    },
+    {
+      "id": "2c.flag.ws_runs.on",
+      "pass": true,
+      "detail": "toggle ws_runs true→true",
+      "snippet": ""
+    },
+    {
+      "id": "2c.flag.ws_runs.off",
+      "pass": true,
+      "detail": "toggle ws_runs true→false",
+      "snippet": ""
+    },
+    {
+      "id": "2c.flag.process_events_ui.on",
+      "pass": true,
+      "detail": "toggle process_events_ui true→true",
+      "snippet": ""
+    },
+    {
+      "id": "2c.flag.process_events_ui.off",
+      "pass": true,
+      "detail": "toggle process_events_ui true→false",
+      "snippet": ""
+    },
+    {
+      "id": "2c.flag.planner_enabled.on",
+      "pass": true,
+      "detail": "toggle planner_enabled true→true",
+      "snippet": ""
+    },
+    {
+      "id": "2c.flag.planner_enabled.off",
+      "pass": true,
+      "detail": "toggle planner_enabled true→false",
+      "snippet": ""
+    },
+    {
+      "id": "2c.flag.draw_review_enabled.on",
+      "pass": true,
+      "detail": "toggle draw_review_enabled true→true",
+      "snippet": ""
+    },
+    {
+      "id": "2c.flag.draw_review_enabled.off",
+      "pass": true,
+      "detail": "toggle draw_review_enabled true→false",
+      "snippet": ""
+    },
+    {
+      "id": "2c.flag.approach_commitment.on",
+      "pass": true,
+      "detail": "toggle approach_commitment false→true",
+      "snippet": ""
+    },
+    {
+      "id": "2c.flag.approach_commitment.off",
+      "pass": true,
+      "detail": "toggle approach_commitment true→false",
+      "snippet": ""
+    },
+    {
+      "id": "2c.putConfig.save",
+      "pass": true,
+      "detail": "toggled stop_on_first_failure true→false and restored",
+      "snippet": ""
+    },
+    {
+      "id": "2c.planner.load",
+      "pass": true,
+      "detail": "loaded 01-matrix",
+      "snippet": "\"01-matrix\""
+    },
+    {
+      "id": "2c.planner.scaffold",
+      "pass": true,
+      "detail": "POST /coach/scaffold returned scaffold",
+      "snippet": "{\n  \"task_id\": \"01-matrix\",\n  \"provider\": \"local/qwen3-vl-8b @ http://localhost:8000/v1\",\n  \"approach\": \"What does 'nearest 0' mean in terms of traversal? Which cells should we start from? How do we propagate distances to neighbors?\",\n  \"complexity\": \"What is the time and space cost of your propagation method? Can you justify why it's optimal?\",\n  \"walkthrough\": \"Track which cells are 0 initially. Then, for each step, mark neighbors with distance +1. Show how distances ripple outward from 0s.\"\n}"
+    },
+    {
+      "id": "2c.flags.restore",
+      "pass": true,
+      "detail": "defaults restored",
+      "snippet": ""
+    },
+    {
+      "id": "3.read.health",
+      "pass": true,
+      "detail": "200",
+      "snippet": "{\"ok\":true,\"requires_token\":false,\"service\":\"lc\",\"version\":\"0.1.0\"}"
+    },
+    {
+      "id": "3.read.llmStatus",
+      "pass": true,
+      "detail": "200",
+      "snippet": "{\"running\":true,\"base_url\":\"http://localhost:8000/v1\",\"pid\":null,\"owned\":false,\"detail\":\"local LLM reachable (external process)\"}"
+    },
+    {
+      "id": "3.read.capabilities",
+      "pass": true,
+      "detail": "200",
+      "snippet": "{\"modes\":[{\"mode\":\"ambient\",\"model\":\"qwen3-vl-8b\",\"provider\":\"local\",\"vision\":true},{\"mode\":\"review\",\"model\":\"qwen3-vl-8b\",\"provider\":\"local\",\"vision\":true},{\"mode\":\"bridge\",\"model\":\"qwen3-vl-8b\",\"provider\":\"local\",\"vision\":true},{\"mode\":\"viz\",\"model\":\"qwen3-vl-8b\",\"provider\":\"local\",\"vision\":true},{\"mode\":\"planner\",\"model\":\"qwen3-vl-8b\",\"provider\":\"local\",\"vision\":true}]}"
+    },
+    {
+      "id": "3.read.problems",
+      "pass": true,
+      "detail": "200",
+      "snippet": "{\"items\":[{\"dataset\":\"leetcode\",\"task_id\":\"01-matrix\",\"key\":\"leetcode/01-matrix\",\"question_id\":\"542\",\"difficulty\":\"Medium\",\"tags\":[\"Breadth-First Search\",\"Array\",\"Dynamic Programming\",\"Matrix\"],\"test_count\":67},{\"dataset\":\"leetcode\",\"task_id\":\"1-bit-and-2-bit-characters\",\"key\":\"leetcode/1-bit-and-2-bit-characters\",\"question_id\":\"717\",\"difficulty\":\"Easy\",\"tags\":[\"Array\"],\"test_count\":95},{\"dataset\""
+    },
+    {
+      "id": "3.read.problem",
+      "pass": true,
+      "detail": "200",
+      "snippet": "{\"dataset\":\"leetcode\",\"key\":\"leetcode/01-matrix\",\"task_id\":\"01-matrix\",\"question_id\":\"542\",\"difficulty\":\"Medium\",\"tags\":[\"Breadth-First Search\",\"Array\",\"Dynamic Programming\",\"Matrix\"],\"problem_description\":\"Given an m x n binary matrix mat, return the distance of the nearest 0 for each cell.\\nThe distance between two cells sharing a common edge is 1.\\n \\n\\nExample 1:\\n\\nInput:\\n\\nmat = [[0,0,0],[0"
+    },
+    {
+      "id": "3.read.config",
+      "pass": true,
+      "detail": "200",
+      "snippet": "{\"data_json_dir\":\"C:\\\\Users\\\\Amit\\\\lc-gui-tui\\\\data\",\"dataset_dirs\":{},\"workspace_dir\":\"~/lc-workspace\",\"python_executable\":\"python3\",\"stop_on_first_failure\":true,\"default_provider\":\"local\",\"local\":{\"base_url\":\"http://localhost:8000/v1\",\"model\":\"qwen3-vl-8b\",\"vision_model\":\"\"},\"ollama\":{\"base_url\":\"http://localhost:11434/v1\",\"model\":\"qwen2.5-coder:7b\",\"vision_model\":\"\"},\"openai\":{\"base_url\":\"https"
+    },
+    {
+      "id": "3.read.datasets",
+      "pass": true,
+      "detail": "200",
+      "snippet": "[{\"id\":\"leetcode\",\"label\":\"LeetCode\",\"source\":\"newfacade/LeetCodeDataset\",\"count\":2869,\"corpus_dir\":\"C:\\\\Users\\\\Amit\\\\lc-gui-tui\\\\data\",\"notes\":\"The original corpus: LeetCode problems with topic tags and sample cases.\"},{\"id\":\"kodcode\",\"label\":\"KodCode\",\"source\":\"KodCode/KodCode-V1\",\"count\":167894,\"corpus_dir\":\"C:\\\\Users\\\\Amit\\\\lc-gui-tui\\\\data\\\\kodcode\",\"notes\":\"Synthetic problems. Only Complete "
+    },
+    {
+      "id": "3.read.tags",
+      "pass": true,
+      "detail": "200",
+      "snippet": "[\"array\",\"backtracking\",\"biconnected component\",\"binary indexed tree\",\"binary search\",\"binary search tree\",\"binary tree\",\"bit manipulation\",\"bitmask\",\"brainteaser\",\"breadth-first search\",\"bucket sort\",\"combinatorics\",\"concurrency\",\"counting\",\"counting sort\",\"depth-first search\",\"divide and conquer\",\"dynamic programming\",\"enumeration\",\"eulerian circuit\",\"game theory\",\"geometry\",\"graph\",\"greedy\",\"ha"
+    },
+    {
+      "id": "3.read.session",
+      "pass": true,
+      "detail": "200",
+      "snippet": "{\"started_at\":1785990361,\"active_list\":null,\"queue\":[\"leetcode/maximum-sum-of-3-non-overlapping-subarrays\",\"leetcode/construct-target-array-with-multiple-sums\",\"leetcode/separate-squares-ii\",\"leetcode/three-equal-parts\",\"leetcode/minimum-time-takes-to-reach-destination-without-drowning\"],\"problems\":{\"leetcode/maximum-sum-of-3-non-overlapping-subarrays\":{\"state\":\"loaded\",\"passed_cases\":0,\"total_cas"
+    },
+    {
+      "id": "3.read.offlineManifest",
+      "pass": true,
+      "detail": "200",
+      "snippet": "{\"v\":1,\"built_at\":1785264193,\"chunk_size\":100,\"total_problems\":5587,\"datasets\":[{\"id\":\"leetcode\",\"label\":\"LeetCode\",\"problem_count\":2869,\"built_at\":1783997520,\"tags\":[\"array\",\"backtracking\",\"biconnected component\",\"binary indexed tree\",\"binary search\",\"binary search tree\",\"binary tree\",\"bit manipulation\",\"bitmask\",\"brainteaser\",\"breadth-first search\",\"bucket sort\",\"combinatorics\",\"concurrency\",\"co"
+    },
+    {
+      "id": "3.read.workspaceMeta",
+      "pass": true,
+      "detail": "meta ok",
+      "snippet": "{\"dataset\":\"leetcode\",\"task_id\":\"01-matrix\",\"question_id\":\"542\",\"difficulty\":\"Medium\",\"tags\":[\"Breadth-First Search\",\"Array\",\"Dynamic Programming\",\"Matrix\"],\"entry_point\":\"updateMatrix\",\"json_path\":\"C:\\\\Users\\\\Amit\\\\lc-gui-tui\\\\data\\\\train.json\",\"cases\":[{\"input\":\"mat = [[1,0,1,1,0,0,1,0,0,1],[0,1,1,0,1,0,1,0,1,1],[0,0,1,0,1,0,0,1,0,0],[1,0,1,0,1,1,1,1,1,1],[0,0,0,1,1,1,1,0,1,0],[1,0,1,1,0,1,0,0,1"
+    },
+    {
+      "id": "3.read.getSolution",
+      "pass": true,
+      "detail": "source len=628",
+      "snippet": "{\"task_id\":\"01-matrix\",\"source\":\"# lc workspace — task: 01-matrix · question #542 · Medium\\r\\n# Entry point: updateMatrix — keep the name and signature; `lc test` calls it directly.\\r\\n# Run `lc test`"
+    },
+    {
+      "id": "3.read.getBoard",
+      "pass": true,
+      "detail": "board ok",
+      "snippet": ""
+    },
+    {
+      "id": "3.read.getAgent",
+      "pass": true,
+      "detail": "messages=0",
+      "snippet": ""
+    },
+    {
+      "id": "3.read.adjacent",
+      "pass": true,
+      "detail": "prev=null next=1-bit-and-2-bit-characters",
+      "snippet": ""
+    },
+    {
+      "id": "3.write.putSolution",
+      "pass": true,
+      "detail": "put+restore ok",
+      "snippet": "{\"task_id\":\"01-matrix\",\"source\":\"# smoke-test-marker\\n# lc workspace — task: 01-matrix · question #542 · Medium\\r\\n# Entry point: updateMatrix — keep the name and signature; `lc test` calls it directl"
+    },
+    {
+      "id": "3.write.putBoard",
+      "pass": true,
+      "detail": "round-trip ok",
+      "snippet": ""
+    },
+    {
+      "id": "3.write.putConfig",
+      "pass": true,
+      "detail": "toggle ws_runs true→false→true",
+      "snippet": ""
+    },
+    {
+      "id": "3.coach.ask",
+      "pass": true,
+      "detail": "reply=\"pong\"",
+      "snippet": "{\"task_id\":\"01-matrix\",\"provider\":\"local/qwen3-vl-8b @ http://localhost:8000/v1\",\"reply\":\"pong\"}"
+    },
+    {
+      "id": "3.coach.review",
+      "pass": "wrong_track",
+      "detail": "verdict=wrong_track",
+      "snippet": "{\"task_id\":\"01-matrix\",\"provider\":\"local/qwen3-vl-8b @ http://localhost:8000/v1\",\"understood_approach\":\"The student plans to iterate through the matrix and track row sums, implying they think the answer depends on summing values per row.\",\"verdict\":\"wrong_track\",\"rating\":{\"correctness\":1,\"complexity\":1,\"clarity\":3},\"strengths\":[\"attempts to process the matrix\"],\"gaps\":[\"how to compute distance to "
+    },
+    {
+      "id": "3.coach.draw_review.off",
+      "pass": true,
+      "detail": "status=400 the post-draw review is off — turn on Settings → Coach → check drawn diagrams",
+      "snippet": ""
+    },
+    {
+      "id": "3.coach.viz",
+      "pass": true,
+      "detail": "programs=0",
+      "snippet": "{\"task_id\":\"01-matrix\",\"provider\":\"local/qwen3-vl-8b @ http://localhost:8000/v1\",\"programs\":[],\"annotations\":[],\"citations\":[{\"case_index\":2,\"case_number\":3,\"input\":\"mat = [[1,1,1],[1,1,1],[1,0,1]]\",\"expected\":\"[[3, 2, 3], [2, 1, 2], [1, 0, 1]]\",\"why\":\"This case shows that row sums cannot capture di"
+    },
+    {
+      "id": "3.scratchpad.http",
+      "pass": true,
+      "detail": "unexpected 400 — scratchpad may have HTTP backing",
+      "snippet": "{\"error\":\"unknown dataset \\\"scratchpad\\\" — expected one of leetcode, kodcode, ms-python-q, deepseek-leetcode, leetcode-with-tests\"}"
+    },
+    {
+      "id": "3.scratchpad.normalizeCoachFlags",
+      "pass": true,
+      "detail": "{\"scratch\":{\"ask\":true,\"draw\":false,\"reviewBoard\":false,\"lazy\":false,\"annotate\":false},\"problem\":{\"ask\":false,\"draw\":true,\"reviewBoard\":true,\"lazy\":true,\"annotate\":false}}",
+      "snippet": ""
+    },
+    {
+      "id": "3.client.md-pdf-epub",
+      "pass": true,
+      "detail": "No HTTP routes for md/pdf/epub open — client-side via Tauri/file picker (templates/scratchpad, util/scratchpadStore)",
+      "snippet": "Daemon routes: see src/serve/mod.rs — no /document or /library endpoints"
+    },
+    {
+      "id": "3.ws.received.stage",
+      "pass": true,
+      "detail": "stages=received→ask→done",
+      "snippet": "{\"stages\":[\"received\",\"ask\",\"done\"],\"resultBody\":{\"provider\":\"local/qwen3-vl-8b @ http://localhost:8000/v1\",\"reply\":\"pong\",\"task_id\":\"01-matrix\"},\"errorMsg\":null}"
+    },
+    {
+      "id": "3.ws.ask.result",
+      "pass": true,
+      "detail": "reply=\"pong\"",
+      "snippet": ""
+    }
+  ]
+}

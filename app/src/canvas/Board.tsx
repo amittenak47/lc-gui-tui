@@ -121,6 +121,7 @@ import {
   ModeIndicator,
   type ModeIndicatorHandle,
 } from "./ModeIndicator";
+import { PadTitle, type PadTitleHandle } from "./PadTitle";
 import { PageIndicator, type PageIndicatorHandle } from "./PageIndicator";
 import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
 import {
@@ -1236,11 +1237,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /*
    * The idle timer, and the tap that restarts it.
    *
-   * Only the two quiet modes run one. Re-armed from `chromeAwake` so any wake —
-   * a corner tap, a mode change — starts the countdown again rather than
-   * inheriting whatever was left of the last one.
+   * `chromeWakeGen` exists so a wake while already awake still re-arms the
+   * timer — `setChromeAwake(true)` alone is a no-op when the flag is true, and
+   * annotate / toolbar taps would otherwise leave the old countdown running.
    */
-  const wakeChrome = useCallback(() => setChromeAwake(true), []);
+  const [chromeWakeGen, setChromeWakeGen] = useState(0);
+  const wakeChrome = useCallback(() => {
+    setChromeAwake(true);
+    setChromeWakeGen((n) => n + 1);
+  }, []);
   // Read from a native listener installed once — see the tap-to-wake guard.
   const wakeChromeRef = useRef(wakeChrome);
   wakeChromeRef.current = wakeChrome;
@@ -1248,19 +1253,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (chromeMode === "visible" || !chromeAwake) return;
     const timer = window.setTimeout(() => setChromeAwake(false), CHROME_IDLE_MS);
     return () => window.clearTimeout(timer);
-  }, [chromeMode, chromeAwake]);
+  }, [chromeMode, chromeAwake, chromeWakeGen]);
   useEffect(() => {
     saveChromeMode(chromeMode);
     // A new mode always starts shown: cycling to "hidden" and having the eye
     // vanish under the finger that was tapping it is how you lose the control
     // you were using.
     setChromeAwake(true);
+    setChromeWakeGen((n) => n + 1);
   }, [chromeMode]);
   const [pressureSensitive, setPressureSensitiveState] = useState(
     () => inkPrefsRef.current.pressureSensitive,
   );
   const eraserBrushRef = useRef<EraserBrushHandle | null>(null);
   const modeIndicatorRef = useRef<ModeIndicatorHandle | null>(null);
+  const padTitleRef = useRef<PadTitleHandle | null>(null);
   const pageIndicatorRef = useRef<PageIndicatorHandle | null>(null);
   /** Last page named to the reader, so the pill fires on arrival only. */
   const lastNamedPageRef = useRef<RegionId | null>(null);
@@ -2004,6 +2011,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [annotateCode, onAnnotateCodeChange]);
 
   const toggleAnnotate = useCallback(() => {
+    wakeChromeRef.current();
     setAnnotateCode((current) => {
       const next = !current;
       modeIndicatorRef.current?.show(next ? "Annotation" : "Scroll mode");
@@ -6156,6 +6164,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       announce: (label) => {
         modeIndicatorRef.current?.show(label, ANNOUNCE_HOLD_MS);
       },
+      showPadTitle: (label) => {
+        padTitleRef.current?.show(label);
+      },
       setInkOps: (ops) => {
         rasterInkRef.current?.setOps(ops);
         /*
@@ -6517,42 +6528,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               .join(" ")}
           >
             <div className="lc-map-chrome-left">
-              {annotateToggle && (
+              {!mapChromeHidden && annotateToggle && (
                 <div className="lc-map-chrome-row">
-                  {mapChromeHidden ? (
-                    <button
-                      type="button"
-                      className="lc-chrome-wake"
-                      aria-pressed={annotateCode}
-                      aria-label={annotateCode ? "Hide toolbar" : "Show toolbar"}
-                      title={
-                        annotateCode
-                          ? "Toolbar on — tap to scroll the page"
-                          : "Toolbar — annotate this page"
-                      }
-                      onClick={toggleAnnotate}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      className={
-                        annotateCode
-                          ? "lc-lined-toggle lc-tip-target is-active"
-                          : "lc-lined-toggle lc-tip-target"
-                      }
-                      aria-pressed={annotateCode}
-                      aria-label={annotateCode ? "Hide toolbar" : "Show toolbar"}
-                      data-tip={
-                        annotateCode
-                          ? "Toolbar on — tap to scroll the page"
-                          : "Toolbar — annotate this page"
-                      }
-                      data-tip-placement="bottom"
-                      onClick={toggleAnnotate}
-                    >
-                      <AnnotateIcon on={annotateCode} />
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className={
+                      annotateCode
+                        ? "lc-lined-toggle lc-tip-target is-active"
+                        : "lc-lined-toggle lc-tip-target"
+                    }
+                    aria-pressed={annotateCode}
+                    aria-label={annotateCode ? "Hide toolbar" : "Show toolbar"}
+                    data-tip={
+                      annotateCode
+                        ? "Toolbar on — tap to scroll the page"
+                        : "Toolbar — annotate this page"
+                    }
+                    data-tip-placement="bottom"
+                    onClick={toggleAnnotate}
+                  >
+                    <AnnotateIcon on={annotateCode} />
+                  </button>
                 </div>
               )}
             </div>
@@ -6563,6 +6559,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 upward and must not lift those controls.
               */}
               {!mapChromeHidden && annotateCode && (
+              <div
+                onPointerDownCapture={() => {
+                  wakeChromeRef.current();
+                }}
+              >
               <BoardToolbar
                 highlighting={highlighting}
                 onToggleHighlight={
@@ -6620,6 +6621,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   toolbarHeightRef.current = height;
                 }}
               />
+              </div>
               )}
               <div className="lc-toolbar-dock-anchor" aria-hidden />
               {!mapChromeHidden && bottomCenter}
@@ -6680,7 +6682,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 {!mapChromeHidden && onThemePick && (
                   <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
                 )}
-                {onToggleSheetLock && (
+                {!mapChromeHidden && onToggleSheetLock && (
                   <button
                     type="button"
                     className={[
@@ -6752,6 +6754,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       )}
       {interactive && activeTool === "eraser" && <EraserBrush ref={eraserBrushRef} />}
       {interactive && <ModeIndicator ref={modeIndicatorRef} />}
+      {interactive && <PadTitle ref={padTitleRef} />}
       {interactive && mobileRegion === null && <PageIndicator ref={pageIndicatorRef} />}
       <RasterInkLayer
         ref={rasterInkRef}

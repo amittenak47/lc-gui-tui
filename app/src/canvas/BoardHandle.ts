@@ -120,13 +120,15 @@ export interface BoardHandle {
   /**
    * Say something briefly over the board, then let it go.
    *
-   * The same toast the annotate toggle uses. It exists on the handle so a
-   * notebook can name itself when it opens without that name having to live on
-   * the page — it used to be a locked text element at the top-left of every
-   * first page, which panned, zoomed, exported and sat where the writing wanted
-   * to go.
+   * Center ModeIndicator toast — Annotation / Scroll mode. ScratchPad open
+   * uses {@link showPadTitle} instead (top-left movie bold).
    */
   announce(label: string): void;
+  /**
+   * ScratchPad-only title: top-left of the pad, movie-bold fade.
+   * Never used for Problem / Constraints / Code / md-ink open.
+   */
+  showPadTitle(label: string): void;
   setTool(tool: ToolName): void;
   undo(): void;
   scrollToContent(): void;

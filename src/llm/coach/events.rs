@@ -144,7 +144,8 @@ impl EventSink {
 
 /// Stage names the client knows how to label. Kept here so the server and the
 /// UI cannot drift apart silently — the WS contract lists exactly these.
-pub const STAGE_NAMES: [&str; 12] = [
+pub const STAGE_NAMES: [&str; 13] = [
+    "received",
     "perceive",
     "claim",
     "verdict",
