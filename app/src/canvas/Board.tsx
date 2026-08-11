@@ -142,7 +142,12 @@ import {
 import { horizontalScrollHost } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import { BoardToolbar } from "./BoardToolbar";
-import { isDeletableElement, type TrashEl } from "./selectionTrash";
+import {
+  isDeletableElement,
+  selectionBounds,
+  trashAnchor,
+  type TrashEl,
+} from "./selectionTrash";
 import {
   CHROME_IDLE_MS,
   chromeModeLabel,
@@ -1597,21 +1602,38 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [interactive]);
 
-  // Library stamps must stay draggable — older imports may still be locked.
+  /*
+   * Reconcile what may and may not be grabbed, for boards saved by older builds.
+   *
+   * Library stamps must stay draggable — older imports may still be locked.
+   * Page frames must not be: they are scaffolding, and an unlocked one is the
+   * whole-note-dragged-off-screen bug (see `buildScratchpadTemplate`). Boards
+   * written before that fix carry `locked: false` on the frame, so opening one
+   * would put the trap straight back.
+   */
   useEffect(() => {
     if (!interactive) return;
     const api = apiRef.current;
     if (!api) return;
     const current = api.getSceneElements() as Array<{
       locked?: boolean;
-      customData?: { lcStamp?: boolean } | null;
+      customData?: {
+        lcStamp?: boolean;
+        lcRegionFrame?: boolean;
+        lcScratchFrame?: boolean;
+      } | null;
       [key: string]: unknown;
     }>;
     let changed = false;
     const next = current.map((element) => {
-      if (element.customData?.lcStamp && element.locked) {
+      const meta = element.customData;
+      if (meta?.lcStamp && element.locked) {
         changed = true;
         return { ...element, locked: false };
+      }
+      if ((meta?.lcScratchFrame || meta?.lcRegionFrame) && !element.locked) {
+        changed = true;
+        return { ...element, locked: true };
       }
       return element;
     });
@@ -2437,9 +2459,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       apiRef.current?.setCursor?.("text");
       applyTextModeToAppState(textModeRef.current);
     } else {
-      apiRef.current?.setActiveTool({ type: tool, locked: false });
+      /*
+       * Shape tools stay equipped.
+       *
+       * Excalidraw drops back to `selection` the moment a shape is placed, so
+       * drawing three rectangles was nine gestures: pick the tool, draw, pick
+       * it again. `locked` is upstream's own tool-lock and it is the right
+       * default here — this is a board you sketch on, and the toolbar is one
+       * tap away when you do want to stop.
+       */
+      const sticky = tool === "rectangle" || tool === "ellipse" || tool === "arrow";
+      apiRef.current?.setActiveTool({ type: tool, locked: sticky });
       apiRef.current?.resetCursor?.();
     }
+
+    /*
+     * Changing tools is always an exit.
+     *
+     * A line left open in Excalidraw's point editor keeps taking taps as bends
+     * even after the toolbar has moved on, so the escape hatch has to be here
+     * as well as on pointerup — picking any other tool is the most obvious way
+     * a hand tries to get out of a shape that will not let go.
+     */
+    apiRef.current?.updateScene({
+      appState: { multiElement: null, editingLinearElement: null },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
     // The brush node unmounts with the tool; hiding it here keeps a stale ring
     // off the canvas for the frame between the click and the unmount.
     if (tool !== "eraser") eraserBrushRef.current?.setVisible(false);
@@ -3301,6 +3346,179 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       stopPanInertia();
     };
   }, [clampPanScroll, interactive, stopPanInertia]);
+
+  /*
+   * Two of Excalidraw's own gestures do not belong on a tablet board.
+   *
+   * **The context menu.** A long press on the canvas opens Excalidraw's menu —
+   * canvas background, grid, zoom, the lot. On a desktop that is a right-click
+   * and nobody finds it by accident; with a shape tool active on a tablet it is
+   * indistinguishable from lining up where the shape goes, and the report that
+   * prompted this describes exactly that: the settings sheet appeared, the
+   * canvas took the next drag, and the writing went off screen. None of what
+   * the menu offers is reachable only from there — the toolbar and the
+   * selection trash cover it — so the whole gesture goes.
+   *
+   * **Double-click-to-create-text.** Excalidraw turns a double click on empty
+   * canvas into a new text element and focuses its editor, which raises the
+   * soft keyboard. With the pen that reads as "I tapped twice and a keyboard
+   * appeared", and it fires under the select and shape tools where no text was
+   * ever wanted. Blocked unless the text tool is genuinely up.
+   *
+   * `isTrusted` is the seam for the text tool's own flow: placing a note
+   * dispatches a synthetic `dblclick` at the caret (see the placement effect
+   * below) to hand off to Excalidraw's editor. A dispatched event is untrusted
+   * by definition, so ours goes through this guard untouched while a real
+   * double tap does not.
+   */
+  useEffect(() => {
+    if (!interactive) return;
+    const root = boardRef.current;
+    if (!root) return;
+
+    const onContextMenu = (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const onDoubleClick = (event: MouseEvent) => {
+      if (!event.isTrusted) return;
+      if (activeToolRef.current === "text") return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    root.addEventListener("contextmenu", onContextMenu, true);
+    root.addEventListener("dblclick", onDoubleClick, true);
+    return () => {
+      root.removeEventListener("contextmenu", onContextMenu, true);
+      root.removeEventListener("dblclick", onDoubleClick, true);
+    };
+  }, [interactive]);
+
+  /*
+   * A shape must not be able to trap the pen, and must be deletable the moment
+   * it exists.
+   *
+   * Two Excalidraw behaviours combine badly here. A *click* with the arrow tool
+   * — as opposed to a drag — opens a multi-point line: every further tap adds a
+   * bend, and the polyline is only closed by Escape, Enter or a double click.
+   * On a keyboard-less tablet whose double click we have just taken away (see
+   * the guard above), that is a state with no exit, which is what "I was stuck
+   * in the arrow shape adding bends" describes. And because a multi-point line
+   * in progress is not *selected*, the trash never appeared either, so the
+   * arrow could not be removed once it was there.
+   *
+   * So: a drag draws a shape, a tap does nothing. Whatever the gesture leaves
+   * behind is selected on release, which is what puts the trash over it.
+   *
+   * The work is deferred a frame because Excalidraw finishes its own pointerup
+   * first — reading the scene synchronously here sees the state before the
+   * element lands.
+   */
+  useEffect(() => {
+    if (!interactive) return;
+    const root = boardRef.current;
+    if (!root) return;
+
+    /** Shorter than this, in scene units, and the "arrow" was a stray tap. */
+    const MIN_SHAPE_SPAN = 4;
+
+    let idsAtDown: Set<string> | null = null;
+
+    const shapeToolUp = () =>
+      activeToolRef.current === "arrow" ||
+      activeToolRef.current === "rectangle" ||
+      activeToolRef.current === "ellipse";
+
+    const onPointerDown = () => {
+      const api = apiRef.current;
+      if (!api || !shapeToolUp()) {
+        idsAtDown = null;
+        return;
+      }
+      idsAtDown = new Set(
+        (api.getSceneElements() as Array<{ id: string; isDeleted?: boolean }>)
+          .filter((el) => !el.isDeleted)
+          .map((el) => el.id),
+      );
+    };
+
+    const settle = () => {
+      const api = apiRef.current;
+      const before = idsAtDown;
+      idsAtDown = null;
+      if (!api || !before || !shapeToolUp()) return;
+
+      const state = api.getAppState() as {
+        multiElement?: { id?: string } | null;
+        editingLinearElement?: { elementId?: string } | null;
+      };
+      const openId =
+        state.multiElement?.id ?? state.editingLinearElement?.elementId ?? null;
+
+      const live = api.getSceneElements() as Array<{
+        id: string;
+        width?: number;
+        height?: number;
+        points?: readonly (readonly [number, number])[];
+        isDeleted?: boolean;
+        [key: string]: unknown;
+      }>;
+
+      const fresh = live.filter((el) => !el.isDeleted && !before.has(el.id));
+      if (fresh.length === 0 && !openId) return;
+
+      // A shape with no extent is a tap, not a drawing. Excalidraw keeps it as
+      // the seed of a multi-point line; we throw it away instead.
+      const spanOf = (el: (typeof live)[number]) => {
+        const points = el.points;
+        if (points && points.length > 0) {
+          let span = 0;
+          for (const [px, py] of points) span = Math.max(span, Math.hypot(px, py));
+          return span;
+        }
+        return Math.hypot(el.width ?? 0, el.height ?? 0);
+      };
+
+      const strays = new Set(
+        fresh.filter((el) => spanOf(el) < MIN_SHAPE_SPAN).map((el) => el.id),
+      );
+      const kept = fresh.filter((el) => !strays.has(el.id));
+
+      const selected: Record<string, true> = {};
+      for (const el of kept) selected[el.id] = true;
+
+      api.updateScene({
+        elements: strays.size
+          ? live.map((el) => (strays.has(el.id) ? { ...el, isDeleted: true } : el))
+          : live,
+        appState: {
+          // Closing the polyline is the whole point — these two are what "stuck
+          // in the arrow" actually was.
+          multiElement: null,
+          editingLinearElement: null,
+          selectedElementIds: selected,
+          selectedGroupIds: {},
+        },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    };
+
+    const onPointerUp = () => {
+      if (!idsAtDown) return;
+      requestAnimationFrame(settle);
+    };
+
+    root.addEventListener("pointerdown", onPointerDown);
+    root.addEventListener("pointerup", onPointerUp);
+    root.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      root.removeEventListener("pointerdown", onPointerDown);
+      root.removeEventListener("pointerup", onPointerUp);
+      root.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [interactive]);
 
   useEffect(() => {
     stopPanInertia();
@@ -5471,40 +5689,40 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               const g = el.customData?.lcStampGroup;
               return Boolean(g && groupIds.has(g) && el.customData?.lcStamp);
             });
-            let minX = Infinity;
-            let minY = Infinity;
-            let maxX = -Infinity;
-            let maxY = -Infinity;
-            for (const el of toDelete) {
-              const w = typeof el.width === "number" ? el.width : 0;
-              const h = typeof el.height === "number" ? el.height : 0;
-              minX = Math.min(minX, el.x);
-              minY = Math.min(minY, el.y);
-              maxX = Math.max(maxX, el.x + w);
-              maxY = Math.max(maxY, el.y + h);
-            }
             const state = api.getAppState() as {
               scrollX?: number;
               scrollY?: number;
               zoom?: { value?: number };
             };
-            const zoom = state.zoom?.value ?? 1;
-            const scrollX = state.scrollX ?? 0;
-            const scrollY = state.scrollY ?? 0;
-            const left = roundPx((maxX + scrollX) * zoom - 36);
-            const top = roundPx((minY + scrollY) * zoom - 40);
+            const board = boardRef.current;
+            const bounds = selectionBounds(toDelete);
+            const anchor = bounds
+              ? trashAnchor(
+                  bounds,
+                  {
+                    scrollX: state.scrollX ?? 0,
+                    scrollY: state.scrollY ?? 0,
+                    zoom: state.zoom?.value ?? 1,
+                  },
+                  {
+                    width: board?.clientWidth ?? window.innerWidth,
+                    height: board?.clientHeight ?? window.innerHeight,
+                  },
+                )
+              : null;
             const ids = toDelete.map((el) => el.id);
             setStampTrash((current) => {
+              if (!anchor) return current ? null : current;
               if (
                 current &&
-                current.left === left &&
-                current.top === top &&
+                current.left === anchor.left &&
+                current.top === anchor.top &&
                 current.ids.length === ids.length &&
                 current.ids.every((id, i) => id === ids[i])
               ) {
                 return current;
               }
-              return { left, top, ids };
+              return { left: anchor.left, top: anchor.top, ids };
             });
           }
         }
@@ -6237,6 +6455,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 Annotate stays on the opposite end. Eye stays when chrome collapses.
               */}
               <div className="lc-map-chrome-stack">
+                {/*
+                  The way back.
+
+                  Even with the page frame locked and the context menu gone,
+                  a board can end up somewhere the writer did not put it — a
+                  pinch that got away, a restore that landed short. Everything
+                  else on this stack is a preference; this is the one control
+                  that exists so a board is never lost, and it is deliberately
+                  one tap with nothing to read first.
+                */}
+                {!mapChromeHidden && (
+                  <button
+                    type="button"
+                    className="lc-lined-toggle"
+                    aria-label="Recentre the board"
+                    title="Recentre the board"
+                    onClick={() => fitView()}
+                  >
+                    <RecentreIcon />
+                  </button>
+                )}
                 {!mapChromeHidden &&
                   linedPaperToggle &&
                   isDrawPageRegion(mobileRegion ?? null) && (
@@ -6587,6 +6826,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     </div>
   );
 });
+
+/** Crosshair in a frame — "put the page back where it belongs". */
+function RecentreIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="17"
+      height="17"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4" />
+      <circle cx="12" cy="12" r="2.5" />
+    </svg>
+  );
+}
 
 function EyeIcon({ closed = false, half = false }: { closed?: boolean; half?: boolean }) {
   if (half) {
