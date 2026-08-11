@@ -382,19 +382,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
     /** Attach host binding when the stroke's bounds land inside a scroll host. */
     function bindStrokeHost<T extends InkOp>(op: T): T {
-      let host = strokeHostRef.current;
-      /*
-       * Pointerdown can miss the host (empty hit stack mid-layout). Fall back
-       * to whichever live host the stroke's bounds overlap so marks still bind.
-       */
-      if (!host) {
-        const bounds = inkOpBounds(op);
-        host =
-          collectScrollHosts().find((candidate) =>
-            strokeBoundsInHost(bounds, candidate.bounds),
-          ) ?? null;
-        if (host) strokeHostRef.current = host;
-      }
+      const host = strokeHostRef.current;
       if (!host) return op;
       const bounds = inkOpBounds(op);
       if (!strokeBoundsInHost(bounds, host.bounds)) return op;
@@ -1096,6 +1084,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
     /**
      * Nested `scrollLeft` moves host-bound ink — repaint when any host scrolls.
+     * Never during a live stroke: a full tile pass under the nib drops samples
+     * and flickers committed ink.
      */
     useEffect(() => {
       if (!enabled) return;
@@ -1106,8 +1096,15 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         hosts.push(...horizontalScrollHostsIn(doc));
       }
       if (hosts.length === 0) return;
+      let frame: number | null = null;
       const onScroll = () => {
-        repaintRef.current();
+        if (drawingRef.current) return;
+        if (frame != null) return;
+        frame = requestAnimationFrame(() => {
+          frame = null;
+          if (drawingRef.current) return;
+          repaintRef.current();
+        });
       };
       for (const host of hosts) {
         host.addEventListener("scroll", onScroll, { passive: true });
@@ -1116,6 +1113,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         for (const host of hosts) {
           host.removeEventListener("scroll", onScroll);
         }
+        if (frame != null) cancelAnimationFrame(frame);
       };
     }, [enabled, tool]);
 
