@@ -6,6 +6,117 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — the board stops being able to trap the pen
+
+- **A shape-tool drag could carry the whole note off screen.** The page frame is
+  scaffolding and it was selectable, so a drag that started a few pixels off its
+  mark grabbed the page instead of drawing on it — with no keyboard to undo it.
+  It is locked now, as the markdown frame already was, and boards saved by older
+  builds are locked on open. Excalidraw's context menu goes with it: a long
+  press opened the canvas settings, and that sheet is what handed the next drag
+  to the canvas.
+
+- **An arrow could not be escaped or deleted.** A click rather than a drag opens
+  a multi-point line, every further tap adds a bend, and the exits are keys this
+  device does not have. A line in progress is also not *selected*, so the trash
+  never appeared over it. Now a drag draws a shape, a tap draws nothing, and
+  whatever the gesture leaves is selected on release. Changing tools closes an
+  open line too.
+
+- **Double-tapping with select or a shape tool raised the keyboard**, because
+  Excalidraw turns a double click on empty canvas into a text element. Blocked
+  unless the text tool is genuinely up.
+
+- **The trash sat over the top-right corner of what it deletes**, covering most
+  of a small shape. It sits outside the selection now, falling back around the
+  box when the corner is off screen, and it measures an arrow by its points
+  rather than its stale width.
+
+- Shape tools stay equipped after placing a shape. Three rectangles was nine
+  gestures.
+
+### Fixed — the pen's dials mean what they say
+
+- **Stroke smoothing had three settings, not a hundred.** Rounding was bought in
+  whole passes through `ceil`, so measured across the slider the stroke changed
+  at 55% and at 90% and nowhere else — and under the bottom quarter the
+  simplifier was pinned at its storage floor, so 8%, 17% and 25% produced
+  byte-identical ink. The last pass is partial now: the corner cutter takes its
+  cut ratio, so 1.4 passes is one full pass and one cutting 40% as deep. Same
+  maximum, same point count, continuous end to end.
+
+- **Speed ink's "capsule" was two bugs.** The low-pass over a stroke's pace was
+  a five-tap box over the point *index*, tuned on the assumption that five
+  stamps span about a nib width — but smoothing *inserts* points, so with it
+  turned up the same five taps covered a fraction of the distance they were
+  tuned for. That is why the beads got worse with the one setting that should
+  have helped. The window is in nib widths of travel now, and there is a slope
+  limit on top, because a bead is a width discontinuity and averaging only ever
+  makes a shorter step. The width multiplier also ran negative past neutral at
+  full strength, which is not a thin line but whatever the hairline floor
+  happens to be; it has a floor.
+
+- **The nib was a different size on a document than on the pad**, because the
+  slider was in scene units and a document opens fitted to a reading column. It
+  is in screen pixels now, converted at stroke start — ink still stores scene
+  units and still scales when the page does.
+
+### Fixed — saving, and getting back what you saved
+
+- **A restored board opened with a gap above the writing**, and came right the
+  moment the pen touched down. The page grows to what is written on it, but only
+  from the ink layer's change handler, which a restore does not fire — so the
+  camera fitted a one-screen frame around several screens of notes. Restoring
+  ink grows the page now, and every restore path puts the ink in before the
+  camera settles.
+
+- **Deleting a notebook was one tap while opening one needed a hold.** Both are
+  holds now.
+
+- **Discard reads Exit when there is nothing to discard**, so leaving a saved
+  board does not ask anyone to confirm throwing away work that is not at risk.
+
+- **Ink drawn over a wide codeblock slid off the words**, because the block was
+  the one thing on the page allowed to scroll its own contents. While a drawing
+  tool is up nothing does; the block shows its full width and the board pans.
+
+- Banners were see-through over live ink, and the notice variant was worse than
+  translucent — its background was invalid CSS, so it silently inherited the
+  error banner's pink.
+
+### Added — a highlighter, autosave, and an eraser that is a setting
+
+- **A real highlighter.** The tool of that name sweeps a region and hands it to
+  the coach, which is useful and is not what anyone reaches for when they want
+  to highlight. The new one is a chisel: one width, one alpha, no pressure and
+  no pace, composited `multiply` so writing stays legible under it. It takes its
+  colour from the pen's palette; the sweep is relabelled for the job it does.
+
+- **Autosave is in Settings.** It has always run, every three seconds, and has
+  never been visible — a bad combination for the one feature whose whole value
+  is confidence. Off is allowed.
+
+- **The eraser's crosshair is gone** (the ring's edge is what the hand aims
+  with) and what it removes is a choice: rub pixels out, or take whole strokes.
+
+- **Hold the header's pad icon to save**, rather than tapping through a menu.
+
+- **Android's back-gesture strips are handed back while writing.** A downstroke
+  started too near the left or right edge used to leave the app instead of
+  leaving ink. The bottom edge is deliberately left alone.
+
+- Server and model polling drop from roughly twenty requests a minute to between
+  two and six.
+
+### Changed — chrome that stays out of the way without going missing
+
+- The toolbar and icon stack sit on the coach panel's top edge and ride it up,
+  instead of being moved clear of the sheet and then hidden anyway.
+- The "Scratchpad" heading is no longer a locked text element on the first page
+  of every notebook; the notebook announces itself over the board and fades.
+- Hidden mode's wake corner has a visible dot, a tap anywhere on the board wakes
+  the controls, and annotate mode never hides the tools being used.
+
 ### Added — Markdown Ink
 
 - **Annotate a markdown file the way you annotate a scratchpad.** A markdown
