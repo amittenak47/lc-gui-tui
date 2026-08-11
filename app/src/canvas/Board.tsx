@@ -3122,7 +3122,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         : null;
       // A wide codeblock defers the same way the dock does: which axis the
       // gesture turns out to be is what decides who owns it.
-      const sideScroll = onCodeDock ? null : horizontalScrollHost(event.target);
+      const sideScroll = onCodeDock
+        ? null
+        : horizontalScrollHost(event.target, annotateCodeRef.current);
       /*
        * Selectable prose defers for the same reason, on time rather than axis.
        *
@@ -4362,7 +4364,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * `preventDefault` on it; the second it only sometimes maps to `deltaX`,
        * so do it by hand when it has not.
        */
-      const sideScroll = horizontalScrollHost(target);
+      const sideScroll = horizontalScrollHost(target, annotateCodeRef.current);
       if (sideScroll) {
         if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
         if (event.shiftKey && event.deltaY !== 0) {
@@ -6395,6 +6397,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // Reading: mute Excalidraw hit-testing so capture scroll always wins
         // (Gemini gatekeeper + CSS). Annotate restores normal canvas hits.
         interactive && !annotateCode && "lc-board-reading",
+        interactive && annotateCode && "lc-board-annotating",
         transparentCanvas && "lc-board-paper",
         docPaper && "lc-board-doc-paper",
         // Highlighting hands the surface back to the document for the length
