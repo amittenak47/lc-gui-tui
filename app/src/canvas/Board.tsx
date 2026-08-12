@@ -146,7 +146,7 @@ import {
   setDocCameraLive,
   pointerInSubMark,
 } from "./docSelectionGesture";
-import { horizontalScrollHost } from "./scrollHost";
+import { horizontalScrollHost, scrollHostLookupFromSlot, slotCssPerScene } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import { applyGestureExclusions, edgeStrips } from "../util/gestureExclusion";
 import { BoardToolbar } from "./BoardToolbar";
@@ -281,6 +281,18 @@ function deviceExportScale(): number {
  * its default margin is baked in here. Ink drawn outside the elements' box
  * extends the canvas rather than being cropped.
  */
+function paintExportInk(
+  inkCtx: CanvasRenderingContext2D,
+  ops: readonly InkOp[],
+  origin: { x: number; y: number },
+  drawScale: number,
+  pageLayers: PageExportLayers | null,
+): void {
+  const hosts = scrollHostLookupFromSlot(pageLayers?.contentSlot, pageLayers?.pageBounds);
+  const hostZoom = slotCssPerScene(pageLayers?.contentSlot, pageLayers?.pageBounds);
+  paintInkAtScale(inkCtx, ops, origin, drawScale, hosts, hostZoom);
+}
+
 async function exportBoardBlob(
   api: ExcalidrawApi,
   ops: readonly InkOp[],
@@ -391,7 +403,7 @@ async function exportBoardBlob(
   inkCanvas.height = height;
   const inkCtx = inkCanvas.getContext("2d");
   if (!inkCtx) return plain();
-  paintInkAtScale(inkCtx, ops, { x: bounds.minX, y: bounds.minY }, drawScale);
+  paintExportInk(inkCtx, ops, { x: bounds.minX, y: bounds.minY }, drawScale, pageLayers);
 
   const out = document.createElement("canvas");
   out.width = width;
@@ -507,7 +519,7 @@ async function exportRegionBlob(
   inkCanvas.height = height;
   const inkCtx = inkCanvas.getContext("2d");
   if (!inkCtx) return plain();
-  paintInkAtScale(inkCtx, regionOps, { x: bounds.minX, y: bounds.minY }, drawScale);
+  paintExportInk(inkCtx, regionOps, { x: bounds.minX, y: bounds.minY }, drawScale, pageLayers);
 
   const out = document.createElement("canvas");
   out.width = width;
@@ -618,7 +630,7 @@ async function exportSceneFrameBlob(
     inkCanvas.height = height;
     const inkCtx = inkCanvas.getContext("2d");
     if (inkCtx) {
-      paintInkAtScale(inkCtx, regionOps, { x: bounds.minX, y: bounds.minY }, drawScale);
+      paintExportInk(inkCtx, regionOps, { x: bounds.minX, y: bounds.minY }, drawScale, pageLayers);
       ctx.drawImage(inkCanvas, 0, 0);
     }
   }
@@ -962,6 +974,14 @@ export interface BoardProps {
    */
   onHighlightingChange?: (on: boolean) => void;
   /**
+   * Footnote underline / highlight sub-mark tools are armed.
+   *
+   * Same pointer-events flip as Sweep (`lc-board-highlighting`): mute ink +
+   * Excalidraw so DocSelectionLayer's character-range path can receive drags
+   * while Annotate is otherwise on.
+   */
+  textMarkSelecting?: boolean;
+  /**
    * Scene height the page frame should grow to — the measured document.
    *
    * A prop rather than a handle call because the imperative version had to
@@ -1063,6 +1083,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     selectableContent = false,
     onMarksSlot,
     onHighlightingChange,
+    textMarkSelecting = false,
     pageContentHeight = null,
     codeContentHeight = null,
     transparentCanvas = false,
@@ -6604,9 +6625,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         interactive && annotateCode && "lc-board-annotating",
         transparentCanvas && "lc-board-paper",
         docPaper && "lc-board-doc-paper",
-        // Highlighting hands the surface back to the document for the length
-        // of the sweep — see the rules in styles.css.
-        highlighting && "lc-board-highlighting",
+        // Highlighting / text-mark tools hand the surface back to the document
+        // for the length of the gesture — see the rules in styles.css.
+        (highlighting || textMarkSelecting) && "lc-board-highlighting",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -6627,7 +6648,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         <div
           ref={contentSlotNodeRef}
           className={
-            selectableContent && (!annotateCode || highlighting)
+            selectableContent && (!annotateCode || highlighting || textMarkSelecting)
               ? "lc-page-content-slot lc-page-content-selectable"
               : "lc-page-content-slot"
           }
@@ -6635,7 +6656,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           // accessibility tree while the reader can pick quotes out of it would
           // be a lie. Annotate mode goes back to being paper under the pen.
           aria-hidden={
-            selectableContent && (!annotateCode || highlighting) ? undefined : true
+            selectableContent && (!annotateCode || highlighting || textMarkSelecting)
+              ? undefined
+              : true
           }
           style={{ width: contentSceneWidth }}
         >

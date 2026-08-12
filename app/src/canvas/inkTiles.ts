@@ -810,7 +810,7 @@ export function paintLiveOp(
           ctx,
           op,
           host.bounds,
-          hostScrollDx(op, host.scrollLeft),
+          hostScrollDx(op, host.scrollLeft, viewport.zoom),
           pixelScale,
           capOptions,
         );
@@ -852,9 +852,9 @@ export function paintHostBoundPass(
     ctx.beginPath();
     ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
     ctx.clip();
-    paintHostBoundOps(ctx, ops, hosts, pixelScale);
+    paintHostBoundOps(ctx, ops, hosts, pixelScale, undefined, viewport.zoom);
     ctx.restore();
   } else {
-    paintHostBoundOps(ctx, ops, hosts, pixelScale);
+    paintHostBoundOps(ctx, ops, hosts, pixelScale, undefined, viewport.zoom);
   }
 }

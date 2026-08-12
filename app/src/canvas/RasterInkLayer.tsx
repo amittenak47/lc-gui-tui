@@ -47,9 +47,8 @@ import {
   hostKeyInDoc,
   hostSceneBounds,
   scrollHostAtPoint,
-  strokeBoundsInHost,
 } from "./scrollHost";
-import { InkTileCache, inkOpBounds, paintHostBoundPass, paintLiveOp } from "./inkTiles";
+import { InkTileCache, paintHostBoundPass, paintLiveOp } from "./inkTiles";
 import { opsAfterStrokeErase } from "./strokeEraser";
 import {
   OVERDRAW_REBASE_HEADROOM,
@@ -380,16 +379,20 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       return out;
     }
 
-    /** Attach host binding when the stroke's bounds land inside a scroll host. */
+    /**
+     * Bind host at stroke start (lab pattern).
+     *
+     * Pointerdown already captured the host under the nib; keep that binding for
+     * the whole stroke. Bounds-gating used to drop short strokes that barely
+     * missed the host AABB after the first sample.
+     */
     function bindStrokeHost<T extends InkOp>(op: T): T {
       const host = strokeHostRef.current;
       if (!host) return op;
-      const bounds = inkOpBounds(op);
-      if (!strokeBoundsInHost(bounds, host.bounds)) return op;
       return { ...op, hostKey: host.key, scrollLeftAtDraw: host.scrollLeft };
     }
 
-    /** Keep live ink aligned with a host the nib is inside. */
+    /** Keep live ink tagged with the host captured at pointerdown. */
     function syncLiveHostBinding(live: InkOp): void {
       const host = strokeHostRef.current;
       if (!host) {
@@ -397,12 +400,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           delete live.hostKey;
           delete live.scrollLeftAtDraw;
         }
-        return;
-      }
-      const bounds = inkOpBounds(live);
-      if (!strokeBoundsInHost(bounds, host.bounds)) {
-        delete live.hostKey;
-        delete live.scrollLeftAtDraw;
         return;
       }
       live.hostKey = host.key;
@@ -1084,6 +1081,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
     /**
      * Nested `scrollLeft` moves host-bound ink — repaint when any host scrolls.
+     *
+     * Scroll does not bubble; capture on the board hears every nested host
+     * (lab pattern). Also attach per-host listeners and re-scan when the doc
+     * DOM gains/loses scrollers — early empty scans used to skip the effect
+     * forever (`if (hosts.length === 0) return` with deps only `[enabled, tool]`).
      * Never during a live stroke: a full tile pass under the nib drops samples
      * and flickers committed ink.
      */
@@ -1091,12 +1093,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       if (!enabled) return;
       const board = canvasRef.current?.closest(".lc-board");
       if (!board) return;
-      const hosts: HTMLElement[] = [];
-      for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
-        hosts.push(...horizontalScrollHostsIn(doc));
-      }
-      if (hosts.length === 0) return;
       let frame: number | null = null;
+      let attached: HTMLElement[] = [];
       const onScroll = () => {
         if (drawingRef.current) return;
         if (frame != null) return;
@@ -1106,16 +1104,48 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           repaintRef.current();
         });
       };
-      for (const host of hosts) {
-        host.addEventListener("scroll", onScroll, { passive: true });
-      }
-      return () => {
-        for (const host of hosts) {
+      const detachHosts = () => {
+        for (const host of attached) {
           host.removeEventListener("scroll", onScroll);
         }
+        attached = [];
+      };
+      const rescanHosts = () => {
+        detachHosts();
+        for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
+          for (const host of horizontalScrollHostsIn(doc)) {
+            host.addEventListener("scroll", onScroll, { passive: true });
+            attached.push(host);
+          }
+        }
+      };
+      rescanHosts();
+      // Capture phase: scroll never bubbles; this catches hosts we have not
+      // attached yet and hosts that appear after the first scan.
+      board.addEventListener("scroll", onScroll, { capture: true, passive: true });
+      const mo =
+        typeof MutationObserver === "function"
+          ? new MutationObserver(() => rescanHosts())
+          : null;
+      mo?.observe(board, { childList: true, subtree: true });
+      const ro =
+        typeof ResizeObserver === "function"
+          ? new ResizeObserver(() => {
+              rescanHosts();
+              if (!drawingRef.current) onScroll();
+            })
+          : null;
+      for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
+        ro?.observe(doc);
+      }
+      return () => {
+        board.removeEventListener("scroll", onScroll, true);
+        detachHosts();
+        mo?.disconnect();
+        ro?.disconnect();
         if (frame != null) cancelAnimationFrame(frame);
       };
-    }, [enabled, tool]);
+    }, [enabled]);
 
     useEffect(() => {
       if (!enabled) return;
@@ -1473,6 +1503,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           };
           liveDrawnIndexRef.current = 0;
         }
+        if (liveRef.current) syncLiveHostBinding(liveRef.current);
         /*
          * Blit the committed page under the frozen view, unless the last frame
          * already is that.

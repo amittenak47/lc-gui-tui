@@ -1,7 +1,14 @@
 /** @vitest-environment jsdom */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { horizontalScrollHost, horizontalScrollHostsIn, hostKeyInDoc, scrollHostAtPoint } from "./scrollHost";
+import {
+  horizontalScrollHost,
+  horizontalScrollHostsIn,
+  hostKeyInDoc,
+  scrollHostAtPoint,
+  scrollHostLookupFromSlot,
+  slotCssPerScene,
+} from "./scrollHost";
 
 /** jsdom lays nothing out, so overflow is stated rather than measured. */
 function sizeOf(el: HTMLElement, scrollWidth: number, clientWidth: number) {
@@ -168,5 +175,28 @@ describe("scrollHostAtPoint", () => {
     board.append(ink);
     document.elementsFromPoint = () => [ink, board];
     expect(scrollHostAtPoint(10, 10)).toBeNull();
+  });
+});
+
+describe("scrollHostLookupFromSlot", () => {
+  it("maps hosts into page scene bounds", () => {
+    const { board, pre } = buildDoc();
+    const slot = board.querySelector(".lc-page-content-slot") as HTMLElement;
+    Object.defineProperty(pre, "scrollLeft", { value: 42, configurable: true });
+    slot.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) as DOMRect;
+    pre.getBoundingClientRect = () =>
+      ({ left: 20, top: 10, right: 180, bottom: 90, width: 160, height: 80 }) as DOMRect;
+    const pageBounds = { minX: 100, minY: 50, maxX: 300, maxY: 150 };
+    const lookup = scrollHostLookupFromSlot(slot, pageBounds);
+    expect(lookup).not.toBeNull();
+    expect(lookup!.get(0)?.scrollLeft).toBe(42);
+    expect(lookup!.get(0)?.bounds).toEqual({
+      minX: 120,
+      minY: 60,
+      maxX: 280,
+      maxY: 140,
+    });
+    expect(slotCssPerScene(slot, pageBounds)).toBeCloseTo(1);
   });
 });

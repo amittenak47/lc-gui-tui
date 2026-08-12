@@ -160,6 +160,55 @@ export interface ScrollHostPaintState {
   bounds: SceneBounds;
 }
 
+/**
+ * Scene-space host lookup for export / offscreen paint.
+ *
+ * Maps each host's visible CSS box into {@link pageBounds} using the content
+ * slot's on-screen size (CSS px per scene unit ≈ camera zoom).
+ */
+export function scrollHostLookupFromSlot(
+  slot: HTMLElement | null | undefined,
+  pageBounds: SceneBounds | null | undefined,
+): Map<number, { bounds: SceneBounds; scrollLeft: number }> | null {
+  if (!slot || !pageBounds) return null;
+  const pageW = pageBounds.maxX - pageBounds.minX;
+  const pageH = pageBounds.maxY - pageBounds.minY;
+  if (pageW <= 0 || pageH <= 0) return null;
+  const slotRect = slot.getBoundingClientRect();
+  if (slotRect.width < 1 || slotRect.height < 1) return null;
+  const sx = slotRect.width / pageW;
+  const sy = slotRect.height / pageH;
+  const map = new Map<number, { bounds: SceneBounds; scrollLeft: number }>();
+  for (const doc of slot.querySelectorAll(DOC_PAGE_SELECTOR)) {
+    horizontalScrollHostsIn(doc).forEach((el, key) => {
+      const r = el.getBoundingClientRect();
+      map.set(key, {
+        scrollLeft: el.scrollLeft,
+        bounds: {
+          minX: pageBounds.minX + (r.left - slotRect.left) / sx,
+          minY: pageBounds.minY + (r.top - slotRect.top) / sy,
+          maxX: pageBounds.minX + (r.right - slotRect.left) / sx,
+          maxY: pageBounds.minY + (r.bottom - slotRect.top) / sy,
+        },
+      });
+    });
+  }
+  return map.size > 0 ? map : null;
+}
+
+/** CSS pixels per scene unit on the content slot (camera zoom proxy). */
+export function slotCssPerScene(
+  slot: HTMLElement | null | undefined,
+  pageBounds: SceneBounds | null | undefined,
+): number {
+  if (!slot || !pageBounds) return 1;
+  const pageW = pageBounds.maxX - pageBounds.minX;
+  if (pageW <= 0) return 1;
+  const w = slot.getBoundingClientRect().width;
+  if (w < 1) return 1;
+  return w / pageW;
+}
+
 /** Whether stroke bounds overlap a host's scene box. */
 export function strokeBoundsInHost(
   bounds: SceneBounds,
