@@ -406,6 +406,7 @@ export function App() {
   /** Footnote overview send upgrades this id from note → coach on first message. */
   const footnoteCoachUpgradeRef = useRef<string | null>(null);
   const [openFootnoteId, setOpenFootnoteId] = useState<string | null>(null);
+  const [footnoteOpenThreadId, setFootnoteOpenThreadId] = useState<string | null>(null);
   const [footnoteAnchorRect, setFootnoteAnchorRect] = useState<DOMRect | null>(null);
   const [subMarkMode, setSubMarkMode] = useState<DocFootnoteSubMarkKind | null>(null);
   const [coachQuoteSeed, setCoachQuoteSeed] = useState<{
@@ -1497,6 +1498,13 @@ export function App() {
       setTests(null);
       setNudges([]);
       setCoachMessages([]);
+      setMdInkFootnotes([]);
+      mdInkFootnotesRef.current = [];
+      pendingQuoteRef.current = null;
+      footnoteCoachUpgradeRef.current = null;
+      setOpenFootnoteId(null);
+      setFootnoteAnchorRect(null);
+      setFootnoteOpenThreadId(null);
       revealForMessageIdRef.current = null;
       lastReviewIdsRef.current = new Set();
       reviewTurnRef.current = 0;
@@ -4371,6 +4379,37 @@ export function App() {
     [coachMessages, groupedCoachThreads],
   );
   const footnoteNumbers = useMemo(() => numberFootnotes(mdInkFootnotes), [mdInkFootnotes]);
+  const footnoteThreadRoots = useMemo(() => {
+    const roots = new Set<string>();
+    for (const entry of mdInkFootnotes) {
+      if (entry.threadRootId) roots.add(entry.threadRootId);
+      for (const thread of entry.threads ?? []) roots.add(thread.rootId);
+    }
+    return roots;
+  }, [mdInkFootnotes]);
+
+  const openCoachFootnoteThread = useCallback(
+    (rootId: string) => {
+      const footnote =
+        mdInkFootnotes.find(
+          (entry) =>
+            entry.threadRootId === rootId ||
+            (entry.threads ?? []).some((thread) => thread.rootId === rootId),
+        ) ?? null;
+      if (footnote) {
+        setFootnoteOpenThreadId(rootId);
+        openFootnoteOverview(footnote.id, null);
+        return;
+      }
+      setCoachFocusThread({ token: Date.now(), rootId });
+    },
+    [mdInkFootnotes, openFootnoteOverview],
+  );
+
+  useEffect(() => {
+    if (!problem || isLocalPad(problem) || mobile) return;
+    boardRef.current?.fitRegion(activeRegion);
+  }, [activeRegion, mobile, problem]);
 
   return (
     <div
@@ -4459,42 +4498,24 @@ export function App() {
           )}
         </div>
 
-        {/* Screen-centered — not balanced against left/right header chrome. */}
-        <div className="lc-header-pairing-anchor">
-          <div
-            className={[
-              "lc-header-pairing-slot",
-              serverLink === "offline" && !pairingEditing && "lc-offline-chip-enter",
-              pairingEditing && "lc-pairing-edit-enter",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-          >
-            {serverLink === "offline" && !pairingEditing ? (
-              <HoldButton
-                label="Offline"
-                className="lc-offline-chip"
-                ariaLabel="Offline: tap to edit host, hold to retry"
-                holdMs={HOLD_SENSITIVE_MS}
-                resetKey={gateOpen}
-                onTap={() => setPairingEditing(true)}
-                onConfirm={() => {
-                  openGate("startup");
-                  setGateWaiting(true);
-                }}
-              >
-                Offline
-              </HoldButton>
-            ) : (
-              <PairingBadge
-                pairing={pairing}
-                onPair={setPairing}
-                editing={pairingEditing}
-                onEditingChange={setPairingEditing}
-              />
-            )}
+        {/* Screen-centered on mobile — desktop pairing lives in .lc-header-right. */}
+        {mobile && (
+          <div className="lc-header-pairing-anchor">
+            <HeaderPairingSlot
+              serverLink={serverLink}
+              pairing={pairing}
+              pairingEditing={pairingEditing}
+              gateOpen={gateOpen}
+              onPair={setPairing}
+              onEditingChange={setPairingEditing}
+              onRetryOffline={() => {
+                openGate("startup");
+                setGateWaiting(true);
+              }}
+              onTapOffline={() => setPairingEditing(true)}
+            />
           </div>
-        </div>
+        )}
 
         <div className="lc-header-center">
           {problem && !isLocalPad(problem) && (
@@ -4680,6 +4701,21 @@ export function App() {
               </svg>
             </HoldButton>
           )}
+          {!mobile && (
+            <HeaderPairingSlot
+              serverLink={serverLink}
+              pairing={pairing}
+              pairingEditing={pairingEditing}
+              gateOpen={gateOpen}
+              onPair={setPairing}
+              onEditingChange={setPairingEditing}
+              onRetryOffline={() => {
+                openGate("startup");
+                setGateWaiting(true);
+              }}
+              onTapOffline={() => setPairingEditing(true)}
+            />
+          )}
           {/* On mobile the gear moves into the ⋯ menu — see HeaderOverflow. */}
           <button
             type="button"
@@ -4810,8 +4846,13 @@ export function App() {
                       : null
                 : null
             }
+            focusRegion={
+              problem && !isLocalPad(problem) && !isMdInk(problem) && !mobile
+                ? activeRegion
+                : null
+            }
             bottomCenter={
-              problem && !isLocalPad(problem) && mobile ? (
+              problem && !isLocalPad(problem) ? (
                 <RegionPager
                   active={activeRegion}
                   onPick={setActiveRegion}
@@ -4840,7 +4881,11 @@ export function App() {
                 ? codeContentHeight + CODE_PAGE_TAIL
                 : null
             }
-            selectableContent={Boolean(problem && isMdInk(problem) && mdInkSource)}
+            selectableContent={Boolean(
+              problem &&
+                ((isMdInk(problem) && mdInkSource) ||
+                  (!isLocalPad(problem) && !isMdInk(problem))),
+            )}
             textMarkSelecting={Boolean(openFootnote)}
             onMarksSlot={setMarksSlot}
             onHighlightingChange={setHighlighting}
@@ -4893,15 +4938,33 @@ export function App() {
                 </DocSelectionLayer>
               ) : problem &&
                 !isLocalPad(problem) &&
+                !isMdInk(problem) &&
                 (!mobile || activeRegion === "constraints") ? (
-                <StatementDocument
-                  title={titleFromSlug(problem.task_id, problem.question_id)}
-                  difficulty={problem.difficulty}
-                  tags={problem.tags}
-                  caseCount={problem.cases?.length}
-                  description={problem.problem_description}
-                  onMeasure={onStatementMeasure}
-                />
+                <DocSelectionLayer
+                  enabled={!annotateCode || Boolean(openFootnote) || highlighting}
+                  highlighting={highlighting}
+                  marksHost={marksSlot}
+                  footnotes={mdInkFootnotes}
+                  onAnnotate={onDocAnnotate}
+                  onCopy={onDocCopy}
+                  onSearch={onDocSearch}
+                  onMark={highlighting ? onDocMark : undefined}
+                  onOpenFootnote={onOpenFootnote}
+                  onRemoveFootnote={onRemoveFootnote}
+                  subMarkMode={openFootnote ? subMarkMode : null}
+                  subMarkParent={openFootnote}
+                  onAddSubMark={onAddSubMark}
+                >
+                  <StatementDocument
+                    title={titleFromSlug(problem.task_id, problem.question_id)}
+                    difficulty={problem.difficulty}
+                    tags={problem.tags}
+                    caseCount={problem.cases?.length}
+                    description={problem.problem_description}
+                    onMeasure={onStatementMeasure}
+                    selectable={!annotateCode || Boolean(openFootnote) || highlighting}
+                  />
+                </DocSelectionLayer>
               ) : null
             }
             coachFold={null}
@@ -5020,6 +5083,8 @@ export function App() {
             coachSurface={isLocalPad(problem) ? "pad" : "problem"}
             quoteSeed={coachQuoteSeed}
             focusThread={coachFocusThread}
+            footnoteThreadRoots={footnoteThreadRoots}
+            onOpenFootnoteThread={openCoachFootnoteThread}
             onThreadChange={(rootId) => {
               threadRootIdRef.current = rootId;
             }}
@@ -5071,7 +5136,9 @@ export function App() {
               setOpenFootnoteId(null);
               setFootnoteAnchorRect(null);
               setSubMarkMode(null);
+              setFootnoteOpenThreadId(null);
             }}
+            openThreadRootId={footnoteOpenThreadId}
             onChange={onFootnoteChange}
             onSendCoach={sendCoachFromFootnote}
             onOpenExternal={(url) => {
@@ -5471,6 +5538,63 @@ function HeaderOverflow({ items }: { items: OverflowItem[] }) {
             </button>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Offline chip or host pairing — shared between the mobile center anchor and
+ * the desktop header-right cluster.
+ */
+function HeaderPairingSlot({
+  serverLink,
+  pairing,
+  pairingEditing,
+  gateOpen,
+  onPair,
+  onEditingChange,
+  onRetryOffline,
+  onTapOffline,
+}: {
+  serverLink: "online" | "offline" | "checking";
+  pairing: Pairing;
+  pairingEditing: boolean;
+  gateOpen: boolean;
+  onPair: (next: Pairing) => void;
+  onEditingChange: (editing: boolean) => void;
+  onRetryOffline: () => void;
+  onTapOffline: () => void;
+}) {
+  return (
+    <div
+      className={[
+        "lc-header-pairing-slot",
+        serverLink === "offline" && !pairingEditing && "lc-offline-chip-enter",
+        pairingEditing && "lc-pairing-edit-enter",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      {serverLink === "offline" && !pairingEditing ? (
+        <HoldButton
+          label="Offline"
+          className="lc-offline-chip"
+          ariaLabel="Offline: tap to edit host, hold to retry"
+          holdMs={HOLD_SENSITIVE_MS}
+          resetKey={gateOpen}
+          onTap={onTapOffline}
+          onConfirm={onRetryOffline}
+        >
+          Offline
+        </HoldButton>
+      ) : (
+        <PairingBadge
+          pairing={pairing}
+          onPair={onPair}
+          editing={pairingEditing}
+          onEditingChange={onEditingChange}
+        />
       )}
     </div>
   );

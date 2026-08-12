@@ -199,8 +199,8 @@ export async function compositePageLayers(
 
   if (contentSlot) {
     const drewPdf = drawPdfCanvases(ctx, contentSlot, pageBounds, exportBounds, drawScale);
-    // Markdown / statement: foreignObject. Skip when PDF bitmaps already drew
-    // the page — avoid soft clones over sharp canvases.
+    // Markdown / statement: foreignObject. Also retry when PDF canvases were
+    // blank or only partially drew — ink-only exports used to skip the DOM path.
     if (!drewPdf) {
       await drawDomSlot(ctx, contentSlot, pageBounds, exportBounds, drawScale);
     }

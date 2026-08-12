@@ -362,6 +362,9 @@ export interface AgentSidePanelProps {
    * {@link quoteSeed}; `null` id returns to the room.
    */
   focusThread?: { token: number; rootId: string | null } | null;
+  /** Thread roots started from a page footnote — open the mark card, not the dock. */
+  footnoteThreadRoots?: ReadonlySet<string>;
+  onOpenFootnoteThread?: (rootId: string) => void;
   onSend: (text: string, flags: CoachSendFlags, mode?: "queue" | "merge") => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
@@ -394,6 +397,8 @@ export function AgentSidePanel({
   coachSurface = "problem",
   quoteSeed = null,
   focusThread = null,
+  footnoteThreadRoots,
+  onOpenFootnoteThread,
   onSend,
   onThreadChange,
   forwardFailures = false,
@@ -418,8 +423,6 @@ export function AgentSidePanel({
    * gone rather than greyed. See {@link CoachSurface}.
    */
   const padSurface = coachSurface === "pad";
-  const [ask, setAsk] = useState(askOnly);
-  const askActive = ask || askOnly;
   /** Annotate is greyed only where there is genuinely nothing to attach. */
   const annotateUnavailable = askOnly && !padSurface;
   const flagUnavailable = askOnly ? " lc-flag-unavailable" : "";
@@ -669,11 +672,10 @@ export function AgentSidePanel({
     return () => window.removeEventListener("resize", onResize);
   }, [mobile, open]);
 
-  // Ask-only workspaces pin Ask on and clear the flags they cannot honour.
+  // Ask-only workspaces clear the pipeline flags they cannot honour.
   // Annotate is not one of them on a pad — see `annotateUnavailable`.
   useEffect(() => {
     if (!askOnly) return;
-    setAsk(true);
     setDraw(false);
     setReviewBoard(false);
     setLazy(false);
@@ -991,7 +993,6 @@ export function AgentSidePanel({
 
   const canSend =
     draft.trim().length > 0 ||
-    ask ||
     draw ||
     reviewBoard ||
     lazy ||
@@ -1047,7 +1048,7 @@ export function AgentSidePanel({
     onSend(
       draft.trim(),
       {
-        ask,
+        ask: askOnly || (!reviewBoard && !lazy && !draw),
         draw,
         reviewBoard,
         lazy,
@@ -1063,7 +1064,6 @@ export function AgentSidePanel({
     setReplyTo(null);
     setPageQuote(null);
     setDraft("");
-    setAsk(askOnly);
     setDraw(false);
     setReviewBoard(false);
     setLazy(false);
@@ -1281,6 +1281,10 @@ export function AgentSidePanel({
                   className="lc-coach-thread-open"
                   onClick={(event) => {
                     event.stopPropagation();
+                    if (footnoteThreadRoots?.has(message.id) && onOpenFootnoteThread) {
+                      onOpenFootnoteThread(message.id);
+                      return;
+                    }
                     enterThread(message.id);
                   }}
                 >
@@ -1526,36 +1530,6 @@ export function AgentSidePanel({
             </div>
             )}
             <div className="lc-coach-composer-actions">
-              <Tip
-                tip={
-                  askOnly
-                    ? "Scratchpad answers questions only"
-                    : lazy || reviewBoard
-                      ? "Turn off Review / Lazy to use Ask"
-                      : "Ask a question without the staged review pipeline"
-                }
-                placement="left"
-              >
-                <button
-                  type="button"
-                  className={askActive ? "lc-flag lc-flag-active" : "lc-flag"}
-                  aria-pressed={askActive}
-                  disabled={busy || (!askOnly && (lazy || reviewBoard))}
-                  onClick={() => {
-                    if (askOnly) return;
-                    setAsk((current) => {
-                      const next = !current;
-                      if (next) {
-                        setLazy(false);
-                        setReviewBoard(false);
-                      }
-                      return next;
-                    });
-                  }}
-                >
-                  Ask
-                </button>
-              </Tip>
               {!padSurface && (
                 <Tip
                   tip={
@@ -1653,11 +1627,9 @@ export function AgentSidePanel({
                     tip={
                       askOnly
                         ? NOT_ON_SCRATCHPAD
-                        : ask
-                          ? "Turn off Ask to use Review"
-                          : photos.length > 0
-                            ? REVIEW_DROPS_PHOTOS
-                            : "Run a staged review of the board"
+                        : photos.length > 0
+                          ? REVIEW_DROPS_PHOTOS
+                          : "Run a staged review of the board"
                     }
                     placement="left"
                   >
@@ -1665,14 +1637,8 @@ export function AgentSidePanel({
                       type="button"
                       className={`lc-flag${reviewBoard ? " lc-flag-active" : ""}${flagUnavailable}`}
                       aria-pressed={reviewBoard}
-                      disabled={busy || askOnly || ask || photos.length > 0}
-                      onClick={() =>
-                        setReviewBoard((current) => {
-                          const next = !current;
-                          if (next) setAsk(false);
-                          return next;
-                        })
-                      }
+                      disabled={busy || askOnly || photos.length > 0}
+                      onClick={() => setReviewBoard((current) => !current)}
                     >
                       Review
                     </button>
@@ -1681,9 +1647,7 @@ export function AgentSidePanel({
                     tip={
                       askOnly
                         ? NOT_ON_SCRATCHPAD
-                        : ask
-                          ? "Turn off Ask to use Lazy"
-                          : "Drawing-first: interpret the board and fill the correct earned parts of solution.py"
+                        : "Drawing-first: interpret the board and fill the correct earned parts of solution.py"
                     }
                     placement="left"
                   >
@@ -1691,14 +1655,8 @@ export function AgentSidePanel({
                       type="button"
                       className={`lc-flag${lazy ? " lc-flag-active" : ""}${flagUnavailable}`}
                       aria-pressed={lazy}
-                      disabled={busy || askOnly || ask}
-                      onClick={() =>
-                        setLazy((current) => {
-                          const next = !current;
-                          if (next) setAsk(false);
-                          return next;
-                        })
-                      }
+                      disabled={busy || askOnly}
+                      onClick={() => setLazy((current) => !current)}
                     >
                       Lazy
                     </button>
