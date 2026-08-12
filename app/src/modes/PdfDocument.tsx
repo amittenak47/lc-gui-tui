@@ -34,7 +34,7 @@
  * arrives (see `DocSelectionLayer`).
  */
 
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /**
  * Supersampling of the page bitmap relative to its scene size.
@@ -97,6 +97,8 @@ export interface PdfDocumentProps {
   frameWidth: number;
   /** Reported whenever the rendered stack height changes, in scene units. */
   onMeasure?: (height: number) => void;
+  /** Fires once per `bytes` when layout finishes or the load fails — unblocks open. */
+  onLayoutReady?: () => void;
   /** Scroll mode: the text layer answers the pointer so quotes can be picked. */
   selectable?: boolean;
   onError?: (message: string) => void;
@@ -138,6 +140,7 @@ export function PdfDocument({
   bytes,
   frameWidth,
   onMeasure,
+  onLayoutReady,
   selectable = false,
   onError,
 }: PdfDocumentProps) {
@@ -148,8 +151,12 @@ export function PdfDocument({
   const [loadError, setLoadError] = useState<string | null>(null);
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
+  const onLayoutReadyRef = useRef(onLayoutReady);
+  onLayoutReadyRef.current = onLayoutReady;
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
+  /** One signal per `bytes` load — success or failure. */
+  const layoutGateSignaledRef = useRef(false);
   /** The open document, shared by the layout pass and the paint pass. */
   const docRef = useRef<Awaited<
     ReturnType<typeof import("pdfjs-dist").getDocument>["promise"]
@@ -171,6 +178,17 @@ export function PdfDocument({
   frameWidthRef.current = frameWidth;
   /** Width the current `pages` were laid out for — skip no-op refits. */
   const laidWidthRef = useRef<number | null>(null);
+
+  function reportStackHeight(node: HTMLDivElement) {
+    const height = node.scrollHeight;
+    if (height > 0) onMeasureRef.current?.(height);
+  }
+
+  function signalLayoutGate() {
+    if (layoutGateSignaledRef.current) return;
+    layoutGateSignaledRef.current = true;
+    onLayoutReadyRef.current?.();
+  }
 
   /** Lay out page boxes for the open doc at the current frame width. */
   async function layoutPages(
@@ -218,6 +236,7 @@ export function PdfDocument({
     // pdf.js detaches the buffer it is handed, and React may run this effect
     // twice in development — a copy keeps the prop reusable either way.
     const data = bytes.slice(0);
+    layoutGateSignaledRef.current = false;
     setOpening(true);
     setLoadError(null);
     setPages([]);
@@ -264,6 +283,7 @@ export function PdfDocument({
         setOpening(false);
         setPages([]);
         onErrorRef.current?.(message);
+        signalLayoutGate();
       }
     })();
 
@@ -488,18 +508,21 @@ export function PdfDocument({
     })();
   }, [pages, windowTick]);
 
-  // Height is reported from the laid-out stack rather than summed from the page
-  // sizes: the gaps, and any rounding the browser does, belong in the number the
-  // page frame grows to, or ink at the bottom of the last page gets clipped.
-  // Skip while `opening` — placeholder "Opening…" height is stable and would
-  // falsely satisfy waitForMdInkLaidOut before pdf.js layout finishes.
+  // First layout after pdf.js sizes pages — useLayoutEffect so height is real
+  // before paint. Skip while `opening` (placeholder "Opening…" is a false ready).
+  useLayoutEffect(() => {
+    if (opening) return;
+    const node = hostRef.current;
+    if (!node) return;
+    if (pages.length > 0) reportStackHeight(node);
+    signalLayoutGate();
+  }, [pages, opening]);
+
+  // Refits after the first layout — ResizeObserver only when the stack is shown.
   useEffect(() => {
     const node = hostRef.current;
     if (!node || opening) return;
-    const report = () => {
-      const height = node.scrollHeight;
-      if (height > 0) onMeasureRef.current?.(height);
-    };
+    const report = () => reportStackHeight(node);
     report();
     if (typeof ResizeObserver !== "function") return;
     const observer = new ResizeObserver(report);
