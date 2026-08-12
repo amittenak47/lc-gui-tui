@@ -35,6 +35,7 @@ import {
 } from "../util/toolbarLayout";
 import type { ToolName } from "./BoardHandle";
 import { ColorRadial } from "./ColorRadial";
+import { HighlighterIcon } from "../components/MarkToolIcons";
 import { FontSizeSlider } from "./FontSizeSlider";
 import { inkSwatches } from "./inkColors";
 import { InkFullnessSlider } from "./InkFullnessSlider";
@@ -501,7 +502,7 @@ export function BoardToolbar({
       ) : icon === "pen" ? (
         <PenIcon />
       ) : icon === "highlighter" ? (
-        <HighlighterIcon />
+        <HighlighterIcon size={20} />
       ) : tool === "selection" ? (
         <span className="lc-tool-emoji" aria-hidden>
           ⬚
@@ -996,30 +997,6 @@ function PinkEraserIcon() {
         <rect x="4.5" y="7" width="15" height="3.8" rx="1.2" fill="#fb7185" />
         <rect x="4.5" y="15.2" width="15" height="2.8" fill="#fff1f2" opacity="0.95" />
       </g>
-    </svg>
-  );
-}
-
-/**
- * A chisel-tipped marker, angled the way the pen is.
- *
- * Deliberately fatter than the pen's nib and drawn in the live ink colour, so
- * the two are told apart by silhouette rather than by remembering which seat is
- * which — `--lc-highlight` is published on the board and is the colour the
- * stroke will actually be.
- */
-function HighlighterIcon() {
-  return (
-    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="20" height="20" aria-hidden>
-      <path
-        d="M15.5 3.5 20.5 8.5 10 19H5v-5z"
-        fill="var(--lc-highlight, currentColor)"
-        fillOpacity="0.42"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-      <path d="M4 21.2h16" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
     </svg>
   );
 }

@@ -5,8 +5,10 @@ import {
   inkPaletteNow,
   onInkPaletteChange,
   provideInkPaletteAdvance,
+  provideInkPaletteRetreat,
   publishInkPalette,
   resetInkPaletteBridge,
+  retreatInkPalette,
 } from "./inkPaletteBridge";
 import { currentInkPalette, type InkPaletteHistory } from "../util/inkPaletteHistory";
 
@@ -55,17 +57,29 @@ describe("inkPaletteBridge", () => {
     expect(cycle).toHaveBeenCalledTimes(1);
   });
 
+  it("runs the board's backward cycle from the open hub", () => {
+    const back = vi.fn();
+    provideInkPaletteRetreat(back);
+    retreatInkPalette();
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+
   it("is a no-op with no board mounted", () => {
     expect(() => advanceInkPalette()).not.toThrow();
+    expect(() => retreatInkPalette()).not.toThrow();
   });
 
   it("drops the wheel when the board unmounts", () => {
     publishInkPalette(palette("#111111"));
     const cycle = vi.fn();
+    const back = vi.fn();
     provideInkPaletteAdvance(cycle);
+    provideInkPaletteRetreat(back);
     resetInkPaletteBridge();
     advanceInkPalette();
+    retreatInkPalette();
     expect(cycle).not.toHaveBeenCalled();
+    expect(back).not.toHaveBeenCalled();
     expect(currentInkPalette(inkPaletteNow())).not.toEqual(["#111111"]);
   });
 });

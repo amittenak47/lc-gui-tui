@@ -670,7 +670,7 @@ export function SettingsModal({
           ))}
         </div>
 
-        <div className="lc-settings-body">
+        <div className="lc-settings-body lc-scroll-pane">
           {error && <div className="lc-warning">{error}</div>}
           {busy && <div className="lc-muted">{busy}</div>}
 

@@ -491,7 +491,7 @@ export function PdfDocument({
             stream — see `docAnchors`. Without one a quote that ran off the
             bottom of a page came back as two sentences fused at the seam.
           */}
-          <div className="lc-pdf-text" />
+          <div className="lc-pdf-text textLayer" />
         </div>
       ))}
       {pages.length === 0 && <p className="lc-pdf-loading">Opening…</p>}

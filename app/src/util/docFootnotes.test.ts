@@ -95,6 +95,66 @@ describe("sanitizeFootnotes", () => {
     expect(sanitizeFootnotes(undefined)).toEqual([]);
     expect(sanitizeFootnotes({ nope: true })).toEqual([]);
   });
+
+  it("round-trips optional bands and drops corrupt ones", () => {
+    const [kept] = sanitizeFootnotes([
+      footnote({
+        bands: [
+          { left: 1, top: 2, width: 30, height: 10 },
+          { left: 0, top: 0, width: -1, height: 4 },
+          { left: "x", top: 1, width: 2, height: 3 } as unknown as { left: number; top: number; width: number; height: number },
+        ],
+      }),
+    ]);
+    expect(kept.bands).toEqual([{ left: 1, top: 2, width: 30, height: 10 }]);
+    const [plain] = sanitizeFootnotes([footnote()]);
+    expect(plain.bands).toBeUndefined();
+  });
+
+  it("round-trips blockText and subMarks", () => {
+    const [kept] = sanitizeFootnotes([
+      footnote({
+        blockText: "full paragraph under the band",
+        subMarks: [
+          { id: "sm-1", kind: "underline", excerpt: "full", start: 0, end: 4 },
+          { id: "bad", kind: "glow" as "underline", excerpt: "x", start: 0, end: 1 },
+          {
+            id: "sm-2",
+            kind: "highlight",
+            excerpt: "band",
+            start: 25,
+            end: 29,
+            anchor: { kind: "text", start: 30, end: 34, scope: "ch-1" },
+          },
+          {
+            id: "sm-bad-anchor",
+            kind: "underline",
+            excerpt: "x",
+            start: 0,
+            end: 1,
+            anchor: { kind: "region", x: 0, y: 0, w: 10, h: 10 } as unknown as {
+              kind: "text";
+              start: number;
+              end: number;
+            },
+          },
+        ],
+      }),
+    ]);
+    expect(kept.blockText).toBe("full paragraph under the band");
+    expect(kept.subMarks).toEqual([
+      { id: "sm-1", kind: "underline", excerpt: "full", start: 0, end: 4 },
+      {
+        id: "sm-2",
+        kind: "highlight",
+        excerpt: "band",
+        start: 25,
+        end: 29,
+        anchor: { kind: "text", start: 30, end: 34, scope: "ch-1" },
+      },
+      { id: "sm-bad-anchor", kind: "underline", excerpt: "x", start: 0, end: 1 },
+    ]);
+  });
 });
 
 describe("searchQueryFor", () => {
