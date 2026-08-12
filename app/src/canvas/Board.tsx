@@ -1217,6 +1217,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [annotateCode, setAnnotateCode] = useState(false);
   /** Highlighter mode — see `onHighlightingChange`. Annotate-only. */
   const [highlighting, setHighlighting] = useState(false);
+  const highlightingRef = useRef(highlighting);
+  highlightingRef.current = highlighting;
   const annotateCodeRef = useRef(annotateCode);
   annotateCodeRef.current = annotateCode;
   /**
@@ -3184,6 +3186,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       !annotateCodeRef.current &&
       resolveElement(target)?.closest(".lc-code-dock") != null;
 
+    /** Hit is on selectable prose/code/PDF text — native Selection owns the drag. */
+    const pointerOnSelectableText = (
+      clientX: number,
+      clientY: number,
+      target: EventTarget | null,
+    ): boolean => {
+      const el = resolveElement(target);
+      if (!el?.closest(".lc-doc-selectable-body")) return false;
+      if (el.closest(".lc-doc-select-overlay, .lc-doc-sheet, .lc-doc-confirm")) return false;
+      if (el.closest("img, canvas, svg, video")) return false;
+      const caret =
+        typeof document.caretRangeFromPoint === "function"
+          ? document.caretRangeFromPoint(clientX, clientY)
+          : null;
+      if (caret?.startContainer?.nodeType === Node.TEXT_NODE) {
+        return (caret.startContainer.textContent?.length ?? 0) > 0;
+      }
+      // PDF text layer spans — caretRangeFromPoint is flaky; trust the layer.
+      if (el.closest(".lc-pdf-text, .textLayer")) return true;
+      // Inside pre/code but not on a text node → leave for sideScroll / pan.
+      if (el.closest("pre, code")) return false;
+      return (
+        el.closest("p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, span, label") != null
+      );
+    };
+
     const isScrollSurface = (target: EventTarget | null) => {
       const el = resolveElement(target);
       if (!el) return false;
@@ -3214,10 +3242,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const canOwnScroll = () => {
       // A hold that turned into a text selection has taken this gesture — see
       // docSelectionGesture. The pan may already be armed when the claim lands
-      // mid-drag, which is exactly why this is checked on every move and not
-      // only at pointerdown.
+      // mid-drag, which is why this is checked on every move and not only at
+      // pointerdown.
       if (selectionOwnsGesture()) return false;
       if (!annotateCodeRef.current) return true;
+      // Sweep (doc highlighting) must still pan — otherwise the page is stuck.
+      if (highlightingRef.current) return true;
       return activeToolRef.current === "hand";
     };
 
@@ -3325,6 +3355,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * SELECT_HOLD_SLOP_PX when DocSelectionLayer's band hit misses.
        */
       if (pointerInSubMark(event.clientX, event.clientY)) return;
+
+      // Native text select: down+drag on words. Do not create panDragRef or the
+      // board steals the gesture after SELECT_HOLD_SLOP_PX and nothing selects.
+      if (pointerOnSelectableText(event.clientX, event.clientY, event.target)) return;
 
       const onCodeDock = isCodeDockTarget(event.target);
       const codeDockEl = onCodeDock
@@ -3437,8 +3471,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return;
       }
       if (drag.sideScroll && !drag.armed) {
-        if (Math.hypot(dx, dy) < armThresholdPx(drag)) return;
-        if (Math.abs(dx) > Math.abs(dy)) {
+        // Native select in flight — do not steal the drag into nested scrollLeft.
+        const live = window.getSelection();
+        if (live && !live.isCollapsed && live.rangeCount > 0) {
+          drag.sideScroll = null;
+        } else if (Math.hypot(dx, dy) < armThresholdPx(drag)) {
+          return;
+        } else if (Math.abs(dx) > Math.abs(dy)) {
           drag.sideScrollActive = true;
           // Anchor on the sample that decided it, so the block does not jump
           // by the threshold the moment it takes over.
@@ -3458,9 +3497,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             /* capture is best-effort on some hosts */
           }
           return;
+        } else {
+          // Vertical: the page wins, and the block is out of it for this gesture.
+          drag.sideScroll = null;
         }
-        // Vertical: the page wins, and the block is out of it for this gesture.
-        drag.sideScroll = null;
       }
 
       if (!drag.armed) {
