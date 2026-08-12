@@ -173,7 +173,10 @@ export interface DocSelectionLayerProps {
   highlighting?: boolean;
   footnotes?: readonly DocFootnote[];
   onAnnotate?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
-  onCopy?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
+  onCopy?: (
+    selection: DocSelectionResult,
+    anchorRect: DOMRect | null,
+  ) => void | boolean | Promise<void | boolean>;
   onSearch?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
   /** Leave the mark and nothing else — the highlighter's plain outcome. */
   onMark?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
@@ -426,12 +429,25 @@ export function DocSelectionLayer({
     }
   }, [enabled, highlighting, subMarkArmed, clearGesture, dismiss]);
 
+  /** Leaving sub-mark / highlight must drop the live dashed marquee immediately. */
+  useEffect(() => {
+    if (subMarkArmed || highlighting) return;
+    setBand(null);
+    setBandFading(false);
+    if (bandFadeTimerRef.current != null) {
+      window.clearTimeout(bandFadeTimerRef.current);
+      bandFadeTimerRef.current = null;
+    }
+  }, [subMarkArmed, highlighting]);
+
   useEffect(() => {
     if (!subMarkArmed) {
       setSubMarkLive(null);
       subMarkDragRef.current = null;
+      // Sub-mark exit: clear hold/marquee chrome that can linger and "follow".
+      clearGesture();
     }
-  }, [subMarkArmed]);
+  }, [subMarkArmed, clearGesture]);
 
   /*
    * No auto-seed. Seeding the first word put overlapping grips on one glyph and
@@ -785,14 +801,14 @@ export function DocSelectionLayer({
       if (caret) {
         const caretBox = caret.getBoundingClientRect();
         const inBands =
-          pointInLocalBands(body, bands, clientX, clientY, 24) ||
+          pointInLocalBands(body, bands, clientX, clientY, 40) ||
           ((caretBox.width >= 0.25 || caretBox.height >= 0.25) &&
             pointInLocalBands(
               body,
               bands,
               caretBox.left + caretBox.width / 2,
               caretBox.top + caretBox.height / 2,
-              12,
+              24,
             ));
         if (inBands) {
           const hit = fromRange(caret);
@@ -850,8 +866,9 @@ export function DocSelectionLayer({
       releaseSelectionGesture();
     };
 
-    /** Pad for mark hit — Board uses the same via setSubMarkPointerHit. */
-    const SUBMARK_HIT_PAD = 32;
+    /** Pad for mark hit — Board uses the same via setSubMarkPointerHit.
+     * PDF text spans are thin; a tighter pad missed grips and froze the first glyph. */
+    const SUBMARK_HIT_PAD = 48;
 
     const pointerHitsParentMark = (clientX: number, clientY: number): boolean => {
       const under = document.elementFromPoint(clientX, clientY);
@@ -1319,12 +1336,15 @@ export function DocSelectionLayer({
       )
     : [];
 
-  const act = (run: ((selection: DocSelectionResult, anchorRect: DOMRect | null) => void) | undefined) => {
+  const act = (
+    run: ((selection: DocSelectionResult, anchorRect: DOMRect | null) => void | Promise<void>) | undefined,
+  ) => {
     const current = selection;
     const anchorRect = highlightBox();
     if (!current || !run) return;
-    run(current, anchorRect);
-    dismiss();
+    void Promise.resolve(run(current, anchorRect)).finally(() => {
+      dismiss();
+    });
   };
 
   /**
@@ -1375,9 +1395,11 @@ export function DocSelectionLayer({
    * width — so clamping against it leaves the element a little wider than the
    * space that was reserved for it. The layout size is what it will settle at.
    *
-   * The visual viewport, not the layout one, because on a tablet they differ
-   * exactly when it matters: a pinch-zoom or a soft keyboard leaves
-   * `innerWidth` describing a region larger than what the reader can see.
+   * Prefer the visual viewport size for max edges (keyboard / pinch), but do
+   * **not** add `visualViewport.offsetLeft/Top` onto `getBoundingClientRect`
+   * anchors — those rects are already in layout viewport coordinates. On
+   * Android WebView, adding the offset shoved the confirm chrome to the
+   * top-left off-screen.
    */
   const clampInto = (node: HTMLElement, left: number, top: number) => {
     const width = node.offsetWidth;
@@ -1385,13 +1407,11 @@ export function DocSelectionLayer({
     const view = window.visualViewport;
     const viewWidth = view?.width ?? window.innerWidth;
     const viewHeight = view?.height ?? window.innerHeight;
-    const originX = view?.offsetLeft ?? 0;
-    const originY = view?.offsetTop ?? 0;
     const margin = 8;
-    const maxLeft = Math.max(margin, originX + viewWidth - width - margin);
-    const maxTop = Math.max(margin, originY + viewHeight - height - margin);
-    node.style.left = `${Math.round(Math.min(Math.max(originX + margin, left), maxLeft))}px`;
-    node.style.top = `${Math.round(Math.min(Math.max(originY + margin, top), maxTop))}px`;
+    const maxLeft = Math.max(margin, viewWidth - width - margin);
+    const maxTop = Math.max(margin, viewHeight - height - margin);
+    node.style.left = `${Math.round(Math.min(Math.max(margin, left), maxLeft))}px`;
+    node.style.top = `${Math.round(Math.min(Math.max(margin, top), maxTop))}px`;
     node.style.visibility = "visible";
   };
 
@@ -1439,6 +1459,11 @@ export function DocSelectionLayer({
     const node = selectionChromeRef.current;
     if (!node) return;
     placeSelectionChrome(node);
+    // Android / Motion: one more place after layout paints select rects.
+    const id = requestAnimationFrame(() => {
+      placeSelectionChrome(selectionChromeRef.current);
+    });
+    return () => cancelAnimationFrame(id);
   }, [phase, placeSelectionChrome, overlaps.length, selection, copied]);
 
   const paintedSubMarks = useMemo(() => {
@@ -1699,8 +1724,15 @@ export function DocSelectionLayer({
               }
               role={phase === "actions" ? "menu" : undefined}
               ref={bindSelectionChrome}
-              style={{ left: 0, top: 0, visibility: "hidden" }}
+              /* Do not put left/top here — React would reset every render and
+                 fight clampInto. Start hidden; placeSelectionChrome reveals. */
+              initial={false}
+              style={{ visibility: "hidden" }}
               transition={{ layout: { duration: 0.22, ease: [0.22, 1, 0.36, 1] } }}
+              onLayoutAnimationComplete={() => {
+                const node = selectionChromeRef.current;
+                if (node) placeSelectionChrome(node);
+              }}
             >
               <AnimatePresence mode="popLayout" initial={false}>
                 {phase === "confirm" ? (
@@ -1798,8 +1830,17 @@ export function DocSelectionLayer({
                             role="menuitem"
                             className="lc-doc-sheet-action"
                             onClick={() => {
-                              setCopied(true);
-                              act(onCopy);
+                              const current = selection;
+                              const run = onCopy;
+                              if (!current || !run) return;
+                              const anchorRect = highlightBox();
+                              void Promise.resolve(run(current, anchorRect)).then((ok) => {
+                                // `false` = clipboard write failed (App shows toast).
+                                if (ok === false) return;
+                                setCopied(true);
+                              }).finally(() => {
+                                dismiss();
+                              });
                             }}
                           >
                             <CopyActionIcon />

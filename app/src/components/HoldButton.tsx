@@ -212,6 +212,7 @@ export function HoldButton({
       data-tip-placement={dataTipPlacement}
       onPointerDown={(event) => {
         event.preventDefault();
+        event.stopPropagation();
         (event.currentTarget as HTMLButtonElement).setPointerCapture(event.pointerId);
         capturingRef.current = true;
         startHold();

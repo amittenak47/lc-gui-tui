@@ -157,6 +157,18 @@ describe("scrollHostAtPoint", () => {
     expect(scrollHostAtPoint(10, 10)).toBe(pre);
   });
 
+  it("finds the host when annotate PE:none keeps it out of the hit stack", () => {
+    const { board, pre } = buildDoc();
+    const ink = document.createElement("canvas");
+    ink.className = "lc-raster-ink";
+    board.append(ink);
+    // Production annotate: page slot is pointer-events none — pre never appears.
+    document.elementsFromPoint = () => [ink, board];
+    pre.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }) as DOMRect;
+    expect(scrollHostAtPoint(10, 10)).toBe(pre);
+  });
+
   it("skips a host whose box does not contain the point", () => {
     const { board, pre, code } = buildDoc();
     const ink = document.createElement("canvas");

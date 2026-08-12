@@ -314,14 +314,13 @@ export function isHostBoundOp(op: InkOp): boolean {
 
 /** Scene-space X shift so host-bound ink stays on the tokens it was drawn over.
  *
- * `scrollLeft` is CSS pixels on the host; scene paint is in scene units.
- * Divide by camera `zoom` (CSS px per scene unit) so a scrolled mark tracks at
- * any zoom — at zoom 1 this matches the lab's 1:1 math.
+ * `scrollLeft` is in the host's local CSS px. The page content slot is authored
+ * in scene units and only camera-scaled via CSS transform, so local CSS px ≡
+ * scene units — do not divide by zoom (that made Board ink lag the lab).
  */
-export function hostScrollDx(op: InkOp, scrollLeftNow: number, zoom = 1): number {
+export function hostScrollDx(op: InkOp, scrollLeftNow: number, _zoom = 1): number {
   if (!isHostBoundOp(op)) return 0;
-  const z = zoom > 0 && Number.isFinite(zoom) ? zoom : 1;
-  return -(scrollLeftNow - op.scrollLeftAtDraw!) / z;
+  return -(scrollLeftNow - op.scrollLeftAtDraw!);
 }
 
 export function hasStylusPressure(pressure: number): boolean {

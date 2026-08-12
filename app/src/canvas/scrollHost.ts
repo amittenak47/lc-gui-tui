@@ -57,16 +57,43 @@ export function horizontalScrollHost(target: EventTarget | null): HTMLElement | 
 }
 
 /**
- * Scroll host under a client point, skipping overlay chrome (ink canvas, etc.).
+ * Scroll host under a client point.
  *
- * Annotate pointers hit `canvas.lc-raster-ink`, which is not inside the doc
- * tree — {@link horizontalScrollHost} on `event.target` always returns null
- * there. Walk the hit stack and take the first real host underneath.
+ * Annotate mode sets `.lc-page-content-slot` to `pointer-events: none` so the
+ * pen lands on the ink canvas — that also removes the `pre` from
+ * `elementsFromPoint`, which is why a hit-stack walk always missed hosts on
+ * the real Board (the lab keeps the host hittable under the overlay).
+ *
+ * Geometry first: every live host's client box, deepest wins. Hit-stack is only
+ * a fallback for callers outside a board tree.
  */
 export function scrollHostAtPoint(clientX: number, clientY: number): HTMLElement | null {
-  if (typeof document === "undefined" || typeof document.elementsFromPoint !== "function") {
-    return null;
+  if (typeof document === "undefined") return null;
+
+  let best: HTMLElement | null = null;
+  let bestArea = Infinity;
+  for (const doc of document.querySelectorAll(DOC_PAGE_SELECTOR)) {
+    for (const host of horizontalScrollHostsIn(doc)) {
+      const box = host.getBoundingClientRect();
+      if (
+        clientX < box.left ||
+        clientX > box.right ||
+        clientY < box.top ||
+        clientY > box.bottom
+      ) {
+        continue;
+      }
+      const area = Math.max(0, box.width) * Math.max(0, box.height);
+      // Smallest box = innermost host when hosts nest.
+      if (area < bestArea) {
+        bestArea = area;
+        best = host;
+      }
+    }
   }
+  if (best) return best;
+
+  if (typeof document.elementsFromPoint !== "function") return null;
   for (const el of document.elementsFromPoint(clientX, clientY)) {
     if (!(el instanceof HTMLElement)) continue;
     if (el.classList.contains("lc-raster-ink")) continue;
@@ -74,8 +101,6 @@ export function scrollHostAtPoint(clientX: number, clientY: number): HTMLElement
     if (el.closest?.(".lc-page-marks-slot")) continue;
     const host = horizontalScrollHost(el);
     if (!host) continue;
-    // Point must sit in the host's visible box — hit-stack can include ancestors
-    // that are not the scrolled surface under the nib.
     const box = host.getBoundingClientRect();
     if (
       clientX < box.left ||

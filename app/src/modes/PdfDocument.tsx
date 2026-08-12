@@ -143,6 +143,9 @@ export function PdfDocument({
 }: PdfDocumentProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [pages, setPages] = useState<RenderedPage[]>([]);
+  /** True until the first successful layout of the current `bytes`. */
+  const [opening, setOpening] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
   const onErrorRef = useRef(onError);
@@ -164,13 +167,50 @@ export function PdfDocument({
   const pumpRef = useRef(false);
   /** Set on unmount / reload, so in-flight paints stop touching dead nodes. */
   const disposedRef = useRef(false);
+  const frameWidthRef = useRef(frameWidth);
+  frameWidthRef.current = frameWidth;
+  /** Width the current `pages` were laid out for — skip no-op refits. */
+  const laidWidthRef = useRef<number | null>(null);
+
+  /** Lay out page boxes for the open doc at the current frame width. */
+  async function layoutPages(
+    doc: NonNullable<typeof docRef.current>,
+    width: number,
+    cancelled: () => boolean,
+  ): Promise<RenderedPage[] | null> {
+    const laid: RenderedPage[] = [];
+    for (let from = 1; from <= doc.numPages; from += LAYOUT_BATCH) {
+      if (cancelled()) return null;
+      const batch = [];
+      for (let n = from; n < from + LAYOUT_BATCH && n <= doc.numPages; n += 1) {
+        batch.push(doc.getPage(n));
+      }
+      const settled = await Promise.all(batch);
+      if (cancelled()) return null;
+      for (const page of settled) {
+        const natural = page.getViewport({ scale: 1 });
+        // Per page, not per document: a scanned plate among typeset pages
+        // is a different size, and a book-wide factor would letterbox one
+        // or crop the other.
+        const fit = natural.width > 0 ? width / natural.width : 1;
+        const viewport = page.getViewport({ scale: fit });
+        laid.push({
+          pageNumber: page.pageNumber,
+          fit,
+          width: Math.round(viewport.width),
+          height: Math.round(viewport.height),
+        });
+      }
+    }
+    return laid;
+  }
 
   /**
-   * Open the document and lay every page out — sizes only, no bitmaps.
+   * Open the document once per `bytes` — sizes only, no bitmaps.
    *
-   * The stack must be its true height before anything is painted: the page
-   * frame grows to it, the pan clamp follows the frame, and ink at the bottom
-   * of the last page is clipped by whatever the frame says.
+   * Frame-width changes are a separate effect: wiping `pages` here used to
+   * flash "Opening…" and cancel in-flight work whenever the column resized,
+   * which looked like the book finished loading then went blank.
    */
   useEffect(() => {
     let cancelled = false;
@@ -178,7 +218,10 @@ export function PdfDocument({
     // pdf.js detaches the buffer it is handed, and React may run this effect
     // twice in development — a copy keeps the prop reusable either way.
     const data = bytes.slice(0);
+    setOpening(true);
+    setLoadError(null);
     setPages([]);
+    laidWidthRef.current = null;
     paintedRef.current.clear();
     wantedRef.current = new Set();
     visibleRef.current = new Set();
@@ -208,37 +251,19 @@ export function PdfDocument({
         docRef.current = doc;
         textLayerRef.current = pdfjs.TextLayer;
 
-        const laid: RenderedPage[] = [];
-        for (let from = 1; from <= doc.numPages; from += LAYOUT_BATCH) {
-          if (cancelled) return;
-          const batch = [];
-          for (let n = from; n < from + LAYOUT_BATCH && n <= doc.numPages; n += 1) {
-            batch.push(doc.getPage(n));
-          }
-          const settled = await Promise.all(batch);
-          if (cancelled) return;
-          for (const page of settled) {
-            const natural = page.getViewport({ scale: 1 });
-            // Per page, not per document: a scanned plate among typeset pages
-            // is a different size, and a book-wide factor would letterbox one
-            // or crop the other.
-            const fit = natural.width > 0 ? frameWidth / natural.width : 1;
-            const viewport = page.getViewport({ scale: fit });
-            laid.push({
-              pageNumber: page.pageNumber,
-              fit,
-              width: Math.round(viewport.width),
-              height: Math.round(viewport.height),
-            });
-          }
-        }
-        if (cancelled) return;
+        const laid = await layoutPages(doc, frameWidthRef.current, () => cancelled);
+        if (cancelled || !laid) return;
+        laidWidthRef.current = frameWidthRef.current;
         setPages(laid);
+        setOpening(false);
       } catch (cause: unknown) {
         if (cancelled) return;
-        onErrorRef.current?.(
-          cause instanceof Error ? cause.message : "this PDF could not be opened",
-        );
+        const message =
+          cause instanceof Error ? cause.message : "this PDF could not be opened";
+        setLoadError(message);
+        setOpening(false);
+        setPages([]);
+        onErrorRef.current?.(message);
       }
     })();
 
@@ -258,7 +283,32 @@ export function PdfDocument({
         }
       }
     };
-  }, [bytes, frameWidth]);
+  }, [bytes]);
+
+  /**
+   * Refit page boxes when the column width changes — keep the old stack on
+   * screen until the new sizes land (no "Opening…" flash).
+   */
+  useEffect(() => {
+    const doc = docRef.current;
+    if (!doc || opening || loadError) return;
+    if (laidWidthRef.current === frameWidth) return;
+    let cancelled = false;
+    void (async () => {
+      const laid = await layoutPages(doc, frameWidth, () => cancelled);
+      if (cancelled || !laid) return;
+      // Drop bitmaps — fit changed, old canvases are the wrong size.
+      for (const entry of paintedRef.current.values()) entry.release();
+      paintedRef.current.clear();
+      wantedRef.current = new Set();
+      visibleRef.current = new Set();
+      laidWidthRef.current = frameWidth;
+      setPages(laid);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [frameWidth, opening, loadError]);
 
   /**
    * Which pages are near enough to be worth a bitmap.
@@ -494,7 +544,12 @@ export function PdfDocument({
           <div className="lc-pdf-text textLayer" />
         </div>
       ))}
-      {pages.length === 0 && <p className="lc-pdf-loading">Opening…</p>}
+      {opening && !loadError && <p className="lc-pdf-loading">Opening…</p>}
+      {loadError && (
+        <p className="lc-pdf-loading" role="alert">
+          Could not open this PDF — {loadError}
+        </p>
+      )}
     </div>
   );
 }
