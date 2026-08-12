@@ -380,17 +380,6 @@ body {
   pointer-events: auto;
 }
 
-/* Problem desktop: pairing lives in .lc-header-right — hide the overlay anchor. */
-.lc-app-problem:not(.lc-mobile) .lc-header-pairing-anchor {
-  display: none;
-}
-
-.lc-app-problem:not(.lc-mobile) .lc-header-right .lc-header-pairing-slot {
-  flex-shrink: 1;
-  min-width: 0;
-  max-width: min(28vw, 220px);
-}
-
 /* Offline and IP share one header slot — never side by side. */
 .lc-header-pairing-slot {
   display: inline-flex;

@@ -4498,24 +4498,22 @@ export function App() {
           )}
         </div>
 
-        {/* Screen-centered on mobile — desktop pairing lives in .lc-header-right. */}
-        {mobile && (
-          <div className="lc-header-pairing-anchor">
-            <HeaderPairingSlot
-              serverLink={serverLink}
-              pairing={pairing}
-              pairingEditing={pairingEditing}
-              gateOpen={gateOpen}
-              onPair={setPairing}
-              onEditingChange={setPairingEditing}
-              onRetryOffline={() => {
-                openGate("startup");
-                setGateWaiting(true);
-              }}
-              onTapOffline={() => setPairingEditing(true)}
-            />
-          </div>
-        )}
+        {/* Screen-centered — not balanced against left/right header chrome. */}
+        <div className="lc-header-pairing-anchor">
+          <HeaderPairingSlot
+            serverLink={serverLink}
+            pairing={pairing}
+            pairingEditing={pairingEditing}
+            gateOpen={gateOpen}
+            onPair={setPairing}
+            onEditingChange={setPairingEditing}
+            onRetryOffline={() => {
+              openGate("startup");
+              setGateWaiting(true);
+            }}
+            onTapOffline={() => setPairingEditing(true)}
+          />
+        </div>
 
         <div className="lc-header-center">
           {problem && !isLocalPad(problem) && (
@@ -4700,21 +4698,6 @@ export function App() {
                 <path d="M14 2v6h6" fill="none" />
               </svg>
             </HoldButton>
-          )}
-          {!mobile && (
-            <HeaderPairingSlot
-              serverLink={serverLink}
-              pairing={pairing}
-              pairingEditing={pairingEditing}
-              gateOpen={gateOpen}
-              onPair={setPairing}
-              onEditingChange={setPairingEditing}
-              onRetryOffline={() => {
-                openGate("startup");
-                setGateWaiting(true);
-              }}
-              onTapOffline={() => setPairingEditing(true)}
-            />
           )}
           {/* On mobile the gear moves into the ⋯ menu — see HeaderOverflow. */}
           <button
