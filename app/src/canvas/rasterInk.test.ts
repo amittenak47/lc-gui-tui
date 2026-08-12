@@ -909,6 +909,7 @@ describe("host-bound ink", () => {
     expect(isHostBoundOp(op)).toBe(true);
     expect(hostScrollDx(op, 20)).toBeCloseTo(0);
     expect(hostScrollDx(op, 50)).toBe(-30);
+    expect(hostScrollDx(op, 50, 2)).toBe(-15);
     expect(hostScrollDx(draw([0, 0], [1, 1]), 50)).toBe(0);
   });
 
@@ -989,6 +990,53 @@ describe("host-bound ink", () => {
     } as unknown as CanvasRenderingContext2D;
     paintHostBoundOps(ctx, [draw([0, 0], [10, 0])], new Map(), 1);
     expect(calls).toHaveLength(0);
+  });
+
+  it("export paintInkAtScale second-passes host-bound ops when hosts given", () => {
+    const calls: Array<[string, ...number[]]> = [];
+    const ctx = {
+      save() {
+        calls.push(["save"]);
+      },
+      restore() {
+        calls.push(["restore"]);
+      },
+      beginPath() {
+        calls.push(["beginPath"]);
+      },
+      rect(x: number, y: number, w: number, h: number) {
+        calls.push(["rect", x, y, w, h]);
+      },
+      clip() {
+        calls.push(["clip"]);
+      },
+      translate(x: number, y: number) {
+        calls.push(["translate", x, y]);
+      },
+      setTransform() {},
+      moveTo() {},
+      lineTo() {},
+      stroke() {},
+      fill() {},
+      arc() {},
+      globalCompositeOperation: "source-over",
+      globalAlpha: 1,
+      strokeStyle: "",
+      fillStyle: "",
+      lineCap: "",
+      lineJoin: "",
+      lineWidth: 0,
+    } as unknown as CanvasRenderingContext2D;
+    const op = {
+      ...draw([0, 0], [40, 0]),
+      hostKey: 0,
+      scrollLeftAtDraw: 10,
+    };
+    const hosts = new Map([
+      [0, { bounds: { minX: 0, minY: 0, maxX: 80, maxY: 20 }, scrollLeft: 40 }],
+    ]);
+    paintInkAtScale(ctx, [op], { x: 0, y: 0 }, 1, hosts, 1);
+    expect(calls).toContainEqual(["translate", -30, 0]);
   });
 });
 

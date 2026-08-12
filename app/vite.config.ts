@@ -1,9 +1,12 @@
 import { createReadStream, cpSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+
+const rootDir = dirname(fileURLToPath(import.meta.url));
 
 /**
  * pdf.js's data directories, served in dev and copied into the build.
@@ -76,6 +79,10 @@ export default defineConfig({
     // path of first board paint.
     chunkSizeWarningLimit: 4200,
     rollupOptions: {
+      input: {
+        main: join(rootDir, "index.html"),
+        hostInkLab: join(rootDir, "host-ink-lab.html"),
+      },
       output: {
         // Excalidraw and Monaco are both large and independent; splitting them
         // keeps the initial board render from waiting on the code editor.

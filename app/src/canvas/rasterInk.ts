@@ -312,10 +312,16 @@ export function isHostBoundOp(op: InkOp): boolean {
   );
 }
 
-/** Scene-space X shift so host-bound ink stays on the tokens it was drawn over. */
-export function hostScrollDx(op: InkOp, scrollLeftNow: number): number {
+/** Scene-space X shift so host-bound ink stays on the tokens it was drawn over.
+ *
+ * `scrollLeft` is CSS pixels on the host; scene paint is in scene units.
+ * Divide by camera `zoom` (CSS px per scene unit) so a scrolled mark tracks at
+ * any zoom — at zoom 1 this matches the lab's 1:1 math.
+ */
+export function hostScrollDx(op: InkOp, scrollLeftNow: number, zoom = 1): number {
   if (!isHostBoundOp(op)) return 0;
-  return -(scrollLeftNow - op.scrollLeftAtDraw!);
+  const z = zoom > 0 && Number.isFinite(zoom) ? zoom : 1;
+  return -(scrollLeftNow - op.scrollLeftAtDraw!) / z;
 }
 
 export function hasStylusPressure(pressure: number): boolean {
@@ -1924,6 +1930,8 @@ export function paintHostBoundOps(
   hosts: ScrollHostLookup,
   pixelScale: number,
   options?: ApplyInkOptions,
+  /** CSS pixels per scene unit (camera zoom). Default 1 for export / tests. */
+  zoom = 1,
 ): void {
   for (const op of ops) {
     if (!isHostBoundOp(op)) continue;
@@ -1932,7 +1940,14 @@ export function paintHostBoundOps(
       applyInkOp(ctx, op, pixelScale, options);
       continue;
     }
-    applyInkOpInHost(ctx, op, host.bounds, hostScrollDx(op, host.scrollLeft), pixelScale, options);
+    applyInkOpInHost(
+      ctx,
+      op,
+      host.bounds,
+      hostScrollDx(op, host.scrollLeft, zoom),
+      pixelScale,
+      options,
+    );
   }
 }
 
@@ -2088,12 +2103,18 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
  * This must run on a canvas of its own: erase ops composite with
  * `destination-out`, so painting straight onto an exported board image would
  * punch holes through the board rather than through the ink.
+ *
+ * Host-bound ops are skipped unless `hosts` is provided — then they get the
+ * same clip+translate second pass as the live overlay.
  */
 export function paintInkAtScale(
   ctx: CanvasRenderingContext2D,
   ops: readonly InkOp[],
   origin: { x: number; y: number },
   scale: number,
+  hosts?: ScrollHostLookup | null,
+  /** CSS px per scene unit for {@link hostScrollDx}; usually slot scale ≈ zoom. */
+  hostZoom = 1,
 ): void {
   ctx.setTransform(scale, 0, 0, scale, -origin.x * scale, -origin.y * scale);
   // Chronological order: a pen stroke drawn *after* an erase must survive.
@@ -2102,6 +2123,9 @@ export function paintInkAtScale(
     if (isHostBoundOp(op)) continue;
     if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, scale);
     else eraseStampsFrom(ctx, op, 0);
+  }
+  if (hosts && hosts.size > 0) {
+    paintHostBoundOps(ctx, ops, hosts, scale, undefined, hostZoom);
   }
   ctx.globalCompositeOperation = "source-over";
   ctx.setTransform(1, 0, 0, 1, 0, 0);

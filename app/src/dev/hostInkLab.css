@@ -1,0 +1,120 @@
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  background: #f4f1ea;
+  color: #1b1f24;
+}
+
+.hil-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.hil-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid #d5cfc4;
+  background: #ebe6dc;
+}
+
+.hil-hint {
+  flex: 1 1 240px;
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.hil-modes {
+  display: flex;
+  gap: 6px;
+}
+
+.hil-modes button {
+  border: 1px solid #b8b0a2;
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.hil-modes button.is-on {
+  background: #1b1f24;
+  color: #f4f1ea;
+  border-color: #1b1f24;
+}
+
+.hil-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.hil-doc {
+  position: relative;
+  max-width: 720px;
+  margin: 24px auto;
+  padding: 0 16px 48px;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.hil-prose {
+  line-height: 1.5;
+  margin: 16px 0;
+}
+
+.hil-host-wrap {
+  border: 1px solid #c9c2b6;
+  border-radius: 8px;
+  background: #fff;
+  /* Outer clip — the host itself scrolls */
+  overflow: hidden;
+}
+
+.hil-host {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  font: 13px/1.45 ui-monospace, Consolas, monospace;
+  white-space: pre;
+  min-height: 160px;
+  /* Force horizontal overflow so scrollHost helpers treat this as a host */
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.hil-ink {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  z-index: 5;
+  pointer-events: auto;
+  /* Lab only — prove the overlay exists; production ink canvas stays clear. */
+  box-shadow: inset 0 0 0 2px rgba(200, 40, 40, 0.55);
+  background: rgba(200, 40, 40, 0.04);
+  cursor: crosshair;
+}
+
+.hil-ink.is-pass {
+  pointer-events: none;
+  cursor: default;
+  background: rgba(40, 120, 200, 0.04);
+  box-shadow: inset 0 0 0 2px rgba(40, 120, 200, 0.45);
+}
+
+.hil-doc.is-annotate .hil-host {
+  /* Let the canvas take the stroke; scroll via Scroll mode */
+  touch-action: none;
+}
