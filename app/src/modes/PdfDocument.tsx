@@ -491,9 +491,11 @@ export function PdfDocument({
   // Height is reported from the laid-out stack rather than summed from the page
   // sizes: the gaps, and any rounding the browser does, belong in the number the
   // page frame grows to, or ink at the bottom of the last page gets clipped.
+  // Skip while `opening` — placeholder "Opening…" height is stable and would
+  // falsely satisfy waitForMdInkLaidOut before pdf.js layout finishes.
   useEffect(() => {
     const node = hostRef.current;
-    if (!node) return;
+    if (!node || opening) return;
     const report = () => {
       const height = node.scrollHeight;
       if (height > 0) onMeasureRef.current?.(height);
@@ -503,7 +505,7 @@ export function PdfDocument({
     const observer = new ResizeObserver(report);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [pages]);
+  }, [pages, opening]);
 
   return (
     <div
