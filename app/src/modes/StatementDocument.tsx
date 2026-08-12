@@ -18,6 +18,8 @@ export interface StatementDocumentProps {
   description?: string | null;
   /** Measured height in scene units (1 CSS px ≈ 1 scene unit at column width). */
   onMeasure?: (height: number) => void;
+  /** When true, statement is quote-selectable (DocSelectionLayer wraps it). */
+  selectable?: boolean;
 }
 
 function metaParts(
@@ -39,6 +41,7 @@ export function StatementDocument({
   caseCount,
   description,
   onMeasure,
+  selectable = false,
 }: StatementDocumentProps) {
   const nodeRef = useRef<HTMLDivElement | null>(null);
   const chips = useMemo(
@@ -70,7 +73,11 @@ export function StatementDocument({
   }, [bodyHtml, chips, title]);
 
   return (
-    <div ref={nodeRef} className="lc-md-ink-doc lc-statement-doc lc-md-ink-paper">
+    <div
+      ref={nodeRef}
+      className="lc-md-ink-doc lc-statement-doc lc-md-ink-paper"
+      aria-hidden={selectable ? undefined : true}
+    >
       <h1 className="lc-statement-title">{title}</h1>
       {chips.length > 0 && (
         <div className="lc-statement-tags" aria-label="Problem tags">

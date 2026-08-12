@@ -47,6 +47,8 @@ export interface FootnoteOverviewProps {
   anchorRect?: DOMRect | null;
   subMarkMode: DocFootnoteSubMarkKind | null;
   onSubMarkModeChange: (mode: DocFootnoteSubMarkKind | null) => void;
+  /** Open directly into a saved coach thread from the mark hub. */
+  openThreadRootId?: string | null;
 }
 type Task =
   | { kind: "note"; id: string | null }
@@ -125,6 +127,7 @@ export function FootnoteOverview({
   anchorRect,
   subMarkMode,
   onSubMarkModeChange,
+  openThreadRootId = null,
 }: FootnoteOverviewProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
@@ -148,6 +151,11 @@ export function FootnoteOverview({
   footnoteRef.current = footnote;
   const paletteRef = useRef(palette);
   const paletteKey = palette.join("|").toLowerCase();
+
+  useEffect(() => {
+    if (!openThreadRootId) return;
+    setTask({ kind: "thread", rootId: openThreadRootId });
+  }, [openThreadRootId]);
 
   /*
    * Wheel cycle → same slot on the new set becomes mark colour, so the page
@@ -561,7 +569,7 @@ export function FootnoteOverview({
               </header>
               {subMarkMode && (
                 <p className="lc-muted lc-footnote-submark-hint">
-                  Drag to select in the mark. Adjust handles, then tap to confirm.
+                  Drag to select text in the mark. Adjust handles, then tap to confirm.
                 </p>
               )}
               {!subMarkArmed && subMarks.length > 0 && (
@@ -643,7 +651,7 @@ export function FootnoteOverview({
                 )}
               </HubSection>
               <HubSection
-                title="Ask AI"
+                title="Send to chat"
                 onAdd={() => openTask({ kind: "thread", rootId: null })}
               >
                 {threads.length > 0 && (

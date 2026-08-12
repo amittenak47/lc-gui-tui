@@ -279,6 +279,10 @@ export function DocSelectionLayer({
     }>
   >([]);
   const [copied, setCopied] = useState(false);
+  /** Native text select vs hold-marquee — drives which actions sheet buttons show. */
+  const [actionsVia, setActionsVia] = useState<"native" | "marquee">("native");
+  /** Screen box for the open selection — native path has no painted overlay rects. */
+  const selectionScreenBoxRef = useRef<DOMRect | null>(null);
   /** The band being swept right now, in body coordinates. */
   const [band, setBand] = useState<LocalRect | null>(null);
   /** Rubber-band is fading out after confirm (hitRects stay). */
@@ -302,6 +306,8 @@ export function DocSelectionLayer({
   } | null>(null);
   const subMarkLiveRef = useRef(subMarkLive);
   subMarkLiveRef.current = subMarkLive;
+  /** Mode while armed — needed to commit when the tool toggles off. */
+  const lastSubMarkModeRef = useRef<DocFootnoteSubMarkKind | null>(null);
   const bandFadeTimerRef = useRef<number | null>(null);
   /**
    * Where each ribbon is on screen, so the card it opens can hang off it.
@@ -369,6 +375,8 @@ export function DocSelectionLayer({
     setCopied(false);
     setSubMarkLive(null);
     subMarkDragRef.current = null;
+    selectionScreenBoxRef.current = null;
+    setActionsVia("native");
   }, []);
 
   const subMarkArmed = Boolean(subMarkMode && subMarkParent);
@@ -437,13 +445,76 @@ export function DocSelectionLayer({
   }, [subMarkArmed, highlighting]);
 
   useEffect(() => {
-    if (!subMarkArmed) {
-      setSubMarkLive(null);
-      subMarkDragRef.current = null;
-      // Sub-mark exit: clear hold/marquee chrome that can linger and "follow".
-      clearGesture();
+    if (subMarkArmed && subMarkMode) {
+      lastSubMarkModeRef.current = subMarkMode;
     }
-  }, [subMarkArmed, clearGesture]);
+  }, [subMarkArmed, subMarkMode]);
+
+  /*
+   * Leaving Underline: keep a finished live range as a real sub-mark.
+   * Clearing without commit made the underline vanish the moment the tool toggled off.
+   */
+  const wasSubMarkArmedRef = useRef(false);
+  useEffect(() => {
+    const wasArmed = wasSubMarkArmedRef.current;
+    wasSubMarkArmedRef.current = subMarkArmed;
+    if (!(wasArmed && !subMarkArmed)) {
+      if (!subMarkArmed) {
+        setSubMarkLive(null);
+        subMarkDragRef.current = null;
+      }
+      return;
+    }
+    const live = subMarkLiveRef.current;
+    const mode = lastSubMarkModeRef.current;
+    const parent = subMarkParent;
+    const add = onAddSubMark;
+    if (live && mode && parent && add && live.end - live.start >= 2) {
+      const stream = textOf(live.root);
+      const [start, end] = snapToWords(stream, live.start, live.end);
+      if (end > start) {
+        const range = rangeFromAnchor(live.root, {
+          kind: "text",
+          start,
+          end,
+          ...(live.scope ? { scope: live.scope } : {}),
+        });
+        const textAnchor = range
+          ? anchorFromRange(live.root, range, live.scope)
+          : null;
+        const excerpt = excerptOf(
+          textForAnchor(
+            live.root,
+            textAnchor ?? { kind: "text", start, end, scope: live.scope },
+          ),
+        );
+        if (excerpt) {
+          let relStart = start;
+          let relEnd = end;
+          if (isTextAnchor(parent.anchor)) {
+            relStart = start - parent.anchor.start;
+            relEnd = end - parent.anchor.start;
+          }
+          add({
+            id: "sm-pending",
+            kind: mode,
+            excerpt,
+            start: relStart,
+            end: relEnd,
+            ...(textAnchor ? { anchor: textAnchor } : {}),
+          });
+        }
+      }
+    }
+    setSubMarkLive(null);
+    subMarkDragRef.current = null;
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch {
+      /* ignore */
+    }
+    clearGesture();
+  }, [subMarkArmed, subMarkParent, onAddSubMark, clearGesture]);
 
   /*
    * No auto-seed. Seeding the first word put overlapping grips on one glyph and
@@ -452,14 +523,21 @@ export function DocSelectionLayer({
   useEffect(() => {
     if (!subMarkArmed) return;
     setSubMarkLive(null);
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch {
+      /* ignore */
+    }
   }, [subMarkArmed, subMarkMode, subMarkParent?.id]);
-
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     host.classList.toggle("lc-doc-submark-armed", subMarkArmed);
-    return () => host.classList.remove("lc-doc-submark-armed");
-  }, [subMarkArmed]);
+    host.classList.toggle("lc-doc-panel-open", Boolean(subMarkParent));
+    return () => {
+      host.classList.remove("lc-doc-submark-armed", "lc-doc-panel-open");
+    };
+  }, [subMarkArmed, subMarkParent]);
 
   useEffect(() => {
     return () => {
@@ -473,14 +551,14 @@ export function DocSelectionLayer({
   /**
    * Native Selection → actions sheet (Copy / Google / Mark).
    * No Confirm|Close — that chrome is hold-marquee only.
-   * Runs for reading mode and annotate Sweep — not during hold-marquee or sub-mark.
+   * Panel open + underline off: full-page native select.
+   * Panel open + underline on: native outside the mark only (inside = grip path).
    */
   useEffect(() => {
     const host = hostRef.current;
     const body = bodyRef.current;
     if (!host || !body) return;
-    if (subMarkArmed) return;
-    if (!enabled && !highlighting) return;
+    if (!enabled && !highlighting && !subMarkParent) return;
 
     const scopeRootForRange = (range: Range): { root: HTMLElement; scope?: string } => {
       const node = range.commonAncestorContainer;
@@ -496,7 +574,6 @@ export function DocSelectionLayer({
       return { root: body };
     };
 
-    /** When the footnote panel is open, only accept ranges inside that mark. */
     const panelBands = (): LocalRect[] | null => {
       if (!subMarkParent) return null;
       const scope = subMarkParent.anchor.scope;
@@ -529,6 +606,7 @@ export function DocSelectionLayer({
 
     const commitNative = (event?: Event) => {
       if (holdRef.current?.held) return;
+      if (subMarkDragRef.current) return;
       if (event && isOverlayControl(event.target)) return;
       // Already showing actions — don't bounce back to a new sheet on chrome clicks.
       if (phaseRef.current === "actions" || phaseRef.current === "confirm") return;
@@ -540,8 +618,11 @@ export function DocSelectionLayer({
       const raw = sel.toString();
       if (!raw.trim()) return;
 
-      const bands = panelBands();
-      if (bands && bands.length > 0 && !rangeHitsBands(range, bands)) return;
+      // Underline tool owns in-mark ranges; leave those for the grip path.
+      if (subMarkArmed) {
+        const bands = panelBands();
+        if (bands && bands.length > 0 && rangeHitsBands(range, bands)) return;
+      }
 
       const { root, scope } = scopeRootForRange(range);
       let anchor = anchorFromRange(root, range, scope);
@@ -551,8 +632,35 @@ export function DocSelectionLayer({
       anchor = { ...anchor, start, end };
       const text = textForAnchor(root, anchor);
       if (!text.trim()) return;
+
+      // Remember the DOM Selection's screen box — native path paints no overlay
+      // rects, so highlightBox() must not fall back to the top of the window.
+      const clientRects = Array.from(range.getClientRects()).filter(
+        (rect) => rect.width >= 0.5 || rect.height >= 0.5,
+      );
+      if (clientRects.length > 0) {
+        let left = Infinity;
+        let top = Infinity;
+        let right = -Infinity;
+        let bottom = -Infinity;
+        for (const rect of clientRects) {
+          left = Math.min(left, rect.left);
+          top = Math.min(top, rect.top);
+          right = Math.max(right, rect.right);
+          bottom = Math.max(bottom, rect.bottom);
+        }
+        selectionScreenBoxRef.current = new DOMRect(left, top, right - left, bottom - top);
+      } else {
+        const box = range.getBoundingClientRect();
+        selectionScreenBoxRef.current =
+          box.width > 0 || box.height > 0
+            ? new DOMRect(box.left, box.top, box.width, box.height)
+            : null;
+      }
+
       // Sheet-only chrome for native path — no grey word boxes / confirm band.
       setHitRects([]);
+      setActionsVia("native");
       setSelection({
         text,
         excerpt: excerptOf(text),
@@ -561,7 +669,7 @@ export function DocSelectionLayer({
       });
       setBand(null);
       setBandFading(false);
-      // Native path skips Confirm|Close — straight to Copy / Google / …
+      // Native path skips Confirm|Close — straight to Copy / Google.
       setPhase("actions");
     };
 
@@ -794,19 +902,26 @@ export function DocSelectionLayer({
       window.removeEventListener("pointermove", onPointerMove, true);
       window.removeEventListener("pointerup", onPointerUp, true);
       window.removeEventListener("pointercancel", onPointerCancel, true);
-      releaseSelectionGesture();
+      clearGesture();
     };
   }, [enabled, highlighting, subMarkArmed, subMarkParent, clearGesture, dismiss, paintMarquee, confirmMarquee]);
 
   /*
-   * Sub-mark mode — custom range selection inside the open mark's bands.
-   *
-   * Native selection is suppressed; iOS-style grips adjust the range before
-   * release commits the sub-mark back to the hub.
+   * Sub-mark mode — custom range only. Native Selection is killed while armed:
+   * dual native+grip path painted a second text layer (blurry duplicate) and
+   * let the browser flood-select half the page when the grip moved a few words.
    */
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !subMarkArmed || !subMarkMode || !subMarkParent || !onAddSubMark) return;
+
+    const killNativeSelection = () => {
+      try {
+        window.getSelection()?.removeAllRanges();
+      } catch {
+        /* ignore */
+      }
+    };
 
     const parentRegion = () => {
       const body = bodyRef.current;
@@ -836,11 +951,6 @@ export function DocSelectionLayer({
       clientY: number,
       scope?: string,
     ): { start: number; root: HTMLElement; scope?: string } | null => {
-      /*
-       * Strict band hit first, then looser fallbacks. PDF text layers and scaled
-       * markdown often miss caretRangeFromPoint; band padding alone was not
-       * enough — select/grip drags froze on the first glyph.
-       */
       const clampStart = (raw: number) => {
         if (!bounds) return raw;
         return Math.max(bounds.start, Math.min(Math.max(bounds.start, bounds.end - 1), raw));
@@ -921,12 +1031,10 @@ export function DocSelectionLayer({
     };
 
     const releaseSubMarkGesture = () => {
-      host.classList.remove("lc-doc-selecting", "lc-doc-submark-mode");
+      host.classList.remove("lc-doc-selecting", "lc-doc-submark-mode", "lc-doc-submark-grip-drag");
       releaseSelectionGesture();
     };
 
-    /** Pad for mark hit — Board uses the same via setSubMarkPointerHit.
-     * PDF text spans are thin; a tighter pad missed grips and froze the first glyph. */
     const SUBMARK_HIT_PAD = 48;
 
     const pointerHitsParentMark = (clientX: number, clientY: number): boolean => {
@@ -944,6 +1052,7 @@ export function DocSelectionLayer({
     };
 
     setSubMarkPointerHit(pointerHitsParentMark);
+    killNativeSelection();
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
@@ -969,8 +1078,11 @@ export function DocSelectionLayer({
       ) {
         return;
       }
+
+      // Own the gesture — no browser Selection (that was the blurry duplicate text).
       event.preventDefault();
       event.stopPropagation();
+      killNativeSelection();
       setSelection(null);
       setPhase("idle");
       setRects([]);
@@ -978,13 +1090,12 @@ export function DocSelectionLayer({
       setBandFading(false);
       setHitRects([]);
       setCopied(false);
-      // Claim before Board's deferred pan can arm — hit-test alone is not enough
-      // if this handler and Board race on the same capture phase.
       claimSelectionGesture();
       host.classList.add("lc-doc-selecting", "lc-doc-submark-mode");
 
       const live = subMarkLiveRef.current;
       if (grip && live) {
+        host.classList.add("lc-doc-submark-grip-drag");
         const which = grip.getAttribute("data-grip");
         subMarkDragRef.current = {
           pointerId: event.pointerId,
@@ -1052,6 +1163,7 @@ export function DocSelectionLayer({
       if (!drag || drag.pointerId !== event.pointerId) return;
       event.preventDefault();
       event.stopPropagation();
+      killNativeSelection();
       const region = parentRegion();
       if (!region?.bounds) return;
       const at = offsetAt(
@@ -1142,6 +1254,7 @@ export function DocSelectionLayer({
       if (!drag || drag.pointerId !== event.pointerId) return;
       subMarkDragRef.current = null;
       releaseSubMarkGesture();
+      killNativeSelection();
 
       const region = parentRegion();
       const [rawStart, rawEnd] = [
@@ -1149,10 +1262,6 @@ export function DocSelectionLayer({
         Math.max(drag.anchor, drag.focus),
       ];
 
-      /*
-       * Grip release only snaps the live range — never commits.
-       * Committing here made one-end adjust impossible (release ate the edit).
-       */
       if (drag.mode === "start" || drag.mode === "end") {
         if (rawEnd <= rawStart) return;
         const stream = textOf(drag.root);
@@ -1168,10 +1277,6 @@ export function DocSelectionLayer({
         return;
       }
 
-      /*
-       * Select drag: keep a live range + grips so ends can still be adjusted.
-       * Tap (no move) while a live range exists commits it.
-       */
       const moved = Math.abs(drag.focus - drag.anchor) > 1;
       if (!moved) {
         const live = subMarkLiveRef.current;
@@ -1208,6 +1313,7 @@ export function DocSelectionLayer({
       window.removeEventListener("pointerup", onPointerUp, true);
       window.removeEventListener("pointercancel", onPointerUp, true);
       releaseSubMarkGesture();
+      killNativeSelection();
     };
   }, [subMarkArmed, subMarkMode, subMarkParent, onAddSubMark, dismiss]);
 
@@ -1430,19 +1536,56 @@ export function DocSelectionLayer({
         ".lc-doc-select-rect, .lc-doc-highlight-band:not(.is-fading), .lc-doc-marquee-band:not(.is-fading), .lc-doc-marquee-hit",
       ),
     );
-    if (painted.length === 0) return null;
-    let left = Infinity;
-    let top = Infinity;
-    let right = -Infinity;
-    let bottom = -Infinity;
-    for (const node of painted) {
-      const box = node.getBoundingClientRect();
-      left = Math.min(left, box.left);
-      top = Math.min(top, box.top);
-      right = Math.max(right, box.right);
-      bottom = Math.max(bottom, box.bottom);
+    if (painted.length > 0) {
+      let left = Infinity;
+      let top = Infinity;
+      let right = -Infinity;
+      let bottom = -Infinity;
+      for (const node of painted) {
+        const box = node.getBoundingClientRect();
+        left = Math.min(left, box.left);
+        top = Math.min(top, box.top);
+        right = Math.max(right, box.right);
+        bottom = Math.max(bottom, box.bottom);
+      }
+      return new DOMRect(left, top, right - left, bottom - top);
     }
-    return new DOMRect(left, top, right - left, bottom - top);
+
+    // Native Selection: no painted rects. Prefer the box captured at commit,
+    // then the live Selection, so the sheet sits on the words not at (8,8).
+    if (selectionScreenBoxRef.current) {
+      const box = selectionScreenBoxRef.current;
+      return new DOMRect(box.left, box.top, box.width, box.height);
+    }
+    try {
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const clientRects = Array.from(range.getClientRects()).filter(
+          (rect) => rect.width >= 0.5 || rect.height >= 0.5,
+        );
+        if (clientRects.length > 0) {
+          let left = Infinity;
+          let top = Infinity;
+          let right = -Infinity;
+          let bottom = -Infinity;
+          for (const rect of clientRects) {
+            left = Math.min(left, rect.left);
+            top = Math.min(top, rect.top);
+            right = Math.max(right, rect.right);
+            bottom = Math.max(bottom, rect.bottom);
+          }
+          return new DOMRect(left, top, right - left, bottom - top);
+        }
+        const box = range.getBoundingClientRect();
+        if (box.width > 0 || box.height > 0) {
+          return new DOMRect(box.left, box.top, box.width, box.height);
+        }
+      }
+    } catch {
+      /* Selection may be gone */
+    }
+    return null;
   };
 
   /**
@@ -1555,15 +1698,7 @@ export function DocSelectionLayer({
   }, [subMarkLive]);
 
   return (
-    <div
-      className={[
-        "lc-doc-selectable",
-        subMarkParent && !subMarkArmed ? "lc-doc-panel-open" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-      ref={hostRef}
-    >
+    <div className="lc-doc-selectable" ref={hostRef}>
       <div className="lc-doc-selectable-body" ref={bodyRef}>
         {children}
       </div>
@@ -1726,9 +1861,9 @@ export function DocSelectionLayer({
               {(() => {
                 const startRect = subMarkLivePaint[0]!;
                 const endRect = subMarkLivePaint[subMarkLivePaint.length - 1]!;
-                const hit = 28;
-                const startStem = Math.max(12, Math.round(startRect.height));
-                const endStem = Math.max(12, Math.round(endRect.height));
+                const hit = 44;
+                const startStem = Math.max(14, Math.round(startRect.height));
+                const endStem = Math.max(14, Math.round(endRect.height));
                 return (
                   <>
                     <button
@@ -1833,6 +1968,7 @@ export function DocSelectionLayer({
                           onOpenFootnote?.(existingHere, rect);
                           return;
                         }
+                        setActionsVia("marquee");
                         setPhase("actions");
                       }}
                     >
@@ -1924,15 +2060,18 @@ export function DocSelectionLayer({
                           </button>
                         </>
                       )}
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="lc-doc-sheet-action"
-                        onClick={() => act(onAnnotate)}
-                      >
-                        <AnnotateActionIcon />
-                        <span>Annotate</span>
-                      </button>
+                      {/* Annotate = make a mark — hold-marquee only, not plain drag-select. */}
+                      {actionsVia === "marquee" && onAnnotate && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="lc-doc-sheet-action"
+                          onClick={() => act(onAnnotate)}
+                        >
+                          <AnnotateActionIcon />
+                          <span>Annotate</span>
+                        </button>
+                      )}
                     </div>
                   </motion.div>
                 )}

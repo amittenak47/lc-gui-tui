@@ -380,6 +380,17 @@ body {
   pointer-events: auto;
 }
 
+/* Problem desktop: pairing lives in .lc-header-right — hide the overlay anchor. */
+.lc-app-problem:not(.lc-mobile) .lc-header-pairing-anchor {
+  display: none;
+}
+
+.lc-app-problem:not(.lc-mobile) .lc-header-right .lc-header-pairing-slot {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: min(28vw, 220px);
+}
+
 /* Offline and IP share one header slot — never side by side. */
 .lc-header-pairing-slot {
   display: inline-flex;
@@ -2513,6 +2524,16 @@ input[type="checkbox"] {
 
 .lc-map-controls > * {
   pointer-events: auto;
+}
+
+/* Coach overlays the canvas (pad/problem): keep map icons clear of the panel. */
+.lc-app-coach-open:not(.lc-mobile) .lc-map-controls {
+  right: calc(10px + var(--lc-coach-width, 520px));
+}
+
+[data-handedness="left"] .lc-app-coach-open:not(.lc-mobile) .lc-map-controls {
+  right: 10px;
+  left: calc(10px + var(--lc-coach-width, 520px));
 }
 
 /*
@@ -6560,6 +6581,38 @@ button.lc-row-selected:hover:not(:disabled) {
   display: none;
 }
 
+/* Narrow desktop problem header — same compact labels as mobile. */
+@media (max-width: 1200px) {
+  .lc-app-problem:not(.lc-mobile) .lc-label-long {
+    display: none;
+  }
+
+  .lc-app-problem:not(.lc-mobile) .lc-label-short {
+    display: inline;
+  }
+
+  .lc-app-problem:not(.lc-mobile) .lc-desktop-only {
+    display: none !important;
+  }
+
+  .lc-app-problem:not(.lc-mobile) .lc-current {
+    max-width: 16vw;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .lc-app-problem:not(.lc-mobile) .lc-header-center {
+    max-width: 38vw;
+    min-width: 0;
+  }
+
+  .lc-app-problem:not(.lc-mobile) .lc-header-left,
+  .lc-app-problem:not(.lc-mobile) .lc-header-right {
+    min-width: 0;
+  }
+}
+
 .lc-mobile .lc-label-long {
   display: none;
 }
@@ -9693,18 +9746,19 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-doc-submark-live {
-  outline: 1px solid color-mix(in srgb, var(--accent, #0d9488) 55%, transparent);
-  background: color-mix(in srgb, var(--accent, #0d9488) 18%, transparent);
+  /* Underline stroke only — no wash fill (fill + PDF ::selection looked like duplicate text). */
+  outline: none;
+  background: transparent;
+  box-shadow: inset 0 -2.5px 0 color-mix(in srgb, var(--accent, #0d9488) 90%, transparent);
 }
 
 /*
- * Selection handles — small circle below the line + thin stem up the edge.
- * Not 44px magenta blobs. Hit target stays larger than the visible knob.
+ * Selection handles — large enough to grab; stem still tracks the line.
  */
 .lc-doc-submark-grip {
   position: absolute;
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   margin: 0;
   border: 0;
@@ -9727,13 +9781,13 @@ button.lc-row-selected:hover:not(:disabled) {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 11px;
-  height: 11px;
-  margin: -5.5px 0 0 -5.5px;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
   border-radius: 50%;
   background: var(--select-edge, #3f4f63);
-  border: 1.5px solid #fff;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 22%);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 28%);
 }
 
 .lc-doc-submark-grip::after {
@@ -9742,31 +9796,31 @@ button.lc-row-selected:hover:not(:disabled) {
   left: 50%;
   bottom: 50%;
   width: 2px;
-  height: var(--lc-grip-stem, 14px);
+  height: var(--lc-grip-stem, 16px);
   margin-left: -1px;
   background: var(--select-edge, #3f4f63);
   border-radius: 1px;
   pointer-events: none;
 }
 
-.lc-doc-submark-mode .lc-doc-selectable-body,
+/* Underline armed: kill browser Selection entirely (no duplicate glyph layer). */
 .lc-doc-submark-armed .lc-doc-selectable-body,
+.lc-doc-submark-armed .lc-doc-selectable-body *,
 .lc-doc-submark-armed .lc-pdf-text,
 .lc-doc-submark-armed .lc-pdf-text span {
   -webkit-user-select: none !important;
   user-select: none !important;
+  cursor: crosshair !important;
 }
 
 /*
- * Footnote panel open (Copy / in-band native select) — not underline tool.
- * Wash lives in the marks slot above the page; it must stay PE:none so the
- * PDF text layer under it still receives drag-select. Force selectability in
- * case a prior sub-mark rule left user-select off.
+ * Footnote panel open (Copy / native select) when Underline is off.
+ * Wash stays PE:none so the PDF text layer receives drag-select.
  */
-.lc-doc-panel-open .lc-doc-selectable-body,
-.lc-doc-panel-open .lc-doc-selectable-body *,
-.lc-doc-panel-open .lc-pdf-text.textLayer,
-.lc-doc-panel-open .lc-pdf-text.textLayer span {
+.lc-doc-panel-open:not(.lc-doc-submark-armed) .lc-doc-selectable-body,
+.lc-doc-panel-open:not(.lc-doc-submark-armed) .lc-doc-selectable-body *,
+.lc-doc-panel-open:not(.lc-doc-submark-armed) .lc-pdf-text.textLayer,
+.lc-doc-panel-open:not(.lc-doc-submark-armed) .lc-pdf-text.textLayer span {
   -webkit-user-select: text !important;
   user-select: text !important;
 }
@@ -10089,6 +10143,15 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-board-highlighting .lc-page-content-slot {
   cursor: crosshair;
+}
+
+/* Footnote panel open uses text-mark PE flip without Sweep — keep text cursor. */
+.lc-board-highlighting.lc-board-text-mark:not(.lc-board-sweep) .lc-page-content-slot {
+  cursor: auto;
+}
+
+.lc-board-highlighting.lc-board-text-mark:not(.lc-board-sweep) .lc-pdf-text.textLayer span {
+  cursor: text;
 }
 
 /* Reading-mode marquee: hold armed → crosshair. */

@@ -933,6 +933,11 @@ export interface BoardProps {
    */
   mobileRegion?: string | null;
   /**
+   * Desktop pager focus — which region capture / fit should target when
+   * {@link mobileRegion} is null and the whole column is visible.
+   */
+  focusRegion?: string | null;
+  /**
    * Chrome that belongs in the middle of the board's bottom row — the mobile
    * page turner. It lives in the same flex row as Appearance and the zoom
    * cluster rather than floating over them, which is the only way the three
@@ -1084,6 +1089,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onCodeSlot,
     readingSize: readingSizeProp,
     mobileRegion = null,
+    focusRegion = null,
     bottomCenter = null,
     pageTitle = null,
     pageContent = null,
@@ -1654,6 +1660,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   // Keep in sync during render so seed/restore → settleFitView sees the page
   // before the page-turn effect runs (otherwise fit zooms to every scratch page).
   mobileRegionRef.current = mobileRegion ?? null;
+  const focusRegionRef = useRef<string | null>(focusRegion ?? null);
+  focusRegionRef.current = focusRegion ?? null;
   const prevMobileRegionRef = useRef<string | null>(mobileRegion ?? null);
   const strokeWidthRef = useRef(strokeWidth);
   strokeWidthRef.current = strokeWidth;
@@ -5477,29 +5485,34 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       typeof document !== "undefined"
         ? getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()
         : "";
-    let bounds = pageBoundsRef.current;
-    // Capture can race the layout pass that fills pageBoundsRef — remeasure.
-    if (!bounds) {
-      const api = apiRef.current;
-      if (api) {
-        const live = api.getSceneElements() as unknown as PageableElement[];
-        const page = mobileRegionRef.current ?? "constraints";
-        const raw = pageBounds(live, page);
-        if (raw) {
-          const pad = REGION_GUTTER / 2;
-          bounds = {
-            minX: raw.minX + pad,
-            minY: raw.minY + pad,
-            maxX: raw.maxX - pad,
-            maxY: raw.maxY - pad,
-          };
-          pageBoundsRef.current = bounds;
-        }
+    const exportPage =
+      mobileRegionRef.current ?? focusRegionRef.current ?? "constraints";
+    // Always remasure for the export target page. Desktop free-scroll keeps
+    // pageBoundsRef on constraints while the pager focus may be elsewhere;
+    // a stale null/wrong box was the ink-only Annotation path.
+    let bounds: SceneBounds | null = null;
+    const api = apiRef.current;
+    if (api) {
+      const live = api.getSceneElements() as unknown as PageableElement[];
+      const raw = pageBounds(live, exportPage);
+      if (raw) {
+        const pad = REGION_GUTTER / 2;
+        bounds = {
+          minX: raw.minX + pad,
+          minY: raw.minY + pad,
+          maxX: raw.maxX - pad,
+          maxY: raw.maxY - pad,
+        };
+        pageBoundsRef.current = bounds;
       }
     }
+    if (!bounds) bounds = pageBoundsRef.current;
+    const contentSlot = contentSlotNodeRef.current;
+    const marksSlot = marksSlotNodeRef.current;
+    if (!contentSlot && !marksSlot) return null;
     return {
-      contentSlot: contentSlotNodeRef.current,
-      marksSlot: marksSlotNodeRef.current,
+      contentSlot,
+      marksSlot,
       pageBounds: bounds,
       paperColor: cssBg || theme.background || "#ffffff",
     };
@@ -6731,6 +6744,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // Highlighting / text-mark tools hand the surface back to the document
         // for the length of the gesture — see the rules in styles.css.
         (highlighting || textMarkSelecting) && "lc-board-highlighting",
+        highlighting && "lc-board-sweep",
+        textMarkSelecting && !highlighting && "lc-board-text-mark",
       ]
         .filter(Boolean)
         .join(" ")}
