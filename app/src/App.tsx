@@ -119,12 +119,15 @@ import {
   addFootnote,
   footnoteRevision,
   freshFootnoteId,
+  freshSubMarkId,
   googleSearchUrl,
   numberFootnotes,
   removeFootnote,
   searchQueryFor,
   threadTitleFrom,
   type DocFootnote,
+  type DocFootnoteSubMark,
+  type DocFootnoteSubMarkKind,
 } from "./util/docFootnotes";
 import { getDocBytes, hashBytes, putDocBytes } from "./util/docBytes";
 import { installHandednessAttr } from "./util/inkHandedness";
@@ -403,6 +406,7 @@ export function App() {
   const footnoteCoachUpgradeRef = useRef<string | null>(null);
   const [openFootnoteId, setOpenFootnoteId] = useState<string | null>(null);
   const [footnoteAnchorRect, setFootnoteAnchorRect] = useState<DOMRect | null>(null);
+  const [subMarkMode, setSubMarkMode] = useState<DocFootnoteSubMarkKind | null>(null);
   const [coachQuoteSeed, setCoachQuoteSeed] = useState<{
     token: number;
     text: string;
@@ -3188,6 +3192,8 @@ export function App() {
             createdAt: now,
             threadRootId: rootId,
             threads: [thread],
+            ...(quoted.hitRects.length > 0 ? { bands: quoted.hitRects } : {}),
+            ...(quoted.text.trim() ? { blockText: quoted.text } : {}),
           }),
         );
         return;
@@ -4026,6 +4032,10 @@ export function App() {
     setFootnoteAnchorRect(anchorRect);
   }, []);
 
+  useEffect(() => {
+    if (!openFootnoteId) setSubMarkMode(null);
+  }, [openFootnoteId]);
+
   const onDocAnnotate = useCallback(
     (selection: DocSelectionResult, anchorRect: DOMRect | null) => {
       const id = freshFootnoteId(mdInkFootnotesRef.current);
@@ -4036,6 +4046,8 @@ export function App() {
           anchor: selection.anchor,
           excerpt: selection.excerpt,
           createdAt: Date.now(),
+          ...(selection.hitRects.length > 0 ? { bands: selection.hitRects } : {}),
+          ...(selection.text.trim() ? { blockText: selection.text } : {}),
         }),
       );
       openFootnoteOverview(id, anchorRect);
@@ -4066,6 +4078,8 @@ export function App() {
           createdAt: Date.now(),
           query,
           url,
+          ...(selection.hitRects.length > 0 ? { bands: selection.hitRects } : {}),
+          ...(selection.text.trim() ? { blockText: selection.text } : {}),
         }),
       );
       openFootnoteOverview(id, anchorRect);
@@ -4084,6 +4098,22 @@ export function App() {
     setMdInkFootnotes((current) => current.map((entry) => (entry.id === next.id ? next : entry)));
   }, []);
 
+  const onAddSubMark = useCallback(
+    (mark: DocFootnoteSubMark) => {
+      if (!openFootnoteId) return;
+      setMdInkFootnotes((current) =>
+        current.map((entry) => {
+          if (entry.id !== openFootnoteId) return entry;
+          const existing = entry.subMarks ?? [];
+          const next = { ...mark, id: freshSubMarkId(existing) };
+          return { ...entry, subMarks: [...existing, next] };
+        }),
+      );
+      setSubMarkMode(null);
+    },
+    [openFootnoteId],
+  );
+
   /** The highlighter's plain outcome: a mark, pointing at nothing but itself. */
   const onDocMark = useCallback((selection: DocSelectionResult) => {
     setMdInkFootnotes((current) =>
@@ -4093,6 +4123,8 @@ export function App() {
         anchor: selection.anchor,
         excerpt: selection.excerpt,
         createdAt: Date.now(),
+        ...(selection.hitRects.length > 0 ? { bands: selection.hitRects } : {}),
+        ...(selection.text.trim() ? { blockText: selection.text } : {}),
       }),
     );
   }, []);
@@ -4808,6 +4840,9 @@ export function App() {
                   onMark={highlighting ? onDocMark : undefined}
                   onOpenFootnote={onOpenFootnote}
                   onRemoveFootnote={onRemoveFootnote}
+                  subMarkMode={openFootnote ? subMarkMode : null}
+                  subMarkParent={openFootnote}
+                  onAddSubMark={onAddSubMark}
                 >
                   {mdInkSource.docType === "pdf" && mdInkSource.bytes ? (
                     <PdfDocument
@@ -4853,8 +4888,8 @@ export function App() {
               ) : null
             }
             coachFold={null}
-            sheetDragLocked={sheetDragLocked}
-            onToggleSheetLock={onToggleSheetLock}
+            sheetDragLocked={mobile ? sheetDragLocked : false}
+            onToggleSheetLock={mobile ? onToggleSheetLock : undefined}
           />
           {(!problem || holdBrowseOverlay) && (
             <div
@@ -4900,12 +4935,13 @@ export function App() {
                    * AND `!boardPreparing` here or the hold never shows a check.
                    */
                   done={browseMotion === "done"}
+                  themeId={themeId}
                 />
               )}
             </div>
           )}
           {problem && (switchMotion === "busy" || switchMotion === "done") && (
-            <WorkspaceLoadStatus done={switchMotion === "done"} />
+            <WorkspaceLoadStatus done={switchMotion === "done"} themeId={themeId} />
           )}
           {/* Monaco docks into the code frame — and on mobile that frame only
               exists on its own page, so the dock is mounted nowhere else. */}
@@ -5012,9 +5048,12 @@ export function App() {
             number={footnoteNumbers.get(openFootnote.id)}
             threadMessages={footnoteThreadMessages}
             anchorRect={footnoteAnchorRect}
+            subMarkMode={subMarkMode}
+            onSubMarkModeChange={setSubMarkMode}
             onClose={() => {
               setOpenFootnoteId(null);
               setFootnoteAnchorRect(null);
+              setSubMarkMode(null);
             }}
             onChange={onFootnoteChange}
             onSendCoach={sendCoachFromFootnote}
@@ -5256,7 +5295,7 @@ export function App() {
           aria-live="polite"
           aria-label={bootPhase === "done" ? "Ready" : "Checking local server"}
         >
-          <LoadingDoodle />
+          <LoadingDoodle themeId={themeId} />
           {bootPhase === "done" ? (
             <div className="lc-spinner-check" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="22" height="22">
@@ -5941,7 +5980,7 @@ function isLlmTimeoutError(cause: unknown): boolean {
 }
 
 /** Shared spinner → checkmark used by browse pick and ‹ › problem switch. */
-function WorkspaceLoadStatus({ done }: { done: boolean }) {
+function WorkspaceLoadStatus({ done, themeId }: { done: boolean; themeId: string }) {
   return (
     <div
       className="lc-overlay-spinner"
@@ -5949,7 +5988,7 @@ function WorkspaceLoadStatus({ done }: { done: boolean }) {
       aria-live="polite"
       aria-label={done ? "Workspace ready" : "Loading workspace"}
     >
-      {!done && <LoadingDoodle />}
+      {!done && <LoadingDoodle themeId={themeId} />}
       {done ? (
         <div className="lc-spinner-check" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="22" height="22">

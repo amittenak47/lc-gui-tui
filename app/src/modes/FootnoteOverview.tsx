@@ -6,24 +6,32 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-
+import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import type { CoachChatMessage } from "./AgentSidePanel";
 import {
   freshNoteId,
   type DocFootnote,
   type DocFootnoteNote,
+  type DocFootnoteSubMarkKind,
   type DocFootnoteUserLink,
 } from "../util/docFootnotes";
+import { ColorRadial } from "../canvas/ColorRadial";
+import { HoldButton } from "../components/HoldButton";
+import { HighlighterIcon, UnderlineIcon } from "../components/MarkToolIcons";
 import {
   advanceInkPalette,
   inkPaletteNow,
   onInkPaletteChange,
+  retreatInkPalette,
 } from "../canvas/inkPaletteBridge";
+import { loadInkHandedness } from "../util/inkHandedness";
 import { currentInkPalette } from "../util/inkPaletteHistory";
+import { footnoteThemeVars } from "../util/footnoteTheme";
 import { isSafeExternalUrl } from "../util/openExternal";
-
+import { HOLD_SENSITIVE_MS } from "../util/gesture";
 export interface FootnoteOverviewProps {
   footnote: DocFootnote;
   number?: number;
@@ -35,24 +43,17 @@ export interface FootnoteOverviewProps {
   onSendCoach: (text: string, threadRootId: string | null) => void;
   onOpenExternal: (url: string) => void;
   anchorRect?: DOMRect | null;
+  subMarkMode: DocFootnoteSubMarkKind | null;
+  onSubMarkModeChange: (mode: DocFootnoteSubMarkKind | null) => void;
 }
-
-/**
- * What the side bubble is showing.
- *
- * One bubble, two contents: a note being written, or a thread being read and
- * replied to. They are the same gesture — an entry in a list opens beside the
- * card — so they are the same surface rather than two that drift apart.
- */
-type Bubble =
+type Task =
   | { kind: "note"; id: string | null }
-  | { kind: "thread"; rootId: string | null };
-
+  | { kind: "thread"; rootId: string | null }
+  | { kind: "link"; index: number | null };
 function turnKind(role: CoachChatMessage["role"]): "user" | "assistant" | "system" | "app" {
   if (role === "user" || role === "system" || role === "app") return role;
   return "assistant";
 }
-
 function viewport() {
   const view = window.visualViewport;
   return {
@@ -62,7 +63,6 @@ function viewport() {
     originY: view?.offsetTop ?? 0,
   };
 }
-
 function settle(node: HTMLElement, left: number, top: number) {
   const margin = 8;
   const { width: viewWidth, height: viewHeight, originX, originY } = viewport();
@@ -72,16 +72,13 @@ function settle(node: HTMLElement, left: number, top: number) {
   node.style.top = `${Math.round(Math.min(Math.max(originY + margin, top), maxTop))}px`;
   node.style.visibility = "visible";
 }
-
 function clampPanel(node: HTMLElement, anchorRect: DOMRect | null | undefined) {
   const margin = 8;
   const { width: viewWidth, height: viewHeight, originX, originY } = viewport();
   const width = node.offsetWidth;
   const height = node.offsetHeight;
-
   let left: number;
   let top: number;
-
   if (anchorRect) {
     left = anchorRect.left + anchorRect.width / 2 - width / 2;
     const below = anchorRect.bottom + 6;
@@ -90,93 +87,117 @@ function clampPanel(node: HTMLElement, anchorRect: DOMRect | null | undefined) {
     left = originX + viewWidth / 2 - width / 2;
     top = originY + viewHeight / 2 - height / 2;
   }
-
   settle(node, left, top);
 }
-
-/**
- * Beside the card if there is room, under it if there is not.
- *
- * "To the side" is the point of the bubble — the list stays visible while an
- * entry is open, so it is obvious which entry you are editing. A phone that
- * cannot fit both across its width gets the bubble below instead of on top of
- * the card, because a bubble covering the list it came from is the thing this
- * layout exists to avoid.
- */
-function placeBubble(node: HTMLElement, card: HTMLElement | null) {
-  const gap = 6;
-  const margin = 8;
-  const { width: viewWidth, height: viewHeight, originX, originY } = viewport();
-  const rect = card?.getBoundingClientRect();
-  if (!rect) {
-    settle(node, originX + viewWidth / 2 - node.offsetWidth / 2, originY + viewHeight / 2 - node.offsetHeight / 2);
-    return;
+function applyViewportSize(node: HTMLElement, task: Task | null, compact = false) {
+  const margin = 16;
+  const { width, height } = viewport();
+  node.style.setProperty("--lc-vvh", `${Math.round(height)}px`);
+  node.style.setProperty("--lc-vvw", `${Math.round(width)}px`);
+  const maxH = Math.round(height - margin * 2);
+  const maxW = Math.min(280, Math.round(width - margin * 2));
+  node.style.maxWidth = `${maxW}px`;
+  node.style.height = "";
+  if (task?.kind === "thread") {
+    node.style.maxHeight = `${Math.min(Math.round(height * 0.62), maxH, 520)}px`;
+  } else if (task) {
+    node.style.maxHeight = `${Math.min(320, maxH)}px`;
+  } else if (compact) {
+    node.style.maxHeight = `${Math.min(132, maxH)}px`;
+  } else {
+    node.style.maxHeight = `${Math.min(Math.round(height * 0.7), maxH, 420)}px`;
   }
-
-  const width = node.offsetWidth;
-  const height = node.offsetHeight;
-  const toRight = rect.right + gap;
-  const toLeft = rect.left - width - gap;
-
-  if (toRight + width + margin <= originX + viewWidth) {
-    settle(node, toRight, rect.top);
-    return;
-  }
-  if (toLeft >= originX + margin) {
-    settle(node, toLeft, rect.top);
-    return;
-  }
-  const below = rect.bottom + gap;
-  const top = below + height + margin > originY + viewHeight ? rect.top - height - gap : below;
-  settle(node, rect.left, top);
 }
-
 /**
  * Footnote overview — doc-sheet chrome, user links only, mini coach thread.
  * Does not open the docked coach panel.
  */
 export function FootnoteOverview({
   footnote,
-  number,
+  number: footnoteNumber,
   threadMessages,
   onClose,
   onChange,
   onSendCoach,
   onOpenExternal,
   anchorRect,
+  subMarkMode,
+  onSubMarkModeChange,
 }: FootnoteOverviewProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const bubbleRef = useRef<HTMLDivElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
-  const [bubble, setBubble] = useState<Bubble | null>(null);
+  const [task, setTask] = useState<Task | null>(null);
   const [draft, setDraft] = useState("");
-  const [linkUrl, setLinkUrl] = useState("");
-  const [addingLink, setAddingLink] = useState(false);
-  /**
-   * The board's colour wheel — the pen's, not a second one.
-   *
-   * Read live rather than copied at open: shuffling here turns the same wheel
-   * the toolbar shows, and a palette pulled at the pen is already on offer when
-   * the reader comes to colour a mark. What is worth persisting is the colour
-   * they chose, and that lives on the footnote.
-   */
   const history = useSyncExternalStore(onInkPaletteChange, inkPaletteNow, inkPaletteNow);
   const palette = currentInkPalette(history);
-
+  const handedness = loadInkHandedness();
+  const markColor = footnote.color ?? palette[0] ?? "#0d9488";
   const userLinks = footnote.userLinks ?? [];
   const notes = footnote.notes ?? [];
   const threads = footnote.threads ?? [];
-  /** Search footnotes keep their own URL — not auto-suggestions. */
+  const subMarks = footnote.subMarks ?? [];
   const searchLink =
     footnote.kind === "search" && footnote.url
       ? { title: footnote.query || "Search", url: footnote.url }
       : null;
+  const subMarkArmed = Boolean(subMarkMode) && !task;
+  const footnoteRef = useRef(footnote);
+  footnoteRef.current = footnote;
+  const paletteRef = useRef(palette);
+  const paletteKey = palette.join("|").toLowerCase();
+
+  /*
+   * Wheel cycle → same slot on the new set becomes mark colour, so the page
+   * box wash + hub chrome rotate with the palette (not only the hub swatch).
+   */
+  useEffect(() => {
+    const prev = paletteRef.current;
+    paletteRef.current = palette;
+    if (prev.join("|").toLowerCase() === paletteKey) return;
+    const current = footnoteRef.current;
+    const slot = current.color
+      ? prev.findIndex(
+          (swatch) => swatch.trim().toLowerCase() === current.color!.trim().toLowerCase(),
+        )
+      : 0;
+    const next = palette[slot >= 0 ? slot : 0] ?? palette[0];
+    if (!next) return;
+    if (
+      current.color &&
+      current.color.trim().toLowerCase() === next.trim().toLowerCase()
+    ) {
+      return;
+    }
+    onChange({ ...current, color: next });
+  }, [paletteKey, palette, onChange]);
+
+  const hasPanelContent =
+    userLinks.length > 0 ||
+    notes.length > 0 ||
+    threads.length > 0 ||
+    subMarks.length > 0;
+
+  const clearPanelContent = () => {
+    const current = footnoteRef.current;
+    onChange({
+      ...current,
+      userLinks: undefined,
+      notes: undefined,
+      threads: undefined,
+      subMarks: undefined,
+      ...(current.threadRootId ? { threadRootId: undefined } : {}),
+    });
+    setTask(null);
+    setDraft("");
+    if (subMarkMode) onSubMarkModeChange(null);
+  };
 
   const place = useCallback(() => {
-    if (panelRef.current) clampPanel(panelRef.current, anchorRect);
-    if (bubbleRef.current) placeBubble(bubbleRef.current, panelRef.current);
-  }, [anchorRect]);
-
+    const node = panelRef.current;
+    if (!node) return;
+    applyViewportSize(node, task, subMarkArmed);
+    clampPanel(node, anchorRect);
+  }, [anchorRect, task, subMarkArmed]);
   useLayoutEffect(() => {
     place();
     const view = window.visualViewport;
@@ -188,413 +209,228 @@ export function FootnoteOverview({
       view?.removeEventListener("scroll", place);
       window.removeEventListener("resize", place);
     };
-  }, [place, bubble, notes.length, threads.length, userLinks.length]);
-
+  }, [place, task, subMarkArmed, notes.length, threads.length, userLinks.length, subMarks.length]);
   const openThreadMessages = useMemo(
-    () => (bubble?.kind === "thread" && bubble.rootId ? threadMessages(bubble.rootId) : []),
-    [bubble, threadMessages],
+    () => (task?.kind === "thread" && task.rootId ? threadMessages(task.rootId) : []),
+    [task, threadMessages],
   );
-
   useLayoutEffect(() => {
     const node = transcriptRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
   }, [openThreadMessages]);
-
-  /*
-   * A brand new thread has no id until the send comes back with one.
-   *
-   * The card asks for `null` and the app answers by adding a thread to the
-   * footnote, so the bubble adopts whichever rootId it did not know about
-   * before. Without this the reader sends a question and the bubble they sent
-   * it from stays empty, which reads as the message having gone nowhere.
-   */
   const knownRootsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (bubble?.kind !== "thread" || bubble.rootId) {
+    if (task?.kind !== "thread" || task.rootId) {
       knownRootsRef.current = new Set(threads.map((thread) => thread.rootId));
       return;
     }
     const fresh = threads.find((thread) => !knownRootsRef.current.has(thread.rootId));
-    if (fresh) setBubble({ kind: "thread", rootId: fresh.rootId });
-  }, [bubble, threads]);
-
+    if (fresh) setTask({ kind: "thread", rootId: fresh.rootId });
+  }, [task, threads]);
   const updateNotes = (next: DocFootnoteNote[]) => {
     onChange({ ...footnote, notes: next.length > 0 ? next : undefined });
   };
-
   const saveNote = (text: string) => {
-    if (bubble?.kind !== "note") return;
+    if (task?.kind !== "note") return;
     const body = text.trim();
     const now = Date.now();
     if (!body) {
-      // An emptied note is a deleted note; a blank box in the list is nothing.
-      if (bubble.id) updateNotes(notes.filter((note) => note.id !== bubble.id));
-      setBubble(null);
+      if (task.id) updateNotes(notes.filter((note) => note.id !== task.id));
+      setTask(null);
       return;
     }
-    if (bubble.id) {
+    if (task.id) {
       updateNotes(
-        notes.map((note) => (note.id === bubble.id ? { ...note, text: body, updatedAt: now } : note)),
+        notes.map((note) => (note.id === task.id ? { ...note, text: body, updatedAt: now } : note)),
       );
     } else {
       updateNotes([...notes, { id: freshNoteId(notes, now), text: body, createdAt: now, updatedAt: now }]);
     }
-    setBubble(null);
+    setTask(null);
   };
-
   const updateUserLinks = (next: DocFootnoteUserLink[]) => {
     onChange({ ...footnote, userLinks: next.length > 0 ? next : undefined });
   };
-
-  const addUserLink = () => {
-    const url = linkUrl.trim();
-    if (!url || !isSafeExternalUrl(url)) return;
-    updateUserLinks([...userLinks, { url }]);
-    setLinkUrl("");
-    setAddingLink(false);
+  const saveLink = (url: string, title?: string) => {
+    if (task?.kind !== "link") return;
+    const trimmed = url.trim();
+    if (!trimmed || !isSafeExternalUrl(trimmed)) return;
+    const entry: DocFootnoteUserLink = title?.trim()
+      ? { url: trimmed, title: title.trim() }
+      : { url: trimmed };
+    if (task.index != null) {
+      updateUserLinks(userLinks.map((link, i) => (i === task.index ? entry : link)));
+    } else {
+      updateUserLinks([...userLinks, entry]);
+    }
+    setTask(null);
   };
-
   const removeUserLink = (index: number) => {
     updateUserLinks(userLinks.filter((_, i) => i !== index));
+    if (task?.kind === "link" && task.index === index) setTask(null);
   };
-
   const removeThread = (rootId: string) => {
-    // The transcript itself is the coach's; the footnote only stops pointing
-    // at it, the same way removing a link does not unpublish a page.
     const next = threads.filter((thread) => thread.rootId !== rootId);
     onChange({
       ...footnote,
       threads: next.length > 0 ? next : undefined,
       ...(footnote.threadRootId === rootId ? { threadRootId: next[0]?.rootId } : {}),
     });
-    if (bubble?.kind === "thread" && bubble.rootId === rootId) setBubble(null);
+    if (task?.kind === "thread" && task.rootId === rootId) setTask(null);
   };
-
   const send = () => {
-    if (bubble?.kind !== "thread") return;
+    if (task?.kind !== "thread") return;
     const text = draft.trim();
     if (!text) return;
-    if (!bubble.rootId) knownRootsRef.current = new Set(threads.map((thread) => thread.rootId));
-    onSendCoach(text, bubble.rootId);
+    if (!task.rootId) knownRootsRef.current = new Set(threads.map((thread) => thread.rootId));
+    onSendCoach(text, task.rootId);
     setDraft("");
   };
-
-  const openBubble = (next: Bubble) => {
+  const openTask = (next: Task) => {
     setDraft("");
-    setBubble(next);
+    if (subMarkMode) onSubMarkModeChange(null);
+    setTask(next);
   };
-
-  const title =
-    number != null
-      ? `${number}. ${footnote.excerpt || "This area of the page"}`
-      : footnote.excerpt || "This area of the page";
-
-  const editing = bubble?.kind === "note" ? notes.find((note) => note.id === bubble.id) ?? null : null;
-
-  /*
-   * The card wears the mark's colour, the same variable the ribbon takes.
-   *
-   * One value in, everything derived in CSS — so the card, its bubble and the
-   * ribbon they came from cannot disagree, and a colour chosen months ago
-   * still reads the way the ribbon does. Absent means default chrome.
-   */
-  const tint = footnote.color ? ({ ["--lc-fn-color" as string]: footnote.color } as const) : {};
-
+  const removeSubMark = (id: string) => {
+    const next = subMarks.filter((mark) => mark.id !== id);
+    onChange({ ...footnote, subMarks: next.length > 0 ? next : undefined });
+  };
+  const editingNote =
+    task?.kind === "note" ? notes.find((note) => note.id === task.id) ?? null : null;
+  const editingLink =
+    task?.kind === "link" && task.index != null ? userLinks[task.index] ?? null : null;
+  const tint = footnoteThemeVars(markColor, palette);
+  const taskMotion = {
+    initial: { opacity: 0 },
+    animate: { opacity: 1 },
+    exit: { opacity: 0 },
+    transition: { duration: 0.16, ease: [0.22, 1, 0.36, 1] as const },
+  };
+  const taskClass =
+    task?.kind === "thread"
+      ? " is-task is-task-thread"
+      : task
+        ? " is-task is-task-compact"
+        : "";
   return createPortal(
-    <>
-      {/*
-        Closes on its own `pointerdown`, not on a click.
-
-        A ribbon opens this card on the *release* of a tap, so the `click` that
-        completes that very tap lands here — on a backdrop that did not exist
-        when the tap began. On `onClick` the card opened and shut inside one
-        tap, which reads as the panel refusing to stay open. A `pointerdown`
-        can only come from a second, deliberate press.
-      */}
+    <LayoutGroup id={`footnote-hub-${footnote.id}`}>
       <button
         type="button"
-        className="lc-doc-sheet-backdrop"
-        aria-label={bubble ? "Close editor" : "Close footnote"}
+        className={`lc-doc-sheet-backdrop${subMarkArmed ? " is-pass-through" : ""}`}
+        aria-label={task ? "Back to footnote" : "Close footnote"}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
+          if (event.target !== event.currentTarget) return;
           event.preventDefault();
-          // One layer at a time: the bubble is on top, so it goes first.
-          if (bubble) setBubble(null);
+          if (task) setTask(null);
           else onClose();
         }}
         style={{ zIndex: 232 }}
       />
-      <div
-        className="lc-doc-sheet lc-footnote-overview"
+      <motion.div
+        layout
+        layoutId="footnote-sheet"
+        className={`lc-doc-sheet lc-footnote-overview${taskClass}${
+          subMarkArmed ? " is-submark-armed" : ""
+        }`}
         ref={panelRef}
         role="dialog"
-        aria-label="Footnote"
+        aria-label={
+          task?.kind === "note"
+            ? "Note"
+            : task?.kind === "link"
+              ? "Link"
+            : task?.kind === "thread"
+              ? "Thread"
+              : footnoteNumber != null
+                ? `Footnote ${footnoteNumber}`
+                : "Footnote"
+        }
         style={{ visibility: "hidden", zIndex: 233, ...tint }}
+        transition={{ layout: { duration: 0.22, ease: [0.22, 1, 0.36, 1] } }}
       >
-        <p className="lc-doc-sheet-excerpt">{title}</p>
-
-        {/*
-          The ribbon's colour, from the wheel the pen draws from.
-
-          Not the same *kind* of palette — the same palette. The swatches are
-          whatever is on the toolbar's colour wheel right now, and ⟳ is that
-          wheel's own forward cycle, so it fetches from ColorHunt, appends to
-          the board's history and is saved with the board exactly as a tap at
-          the pen would be.
-        */}
-        <section className="lc-footnote-overview-section" aria-label="Colour">
-          <h3 className="lc-coach-turn-role">Colour</h3>
-          <div className="lc-footnote-overview-swatches">
-            {palette.map((color) => (
-              <button
-                key={color}
-                type="button"
-                className={`lc-footnote-overview-swatch${
-                  footnote.color === color ? " is-active" : ""
-                }`}
-                style={{ background: color }}
-                aria-label={`Colour this mark ${color}`}
-                aria-pressed={footnote.color === color}
-                title={color}
-                onClick={() => onChange({ ...footnote, color })}
-              />
-            ))}
-            <button
-              type="button"
-              className="lc-secondary"
-              aria-label="Another palette"
-              title="Another palette"
-              onClick={advanceInkPalette}
+        <AnimatePresence mode="popLayout" initial={false}>
+          {task?.kind === "note" ? (
+            <motion.div
+              key="task-note"
+              className="lc-footnote-overview-task lc-footnote-overview-task-compact"
+              layout
+              layoutId="footnote-hub-body"
+              {...taskMotion}
             >
-              ⟳
-            </button>
-            {footnote.color && (
-              <button
-                type="button"
-                className="lc-secondary"
-                aria-label="Use the default colour"
-                title="Use the default colour"
-                onClick={() => {
-                  const { color: _dropped, ...rest } = footnote;
-                  onChange(rest);
-                }}
-              >
-                Reset
-              </button>
-            )}
-          </div>
-        </section>
-
-        <section className="lc-footnote-overview-section" aria-label="Links">
-          <h3 className="lc-coach-turn-role">Links</h3>
-          <ul className="lc-footnote-overview-link-list">
-            {searchLink && (
-              <li>
-                <button
-                  type="button"
-                  className="lc-coach-scope-option"
-                  onClick={() => onOpenExternal(searchLink.url)}
-                >
-                  <strong>{searchLink.title}</strong>
-                  <span className="lc-muted">{searchLink.url}</span>
-                </button>
-              </li>
-            )}
-            {userLinks.map((link, index) => (
-              <li key={`user-${index}-${link.url}`} className="lc-footnote-overview-link-row">
-                <button
-                  type="button"
-                  className="lc-coach-scope-option"
-                  onClick={() => onOpenExternal(link.url)}
-                >
-                  <strong>{link.title || link.url}</strong>
-                  {link.title ? <span className="lc-muted">{link.url}</span> : null}
-                </button>
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  aria-label="Remove link"
-                  onClick={() => removeUserLink(index)}
-                >
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ul>
-          {addingLink ? (
-            <div className="lc-footnote-overview-add-link">
-              <input
-                type="url"
-                placeholder="https://…"
-                value={linkUrl}
-                onChange={(event) => setLinkUrl(event.target.value)}
-                aria-label="Link URL"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    addUserLink();
-                  }
-                }}
+              <NoteTask
+                key={editingNote?.id ?? "new"}
+                initial={editingNote?.text ?? ""}
+                onSave={saveNote}
+                onBack={() => setTask(null)}
               />
-              <button type="button" onClick={addUserLink}>
-                Add
-              </button>
-              <button
-                type="button"
-                className="lc-secondary"
-                onClick={() => {
-                  setAddingLink(false);
-                  setLinkUrl("");
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button type="button" className="lc-secondary" onClick={() => setAddingLink(true)}>
-              Add link
-            </button>
-          )}
-        </section>
-
-        {/*
-          Notes, as entries.
-
-          Each row is a box that opens what it holds; the buttons at its end
-          edit and delete that one note. The list scrolls, so a mark with a
-          dozen notes is the same height on the card as a mark with one.
-        */}
-        <section className="lc-footnote-overview-section" aria-label="Notes">
-          <h3 className="lc-coach-turn-role">Notes</h3>
-          <ul className="lc-footnote-overview-link-list">
-            {notes.length === 0 && <li className="lc-muted lc-footnote-overview-empty">No notes yet.</li>}
-            {notes.map((note) => (
-              <li key={note.id} className="lc-footnote-overview-link-row">
-                <button
-                  type="button"
-                  className={`lc-coach-scope-option${
-                    bubble?.kind === "note" && bubble.id === note.id ? " is-open" : ""
-                  }`}
-                  onClick={() => openBubble({ kind: "note", id: note.id })}
-                >
-                  <strong className="lc-footnote-overview-entry-text">{note.text}</strong>
+            </motion.div>
+          ) : task?.kind === "link" ? (
+            <motion.div
+              key="task-link"
+              className="lc-footnote-overview-task lc-footnote-overview-task-compact"
+              layout
+              layoutId="footnote-hub-body"
+              {...taskMotion}
+            >
+              <LinkTask
+                key={editingLink?.url ?? "new"}
+                initialUrl={editingLink?.url ?? ""}
+                initialTitle={editingLink?.title ?? ""}
+                onSave={saveLink}
+                onRemove={
+                  task.index != null
+                    ? () => {
+                        removeUserLink(task.index!);
+                      }
+                    : undefined
+                }
+                onBack={() => setTask(null)}
+              />
+            </motion.div>
+          ) : task?.kind === "thread" ? (
+            <motion.div
+              key={`task-thread-${task.rootId ?? "new"}`}
+              className="lc-footnote-overview-task lc-footnote-overview-task-thread"
+              layout
+              layoutId="footnote-hub-body"
+              {...taskMotion}
+            >
+              <div className="lc-footnote-task-head">
+                <button type="button" className="lc-secondary" onClick={() => setTask(null)}>
+                  Back
                 </button>
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  aria-label="Edit note"
-                  title="Edit"
-                  onClick={() => openBubble({ kind: "note", id: note.id })}
-                >
-                  ✎
-                </button>
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  aria-label="Delete note"
-                  title="Delete"
-                  onClick={() => {
-                    updateNotes(notes.filter((entry) => entry.id !== note.id));
-                    if (bubble?.kind === "note" && bubble.id === note.id) setBubble(null);
-                  }}
-                >
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ul>
-          <button
-            type="button"
-            className="lc-secondary"
-            onClick={() => openBubble({ kind: "note", id: null })}
-          >
-            Add note
-          </button>
-        </section>
-
-        {/* Threads, listed the same way — a conversation is an entry too. */}
-        <section className="lc-footnote-overview-section" aria-label="Ask AI">
-          <h3 className="lc-coach-turn-role">Ask AI</h3>
-          <ul className="lc-footnote-overview-link-list">
-            {threads.length === 0 && (
-              <li className="lc-muted lc-footnote-overview-empty">No threads yet.</li>
-            )}
-            {threads.map((thread) => (
-              <li key={thread.rootId} className="lc-footnote-overview-link-row">
-                <button
-                  type="button"
-                  className={`lc-coach-scope-option${
-                    bubble?.kind === "thread" && bubble.rootId === thread.rootId ? " is-open" : ""
-                  }`}
-                  onClick={() => openBubble({ kind: "thread", rootId: thread.rootId })}
-                >
-                  <strong className="lc-footnote-overview-entry-text">{thread.title}</strong>
-                </button>
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  aria-label="Forget thread"
-                  title="Forget"
-                  onClick={() => removeThread(thread.rootId)}
-                >
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ul>
-          <button
-            type="button"
-            className="lc-secondary"
-            onClick={() => openBubble({ kind: "thread", rootId: null })}
-          >
-            New thread
-          </button>
-        </section>
-      </div>
-
-      {bubble && (
-        <div
-          className="lc-doc-sheet lc-footnote-bubble"
-          ref={bubbleRef}
-          role="dialog"
-          aria-label={bubble.kind === "note" ? "Note" : "Thread"}
-          style={{ visibility: "hidden", zIndex: 234, ...tint }}
-        >
-          {bubble.kind === "note" ? (
-            <NoteBubble
-              key={editing?.id ?? "new"}
-              initial={editing?.text ?? ""}
-              onSave={saveNote}
-              onCancel={() => setBubble(null)}
-            />
-          ) : (
-            <>
-              {/* Titled the way the card titles itself — this is what the
-                  bubble is about, not a section label. */}
-              <p className="lc-doc-sheet-excerpt">
-                {bubble.rootId
-                  ? threads.find((thread) => thread.rootId === bubble.rootId)?.title ?? "Thread"
-                  : "New thread"}
-              </p>
-              <div className="lc-coach-messages lc-footnote-overview-thread" ref={transcriptRef}>
-                {openThreadMessages.length === 0 ? (
-                  <p className="lc-muted lc-footnote-overview-empty">No messages yet.</p>
-                ) : (
-                  openThreadMessages.map((message) => (
-                    <div
-                      key={message.id}
-                      className={`lc-coach-turn lc-coach-turn-${turnKind(message.role)}`}
-                    >
-                      <div className="lc-coach-turn-role">
-                        {turnKind(message.role) === "user" ? "You" : "Coach"}
-                      </div>
-                      <div className="lc-coach-turn-body">
-                        {message.content || (message.pending ? "…" : "")}
-                      </div>
-                    </div>
-                  ))
+                <span className="lc-footnote-task-title">
+                  {task.rootId
+                    ? threads.find((thread) => thread.rootId === task.rootId)?.title ?? "Thread"
+                    : "Ask AI"}
+                </span>
+                {task.rootId && (
+                  <button
+                    type="button"
+                    className="lc-secondary"
+                    aria-label="Forget thread"
+                    onClick={() => removeThread(task.rootId!)}
+                  >
+                    ✕
+                  </button>
                 )}
+              </div>
+              <div className="lc-coach-messages lc-footnote-overview-thread" ref={transcriptRef}>
+                {openThreadMessages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`lc-coach-turn lc-coach-turn-${turnKind(message.role)}`}
+                  >
+                    <div className="lc-coach-turn-role">
+                      {turnKind(message.role) === "user" ? "You" : "Coach"}
+                    </div>
+                    <div className="lc-coach-turn-body">
+                      {message.content || (message.pending ? "…" : "")}
+                    </div>
+                  </div>
+                ))}
               </div>
               <form
                 className="lc-coach-composer lc-footnote-overview-composer"
@@ -618,58 +454,236 @@ export function FootnoteOverview({
                 />
                 <div className="lc-coach-composer-bar">
                   <div className="lc-coach-composer-actions">
-                    <button
-                      type="button"
-                      className="lc-secondary"
-                      onClick={() => setBubble(null)}
-                    >
-                      Close
-                    </button>
                     <button type="submit" disabled={draft.trim().length === 0}>
                       Send
                     </button>
                   </div>
                 </div>
               </form>
-            </>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="hub"
+              className="lc-footnote-overview-hub"
+              layout
+              layoutId="footnote-hub-body"
+              {...taskMotion}
+            >
+              <header className="lc-footnote-overview-toolbar" aria-label="Mark style">
+                <div className="lc-footnote-submark-modes" role="group" aria-label="Sub-mark mode">
+                  <button
+                    type="button"
+                    className={`lc-footnote-mark-tool${subMarkMode === "underline" ? " is-active" : ""}`}
+                    aria-label="Underline"
+                    title="Underline"
+                    aria-pressed={subMarkMode === "underline"}
+                    onClick={() =>
+                      onSubMarkModeChange(subMarkMode === "underline" ? null : "underline")
+                    }
+                  >
+                    <UnderlineIcon size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    className={`lc-footnote-mark-tool${subMarkMode === "highlight" ? " is-active" : ""}`}
+                    aria-label="Highlight"
+                    title="Highlight"
+                    aria-pressed={subMarkMode === "highlight"}
+                    onClick={() =>
+                      onSubMarkModeChange(subMarkMode === "highlight" ? null : "highlight")
+                    }
+                  >
+                    <HighlighterIcon size={16} />
+                  </button>
+                </div>
+                <div className="lc-footnote-overview-color">
+                  <ColorRadial
+                    colors={palette}
+                    value={markColor}
+                    onPick={(color) => onChange({ ...footnote, color })}
+                    onCycleNext={advanceInkPalette}
+                    onCyclePrev={retreatInkPalette}
+                    handedness={handedness}
+                    compact
+                    wheelZIndex={240}
+                  />
+                </div>
+                {hasPanelContent && (
+                  <button
+                    type="button"
+                    className="lc-footnote-panel-clear"
+                    aria-label="Clear links, notes, threads, and sub-marks"
+                    title="Clear panel content"
+                    onClick={clearPanelContent}
+                  >
+                    ✕
+                  </button>
+                )}
+              </header>
+              {subMarkMode && (
+                <p className="lc-muted lc-footnote-submark-hint">
+                  Drag to select in the mark. Adjust handles, then tap to confirm.
+                </p>
+              )}
+              {!subMarkArmed && subMarks.length > 0 && (
+                <ul className="lc-footnote-overview-link-list" aria-label="Sub-marks">
+                  {subMarks.map((mark) => (
+                    <li key={mark.id} className="lc-footnote-overview-link-row">
+                      <span className="lc-coach-scope-option">
+                        <strong>{mark.kind}</strong>
+                        <span className="lc-muted">{mark.excerpt}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="lc-secondary"
+                        aria-label={`Remove ${mark.kind}`}
+                        onClick={() => removeSubMark(mark.id)}
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!subMarkArmed && (
+                <>
+              <HubSection
+                title="Links"
+                onAdd={() => openTask({ kind: "link", index: null })}
+              >
+                {(searchLink || userLinks.length > 0) && (
+                  <ul className="lc-footnote-overview-link-list">
+                    {searchLink && (
+                      <li>
+                        <button
+                          type="button"
+                          className="lc-coach-scope-option"
+                          onClick={() => onOpenExternal(searchLink.url)}
+                        >
+                          <strong>{searchLink.title}</strong>
+                          <span className="lc-muted">{searchLink.url}</span>
+                        </button>
+                      </li>
+                    )}
+                    {userLinks.map((link, index) => (
+                      <li key={`user-${index}-${link.url}`}>
+                        <button
+                          type="button"
+                          className="lc-coach-scope-option"
+                          onClick={() => openTask({ kind: "link", index })}
+                        >
+                          <strong>{link.title || link.url}</strong>
+                          {link.title ? <span className="lc-muted">{link.url}</span> : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </HubSection>
+              <HubSection title="Notes" onAdd={() => openTask({ kind: "note", id: null })}>
+                {notes.length > 0 && (
+                  <ul className="lc-footnote-overview-link-list lc-footnote-overview-scroll-list lc-scroll-pane">
+                    {notes.map((note) => (
+                      <li key={note.id}>
+                        <HoldButton
+                          label={note.text}
+                          className="lc-coach-scope-option lc-footnote-overview-entry-hold lc-hold-danger"
+                          ariaLabel={`${note.text} — tap to edit, hold to delete`}
+                          holdMs={HOLD_SENSITIVE_MS}
+                          holdThrough
+                          onTap={() => openTask({ kind: "note", id: note.id })}
+                          onConfirm={() =>
+                            updateNotes(notes.filter((entry) => entry.id !== note.id))
+                          }
+                        >
+                          <strong className="lc-footnote-overview-entry-text">{note.text}</strong>
+                        </HoldButton>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </HubSection>
+              <HubSection
+                title="Ask AI"
+                onAdd={() => openTask({ kind: "thread", rootId: null })}
+              >
+                {threads.length > 0 && (
+                  <ul className="lc-footnote-overview-link-list lc-footnote-overview-scroll-list lc-scroll-pane">
+                    {threads.map((thread) => (
+                      <li key={thread.rootId}>
+                        <button
+                          type="button"
+                          className="lc-coach-scope-option"
+                          onClick={() => openTask({ kind: "thread", rootId: thread.rootId })}
+                        >
+                          <strong className="lc-footnote-overview-entry-text">{thread.title}</strong>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </HubSection>
+                </>
+              )}
+            </motion.div>
           )}
-        </div>
-      )}
-    </>,
+        </AnimatePresence>
+      </motion.div>
+    </LayoutGroup>,
     document.body,
   );
 }
-
-/**
- * The note editor — its own component so the text lives in it.
- *
- * Keyed by the note being edited, so opening a different entry remounts with
- * that entry's text rather than carrying the last one's over. Saving is
- * explicit: a note is not written back on every keystroke, which is what
- * makes Cancel mean something.
- */
-function NoteBubble({
+function HubSection({
+  title,
+  onAdd,
+  children,
+}: {
+  title: string;
+  onAdd: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="lc-footnote-overview-section" aria-label={title}>
+      <div className="lc-footnote-overview-section-head">
+        <h3 className="lc-coach-turn-role">{title}</h3>
+        <button
+          type="button"
+          className="lc-footnote-overview-add"
+          aria-label={`Add ${title}`}
+          onClick={onAdd}
+        >
+          +
+        </button>
+      </div>
+      {children}
+    </section>
+  );
+}
+function NoteTask({
   initial,
   onSave,
-  onCancel,
+  onBack,
 }: {
   initial: string;
   onSave: (text: string) => void;
-  onCancel: () => void;
+  onBack: () => void;
 }) {
   const [text, setText] = useState(initial);
   const ref = useRef<HTMLTextAreaElement | null>(null);
-
   useEffect(() => {
     ref.current?.focus();
   }, []);
-
   return (
     <>
-      <h3 className="lc-coach-turn-role">{initial ? "Edit note" : "New note"}</h3>
+      <div className="lc-footnote-task-head">
+        <button type="button" className="lc-secondary" onClick={onBack}>
+          Back
+        </button>
+        <span className="lc-footnote-task-title">{initial ? "Edit note" : "New note"}</span>
+      </div>
       <textarea
         ref={ref}
-        className="lc-footnote-bubble-note"
+        className="lc-footnote-bubble-note lc-footnote-overview-task-field"
         value={text}
         onChange={(event) => setText(event.target.value)}
         aria-label="Note"
@@ -677,7 +691,7 @@ function NoteBubble({
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
-            onCancel();
+            onBack();
             return;
           }
           if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
@@ -686,10 +700,77 @@ function NoteBubble({
         }}
       />
       <div className="lc-footnote-bubble-actions">
-        <button type="button" className="lc-secondary" onClick={onCancel}>
-          Cancel
-        </button>
         <button type="button" onClick={() => onSave(text)}>
+          Save
+        </button>
+      </div>
+    </>
+  );
+}
+function LinkTask({
+  initialUrl,
+  initialTitle,
+  onSave,
+  onRemove,
+  onBack,
+}: {
+  initialUrl: string;
+  initialTitle: string;
+  onSave: (url: string, title?: string) => void;
+  onRemove?: () => void;
+  onBack: () => void;
+}) {
+  const [url, setUrl] = useState(initialUrl);
+  const [title, setTitle] = useState(initialTitle);
+  const ref = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+  const submit = () => onSave(url, title);
+  return (
+    <>
+      <div className="lc-footnote-task-head">
+        <button type="button" className="lc-secondary" onClick={onBack}>
+          Back
+        </button>
+        <span className="lc-footnote-task-title">{initialUrl ? "Edit link" : "New link"}</span>
+        {onRemove && (
+          <button type="button" className="lc-secondary" aria-label="Remove link" onClick={onRemove}>
+            ✕
+          </button>
+        )}
+      </div>
+      <div className="lc-footnote-overview-add-link lc-footnote-overview-task-fields">
+        <input
+          ref={ref}
+          type="url"
+          placeholder="https://…"
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+          aria-label="Link URL"
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+        <input
+          type="text"
+          placeholder="Title (optional)"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          aria-label="Link title"
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+      </div>
+      <div className="lc-footnote-bubble-actions">
+        <button type="button" onClick={submit}>
           Save
         </button>
       </div>

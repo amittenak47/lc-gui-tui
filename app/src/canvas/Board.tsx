@@ -86,6 +86,7 @@ import {
 } from "../util/inkPaletteHistory";
 import {
   provideInkPaletteAdvance,
+  provideInkPaletteRetreat,
   publishInkPalette,
   resetInkPaletteBridge,
 } from "./inkPaletteBridge";
@@ -143,11 +144,13 @@ import {
   selectionOwnsGesture,
   onDocScrollRequest,
   setDocCameraLive,
+  pointerInSubMark,
 } from "./docSelectionGesture";
 import { horizontalScrollHost } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import { applyGestureExclusions, edgeStrips } from "../util/gestureExclusion";
 import { BoardToolbar } from "./BoardToolbar";
+import { ScrollBackHold } from "./ScrollBackHold";
 import {
   isDeletableElement,
   selectionBounds,
@@ -201,6 +204,11 @@ import {
   type SceneBounds,
   type ViewportTransform,
 } from "./rasterInk";
+import {
+  compositePageLayers,
+  resolveExportPaperColor,
+  type PageExportLayers,
+} from "./exportPageComposite";
 
 /**
  * The slice of Excalidraw's imperative API this file uses, declared locally so a
@@ -283,25 +291,58 @@ async function exportBoardBlob(
    * Excalidraw returns, so setting it here is enough for both layers.
    */
   exportScale = 1,
+  pageLayers: PageExportLayers | null = null,
 ): Promise<Blob> {
   const elements = api.getSceneElements();
   const appState = { ...(api.getAppState() as object), exportScale } as Record<string, unknown>;
   const files = api.getFiles();
+  const paper = resolveExportPaperColor(
+    typeof appState.viewBackgroundColor === "string"
+      ? appState.viewBackgroundColor
+      : null,
+    pageLayers?.paperColor ?? "#ffffff",
+  );
+  const exportAppState = {
+    ...appState,
+    exportBackground: true,
+    viewBackgroundColor: paper,
+  };
   const plain = () =>
     exportToBlob({
       elements: elements as never,
-      appState: appState as never,
+      appState: exportAppState as never,
       files: files as never,
       mimeType: "image/png",
       quality: 0.8,
     });
 
   const inkBounds = inkOpsBounds(ops);
-  if (!inkBounds || elements.length === 0) return plain();
+  const pageBounds = pageLayers?.pageBounds ?? null;
+  // Doc pages can be ink-free — still need the HTML/PDF under the transparent
+  // Excalidraw frame. Without this, "capture entire" on a clean reading page
+  // falls through to plain Excalidraw and comes back black.
+  if (!inkBounds && !pageBounds) return plain();
+  // Empty Excalidraw scene must still composite the DOM page when present.
+  if (elements.length === 0) {
+    if (!pageBounds) return plain();
+    const content = unionSceneBounds(pageBounds, inkBounds)!;
+    return exportSceneFrameBlob(
+      api,
+      ops,
+      {
+        x: content.minX - EXPORT_PADDING,
+        y: content.minY - EXPORT_PADDING,
+        width: content.maxX - content.minX + 2 * EXPORT_PADDING,
+        height: content.maxY - content.minY + 2 * EXPORT_PADDING,
+      },
+      exportScale,
+      pageLayers,
+    );
+  }
 
   const board = await exportToCanvas({
     elements: elements as never,
-    appState: appState as never,
+    appState: exportAppState as never,
     files: files as never,
     exportPadding: 0,
   });
@@ -310,9 +351,29 @@ async function exportBoardBlob(
   // Also the check that the export really did land on those bounds: an
   // unhonoured padding skews the two axes apart on any non-square board.
   const scale = exportScaleFrom(board.width, board.height, boardBounds);
-  if (scale === null) return plain();
+  if (scale === null) {
+    if (pageBounds) {
+      const content = unionSceneBounds(pageBounds, inkBounds)!;
+      return exportSceneFrameBlob(
+        api,
+        ops,
+        {
+          x: content.minX - EXPORT_PADDING,
+          y: content.minY - EXPORT_PADDING,
+          width: content.maxX - content.minX + 2 * EXPORT_PADDING,
+          height: content.maxY - content.minY + 2 * EXPORT_PADDING,
+        },
+        exportScale,
+        pageLayers,
+      );
+    }
+    return plain();
+  }
 
-  const content = unionSceneBounds(boardBounds, inkBounds)!;
+  const content = unionSceneBounds(
+    boardBounds,
+    unionSceneBounds(inkBounds, pageBounds),
+  )!;
   const bounds: SceneBounds = {
     minX: content.minX - EXPORT_PADDING,
     minY: content.minY - EXPORT_PADDING,
@@ -337,13 +398,9 @@ async function exportBoardBlob(
   out.height = height;
   const ctx = out.getContext("2d");
   if (!ctx) return plain();
-  const background = appState.viewBackgroundColor;
-  if (appState.exportBackground !== false && typeof background === "string") {
-    // The board export only covers its own box; anything the ink added around
-    // it would otherwise come out transparent.
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, width, height);
-  }
+  ctx.fillStyle = paper;
+  ctx.fillRect(0, 0, width, height);
+  await compositePageLayers(ctx, bounds, drawScale, pageLayers);
   ctx.drawImage(
     board,
     (boardBounds.minX - bounds.minX) * drawScale,
@@ -370,9 +427,14 @@ async function exportRegionBlob(
   frame: { x: number; y: number; width: number; height: number },
   /** See {@link exportBoardBlob}. */
   exportScale = 1,
+  pageLayers: PageExportLayers | null = null,
 ): Promise<Blob> {
   const appState = { ...(api.getAppState() as object), exportScale } as Record<string, unknown>;
   const files = api.getFiles();
+  const paper = resolveExportPaperColor(
+    (appState as { viewBackgroundColor?: string }).viewBackgroundColor,
+    pageLayers?.paperColor ?? "#ffffff",
+  );
   const frameBounds: SceneBounds = {
     minX: frame.x,
     minY: frame.y,
@@ -395,8 +457,7 @@ async function exportRegionBlob(
       appState: {
         ...(appState as object),
         exportBackground: true,
-        viewBackgroundColor:
-          (appState as { viewBackgroundColor?: string }).viewBackgroundColor ?? "#fff",
+        viewBackgroundColor: paper,
       } as never,
       files: files as never,
       mimeType: "image/png",
@@ -404,15 +465,19 @@ async function exportRegionBlob(
       exportPadding: 16,
     });
 
-  if (elements.length === 0) return plain();
+  if (elements.length === 0) {
+    if (pageLayers?.pageBounds) {
+      return exportSceneFrameBlob(api, ops, frame, exportScale, pageLayers);
+    }
+    return plain();
+  }
 
   const board = await exportToCanvas({
     elements: elements as never,
     appState: {
       ...(appState as object),
       exportBackground: true,
-      viewBackgroundColor:
-        (appState as { viewBackgroundColor?: string }).viewBackgroundColor ?? "#fff",
+      viewBackgroundColor: paper,
     } as never,
     files: files as never,
     exportPadding: 0,
@@ -420,9 +485,13 @@ async function exportRegionBlob(
   const [minX, minY, maxX, maxY] = getCommonBounds(elements as never);
   const boardBounds: SceneBounds = { minX, minY, maxX, maxY };
   const scale = exportScaleFrom(board.width, board.height, boardBounds);
-  if (scale === null || regionOps.length === 0) return plain();
+  if (scale === null) return plain();
+  if (regionOps.length === 0 && !pageLayers?.pageBounds) return plain();
 
-  const content = unionSceneBounds(boardBounds, inkOpsBounds(regionOps) ?? boardBounds)!;
+  const content = unionSceneBounds(
+    boardBounds,
+    unionSceneBounds(inkOpsBounds(regionOps), pageLayers?.pageBounds ?? null),
+  )!;
   const bounds: SceneBounds = {
     minX: content.minX - EXPORT_PADDING,
     minY: content.minY - EXPORT_PADDING,
@@ -445,10 +514,9 @@ async function exportRegionBlob(
   out.height = height;
   const ctx = out.getContext("2d");
   if (!ctx) return plain();
-  const background =
-    (appState as { viewBackgroundColor?: string }).viewBackgroundColor ?? "#fff";
-  ctx.fillStyle = background;
+  ctx.fillStyle = paper;
   ctx.fillRect(0, 0, width, height);
+  await compositePageLayers(ctx, bounds, drawScale, pageLayers);
   ctx.drawImage(
     board,
     (boardBounds.minX - bounds.minX) * drawScale,
@@ -474,12 +542,15 @@ async function exportSceneFrameBlob(
   frame: { x: number; y: number; width: number; height: number },
   /** See {@link exportBoardBlob}. Sets the composite scale here, not just Excalidraw's. */
   exportScale = 2,
+  pageLayers: PageExportLayers | null = null,
 ): Promise<Blob> {
   const appState = { ...(api.getAppState() as object), exportScale } as Record<string, unknown>;
   const files = api.getFiles();
   const all = api.getSceneElements() as SceneElementLike[];
-  const background =
-    (appState as { viewBackgroundColor?: string }).viewBackgroundColor ?? "#fff";
+  const paper = resolveExportPaperColor(
+    (appState as { viewBackgroundColor?: string }).viewBackgroundColor,
+    pageLayers?.paperColor ?? "#ffffff",
+  );
   const bounds: SceneBounds = {
     minX: frame.x,
     minY: frame.y,
@@ -499,8 +570,9 @@ async function exportSceneFrameBlob(
   if (!ctx) {
     return new Blob([], { type: "image/png" });
   }
-  ctx.fillStyle = background;
+  ctx.fillStyle = paper;
   ctx.fillRect(0, 0, width, height);
+  await compositePageLayers(ctx, bounds, drawScale, pageLayers);
 
   if (all.length > 0) {
     const board = await exportToCanvas({
@@ -508,7 +580,7 @@ async function exportSceneFrameBlob(
       appState: {
         ...(appState as object),
         exportBackground: true,
-        viewBackgroundColor: background,
+        viewBackgroundColor: paper,
       } as never,
       files: files as never,
       exportPadding: 0,
@@ -1180,6 +1252,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     provideInkPaletteAdvance(cycleInkPaletteForward);
     return () => provideInkPaletteAdvance(null);
   }, [cycleInkPaletteForward]);
+  useEffect(() => {
+    provideInkPaletteRetreat(cycleInkPaletteBackward);
+    return () => provideInkPaletteRetreat(null);
+  }, [cycleInkPaletteBackward]);
   useEffect(() => resetInkPaletteBridge, []);
   const [linedPaper, setLinedPaper] = useState(false);
   const linedPaperRef = useRef(linedPaper);
@@ -3161,6 +3237,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!canOwnScroll()) return;
       if (event.button !== 0) return;
       if (!isScrollSurface(event.target)) return;
+      /*
+       * Armed sub-mark owns the finger inside the open mark. Do not write
+       * panDragRef at all — deferred selectable-doc pan would still arm after
+       * SELECT_HOLD_SLOP_PX when DocSelectionLayer's band hit misses.
+       */
+      if (pointerInSubMark(event.clientX, event.clientY)) return;
 
       const onCodeDock = isCodeDockTarget(event.target);
       const codeDockEl = onCodeDock
@@ -3242,6 +3324,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!drag || drag.pointerId !== event.pointerId) return;
       if (!handPanningRef.current) return;
       if (!canOwnScroll()) return;
+      /*
+       * Sub-mark owns the finger once it enters the open mark — even if pan
+       * deferred-armed from a down outside the bands.
+       */
+      if (pointerInSubMark(event.clientX, event.clientY)) {
+        dropPanForSelection();
+        return;
+      }
 
       const dx = event.clientX - drag.startClientX;
       const dy = event.clientY - drag.startClientY;
@@ -4809,9 +4899,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         requestAnimationFrame(reportCodeSlot);
         requestAnimationFrame(reportLinedSlot);
         requestAnimationFrame(reportTitleSlot);
+        requestAnimationFrame(reportContentSlot);
       }
     },
-    [mobile, reportCodeSlot, reportLinedSlot, reportTitleSlot],
+    [mobile, reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot],
   );
 
   const fitFrame = useCallback(
@@ -5054,8 +5145,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       await wait(120);
       refitToViewport();
       await waitFrame();
+      reportContentSlot();
     })();
-  }, [refitToViewport]);
+  }, [refitToViewport, reportContentSlot]);
 
   /** Drop a configured stamp near the middle of what's currently on screen. */
   const stamp = useCallback(
@@ -5253,6 +5345,42 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
   }, []);
 
+  const pageExportLayers = useCallback((): PageExportLayers | null => {
+    if (!pageContentRef.current) return null;
+    const theme =
+      BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
+    const cssBg =
+      typeof document !== "undefined"
+        ? getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()
+        : "";
+    let bounds = pageBoundsRef.current;
+    // Capture can race the layout pass that fills pageBoundsRef — remeasure.
+    if (!bounds) {
+      const api = apiRef.current;
+      if (api) {
+        const live = api.getSceneElements() as unknown as PageableElement[];
+        const page = mobileRegionRef.current ?? "constraints";
+        const raw = pageBounds(live, page);
+        if (raw) {
+          const pad = REGION_GUTTER / 2;
+          bounds = {
+            minX: raw.minX + pad,
+            minY: raw.minY + pad,
+            maxX: raw.maxX - pad,
+            maxY: raw.maxY - pad,
+          };
+          pageBoundsRef.current = bounds;
+        }
+      }
+    }
+    return {
+      contentSlot: contentSlotNodeRef.current,
+      marksSlot: marksSlotNodeRef.current,
+      pageBounds: bounds,
+      paperColor: cssBg || theme.background || "#ffffff",
+    };
+  }, [themeId]);
+
   const captureEntireBoard = useCallback(async () => {
     const api = apiRef.current;
     if (!api) return;
@@ -5269,6 +5397,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       api,
       rasterInkRef.current?.getOps() ?? [],
       deviceExportScale(),
+      pageExportLayers(),
     );
     if (!blob || blob.size === 0) {
       feedback?.toast("Nothing to capture", "error");
@@ -5281,7 +5410,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       await insertImageFromDataURL(dataURL, "image/png");
     }
     await reportCapture(blob, mode);
-  }, [insertImageFromDataURL, reportCapture]);
+  }, [insertImageFromDataURL, pageExportLayers, reportCapture]);
 
   const beginRegionCapture = useCallback(() => {
     setCaptureMenuOpen(false);
@@ -5334,6 +5463,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         rasterInkRef.current?.getOps() ?? [],
         { x, y, width, height },
         deviceExportScale(),
+        pageExportLayers(),
       );
       if (!blob || blob.size === 0) {
         feedback?.toast("Nothing to capture", "error");
@@ -5345,7 +5475,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       await reportCapture(blob, mode);
     },
-    [clientToScene, insertImageFromDataURL, reportCapture],
+    [clientToScene, insertImageFromDataURL, pageExportLayers, reportCapture],
   );
 
 
@@ -5948,7 +6078,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (!api) return "";
         // Downscaled inside captureImage — a full-size export of this board is
         // tens of megabytes, which is what the daemon refused to buffer.
-        return captureImage(() => exportBoardBlob(api, rasterInkRef.current?.getOps() ?? []));
+        return captureImage(() =>
+          exportBoardBlob(api, rasterInkRef.current?.getOps() ?? [], 1, pageExportLayers()),
+        );
       },
       exportRegionThumbs: async () => {
         const api = apiRef.current;
@@ -6063,12 +6195,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             });
             const png = await captureImage(
               () =>
-                exportRegionBlob(api, ops, cropElements as SceneElementLike[], {
-                  x: crop.x,
-                  y: crop.y,
-                  width: crop.width,
-                  height: crop.height,
-                }),
+                exportRegionBlob(
+                  api,
+                  ops,
+                  cropElements as SceneElementLike[],
+                  {
+                    x: crop.x,
+                    y: crop.y,
+                    width: crop.width,
+                    height: crop.height,
+                  },
+                  1,
+                  pageExportLayers(),
+                ),
               { maxEdge: 640, maxBase64: 2 * 1024 * 1024 },
             );
             if (png) {
@@ -6099,10 +6238,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             (el) => !el.isDeleted && !el.customData?.lcRegionFrame && !el.customData?.lcVizId,
           );
           if (drawn.length > 0 || ops.length > 0) {
-            const png = await captureImage(() => exportBoardBlob(api, ops), {
+            const png = await captureImage(
+              () => exportBoardBlob(api, ops, 1, pageExportLayers()),
+              {
               maxEdge: 640,
               maxBase64: 2 * 1024 * 1024,
-            });
+            },
+            );
             if (png) thumbs.push({ region: STUDENT_REGION_ORDER[0], label: "Board", png });
           }
         }
@@ -6152,7 +6294,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
 
         const png = await captureImage(
-          () => exportRegionBlob(api, ops, visible, crop),
+          () => exportRegionBlob(api, ops, visible, crop, 1, pageExportLayers()),
           { maxEdge: 640, maxBase64: 2 * 1024 * 1024 },
         );
         return png ? { label: "This view", png } : null;
@@ -6707,7 +6849,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 {!mapChromeHidden && onThemePick && (
                   <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
                 )}
-                {!mapChromeHidden && onToggleSheetLock && (
+                {!mapChromeHidden && mobile && onToggleSheetLock && (
                   <button
                     type="button"
                     className={[
@@ -6781,6 +6923,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       {interactive && <ModeIndicator ref={modeIndicatorRef} />}
       {interactive && <PadTitle ref={padTitleRef} />}
       {interactive && mobileRegion === null && <PageIndicator ref={pageIndicatorRef} />}
+      {interactive && (
+        <ScrollBackHold
+          boardRef={boardRef}
+          onScrollBack={() => apiRef.current?.scrollToContent()}
+        />
+      )}
       <RasterInkLayer
         ref={rasterInkRef}
         enabled={interactive}

@@ -15,7 +15,14 @@
  * about *these* words, and follows the annotation set that owns them.
  */
 
-import { isRegionAnchor, isTextAnchor, normalizeAnchor, type DocAnchor } from "./docAnchors";
+import {
+  isRegionAnchor,
+  isTextAnchor,
+  normalizeAnchor,
+  type DocAnchor,
+  type TextAnchor,
+} from "./docAnchors";
+import type { LocalRect } from "./docMarquee";
 
 export type DocFootnoteKind = "coach" | "search" | "note";
 
@@ -101,6 +108,46 @@ export interface DocFootnote {
    * for when a reader wants to mean something by it.
    */
   color?: string;
+  /**
+   * Content-block boxes under the selection (body-local), for region chrome.
+   *
+   * When present, the page paints these instead of the full marquee rectangle
+   * so the mark hugs paragraphs / pre / figures. Absent = older footnotes that
+   * only stored the rubber-band region.
+   */
+  bands?: LocalRect[];
+  /**
+   * Full text under the selection (not the clamped excerpt).
+   *
+   * The overview panel shows this as the collapsible block quote; sub-marks
+   * index into it. Absent = older footnotes that only stored `excerpt`.
+   */
+  blockText?: string;
+  /**
+   * Narrower underline / highlight marks inside {@link blockText}.
+   */
+  subMarks?: DocFootnoteSubMark[];
+}
+
+export type DocFootnoteSubMarkKind = "underline" | "highlight";
+
+/**
+ * A narrower underline / highlight inside a parent mark.
+ *
+ * `anchor` is where it lives on the page; `start` / `end` index into
+ * {@link DocFootnote.blockText} when that field is present for coach context.
+ */
+export interface DocFootnoteSubMark {
+  id: string;
+  kind: DocFootnoteSubMarkKind;
+  /** Slice of {@link DocFootnote.blockText} / excerpt. */
+  excerpt: string;
+  /** Inclusive start offset into the block text. */
+  start: number;
+  /** Exclusive end offset. */
+  end: number;
+  /** Live page anchor when the sub-mark was made on the document. */
+  anchor?: TextAnchor;
 }
 
 /** `#rgb` or `#rrggbb`, which is all a palette ever produces. */
@@ -144,6 +191,16 @@ export function freshFootnoteId(existing: readonly DocFootnote[], now = Date.now
 /** Ids are per-footnote, so the same timestamp-with-a-guard shape does. */
 export function freshNoteId(existing: readonly DocFootnoteNote[], now = Date.now()): string {
   const base = `nt-${now.toString(36)}`;
+  if (!existing.some((entry) => entry.id === base)) return base;
+  for (let suffix = 1; ; suffix += 1) {
+    const candidate = `${base}-${suffix.toString(36)}`;
+    if (!existing.some((entry) => entry.id === candidate)) return candidate;
+  }
+}
+
+/** Ids for in-panel underline / highlight slices. */
+export function freshSubMarkId(existing: readonly DocFootnoteSubMark[], now = Date.now()): string {
+  const base = `sm-${now.toString(36)}`;
   if (!existing.some((entry) => entry.id === base)) return base;
   for (let suffix = 1; ; suffix += 1) {
     const candidate = `${base}-${suffix.toString(36)}`;
@@ -406,6 +463,12 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
       // A colour that is not a colour is dropped rather than passed through to
       // an inline style, where anything at all would be accepted.
       const color = isHexColor(candidate.color) ? candidate.color.trim() : undefined;
+      const bands = sanitizeBands(candidate.bands);
+      const blockText =
+        typeof candidate.blockText === "string" && candidate.blockText.trim()
+          ? candidate.blockText
+          : undefined;
+      const subMarks = sanitizeSubMarks(candidate.subMarks);
       return [
         {
           ...(rest as DocFootnote),
@@ -414,10 +477,71 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
           threads,
           ...(userLinks ? { userLinks } : {}),
           ...(color ? { color } : {}),
+          ...(bands ? { bands } : {}),
+          ...(blockText ? { blockText } : {}),
+          ...(subMarks ? { subMarks } : {}),
         },
       ];
     })
     .sort(sortByPosition);
+}
+
+/** Accept finite local rects only; drop the field when empty/corrupt. */
+function sanitizeBands(value: unknown): LocalRect[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const out: LocalRect[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const r = entry as Partial<LocalRect>;
+    if (
+      !Number.isFinite(r.left) ||
+      !Number.isFinite(r.top) ||
+      !Number.isFinite(r.width) ||
+      !Number.isFinite(r.height)
+    ) {
+      continue;
+    }
+    if ((r.width as number) <= 0 || (r.height as number) <= 0) continue;
+    out.push({
+      left: r.left as number,
+      top: r.top as number,
+      width: r.width as number,
+      height: r.height as number,
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+const SUB_MARK_KINDS: ReadonlySet<DocFootnoteSubMarkKind> = new Set([
+  "underline",
+  "highlight",
+]);
+
+function sanitizeSubMarks(value: unknown): DocFootnoteSubMark[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const out: DocFootnoteSubMark[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const mark = entry as Partial<DocFootnoteSubMark>;
+    if (typeof mark.id !== "string" || !mark.id) continue;
+    if (!SUB_MARK_KINDS.has(mark.kind as DocFootnoteSubMarkKind)) continue;
+    if (!Number.isFinite(mark.start) || !Number.isFinite(mark.end)) continue;
+    const start = mark.start as number;
+    const end = mark.end as number;
+    if (end <= start || start < 0) continue;
+    const excerpt = typeof mark.excerpt === "string" ? mark.excerpt : "";
+    const anchor = normalizeAnchor(mark.anchor);
+    const textAnchor = anchor && isTextAnchor(anchor) ? anchor : undefined;
+    out.push({
+      id: mark.id,
+      kind: mark.kind as DocFootnoteSubMarkKind,
+      excerpt,
+      start,
+      end,
+      ...(textAnchor ? { anchor: textAnchor } : {}),
+    });
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 /** Google Search URL for a quote — the query is the words, nothing added. */
@@ -494,6 +618,22 @@ export function footnoteRevision(footnotes: readonly DocFootnote[]): string {
         entry.threadRootId ?? "",
         (entry.threads ?? []).map((thread) => `${thread.rootId}|${thread.title}`).join("\x1f"),
         (entry.userLinks ?? []).map((link) => `${link.title ?? ""}|${link.url}`).join("\x1f"),
+        (entry.bands ?? [])
+          .map((b) => `${b.left},${b.top},${b.width},${b.height}`)
+          .join("\x1f"),
+        entry.blockText ?? "",
+        (entry.subMarks ?? [])
+          .map((m) =>
+            [
+              m.id,
+              m.kind,
+              m.start,
+              m.end,
+              m.excerpt,
+              m.anchor ? `${m.anchor.start}:${m.anchor.end}:${m.anchor.scope ?? ""}` : "",
+            ].join(":"),
+          )
+          .join("\x1f"),
       ].join("\x1e"),
     )
     .join("\x1d");

@@ -20,6 +20,21 @@
   --surface: rgb(255 255 255 / 94%);
   --select-edge: #3f4f63;
   --select-fill: rgb(63 79 99 / 11%);
+  /*
+   * Hold-to-fill washes — one recipe app-wide.
+   * Soft: dark text on rows (choices, recent docs). Pill: white-text chrome buttons.
+   * Never full opaque accent — that reads louder than the rest of the UI.
+   */
+  --lc-hold-wash-top: color-mix(in srgb, var(--accent) 20%, transparent);
+  --lc-hold-wash-bottom: color-mix(in srgb, var(--accent) 34%, transparent);
+  --lc-hold-pill-top: color-mix(in srgb, var(--accent) 48%, transparent);
+  --lc-hold-pill-mid: color-mix(in srgb, var(--accent) 58%, transparent);
+  --lc-hold-pill-bottom: color-mix(in srgb, var(--accent) 52%, #000 10%);
+  --lc-hold-danger-wash-top: color-mix(in srgb, var(--bad) 18%, transparent);
+  --lc-hold-danger-wash-bottom: color-mix(in srgb, var(--bad) 32%, transparent);
+  --lc-hold-danger-pill-top: color-mix(in srgb, var(--bad) 48%, transparent);
+  --lc-hold-danger-pill-mid: color-mix(in srgb, var(--bad) 58%, transparent);
+  --lc-hold-danger-pill-bottom: color-mix(in srgb, var(--bad) 52%, #000 10%);
   /* System bars (Android nav, iOS home indicator). Overridden on mobile below. */
   --lc-safe-top: env(safe-area-inset-top, 0px);
   --lc-safe-right: env(safe-area-inset-right, 0px);
@@ -69,10 +84,142 @@ body {
   background: color-mix(in srgb, var(--ink) 42%, transparent);
 }
 
-*::-webkit-scrollbar-button {
-  display: none;
+/*
+ * Kill the ↑↓ / ←→ stepper buttons Windows Chromium still paints on some
+ * themes even when `display: none` is set on the bare button selector.
+ * Fat panes need the same rules scoped — wide tracks are what bring steppers back.
+ */
+*::-webkit-scrollbar-button,
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:double-button,
+*::-webkit-scrollbar-button:start,
+*::-webkit-scrollbar-button:end,
+*::-webkit-scrollbar-button:vertical:start:decrement,
+*::-webkit-scrollbar-button:vertical:end:increment,
+*::-webkit-scrollbar-button:vertical:start:increment,
+*::-webkit-scrollbar-button:vertical:end:decrement,
+*::-webkit-scrollbar-button:horizontal:start:decrement,
+*::-webkit-scrollbar-button:horizontal:end:increment,
+*::-webkit-scrollbar-button:horizontal:start:increment,
+*::-webkit-scrollbar-button:horizontal:end:decrement,
+*::-webkit-scrollbar-button:decrement,
+*::-webkit-scrollbar-button:increment,
+*::-webkit-scrollbar-button:single-button:vertical:decrement,
+*::-webkit-scrollbar-button:single-button:vertical:increment,
+*::-webkit-scrollbar-button:single-button:horizontal:decrement,
+*::-webkit-scrollbar-button:single-button:horizontal:increment,
+.lc-scroll-pane::-webkit-scrollbar-button,
+.lc-scroll-pane::-webkit-scrollbar-button:single-button,
+.lc-scroll-pane::-webkit-scrollbar-button:double-button,
+.lc-scroll-pane::-webkit-scrollbar-button:vertical:start:decrement,
+.lc-scroll-pane::-webkit-scrollbar-button:vertical:end:increment,
+.lc-scroll-pane::-webkit-scrollbar-button:single-button:vertical:decrement,
+.lc-scroll-pane::-webkit-scrollbar-button:single-button:vertical:increment {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: 0 !important;
+  max-height: 0 !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+*::-webkit-scrollbar-corner,
+.lc-scroll-pane::-webkit-scrollbar-corner {
+  background: transparent;
   width: 0;
   height: 0;
+}
+
+/*
+ * Fat track (settings-style): easy to grab, and clicking the gap jumps by a
+ * page — native WebKit behaviour once the track is wide enough to hit.
+ *
+ * Chrome 121+ (and the global `*` thin scrollbar rule): any `scrollbar-color`
+ * other than `auto` disables ALL `::-webkit-scrollbar-*` styling — including
+ * width and `::-webkit-scrollbar-button { display: none }`. That leaves the
+ * OS scrollbar with ↑↓ steppers. Keep standard props at `auto` here so WebKit
+ * rules below actually apply; Firefox gets a fallback at the bottom.
+ */
+.lc-scroll-pane {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+.lc-scroll-pane::-webkit-scrollbar {
+  width: 16px;
+  height: 16px;
+}
+
+.lc-scroll-pane::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lc-scroll-pane::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 4px solid transparent;
+  background-clip: padding-box;
+  background: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+
+.lc-scroll-pane::-webkit-scrollbar-thumb:hover,
+.lc-scroll-pane::-webkit-scrollbar-thumb:active {
+  border-width: 2px;
+  background: color-mix(in srgb, var(--ink) 46%, transparent);
+}
+
+/* Must follow thumb/track — scoped kill for fat-pane steppers (Windows Chromium). */
+.lc-scroll-pane::-webkit-scrollbar-button,
+.lc-scroll-pane::-webkit-scrollbar-button:single-button,
+.lc-scroll-pane::-webkit-scrollbar-button:double-button,
+.lc-scroll-pane::-webkit-scrollbar-button:vertical,
+.lc-scroll-pane::-webkit-scrollbar-button:horizontal,
+.lc-scroll-pane::-webkit-scrollbar-button:start,
+.lc-scroll-pane::-webkit-scrollbar-button:end,
+.lc-scroll-pane::-webkit-scrollbar-button:vertical:start:decrement,
+.lc-scroll-pane::-webkit-scrollbar-button:vertical:end:increment,
+.lc-scroll-pane::-webkit-scrollbar-button:vertical:start:increment,
+.lc-scroll-pane::-webkit-scrollbar-button:vertical:end:decrement,
+.lc-scroll-pane::-webkit-scrollbar-button:horizontal:start:decrement,
+.lc-scroll-pane::-webkit-scrollbar-button:horizontal:end:increment,
+.lc-scroll-pane::-webkit-scrollbar-button:horizontal:start:increment,
+.lc-scroll-pane::-webkit-scrollbar-button:horizontal:end:decrement,
+.lc-scroll-pane::-webkit-scrollbar-button:decrement,
+.lc-scroll-pane::-webkit-scrollbar-button:increment,
+.lc-scroll-pane::-webkit-scrollbar-button:single-button:vertical:decrement,
+.lc-scroll-pane::-webkit-scrollbar-button:single-button:vertical:increment,
+.lc-scroll-pane::-webkit-scrollbar-button:single-button:horizontal:decrement,
+.lc-scroll-pane::-webkit-scrollbar-button:single-button:horizontal:increment,
+.lc-scroll-pane::-webkit-scrollbar-button:double-button:vertical:decrement,
+.lc-scroll-pane::-webkit-scrollbar-button:double-button:vertical:increment {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: 0 !important;
+  max-height: 0 !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .lc-scroll-pane {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--ink) 32%, transparent) transparent;
+  }
 }
 
 .lc-app {
@@ -1319,9 +1466,53 @@ input[type="checkbox"] {
 .lc-mobile .lc-board .FixedSideContainer,
 .lc-mobile .lc-board .layer-ui__wrapper .Island,
 .lc-mobile .lc-board .Stack.zoom-actions,
-.lc-mobile .lc-board .undo-redo-buttons,
-.lc-mobile .lc-board .scroll-back-to-content {
+.lc-mobile .lc-board .undo-redo-buttons {
   display: none !important;
+}
+
+/*
+ * Excalidraw's tap "Scroll back to content" — mute visually and to hits, but
+ * leave display alone so {@link ScrollBackHold} can mirror when it appears.
+ * Our hold-to-fill control is `.lc-scroll-back-hold`.
+ */
+.lc-board .scroll-back-to-content {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  color: transparent !important;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.lc-scroll-back-hold {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  z-index: 14;
+  transform: translateX(-50%);
+  min-width: 0;
+  min-height: 0;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent, #0d9488) 55%, transparent);
+  background: color-mix(in srgb, var(--accent, #0d9488) 14%, var(--panel, #fff));
+  color: var(--ink, #1a1a1a);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 16%);
+}
+
+.lc-scroll-back-hold .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    var(--lc-hold-wash-top) 0%,
+    var(--lc-hold-wash-bottom) 100%
+  );
+}
+
+.lc-scroll-back-hold .lc-hold-reveal-label {
+  color: inherit;
 }
 
 /* Mid-drag the fade is the gesture, so it must not lag behind the finger. */
@@ -4578,25 +4769,108 @@ code {
 }
 
 .lc-browser-filters {
-  display: flex;
+  display: grid;
+  /* Search grows; selects stay compact — native <select> used to inflate to
+     longest option (tag list → half the row). */
+  grid-template-columns: minmax(12rem, 1fr) 7.5rem 8.5rem 6.5rem;
   gap: 8px;
-  flex-wrap: wrap;
+  align-items: center;
 }
 
 .lc-browser-filters input[type="search"],
-.lc-browser-filters select {
-  border-color: var(--chrome-edge);
+.lc-browser-filters .lc-filter-select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .lc-browser-filters input[type="search"] {
-  flex: 0 1 140px;
-  max-width: 160px;
-  min-width: 96px;
+  border-color: var(--chrome-edge);
 }
 
-.lc-browser-filters select {
-  flex: 1 1 0;
+.lc-filter-select {
+  position: relative;
   min-width: 0;
+}
+
+.lc-filter-select-trigger {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--touch, 40px);
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--surface, var(--panel, var(--bg)));
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 55%,
+    calc(100% - 9px) 55%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.lc-filter-select-trigger:not(.has-value) .lc-filter-select-label {
+  color: var(--muted);
+  opacity: 0.9;
+}
+
+.lc-filter-select-trigger.is-open {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--chrome-edge));
+}
+
+.lc-filter-select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-filter-select-menu {
+  position: fixed;
+  z-index: 160;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--surface, var(--panel, var(--bg)));
+  box-shadow: 0 10px 28px rgb(0 0 0 / 22%);
+  overflow-x: hidden;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.lc-filter-select-option {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lc-filter-select-option:hover,
+.lc-filter-select-option:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: none;
+}
+
+.lc-filter-select-option.is-active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  font-weight: 600;
 }
 
 .lc-table-head,
@@ -4841,8 +5115,8 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-browser-foot .lc-browser-start-hold .lc-hold-reveal-fill {
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--accent) 20%, transparent) 0%,
-    color-mix(in srgb, var(--accent) 34%, transparent) 100%
+    var(--lc-hold-wash-top) 0%,
+    var(--lc-hold-wash-bottom) 100%
   );
 }
 
@@ -5150,44 +5424,6 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: auto;
   flex: 1;
   min-height: 0;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--ink) 32%, transparent) transparent;
-}
-
-/*
- * Wide enough to catch with a thumb.
- *
- * 6px is a scrollbar you read, not one you drag — on a tablet it takes two or
- * three tries to land on. The code dock already solved this; Settings is the
- * page that still had the thin one, and it is the longer scroll of the two.
- */
-.lc-settings-body::-webkit-scrollbar {
-  width: 14px;
-}
-
-.lc-settings-body::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.lc-settings-body::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  /* Padding via a transparent border so the thumb stays visually slim while
-     the draggable box is the full track width. */
-  border: 4px solid transparent;
-  background-clip: padding-box;
-  background: color-mix(in srgb, var(--ink) 28%, transparent);
-}
-
-.lc-settings-body::-webkit-scrollbar-thumb:hover,
-.lc-settings-body::-webkit-scrollbar-thumb:active {
-  border-width: 2px;
-  background: color-mix(in srgb, var(--ink) 46%, transparent);
-}
-
-.lc-settings-body::-webkit-scrollbar-button {
-  display: none;
-  width: 0;
-  height: 0;
 }
 
 /*
@@ -5539,26 +5775,25 @@ button.lc-row-selected:hover:not(:disabled) {
   touch-action: none;
 }
 
-.lc-server-gate-boot > .lc-spinner {
-  position: relative;
-  z-index: 1;
-  pointer-events: none;
-}
-
-.lc-server-gate-boot > .lc-spinner-check {
-  position: relative;
-  z-index: 1;
-  pointer-events: none;
-}
-
 .lc-loading-doodle {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  z-index: 0;
+  z-index: 1;
+  pointer-events: auto;
   touch-action: none;
   cursor: crosshair;
+  color: inherit;
+}
+
+.lc-server-gate-boot > .lc-spinner,
+.lc-server-gate-boot > .lc-spinner-check,
+.lc-overlay-spinner > .lc-spinner,
+.lc-overlay-spinner > .lc-spinner-check {
+  position: relative;
+  z-index: 2;
+  pointer-events: none;
 }
 
 .lc-coach-live {
@@ -5758,7 +5993,11 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-hold-reveal.lc-hold-icon .lc-hold-reveal-fill {
-  background: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: linear-gradient(
+    180deg,
+    var(--lc-hold-wash-top) 0%,
+    var(--lc-hold-wash-bottom) 100%
+  );
 }
 
 .lc-hold-reveal.lc-hold-icon .lc-hold-reveal-label {
@@ -5795,9 +6034,9 @@ button.lc-row-selected:hover:not(:disabled) {
   z-index: 0;
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--accent) 78%, #fff 12%) 0%,
-    var(--accent) 55%,
-    color-mix(in srgb, var(--accent) 82%, #000 18%) 100%
+    var(--lc-hold-pill-top) 0%,
+    var(--lc-hold-pill-mid) 55%,
+    var(--lc-hold-pill-bottom) 100%
   );
   transform: translateY(calc((1 - var(--lc-hold, 0)) * 100%));
   transition: none;
@@ -5860,9 +6099,9 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-hold-danger .lc-hold-reveal-fill {
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--bad) 78%, #fff 12%) 0%,
-    var(--bad) 55%,
-    color-mix(in srgb, var(--bad) 82%, #000 18%) 100%
+    var(--lc-hold-danger-pill-top) 0%,
+    var(--lc-hold-danger-pill-mid) 55%,
+    var(--lc-hold-danger-pill-bottom) 100%
   );
 }
 
@@ -5912,16 +6151,16 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-hold-choice .lc-hold-reveal-fill {
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--accent) 20%, transparent) 0%,
-    color-mix(in srgb, var(--accent) 34%, transparent) 100%
+    var(--lc-hold-wash-top) 0%,
+    var(--lc-hold-wash-bottom) 100%
   );
 }
 
 .lc-hold-danger.lc-hold-choice .lc-hold-reveal-fill {
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--bad) 18%, transparent) 0%,
-    color-mix(in srgb, var(--bad) 32%, transparent) 100%
+    var(--lc-hold-danger-wash-top) 0%,
+    var(--lc-hold-danger-wash-bottom) 100%
   );
 }
 
@@ -6727,6 +6966,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-dataset-tabs {
   gap: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
   flex-wrap: nowrap;
 }
@@ -6748,6 +6988,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /* Filters: one compact row; scroll horizontally on the narrowest phones. */
 .lc-mobile .lc-browser-filters {
+  display: flex;
   flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
@@ -6761,7 +7002,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-browser-filters input[type="search"],
-.lc-mobile .lc-browser-filters select {
+.lc-mobile .lc-browser-filters .lc-filter-select-trigger {
   min-height: 24px;
   height: 24px;
   padding: 0 4px;
@@ -6775,13 +7016,18 @@ button.lc-row-selected:hover:not(:disabled) {
   max-width: none;
 }
 
-.lc-mobile .lc-browser-filters select {
+.lc-mobile .lc-browser-filters .lc-filter-select {
   flex: 1 1 0;
   min-width: 0;
   max-width: 4.75rem;
-  padding-right: 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.lc-mobile .lc-browser-filters .lc-filter-select-trigger {
+  padding-right: 14px;
+  background-position:
+    calc(100% - 10px) 55%,
+    calc(100% - 6px) 55%;
+  background-size: 4px 4px, 4px 4px;
 }
 
 .lc-mobile .lc-browser-results {
@@ -6920,7 +7166,7 @@ button.lc-row-selected:hover:not(:disabled) {
 /* Tablet / landscape Magic Note Pad: room for tags + fuller chrome, still one row. */
 @media (min-width: 601px) {
   .lc-mobile .lc-browser-filters input[type="search"],
-  .lc-mobile .lc-browser-filters select {
+  .lc-mobile .lc-browser-filters .lc-filter-select-trigger {
     min-height: 28px;
     height: 28px;
     font-size: 12px;
@@ -6933,7 +7179,7 @@ button.lc-row-selected:hover:not(:disabled) {
     max-width: none;
   }
 
-  .lc-mobile .lc-browser-filters select {
+  .lc-mobile .lc-browser-filters .lc-filter-select {
     flex: 1 1 0;
     max-width: 6rem;
   }
@@ -6974,7 +7220,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /* Very narrow (iPhone SE / Galaxy portrait): tighter still. */
 @media (max-width: 400px) {
-  .lc-mobile .lc-browser-filters select {
+  .lc-mobile .lc-browser-filters .lc-filter-select {
     flex: 1 1 0;
     min-width: 0;
   }
@@ -7296,7 +7542,17 @@ button.lc-row-selected:hover:not(:disabled) {
   flex: 1;
   min-width: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   border-bottom: none;
+  /* One-line tab strip — never a vertical scrollbar; scroll is wheel-only. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.lc-dataset-tabs::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .lc-dataset-tab {
@@ -7504,6 +7760,15 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 3px;
 }
 
+/* Same soft wash as `.lc-hold-choice` — not the saturated pill fill. */
+.lc-scratch-load-hold .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    var(--lc-hold-wash-top) 0%,
+    var(--lc-hold-wash-bottom) 100%
+  );
+}
+
 .lc-scratch-load-hold strong {
   font-size: 13.5px;
 }
@@ -7553,9 +7818,8 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-scratch-load-trash .lc-hold-reveal-fill {
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--bad, #b91c1c) 78%, #fff 12%) 0%,
-    var(--bad, #b91c1c) 55%,
-    color-mix(in srgb, var(--bad, #b91c1c) 82%, #000 18%) 100%
+    var(--lc-hold-danger-wash-top) 0%,
+    var(--lc-hold-danger-wash-bottom) 100%
   );
 }
 
@@ -8337,34 +8601,24 @@ button.lc-row-selected:hover:not(:disabled) {
   --lc-fn-text: #2c3a8c;
 
   /*
-   * A ribbon the reader coloured.
+   * Number chip inset in the mark box (top-right), not a tab hanging outside.
    *
    * One value comes in from the footnote — `--lc-fn-color` — and the edge and
-   * the label are derived from it here rather than stored three times. That is
-   * what keeps a colour chosen months ago from drifting out of step with how a
-   * ribbon is drawn, and it means a palette only ever has to yield one hex.
+   * the label are derived from it here rather than stored three times.
    */
   position: absolute;
-  /*
-   * Rides above the line, like the superscript it stands in for. Sitting *in*
-   * the line put the marker on top of the next word, which is a mark that makes
-   * the page harder to read in the name of annotating it.
-   *
-   * Sized in page units, so it scales with the type it annotates rather than
-   * growing into a lozenge the moment the reader zooms in.
-   */
-  transform: translate(2px, -60%);
-  /* `min-height: 0` beats the base `button` rule's touch target — a marker is
-     read at page scale, not tapped at chrome scale. */
-  min-width: 13px;
-  min-height: 0;
-  height: 13px;
-  padding: 0 3px;
-  border-radius: 7px 7px 7px 2px;
+  transform: none;
+  /* Beat `.lc-hold-reveal` pill sizing — marker is page-scale, not chrome. */
+  min-width: 16px !important;
+  width: 16px;
+  min-height: 0 !important;
+  height: 16px;
+  padding: 0 !important;
+  border-radius: 4px;
   border: 1px solid var(--lc-fn-edge);
   background: var(--lc-fn-fill);
   color: var(--lc-fn-text);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -8372,39 +8626,32 @@ button.lc-row-selected:hover:not(:disabled) {
   align-items: center;
   justify-content: center;
   pointer-events: auto;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 18%);
+  clip-path: none;
+  overflow: hidden;
   animation: lc-doc-footnote-pop 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* The speech tail — a small wedge off the lower-left, as on a chat bubble. */
+/* Speech-bubble / bookmark-tab silhouettes retired — inset chip only. */
 .lc-doc-footnote::after {
-  content: "";
-  position: absolute;
-  left: -1px;
-  bottom: -3px;
-  width: 5px;
-  height: 5px;
-  background: var(--lc-fn-fill);
-  border-left: 1px solid var(--lc-fn-edge);
-  border-bottom: 1px solid var(--lc-fn-edge);
-  border-bottom-left-radius: 1px;
-  clip-path: polygon(0 100%, 100% 100%, 0 0);
+  content: none;
 }
 
 @keyframes lc-doc-footnote-pop {
   from {
     opacity: 0;
-    transform: translate(2px, -60%) scale(0.6);
+    transform: scale(0.85);
   }
   to {
     opacity: 1;
-    transform: translate(2px, -60%) scale(1);
+    transform: none;
   }
 }
 
 .lc-doc-footnote-tag {
   position: relative;
   z-index: 1;
+  margin-top: 0;
 }
 
 /* A search leads off the page rather than into the chat — ink, not accent. */
@@ -8421,32 +8668,23 @@ button.lc-row-selected:hover:not(:disabled) {
   --lc-fn-text: #6b4b00;
 }
 
-/* Dark paper: same hues, lifted so they read on a near-black page. */
 /*
- * The water balloon.
- *
- * `.lc-hold-reveal-fill` already rises from the bottom on `--lc-hold`, so a
- * ribbon held down swells with its own colour and pops. Overriding only the
- * paint — the motion is the shared one every other hold button uses.
+ * Hold fill left → right across the bookmark tab.
  */
-.lc-doc-footnote {
-  /* The speech tail hangs outside the box — see `::after` below — so the fill
-     cannot be clipped by the button and rises by height instead. */
-  overflow: visible;
-}
-
 .lc-doc-footnote .lc-hold-reveal-fill {
-  inset: auto 0 0 0;
-  height: calc(var(--lc-hold, 0) * 100%);
+  inset: 0 auto 0 0;
+  width: calc(var(--lc-hold, 0) * 100%);
+  height: 100%;
   transform: none;
   background: var(--lc-fn-edge);
-  border-radius: inherit;
+  border-radius: 0;
 }
 
 .lc-doc-footnote .lc-hold-reveal-label {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  width: 100%;
 }
 
 :root[data-theme="dark"] .lc-doc-footnote {
@@ -8468,73 +8706,16 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * A region mark is the area, not a point beside it.
- *
- * The button becomes the highlighted box — a translucent wash in the marker's
- * own colour — and the numbered bubble tucks into its top-left corner. A
- * highlighter sweep over a figure then reads as "this figure is annotated"
- * rather than as a badge floating near it.
- */
-/*
  * A colour the reader chose, and it beats everything above.
  *
- * Placed after the kind defaults and the mode overrides deliberately: they are
- * the same weight, so this wins on source order. Put earlier — where it
- * originally was — a coloured ribbon came out the theme's blue on a dark page,
- * which looks exactly like the colour not having been saved.
- *
- * The leading `:root` is load-bearing. The mode rules are
- * `:root[data-theme="dark"] .lc-doc-footnote`, three selectors' worth; without
- * this the reader's colour was two, and would have lost to them on every dark
- * theme — the same bug one layer along, and invisible in light mode.
+ * The leading `:root` is load-bearing against dark-theme kind defaults.
+ * Primary (`--lc-fn-color`) owns the edge; light/deep from the board palette
+ * soften fill and label when present.
  */
 :root .lc-doc-footnote[style*="--lc-fn-color"] {
-  --lc-fn-fill: var(--lc-fn-color);
-  --lc-fn-edge: color-mix(in srgb, var(--lc-fn-color) 62%, #000);
-  --lc-fn-text: color-mix(in srgb, var(--lc-fn-color) 22%, #000);
-}
-
-.lc-doc-footnote[data-region] {
-  transform: none;
-  padding: 0;
-  min-width: 0;
-  min-height: 0;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--lc-fn-edge) 22%, transparent);
-  border-color: color-mix(in srgb, var(--lc-fn-edge) 55%, transparent);
-  box-shadow: none;
-  align-items: flex-start;
-  justify-content: flex-start;
-  /*
-   * The wash does not pop; the number on it does.
-   *
-   * A translucent area fading in reads as the page changing rather than as a
-   * mark arriving, and an animation whose resting state comes from `fill-mode`
-   * is one more thing that can leave the box invisible if it never gets a first
-   * frame. The box is simply there, and the bubble springs in.
-   */
-  animation: none;
-  opacity: 1;
-}
-
-.lc-doc-footnote[data-region]::after {
-  content: none;
-}
-
-.lc-doc-footnote[data-region] .lc-doc-footnote-tag {
-  animation: lc-doc-footnote-pop 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  margin: -7px 0 0 -3px;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 3px;
-  border-radius: 7px 7px 7px 2px;
-  border: 1px solid var(--lc-fn-edge);
-  background: var(--lc-fn-fill);
-  color: var(--lc-fn-text);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
+  --lc-fn-fill: color-mix(in srgb, var(--lc-fn-color) 38%, var(--lc-fn-light, #fff));
+  --lc-fn-edge: var(--lc-fn-color);
+  --lc-fn-text: var(--lc-fn-deep, color-mix(in srgb, var(--lc-fn-color) 22%, #000));
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -8579,6 +8760,35 @@ button.lc-row-selected:hover:not(:disabled) {
    * measurement has to animate in opacity and scale only.
    */
   animation: lc-doc-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Selection confirm ↔ actions: Motion owns the morph — no CSS pop fight. */
+.lc-doc-selection-chrome {
+  animation: none;
+}
+
+.lc-doc-confirm.lc-doc-selection-chrome,
+.lc-doc-sheet.lc-doc-selection-chrome {
+  overflow: hidden;
+  animation: none;
+}
+
+.lc-doc-confirm-row {
+  display: flex;
+  gap: 4px;
+}
+
+.lc-doc-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.lc-doc-sheet-actions-menu {
+  padding: 6px;
+  border-radius: 14px;
+  gap: 6px;
 }
 
 /* Grows in place. See the note above on why nothing here may translate. */
@@ -8672,26 +8882,274 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-doc-sheet-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
+  padding: 0;
 }
 
-.lc-doc-sheet-actions button {
-  flex: 1 1 auto;
-  min-height: 34px;
+.lc-doc-sheet-actions button,
+.lc-doc-sheet-action {
+  flex: 0 0 auto;
+  min-height: 28px !important;
+  height: 28px;
+  padding: 0 10px 0 8px !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
   white-space: nowrap;
+  border-radius: 999px;
+  border: 1px solid var(--chrome-edge, var(--line));
+  background: color-mix(in srgb, var(--panel, #fff) 88%, var(--bg, #f5f5f5));
+  color: var(--ink, inherit);
+  cursor: pointer;
+}
+
+.lc-doc-sheet-action:hover {
+  border-color: color-mix(in srgb, var(--accent, #0d9488) 45%, var(--chrome-edge, var(--line)));
+  background: color-mix(in srgb, var(--accent, #0d9488) 10%, var(--panel, #fff));
+}
+
+.lc-doc-sheet-action-icon {
+  flex: 0 0 auto;
+  display: block;
+  opacity: 0.85;
 }
 
 /* Footnote overview — compact mini card; user links only (no default suggestions). */
 .lc-footnote-overview {
   position: fixed;
   width: min(260px, 86vw);
-  max-width: min(260px, 86vw);
-  max-height: min(70vh, 420px);
+  max-width: min(260px, min(280px, calc(var(--lc-vvw, 100vw) - 32px)));
+  max-height: min(70vh, calc(var(--lc-vvh, 100vh) - 32px), 420px);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   overflow: hidden;
   padding: 8px;
+}
+
+.lc-footnote-overview.is-task {
+  width: min(280px, calc(var(--lc-vvw, 100vw) - 32px));
+  max-width: min(280px, calc(var(--lc-vvw, 100vw) - 32px));
+}
+
+.lc-footnote-overview.is-task-compact {
+  max-height: min(320px, calc(var(--lc-vvh, 100vh) - 32px));
+}
+
+.lc-footnote-overview.is-task-thread {
+  max-height: min(62vh, calc(var(--lc-vvh, 100vh) - 32px), 520px);
+}
+
+.lc-footnote-overview.is-submark-armed {
+  max-width: min(220px, calc(var(--lc-vvw, 100vw) - 32px));
+  /*
+   * Pass hits through to the mark box so underline/highlight can drag text.
+   * Only the mode toggles / color control stay clickable.
+   */
+  pointer-events: none;
+}
+
+.lc-footnote-overview.is-submark-armed .lc-footnote-mark-tool,
+.lc-footnote-overview.is-submark-armed .lc-footnote-overview-color,
+.lc-footnote-overview.is-submark-armed .lc-footnote-panel-clear {
+  pointer-events: auto;
+}
+
+.lc-doc-sheet-backdrop.is-pass-through {
+  pointer-events: none;
+  background: transparent;
+}
+
+.lc-footnote-overview-hub,
+.lc-footnote-overview-task {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.lc-footnote-overview-task-compact {
+  flex: 0 0 auto;
+}
+
+.lc-footnote-overview-task-thread {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.lc-footnote-overview-task-field {
+  width: 100%;
+  resize: vertical;
+  min-height: 4.5rem;
+  max-height: 10rem;
+}
+
+.lc-footnote-overview-task-thread .lc-footnote-overview-task-field {
+  flex: 1 1 auto;
+  min-height: 6rem;
+  max-height: none;
+}
+
+.lc-footnote-overview-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.lc-footnote-overview-toolbar .lc-footnote-submark-modes {
+  margin: 0;
+  gap: 2px;
+}
+
+.lc-footnote-mark-tool {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px !important;
+  max-height: 28px;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--border, #ccc) 80%, transparent);
+  background: color-mix(in srgb, var(--panel, #fff) 92%, transparent) !important;
+  color: var(--ink, inherit) !important;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.lc-footnote-mark-tool.is-active {
+  border-color: color-mix(in srgb, var(--accent, #0d9488) 70%, transparent);
+  background: color-mix(in srgb, var(--accent, #0d9488) 16%, transparent);
+}
+
+.lc-footnote-overview-toolbar .lc-color-radial-compact .lc-color-dot {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px !important;
+  max-height: 28px;
+  padding: 0 !important;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.lc-footnote-overview-toolbar .lc-color-radial-compact .lc-color-dot-fill {
+  width: 16px;
+  height: 16px;
+}
+
+.lc-footnote-chip {
+  min-height: 22px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1;
+  border: 1px solid color-mix(in srgb, var(--border, #ccc) 80%, transparent);
+  background: color-mix(in srgb, var(--panel, #fff) 92%, transparent);
+  color: var(--fg, inherit);
+  cursor: pointer;
+}
+
+.lc-footnote-chip.is-active {
+  border-color: color-mix(in srgb, var(--accent, #0d9488) 70%, transparent);
+  background: color-mix(in srgb, var(--accent, #0d9488) 16%, transparent);
+}
+
+.lc-footnote-overview-swatches-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+}
+
+.lc-footnote-overview-color {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.lc-footnote-panel-clear {
+  margin-left: auto;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 22px !important;
+  max-height: 22px;
+  padding: 0 !important;
+  border: 0;
+  border-radius: 6px;
+  background: transparent !important;
+  color: color-mix(in srgb, var(--lc-fn-deep, var(--muted, #888)) 70%, transparent);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.lc-footnote-panel-clear:hover {
+  opacity: 1;
+  color: var(--lc-fn-color, var(--accent, #0d9488));
+  background: color-mix(in srgb, var(--lc-fn-color, var(--accent)) 12%, transparent) !important;
+}
+
+.lc-footnote-overview-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  min-height: 0;
+}
+
+.lc-footnote-overview-section-head .lc-coach-turn-role {
+  margin: 0;
+  line-height: 1.2;
+}
+
+.lc-footnote-overview-add {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 22px !important;
+  max-height: 22px;
+  padding: 0 !important;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--border, #ccc) 80%, transparent);
+  background: color-mix(in srgb, var(--panel, #fff) 92%, transparent) !important;
+  color: var(--ink, inherit) !important;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+  align-self: center;
+  box-sizing: border-box;
+}
+
+.lc-footnote-task-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lc-footnote-task-title {
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lc-footnote-submark-hint {
+  margin: 0;
+  font-size: 11px;
 }
 
 .lc-footnote-overview .lc-doc-sheet-excerpt {
@@ -8702,6 +9160,63 @@ button.lc-row-selected:hover:not(:disabled) {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.lc-footnote-block-toggle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.lc-footnote-section-toggle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.lc-footnote-section-toggle .lc-coach-turn-role {
+  margin: 0;
+}
+
+.lc-footnote-block-toggle .lc-coach-turn-role {
+  margin: 0;
+}
+
+.lc-footnote-submark-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.15rem 0 0.25rem;
+}
+
+.lc-footnote-submark-modes .lc-secondary.is-active {
+  outline: 2px solid color-mix(in srgb, var(--accent, #0d9488) 55%, transparent);
+}
+
+.lc-footnote-overview-scroll-list {
+  max-height: 4.5rem;
+  overflow-y: auto;
+}
+
+.lc-footnote-submark-hint {
+  margin: 0.25rem 0 0;
+  font-size: 0.85em;
 }
 
 .lc-footnote-overview .lc-coach-turn-role {
@@ -8746,6 +9261,52 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 0;
   font-size: 11px;
   border-radius: 6px;
+}
+
+/*
+ * Note rows: tap edits, hold deletes. Fill runs left → right (not the default
+ * bottom-up water balloon), so a short list row reads as a progress bar.
+ */
+.lc-footnote-overview-link-list .lc-hold-reveal.lc-footnote-overview-entry-hold {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 0 !important;
+  height: auto;
+  overflow: hidden;
+  box-sizing: border-box;
+  font-weight: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--chrome-edge);
+  border-radius: 6px;
+  padding: 4px 7px;
+}
+
+.lc-footnote-overview-entry-hold.lc-hold-danger {
+  background: var(--panel);
+}
+
+.lc-footnote-overview-entry-hold .lc-hold-reveal-fill,
+.lc-footnote-overview-entry-hold.lc-hold-danger .lc-hold-reveal-fill {
+  inset: 0 auto 0 0;
+  width: calc(var(--lc-hold, 0) * 100%);
+  height: 100%;
+  transform: none;
+  background: linear-gradient(
+    90deg,
+    var(--lc-hold-danger-wash-top) 0%,
+    var(--lc-hold-danger-wash-bottom) 100%
+  );
+}
+
+.lc-footnote-overview-entry-hold .lc-hold-reveal-label {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lc-doc-sheet-marks .lc-coach-scope-option strong,
@@ -8866,25 +9427,77 @@ button.lc-row-selected:hover:not(:disabled) {
 /*
  * A card wearing the colour of the mark it belongs to.
  *
- * The same `--lc-fn-color` the ribbon takes, derived the same way — the edge
- * from the colour, a wash of it behind the heading. The body stays `--panel`
- * on purpose: a palette pulled at random makes no promise about contrast, and
- * a note is text to read, not a swatch. Matched to the ribbon at its border,
- * which is what makes the card look like it came from that mark.
+ * Full board palette arrives as `--lc-fn-p0`…`p3` plus light/mid/deep roles.
+ * Selected swatch (`--lc-fn-color`) owns accents — borders, chips, active tools,
+ * inset bar. Labels / body copy use `--lc-fn-ink` so a pastel pick cannot bleach
+ * LINKS / NOTES on the light panel wash. Page bands stay separately pale.
  */
 .lc-footnote-overview[style*="--lc-fn-color"],
-.lc-footnote-bubble[style*="--lc-fn-color"] {
-  border-color: color-mix(in srgb, var(--lc-fn-color) 62%, #000);
+.lc-footnote-overview.is-task[style*="--lc-fn-color"] {
+  background: color-mix(in srgb, var(--lc-fn-light) 42%, var(--overlay-bg, var(--panel)));
+  border-color: color-mix(in srgb, var(--lc-fn-color) 72%, var(--lc-fn-deep));
+  color: var(--lc-fn-ink, var(--lc-fn-deep, var(--ink)));
   box-shadow:
-    0 8px 28px rgb(0 0 0 / 22%),
+    0 8px 28px color-mix(in srgb, var(--lc-fn-deep) 32%, transparent),
     inset 0 2px 0 0 var(--lc-fn-color);
 }
 
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-doc-sheet-excerpt,
-.lc-footnote-bubble[style*="--lc-fn-color"] .lc-doc-sheet-excerpt {
-  background: color-mix(in srgb, var(--lc-fn-color) 26%, transparent);
+.lc-footnote-overview.is-task[style*="--lc-fn-color"] .lc-doc-sheet-excerpt {
+  background: color-mix(
+    in srgb,
+    var(--lc-fn-color) 18%,
+    color-mix(in srgb, var(--lc-fn-mid) 22%, transparent)
+  );
   border-radius: 5px;
   padding: 3px 5px;
+  color: var(--lc-fn-ink, var(--lc-fn-deep, var(--ink)));
+}
+
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-coach-turn-role,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-task-title,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-entry-text,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-section-toggle,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-block-toggle {
+  color: var(--lc-fn-ink, var(--lc-fn-deep, var(--ink)));
+}
+
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-mark-tool {
+  border-color: color-mix(in srgb, var(--lc-fn-mid) 55%, transparent);
+  color: color-mix(in srgb, var(--lc-fn-ink, var(--lc-fn-deep)) 75%, var(--lc-fn-color));
+}
+
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-mark-tool.is-active {
+  border-color: var(--lc-fn-color);
+  color: var(--lc-fn-color);
+  background: color-mix(in srgb, var(--lc-fn-color) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lc-fn-color) 40%, transparent);
+}
+
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-section {
+  background: color-mix(in srgb, var(--lc-fn-mid) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lc-fn-mid) 38%, transparent);
+  border-radius: 8px;
+  padding: 4px 6px;
+}
+
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-add,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-section-head .lc-coach-turn-role {
+  color: var(--lc-fn-ink, var(--lc-fn-deep, var(--ink))) !important;
+}
+
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-secondary {
+  color: color-mix(in srgb, var(--lc-fn-ink, var(--lc-fn-deep)) 72%, var(--lc-fn-mid));
+  border-color: color-mix(in srgb, var(--lc-fn-mid) 45%, transparent);
+}
+
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-chip {
+  border-color: var(--lc-fn-color);
+  color: var(--lc-fn-color);
+}
+
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-muted {
+  color: color-mix(in srgb, var(--lc-fn-ink, var(--lc-fn-deep)) 58%, transparent);
 }
 
 /*
@@ -9041,6 +9654,91 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 10px;
 }
 
+/* Sub-marks painted on the page while the hub is open. */
+.lc-doc-submark-paint {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 2px;
+}
+
+.lc-doc-submark-underline {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent, #0d9488) 85%, transparent);
+}
+
+.lc-doc-submark-highlight {
+  background: color-mix(in srgb, var(--lc-highlight, #f5b301) 42%, transparent);
+}
+
+.lc-doc-submark-live {
+  outline: 1px solid color-mix(in srgb, var(--accent, #0d9488) 55%, transparent);
+  background: color-mix(in srgb, var(--accent, #0d9488) 18%, transparent);
+}
+
+/*
+ * Selection handles — small circle below the line + thin stem up the edge.
+ * Not 44px magenta blobs. Hit target stays larger than the visible knob.
+ */
+.lc-doc-submark-grip {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: grab;
+  touch-action: none;
+  z-index: 6;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.lc-doc-submark-grip:active {
+  cursor: grabbing;
+}
+
+.lc-doc-submark-grip::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  margin: -5.5px 0 0 -5.5px;
+  border-radius: 50%;
+  background: var(--select-edge, #3f4f63);
+  border: 1.5px solid #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 22%);
+}
+
+.lc-doc-submark-grip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 50%;
+  width: 2px;
+  height: var(--lc-grip-stem, 14px);
+  margin-left: -1px;
+  background: var(--select-edge, #3f4f63);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.lc-doc-submark-mode .lc-doc-selectable-body,
+.lc-doc-submark-armed .lc-doc-selectable-body,
+.lc-doc-submark-armed .lc-pdf-text,
+.lc-doc-submark-armed .lc-pdf-text span {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+/*
+ * Bands stay pointer-events: none while armed — PE:auto sat on top of the PDF
+ * text layer and made caretRangeFromPoint miss, so grips/drags never updated.
+ */
+
 
 /* ------------------------------------------------------ PDF and EPUB --- */
 
@@ -9063,6 +9761,10 @@ button.lc-row-selected:hover:not(:disabled) {
   flex: 0 0 auto;
   background: #fff;
   box-shadow: 0 1px 6px rgb(0 0 0 / 22%);
+  /* pdf.js TextLayer setLayerDimensions() rounds against these. */
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --user-unit: 1;
 }
 
 /* The picture. Never selected out of — the text layer above is for that. */
@@ -9075,25 +9777,50 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * pdf.js's text layer: the same words as the picture, in transparent spans
- * positioned over it. Invisible and hit-testable is the whole point — it is
- * what lets a hold-drag find a caret in something that is otherwise a bitmap.
- * pdf.js positions its spans against these custom properties.
+ * pdf.js text layer — must carry class `textLayer` and these layout rules.
+ *
+ * Spans set `--font-height` / `--scale-x` / `--rotate` inline; without the
+ * calc()'d font-size + transform, getClientRects() drift off the canvas glyphs
+ * and sub-mark highlight/underline paint between rows.
  */
-.lc-pdf-text {
+.lc-pdf-text.textLayer {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  overflow: clip;
   line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-align: initial;
   opacity: 1;
+  transform-origin: 0 0;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  z-index: 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
 }
 
-.lc-pdf-text span,
-.lc-pdf-text br {
+.lc-pdf-text.textLayer > :not(.markedContent),
+.lc-pdf-text.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.lc-pdf-text.textLayer .markedContent {
+  display: contents;
+}
+
+.lc-pdf-text.textLayer span,
+.lc-pdf-text.textLayer br {
   position: absolute;
   white-space: pre;
   color: transparent;
-  transform-origin: 0 0;
+  transform-origin: 0% 0%;
   cursor: text;
 }
 
@@ -9329,6 +10056,8 @@ button.lc-row-selected:hover:not(:disabled) {
   border: 1px solid color-mix(in srgb, var(--lc-highlight, #f5b301) 55%, transparent);
   mix-blend-mode: multiply;
   pointer-events: none;
+  opacity: 1;
+  transition: opacity 220ms ease-out;
 }
 
 /*
@@ -9342,6 +10071,13 @@ button.lc-row-selected:hover:not(:disabled) {
   border: 1.5px dashed color-mix(in srgb, var(--accent, #0d9488) 70%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, #0d9488) 18%, transparent);
   pointer-events: none;
+  opacity: 1;
+  transition: opacity 220ms ease-out;
+}
+
+.lc-doc-marquee-band.is-fading,
+.lc-doc-highlight-band.is-fading {
+  opacity: 0;
 }
 
 .lc-doc-marquee-hit {
@@ -9352,6 +10088,40 @@ button.lc-row-selected:hover:not(:disabled) {
   pointer-events: none;
 }
 
+.lc-doc-marquee-hit.is-confirmed {
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent, #0d9488) 12%, transparent);
+}
+
+.lc-doc-footnote-pack {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.lc-doc-footnote-pack > .lc-doc-footnote {
+  pointer-events: auto;
+}
+
+.lc-doc-footnote-band {
+  position: absolute;
+  border-radius: 3px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--lc-fn-edge, var(--accent, #0d9488)) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lc-fn-edge, var(--accent, #0d9488)) 55%, transparent);
+}
+
+:root .lc-doc-footnote-band[style*="--lc-fn-color"] {
+  --lc-fn-edge: var(--lc-fn-color);
+  background: color-mix(
+    in srgb,
+    var(--lc-fn-color) 20%,
+    color-mix(in srgb, var(--lc-fn-light, transparent) 28%, transparent)
+  );
+  border-color: color-mix(in srgb, var(--lc-fn-color) 68%, var(--lc-fn-deep, #000));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lc-fn-mid, transparent) 35%, transparent);
+}
+
 :root[data-theme="dark"] .lc-doc-marquee-band {
   background: color-mix(in srgb, var(--accent, #2dd4bf) 18%, transparent);
   border-color: color-mix(in srgb, var(--accent, #2dd4bf) 65%, transparent);
@@ -9360,4 +10130,8 @@ button.lc-row-selected:hover:not(:disabled) {
 :root[data-theme="dark"] .lc-doc-marquee-hit {
   border-color: color-mix(in srgb, var(--accent, #2dd4bf) 80%, #5eead4);
   background: color-mix(in srgb, var(--accent, #2dd4bf) 10%, transparent);
+}
+
+:root[data-theme="dark"] .lc-doc-marquee-hit.is-confirmed {
+  background: color-mix(in srgb, var(--accent, #2dd4bf) 14%, transparent);
 }

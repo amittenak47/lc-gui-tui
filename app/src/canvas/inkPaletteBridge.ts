@@ -25,6 +25,7 @@ const UNSET: InkPaletteHistory = seedInkPaletteHistory("light");
 
 let history: InkPaletteHistory = UNSET;
 let advance: (() => void) | null = null;
+let retreat: (() => void) | null = null;
 const listeners = new Set<() => void>();
 
 /** Board, whenever its wheel changes. */
@@ -63,9 +64,20 @@ export function advanceInkPalette(): void {
   advance?.();
 }
 
+/** Board registers the backward cycle (hub tap on the open wheel). */
+export function provideInkPaletteRetreat(handler: (() => void) | null): void {
+  retreat = handler;
+}
+
+/** Ask for the previous palette in history. */
+export function retreatInkPalette(): void {
+  retreat?.();
+}
+
 /** Board on unmount, so a stale wheel is not left on offer. */
 export function resetInkPaletteBridge(): void {
   history = UNSET;
   advance = null;
+  retreat = null;
   for (const listener of listeners) listener();
 }

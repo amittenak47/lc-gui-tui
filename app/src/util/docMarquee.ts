@@ -105,15 +105,40 @@ export function scopeRootAtPoint(
   return { root: body };
 }
 
+/** Axis-aligned union of body-local rects; null when empty. */
+export function unionLocalRects(rects: readonly LocalRect[]): LocalRect | null {
+  if (rects.length === 0) return null;
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const rect of rects) {
+    left = Math.min(left, rect.left);
+    top = Math.min(top, rect.top);
+    right = Math.max(right, rect.left + rect.width);
+    bottom = Math.max(bottom, rect.top + rect.height);
+  }
+  if (!Number.isFinite(left) || right <= left || bottom <= top) return null;
+  return { left, top, width: right - left, height: bottom - top };
+}
+
 /**
  * Turn a body-local band into a durable region anchor (+ optional quote text).
+ *
+ * `hitRects` are intersecting content blocks for confirm chrome / footnote bands.
+ * When nothing block-like intersects, falls back to the marquee rect itself.
  */
 export function finalizeMarquee(
   body: HTMLElement,
   rect: LocalRect,
   root: HTMLElement,
   scope: string | undefined,
-): { anchor: RegionAnchor; text: string; excerpt: string } | null {
+): {
+  anchor: RegionAnchor;
+  text: string;
+  excerpt: string;
+  hitRects: LocalRect[];
+} | null {
   const scale = scaleOf(body) || 1;
   if (rect.width * scale < MIN_BAND_PX && rect.height * scale < MIN_BAND_PX) {
     return null;
@@ -132,7 +157,13 @@ export function finalizeMarquee(
   );
   if (!anchor) return null;
   const text = textUnder(body, rect, scale, bodyBox);
-  return { anchor, text, excerpt: excerptOf(text) };
+  const hits = hitRectsUnder(body, root, rect);
+  return {
+    anchor,
+    text,
+    excerpt: excerptOf(text),
+    hitRects: hits.length > 0 ? hits : [rect],
+  };
 }
 
 export function textUnder(
@@ -208,4 +239,6 @@ export type MarqueeResult = {
   text: string;
   excerpt: string;
   anchor: DocAnchor;
+  /** Content-block boxes under the marquee (body-local); fallback = marquee itself. */
+  hitRects: LocalRect[];
 };

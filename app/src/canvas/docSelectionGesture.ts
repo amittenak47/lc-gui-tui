@@ -91,3 +91,23 @@ export function onDocScrollRequest(handler: ((dy: number) => number) | null): vo
 export function requestDocScroll(dy: number): number {
   return onScrollRequest?.(dy) ?? 0;
 }
+
+/* ----------------------------------------------- sub-mark pointer hit --- */
+
+/**
+ * While sub-mark mode is armed, DocSelectionLayer registers a hit-test for the
+ * open mark (bands + grips). Board reads it on pointerdown so a deferred pan
+ * never arms inside the mark — even when band hit-tests miss and claim is late.
+ */
+type SubMarkPointerHit = (clientX: number, clientY: number) => boolean;
+
+let subMarkPointerHit: SubMarkPointerHit | null = null;
+
+export function setSubMarkPointerHit(handler: SubMarkPointerHit | null): void {
+  subMarkPointerHit = handler;
+}
+
+/** True when the pointer is inside the armed sub-mark (bands / grips / pad). */
+export function pointerInSubMark(clientX: number, clientY: number): boolean {
+  return subMarkPointerHit?.(clientX, clientY) ?? false;
+}

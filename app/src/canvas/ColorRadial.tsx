@@ -45,6 +45,8 @@ interface ColorRadialProps {
   onEditColor?: (index: number, color: string) => void;
   handedness: InkHandedness;
   compact?: boolean;
+  /** Portaled wheel stacks above doc sheets (footnote hub uses ~240). */
+  wheelZIndex?: number;
 }
 
 interface Wedge {
@@ -135,9 +137,12 @@ export function ColorRadial({
   onEditColor,
   handedness,
   compact = false,
+  wheelZIndex = 90,
 }: ColorRadialProps) {
   const [open, setOpen] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
+  /** Instant fill before parent `value` catches up after onPick. */
+  const [pending, setPending] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const holdTimerRef = useRef<number | null>(null);
@@ -150,6 +155,19 @@ export function ColorRadial({
   const editTimerRef = useRef<number>(0);
   const editingSlotRef = useRef<number | null>(null);
   const colorInputRef = useRef<HTMLInputElement | null>(null);
+
+  const shown = pending ?? value;
+  useEffect(() => {
+    setPending(null);
+  }, [value]);
+
+  const pickColor = useCallback(
+    (color: string) => {
+      setPending(color);
+      onPick(color);
+    },
+    [onPick],
+  );
 
   const cancelEditHold = useCallback(() => {
     if (editTimerRef.current) {
@@ -264,7 +282,7 @@ export function ColorRadial({
       draggingRef.current = false;
       const landed = colorAt(event.clientX, event.clientY);
       if (landed) {
-        onPick(landed);
+        pickColor(landed);
         close();
       } else {
         setHovered(null);
@@ -278,7 +296,7 @@ export function ColorRadial({
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [open, colorAt, onPick, close]);
+  }, [open, colorAt, pickColor, close]);
 
   const wheel =
     open &&
@@ -295,6 +313,7 @@ export function ColorRadial({
           height: size,
           marginLeft: -OUTER_R,
           marginTop: -OUTER_R,
+          zIndex: wheelZIndex,
         }}
       >
         <div className="lc-color-wheel-disc" aria-hidden>
@@ -315,7 +334,7 @@ export function ColorRadial({
               const state =
                 wedge.color === hovered
                   ? " is-hovered"
-                  : wedge.color === value
+                  : wedge.color.toLowerCase() === shown.toLowerCase()
                     ? " is-current"
                     : "";
               return (
@@ -352,7 +371,7 @@ export function ColorRadial({
                     // that follows it must not also pick the old colour.
                     if (editingSlotRef.current !== null) return;
                     cancelEditHold();
-                    onPick(wedge.color);
+                    pickColor(wedge.color);
                     close();
                   }}
                 />
@@ -379,18 +398,24 @@ export function ColorRadial({
           <button
             type="button"
             className="lc-color-wheel-hub"
-            style={{ background: value }}
+            style={{ background: shown }}
             aria-label={
-              onCyclePrev
-                ? "Current ink colour — tap for previous palette"
+              onCyclePrev || onCycleNext
+                ? "Current ink colour — tap to cycle palettes"
                 : "Current ink colour"
             }
-            title={onCyclePrev ? "Tap for previous palette" : undefined}
+            title={
+              onCyclePrev || onCycleNext ? "Tap to cycle palettes" : undefined
+            }
             onClick={() => {
               if (editingSlotRef.current !== null) return;
               cancelEditHold();
               if (onCyclePrev) {
                 onCyclePrev();
+                return;
+              }
+              if (onCycleNext) {
+                onCycleNext();
                 return;
               }
               close();
@@ -441,7 +466,7 @@ export function ColorRadial({
           draggingRef.current = false;
         }}
       >
-        <span className="lc-color-dot-fill" style={{ background: value }} aria-hidden />
+        <span className="lc-color-dot-fill" style={{ background: shown }} aria-hidden />
       </button>
       {wheel}
     </div>

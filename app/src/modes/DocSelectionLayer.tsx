@@ -14,14 +14,21 @@
  * tool is on; there the pen owns the surface.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { AnimatePresence, motion } from "motion/react";
 
 import {
+  anchorFromRange,
+  excerptOf,
   isRegionAnchor,
+  isTextAnchor,
   rangeFromAnchor,
   scopeRootIn,
   scopeRootsIn,
+  snapToWords,
+  textForAnchor,
+  textOf,
   type DocAnchor,
 } from "../util/docAnchors";
 import {
@@ -30,6 +37,8 @@ import {
   orderScopes,
   overlappingFootnotes,
   type DocFootnote,
+  type DocFootnoteSubMark,
+  type DocFootnoteSubMarkKind,
 } from "../util/docFootnotes";
 import { HoldButton } from "../components/HoldButton";
 import { HOLD_SENSITIVE_MS, LONG_PRESS_MS, SELECT_HOLD_SLOP_PX } from "../util/gesture";
@@ -39,6 +48,7 @@ import {
   requestDocScroll,
   onDocCameraLiveChange,
   releaseSelectionGesture,
+  setSubMarkPointerHit,
 } from "../canvas/docSelectionGesture";
 import { horizontalScrollHost } from "../canvas/scrollHost";
 import {
@@ -49,8 +59,16 @@ import {
   hitRectsUnder,
   scaleOf,
   scopeRootAtPoint,
+  textUnder,
+  unionLocalRects,
   viewportToLocal,
 } from "../util/docMarquee";
+import {
+  inkPaletteNow,
+  onInkPaletteChange,
+} from "../canvas/inkPaletteBridge";
+import { currentInkPalette } from "../util/inkPaletteHistory";
+import { footnoteThemeVars } from "../util/footnoteTheme";
 
 /**
  * Controls painted over the page that own their own taps.
@@ -64,7 +82,9 @@ import {
 function isOverlayControl(target: EventTarget | null): boolean {
   const element = target as Element | null;
   return Boolean(
-    element?.closest?.(".lc-doc-footnote, .lc-doc-confirm, .lc-footnote-overview, .lc-footnote-bubble"),
+    element?.closest?.(
+      ".lc-doc-footnote, .lc-doc-confirm, .lc-footnote-overview, .lc-doc-submark-grip",
+    ),
   );
 }
 
@@ -89,10 +109,46 @@ function edgeStep(over: number): number {
   return SELECT_EDGE_STEP_MIN_PX + (SELECT_EDGE_STEP_MAX_PX - SELECT_EDGE_STEP_MIN_PX) * lean;
 }
 
+type RibbonPlacement = {
+  footnote: DocFootnote;
+  at: LocalRect;
+  bands: LocalRect[];
+  useBands: boolean;
+  number: number;
+};
+
+function localRectEqual(a: LocalRect, b: LocalRect): boolean {
+  return a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
+}
+
+/** Avoid setState when place() remeasures the same geometry. */
+function ribbonsPlacementEqual(a: RibbonPlacement[], b: RibbonPlacement[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      x.footnote.id !== y.footnote.id ||
+      x.number !== y.number ||
+      x.useBands !== y.useBands ||
+      !localRectEqual(x.at, y.at) ||
+      x.bands.length !== y.bands.length
+    ) {
+      return false;
+    }
+    for (let j = 0; j < x.bands.length; j++) {
+      if (!localRectEqual(x.bands[j], y.bands[j])) return false;
+    }
+  }
+  return true;
+}
+
 export interface DocSelectionResult {
   text: string;
   excerpt: string;
   anchor: DocAnchor;
+  /** Content-block boxes under the marquee (body-local). */
+  hitRects: LocalRect[];
 }
 
 export interface DocSelectionLayerProps {
@@ -124,6 +180,10 @@ export interface DocSelectionLayerProps {
   /** Tap on an existing ribbon — reopen the overview for that mark. */
   onOpenFootnote?: (footnote: DocFootnote, anchorRect: DOMRect | null) => void;
   onRemoveFootnote?: (footnote: DocFootnote) => void;
+  /** Armed from the footnote hub — underline / highlight inside the open mark. */
+  subMarkMode?: DocFootnoteSubMarkKind | null;
+  subMarkParent?: DocFootnote | null;
+  onAddSubMark?: (mark: DocFootnoteSubMark) => void;
 }
 
 /**
@@ -183,6 +243,9 @@ export function DocSelectionLayer({
   onMark,
   onOpenFootnote,
   onRemoveFootnote,
+  subMarkMode = null,
+  subMarkParent = null,
+  onAddSubMark,
 }: DocSelectionLayerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   /**
@@ -208,13 +271,39 @@ export function DocSelectionLayer({
    */
   const [phase, setPhase] = useState<"idle" | "confirm" | "actions">("idle");
   const [ribbons, setRibbons] = useState<
-    Array<{ footnote: DocFootnote; at: LocalRect; number: number }>
+    Array<{
+      footnote: DocFootnote;
+      at: LocalRect;
+      bands: LocalRect[];
+      useBands: boolean;
+      number: number;
+    }>
   >([]);
   const [copied, setCopied] = useState(false);
   /** The band being swept right now, in body coordinates. */
   const [band, setBand] = useState<LocalRect | null>(null);
+  /** Rubber-band is fading out after confirm (hitRects stay). */
+  const [bandFading, setBandFading] = useState(false);
   /** Content blocks intersecting the live marquee (chrome only). */
   const [hitRects, setHitRects] = useState<LocalRect[]>([]);
+  /** Live sub-mark range while the reader is dragging on the page. */
+  const [subMarkLive, setSubMarkLive] = useState<{
+    start: number;
+    end: number;
+    root: HTMLElement;
+    scope?: string;
+  } | null>(null);
+  const subMarkDragRef = useRef<{
+    pointerId: number;
+    mode: "select" | "start" | "end";
+    root: HTMLElement;
+    scope?: string;
+    anchor: number;
+    focus: number;
+  } | null>(null);
+  const subMarkLiveRef = useRef(subMarkLive);
+  subMarkLiveRef.current = subMarkLive;
+  const bandFadeTimerRef = useRef<number | null>(null);
   const bandRef = useRef<{
     pointerId: number;
     startX: number;
@@ -268,27 +357,106 @@ export function DocSelectionLayer({
   }, []);
 
   const dismiss = useCallback(() => {
+    if (bandFadeTimerRef.current != null) {
+      window.clearTimeout(bandFadeTimerRef.current);
+      bandFadeTimerRef.current = null;
+    }
     setSelection(null);
     setPhase("idle");
     setRects([]);
     setBand(null);
+    setBandFading(false);
     setHitRects([]);
     setCopied(false);
+    setSubMarkLive(null);
+    subMarkDragRef.current = null;
   }, []);
+
+  const subMarkArmed = Boolean(subMarkMode && subMarkParent);
+  const inkHistory = useSyncExternalStore(onInkPaletteChange, inkPaletteNow, inkPaletteNow);
+  const inkPalette = currentInkPalette(inkHistory);
 
   const paintMarquee = useCallback((rect: LocalRect, root: HTMLElement) => {
     const body = bodyRef.current;
     if (!body) return;
+    if (bandFadeTimerRef.current != null) {
+      window.clearTimeout(bandFadeTimerRef.current);
+      bandFadeTimerRef.current = null;
+    }
+    setBandFading(false);
     setBand(rect);
     setHitRects(hitRectsUnder(body, root, rect));
   }, []);
 
+  /** Enter confirm: keep paragraph chrome, fade the rubber-band away. */
+  const confirmMarquee = useCallback(
+    (done: {
+      text: string;
+      excerpt: string;
+      anchor: DocAnchor;
+      hitRects: LocalRect[];
+    }, rect: LocalRect) => {
+      if (bandFadeTimerRef.current != null) {
+        window.clearTimeout(bandFadeTimerRef.current);
+        bandFadeTimerRef.current = null;
+      }
+      setHitRects(done.hitRects);
+      setSelection({
+        text: done.text,
+        excerpt: done.excerpt,
+        anchor: done.anchor,
+        hitRects: done.hitRects,
+      });
+      setBand(rect);
+      setBandFading(true);
+      setPhase("confirm");
+      bandFadeTimerRef.current = window.setTimeout(() => {
+        setBand(null);
+        setBandFading(false);
+        bandFadeTimerRef.current = null;
+      }, 220);
+    },
+    [],
+  );
+
   useEffect(() => {
-    if (!enabled && !highlighting) {
+    if (!enabled && !highlighting && !subMarkArmed) {
       clearGesture();
       dismiss();
     }
-  }, [enabled, highlighting, clearGesture, dismiss]);
+  }, [enabled, highlighting, subMarkArmed, clearGesture, dismiss]);
+
+  useEffect(() => {
+    if (!subMarkArmed) {
+      setSubMarkLive(null);
+      subMarkDragRef.current = null;
+    }
+  }, [subMarkArmed]);
+
+  /*
+   * No auto-seed. Seeding the first word put overlapping grips on one glyph and
+   * made every drag look broken. Live range appears only when the reader drags.
+   */
+  useEffect(() => {
+    if (!subMarkArmed) return;
+    setSubMarkLive(null);
+  }, [subMarkArmed, subMarkMode, subMarkParent?.id]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    host.classList.toggle("lc-doc-submark-armed", subMarkArmed);
+    return () => host.classList.remove("lc-doc-submark-armed");
+  }, [subMarkArmed]);
+
+  useEffect(() => {
+    return () => {
+      if (bandFadeTimerRef.current != null) {
+        window.clearTimeout(bandFadeTimerRef.current);
+        bandFadeTimerRef.current = null;
+      }
+    };
+  }, []);
 
   /**
    * Annotate highlighter: immediate marquee (no hold).
@@ -296,7 +464,7 @@ export function DocSelectionLayer({
    */
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || !highlighting) return;
+    if (!host || !highlighting || subMarkArmed) return;
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
@@ -351,9 +519,7 @@ export function DocSelectionLayer({
         setHitRects([]);
         return;
       }
-      paintMarquee(rect, root);
-      setSelection({ text: done.text, excerpt: done.excerpt, anchor: done.anchor });
-      setPhase("confirm");
+      confirmMarquee(done, rect);
     };
 
     host.addEventListener("pointerdown", onPointerDown);
@@ -368,12 +534,12 @@ export function DocSelectionLayer({
       host.classList.remove("lc-doc-selecting", "lc-doc-select-mode");
       releaseSelectionGesture();
     };
-  }, [highlighting, dismiss, paintMarquee]);
+  }, [highlighting, subMarkArmed, dismiss, paintMarquee, confirmMarquee]);
 
   // Reading mode: hold to arm selection mode, then drag a marquee box.
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || !enabled || highlighting) return;
+    if (!host || !enabled || highlighting || subMarkArmed) return;
 
     const paintFromFinger = (hold: NonNullable<typeof holdRef.current>) => {
       const body = bodyRef.current;
@@ -535,9 +701,7 @@ export function DocSelectionLayer({
         setHitRects([]);
         return;
       }
-      paintMarquee(rect, root);
-      setSelection({ text: done.text, excerpt: done.excerpt, anchor: done.anchor });
-      setPhase("confirm");
+      confirmMarquee(done, rect);
     };
 
     const onPointerUp = (event: PointerEvent) => finishHold(event, true);
@@ -557,7 +721,419 @@ export function DocSelectionLayer({
       window.removeEventListener("pointercancel", onPointerCancel, true);
       releaseSelectionGesture();
     };
-  }, [enabled, highlighting, clearGesture, dismiss, paintMarquee]);
+  }, [enabled, highlighting, subMarkArmed, clearGesture, dismiss, paintMarquee, confirmMarquee]);
+
+  /*
+   * Sub-mark mode — custom range selection inside the open mark's bands.
+   *
+   * Native selection is suppressed; iOS-style grips adjust the range before
+   * release commits the sub-mark back to the hub.
+   */
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !subMarkArmed || !subMarkMode || !subMarkParent || !onAddSubMark) return;
+
+    const parentRegion = () => {
+      const body = bodyRef.current;
+      if (!body) return null;
+      const scope = subMarkParent.anchor.scope;
+      const root = scopeRootIn(body, scope) as HTMLElement | null;
+      if (!root) return null;
+      const storedBands =
+        subMarkParent.bands && subMarkParent.bands.length > 0 ? subMarkParent.bands : null;
+      const bands =
+        storedBands ??
+        (() => {
+          const at = rectForAnchor(body, root, subMarkParent.anchor);
+          return at ? [at] : [];
+        })();
+      if (bands.length === 0) return null;
+      const bounds = parentTextBounds(body, root, subMarkParent, bands);
+      return { body, root, scope, bands, bounds };
+    };
+
+    const offsetAt = (
+      body: HTMLElement,
+      root: HTMLElement,
+      bands: readonly LocalRect[],
+      bounds: { start: number; end: number } | null,
+      clientX: number,
+      clientY: number,
+      scope?: string,
+    ): { start: number; root: HTMLElement; scope?: string } | null => {
+      /*
+       * Strict band hit first, then looser fallbacks. PDF text layers and scaled
+       * markdown often miss caretRangeFromPoint; band padding alone was not
+       * enough — select/grip drags froze on the first glyph.
+       */
+      const clampStart = (raw: number) => {
+        if (!bounds) return raw;
+        return Math.max(bounds.start, Math.min(Math.max(bounds.start, bounds.end - 1), raw));
+      };
+
+      const fromRange = (range: Range | null) => {
+        if (!range || !root.contains(range.startContainer)) return null;
+        const anchor = anchorFromRange(root, range, scope);
+        if (anchor?.start == null) return null;
+        if (bounds && (anchor.start < bounds.start || anchor.start >= bounds.end)) {
+          return null;
+        }
+        return { start: clampStart(anchor.start), root, scope };
+      };
+
+      const caret = caretRangeAt(clientX, clientY);
+      if (caret) {
+        const caretBox = caret.getBoundingClientRect();
+        const inBands =
+          pointInLocalBands(body, bands, clientX, clientY, 24) ||
+          ((caretBox.width >= 0.25 || caretBox.height >= 0.25) &&
+            pointInLocalBands(
+              body,
+              bands,
+              caretBox.left + caretBox.width / 2,
+              caretBox.top + caretBox.height / 2,
+              12,
+            ));
+        if (inBands) {
+          const hit = fromRange(caret);
+          if (hit) return hit;
+        }
+      }
+
+      const nearBand = nearestOffsetInBands(body, root, bands, clientX, clientY, scope);
+      if (nearBand) return { start: clampStart(nearBand.start), root, scope };
+
+      const loose =
+        fromRange(caret) ??
+        fromRange(nearestCaretInRoot(root, clientX, clientY)) ??
+        nearestOffsetInRoot(root, clientX, clientY, scope);
+      if (!loose) return null;
+      if (bounds && (loose.start < bounds.start || loose.start >= bounds.end)) {
+        return { start: clampStart(loose.start), root, scope };
+      }
+      return { start: clampStart(loose.start), root, scope };
+    };
+
+    const parentBlockText = (body: HTMLElement, bands: readonly LocalRect[]): string => {
+      if (subMarkParent.blockText?.trim()) return subMarkParent.blockText;
+      const union = unionLocalRects(bands);
+      if (!union) return "";
+      const scale = scaleOf(body) || 1;
+      return textUnder(body, union, scale, body.getBoundingClientRect());
+    };
+
+    const clampToParent = (
+      start: number,
+      end: number,
+      bounds: { start: number; end: number } | null,
+    ): [number, number] => {
+      const lo = Math.min(start, end);
+      const hi = Math.max(start, end);
+      if (!bounds) return [lo, hi];
+      return [Math.max(bounds.start, lo), Math.min(bounds.end, hi)];
+    };
+
+    const liveFrom = (
+      root: HTMLElement,
+      scope: string | undefined,
+      anchor: number,
+      focus: number,
+      bounds: { start: number; end: number } | null,
+    ) => {
+      const [start, end] = clampToParent(anchor, focus, bounds);
+      if (end <= start) return;
+      setSubMarkLive({ start, end, root, scope });
+    };
+
+    const releaseSubMarkGesture = () => {
+      host.classList.remove("lc-doc-selecting", "lc-doc-submark-mode");
+      releaseSelectionGesture();
+    };
+
+    /** Pad for mark hit — Board uses the same via setSubMarkPointerHit. */
+    const SUBMARK_HIT_PAD = 32;
+
+    const pointerHitsParentMark = (clientX: number, clientY: number): boolean => {
+      const under = document.elementFromPoint(clientX, clientY);
+      if (under?.closest?.(".lc-doc-submark-grip")) return true;
+      const region = parentRegion();
+      if (!region) return false;
+      return pointInLocalBands(
+        region.body,
+        region.bands,
+        clientX,
+        clientY,
+        SUBMARK_HIT_PAD,
+      );
+    };
+
+    setSubMarkPointerHit(pointerHitsParentMark);
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      const fromTarget = (event.target as Element | null)?.closest?.(
+        ".lc-doc-submark-grip",
+      ) as Element | null;
+      const fromPoint = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest?.(".lc-doc-submark-grip") as Element | null;
+      const grip = fromTarget ?? fromPoint;
+      if (!grip && isOverlayControl(event.target)) return;
+      const region = parentRegion();
+      if (!region) return;
+      if (
+        !grip &&
+        !pointInLocalBands(
+          region.body,
+          region.bands,
+          event.clientX,
+          event.clientY,
+          SUBMARK_HIT_PAD,
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      setSelection(null);
+      setPhase("idle");
+      setRects([]);
+      setBand(null);
+      setBandFading(false);
+      setHitRects([]);
+      setCopied(false);
+      // Claim before Board's deferred pan can arm — hit-test alone is not enough
+      // if this handler and Board race on the same capture phase.
+      claimSelectionGesture();
+      host.classList.add("lc-doc-selecting", "lc-doc-submark-mode");
+
+      const live = subMarkLiveRef.current;
+      if (grip && live) {
+        const which = grip.getAttribute("data-grip");
+        subMarkDragRef.current = {
+          pointerId: event.pointerId,
+          mode: which === "start" ? "start" : "end",
+          root: live.root,
+          scope: live.scope,
+          anchor: live.start,
+          focus: live.end,
+        };
+        try {
+          (grip as HTMLElement).setPointerCapture(event.pointerId);
+        } catch {
+          try {
+            host.setPointerCapture(event.pointerId);
+          } catch {
+            /* capture is best-effort */
+          }
+        }
+        return;
+      }
+
+      const at =
+        offsetAt(
+          region.body,
+          region.root,
+          region.bands,
+          region.bounds,
+          event.clientX,
+          event.clientY,
+          region.scope,
+        ) ??
+        (live && region.bounds
+          ? {
+              start: Math.max(
+                region.bounds.start,
+                Math.min(region.bounds.end - 1, live.start),
+              ),
+              root: region.root,
+              scope: region.scope,
+            }
+          : null);
+      if (!at || !region.bounds) {
+        releaseSubMarkGesture();
+        return;
+      }
+      const focus = Math.min(region.bounds.end, at.start + 1);
+      subMarkDragRef.current = {
+        pointerId: event.pointerId,
+        mode: "select",
+        root: at.root,
+        scope: at.scope,
+        anchor: at.start,
+        focus,
+      };
+      try {
+        host.setPointerCapture(event.pointerId);
+      } catch {
+        /* capture is best-effort */
+      }
+      liveFrom(at.root, at.scope, at.start, focus, region.bounds);
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      const drag = subMarkDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const region = parentRegion();
+      if (!region?.bounds) return;
+      const at = offsetAt(
+        region.body,
+        region.root,
+        region.bands,
+        region.bounds,
+        event.clientX,
+        event.clientY,
+        drag.scope,
+      );
+      if (!at) return;
+      if (drag.mode === "select") {
+        drag.focus = at.start;
+        liveFrom(drag.root, drag.scope, drag.anchor, drag.focus, region.bounds);
+        return;
+      }
+      if (drag.mode === "start") {
+        const next = Math.min(at.start, drag.focus - 1);
+        drag.anchor = next;
+        liveFrom(drag.root, drag.scope, drag.anchor, drag.focus, region.bounds);
+        return;
+      }
+      const next = Math.max(at.start, drag.anchor + 1);
+      drag.focus = next;
+      liveFrom(drag.root, drag.scope, drag.anchor, drag.focus, region.bounds);
+    };
+
+    const commitSubMark = (rawStart: number, rawEnd: number, root: HTMLElement, scope?: string) => {
+      if (!subMarkMode || rawEnd <= rawStart) return;
+      const region = parentRegion();
+      const blockText = region ? parentBlockText(region.body, region.bands) : "";
+      const stream = textOf(root);
+      const [start, end] = snapToWords(stream, rawStart, rawEnd);
+      const [clampedStart, clampedEnd] = clampToParent(start, end, region?.bounds ?? null);
+      if (clampedEnd <= clampedStart) return;
+
+      const range = rangeFromAnchor(root, {
+        kind: "text",
+        start: clampedStart,
+        end: clampedEnd,
+        ...(scope ? { scope } : {}),
+      });
+      if (!range) return;
+
+      const textAnchor = anchorFromRange(root, range, scope);
+      const excerpt = excerptOf(
+        textForAnchor(
+          root,
+          textAnchor ?? {
+            kind: "text",
+            start: clampedStart,
+            end: clampedEnd,
+            scope,
+          },
+        ),
+      );
+      if (!excerpt) return;
+
+      let relStart = clampedStart;
+      let relEnd = clampedEnd;
+      if (isTextAnchor(subMarkParent.anchor)) {
+        relStart = clampedStart - subMarkParent.anchor.start;
+        relEnd = clampedEnd - subMarkParent.anchor.start;
+      } else if (region?.bounds) {
+        relStart = clampedStart - region.bounds.start;
+        relEnd = clampedEnd - region.bounds.start;
+      } else if (blockText) {
+        const slice = stream.slice(clampedStart, clampedEnd);
+        const idx = blockText.indexOf(slice);
+        relStart = idx >= 0 ? idx : 0;
+        relEnd = relStart + slice.length;
+      }
+
+      setSubMarkLive(null);
+      onAddSubMark({
+        id: "sm-pending",
+        kind: subMarkMode,
+        excerpt,
+        start: relStart,
+        end: relEnd,
+        ...(textAnchor ? { anchor: textAnchor } : {}),
+      });
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      const drag = subMarkDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      subMarkDragRef.current = null;
+      releaseSubMarkGesture();
+
+      const region = parentRegion();
+      const [rawStart, rawEnd] = [
+        Math.min(drag.anchor, drag.focus),
+        Math.max(drag.anchor, drag.focus),
+      ];
+
+      /*
+       * Grip release only snaps the live range — never commits.
+       * Committing here made one-end adjust impossible (release ate the edit).
+       */
+      if (drag.mode === "start" || drag.mode === "end") {
+        if (rawEnd <= rawStart) return;
+        const stream = textOf(drag.root);
+        const [start, end] = snapToWords(stream, rawStart, rawEnd);
+        const [clampedStart, clampedEnd] = clampToParent(start, end, region?.bounds ?? null);
+        if (clampedEnd <= clampedStart) return;
+        setSubMarkLive({
+          start: clampedStart,
+          end: clampedEnd,
+          root: drag.root,
+          scope: drag.scope,
+        });
+        return;
+      }
+
+      /*
+       * Select drag: keep a live range + grips so ends can still be adjusted.
+       * Tap (no move) while a live range exists commits it.
+       */
+      const moved = Math.abs(drag.focus - drag.anchor) > 1;
+      if (!moved) {
+        const live = subMarkLiveRef.current;
+        if (live && live.end - live.start >= 2) {
+          commitSubMark(live.start, live.end, live.root, live.scope);
+        }
+        return;
+      }
+      if (rawEnd <= rawStart) return;
+      const stream = textOf(drag.root);
+      const [start, end] = snapToWords(stream, rawStart, rawEnd);
+      const [clampedStart, clampedEnd] = clampToParent(start, end, region?.bounds ?? null);
+      if (clampedEnd <= clampedStart) return;
+      setSubMarkLive({
+        start: clampedStart,
+        end: clampedEnd,
+        root: drag.root,
+        scope: drag.scope,
+      });
+    };
+
+    const onSelectStart = (event: Event) => event.preventDefault();
+
+    host.addEventListener("selectstart", onSelectStart);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerUp, true);
+    return () => {
+      setSubMarkPointerHit(null);
+      host.removeEventListener("selectstart", onSelectStart);
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointermove", onPointerMove, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+      releaseSubMarkGesture();
+    };
+  }, [subMarkArmed, subMarkMode, subMarkParent, onAddSubMark, dismiss]);
 
   /*
    * Ribbons are placed from the live DOM, so they follow a re-render of the
@@ -591,16 +1167,38 @@ export function DocSelectionLayer({
       const roots = scopeRootsIn(body);
       // Numbering follows the document, so the sort has to know page order.
       orderScopes(roots.map((root) => root.dataset.docScope ?? ""));
-      const placed: Array<{ footnote: DocFootnote; at: LocalRect; number: number }> = [];
+      const placed: Array<{
+        footnote: DocFootnote;
+        at: LocalRect;
+        bands: LocalRect[];
+        useBands: boolean;
+        number: number;
+      }> = [];
       for (const footnote of footnotes) {
         const scope = footnote.anchor.scope;
         const root = scopeRootIn(body, scope) as HTMLElement | null;
         if (!root) continue;
-        const at = rectForAnchor(body, root, footnote.anchor);
+        const storedBands = footnote.bands && footnote.bands.length > 0 ? footnote.bands : null;
+        const bands =
+          storedBands ??
+          (() => {
+            const at = rectForAnchor(body, root, footnote.anchor);
+            return at ? [at] : [];
+          })();
+        if (bands.length === 0) continue;
+        const at = unionLocalRects(bands);
         if (!at) continue;
-        placed.push({ footnote, at, number: numbers.get(footnote.id) ?? 0 });
+        placed.push({
+          footnote,
+          at,
+          bands,
+          useBands: storedBands != null && isRegionAnchor(footnote.anchor),
+          number: numbers.get(footnote.id) ?? 0,
+        });
       }
-      setRibbons(placed);
+      // Skip React commits when geometry is unchanged — mid-scroll place() used
+      // to re-render the overlay every time even when nothing moved.
+      setRibbons((prev) => (ribbonsPlacementEqual(prev, placed) ? prev : placed));
     };
     placeRef.current = place;
     // One-shot on deps: ribbons still ride marksSlot transform during pan.
@@ -637,6 +1235,10 @@ export function DocSelectionLayer({
      * after mount. Annotate keeps the layer mounted (`enabled=false`) so the
      * pen can draw, but re-placing ribbons on every PDF window mutation mid-
      * flick starves ink tile paint until scroll settle.
+     *
+     * Critical: disconnect the observer while the camera is live. Deferring
+     * `place()` alone still left MutationObserver + rAF firing every text-layer
+     * paint during a flick (~30fps chop). Pause delivery; reconnect on settle.
      */
     const watchMutations = enabled || highlighting;
     let frame: number | null = null;
@@ -648,37 +1250,61 @@ export function DocSelectionLayer({
       };
     }
 
-    // Coalesced to a frame: a text layer lands as hundreds of appended spans,
-    // and re-measuring on each one would be a layout read per span.
-    const schedulePlace = () => {
+    let observing = false;
+    const observer = new MutationObserver(() => {
       if (isDocCameraLive()) {
         placementDeferred = true;
         return;
       }
-      place();
-    };
-    const observer = new MutationObserver(() => {
       if (frame != null) return;
       frame = requestAnimationFrame(() => {
         frame = null;
-        schedulePlace();
+        if (isDocCameraLive()) {
+          placementDeferred = true;
+          return;
+        }
+        place();
       });
     });
-    observer.observe(body, { childList: true, subtree: true, characterData: true });
+    const startObserver = () => {
+      if (observing) return;
+      observer.observe(body, { childList: true, subtree: true, characterData: true });
+      observing = true;
+    };
+    const stopObserver = () => {
+      if (!observing) return;
+      observer.disconnect();
+      observing = false;
+      if (frame != null) {
+        cancelAnimationFrame(frame);
+        frame = null;
+      }
+    };
+    if (!isDocCameraLive()) startObserver();
+    else placementDeferred = true;
+
     onDocCameraLiveChange((live) => {
-      if (live || !placementDeferred) return;
+      if (live) {
+        placementDeferred = true;
+        stopObserver();
+        return;
+      }
+      startObserver();
+      if (!placementDeferred) return;
       placementDeferred = false;
       place();
     });
     return () => {
-      observer.disconnect();
+      stopObserver();
       onDocCameraLiveChange(null);
       body.removeEventListener("scroll", onHostScroll, true);
       placeRef.current = null;
       if (frame != null) cancelAnimationFrame(frame);
       if (scrollFrame != null) cancelAnimationFrame(scrollFrame);
     };
-  }, [footnotes, children, enabled, highlighting]);
+    // Intentionally omit `children`: identity churn on every App render re-bound
+    // the observer and re-ran place(), which felt like a constant scroll ping.
+  }, [footnotes, enabled, highlighting]);
 
 
 
@@ -722,7 +1348,7 @@ export function DocSelectionLayer({
   const highlightBox = (): DOMRect | null => {
     const painted = Array.from(
       document.querySelectorAll(
-        ".lc-doc-select-rect, .lc-doc-highlight-band, .lc-doc-marquee-band, .lc-doc-marquee-hit",
+        ".lc-doc-select-rect, .lc-doc-highlight-band:not(.is-fading), .lc-doc-marquee-band:not(.is-fading), .lc-doc-marquee-hit",
       ),
     );
     if (painted.length === 0) return null;
@@ -770,6 +1396,8 @@ export function DocSelectionLayer({
   };
 
   /** Tick and cross, off the selection's top-right corner. */
+  const selectionChromeRef = useRef<HTMLDivElement | null>(null);
+
   const placeConfirm = useCallback((node: HTMLDivElement | null) => {
     if (!node) return;
     const at = highlightBox();
@@ -783,33 +1411,64 @@ export function DocSelectionLayer({
   }, []);
 
   /**
-   * Put the popup below the selection, and inside the window.
-   *
-   * Measured on the node rather than computed from a guess at its size,
-   * because its width depends on which actions are offered — a plate with no
-   * words in it has two buttons, a quote has four. It is rendered hidden at the
-   * origin for exactly one frame so there is something real to measure; the
-   * alternative is a menu that visibly jumps into place.
-   *
-   * It used to be positioned from the pointer with a `translate(-50%, 10px)`
-   * and no clamp at all, which is why a quote near the right edge opened half
-   * off the screen and one near the bottom opened below it.
+   * Actions stay in the same corner as confirm / the bookmark — top-right of
+   * the selection — so the pill morphs in place instead of jumping under the box.
    */
   const placeSheet = useCallback((node: HTMLDivElement | null) => {
+    placeConfirm(node);
+  }, [placeConfirm]);
+
+  const placeSelectionChrome = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (phase === "confirm") placeConfirm(node);
+      else if (phase === "actions") placeSheet(node);
+    },
+    [phase, placeConfirm, placeSheet],
+  );
+
+  const bindSelectionChrome = useCallback(
+    (node: HTMLDivElement | null) => {
+      selectionChromeRef.current = node;
+      placeSelectionChrome(node);
+    },
+    [placeSelectionChrome],
+  );
+
+  useLayoutEffect(() => {
+    if (phase !== "confirm" && phase !== "actions") return;
+    const node = selectionChromeRef.current;
     if (!node) return;
-    const width = node.offsetWidth;
-    const height = node.offsetHeight;
-    const at = highlightBox();
-    if (!at) {
-      clampInto(node, window.innerWidth / 2 - width / 2, window.innerHeight / 2 - height / 2);
-      return;
+    placeSelectionChrome(node);
+  }, [phase, placeSelectionChrome, overlaps.length, selection, copied]);
+
+  const paintedSubMarks = useMemo(() => {
+    const body = bodyRef.current;
+    if (!body || !subMarkParent?.subMarks?.length) return [];
+    const out: Array<{ id: string; kind: DocFootnoteSubMarkKind; rects: LocalRect[] }> = [];
+    for (const mark of subMarkParent.subMarks) {
+      const anchor = resolveSubMarkAnchor(subMarkParent, mark);
+      if (!anchor) continue;
+      const root = scopeRootIn(body, anchor.scope) as HTMLElement | null;
+      if (!root) continue;
+      const range = rangeFromAnchor(root, anchor);
+      if (!range) continue;
+      out.push({ id: mark.id, kind: mark.kind, rects: localRects(body, range) });
     }
-    // Below the quote by preference; above it when there is no room underneath,
-    // which is better than over the words the menu is about.
-    const below = at.bottom + 10;
-    const top = below + height + 8 > window.innerHeight ? at.top - height - 10 : below;
-    clampInto(node, at.left + at.width / 2 - width / 2, top);
-  }, []);
+    return out;
+  }, [subMarkParent, footnotes, children]);
+
+  const subMarkLivePaint = useMemo(() => {
+    const body = bodyRef.current;
+    if (!body || !subMarkLive) return [];
+    const range = rangeFromAnchor(subMarkLive.root, {
+      kind: "text",
+      start: subMarkLive.start,
+      end: subMarkLive.end,
+      ...(subMarkLive.scope ? { scope: subMarkLive.scope } : {}),
+    });
+    if (!range) return [];
+    return localRects(body, range);
+  }, [subMarkLive]);
 
   return (
     <div className="lc-doc-selectable" ref={hostRef}>
@@ -820,12 +1479,13 @@ export function DocSelectionLayer({
         marksHost,
         <div
           className="lc-doc-select-overlay"
-          aria-hidden={rects.length === 0}
+          aria-hidden={rects.length === 0 && hitRects.length === 0 && !band && ribbons.length === 0}
         >
           {band && (
             <div
               className={
-                highlighting ? "lc-doc-highlight-band" : "lc-doc-marquee-band"
+                (highlighting ? "lc-doc-highlight-band" : "lc-doc-marquee-band") +
+                (bandFading ? " is-fading" : "")
               }
               style={{
                 left: band.left,
@@ -838,7 +1498,11 @@ export function DocSelectionLayer({
           {hitRects.map((rect, index) => (
             <div
               key={`hit-${index}`}
-              className="lc-doc-marquee-hit"
+              className={
+                phase === "idle"
+                  ? "lc-doc-marquee-hit"
+                  : "lc-doc-marquee-hit is-confirmed"
+              }
               style={{
                 left: rect.left,
                 top: rect.top,
@@ -859,193 +1523,313 @@ export function DocSelectionLayer({
               }}
             />
           ))}
-          {ribbons.map(({ footnote, at, number }) => (
+          {ribbons.map(({ footnote, at, bands, useBands, number }) => {
             /*
-             * Tap opens the mark; holding fills it and pops it.
+             * Tap opens the mark; hold fills left→right and deletes.
              *
-             * `HoldButton` is what the rest of the app already means by "this
-             * is destructive, so mean it" — and its fill rises from the bottom
-             * on `--lc-hold`, which is exactly the water-balloon read: the
-             * ribbon swells with colour and bursts. Nothing new to learn, and
-             * no delete button crowding a marker that is 13 pixels wide.
+             * Number chip sits inset in the top-right of the topmost band (or
+             * union box) — inside the wash, not hanging off the edge.
              */
-            <HoldButton
-              key={footnote.id}
-              label={String(number)}
-              className={`lc-doc-footnote lc-doc-footnote-${footnote.kind}`}
+            const tint = footnoteThemeVars(
+              footnote.color ?? inkPalette[0],
+              inkPalette,
+            );
+            const paintBands =
+              useBands && bands.length > 0 ? bands : at ? [at] : [];
+            const topBand =
+              paintBands.length > 0
+                ? paintBands.reduce((best, bandRect) =>
+                    bandRect.top < best.top ||
+                    (bandRect.top === best.top && bandRect.left < best.left)
+                      ? bandRect
+                      : best,
+                  )
+                : at;
+            const host = topBand ?? at;
+            const chipPad = 3;
+            const chipW = 16;
+            const chipStyle = {
+              left: host.left + Math.max(chipPad, host.width - chipW - chipPad),
+              top: host.top + chipPad,
+              ...tint,
+            };
+            return (
+              <span key={footnote.id} className="lc-doc-footnote-pack" style={tint}>
+                {paintBands.map((bandRect, bandIndex) => (
+                    <div
+                      key={`fn-band-${bandIndex}`}
+                      className="lc-doc-footnote-band"
+                      style={{
+                        left: bandRect.left,
+                        top: bandRect.top,
+                        width: bandRect.width,
+                        height: bandRect.height,
+                        ...tint,
+                      }}
+                    />
+                  ))}
+                <HoldButton
+                  label={String(number)}
+                  className={`lc-doc-footnote lc-doc-footnote-bookmark lc-doc-footnote-${footnote.kind}`}
+                  style={chipStyle}
+                  ariaLabel={`${footnoteTitle(footnote, number)} — tap to open, hold to delete`}
+                  onTap={() => {
+                    const rect = ribbonRects.current.get(footnote.id) ?? null;
+                    onOpenFootnote?.(footnote, rect);
+                  }}
+                  /*
+                   * The longer hold, not the default 333ms.
+                   *
+                   * A ribbon is sixteen pixels across and deleting it throws away a
+                   * thread or a search the reader cannot get back. `HOLD_MS` is
+                   * shorter than the app's own `LONG_PRESS_MS`, so a tap that
+                   * merely lingered would have popped the mark. `HOLD_SENSITIVE_MS`
+                   * is what the offline gate and the solution reveal already use
+                   * for "mean it".
+                   */
+                  holdMs={HOLD_SENSITIVE_MS}
+                  holdThrough
+                  onConfirm={() => onRemoveFootnote?.(footnote)}
+                  onMeasure={(node: HTMLButtonElement | null) => {
+                    if (node) ribbonRects.current.set(footnote.id, node.getBoundingClientRect());
+                    else ribbonRects.current.delete(footnote.id);
+                  }}
+                >
+                  <span className="lc-doc-footnote-tag">{number}</span>
+                </HoldButton>
+              </span>
+            );
+          })}
+
+          {paintedSubMarks.flatMap((entry) =>
+            entry.rects.map((rect, index) => (
+              <div
+                key={`sub-${entry.id}-${index}`}
+                className={`lc-doc-submark-paint lc-doc-submark-${entry.kind}`}
+                style={{
+                  left: rect.left,
+                  top: rect.top,
+                  width: rect.width,
+                  height: rect.height,
+                }}
+              />
+            )),
+          )}
+          {subMarkLivePaint.map((rect, index) => (
+            <div
+              key={`sub-live-${index}`}
+              className={`lc-doc-submark-paint lc-doc-submark-live lc-doc-submark-${subMarkMode ?? "underline"}`}
               style={{
-                ...(isRegionAnchor(footnote.anchor)
-                  ? { left: at.left, top: at.top, width: at.width, height: at.height }
-                  : { left: at.left + at.width, top: at.top }),
-                // One value in; the edge and the label are derived in CSS.
-                ...(footnote.color ? { ["--lc-fn-color" as string]: footnote.color } : {}),
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height,
               }}
-              dataRegion={isRegionAnchor(footnote.anchor)}
-              ariaLabel={`${footnoteTitle(footnote, number)} — tap to open, hold to delete`}
-              onTap={() => {
-                const rect = ribbonRects.current.get(footnote.id) ?? null;
-                onOpenFootnote?.(footnote, rect);
-              }}
-              /*
-               * The longer hold, not the default 333ms.
-               *
-               * A ribbon is sixteen pixels across and deleting it throws away a
-               * thread or a search the reader cannot get back. `HOLD_MS` is
-               * shorter than the app's own `LONG_PRESS_MS`, so a tap that
-               * merely lingered would have popped the mark. `HOLD_SENSITIVE_MS`
-               * is what the offline gate and the solution reveal already use
-               * for "mean it".
-               */
-              holdMs={HOLD_SENSITIVE_MS}
-              holdThrough
-              onConfirm={() => onRemoveFootnote?.(footnote)}
-              onMeasure={(node: HTMLButtonElement | null) => {
-                if (node) ribbonRects.current.set(footnote.id, node.getBoundingClientRect());
-                else ribbonRects.current.delete(footnote.id);
-              }}
-            >
-              <span className="lc-doc-footnote-tag">{number}</span>
-            </HoldButton>
+            />
           ))}
+          {subMarkLivePaint.length > 0 &&
+            subMarkLive != null &&
+            subMarkLive.end - subMarkLive.start >= 2 && (
+            <>
+              {(() => {
+                const startRect = subMarkLivePaint[0]!;
+                const endRect = subMarkLivePaint[subMarkLivePaint.length - 1]!;
+                const hit = 28;
+                const startStem = Math.max(12, Math.round(startRect.height));
+                const endStem = Math.max(12, Math.round(endRect.height));
+                return (
+                  <>
+                    <button
+                      type="button"
+                      className="lc-doc-submark-grip"
+                      data-grip="start"
+                      style={{
+                        left: startRect.left - hit / 2,
+                        top: startRect.top + startRect.height - hit / 2,
+                        ["--lc-grip-stem" as string]: `${startStem}px`,
+                      }}
+                      aria-label="Adjust selection start"
+                    />
+                    <button
+                      type="button"
+                      className="lc-doc-submark-grip"
+                      data-grip="end"
+                      style={{
+                        left: endRect.left + endRect.width - hit / 2,
+                        top: endRect.top + endRect.height - hit / 2,
+                        ["--lc-grip-stem" as string]: `${endStem}px`,
+                      }}
+                      aria-label="Adjust selection end"
+                    />
+                  </>
+                );
+              })()}
+            </>
+          )}
         </div>,
       )}
       {/*
-        Accept or reject, at the top-right corner of what was picked.
+        Accept / reject, then actions — one surface that morphs.
 
         Portalled to the body rather than painted into the page overlay, and
         that is not a cosmetic choice: the overlay lives inside the board, where
         the scroll gatekeeper takes pointer capture, and a control there gets no
         `click` at all — its `pointerup` is retargeted to the capturing element.
-        Out here the chip is an ordinary button. It is positioned from the
-        highlight's on-screen box, so it still lands on the corner of the words
-        at any zoom; a selection does not outlive the gesture that made it, so
-        it has nothing to track.
+        Out here the chip is an ordinary button. Shared `layoutId` grows the
+        ✓/✕ pill into the action sheet so the two steps read as one control.
       */}
-      {phase === "confirm" &&
-        selection &&
-        createPortal(
-          <div className="lc-doc-confirm" ref={placeConfirm} style={{ visibility: "hidden" }}>
-            <button
-              type="button"
-              className="lc-doc-confirm-btn lc-doc-confirm-yes"
-              aria-label="Use this selection"
-              title="Use this selection"
-              onClick={() => {
-                /*
-                 * Re-marking the very same words is not a new mark.
-                 *
-                 * Nobody annotates one span twice on purpose — they are trying
-                 * to get back to the note they already made — so this goes
-                 * straight to that card instead of offering to make a
-                 * duplicate beside it. Anything less than an exact match is a
-                 * real new selection and gets the sheet, with the overlap
-                 * listed in it.
-                 */
-                if (existingHere) {
-                  const rect = highlightBox();
-                  dismiss();
-                  onOpenFootnote?.(existingHere, rect);
-                  return;
-                }
-                setPhase("actions");
-              }}
-            >
-              ✓
-            </button>
-            <button
-              type="button"
-              className="lc-doc-confirm-btn lc-doc-confirm-no"
-              aria-label="Discard this selection"
-              title="Discard this selection"
-              onClick={dismiss}
-            >
-              ✕
-            </button>
-          </div>,
-          document.body,
-        )}
-      {phase === "actions" &&
+      {(phase === "confirm" || phase === "actions") &&
         selection &&
         createPortal(
           <>
-            <button
-              type="button"
-              className="lc-doc-sheet-backdrop"
-              aria-label="Dismiss selection actions"
-              onClick={dismiss}
-            />
-            <div
-              className="lc-doc-sheet"
-              role="menu"
-              ref={placeSheet}
+            {phase === "actions" && (
+              <button
+                type="button"
+                className="lc-doc-sheet-backdrop"
+                aria-label="Dismiss selection actions"
+                onClick={dismiss}
+              />
+            )}
+            <motion.div
+              layoutId="doc-selection-chrome"
+              className={
+                phase === "confirm"
+                  ? "lc-doc-confirm lc-doc-selection-chrome"
+                  : "lc-doc-sheet lc-doc-sheet-actions-menu lc-doc-selection-chrome"
+              }
+              role={phase === "actions" ? "menu" : undefined}
+              ref={bindSelectionChrome}
               style={{ left: 0, top: 0, visibility: "hidden" }}
+              transition={{ layout: { duration: 0.22, ease: [0.22, 1, 0.36, 1] } }}
             >
-              <p className="lc-doc-sheet-excerpt">
-                {selection.excerpt || "This area of the page"}
-              </p>
-              {/*
-                Marks this selection has landed on.
-
-                Offered rather than assumed. Selecting a paragraph that happens
-                to contain a marked phrase is an ordinary thing to do and makes
-                a real new mark — but it is also exactly when a near-duplicate
-                gets made by accident, so the note already there is one tap
-                away. Built from the same rows the overview card uses.
-              */}
-              {overlaps.length > 0 && (
-                <ul className="lc-doc-sheet-marks" aria-label="Marks on this selection">
-                  {overlaps.map((footnote) => (
-                    <li key={footnote.id}>
+              <AnimatePresence mode="popLayout" initial={false}>
+                {phase === "confirm" ? (
+                  <motion.div
+                    key="confirm"
+                    className="lc-doc-confirm-row"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.12 }}
+                  >
+                    <button
+                      type="button"
+                      className="lc-doc-confirm-btn lc-doc-confirm-yes"
+                      aria-label="Use this selection"
+                      title="Use this selection"
+                      onClick={() => {
+                        /*
+                         * Re-marking the very same words is not a new mark.
+                         *
+                         * Nobody annotates one span twice on purpose — they are trying
+                         * to get back to the note they already made — so this goes
+                         * straight to that card instead of offering to make a
+                         * duplicate beside it. Anything less than an exact match is a
+                         * real new selection and gets the sheet, with the overlap
+                         * listed in it.
+                         */
+                        if (existingHere) {
+                          const rect = highlightBox();
+                          dismiss();
+                          onOpenFootnote?.(existingHere, rect);
+                          return;
+                        }
+                        setPhase("actions");
+                      }}
+                    >
+                      ✓
+                    </button>
+                    <button
+                      type="button"
+                      className="lc-doc-confirm-btn lc-doc-confirm-no"
+                      aria-label="Discard this selection"
+                      title="Discard this selection"
+                      onClick={dismiss}
+                    >
+                      ✕
+                    </button>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="actions"
+                    className="lc-doc-sheet-body"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.14, delay: 0.04 }}
+                  >
+                    {overlaps.length > 0 && (
+                      <ul className="lc-doc-sheet-marks" aria-label="Marks on this selection">
+                        {overlaps.map((footnote) => (
+                          <li key={footnote.id}>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="lc-coach-scope-option"
+                              onClick={() => {
+                                const rect = highlightBox();
+                                dismiss();
+                                onOpenFootnote?.(footnote, rect);
+                              }}
+                            >
+                              <strong>{`Open ${footnoteNumbers.get(footnote.id) ?? ""}`.trim()}</strong>
+                              <span className="lc-muted">{footnote.excerpt || "this area"}</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="lc-doc-sheet-actions">
+                      {onMark && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="lc-doc-sheet-action"
+                          onClick={() => act(onMark)}
+                        >
+                          <MarkActionIcon />
+                          <span>Mark</span>
+                        </button>
+                      )}
+                      {selection.text.trim().length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="lc-doc-sheet-action"
+                            onClick={() => {
+                              setCopied(true);
+                              act(onCopy);
+                            }}
+                          >
+                            <CopyActionIcon />
+                            <span>{copied ? "Copied" : "Copy"}</span>
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="lc-doc-sheet-action"
+                            onClick={() => act(onSearch)}
+                          >
+                            <SearchActionIcon />
+                            <span>Google</span>
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         role="menuitem"
-                        className="lc-coach-scope-option"
-                        onClick={() => {
-                          const rect = highlightBox();
-                          dismiss();
-                          onOpenFootnote?.(footnote, rect);
-                        }}
+                        className="lc-doc-sheet-action"
+                        onClick={() => act(onAnnotate)}
                       >
-                        <strong>{`Open ${footnoteNumbers.get(footnote.id) ?? ""}`.trim()}</strong>
-                        <span className="lc-muted">{footnote.excerpt || "this area"}</span>
+                        <AnnotateActionIcon />
+                        <span>Annotate</span>
                       </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="lc-doc-sheet-actions">
-                {/*
-                  A highlight over a scanned plate has no words in it, so Copy
-                  and Google have nothing to act on. Annotate always is — it gets
-                  the crop and opens the overview card.
-                */}
-                {onMark && (
-                  <button type="button" role="menuitem" onClick={() => act(onMark)}>
-                    Mark
-                  </button>
+                    </div>
+                  </motion.div>
                 )}
-                {selection.text.trim().length > 0 && (
-                  <>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setCopied(true);
-                        act(onCopy);
-                      }}
-                    >
-                      {copied ? "Copied" : "Copy"}
-                    </button>
-                    <button type="button" role="menuitem" onClick={() => act(onSearch)}>
-                      Google
-                    </button>
-                  </>
-                )}
-                <button type="button" role="menuitem" onClick={() => act(onAnnotate)}>
-                  Annotate
-                </button>
-              </div>
-            </div>
+              </AnimatePresence>
+            </motion.div>
           </>,
           document.body,
         )}
@@ -1066,6 +1850,60 @@ function footnoteTitle(footnote: DocFootnote, number: number): string {
   }
 }
 
+function CopyActionIcon() {
+  return (
+    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+      <rect x="5.5" y="5.5" width="7" height="8" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M3.5 10.5V3.8A1.3 1.3 0 0 1 4.8 2.5h5.7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function SearchActionIcon() {
+  return (
+    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+      <circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="m10.2 10.2 3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AnnotateActionIcon() {
+  return (
+    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+      <path
+        d="M4 12.5 11.2 5.3a1.4 1.4 0 0 1 2 2L6 14.5H4z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <path d="m10.2 4.3 1.5-1.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MarkActionIcon() {
+  return (
+    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+      <path
+        d="M4 2.5h5.5L12 5v8.5H4z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <path d="M9.5 2.5V5H12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 
 /**
  * Paint the marker layer into the board's marks slot when there is one.
@@ -1075,4 +1913,287 @@ function footnoteTitle(footnote: DocFootnote, number: number): string {
  */
 function overlay(host: HTMLElement | null, node: React.ReactNode): React.ReactNode {
   return host ? createPortal(node, host) : node;
+}
+
+function caretRangeAt(clientX: number, clientY: number): Range | null {
+  if (document.caretRangeFromPoint) return document.caretRangeFromPoint(clientX, clientY);
+  const pos = document.caretPositionFromPoint?.(clientX, clientY);
+  if (!pos) return null;
+  const range = document.createRange();
+  range.setStart(pos.offsetNode, pos.offset);
+  range.collapse(true);
+  return range;
+}
+
+/** Probe around a point when caret APIs miss thin PDF glyphs. */
+function nearestCaretInRoot(root: HTMLElement, clientX: number, clientY: number): Range | null {
+  const deltas = [0, -3, 3, -6, 6, -10, 10, -16, 16];
+  for (const dy of deltas) {
+    for (const dx of deltas) {
+      const range = caretRangeAt(clientX + dx, clientY + dy);
+      if (range && root.contains(range.startContainer)) return range;
+    }
+  }
+  return null;
+}
+
+/**
+ * Walk text under `root` and pick the closest character offset — no band filter.
+ * Used when band-constrained lookup misses (scaled markdown / PDF text layer).
+ */
+function nearestOffsetInRoot(
+  root: HTMLElement,
+  clientX: number,
+  clientY: number,
+  scope?: string,
+): { start: number; root: HTMLElement; scope?: string } | null {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let best: { dist: number; node: Text; offset: number } | null = null;
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const text = node as Text;
+    if (!text.data || !/\S/.test(text.data)) continue;
+    const length = text.data.length;
+    const step = Math.max(1, Math.floor(length / Math.max(1, Math.min(32, length))));
+    for (let i = 0; i < length; i += step) {
+      const range = document.createRange();
+      const end = Math.min(length, i + 1);
+      try {
+        range.setStart(text, i);
+        range.setEnd(text, end);
+      } catch {
+        continue;
+      }
+      const rect = range.getBoundingClientRect();
+      if (rect.width < 0.25 && rect.height < 0.25) continue;
+      const cx = Math.min(Math.max(clientX, rect.left), rect.right);
+      const cy = Math.min(Math.max(clientY, rect.top), rect.bottom);
+      const dist = (cx - clientX) ** 2 + (cy - clientY) ** 2;
+      const offset = clientX <= (rect.left + rect.right) / 2 ? i : end;
+      if (!best || dist < best.dist) best = { dist, node: text, offset };
+    }
+  }
+  if (!best) return null;
+  const range = document.createRange();
+  range.setStart(best.node, Math.min(best.offset, best.node.data.length));
+  range.collapse(true);
+  const anchor = anchorFromRange(root, range, scope);
+  if (anchor?.start == null) return null;
+  return { start: anchor.start, root, scope };
+}
+
+/**
+ * Walk text rects under `root` that intersect `bands` and pick the closest
+ * character offset to the pointer.
+ */
+function nearestOffsetInBands(
+  body: HTMLElement,
+  root: HTMLElement,
+  bands: readonly LocalRect[],
+  clientX: number,
+  clientY: number,
+  scope?: string,
+): { start: number; root: HTMLElement; scope?: string } | null {
+  const scale = scaleOf(body) || 1;
+  const bodyBox = body.getBoundingClientRect();
+  const clientBands = bands.map((band) => ({
+    left: bodyBox.left + band.left * scale,
+    top: bodyBox.top + band.top * scale,
+    right: bodyBox.left + (band.left + band.width) * scale,
+    bottom: bodyBox.top + (band.top + band.height) * scale,
+  }));
+  const hitsBand = (rect: DOMRect) =>
+    clientBands.some(
+      (band) =>
+        rect.left < band.right &&
+        rect.right > band.left &&
+        rect.top < band.bottom &&
+        rect.bottom > band.top,
+    );
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let best: { dist: number; node: Text; offset: number } | null = null;
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const text = node as Text;
+    if (!text.data || !/\S/.test(text.data)) continue;
+    const full = document.createRange();
+    full.selectNodeContents(text);
+    const fullBox = full.getBoundingClientRect();
+    if ((fullBox.width > 0 || fullBox.height > 0) && !hitsBand(fullBox)) continue;
+
+    const length = text.data.length;
+    const step = Math.max(1, Math.floor(length / Math.max(1, Math.min(24, length))));
+    for (let i = 0; i < length; i += step) {
+      const range = document.createRange();
+      const end = Math.min(length, i + 1);
+      try {
+        range.setStart(text, i);
+        range.setEnd(text, end);
+      } catch {
+        continue;
+      }
+      const rect = range.getBoundingClientRect();
+      if (rect.width < 0.25 && rect.height < 0.25) continue;
+      if (!hitsBand(rect)) continue;
+      const cx = Math.min(Math.max(clientX, rect.left), rect.right);
+      const cy = Math.min(Math.max(clientY, rect.top), rect.bottom);
+      const dist = (cx - clientX) ** 2 + (cy - clientY) ** 2;
+      const offset = clientX <= (rect.left + rect.right) / 2 ? i : end;
+      if (!best || dist < best.dist) best = { dist, node: text, offset };
+    }
+  }
+  if (!best) return null;
+  const range = document.createRange();
+  range.setStart(best.node, Math.min(best.offset, best.node.data.length));
+  range.collapse(true);
+  const anchor = anchorFromRange(root, range, scope);
+  if (anchor?.start == null) return null;
+  return { start: anchor.start, root, scope };
+}
+
+/**
+ * Character range inside `root` that belongs to the parent mark.
+ *
+ * Text anchors use their offsets. Region marks collect glyphs whose boxes
+ * intersect the mark bands — never fall back to the document start (that is
+ * how "lc whiteboard" got selected while the box was on Agent instructions).
+ */
+function parentTextBounds(
+  body: HTMLElement,
+  root: HTMLElement,
+  parent: DocFootnote,
+  bands: readonly LocalRect[],
+): { start: number; end: number } | null {
+  if (isTextAnchor(parent.anchor)) {
+    if (parent.anchor.end <= parent.anchor.start) return null;
+    return { start: parent.anchor.start, end: parent.anchor.end };
+  }
+
+  const scale = scaleOf(body) || 1;
+  const bodyBox = body.getBoundingClientRect();
+  const clientBands = bands.map((band) => ({
+    left: bodyBox.left + band.left * scale,
+    top: bodyBox.top + band.top * scale,
+    right: bodyBox.left + (band.left + band.width) * scale,
+    bottom: bodyBox.top + (band.top + band.height) * scale,
+  }));
+  const hitsBand = (rect: DOMRect) =>
+    clientBands.some(
+      (band) =>
+        rect.left < band.right &&
+        rect.right > band.left &&
+        rect.top < band.bottom &&
+        rect.bottom > band.top,
+    );
+
+  let min = Infinity;
+  let max = -Infinity;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const text = node as Text;
+    if (!text.data || !/\S/.test(text.data)) continue;
+    const full = document.createRange();
+    full.selectNodeContents(text);
+    const fullBox = full.getBoundingClientRect();
+    if ((fullBox.width > 0 || fullBox.height > 0) && !hitsBand(fullBox)) continue;
+
+    const length = text.data.length;
+    let runStart: number | null = null;
+    for (let i = 0; i <= length; i += 1) {
+      let inside = false;
+      if (i < length) {
+        const range = document.createRange();
+        try {
+          range.setStart(text, i);
+          range.setEnd(text, i + 1);
+        } catch {
+          continue;
+        }
+        const rect = range.getBoundingClientRect();
+        inside =
+          (rect.width >= 0.25 || rect.height >= 0.25) && hitsBand(rect);
+      }
+      if (inside && runStart == null) runStart = i;
+      if (!inside && runStart != null) {
+        const range = document.createRange();
+        try {
+          range.setStart(text, runStart);
+          range.setEnd(text, i);
+        } catch {
+          runStart = null;
+          continue;
+        }
+        const anchor = anchorFromRange(root, range, parent.anchor.scope);
+        if (anchor) {
+          min = Math.min(min, anchor.start);
+          max = Math.max(max, anchor.end);
+        }
+        runStart = null;
+      }
+    }
+  }
+
+  if (Number.isFinite(min) && max > min) return { start: min, end: max };
+
+  /*
+   * Last resort: blockText / excerpt as a probe, but only if that slice's
+   * painted box still sits inside the bands.
+   */
+  const block = parent.blockText?.trim() || parent.excerpt?.trim() || "";
+  if (!block) return null;
+  const stream = textOf(root);
+  const probe = block.slice(0, Math.min(48, block.length));
+  let from = 0;
+  while (from < stream.length) {
+    const base = stream.indexOf(probe, from);
+    if (base < 0) break;
+    const end = Math.min(base + block.length, stream.length);
+    const range = rangeFromAnchor(root, {
+      kind: "text",
+      start: base,
+      end: Math.max(base + 1, Math.min(end, base + probe.length)),
+      ...(parent.anchor.scope ? { scope: parent.anchor.scope } : {}),
+    });
+    if (range) {
+      const box = range.getBoundingClientRect();
+      if (hitsBand(box)) {
+        return { start: base, end: Math.min(base + block.length, stream.length) };
+      }
+    }
+    from = base + 1;
+  }
+  return null;
+}
+
+function pointInLocalBands(
+  body: HTMLElement,
+  bands: readonly LocalRect[],
+  clientX: number,
+  clientY: number,
+  pad = 0,
+): boolean {
+  const { x, y } = viewportToLocal(body, clientX, clientY);
+  return bands.some(
+    (band) =>
+      x >= band.left - pad &&
+      x <= band.left + band.width + pad &&
+      y >= band.top - pad &&
+      y <= band.top + band.height + pad,
+  );
+}
+
+function resolveSubMarkAnchor(
+  parent: DocFootnote,
+  mark: DocFootnoteSubMark,
+): DocAnchor | null {
+  if (mark.anchor) return mark.anchor;
+  if (!isTextAnchor(parent.anchor)) return null;
+  return {
+    kind: "text",
+    start: parent.anchor.start + mark.start,
+    end: parent.anchor.start + mark.end,
+    ...(parent.anchor.scope ? { scope: parent.anchor.scope } : {}),
+  };
 }

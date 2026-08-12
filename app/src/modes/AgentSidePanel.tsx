@@ -1154,7 +1154,7 @@ export function AgentSidePanel({
           </div>
         )}
         <div
-          className="lc-coach-messages"
+          className="lc-coach-messages lc-scroll-pane"
           ref={listRef}
           key={openThreadId ?? "__room__"}
           aria-live="polite"

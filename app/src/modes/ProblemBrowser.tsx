@@ -27,6 +27,7 @@ import {
   type OfflinePack,
 } from "../util/offlineCorpus";
 import { BackgroundPalette } from "../components/BackgroundPalette";
+import { BrowserFilterSelect } from "../components/BrowserFilterSelect";
 import { HoldButton } from "../components/HoldButton";
 import { titleFromSlug } from "../util/text";
 import { loadBrowsePosition, saveBrowsePosition } from "../util/browsePosition";
@@ -539,43 +540,39 @@ export function ProblemBrowser({
                 aria-label="Search problems"
                 onChange={(event) => setQuery(event.target.value)}
               />
-              <select
+              <BrowserFilterSelect
                 className="lc-filter-diff"
                 value={difficulty}
                 aria-label="Difficulty"
-                onChange={(event) => setDifficulty(event.target.value)}
-              >
-                {DIFFICULTIES.map((value) => (
-                  <option key={value || "any"} value={value}>
-                    {value || (mobile ? "diff" : "difficulty")}
-                  </option>
-                ))}
-              </select>
-              <select
+                placeholder={mobile ? "diff" : "difficulty"}
+                options={DIFFICULTIES.map((value) => ({
+                  value,
+                  label: value || "Any",
+                }))}
+                onChange={setDifficulty}
+              />
+              <BrowserFilterSelect
                 className="lc-filter-tag"
                 value={tag}
                 aria-label="Tag"
-                onChange={(event) => setTag(event.target.value)}
-              >
-                <option value="">tag</option>
-                {tags.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-              <select
+                placeholder="tag"
+                options={[
+                  { value: "", label: "Any" },
+                  ...tags.map((value) => ({ value, label: value })),
+                ]}
+                onChange={setTag}
+              />
+              <BrowserFilterSelect
                 className="lc-filter-sort"
                 value={sort}
                 aria-label="Sort"
-                onChange={(event) => setSort(event.target.value)}
-              >
-                {SORTS.map((value) => (
-                  <option key={value} value={value}>
-                    {SORT_LABEL[value]}
-                  </option>
-                ))}
-              </select>
+                placeholder="sort"
+                options={SORTS.map((value) => ({
+                  value,
+                  label: SORT_LABEL[value],
+                }))}
+                onChange={setSort}
+              />
             </div>
 
             {error && <p className="lc-warning">{error}</p>}
