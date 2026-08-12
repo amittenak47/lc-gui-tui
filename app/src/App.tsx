@@ -73,6 +73,7 @@ import { BOARD_THEMES } from "./templates/skeleton";
 import { statementLinePitch } from "./modes/codeFontSize";
 import { sha256Hex } from "./util/codeHash";
 import { HOLD_SENSITIVE_MS } from "./util/gesture";
+import { copyTextToClipboard } from "./util/clipboard";
 import { skeletonOf } from "./util/solutionSplit";
 import {
   AgentSidePanel,
@@ -2045,7 +2046,17 @@ export function App() {
         await boardRef.current?.settleFitView();
 
         // Document must finish laying out (measure stable) before reveal.
-        await waitForMdInkLaidOut(() => mdInkHeightRef.current);
+        // PDFs can take longer than markdown; a soft timeout used to clear the
+        // loading overlay while PdfDocument still showed "Opening…".
+        let laidOut = await waitForMdInkLaidOut(() => mdInkHeightRef.current);
+        if (!laidOut && bytes) {
+          laidOut = await waitForMdInkLaidOut(() => mdInkHeightRef.current, 25000);
+        }
+        if (!laidOut) {
+          throw new Error(
+            "This document did not finish opening — try again, or pick a smaller file.",
+          );
+        }
         await boardRef.current?.settleFitView();
 
         {
@@ -4055,11 +4066,16 @@ export function App() {
     [openFootnoteOverview],
   );
 
-  const onDocCopy = useCallback((_selection: DocSelectionResult, _anchorRect: DOMRect | null) => {
-    void navigator.clipboard?.writeText(_selection.text).catch(() => {
-      setError("this device would not let the app write to the clipboard");
-    });
-  }, []);
+  const onDocCopy = useCallback(
+    async (selection: DocSelectionResult, _anchorRect: DOMRect | null) => {
+      const ok = await copyTextToClipboard(selection.text);
+      if (!ok) {
+        setError("this device would not let the app write to the clipboard");
+      }
+      return ok;
+    },
+    [],
+  );
 
   const onDocSearch = useCallback(
     (selection: DocSelectionResult, anchorRect: DOMRect | null) => {
@@ -5754,11 +5770,14 @@ function waitMs(ms: number): Promise<void> {
 /**
  * Wait until MdInkDocument has reported a stable height.
  * Used under the existing loading overlay so refresh runs on a finished page.
+ *
+ * Returns false when the timeout fires without a height — callers must not
+ * treat that as "document ready" or the board reveals on a stuck "Opening…".
  */
 function waitForMdInkLaidOut(
   readHeight: () => number | null,
   timeoutMs = 8000,
-): Promise<void> {
+): Promise<boolean> {
   return new Promise((resolve) => {
     const start = performance.now();
     let last: number | null = null;
@@ -5769,7 +5788,7 @@ function waitForMdInkLaidOut(
         if (last != null && Math.abs(height - last) < 1) {
           stable += 1;
           if (stable >= 3) {
-            resolve();
+            resolve(true);
             return;
           }
         } else {
@@ -5778,7 +5797,7 @@ function waitForMdInkLaidOut(
         last = height;
       }
       if (performance.now() - start >= timeoutMs) {
-        resolve();
+        resolve(false);
         return;
       }
       window.setTimeout(tick, 50);

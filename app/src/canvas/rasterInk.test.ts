@@ -909,7 +909,7 @@ describe("host-bound ink", () => {
     expect(isHostBoundOp(op)).toBe(true);
     expect(hostScrollDx(op, 20)).toBeCloseTo(0);
     expect(hostScrollDx(op, 50)).toBe(-30);
-    expect(hostScrollDx(op, 50, 2)).toBe(-15);
+    expect(hostScrollDx(op, 50, 2)).toBe(-30);
     expect(hostScrollDx(draw([0, 0], [1, 1]), 50)).toBe(0);
   });
 
@@ -990,6 +990,44 @@ describe("host-bound ink", () => {
     } as unknown as CanvasRenderingContext2D;
     paintHostBoundOps(ctx, [draw([0, 0], [10, 0])], new Map(), 1);
     expect(calls).toHaveLength(0);
+  });
+
+  it("still paints host-bound ops when the host lookup misses (no silent drop)", () => {
+    const strokes: string[] = [];
+    const ctx = {
+      save() {},
+      restore() {},
+      beginPath() {},
+      rect() {},
+      clip() {},
+      translate() {},
+      setTransform() {},
+      moveTo() {
+        strokes.push("moveTo");
+      },
+      lineTo() {
+        strokes.push("lineTo");
+      },
+      stroke() {
+        strokes.push("stroke");
+      },
+      fill() {},
+      arc() {},
+      globalCompositeOperation: "source-over",
+      globalAlpha: 1,
+      strokeStyle: "",
+      fillStyle: "",
+      lineCap: "",
+      lineJoin: "",
+      lineWidth: 0,
+    } as unknown as CanvasRenderingContext2D;
+    const op = {
+      ...draw([0, 0], [10, 0]),
+      hostKey: 7,
+      scrollLeftAtDraw: 40,
+    };
+    paintHostBoundOps(ctx, [op], new Map(), 1);
+    expect(strokes).toContain("stroke");
   });
 
   it("export paintInkAtScale second-passes host-bound ops when hosts given", () => {

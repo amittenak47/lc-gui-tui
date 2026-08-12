@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use minijinja::{context, Environment};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
@@ -83,8 +84,14 @@ pub fn generate(
     let solution_path = dir.join("solution.py");
     if !solution_path.exists() || force {
         fs::write(&solution_path, solution)?;
-    } else {
-        eprintln!("solution.py already exists — left untouched (pass --force to overwrite)");
+    } else if std::io::stderr().is_terminal() {
+        // Never `eprintln!` here: a closed stderr pipe (common when `lc serve`
+        // is hosted under Windows tooling) makes `eprintln!` panic the
+        // spawn_blocking task and `/problems/:id/load` returns 500.
+        let _ = writeln!(
+            std::io::stderr(),
+            "solution.py already exists — left untouched (pass --force to overwrite)"
+        );
     }
 
     fs::write(dir.join("run_tests.py"), RUN_TESTS_PY)?;
@@ -461,7 +468,8 @@ fn open_in_editor_impl(dir: &Path, quiet: bool) {
     }
 
     if !quiet {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "Could not launch cursor/code — open manually: {}",
             target.display()
         );

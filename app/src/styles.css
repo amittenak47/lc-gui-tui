@@ -1485,10 +1485,13 @@ input[type="checkbox"] {
 }
 
 .lc-scroll-back-hold {
-  position: absolute;
+  /* Fixed to the viewport — absolute-to-.lc-board put this under the fold when
+     the camera had already wandered into empty board space. */
+  position: fixed;
   left: 50%;
-  bottom: 18px;
-  z-index: 14;
+  bottom: max(18px, env(safe-area-inset-bottom, 0px));
+  top: auto;
+  z-index: 240;
   transform: translateX(-50%);
   min-width: 0;
   min-height: 0;
@@ -1501,6 +1504,8 @@ input[type="checkbox"] {
   font-size: 12px;
   font-weight: 600;
   box-shadow: 0 4px 14px rgb(0 0 0 / 16%);
+  pointer-events: auto;
+  touch-action: manipulation;
 }
 
 .lc-scroll-back-hold .lc-hold-reveal-fill {
@@ -2986,7 +2991,13 @@ input[type="checkbox"] {
  */
 .lc-board-reading .lc-page-content-slot .lc-md-ink-doc pre {
   pointer-events: auto;
-  touch-action: pan-x;
+  /*
+   * `touch-action: pan-x` used to win over `.lc-doc-selectable * { touch-action: none }`
+   * (higher specificity). The browser then owned sideways pans on the `pre` and
+   * hold-to-marquee never armed inside code fences. Board already drives
+   * nested `scrollLeft` via `sideScroll` — keep touch-action none.
+   */
+  touch-action: none;
   overscroll-behavior-x: contain;
 }
 
@@ -3038,7 +3049,7 @@ input[type="checkbox"] {
 
 .lc-board-reading .lc-page-content-slot .lc-code-doc-pre {
   pointer-events: auto;
-  touch-action: pan-x;
+  touch-action: none;
   overscroll-behavior-x: contain;
 }
 
@@ -8223,6 +8234,15 @@ button.lc-row-selected:hover:not(:disabled) {
   z-index: 12;
 }
 
+/*
+ * Doc paper (md/pdf/epub): keep ink above Excalidraw even after leaving
+ * Annotate — `.lc-annotating-code` drops with the mode toggle and used to bury
+ * committed strokes under the (transparent-but-still-stacked) scene canvas.
+ */
+.lc-board-doc-paper .lc-raster-ink {
+  z-index: 12;
+}
+
 
 /*
  * Per-message actions used to live behind a ⋯ handle because long-press was
@@ -9737,7 +9757,12 @@ button.lc-row-selected:hover:not(:disabled) {
 /*
  * Bands stay pointer-events: none while armed — PE:auto sat on top of the PDF
  * text layer and made caretRangeFromPoint miss, so grips/drags never updated.
+ * Ensure the pdf.js text layer can receive the pointer under the selectable slot.
  */
+.lc-page-content-selectable .lc-pdf-text.textLayer,
+.lc-board-highlighting .lc-pdf-text.textLayer {
+  pointer-events: auto;
+}
 
 
 /* ------------------------------------------------------ PDF and EPUB --- */

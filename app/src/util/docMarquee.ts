@@ -177,6 +177,7 @@ export function textUnder(
   const right = left + rect.width * scale;
   const bottom = top + rect.height * scale;
   const parts: string[] = [];
+  let fromCode = false;
   for (const node of textNodesOf(body)) {
     if (!node.data.trim()) continue;
     const range = document.createRange();
@@ -185,7 +186,18 @@ export function textUnder(
     if (box.width === 0 && box.height === 0) continue;
     const overlaps =
       box.left < right && box.right > left && box.top < bottom && box.bottom > top;
-    if (overlaps) parts.push(node.data);
+    if (!overlaps) continue;
+    if (node.parentElement?.closest("pre, code")) fromCode = true;
+    parts.push(node.data);
+  }
+  if (parts.length === 0) return "";
+  // Code fences keep newlines / indentation; prose collapses whitespace.
+  if (fromCode) {
+    return parts
+      .join("")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]+\n/g, "\n")
+      .trimEnd();
   }
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }

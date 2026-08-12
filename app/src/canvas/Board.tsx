@@ -146,7 +146,14 @@ import {
   setDocCameraLive,
   pointerInSubMark,
 } from "./docSelectionGesture";
-import { horizontalScrollHost, scrollHostLookupFromSlot, slotCssPerScene } from "./scrollHost";
+import {
+  DOC_PAGE_SELECTOR,
+  horizontalScrollHost,
+  horizontalScrollHostsIn,
+  scrollHostAtPoint,
+  scrollHostLookupFromSlot,
+  slotCssPerScene,
+} from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import { applyGestureExclusions, edgeStrips } from "../util/gestureExclusion";
 import { BoardToolbar } from "./BoardToolbar";
@@ -2119,19 +2126,53 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onAnnotateCodeChange?.(annotateCode);
   }, [annotateCode, onAnnotateCodeChange]);
 
+  /** Snapshot nested host scrollLeft under the content slot (annotate toggle). */
+  const snapshotHostScroll = useCallback((): Map<HTMLElement, number> => {
+    const slot = contentSlotNodeRef.current;
+    const out = new Map<HTMLElement, number>();
+    if (!slot) return out;
+    for (const doc of slot.querySelectorAll(DOC_PAGE_SELECTOR)) {
+      for (const host of horizontalScrollHostsIn(doc)) {
+        out.set(host, host.scrollLeft);
+      }
+    }
+    return out;
+  }, []);
+
+  const restoreHostScroll = useCallback((saved: Map<HTMLElement, number>) => {
+    for (const [host, left] of saved) {
+      if (host.isConnected) host.scrollLeft = left;
+    }
+  }, []);
+
   const toggleAnnotate = useCallback(() => {
     wakeChromeRef.current();
+    const saved = snapshotHostScroll();
     setAnnotateCode((current) => {
       const next = !current;
       modeIndicatorRef.current?.show(next ? "Annotation" : "Scroll mode");
       return next;
     });
-  }, []);
+    // Mode flip changes PE/classes; restore scroll after commit and repaint ink.
+    requestAnimationFrame(() => {
+      restoreHostScroll(saved);
+      rasterInkRef.current?.repaint();
+    });
+  }, [restoreHostScroll, snapshotHostScroll]);
 
   // Leaving Annotate puts the pen down and the highlighter with it.
   useEffect(() => {
     if (!annotateCode && highlighting) setHighlighting(false);
   }, [annotateCode, highlighting]);
+
+  /** Annotate PE/class flip can desync host-bound ink — repaint after the mode settles. */
+  useEffect(() => {
+    if (!interactive) return;
+    const id = requestAnimationFrame(() => {
+      rasterInkRef.current?.repaint();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [annotateCode, interactive]);
 
   useEffect(() => {
     onHighlightingChange?.(highlighting);
@@ -2415,12 +2456,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
 
   const clampPanScroll = useCallback((scrollX: number, scrollY: number, zoom: number) => {
-    if (!mobileRef.current || mobileRegionRef.current == null) {
-      return { scrollX, scrollY };
-    }
     const bounds = pageBoundsRef.current;
     const api = apiRef.current;
     if (!bounds || !api) return { scrollX, scrollY };
+    /*
+     * Mobile paging always clamped. Desktop used to skip clamp entirely, so a
+     * reading board could pan into empty beige past the page — Excalidraw then
+     * offered "Scroll back to content" and the hold button sat on a dead zone.
+     * Clamp whenever we know the open page box (md-ink / region frames).
+     */
     const state = api.getAppState() as { width?: number; height?: number };
     if (typeof state.width !== "number" || typeof state.height !== "number") {
       return { scrollX, scrollY };
@@ -2856,6 +2900,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   /**
+   * Nested scroll hosts for host-bound ink — same slot mapping as export so
+   * paint keys/bounds match PNG composite.
+   */
+  const getScrollHosts = useCallback(() => {
+    const map = scrollHostLookupFromSlot(
+      contentSlotNodeRef.current,
+      pageBoundsRef.current,
+    );
+    if (!map) return [];
+    return [...map.entries()].map(([key, host]) => ({
+      key,
+      scrollLeft: host.scrollLeft,
+      bounds: host.bounds,
+    }));
+  }, []);
+
+  /**
    * Move the page for one scroll sample — no `updateScene`, no reblit.
    *
    * Everything on the board is bound to page coordinates for the duration of
@@ -3142,7 +3203,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         el.closest(
           ".lc-toolbar, .lc-map-controls, .lc-pager, .lc-stamp-trash, .lc-capture-overlay," +
             " .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview" +
-            ", .lc-footnote-bubble",
+            ", .lc-footnote-bubble, .lc-scroll-back-hold, .lc-hold-reveal",
         )
       ) {
         return false;
@@ -3271,9 +3332,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         : null;
       // A wide codeblock defers the same way the dock does: which axis the
       // gesture turns out to be is what decides who owns it.
+      // Geometry hit — annotate lands on the ink canvas, so `event.target` is
+      // never inside the doc and `horizontalScrollHost(target)` always misses.
       const sideScroll = onCodeDock
         ? null
-        : horizontalScrollHost(event.target);
+        : scrollHostAtPoint(event.clientX, event.clientY) ??
+          horizontalScrollHost(event.target);
       /*
        * Selectable prose defers for the same reason, on time rather than axis.
        *
@@ -4406,8 +4470,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       );
       const bounds = pageBoundsRef.current;
       if (
-        mobile &&
-        mobileRegionRef.current != null &&
         bounds &&
         typeof state.width === "number" &&
         typeof state.height === "number"
@@ -5110,9 +5172,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!board || typeof ResizeObserver === "undefined") return;
     let timer: number | null = null;
     const run = () => {
-      if (mobileRegionRef.current === null) return;
       // Once the user has zoomed or panned, the camera is theirs: resize the
       // page frame to the new viewport, but leave zoom and scroll alone.
+      // Desktop used to bail when `mobileRegion === null`, so opening a file
+      // and then resizing the window never refit the reading column.
       if (userAdjustedCameraRef.current) {
         fitFrame();
         return;
@@ -6976,6 +7039,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         partialErase={eraserPartial}
         pressureSensitive={pressureSensitive}
         getViewport={getViewport}
+        getScrollHosts={getScrollHosts}
         clip={inkClip}
         onChange={handleInkChange}
         onStylusAccessory={interactive ? handleStylusAccessory : undefined}
@@ -7079,8 +7143,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               // Clamping again here only lands a second `updateScene` on top of
               // the coast's own, which is the fight that made a flick judder.
               if (
-                !mobileRef.current ||
-                mobileRegionRef.current == null ||
                 clampingScrollRef.current ||
                 committingScrollRef.current ||
                 inertiaFrameRef.current !== 0 ||
