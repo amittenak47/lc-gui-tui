@@ -38,8 +38,15 @@ import {
   inkDryScale,
   NO_PRESSURE,
   normalizePressure,
+  dwellBlotGrowT,
+  coalesceRibbonPoints,
+  densifyRibbonPoints,
+  fillInkRibbon,
+  inkDiscRadii,
+  isDiscPrimaryPath,
   paintInkAtScale,
   paintInkDisc,
+  trailingTipClusterStart,
   pointerPressure,
   scenePointFromCanvasPixel,
   scenePointFromPointer,
@@ -995,6 +1002,7 @@ function inkDrawContext() {
   let fillCount = 0;
   let strokeCount = 0;
   let radialGradients = 0;
+  const arcRadii: number[] = [];
   let pen = { x: 0, y: 0 };
 
   const map = (x: number, y: number) => ({
@@ -1035,6 +1043,7 @@ function inkDrawContext() {
       strokeCount++;
     },
     arc(x: number, y: number, r: number) {
+      arcRadii.push(r);
       if (composite !== "destination-out") {
         caps.push({ ...map(x, y), r: r * transform[0] });
       }
@@ -1042,8 +1051,9 @@ function inkDrawContext() {
     fill() {
       fillCount++;
     },
-    createRadialGradient() {
+    createRadialGradient(_x0: number, _y0: number, _r0: number, _x1: number, _y1: number, r1: number) {
       radialGradients++;
+      arcRadii.push(r1);
       return {
         addColorStop() {},
       };
@@ -1060,6 +1070,7 @@ function inkDrawContext() {
     ctx: ctx as unknown as CanvasRenderingContext2D,
     strokes,
     caps,
+    arcRadii,
     get strokeCount() {
       return strokeCount;
     },
@@ -1072,20 +1083,263 @@ function inkDrawContext() {
   };
 }
 
-describe("paintInkDisc blot blend", () => {
-  it("keeps a hard disc when blend is 0", () => {
-    const draw = inkDrawContext();
-    draw.ctx.fillStyle = "#112233";
-    paintInkDisc(draw.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 0, "#112233");
-    expect(draw.radialGradients).toBe(0);
-    expect(draw.fillCount).toBe(1);
+describe("inkDiscRadii / dwell growth", () => {
+  it("starts smaller than tip radius and grows to tip without overshoot", () => {
+    const tip = 10;
+    const early = inkDiscRadii(tip, 0.55, 0);
+    const mid = inkDiscRadii(tip, 0.55, 0.4);
+    const full = inkDiscRadii(tip, 0.55, 1);
+    expect(early.outerR).toBeCloseTo(tip * 0.04);
+    expect(early.outerR).toBeLessThan(tip * 0.1);
+    expect(mid.outerR).toBeGreaterThan(early.outerR);
+    expect(mid.outerR).toBeLessThan(tip);
+    expect(full.outerR).toBeCloseTo(tip);
+    expect(full.outerR).toBeLessThanOrEqual(tip);
   });
 
-  it("uses a radial fade when blend is high", () => {
-    const draw = inkDrawContext();
-    paintInkDisc(draw.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233");
-    expect(draw.radialGradients).toBe(1);
-    expect(draw.fillCount).toBe(1);
+  it("keeps a solid core with soft rim only outside innerR", () => {
+    const { outerR, innerR } = inkDiscRadii(10, 1, 1);
+    expect(innerR).toBeGreaterThan(0);
+    expect(innerR).toBeLessThan(outerR);
+    expect(outerR).toBeLessThanOrEqual(10);
+  });
+
+  it("uses a hard rim when blot blend is 0", () => {
+    const { outerR, innerR } = inkDiscRadii(10, 0, 1);
+    expect(innerR).toBeCloseTo(outerR);
+  });
+
+  it("raises growT slowly as a dwell cluster lengthens", () => {
+    const tipR = 4;
+    const one = dwellBlotGrowT(points([0, 0]), tipR, 0.5);
+    const few = dwellBlotGrowT(
+      points([0, 0], [0.1, 0], [0, 0.1], [0.05, 0.05], [0, 0], [0.02, 0], [0, 0.02], [0, 0], [0.01, 0], [0, 0]),
+      tipR,
+      0.5,
+    );
+    const manyPts: Array<[number, number]> = [];
+    for (let i = 0; i < 50; i++) manyPts.push([0.01 * (i % 3), 0.01 * ((i + 1) % 3)]);
+    const many = dwellBlotGrowT(points(...manyPts), tipR, 0.5);
+    expect(one).toBe(0);
+    expect(few).toBeGreaterThan(one);
+    expect(few).toBeLessThan(0.35);
+    expect(many).toBeGreaterThan(few);
+    expect(many).toBeGreaterThan(0.7);
+  });
+});
+
+describe("paintInkDisc tip vs join", () => {
+  it("keeps a hard disc when blend is 0", () => {
+    const drawCtx = inkDrawContext();
+    drawCtx.ctx.fillStyle = "#112233";
+    paintInkDisc(drawCtx.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 0, "#112233", true);
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(4);
+  });
+
+  it("tip mode stays hard even when blend is high (no halo)", () => {
+    const drawCtx = inkDrawContext();
+    paintInkDisc(drawCtx.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233", false, 1);
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(4);
+  });
+
+  it("tip mode grows from a tiny hard core", () => {
+    const drawCtx = inkDrawContext();
+    paintInkDisc(drawCtx.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233", false, 0);
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(4 * 0.04);
+  });
+
+  it("join mode uses radial fade clamped to nib radius", () => {
+    const drawCtx = inkDrawContext();
+    paintInkDisc(drawCtx.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233", true);
+    expect(drawCtx.radialGradients).toBe(1);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(Math.max(...drawCtx.arcRadii)).toBeCloseTo(4);
+  });
+
+  it("short-path / tip-down stroke paints hard with high blot blend", () => {
+    const op: InkOp = {
+      kind: "draw",
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 1,
+      points: points([10, 10]),
+    };
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(1);
+    expect(drawCtx.arcRadii[0]).toBeLessThan(2);
+  });
+});
+
+describe("fillInkRibbon per-quad", () => {
+  it("fills one quad per segment instead of one closed polygon", () => {
+    const drawCtx = inkDrawContext();
+    const left = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 20, y: 0 },
+    ];
+    const right = [
+      { x: 0, y: 4 },
+      { x: 10, y: 4 },
+      { x: 20, y: 4 },
+    ];
+    fillInkRibbon(drawCtx.ctx, left, right, 1);
+    expect(drawCtx.fillCount).toBe(2);
+  });
+
+  it("still fills self-crossing side polylines (no single winding cancel)", () => {
+    const drawCtx = inkDrawContext();
+    // Bow-tie-ish left/right: two quads still each fill once.
+    const left = [
+      { x: 0, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    const right = [
+      { x: 0, y: 4 },
+      { x: 10, y: 6 },
+      { x: 4, y: 14 },
+    ];
+    fillInkRibbon(drawCtx.ctx, left, right, 1);
+    expect(drawCtx.fillCount).toBe(2);
+  });
+});
+
+describe("disc-primary dwell path", () => {
+  it("treats a tight near-stationary cluster as disc-primary", () => {
+    const cluster = points(
+      [10, 10],
+      [10.2, 10.1],
+      [10.1, 9.9],
+      [10.05, 10.05],
+      [10.15, 10],
+      [10, 10.1],
+      [10.1, 10],
+    );
+    expect(isDiscPrimaryPath(cluster, 8)).toBe(true);
+  });
+
+  it("keeps slight pen wiggles disc-primary within about one nib", () => {
+    // bbox extent ~7 on nib 8 — previously ribboned at 0.4× nib.
+    expect(isDiscPrimaryPath(points([0, 0], [5, 1], [7, 0], [6, -1], [3, 0]), 8)).toBe(true);
+  });
+
+  it("keeps a real stroke off the disc-primary path", () => {
+    expect(isDiscPrimaryPath(points([0, 0], [40, 0], [80, 10]), 8)).toBe(false);
+  });
+
+  it("paints a dwell cluster as discs rather than many ribbon quads", () => {
+    const cluster = points(
+      [10, 10],
+      [10.1, 10],
+      [10, 10.1],
+      [10.05, 10.05],
+      [10.12, 9.98],
+      [10.02, 10.08],
+      [10.08, 10.02],
+      [10, 10],
+    );
+    const op: InkOp = {
+      kind: "draw",
+      color: "#000",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 0.55,
+      points: cluster,
+    };
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    // One growing disc stamp — not one fill per ribbon segment.
+    expect(drawCtx.fillCount).toBe(1);
+  });
+});
+
+describe("speed-ink ribbon coalesce / densify / tip split", () => {
+  const style = () => inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, INK_SLOWNESS_NEUTRAL, 1);
+
+  it("collapses near-duplicate samples", () => {
+    const pts = points(
+      [0, 0],
+      [0.2, 0],
+      [0.3, 0.1],
+      [0.25, 0],
+      [40, 0],
+      [40.1, 0],
+      [80, 0],
+    );
+    const styles = pts.map(() => style());
+    const out = coalesceRibbonPoints(pts, styles, 1);
+    expect(out.points.length).toBeLessThan(pts.length);
+    expect(out.points[0].x).toBeCloseTo(0);
+    expect(out.points[out.points.length - 1].x).toBeCloseTo(80);
+  });
+
+  it("inserts midpoints on long thick chords", () => {
+    const pts = points([0, 0], [40, 0]);
+    const styles = pts.map(() => style());
+    const out = densifyRibbonPoints(pts, styles, 1);
+    expect(out.points.length).toBeGreaterThan(2);
+    expect(out.points[0].x).toBeCloseTo(0);
+    expect(out.points[out.points.length - 1].x).toBeCloseTo(40);
+  });
+
+  it("finds a trailing tip cluster after a real stroke prefix", () => {
+    const pts = points(
+      [0, 0],
+      [20, 0],
+      [40, 0],
+      [60, 0],
+      [60.2, 0.1],
+      [60.1, -0.1],
+      [60.15, 0],
+      [60, 0.05],
+    );
+    const start = trailingTipClusterStart(pts, 8);
+    expect(start).toBeGreaterThanOrEqual(2);
+    expect(start).toBeLessThan(pts.length);
+  });
+
+  it("speed-ink stroke paints without soft radial boundary discs", () => {
+    // Long enough to leave disc-primary; wiggly tip would previously soft-fade.
+    const pts = points(
+      [0, 0],
+      [15, 2],
+      [30, -1],
+      [45, 3],
+      [60, 0],
+      [75, 2],
+      [90, 0],
+    );
+    const op: InkOp = {
+      kind: "draw",
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 1,
+      points: pts,
+    };
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    // Soft boundary discs used createRadialGradient; hard silhouette path does not.
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
   });
 });
 

@@ -1017,9 +1017,10 @@ export function SettingsModal({
                 <>
                   <div className="lc-settings-subhead">Speed blot blend</div>
                   <p className="lc-settings-hint">
-                    Soften the dark dwell / join discs into the ribbon — radial fade
-                    instead of a hard Sharpie point. 0% keeps hard dots; 100% fades them
-                    most. Saved on this device only.
+                    Soft rim on the dwell pool and how fast it spreads from a small
+                    core out to the tip — not a halo past the stroke. 0% keeps a hard
+                    expanding disc; 100% softens the rim and grows faster. Saved on
+                    this device only.
                   </p>
                   <div className="lc-settings-slider">
                     <input

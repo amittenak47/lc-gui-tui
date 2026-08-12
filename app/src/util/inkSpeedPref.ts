@@ -8,7 +8,7 @@
  */
 
 const KEY = "lc.inkSpeed";
-/** Soften speed-ink join/dwell discs into the ribbon (0 = hard dots, 1 = soft). */
+/** Soft rim + dwell growth feel (0 = hard expanding disc, 1 = soft rim / faster grow). */
 const BLOT_BLEND_KEY = "lc.inkSpeedBlotBlend";
 
 export const INK_SPEED_MIN = 0;
@@ -50,7 +50,7 @@ export function speedInkToPercent(value: number): number {
   return Math.round(clamp(value) * 100);
 }
 
-/** 0 = hard join discs; 1 = radial fade + lower disc contrast. */
+/** 0 = hard expanding disc; 1 = wider soft rim + faster dwell growth. */
 export function loadInkSpeedBlotBlend(): number {
   try {
     const raw = localStorage.getItem(BLOT_BLEND_KEY);
