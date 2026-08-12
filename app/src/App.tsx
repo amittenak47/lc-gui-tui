@@ -442,22 +442,15 @@ export function App() {
   const [mdInkHeight, setMdInkHeight] = useState<number | null>(null);
   const mdInkHeightRef = useRef<number | null>(null);
   mdInkHeightRef.current = mdInkHeight;
-  const pdfLayoutReadyRef = useRef<(() => void) | null>(null);
   /** Scene width of the open markdown page — viewport-sized on fresh opens. */
   const [mdInkPageWidth, setMdInkPageWidth] = useState(MD_INK_PAGE_W);
   /** The width marks were placed at — recorded in an exported sidecar. */
   const mdInkPageWidthRef = useRef(MD_INK_PAGE_W);
   mdInkPageWidthRef.current = mdInkPageWidth;
   const onMdInkMeasure = useCallback((height: number) => {
-    mdInkHeightRef.current = height;
     setMdInkHeight((prev) =>
       prev !== null && Math.abs(prev - height) < 1 ? prev : height,
     );
-  }, []);
-  const onPdfLayoutReady = useCallback(() => {
-    const done = pdfLayoutReadyRef.current;
-    pdfLayoutReadyRef.current = null;
-    done?.();
   }, []);
   /** Problem statement HTML measure — same paper path as md-ink. */
   const [statementHeight, setStatementHeight] = useState<number | null>(null);
@@ -1973,13 +1966,6 @@ export function App() {
           ? await getMdInkDoc(input.docId)
           : await findMdInkDocByHash(hash);
 
-        let pdfLayoutGate: Promise<void> | null = null;
-        if (bytes) {
-          pdfLayoutGate = new Promise<void>((resolve) => {
-            pdfLayoutReadyRef.current = resolve;
-          });
-        }
-
         /*
          * The bytes go in before anything is restored over them.
          *
@@ -2068,24 +2054,12 @@ export function App() {
         await boardRef.current?.settleFitView();
 
         // Document must finish laying out (measure stable) before reveal.
-        // PDFs: wait for PdfDocument layout gate, then stable height — never the
-        // "Opening…" placeholder.
-        if (pdfLayoutGate) {
-          const gateReleased = await Promise.race([
-            pdfLayoutGate,
-            waitMs(45000).then(() => false as const),
-          ]);
-          pdfLayoutReadyRef.current = null;
-          if (gateReleased === false) {
-            throw new Error(
-              "This document did not finish opening — try again, or pick a smaller file.",
-            );
-          }
+        // PDFs can take longer than markdown; a soft timeout used to clear the
+        // loading overlay while PdfDocument still showed "Opening…".
+        let laidOut = await waitForMdInkLaidOut(() => mdInkHeightRef.current);
+        if (!laidOut && bytes) {
+          laidOut = await waitForMdInkLaidOut(() => mdInkHeightRef.current, 25000);
         }
-        let laidOut = await waitForMdInkLaidOut(
-          () => mdInkHeightRef.current,
-          bytes ? 12000 : 8000,
-        );
         if (!laidOut) {
           throw new Error(
             "This document did not finish opening — try again, or pick a smaller file.",
@@ -2138,7 +2112,6 @@ export function App() {
           );
         }
       } catch (cause) {
-        pdfLayoutReadyRef.current = null;
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
@@ -4921,7 +4894,6 @@ export function App() {
                       bytes={mdInkSource.bytes}
                       frameWidth={mdInkPageWidth}
                       onMeasure={onMdInkMeasure}
-                      onLayoutReady={onPdfLayoutReady}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                       onError={setError}
                     />
