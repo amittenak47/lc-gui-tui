@@ -20,7 +20,9 @@ import {
 } from "../util/docFootnotes";
 import { ColorRadial } from "../canvas/ColorRadial";
 import { HoldButton } from "../components/HoldButton";
-import { HighlighterIcon, UnderlineIcon } from "../components/MarkToolIcons";
+import { UnderlineIcon } from "../components/MarkToolIcons";
+import { pointerInSubMark } from "../canvas/docSelectionGesture";
+import { copyTextToClipboard } from "../util/clipboard";
 import {
   advanceInkPalette,
   inkPaletteNow,
@@ -141,6 +143,7 @@ export function FootnoteOverview({
       ? { title: footnote.query || "Search", url: footnote.url }
       : null;
   const subMarkArmed = Boolean(subMarkMode) && !task;
+  const [copied, setCopied] = useState(false);
   const footnoteRef = useRef(footnote);
   footnoteRef.current = footnote;
   const paletteRef = useRef(palette);
@@ -191,6 +194,49 @@ export function FootnoteOverview({
     setDraft("");
     if (subMarkMode) onSubMarkModeChange(null);
   };
+
+  // Let the page receive pointers so the reader can select inside the mark.
+  // Close when the down is outside the panel and outside the mark bands.
+  useEffect(() => {
+    const onDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      const el = event.target instanceof Element ? event.target : null;
+      if (
+        el?.closest?.(
+          ".lc-footnote-overview, .lc-doc-sheet, .lc-doc-confirm, .lc-doc-selection-chrome, .lc-doc-submark-grip",
+        )
+      ) {
+        return;
+      }
+      if (pointerInSubMark(event.clientX, event.clientY)) return;
+      if (task) {
+        setTask(null);
+        return;
+      }
+      onClose();
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    return () => window.removeEventListener("pointerdown", onDown, true);
+  }, [onClose, task]);
+
+  // Highlight sub-mark retired from the panel — clear a leftover armed mode.
+  useEffect(() => {
+    if (subMarkMode === "highlight") onSubMarkModeChange(null);
+  }, [subMarkMode, onSubMarkModeChange]);
+
+  const copyMarkText = useCallback(async () => {
+    const live = window.getSelection()?.toString().trim() ?? "";
+    const text =
+      live ||
+      footnote.blockText?.trim() ||
+      footnote.excerpt?.trim() ||
+      "";
+    const ok = await copyTextToClipboard(text);
+    if (ok) {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    }
+  }, [footnote.blockText, footnote.excerpt]);
 
   const place = useCallback(() => {
     const node = panelRef.current;
@@ -317,15 +363,9 @@ export function FootnoteOverview({
     <LayoutGroup id={`footnote-hub-${footnote.id}`}>
       <button
         type="button"
-        className={`lc-doc-sheet-backdrop${subMarkArmed ? " is-pass-through" : ""}`}
+        className="lc-doc-sheet-backdrop is-pass-through"
         aria-label={task ? "Back to footnote" : "Close footnote"}
-        onPointerDown={(event) => {
-          if (event.button !== 0) return;
-          if (event.target !== event.currentTarget) return;
-          event.preventDefault();
-          if (task) setTask(null);
-          else onClose();
-        }}
+        tabIndex={-1}
         style={{ zIndex: 232 }}
       />
       <motion.div
@@ -485,15 +525,14 @@ export function FootnoteOverview({
                   </button>
                   <button
                     type="button"
-                    className={`lc-footnote-mark-tool${subMarkMode === "highlight" ? " is-active" : ""}`}
-                    aria-label="Highlight"
-                    title="Highlight"
-                    aria-pressed={subMarkMode === "highlight"}
-                    onClick={() =>
-                      onSubMarkModeChange(subMarkMode === "highlight" ? null : "highlight")
-                    }
+                    className={`lc-footnote-mark-tool lc-footnote-copy-tool${copied ? " is-copied" : ""}`}
+                    aria-label={copied ? "Copied" : "Copy"}
+                    title={copied ? "Copied" : "Select text in the mark, then copy — or copy the whole mark"}
+                    onClick={() => {
+                      void copyMarkText();
+                    }}
                   >
-                    <HighlighterIcon size={16} />
+                    <span aria-hidden>{copied ? "✓" : "📋"}</span>
                   </button>
                 </div>
                 <div className="lc-footnote-overview-color">

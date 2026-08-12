@@ -1,17 +1,13 @@
 /**
- * Picking a region (or the words under it) out of the page, in Scroll mode.
+ * Picking a quote out of the page.
  *
- * The gesture is hold-then-drag a marquee box. Drag alone scrolls the page; a
- * tap must stay free for reading. Holding is the only thing a reader never does
- * by accident, so it is safe to enter selection mode.
+ * Two gestures in Scroll mode:
+ * 1. Native text selection — down + drag immediately (any direction). Primary
+ *    path for Copy / Google.
+ * 2. Hold-still (~580ms) then drag — annotate region marquee (figures / Mark).
  *
- * Native text selection is not used. On a tablet WebView it fights
- * `touch-action: none`, and system handles sit in screen space over a scaled
- * scene. The marquee paints in the page's own coordinates (same idea as ink),
- * and persists as a {@link RegionAnchor} — text under the box is optional.
- *
- * Annotate mode turns this layer off (`enabled=false`) unless the highlighter
- * tool is on; there the pen owns the surface.
+ * Annotate + highlight/underline uses the same native Selection path (no hold
+ * box). Sub-mark grips inside an open footnote stay custom.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -19,6 +15,7 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 
 import {
+  SCOPE_ATTR,
   anchorFromRange,
   excerptOf,
   isRegionAnchor,
@@ -83,7 +80,7 @@ function isOverlayControl(target: EventTarget | null): boolean {
   const element = target as Element | null;
   return Boolean(
     element?.closest?.(
-      ".lc-doc-footnote, .lc-doc-confirm, .lc-footnote-overview, .lc-doc-submark-grip",
+      ".lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-doc-selection-chrome, .lc-footnote-overview, .lc-doc-submark-grip",
     ),
   );
 }
@@ -165,10 +162,7 @@ export interface DocSelectionLayerProps {
    */
   marksHost?: HTMLElement | null;
   /**
-   * Highlighter mode — same marquee, but armed immediately (no hold).
-   *
-   * Annotate-only: the tool *is* the mode, so a drag means this and nothing
-   * else while it is on. Reading mode uses hold-then-marquee instead.
+   * Highlighter / underline tool — native text selection, not the hold box.
    */
   highlighting?: boolean;
   footnotes?: readonly DocFootnote[];
@@ -273,6 +267,8 @@ export function DocSelectionLayer({
    * words is a chance to say "not that" without the menu ever appearing.
    */
   const [phase, setPhase] = useState<"idle" | "confirm" | "actions">("idle");
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
   const [ribbons, setRibbons] = useState<
     Array<{
       footnote: DocFootnote;
@@ -307,11 +303,6 @@ export function DocSelectionLayer({
   const subMarkLiveRef = useRef(subMarkLive);
   subMarkLiveRef.current = subMarkLive;
   const bandFadeTimerRef = useRef<number | null>(null);
-  const bandRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-  } | null>(null);
   /**
    * Where each ribbon is on screen, so the card it opens can hang off it.
    *
@@ -363,6 +354,11 @@ export function DocSelectionLayer({
     if (bandFadeTimerRef.current != null) {
       window.clearTimeout(bandFadeTimerRef.current);
       bandFadeTimerRef.current = null;
+    }
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch {
+      /* ignore */
     }
     setSelection(null);
     setPhase("idle");
@@ -475,87 +471,143 @@ export function DocSelectionLayer({
   }, []);
 
   /**
-   * Annotate highlighter: immediate marquee (no hold).
-   * Same finalize path as reading-mode hold→marquee.
+   * Native Selection → actions sheet (Copy / Google / Mark).
+   * No Confirm|Close — that chrome is hold-marquee only.
+   * Runs for reading mode and annotate Sweep — not during hold-marquee or sub-mark.
    */
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || !highlighting || subMarkArmed) return;
+    const body = bodyRef.current;
+    if (!host || !body) return;
+    if (subMarkArmed) return;
+    if (!enabled && !highlighting) return;
 
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      if (isOverlayControl(event.target)) return;
-      dismiss();
-      bandRef.current = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-      };
-      claimSelectionGesture();
-      host.classList.add("lc-doc-selecting", "lc-doc-select-mode");
-      event.preventDefault();
+    const scopeRootForRange = (range: Range): { root: HTMLElement; scope?: string } => {
+      const node = range.commonAncestorContainer;
+      const el =
+        node.nodeType === Node.ELEMENT_NODE
+          ? (node as HTMLElement)
+          : node.parentElement;
+      const scoped = el?.closest(`[${SCOPE_ATTR}]`);
+      if (scoped instanceof HTMLElement && body.contains(scoped)) {
+        const scope = scoped.getAttribute(SCOPE_ATTR) ?? undefined;
+        return { root: scoped, scope: scope || undefined };
+      }
+      return { root: body };
     };
 
-    const onPointerMove = (event: PointerEvent) => {
-      const start = bandRef.current;
-      const body = bodyRef.current;
-      if (!start || start.pointerId !== event.pointerId || !body) return;
-      event.preventDefault();
-      const a = viewportToLocal(body, start.startX, start.startY);
-      const b = viewportToLocal(body, event.clientX, event.clientY);
-      const rect = bandFromLocalPoints(body, a, b);
-      const { root } = scopeRootAtPoint(body, start.startX, start.startY);
-      paintMarquee(rect, root);
+    /** When the footnote panel is open, only accept ranges inside that mark. */
+    const panelBands = (): LocalRect[] | null => {
+      if (!subMarkParent) return null;
+      const scope = subMarkParent.anchor.scope;
+      const root = scopeRootIn(body, scope) as HTMLElement | null;
+      if (!root) return null;
+      const stored =
+        subMarkParent.bands && subMarkParent.bands.length > 0 ? subMarkParent.bands : null;
+      if (stored) return [...stored];
+      const at = rectForAnchor(body, root, subMarkParent.anchor);
+      return at ? [at] : null;
     };
 
-    const onPointerUp = (event: PointerEvent) => {
-      const start = bandRef.current;
-      if (!start || start.pointerId !== event.pointerId) return;
-      bandRef.current = null;
-      host.classList.remove("lc-doc-selecting", "lc-doc-select-mode");
-      releaseSelectionGesture();
-      const body = bodyRef.current;
-      if (!body) {
-        setBand(null);
-        setHitRects([]);
-        return;
+    const rangeHitsBands = (range: Range, bands: readonly LocalRect[]): boolean => {
+      for (const rect of Array.from(range.getClientRects())) {
+        if (rect.width < 0.5 && rect.height < 0.5) continue;
+        if (
+          pointInLocalBands(
+            body,
+            bands,
+            rect.left + rect.width / 2,
+            rect.top + rect.height / 2,
+            8,
+          )
+        ) {
+          return true;
+        }
       }
-      const a = viewportToLocal(body, start.startX, start.startY);
-      const b = viewportToLocal(body, event.clientX, event.clientY);
-      const rect = bandFromLocalPoints(body, a, b);
-      if (rect.width * (scaleOf(body) || 1) < MIN_BAND_PX) {
-        setBand(null);
-        setHitRects([]);
-        return;
-      }
-      const { root, scope } = scopeRootAtPoint(body, start.startX, start.startY);
-      const done = finalizeMarquee(body, rect, root, scope);
-      if (!done) {
-        setBand(null);
-        setHitRects([]);
-        return;
-      }
-      confirmMarquee(done, rect);
+      return false;
     };
 
-    host.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("pointermove", onPointerMove, { passive: false });
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
+    const commitNative = (event?: Event) => {
+      if (holdRef.current?.held) return;
+      if (event && isOverlayControl(event.target)) return;
+      // Already showing actions — don't bounce back to a new sheet on chrome clicks.
+      if (phaseRef.current === "actions" || phaseRef.current === "confirm") return;
+
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount < 1) return;
+      const range = sel.getRangeAt(0);
+      if (!body.contains(range.commonAncestorContainer)) return;
+      const raw = sel.toString();
+      if (!raw.trim()) return;
+
+      const bands = panelBands();
+      if (bands && bands.length > 0 && !rangeHitsBands(range, bands)) return;
+
+      const { root, scope } = scopeRootForRange(range);
+      let anchor = anchorFromRange(root, range, scope);
+      if (!anchor) return;
+      const stream = textOf(root);
+      const [start, end] = snapToWords(stream, anchor.start, anchor.end);
+      anchor = { ...anchor, start, end };
+      const text = textForAnchor(root, anchor);
+      if (!text.trim()) return;
+      // Sheet-only chrome for native path — no grey word boxes / confirm band.
+      setHitRects([]);
+      setSelection({
+        text,
+        excerpt: excerptOf(text),
+        anchor,
+        hitRects: [],
+      });
+      setBand(null);
+      setBandFading(false);
+      // Native path skips Confirm|Close — straight to Copy / Google / …
+      setPhase("actions");
+    };
+
+    const onPointerUp = (event: Event) => {
+      window.requestAnimationFrame(() => commitNative(event));
+    };
+
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("mouseup", onPointerUp, true);
     return () => {
-      host.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
-      host.classList.remove("lc-doc-selecting", "lc-doc-select-mode");
-      releaseSelectionGesture();
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("mouseup", onPointerUp, true);
     };
-  }, [highlighting, subMarkArmed, dismiss, paintMarquee, confirmMarquee]);
+  }, [enabled, highlighting, subMarkArmed, subMarkParent]);
 
-  // Reading mode: hold to arm selection mode, then drag a marquee box.
+  /** Panel open (no sub-mark tool): still register mark hit so Board/backdrop can test it. */
+  useEffect(() => {
+    if (!subMarkParent || subMarkArmed) return;
+    const SUBMARK_HIT_PAD = 48;
+    const hit = (clientX: number, clientY: number): boolean => {
+      const body = bodyRef.current;
+      if (!body) return false;
+      const scope = subMarkParent.anchor.scope;
+      const root = scopeRootIn(body, scope) as HTMLElement | null;
+      if (!root) return false;
+      const stored =
+        subMarkParent.bands && subMarkParent.bands.length > 0 ? subMarkParent.bands : null;
+      const bands =
+        stored ??
+        (() => {
+          const at = rectForAnchor(body, root, subMarkParent.anchor);
+          return at ? [at] : [];
+        })();
+      if (bands.length === 0) return false;
+      return pointInLocalBands(body, bands, clientX, clientY, SUBMARK_HIT_PAD);
+    };
+    setSubMarkPointerHit(hit);
+    return () => setSubMarkPointerHit(null);
+  }, [subMarkParent, subMarkArmed]);
+
+  // Reading mode: hold still to arm annotate marquee (region / Mark). Native
+  // drag-select is separate — do not preventDefault selectstart until armed.
+  // Panel open → native in-band only (no hold box fighting Copy).
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || !enabled || highlighting || subMarkArmed) return;
+    if (!host || !enabled || highlighting || subMarkArmed || subMarkParent) return;
 
     const paintFromFinger = (hold: NonNullable<typeof holdRef.current>) => {
       const body = bodyRef.current;
@@ -568,7 +620,7 @@ export function DocSelectionLayer({
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
       if (isOverlayControl(event.target)) return;
-      dismiss();
+      // Don't dismiss an open sheet on every down — only start a pending hold.
       clearGesture();
       const startX = event.clientX;
       const startY = event.clientY;
@@ -589,7 +641,12 @@ export function DocSelectionLayer({
           const hold = holdRef.current;
           const body = bodyRef.current;
           if (!hold || !body) return;
-          // No caret required — empty margin / figure still arms selection.
+          try {
+            window.getSelection()?.removeAllRanges();
+          } catch {
+            /* ignore */
+          }
+          dismiss();
           const { root, scope } = scopeRootAtPoint(body, startX, startY);
           hold.held = true;
           hold.timer = null;
@@ -610,7 +667,6 @@ export function DocSelectionLayer({
             /* window listeners still run */
           }
           host.classList.add("lc-doc-selecting", "lc-doc-select-mode");
-          // Tiny starter band so the mode is visible before the drag grows it.
           paintFromFinger(hold);
           if (edgeFrameRef.current == null) {
             edgeFrameRef.current = requestAnimationFrame(autoScroll);
@@ -722,7 +778,10 @@ export function DocSelectionLayer({
 
     const onPointerUp = (event: PointerEvent) => finishHold(event, true);
     const onPointerCancel = (event: PointerEvent) => finishHold(event, false);
-    const onSelectStart = (event: Event) => event.preventDefault();
+    const onSelectStart = (event: Event) => {
+      // Only block native select once the annotate box owns the finger.
+      if (holdRef.current?.held) event.preventDefault();
+    };
 
     host.addEventListener("selectstart", onSelectStart);
     host.addEventListener("pointerdown", onPointerDown);
@@ -737,7 +796,7 @@ export function DocSelectionLayer({
       window.removeEventListener("pointercancel", onPointerCancel, true);
       releaseSelectionGesture();
     };
-  }, [enabled, highlighting, subMarkArmed, clearGesture, dismiss, paintMarquee, confirmMarquee]);
+  }, [enabled, highlighting, subMarkArmed, subMarkParent, clearGesture, dismiss, paintMarquee, confirmMarquee]);
 
   /*
    * Sub-mark mode — custom range selection inside the open mark's bands.
@@ -1496,7 +1555,15 @@ export function DocSelectionLayer({
   }, [subMarkLive]);
 
   return (
-    <div className="lc-doc-selectable" ref={hostRef}>
+    <div
+      className={[
+        "lc-doc-selectable",
+        subMarkParent && !subMarkArmed ? "lc-doc-panel-open" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      ref={hostRef}
+    >
       <div className="lc-doc-selectable-body" ref={bodyRef}>
         {children}
       </div>

@@ -8505,13 +8505,9 @@ button.lc-row-selected:hover:not(:disabled) {
 /* ------------------------------------------------- document selection --- */
 
 /*
- * Scroll mode makes the page hit-testable so a hold can land on a word.
- *
- * Annotate mode never gets this class: there the pen owns the surface, and a
- * paper layer that answered the pointer would take strokes off the ink layer.
- * `user-select` stays off in both — the highlight below is painted from the
- * range rather than by the platform, because a system selection draws its
- * handles in screen space over a page that lives in a scaled scene.
+ * Scroll mode makes the page hit-testable so a hold can land on a word /
+ * native drag-select can start. Annotate without highlight drops this class
+ * so the pen owns the paper again.
  */
 .lc-page-content-selectable {
   pointer-events: auto;
@@ -8522,13 +8518,20 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * The body no longer needs `user-select: text` for caret hit-testing.
- * Marquee selection paints its own band; keep callout off on iOS.
+ * Native text selection is the primary quote path (down+drag).
+ * Hold-still annotate marquee is separate and suppresses select while armed.
  */
 .lc-doc-selectable-body {
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* Hold-armed annotate box owns the gesture — kill native select chrome. */
+.lc-doc-selecting .lc-doc-selectable-body,
+.lc-doc-selecting .lc-doc-selectable-body * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }
 
 /*
@@ -9755,6 +9758,26 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
+ * Footnote panel open (Copy / in-band native select) — not underline tool.
+ * Wash lives in the marks slot above the page; it must stay PE:none so the
+ * PDF text layer under it still receives drag-select. Force selectability in
+ * case a prior sub-mark rule left user-select off.
+ */
+.lc-doc-panel-open .lc-doc-selectable-body,
+.lc-doc-panel-open .lc-doc-selectable-body *,
+.lc-doc-panel-open .lc-pdf-text.textLayer,
+.lc-doc-panel-open .lc-pdf-text.textLayer span {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+.lc-doc-panel-open .lc-pdf-text.textLayer {
+  pointer-events: auto !important;
+  /* Above the page canvas inside the page box; marks-slot wash stays PE:none. */
+  z-index: 2;
+}
+
+/*
  * Bands stay pointer-events: none while armed — PE:auto sat on top of the PDF
  * text layer and made caretRangeFromPoint miss, so grips/drags never updated.
  * Ensure the pdf.js text layer can receive the pointer under the selectable slot.
@@ -9762,6 +9785,15 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-page-content-selectable .lc-pdf-text.textLayer,
 .lc-board-highlighting .lc-pdf-text.textLayer {
   pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.lc-page-content-selectable .lc-pdf-text.textLayer span,
+.lc-board-highlighting .lc-pdf-text.textLayer span {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 
@@ -10131,7 +10163,8 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-doc-footnote-band {
   position: absolute;
   border-radius: 3px;
-  pointer-events: none;
+  /* Never steal hits from the PDF/markdown text under the wash. */
+  pointer-events: none !important;
   background: color-mix(in srgb, var(--lc-fn-edge, var(--accent, #0d9488)) 22%, transparent);
   border: 1px solid color-mix(in srgb, var(--lc-fn-edge, var(--accent, #0d9488)) 55%, transparent);
 }

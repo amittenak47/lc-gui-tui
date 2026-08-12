@@ -4841,13 +4841,13 @@ export function App() {
                 : null
             }
             selectableContent={Boolean(problem && isMdInk(problem) && mdInkSource)}
-            textMarkSelecting={Boolean(openFootnote && subMarkMode)}
+            textMarkSelecting={Boolean(openFootnote)}
             onMarksSlot={setMarksSlot}
             onHighlightingChange={setHighlighting}
             pageContent={
               problem && isMdInk(problem) && mdInkSource ? (
                 <DocSelectionLayer
-                  enabled={!annotateCode || Boolean(openFootnote && subMarkMode)}
+                  enabled={!annotateCode || Boolean(openFootnote) || highlighting}
                   highlighting={highlighting}
                   marksHost={marksSlot}
                   footnotes={mdInkFootnotes}
@@ -4866,14 +4866,14 @@ export function App() {
                       bytes={mdInkSource.bytes}
                       frameWidth={mdInkPageWidth}
                       onMeasure={onMdInkMeasure}
-                      selectable={!annotateCode || Boolean(subMarkMode) || highlighting}
+                      selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                       onError={setError}
                     />
                   ) : mdInkSource.docType === "epub" && mdInkSource.bytes ? (
                     <EpubDocument
                       bytes={mdInkSource.bytes}
                       onMeasure={onMdInkMeasure}
-                      selectable={!annotateCode || Boolean(subMarkMode) || highlighting}
+                      selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                       onError={setError}
                     />
                   ) : mdInkSource.docType === "code" ? (
@@ -4881,13 +4881,13 @@ export function App() {
                       source={mdInkSource.text}
                       language={languageForName(mdInkSource.name)}
                       onMeasure={onMdInkMeasure}
-                      selectable={!annotateCode || Boolean(subMarkMode) || highlighting}
+                      selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                     />
                   ) : (
                     <MdInkDocument
                       source={mdInkSource.text}
                       onMeasure={onMdInkMeasure}
-                      selectable={!annotateCode || Boolean(subMarkMode) || highlighting}
+                      selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                     />
                   )}
                 </DocSelectionLayer>
