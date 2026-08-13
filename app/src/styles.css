@@ -2078,6 +2078,19 @@ input[type="checkbox"] {
   color: #fff;
 }
 
+.lc-hold-reveal.lc-tool {
+  min-width: 0;
+  width: var(--touch);
+  min-height: calc(var(--touch) - 10px);
+  height: calc(var(--touch) - 10px);
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.lc-tool.is-locked {
+  opacity: 0.4;
+}
+
 .lc-tool-mini {
   width: 36px;
   min-height: 30px;
@@ -5461,35 +5474,62 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: auto;
   flex: 1;
   min-height: 0;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 /*
- * Named folds inside the body. The pane above is still the only scroller —
- * these do not grow their own overflow. Match the tab strip: a rule and a
- * chevron, not a second card language.
+ * Named folds inside the body. Same chrome as `.lc-bridge-fold` / the pager:
+ * `--chrome-edge` hairline, surface wash, 10px radius. A button row, not
+ * `<details>` — Android WebView eats overflow pans that start on `<summary>`.
  */
 .lc-settings-fold {
-  border: 1px solid var(--border, rgb(127 127 127 / 20%));
+  border: 1px solid var(--chrome-edge);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--ink) 3.5%, transparent);
+  background: color-mix(in srgb, var(--surface) 78%, var(--bg));
+  overflow: hidden;
+}
+
+.lc-settings-fold-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: var(--touch);
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: left;
+  cursor: pointer;
 }
 
 .lc-settings-fold-summary:hover {
-  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
 }
 
-.lc-settings-fold-summary::-webkit-details-marker {
-  display: none;
+.lc-settings-fold-chevron {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
 }
 
-.lc-settings-fold-summary::before {
-  content: "▸";
-  color: var(--muted);
-  font-size: 11px;
+.lc-settings-fold.is-open > .lc-settings-fold-summary .lc-settings-fold-chevron {
+  transform: rotate(45deg);
 }
 
-.lc-settings-fold[open] > .lc-settings-fold-summary::before {
-  content: "▾";
+.lc-settings-fold-title {
+  min-width: 0;
 }
 
 .lc-settings-fold-body {
@@ -5497,7 +5537,8 @@ button.lc-row-selected:hover:not(:disabled) {
   flex-direction: column;
   gap: 12px;
   padding: 12px;
-  border-top: 1px solid var(--border, rgb(127 127 127 / 18%));
+  border-top: 1px solid var(--chrome-edge);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
 }
 
 .lc-settings-fold-body > .lc-settings-subhead:first-child {

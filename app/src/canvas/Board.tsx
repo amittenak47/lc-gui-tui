@@ -1139,6 +1139,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
   const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
   const [inkSmoothingMode, setInkSmoothingMode] = useState(() => loadInkSmoothingMode());
+  const [straightInk, setStraightInk] = useState(() => inkPrefsRef.current.straightInk);
   const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
   const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() =>
     loadInkSpeedBlotBlend(),
@@ -2590,6 +2591,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       inkFullness: number;
       pressureSensitive: boolean;
       inkColor: string;
+      straightInk: boolean;
     }>) => {
       const next = {
         penWidth: patch.penWidth ?? penStrokeWidth,
@@ -2597,11 +2599,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         inkFullness: patch.inkFullness ?? inkFullness,
         pressureSensitive: patch.pressureSensitive ?? pressureSensitive,
         inkColor: patch.inkColor ?? inkColor,
+        straightInk: patch.straightInk ?? straightInk,
       };
       inkPrefsRef.current = next;
       saveInkToolPrefs(next);
     },
-    [penStrokeWidth, eraserStrokeWidth, inkFullness, pressureSensitive, inkColor],
+    [penStrokeWidth, eraserStrokeWidth, inkFullness, pressureSensitive, inkColor, straightInk],
   );
 
   const setStrokeWidth = useCallback((width: number) => {
@@ -2622,6 +2625,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     (enabled: boolean) => {
       setPressureSensitiveState(enabled);
       persistInkPrefs({ pressureSensitive: enabled });
+    },
+    [persistInkPrefs],
+  );
+
+  const setStraightInkOn = useCallback(
+    (on: boolean) => {
+      setStraightInk(on);
+      persistInkPrefs({ straightInk: on });
     },
     [persistInkPrefs],
   );
@@ -3383,9 +3394,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        */
       if (pointerInSubMark(event.clientX, event.clientY)) return;
 
-      // Native text select: down+drag on words. Do not create panDragRef or the
-      // board steals the gesture after SELECT_HOLD_SLOP_PX and nothing selects.
-      if (pointerOnSelectableText(event.clientX, event.clientY, event.target)) return;
+      // Mouse: down+drag on words is native select. Touch/pen must still pan —
+      // Android has no wheel, `touch-action: none` kills native scroll, and an
+      // early return here left the statement stuck. Deferred selectable-doc pan
+      // below waits SELECT_HOLD_SLOP_PX; a live Selection aborts the arm.
+      if (
+        event.pointerType === "mouse" &&
+        pointerOnSelectableText(event.clientX, event.clientY, event.target)
+      ) {
+        return;
+      }
 
       const onCodeDock = isCodeDockTarget(event.target);
       const codeDockEl = onCodeDock
@@ -3532,6 +3550,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       if (!drag.armed) {
         if (Math.hypot(dx, dy) < armThresholdPx(drag)) return;
+        if (drag.selectableDoc) {
+          const live = window.getSelection();
+          if (live && !live.isCollapsed && live.rangeCount > 0) {
+            dropPanForSelection();
+            return;
+          }
+        }
         stopPanInertia();
         const cam = readScroll();
         drag.startScrollY = cam.scrollY;
@@ -6970,6 +6995,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 onCaptureEntire={captureEntireBoard}
                 onCaptureRegion={beginRegionCapture}
                 onReset={resetTemplate}
+                straightInk={straightInk}
+                onStraightInk={setStraightInkOn}
                 onUndo={undoBoard}
                 onRedo={redoBoard}
                 mobile={mobile}
@@ -7134,6 +7161,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pressureClip={pressureClip}
         smoothing={inkSmoothing}
         smoothingMode={inkSmoothingMode}
+        straightInk={straightInk}
         speedInk={inkSpeed}
         speedBlotBlend={inkSpeedBlotBlend}
         inkBoldness={inkBoldness}
