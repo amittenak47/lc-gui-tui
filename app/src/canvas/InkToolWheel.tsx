@@ -22,12 +22,12 @@ import {
 } from "../util/inkToolPresets";
 import { clampWheelAnchor } from "./ColorRadial";
 
-const WHEEL_R = 124;
-const OUTER_INNER = 86;
-const INNER_OUTER = 82;
-const INNER_INNER = 36;
+const WHEEL_R = 96;
+const OUTER_INNER = 67;
+const INNER_OUTER = 64;
+const INNER_INNER = 28;
 const VIEW_PAD = 12;
-const CARD_W = 236;
+const CARD_W = 184;
 
 const KINDS: InkPresetKind[] = ["pen", "highlighter", "eraser"];
 
@@ -466,11 +466,11 @@ export function InkToolWheel({
               aria-hidden
             >
               {sliceKind === "highlighter" ? (
-                <HighlighterIcon size={18} />
+                <HighlighterIcon size={15} />
               ) : sliceKind === "eraser" ? (
-                <PinkEraserIcon size={18} />
+                <PinkEraserIcon size={15} />
               ) : (
-                <PenToolIcon size={18} />
+                <PenToolIcon size={15} />
               )}
             </span>
           );

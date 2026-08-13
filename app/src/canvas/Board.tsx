@@ -7243,7 +7243,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       wakeChrome();
                     }}
                     onClick={wakeChrome}
-                  />
+                  >
+                    <span className="lc-chrome-wake-ghost" aria-hidden>
+                      <EyeIcon closed />
+                    </span>
+                  </button>
                 )}
               </div>
             </div>

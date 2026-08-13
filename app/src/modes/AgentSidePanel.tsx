@@ -687,9 +687,25 @@ export function AgentSidePanel({
       });
     };
     apply();
-    const id = window.requestAnimationFrame(apply);
+    const panel = panelRef.current;
+    let ro: ResizeObserver | null = null;
+    if (panel && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => apply());
+      ro.observe(panel);
+    }
+    let frames = 0;
+    let id = 0;
+    const tick = () => {
+      apply();
+      frames += 1;
+      if (sheetHeight() <= 0 && frames < 16) {
+        id = window.requestAnimationFrame(tick);
+      }
+    };
+    id = window.requestAnimationFrame(tick);
     return () => {
       window.cancelAnimationFrame(id);
+      ro?.disconnect();
     };
   }, [mobile, open, sheetDragging]);
 

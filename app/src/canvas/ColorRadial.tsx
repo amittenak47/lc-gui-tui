@@ -3,6 +3,7 @@
  *
  * Toolbar: tap cycles the next palette (fetch past the end); hold opens the
  * wheel. Open hub: tap cycles palettes already in history, no fetch.
+ * Embedded (preset sheet) hub: same as the toolbar tap — next, including fetch.
  * Wedge: tap/drag picks; hold opens the OS colour editor for that slot.
  *
  * Portaled with `position: fixed` so the toolbar scroller cannot clip the ring.
@@ -37,9 +38,9 @@ const EDIT_HOLD_MS = 550;
 /** Outer / inner radius of the colour ring (CSS px). Toolbar / flyout size. */
 export const OUTER_R = 78;
 const INNER_R = 34;
-/** Preset-sheet ring — large enough the full dial reads, still fits the left column. */
-const EMBEDDED_OUTER_R = 92;
-const EMBEDDED_INNER_R = 40;
+/** Preset-sheet ring — compact so the editor stays near 2× the tool wheel. */
+const EMBEDDED_OUTER_R = 70;
+const EMBEDDED_INNER_R = 30;
 /** Hit slop beyond the ring for drag-pick. */
 const HIT_PAD = 10;
 /** Keep the ring this far inside the window when the swatch sits on an edge. */
@@ -548,6 +549,15 @@ export function ColorRadial({
           onClick={() => {
             if (editingSlotRef.current !== null) return;
             cancelEditHold();
+            // Embedded ring is always open — same as the toolbar tap: next
+            // palette, which is the ColorHunt fetch at the end of history.
+            // The flyout hub still walks backward first so a mis-tap on the
+            // open disc does not spend a network round-trip.
+            if (embedded && onCycleNext) {
+              setCycleDir("next");
+              onCycleNext();
+              return;
+            }
             if (onCyclePrev) {
               setCycleDir("prev");
               onCyclePrev();

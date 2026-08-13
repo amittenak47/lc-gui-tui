@@ -38,7 +38,12 @@ import {
   type DocFootnoteSubMarkKind,
 } from "../util/docFootnotes";
 import { HoldButton } from "../components/HoldButton";
-import { HOLD_SENSITIVE_MS, SELECT_HOLD_ARM_MS, SELECT_HOLD_SLOP_PX } from "../util/gesture";
+import {
+  HOLD_SENSITIVE_MS,
+  SELECT_HOLD_ARM_MS,
+  SELECT_HOLD_SLOP_PX,
+  selectHoldYieldsToScroll,
+} from "../util/gesture";
 import {
   claimSelectionGesture,
   isDocCameraLive,
@@ -81,7 +86,7 @@ function isOverlayControl(target: EventTarget | null): boolean {
   const element = target as Element | null;
   return Boolean(
     element?.closest?.(
-      ".lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-doc-selection-chrome, .lc-footnote-overview, .lc-doc-submark-grip",
+      ".lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-doc-sheet-backdrop, .lc-doc-selection-chrome, .lc-footnote-overview, .lc-doc-submark-grip",
     ),
   );
 }
@@ -764,7 +769,9 @@ export function DocSelectionLayer({
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
       if (isOverlayControl(event.target)) return;
-      // Don't dismiss an open sheet on every down — only start a pending hold.
+      // Unsaved confirm (✓/✕, not yet Annotate) dies on tap-off. A new hold
+      // on this same pointer can replace it. Actions stay on the backdrop.
+      if (phaseRef.current === "confirm") dismiss();
       clearGesture();
       const startX = event.clientX;
       const startY = event.clientY;
@@ -807,7 +814,13 @@ export function DocSelectionLayer({
           if (moved > SELECT_HOLD_SLOP_PX) clearGesture();
           return;
         }
-        if (moved === 0) return;
+        if (moved <= SELECT_HOLD_SLOP_PX) return;
+        const dx = event.clientX - hold.startX;
+        const dy = event.clientY - hold.startY;
+        if (selectHoldYieldsToScroll(dx, dy)) {
+          clearGesture();
+          return;
+        }
         hold.lastX = event.clientX;
         hold.lastY = event.clientY;
         beginMarquee(hold);
@@ -879,6 +892,17 @@ export function DocSelectionLayer({
       clearGesture();
     };
   }, [enabled, highlighting, subMarkArmed, subMarkParent, clearGesture, dismiss, paintMarquee, confirmMarquee]);
+
+  useEffect(() => {
+    const onDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      if (phaseRef.current !== "confirm") return;
+      if (isOverlayControl(event.target)) return;
+      dismiss();
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    return () => window.removeEventListener("pointerdown", onDown, true);
+  }, [dismiss]);
 
   /*
    * Sub-mark mode — custom range only. Native Selection is killed while armed:
@@ -1899,7 +1923,10 @@ export function DocSelectionLayer({
                 type="button"
                 className="lc-doc-sheet-backdrop"
                 aria-label="Dismiss selection actions"
-                onClick={dismiss}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  dismiss();
+                }}
               />
             )}
             <motion.div
