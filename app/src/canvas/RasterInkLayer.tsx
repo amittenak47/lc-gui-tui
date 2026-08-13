@@ -66,7 +66,7 @@ import {
   smoothInkPoints,
   type InkSmoothingMode,
 } from "./inkSmoothing";
-import { WHEEL_OPEN_MS } from "../util/gesture";
+import { WHEEL_HOLD_SLOP_PX, WHEEL_OPEN_MS } from "../util/gesture";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
 import { INK_SPEED_BLOT_BLEND_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
@@ -1411,16 +1411,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             }
             pending.decided = true;
             pending.opened = true;
-            const live = liveRef.current;
-            const painted =
-              (live?.points.length ?? 0) > 1 ||
-              (attackBufferRef.current?.length ?? 0) > 1;
-            if (drawingRef.current && painted) {
-              pendingHoldRef.current = null;
-              return;
-            }
-            // Still-nib: drop the live starter so the dial is not sitting on a
-            // dot. Pen, highlighter, and eraser all share this rest path.
+            // Jitter can stamp a few live points inside slop. That is still a
+            // rest — drop the starter so the dial is not sitting on a dot.
             drawingRef.current = false;
             activePointerRef.current = null;
             liveRef.current = null;
@@ -1441,9 +1433,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             repaintRef.current();
             onWheelHoldRef.current?.(pending.down.clientX, pending.down.clientY);
           }, WHEEL_OPEN_MS);
-          // Fall through — ink starts now (pen, highlighter, eraser). The first
-          // real move cancels the timer. Returning here delayed every stroke
-          // until 8px, then opened the dial if the drag stayed inside slop.
+          // Fall through — ink starts now (pen, highlighter, eraser). Travel
+          // past slop cancels the timer. Staying inside it until dwell opens
+          // the dial (tablet nib jitter is often 8–12px).
         }
         forceInkRef.current = false;
 
@@ -1774,10 +1766,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           if (!pending.decided) {
             const dx = event.clientX - pending.down.clientX;
             const dy = event.clientY - pending.down.clientY;
-            // Any real travel is ink — pen, highlighter, and eraser share this
-            // path. Waiting for 8px (or 280ms) was the lag, and a slow start
-            // that never left slop opened the dial on top of the stroke.
-            if (dx !== 0 || dy !== 0 || drawingRef.current) {
+            // Past slop is ink. Sub-pixel / tablet shake stays pending so the
+            // dwell can still open the dial. drawingRef is already true from
+            // the down fall-through — do not treat that as "decided".
+            if (Math.hypot(dx, dy) > WHEEL_HOLD_SLOP_PX) {
               pending.decided = true;
               if (holdTimerRef.current != null) {
                 window.clearTimeout(holdTimerRef.current);

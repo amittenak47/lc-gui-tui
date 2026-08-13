@@ -24,10 +24,10 @@ export const WHEEL_OPEN_MS = 280;
 /**
  * Finger travel that turns a pending wheel dwell into ink.
  *
- * Tighter than {@link SELECT_HOLD_SLOP_PX}: cursive leaves this radius on the
- * first real stroke sample, so the dwell check runs at most once per down.
+ * Tighter than a pan, looser than a hair: stylus contact jitter is often
+ * 8–12px, and 8px cancelled tablet dwell before the dial could open.
  */
-export const WHEEL_HOLD_SLOP_PX = 8;
+export const WHEEL_HOLD_SLOP_PX = 16;
 
 /** Long-press to open a secondary menu (scratchpad load, coach message). */
 export const LONG_PRESS_MS = 580;
@@ -36,11 +36,11 @@ export const LONG_PRESS_MS = 580;
  * Stillness before a document hold-to-marquee claims the finger.
  *
  * Capture + `claimSelectionGesture` run here so Android's native long-press
- * (~400–500ms) cannot `pointercancel` the pointer before the box arms. A move
- * after this pause is the marquee drag, not a pan. Immediate travel still
- * yields to scroll / native text select via {@link SELECT_HOLD_SLOP_PX}.
+ * (~400–500ms) cannot `pointercancel` the pointer before the box arms. 140ms
+ * was short enough that a scroll hitch looked like a hold. 260ms still beats
+ * native select; a first move that is mostly vertical yields back to pan.
  */
-export const SELECT_HOLD_ARM_MS = 140;
+export const SELECT_HOLD_ARM_MS = 260;
 
 /**
  * Finger travel before a pending hold-to-select yields to scroll.
@@ -50,3 +50,13 @@ export const SELECT_HOLD_ARM_MS = 140;
  * bands the page and never becomes a same-line selection.
  */
 export const SELECT_HOLD_SLOP_PX = 16;
+
+/**
+ * After the marquee arms, a first move this much more vertical than horizontal
+ * is a reading pan, not a box. Horizontal / diagonal still marquees.
+ */
+export const SELECT_HOLD_SCROLL_RATIO = 1.35;
+
+export function selectHoldYieldsToScroll(dx: number, dy: number): boolean {
+  return Math.abs(dy) > Math.abs(dx) * SELECT_HOLD_SCROLL_RATIO;
+}

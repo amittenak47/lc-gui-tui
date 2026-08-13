@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ERASER_WIDTH_MAX } from "../canvas/rasterInk";
+import { selectHoldYieldsToScroll } from "./gesture";
 import { loadInkToolPrefs } from "./inkToolPrefs";
 import { TEST_STRIP_POINTS, testStripDrawOp } from "./inkPresetStrip";
 import {
@@ -137,10 +138,17 @@ describe("wheel confirm / hold", () => {
   });
 
   it("starts ink if the nib moves before the dwell, else opens the wheel", () => {
-    expect(wheelHoldOutcome(12, 100)).toBe("ink");
+    expect(wheelHoldOutcome(17, 100)).toBe("ink");
     expect(wheelHoldOutcome(2, 200)).toBe("pending");
     expect(wheelHoldOutcome(2, 280)).toBe("wheel");
-    expect(wheelHoldOutcome(9, 50)).toBe("ink");
+    expect(wheelHoldOutcome(9, 50)).toBe("pending");
+    expect(wheelHoldOutcome(9, 280)).toBe("wheel");
+  });
+
+  it("yields a post-arm marquee to a vertical reading pan", () => {
+    expect(selectHoldYieldsToScroll(4, 20)).toBe(true);
+    expect(selectHoldYieldsToScroll(24, 6)).toBe(false);
+    expect(selectHoldYieldsToScroll(-8, -8)).toBe(false);
   });
 
   it("auto-applies only after outer then a new inner, when Tap OK is off", () => {

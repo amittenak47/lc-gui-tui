@@ -1902,9 +1902,9 @@ input[type="checkbox"] {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 56px;
-  height: 56px;
-  margin: -28px 0 0 -28px;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -1986,7 +1986,7 @@ input[type="checkbox"] {
 .lc-ink-wheel-card {
   position: absolute;
   top: 8px;
-  width: 236px;
+  width: 184px;
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--chrome-edge);
@@ -2083,10 +2083,10 @@ input[type="checkbox"] {
 .lc-preset-sheet {
   position: fixed;
   left: 50%;
-  top: 8%;
+  top: 10%;
   z-index: 98;
-  width: min(720px, calc(100vw - 24px));
-  max-height: 84vh;
+  width: min(384px, calc(100vw - 24px));
+  max-height: min(56vh, 420px);
   overflow: auto;
   transform: translateX(-50%);
   transform-origin: var(--lc-morph-x) var(--lc-morph-y);
@@ -2109,7 +2109,7 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--chrome-edge);
 }
 
@@ -2186,22 +2186,22 @@ input[type="checkbox"] {
 }
 
 .lc-preset-sheet-strip {
-  padding: 10px 16px 0;
+  padding: 8px 12px 0;
 }
 
 .lc-preset-strip-canvas {
   width: 100%;
-  height: 88px;
+  height: 56px;
   border-radius: 8px;
   background: var(--paper, #fdf6e3);
 }
 
 .lc-preset-sheet-cols {
   display: grid;
-  grid-template-columns: minmax(200px, 0.9fr) minmax(280px, 1.1fr);
+  grid-template-columns: minmax(140px, 0.9fr) minmax(180px, 1.1fr);
   align-items: start;
-  gap: 16px 20px;
-  padding: 8px 16px 14px;
+  gap: 10px 14px;
+  padding: 6px 12px 12px;
 }
 
 .lc-preset-sheet-cols.is-single {
@@ -2229,7 +2229,7 @@ input[type="checkbox"] {
   justify-content: center;
   align-items: center;
   padding: 10px 0 4px;
-  min-height: 184px;
+  min-height: 148px;
 }
 
 .lc-preset-sheet-physics {
@@ -2264,7 +2264,7 @@ input[type="checkbox"] {
   margin: 4px 0 10px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 420px) {
   .lc-preset-sheet-cols {
     grid-template-columns: 1fr;
   }
@@ -2624,8 +2624,8 @@ input[type="checkbox"] {
 }
 
 .lc-color-radial-embedded {
-  width: 184px;
-  height: 184px;
+  width: 148px;
+  height: 148px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2641,9 +2641,9 @@ input[type="checkbox"] {
 }
 
 .lc-color-radial-embedded .lc-color-wheel-hub {
-  width: 64px;
-  height: 64px;
-  margin: -32px 0 0 -32px;
+  width: 48px;
+  height: 48px;
+  margin: -24px 0 0 -24px;
 }
 
 /* Bottom dock — pager stacked above the pen island.
@@ -3407,8 +3407,9 @@ input[type="checkbox"] {
 /*
  * Idle wake: the whole right stack, not a 56px square on the eye.
  *
- * A faint dot still sits where the eye was. The button fills the card
- * footprint so a pen looking for the toggle cannot miss and stamp dots.
+ * A blurred ghost of the visibility icon sits where the eye was. The button
+ * fills the card footprint so a pen looking for the toggle cannot miss and
+ * stamp dots.
  */
 .lc-chrome-wake {
   position: absolute;
@@ -3426,24 +3427,25 @@ input[type="checkbox"] {
   -webkit-tap-highlight-color: transparent;
 }
 
-.lc-chrome-wake::after {
-  content: "";
+.lc-chrome-wake-ghost {
   position: absolute;
   left: 50%;
-  top: auto;
-  bottom: 18px;
-  width: 7px;
-  height: 7px;
-  margin: 0 0 0 -3.5px;
-  border-radius: 50%;
-  background: var(--ink);
-  opacity: 0.16;
-  transition: opacity 160ms ease-out;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  opacity: 0.22;
+  filter: blur(2.2px);
+  pointer-events: none;
+  transition: opacity 160ms ease-out, filter 160ms ease-out;
 }
 
-.lc-chrome-wake:hover::after,
-.lc-chrome-wake:focus-visible::after {
+.lc-chrome-wake:hover .lc-chrome-wake-ghost,
+.lc-chrome-wake:focus-visible .lc-chrome-wake-ghost {
   opacity: 0.42;
+  filter: blur(1.4px);
 }
 
 /*
