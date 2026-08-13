@@ -138,7 +138,7 @@ export function FootnoteOverview({
   const [task, setTask] = useState<Task | null>(null);
   const [draft, setDraft] = useState("");
   const palette =
-    normalizePalette(footnote.palette) ?? paletteForMarkIndex((number ?? 1) - 1);
+    normalizePalette(footnote.palette) ?? paletteForMarkIndex((footnoteNumber ?? 1) - 1);
   const handedness = loadInkHandedness();
   const markColor = footnote.color ?? palette[0] ?? "#0d9488";
   const userLinks = footnote.userLinks ?? [];
@@ -563,9 +563,9 @@ export function FootnoteOverview({
                 )}
               </header>
               <label className="lc-footnote-overview-title-row">
-                {number != null && (
+                {footnoteNumber != null && (
                   <span className="lc-footnote-overview-title-num" aria-hidden>
-                    {number}.
+                    {footnoteNumber}.
                   </span>
                 )}
                 <input
