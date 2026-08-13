@@ -56,7 +56,6 @@ import {
   contentAABBsInFrame,
   contentBottomInFrame,
   growDrawHeight,
-  initialDrawHeight,
   isDrawPageRegion,
 } from "../templates/drawPageGrowth";
 import { INK_REGION_GAP, INK_REGION_PAD, inkRegionSplit } from "./inkRegionSplit";
@@ -161,6 +160,8 @@ import {
   setDrawingImmersive,
 } from "../util/gestureExclusion";
 import { BoardToolbar } from "./BoardToolbar";
+import { InkPresetEditor } from "./InkPresetEditor";
+import { InkToolWheel } from "./InkToolWheel";
 import { ScrollBackHold } from "./ScrollBackHold";
 import {
   isDeletableElement,
@@ -204,6 +205,17 @@ import {
 } from "../util/capturePrefs";
 import { CaptureFeedback, type CaptureFeedbackHandle } from "./CaptureFeedback";
 import { loadInkToolPrefs, saveInkToolPrefs } from "../util/inkToolPrefs";
+import {
+  applyWedge,
+  duplicateWedge,
+  isEraserWedge,
+  kindFromTool,
+  loadInkToolPresets,
+  saveInkToolPresets,
+  saveWedge,
+  toolFromKind,
+  wedgeAt,
+} from "../util/inkToolPresets";
 import {
   clampExportScale,
   exportScaleFrom,
@@ -1130,6 +1142,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const textModeRef = useRef(textMode);
   textModeRef.current = textMode;
   const inkPrefsRef = useRef(loadInkToolPrefs());
+  const [presetStore, setPresetStore] = useState(() => loadInkToolPresets());
+  const presetStoreRef = useRef(presetStore);
+  presetStoreRef.current = presetStore;
+  const [inkWheel, setInkWheel] = useState<
+    { x: number; y: number } | "canvas" | null
+  >(null);
+  const [presetEditor, setPresetEditor] = useState<{
+    kind: "pen" | "highlighter" | "eraser";
+    index: number;
+    from: DOMRect;
+  } | null>(null);
   const [inkColor, setInkColor] = useState(() =>
     resolveInkColor(themeId, inkPrefsRef.current.inkColor),
   );
@@ -2649,6 +2672,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [persistInkPrefs],
   );
 
+  const syncInkFromPrefs = useCallback(() => {
+    const prefs = loadInkToolPrefs();
+    inkPrefsRef.current = prefs;
+    setPenStrokeWidth(prefs.penWidth);
+    setEraserStrokeWidth(prefs.eraserWidth);
+    setInkFullnessState(prefs.inkFullness);
+    setPressureSensitiveState(prefs.pressureSensitive);
+    setStraightInk(prefs.straightInk);
+    if (prefs.inkColor) setInkColor(prefs.inkColor);
+  }, []);
+
+  const applyInkWedge = useCallback(
+    (kind: "pen" | "highlighter" | "eraser", index: number) => {
+      const next = applyWedge(presetStoreRef.current, kind, index);
+      setPresetStore(next);
+      syncInkFromPrefs();
+    },
+    [syncInkFromPrefs],
+  );
+
   const applyTextModeToAppState = useCallback((mode: "plain" | "code") => {
     apiRef.current?.updateScene({
       appState: {
@@ -2757,6 +2800,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
 
     setActiveTool(tool);
+    const kind = kindFromTool(tool);
+    if (kind && tool !== activeTool) {
+      applyInkWedge(kind, presetStoreRef.current.lastWedge[kind]);
+    }
     // Scroll tool: drop any selection. A selected page frame draws animated
     // ants around the whole document and tanks scroll on long pages.
     if (tool === "hand") {
@@ -2765,8 +2812,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         captureUpdate: CaptureUpdateAction.NEVER,
       });
     }
-  }, [activeTool, applyTextModeToAppState]);
+  }, [activeTool, applyTextModeToAppState, applyInkWedge]);
   setActiveToolRef.current = setTool;
+
+  useEffect(() => {
+    const onPresets = () => setPresetStore(loadInkToolPresets());
+    window.addEventListener("lc-ink-presets", onPresets);
+    return () => window.removeEventListener("lc-ink-presets", onPresets);
+  }, []);
 
   useEffect(() => {
     if (annotateCode) {
@@ -4917,7 +4970,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               regionMin,
               growDrawHeight({
                 basePageH,
-                currentH: initialDrawHeight(basePageH),
+                currentH: num(primary.height, 0),
                 contentBottomRel,
               }),
             );
@@ -5098,8 +5151,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         requestAnimationFrame(reportTitleSlot);
         requestAnimationFrame(reportContentSlot);
       }
+      // Frame-only resize used to skip this: pageBoundsRef / inkClip stayed
+      // on the first-open box, so the page still scrolled but ink died past
+      // that initial view.
+      syncPageVisibility();
     },
-    [mobile, reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot],
+    [mobile, reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot, syncPageVisibility],
   );
 
   const fitFrame = useCallback(
@@ -5423,10 +5480,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         elements: [...(api.getSceneElements() as unknown[]), ...pieces],
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
-      setShapesOpen(false);
-      setTool("selection");
     },
-    [convert, setTool],
+    [convert],
   );
 
   /** Place an image element at viewport center (or an explicit scene rect). */
@@ -5516,12 +5571,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         elements: [...(api.getSceneElements() as unknown[]), ...tagged],
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
-      setTool("selection");
       setCaptureMenuOpen(false);
       setCaptureArmed(false);
       setCaptureRegion(null);
     },
-    [setTool],
+    [],
   );
 
   const pickImageFile = useCallback(() => {
@@ -7001,8 +7055,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     setShapesOpen(false);
                     return;
                   }
-                  // Shape library is exclusive with drawing tools.
-                  setTool("selection");
                   setShapesOpen(true);
                   setCaptureMenuOpen(false);
                 }}
@@ -7024,16 +7076,57 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 onHeightChange={(height) => {
                   toolbarHeightRef.current = height;
                 }}
+                showColorWheel={presetStore.colorWheelOnToolbar}
+                presetName={
+                  wedgeAt(
+                    presetStore,
+                    kindFromTool(activeTool) ?? "pen",
+                    presetStore.lastWedge[kindFromTool(activeTool) ?? "pen"],
+                  )?.name ?? "Global"
+                }
+                presetColour={
+                  (() => {
+                    const kind = kindFromTool(activeTool) ?? "pen";
+                    const snap = wedgeAt(presetStore, kind, presetStore.lastWedge[kind]);
+                    if (!snap) return inkColor;
+                    if (isEraserWedge(snap)) return "#f9a8d4";
+                    return snap.colour;
+                  })()
+                }
+                wheelLocked={presetStore.wheelLocked}
+                onToggleWheelLock={() => {
+                  const next = {
+                    ...presetStore,
+                    wheelLocked: !presetStore.wheelLocked,
+                  };
+                  setPresetStore(next);
+                  saveInkToolPresets(next);
+                }}
+                onOpenInkWheel={() => setInkWheel("canvas")}
               />
               </div>
               )}
             </div>
             <div className="lc-map-chrome-right">
               {/*
-                Right stack (bottom → top): eye, theme chip, lined paper.
-                Annotate stays on the opposite end. Eye stays when chrome collapses.
+                Right panel: Recentre, lined paper, theme, eye (sheet lock on
+                mobile). One card. Annotate stays on the opposite end. Eye
+                stays when chrome collapses; wake-dot is un-carded.
               */}
-              <div className="lc-map-chrome-stack">
+              <div
+                className="lc-map-chrome-stack"
+                role="toolbar"
+                aria-label="Board view"
+                onPointerDownCapture={
+                  !chromeShown.eye
+                    ? (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        wakeChrome();
+                      }
+                    : undefined
+                }
+              >
                 {/*
                   The way back.
 
@@ -7130,12 +7223,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   </button>
                 )}
                 {/*
-                  The corner that brings it back.
-                  
+                  The column that brings it back.
+
                   Only mounted when there is nothing else there to tap, so it
-                  never sits over a live control. Sized to a finger rather than
-                  to the eye it replaces — the whole point is finding it without
-                  looking.
+                  never sits over a live control. Hit target is the whole
+                  stack, not just the eye's square — with a pen up, a miss
+                  used to stamp dots on the page.
                 */}
                 {!chromeShown.eye && (
                   <button
@@ -7144,7 +7237,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     aria-label="Show board controls"
                     data-tip="Show controls"
                     data-tip-placement="bottom"
-                    onPointerDown={wakeChrome}
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      wakeChrome();
+                    }}
                     onClick={wakeChrome}
                   />
                 )}
@@ -7193,7 +7290,85 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         clip={inkClip}
         onChange={handleInkChange}
         onStylusAccessory={interactive ? handleStylusAccessory : undefined}
+        wheelHoldEnabled={
+          interactive && inkToolActive && !presetStore.wheelLocked
+        }
+        onWheelHold={(x, y) => setInkWheel({ x, y })}
       />
+      {inkWheel && (
+        <InkToolWheel
+          open
+          anchor={inkWheel}
+          handedness={inkHandedness}
+          store={presetStore}
+          liveKind={kindFromTool(activeTool) ?? "pen"}
+          onClose={() => setInkWheel(null)}
+          onConfirm={(kind, wedge) => {
+            applyInkWedge(kind, wedge);
+            setTool(toolFromKind(kind));
+            setInkWheel(null);
+          }}
+          onEdit={(kind, index, from) => {
+            setInkWheel(null);
+            setPresetEditor({ kind, index, from });
+          }}
+        />
+      )}
+      {presetEditor && (
+        <InkPresetEditor
+          kind={presetEditor.kind}
+          index={presetEditor.index}
+          initial={wedgeAt(presetStore, presetEditor.kind, presetEditor.index)}
+          fallback={wedgeAt(presetStore, presetEditor.kind, 0)}
+          from={presetEditor.from}
+          inkPalette={inkPalette}
+          inkColor={inkColor}
+          handedness={inkHandedness}
+          onEditInkColor={(index, colour) => {
+            applyInkPaletteHistory(
+              setInkPaletteSlot(inkPaletteHistoryRef.current, index, colour),
+            );
+          }}
+          onCycleNext={cycleInkPaletteForward}
+          onCyclePrev={cycleInkPaletteBackward}
+          onClose={() => setPresetEditor(null)}
+          onSave={(snap) => {
+            let next = saveWedge(
+              presetStoreRef.current,
+              presetEditor.kind,
+              presetEditor.index,
+              snap,
+            );
+            next = applyWedge(next, presetEditor.kind, presetEditor.index);
+            setPresetStore(next);
+            syncInkFromPrefs();
+            setPresetEditor(null);
+          }}
+          onDuplicate={(snap) => {
+            const copied = duplicateWedge(
+              presetStoreRef.current,
+              presetEditor.kind,
+              presetEditor.index,
+            );
+            if (!copied) {
+              const next = saveWedge(
+                presetStoreRef.current,
+                presetEditor.kind,
+                presetEditor.index,
+                snap,
+              );
+              setPresetStore(next);
+              return;
+            }
+            setPresetStore(copied.store);
+            setPresetEditor({
+              kind: presetEditor.kind,
+              index: copied.slot,
+              from: presetEditor.from,
+            });
+          }}
+        />
+      )}
       <Excalidraw
         viewModeEnabled={!interactive || !annotateCode}
         handleKeyboardGlobally={interactive}

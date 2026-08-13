@@ -3,14 +3,17 @@
  * Backdrop blurs the board the same way problem-load transitions do.
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import type { LcClient } from "../api/client";
 import type { CoachFlags, DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
 import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { HoldButton } from "./HoldButton";
+import { MorphBar } from "./MorphBar";
 import { loadForwardFailures, saveForwardFailures } from "../util/coachPrefs";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
+import { loadInkToolPresets, saveInkToolPresets } from "../util/inkToolPresets";
 import {
   loadInkPressureClip,
   pressureClipFromPercent,
@@ -99,31 +102,51 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "server", label: "Server" },
 ];
 
+const SETTINGS_PAGE_TITLES: Record<string, string> = {
+  paths: "Paths",
+  datasets: "Datasets",
+  writing: "Writing settings",
+  storage: "Storage Settings",
+  tests: "Test Cases",
+  llm: "LLM",
+  serve: "Serve",
+};
+
+const SettingsPageCtx = createContext<{
+  page: string;
+  open: (id: string) => void;
+  host: HTMLElement | null;
+}>({ page: "root", open: () => {}, host: null });
+
 /**
- * One named fold in the settings body.
- *
- * The body stays the only scroller — these just hide the long lists so the
- * tab is a map of topics instead of a wall of radios. Independent: two can
- * be open at once. Start closed.
- *
- * A `<button>` not `<details>`: native summary eats Android overflow pans,
- * and the disclosure triangle never matched the rest of the chrome.
+ * A settings topic on the root list. Click morphs the window into that page;
+ * Back on the header returns. Children portal into the morph sub-panel so the
+ * accordion never grows in place.
  */
-function SettingsFold({ title, children }: { title: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+function SettingsFold({
+  id,
+  title,
+  children,
+}: {
+  id: string;
+  title: string;
+  children: ReactNode;
+}) {
+  const { page, open, host } = useContext(SettingsPageCtx);
   return (
-    <div className={open ? "lc-settings-fold is-open" : "lc-settings-fold"}>
-      <button
-        type="button"
-        className="lc-settings-fold-summary"
-        aria-expanded={open}
-        onClick={() => setOpen((on) => !on)}
-      >
-        <span className="lc-settings-fold-chevron" aria-hidden />
-        <span className="lc-settings-fold-title">{title}</span>
-      </button>
-      {open ? <div className="lc-settings-fold-body">{children}</div> : null}
-    </div>
+    <>
+      <div className="lc-settings-fold">
+        <button
+          type="button"
+          className="lc-settings-fold-summary"
+          onClick={() => open(id)}
+        >
+          <span className="lc-settings-fold-chevron" aria-hidden />
+          <span className="lc-settings-fold-title">{title}</span>
+        </button>
+      </div>
+      {page === id && host ? createPortal(children, host) : null}
+    </>
   );
 }
 
@@ -140,11 +163,13 @@ const MODES = ["ambient", "review", "bridge", "viz", "planner"] as const;
  * hold its ground, and how does it talk back.
  */
 const COACH_FLAG_GROUPS: Array<{
+  id: string;
   title: string;
   blurb: string;
   flags: Array<[keyof CoachFlags, string, string]>;
 }> = [
   {
+    id: "coach-knows",
     title: "What the coach knows before it looks",
     blurb:
       "Extra model calls made once per problem, before your board is read. Both cost a call, so both start off.",
@@ -162,6 +187,7 @@ const COACH_FLAG_GROUPS: Array<{
     ],
   },
   {
+    id: "coach-reads",
     title: "How it reads your board",
     blurb: "What the coach does when the board argues for something.",
     flags: [
@@ -173,6 +199,7 @@ const COACH_FLAG_GROUPS: Array<{
     ],
   },
   {
+    id: "coach-answers",
     title: "How its answers arrive",
     blurb: "Transport and transparency — neither changes what it says.",
     flags: [
@@ -272,6 +299,10 @@ interface DevicePrefs {
   autosaveMs: AutosaveInterval;
   /** ColourHunt tag the ink wheel asks for. */
   paletteTag: PaletteTag;
+  /** Show ColorRadial on the drawing island (temporary colour until 1D Save). */
+  colorWheelOnToolbar: boolean;
+  /** Hub tap to apply a wheel pick. Off applies on the inner wedge. */
+  tapOk: boolean;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -292,6 +323,8 @@ function loadDevicePrefs(): DevicePrefs {
     eraserPartial: loadEraserPartial(),
     autosaveMs: loadAutosaveInterval(),
     paletteTag: loadPaletteTag(),
+    colorWheelOnToolbar: loadInkToolPresets().colorWheelOnToolbar,
+    tapOk: loadInkToolPresets().tapOk,
   };
 }
 
@@ -312,7 +345,9 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.inkBoldness === b.inkBoldness &&
     a.eraserPartial === b.eraserPartial &&
     a.autosaveMs === b.autosaveMs &&
-    a.paletteTag === b.paletteTag
+    a.paletteTag === b.paletteTag &&
+    a.colorWheelOnToolbar === b.colorWheelOnToolbar &&
+    a.tapOk === b.tapOk
   );
 }
 
@@ -343,6 +378,8 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const mobile = useIsMobile();
   const [tab, setTab] = useState<TabId>(initialTab ?? "personalise");
+  const [page, setPage] = useState("root");
+  const [subHost, setSubHost] = useState<HTMLDivElement | null>(null);
   const [draft, setDraft] = useState<LcConfig>(emptyConfig);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -367,6 +404,10 @@ export function SettingsModal({
    */
   const [storage, setStorage] = useState<(StorageUsage & { persisted: boolean }) | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
+  const [colorWheelOnToolbar, setColorWheelOnToolbar] = useState(
+    () => loadInkToolPresets().colorWheelOnToolbar,
+  );
+  const [tapOk, setTapOk] = useState(() => loadInkToolPresets().tapOk);
   const [forwardFailures, setForwardFailures] = useState<boolean>(() =>
     loadForwardFailures(),
   );
@@ -508,8 +549,11 @@ export function SettingsModal({
     setEraserPartial(prefs.eraserPartial);
     setAutosaveMs(prefs.autosaveMs);
     setPaletteTag(prefs.paletteTag);
+    setColorWheelOnToolbar(prefs.colorWheelOnToolbar);
+    setTapOk(prefs.tapOk);
     setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
+    setPage("root");
     void offlinePackMeta().then((meta) => {
       if (!cancelled && meta) {
         setPackMeta({ built_at: meta.built_at, problemCount: meta.problemCount });
@@ -569,6 +613,8 @@ export function SettingsModal({
     eraserPartial,
     autosaveMs,
     paletteTag,
+    colorWheelOnToolbar,
+    tapOk,
   };
   const dirty =
     !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
@@ -613,6 +659,11 @@ export function SettingsModal({
         saveEraserPartial(eraserPartial);
         saveAutosaveInterval(autosaveMs);
         savePaletteTag(paletteTag);
+        saveInkToolPresets({
+          ...loadInkToolPresets(),
+          colorWheelOnToolbar,
+          tapOk,
+        });
         setBaselinePrefs(draftPrefs);
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
@@ -669,6 +720,23 @@ export function SettingsModal({
   };
 
   const provider = draft[providerFocus];
+  const pageTitle =
+    page === "root"
+      ? "Settings"
+      : (COACH_FLAG_GROUPS.find((group) => group.id === page)?.title ??
+        SETTINGS_PAGE_TITLES[page] ??
+        "Settings");
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (page !== "root") setPage("root");
+      else cancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [page]);
 
   return (
     <div
@@ -680,10 +748,28 @@ export function SettingsModal({
     >
       <div className="lc-settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
         <div className="lc-settings-head">
-          <h2>Settings</h2>
-          <p className="lc-muted">Synced with TUI via config.toml</p>
+          {page === "root" ? (
+            <>
+              <h2>Settings</h2>
+              <p className="lc-muted">Synced with TUI via config.toml</p>
+            </>
+          ) : (
+            <div className="lc-settings-head-row">
+              <button type="button" className="lc-settings-back" onClick={() => setPage("root")}>
+                Back
+              </button>
+              <h2>{pageTitle}</h2>
+            </div>
+          )}
         </div>
 
+        <SettingsPageCtx.Provider value={{ page, open: setPage, host: subHost }}>
+        <MorphBar
+          active={page === "root" ? "root" : "sub"}
+          axis="height"
+          className="lc-settings-morph"
+        >
+        <div data-morph-id="root">
         <div className="lc-settings-tabs" role="tablist">
           {TABS.map((entry) => (
             <button
@@ -705,7 +791,7 @@ export function SettingsModal({
 
           {tab === "workspace" && (
             <div className="lc-settings-fields">
-              <SettingsFold title="Paths">
+              <SettingsFold id="paths" title="Paths">
               <label>
                 <span>Problems folder</span>
                 <input
@@ -744,11 +830,55 @@ export function SettingsModal({
               </label>
               </SettingsFold>
 
-              <SettingsFold title="Datasets">
+              <SettingsFold id="datasets" title="Datasets">
               <p className="lc-muted">
                 Each problem set is indexed into its own table. By default a corpus lives in{" "}
                 <code>&lt;problems folder&gt;/&lt;dataset&gt;/</code>; override it below when it
                 lives somewhere else.
+              </p>
+              <div className="lc-settings-subhead">Offline dataset download</div>
+              <p className="lc-settings-hint">
+                Download every indexed dataset except KodCode onto this device (~100–250&nbsp;MB).
+                Browse and open statements offline; tests need the server.
+              </p>
+              {packMeta && (
+                <p className="lc-muted">
+                  On device: {packMeta.problemCount.toLocaleString()} problems · built{" "}
+                  {new Date(packMeta.built_at * 1000).toLocaleString()}
+                </p>
+              )}
+              {packInfo && <p className="lc-muted">{packInfo}</p>}
+              {packError && <div className="lc-warning">{packError}</div>}
+              <HoldButton
+                label={packLabel}
+                className={[
+                  "lc-pack-download",
+                  "lc-progress-fill",
+                  packActive ? "lc-hold-danger" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                trackProgress={packActive ? packProgress : 0}
+                fillIndeterminate={packBusy && packIndeterminate}
+                disabled={Boolean(busy)}
+                onTap={onPackTap}
+                onConfirm={onPackAbort}
+                ariaLabel={
+                  packActive
+                    ? `${packLabel}: tap to pause, hold to abort`
+                    : packMeta
+                      ? `${packLabel}: tap to delta refresh`
+                      : packLabel
+                }
+              >
+                {packLabel}
+              </HoldButton>
+              <p className="lc-settings-hint">
+                {packActive
+                  ? "Tap to pause · hold to abort (keeps the finished pack on device)."
+                  : packMode === "delta"
+                    ? "Refresh only fetches changed datasets and problems — unchanged corpora stay on device."
+                    : "Downloads in the background — you can close Settings. Closing the app pauses; reopening resumes."}
               </p>
               {datasets.length === 0 && (
                 <p className="lc-muted">
@@ -787,7 +917,7 @@ export function SettingsModal({
 
           {tab === "personalise" && (
             <div className="lc-settings-fields">
-              <SettingsFold title="Writing Behavior">
+              <SettingsFold id="writing" title="Writing settings">
               <div className="lc-settings-subhead">Writing hand</div>
               <p className="lc-settings-hint">
                 Tilts the colour picker so swatches sit clear of your writing hand, and
@@ -825,7 +955,7 @@ export function SettingsModal({
                 </button>
               </div>
 
-              <div className="lc-settings-subhead">Screen captures</div>
+              <div className="lc-settings-subhead">Photo settings</div>
               <p className="lc-settings-hint">
                 What happens when you capture the board — entire or a region. Files are
                 saved on this device only; the default destination is Photos.
@@ -992,6 +1122,93 @@ export function SettingsModal({
                 </>
               )}
 
+              <div className="lc-settings-subhead">Ink presets</div>
+              <p className="lc-settings-hint">
+                Six wedges per tool. Slot 1 is Global. Pen, highlighter and eraser
+                live on the wheel — hold the preset name until it fills (or rest
+                the nib without moving, 280ms when unlocked) to open it. A tap does
+                nothing.
+              </p>
+              <div className="lc-settings-subhead">Tap OK</div>
+              <p className="lc-settings-hint">
+                Confirm the pair at the hub. Off applies as soon as you pick the
+                inner wedge — outer tool first, then a colour. The tool you already
+                have counts as the outer pick. Switching tools clears the colour;
+                switching back is still the outer step. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Tap OK"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!tapOk}
+                  className={
+                    tapOk
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setTapOk(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={tapOk}
+                  className={
+                    tapOk
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setTapOk(true)}
+                >
+                  <strong>On</strong>
+                </button>
+              </div>
+              <div className="lc-settings-subhead">Colour wheel on toolbar</div>
+              <p className="lc-settings-hint">
+                Temporary colour — does not rewrite the active wedge until you Save
+                in the preset editor. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Colour wheel on toolbar"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!colorWheelOnToolbar}
+                  className={
+                    colorWheelOnToolbar
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setColorWheelOnToolbar(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={colorWheelOnToolbar}
+                  className={
+                    colorWheelOnToolbar
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setColorWheelOnToolbar(true)}
+                >
+                  <strong>On</strong>
+                </button>
+              </div>
+
+              {/* Ink physics UI moved to the 1D preset sheet. Kept for revert. */}
+              {false && (
+              <>
               <div className="lc-settings-subhead">Pressure clip</div>
               <p className="lc-settings-hint">
                 How hard you press before the pen reads as &ldquo;full&rdquo; pressure. Lower
@@ -1208,6 +1425,8 @@ export function SettingsModal({
                   </div>
                 </>
               )}
+              </>
+              )}
 
               {/*
                 What the ⟳ on the colour wheel asks for.
@@ -1249,7 +1468,7 @@ export function SettingsModal({
               </div>
               </SettingsFold>
 
-              <SettingsFold title="Storage Settings">
+              <SettingsFold id="storage" title="Storage Settings">
               <div className="lc-settings-subhead">Autosave</div>
               <p className="lc-settings-hint">
                 How often the board writes itself down, so a crash or a closed lid
@@ -1313,7 +1532,7 @@ export function SettingsModal({
 
               <div className="lc-settings-subhead">Storage on this device</div>
               <p className="lc-settings-hint">
-                Annotated documents, scratchpad notebooks, board images and any offline
+                Annotated documents, whiteboard notebooks, board images and any offline
                 problem pack all share one budget. Handwriting is the expensive part — a
                 heavily annotated page costs far more than the document under it.
               </p>
@@ -1346,7 +1565,7 @@ export function SettingsModal({
 
           {tab === "ai" && (
             <div className="lc-settings-fields">
-              <SettingsFold title="Test Cases">
+              <SettingsFold id="tests" title="Test Cases">
               <div className="lc-settings-subhead">When a case fails</div>
               <div className="lc-settings-choice" role="radiogroup" aria-label="Test run mode">
                 <button
@@ -1428,36 +1647,47 @@ export function SettingsModal({
                 </button>
               </div>
               <p className="lc-settings-hint">
-                Saved on this device only. Problems only — the scratchpad and document pads
+                Saved on this device only. Problems only — the whiteboard and document pads
                 have no test run to forward.
               </p>
               </SettingsFold>
 
               {COACH_FLAG_GROUPS.map((group) => (
-                <SettingsFold key={group.title} title={group.title}>
+                <SettingsFold key={group.id} id={group.id} title={group.title}>
                   <p className="lc-settings-hint">{group.blurb}</p>
-                  {group.flags.map(([key, label, hint]) => (
-                    <label key={key} className="lc-settings-toggle">
-                      <input
-                        type="checkbox"
-                        checked={(draft.coach ?? DEFAULT_COACH_FLAGS)[key]}
-                        onChange={(e) =>
-                          setDraft((prev) => ({
-                            ...prev,
-                            coach: {
-                              ...DEFAULT_COACH_FLAGS,
-                              ...(prev.coach ?? {}),
-                              [key]: e.target.checked,
-                            },
-                          }))
-                        }
-                      />
-                      <span>
-                        <strong>{label}</strong>
-                        <span className="lc-muted">{hint}</span>
-                      </span>
-                    </label>
-                  ))}
+                  <div className="lc-settings-choice">
+                    {group.flags.map(([key, label, hint]) => {
+                      const on = (draft.coach ?? DEFAULT_COACH_FLAGS)[key];
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          aria-pressed={on}
+                          className={
+                            on
+                              ? "lc-settings-choice-option is-active"
+                              : "lc-settings-choice-option"
+                          }
+                          onClick={() =>
+                            setDraft((prev) => {
+                              const current = (prev.coach ?? DEFAULT_COACH_FLAGS)[key];
+                              return {
+                                ...prev,
+                                coach: {
+                                  ...DEFAULT_COACH_FLAGS,
+                                  ...(prev.coach ?? {}),
+                                  [key]: !current,
+                                },
+                              };
+                            })
+                          }
+                        >
+                          <strong>{label}</strong>
+                          <span className="lc-muted">{hint}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </SettingsFold>
               ))}
             </div>
@@ -1479,53 +1709,7 @@ export function SettingsModal({
                 </p>
               </div>
 
-              <SettingsFold title="Offline problems">
-              <p className="lc-settings-hint">
-                Download every indexed dataset except KodCode onto this device (~100–250&nbsp;MB).
-                Browse and open statements offline; tests need the server.
-              </p>
-              {packMeta && (
-                <p className="lc-muted">
-                  On device: {packMeta.problemCount.toLocaleString()} problems · built{" "}
-                  {new Date(packMeta.built_at * 1000).toLocaleString()}
-                </p>
-              )}
-              {packInfo && <p className="lc-muted">{packInfo}</p>}
-              {packError && <div className="lc-warning">{packError}</div>}
-              <HoldButton
-                label={packLabel}
-                className={[
-                  "lc-pack-download",
-                  "lc-progress-fill",
-                  packActive ? "lc-hold-danger" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                trackProgress={packActive ? packProgress : 0}
-                fillIndeterminate={packBusy && packIndeterminate}
-                disabled={Boolean(busy)}
-                onTap={onPackTap}
-                onConfirm={onPackAbort}
-                ariaLabel={
-                  packActive
-                    ? `${packLabel}: tap to pause, hold to abort`
-                    : packMeta
-                      ? `${packLabel}: tap to delta refresh`
-                      : packLabel
-                }
-              >
-                {packLabel}
-              </HoldButton>
-              <p className="lc-settings-hint">
-                {packActive
-                  ? "Tap to pause · hold to abort (keeps the finished pack on device)."
-                  : packMode === "delta"
-                    ? "Refresh only fetches changed datasets and problems — unchanged corpora stay on device."
-                    : "Downloads in the background — you can close Settings. Closing the app pauses; reopening resumes."}
-              </p>
-              </SettingsFold>
-
-              <SettingsFold title="LLM">
+              <SettingsFold id="llm" title="LLM">
               <div className="lc-settings-subhead">Coach status</div>
               <p className="lc-coach-live" data-status={coachStatus}>
                 <span className="lc-coach-live-dot" aria-hidden />
@@ -1658,7 +1842,7 @@ export function SettingsModal({
               </div>
               </SettingsFold>
 
-              <SettingsFold title="Serve">
+              <SettingsFold id="serve" title="Serve">
               <label>
                 <span>Port</span>
                 <input
@@ -1723,6 +1907,12 @@ export function SettingsModal({
             {saving ? "Saving…" : "Save"}
           </button>
         </div>
+        </div>
+        <div data-morph-id="sub">
+          <div className="lc-settings-page lc-settings-fields" ref={setSubHost} />
+        </div>
+        </MorphBar>
+        </SettingsPageCtx.Provider>
       </div>
     </div>
   );

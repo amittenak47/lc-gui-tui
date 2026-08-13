@@ -10,7 +10,8 @@
  * One island, one row, always the same height, is what is left.
  *
  * Everything that is not a tool hides behind a press: shapes fan out of one
- * button, colour fans out of one dot ({@link ColorRadial}).
+ * button, colour fans out of one dot ({@link ColorRadial}), pen / highlighter /
+ * eraser live on the ink wheel (hold the preset chip).
  *
  * Long-press the grip to undock and drag the island anywhere on the workspace;
  * drop near the bottom dock slot to snap it home with a short settle animation.
@@ -20,24 +21,27 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { MorphBar } from "../components/MorphBar";
 import { HoldButton } from "../components/HoldButton";
+import { StraightIcon } from "../components/MarkToolIcons";
+import { relativeLuminance } from "../util/footnoteTheme";
 import {
   SHAPES,
   SHAPE_GROUPS,
   type ShapeModValue,
   type ShapeStamp,
 } from "../templates/shapes";
-import { LONG_PRESS_MS } from "../util/gesture";
+import { HOLD_MS, LONG_PRESS_MS, WHEEL_OPEN_MS } from "../util/gesture";
 import type { InkHandedness } from "../util/inkHandedness";
 import {
   clampToBox,
   loadToolbarLayout,
   saveToolbarLayout,
   TOOLBAR_DOCK_SNAP_PX,
+  TOOLBAR_LEFT_CHROME_INSET_PX,
+  toolbarAxis,
   type ToolbarLayout,
 } from "../util/toolbarLayout";
 import type { ToolName } from "./BoardHandle";
 import { ColorRadial } from "./ColorRadial";
-import { HighlighterIcon } from "../components/MarkToolIcons";
 import { FontSizeSlider } from "./FontSizeSlider";
 import { inkSwatches } from "./inkColors";
 import { InkFullnessSlider } from "./InkFullnessSlider";
@@ -64,8 +68,15 @@ function clampFloatingPos(
   y: number,
   width: number,
   height: number,
+  extraLeft = 0,
 ): { x: number; y: number } {
-  return clampToBox(x, y, width, height, boardChromeBox());
+  const box = boardChromeBox();
+  return clampToBox(x, y, width, height, { ...box, left: box.left + extraLeft });
+}
+
+/** Label ink on a preset-coloured chip — dark on pastels, light on ink. */
+function presetChipInk(fill: string): string {
+  return relativeLuminance(fill) > 0.55 ? "#1c1917" : "#fafafa";
 }
 
 function dockAnchorRect(toolbar: HTMLElement | null): DOMRect | null {
@@ -80,23 +91,6 @@ function dockAnchorRect(toolbar: HTMLElement | null): DOMRect | null {
   }
   return dock.getBoundingClientRect();
 }
-
-/** Ink seats first, then Select after the divider. No Hand: scrolling is toolbar-off. */
-const INK_TOOLS: Array<{
-  tool: ToolName;
-  label: string;
-  hint: string;
-  icon?: "pen" | "eraser" | "highlighter";
-}> = [
-  { tool: "freedraw", label: "Pen", hint: "Pen", icon: "pen" },
-  {
-    tool: "highlighter",
-    label: "Highlighter",
-    hint: "Highlighter — wide, translucent, in the pen's colour",
-    icon: "highlighter",
-  },
-  { tool: "eraser", label: "Eraser", hint: "Eraser — only removes ink under the brush", icon: "eraser" },
-];
 
 /** Shapes flyout — same menu the ⬡ button opens (includes Text box). */
 const SHAPE_TOOLS: Array<{ tool: ToolName; label: string; glyph: string }> = [
@@ -161,13 +155,19 @@ export interface BoardToolbarProps {
   mobile?: boolean;
   /** Reports island height so the page fit can clear it. */
   onHeightChange?: (height: number) => void;
+  showColorWheel?: boolean;
+  presetName?: string;
+  presetColour?: string;
+  wheelLocked?: boolean;
+  onToggleWheelLock?: () => void;
+  onOpenInkWheel?: () => void;
 }
 
 export function BoardToolbar({
   active,
   onPick,
-  highlighting = false,
-  onToggleHighlight,
+  highlighting: _highlighting = false,
+  onToggleHighlight: _onToggleHighlight,
   themeId,
   inkPalette,
   onEditInkColor,
@@ -201,22 +201,27 @@ export function BoardToolbar({
   onRedo,
   mobile = false,
   onHeightChange,
+  showColorWheel: _showColorWheel = false,
+  presetName = "Global",
+  presetColour = "#3d3d3d",
+  wheelLocked = true,
+  onToggleWheelLock,
+  onOpenInkWheel,
 }: BoardToolbarProps) {
-  // Stroke weight is for pen / shapes / eraser — text has its own wheel.
-  const showStrokeSizes =
-    active === "freedraw" ||
-    active === "highlighter" ||
-    active === "rectangle" ||
-    active === "ellipse" ||
-    active === "arrow" ||
-    active === "eraser";
+  // Ink nib / fullness / pressure live on presets. Text still has a size wheel.
+  const showStrokeSizes = false;
   const [shapeMenuOpen, setShapeMenuOpen] = useState(false);
+  const [shapeFlyout, setShapeFlyout] = useState<"shapes" | "photos" | "capture">(
+    "shapes",
+  );
+  const [shapeMediaMode, setShapeMediaMode] = useState<"photos" | "capture">(
+    "photos",
+  );
   const [resetLocked, setResetLocked] = useState(true);
   const [configuring, setConfiguring] = useState<ShapeStamp | null>(null);
   const [mods, setMods] = useState<Record<string, ShapeModValue>>({});
   const [moveAsOne, setMoveAsOne] = useState(true);
   const [shapePhase, setShapePhase] = useState<"list" | "fade" | "mod">("list");
-  const [helpOpen, setHelpOpen] = useState(false);
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
 
   const [layout, setLayout] = useState<ToolbarLayout>(() => loadToolbarLayout());
@@ -224,17 +229,44 @@ export function BoardToolbar({
   const [docking, setDocking] = useState(false);
   const [dockNear, setDockNear] = useState(false);
   const dragHoldTimerRef = useRef<number | null>(null);
+  const gripRef = useRef<HTMLButtonElement | null>(null);
+  const [gripShake, setGripShake] = useState(false);
+  const gripShakeRef = useRef(false);
+  gripShakeRef.current = gripShake;
+  const pendingGripRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    clientX: number;
+    clientY: number;
+    fromDocked: boolean;
+    target: HTMLButtonElement;
+  } | null>(null);
   const dragRef = useRef<{
     pointerId: number;
     offsetX: number;
     offsetY: number;
     width: number;
     height: number;
+    clientX: number;
+    clientY: number;
+    gripOffsetX: number;
+    gripOffsetY: number;
   } | null>(null);
 
   const floating = layout.mode === "floating";
   const floatX = layout.mode === "floating" ? layout.x : 0;
   const floatY = layout.mode === "floating" ? layout.y : 0;
+  const axisPrevRef = useRef<"row" | "column">("row");
+  const axis = toolbarAxis(
+    layout.mode,
+    floatX,
+    toolbarRootRef.current?.offsetWidth ?? 400,
+    typeof window === "undefined" ? 1280 : window.innerWidth,
+    dockNear,
+    axisPrevRef.current,
+  );
+  axisPrevRef.current = axis;
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const draggingRef = useRef(dragging);
@@ -319,7 +351,8 @@ export function BoardToolbar({
       const current = layoutRef.current;
       if (!node || current.mode !== "floating") return;
       const rect = node.getBoundingClientRect();
-      const next = clampFloatingPos(current.x, current.y, rect.width, rect.height);
+      const extraLeft = axis === "column" ? TOOLBAR_LEFT_CHROME_INSET_PX : 0;
+      const next = clampFloatingPos(current.x, current.y, rect.width, rect.height, extraLeft);
       if (next.x !== current.x || next.y !== current.y) {
         const updated: ToolbarLayout = { mode: "floating", ...next };
         setLayout(updated);
@@ -329,7 +362,35 @@ export function BoardToolbar({
     clampNow();
     window.addEventListener("resize", clampNow);
     return () => window.removeEventListener("resize", clampNow);
-  }, [layout.mode, dragging, docking]);
+  }, [layout.mode, dragging, docking, axis]);
+
+  useLayoutEffect(() => {
+    if (!dragging) return;
+    const node = toolbarRootRef.current;
+    const grip = gripRef.current;
+    const drag = dragRef.current;
+    if (!node || !grip || !drag) return;
+    const rect = node.getBoundingClientRect();
+    if (Math.abs(rect.width - drag.width) < 1 && Math.abs(rect.height - drag.height) < 1) {
+      return;
+    }
+    const gripRect = grip.getBoundingClientRect();
+    const dx = drag.clientX - drag.gripOffsetX - gripRect.left;
+    const dy = drag.clientY - drag.gripOffsetY - gripRect.top;
+    const extraLeft = axis === "column" ? TOOLBAR_LEFT_CHROME_INSET_PX : 0;
+    const next = clampFloatingPos(
+      rect.left + dx,
+      rect.top + dy,
+      rect.width,
+      rect.height,
+      extraLeft,
+    );
+    drag.width = rect.width;
+    drag.height = rect.height;
+    drag.offsetX = drag.clientX - next.x;
+    drag.offsetY = drag.clientY - next.y;
+    setLayout({ mode: "floating", ...next });
+  }, [axis, dragging]);
 
   const finishDockAnimation = useCallback(() => {
     const docked: ToolbarLayout = { mode: "docked" };
@@ -352,42 +413,73 @@ export function BoardToolbar({
     const clientX = event.clientX;
     const clientY = event.clientY;
     const target = event.currentTarget;
+    pendingGripRef.current = {
+      pointerId,
+      startX: clientX,
+      startY: clientY,
+      clientX,
+      clientY,
+      fromDocked,
+      target,
+    };
+    try {
+      target.setPointerCapture(pointerId);
+    } catch {
+      /* already captured */
+    }
     dragHoldTimerRef.current = window.setTimeout(() => {
       dragHoldTimerRef.current = null;
+      const pending = pendingGripRef.current;
       const node = toolbarRootRef.current;
-      if (!node) return;
+      if (!pending || !node) return;
+      setGripShake(false);
       const rect = node.getBoundingClientRect();
-      const x = fromDocked ? rect.left : floatX;
-      const y = fromDocked ? rect.top : floatY;
+      const x = pending.fromDocked ? rect.left : floatX;
+      const y = pending.fromDocked ? rect.top : floatY;
       setLayout({ mode: "floating", x, y });
       setDragging(true);
       setDocking(false);
       setShapeMenuOpen(false);
-      setHelpOpen(false);
+      const gripRect = pending.target.getBoundingClientRect();
       dragRef.current = {
-        pointerId,
-        offsetX: clientX - x,
-        offsetY: clientY - y,
+        pointerId: pending.pointerId,
+        offsetX: pending.clientX - x,
+        offsetY: pending.clientY - y,
         width: rect.width,
         height: rect.height,
+        clientX: pending.clientX,
+        clientY: pending.clientY,
+        gripOffsetX: pending.clientX - gripRect.left,
+        gripOffsetY: pending.clientY - gripRect.top,
       };
-      try {
-        target.setPointerCapture(pointerId);
-      } catch {
-        /* already captured */
-      }
     }, LONG_PRESS_MS);
   };
 
   const onGripPointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const pending = pendingGripRef.current;
+    if (pending && pending.pointerId === event.pointerId && !draggingRef.current) {
+      pending.clientX = event.clientX;
+      pending.clientY = event.clientY;
+      const dist = Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY);
+      if (dist > 8 && !gripShakeRef.current && dragHoldTimerRef.current != null) {
+        setGripShake(true);
+      }
+    }
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId || !draggingRef.current) return;
-    const next = clampFloatingPos(
-      event.clientX - drag.offsetX,
-      event.clientY - drag.offsetY,
+    drag.clientX = event.clientX;
+    drag.clientY = event.clientY;
+    const tentative = { x: event.clientX - drag.offsetX, y: event.clientY - drag.offsetY };
+    const nextAxis = toolbarAxis(
+      "floating",
+      tentative.x,
       drag.width,
-      drag.height,
+      window.innerWidth,
+      false,
+      axisPrevRef.current,
     );
+    const extraLeft = nextAxis === "column" ? TOOLBAR_LEFT_CHROME_INSET_PX : 0;
+    const next = clampFloatingPos(tentative.x, tentative.y, drag.width, drag.height, extraLeft);
     setLayout({ mode: "floating", ...next });
     const anchor = dockAnchorRect(toolbarRootRef.current);
     if (anchor) {
@@ -403,6 +495,7 @@ export function BoardToolbar({
 
   const onGripPointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
     clearDragHold();
+    pendingGripRef.current = null;
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) {
       try {
@@ -497,34 +590,30 @@ export function BoardToolbar({
     active === "ellipse" ||
     active === "arrow" ||
     active === "text";
+  const shapesUiActive = shapeMenuOpen || shapeToolActive;
 
-  const renderToolButton = (
-    tool: ToolName,
-    label: string,
-    hint: string,
-    icon?: "pen" | "eraser" | "highlighter",
-  ) => (
+  const openShapeFlyout = (panel: "shapes" | "photos" | "capture") => {
+    if (shapesOpen) onToggleShapes();
+    setShapeFlyout(panel);
+    setShapeMenuOpen(true);
+  };
+
+  const renderToolButton = (tool: ToolName, label: string, hint: string) => (
     <button
       key={tool}
       type="button"
       className={
-        tool === active && !shapesOpen
+        tool === active && !shapesUiActive
           ? "lc-tool lc-tool-active lc-tip-target"
           : "lc-tool lc-tip-target"
       }
       aria-label={hint}
       data-tip={hint}
       data-tip-placement="bottom"
-      aria-pressed={tool === active && !shapesOpen}
+      aria-pressed={tool === active && !shapesUiActive}
       onClick={() => pickTool(tool)}
     >
-      {icon === "eraser" ? (
-        <PinkEraserIcon />
-      ) : icon === "pen" ? (
-        <PenIcon />
-      ) : icon === "highlighter" ? (
-        <HighlighterIcon size={20} />
-      ) : tool === "selection" ? (
+      {tool === "selection" ? (
         <span className="lc-tool-emoji" aria-hidden>
           ⬚
         </span>
@@ -545,7 +634,9 @@ export function BoardToolbar({
         floating ? "lc-toolbar-floating" : "",
         dragging ? "lc-toolbar-dragging" : "",
         docking ? "lc-toolbar-docking" : "",
+        gripShake ? "is-shake" : "",
         dockNear && (dragging || docking) ? "lc-toolbar-dock-near" : "",
+        axis === "column" ? "is-column" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -561,11 +652,25 @@ export function BoardToolbar({
             }
           : undefined
       }
+      onAnimationEnd={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.animationName === "lc-stuck-shake") setGripShake(false);
+      }}
+      onPointerUp={() => {
+        const root = toolbarRootRef.current;
+        window.requestAnimationFrame(() => {
+          const active = document.activeElement;
+          if (active instanceof HTMLElement && root?.contains(active)) {
+            active.blur();
+          }
+        });
+      }}
       role="toolbar"
       aria-label="Drawing tools"
     >
       <div className="lc-toolbar-row">
         <button
+          ref={gripRef}
           type="button"
           className="lc-toolbar-grip lc-tip-target"
           aria-label="Hold and drag to move toolbar"
@@ -579,9 +684,55 @@ export function BoardToolbar({
           <span className="lc-toolbar-grip-dots" aria-hidden />
         </button>
 
-        {INK_TOOLS.map(({ tool, label, hint, icon }) =>
-          renderToolButton(tool, label, hint, icon),
-        )}
+        <div className="lc-color-wrap">
+          <ColorRadial
+            colors={inkPalette ?? inkSwatches(themeId)}
+            onEditColor={onEditInkColor}
+            onCycleNext={onCycleInkPaletteNext}
+            onCyclePrev={onCycleInkPalettePrev}
+            value={inkColor}
+            onPick={onInk}
+            handedness={handedness}
+            compact={mobile}
+          />
+        </div>
+
+        <HoldButton
+          label={presetName}
+          ariaLabel={
+            wheelLocked
+              ? `${presetName} locked — tap to unlock, hold to open presets`
+              : `${presetName} unlocked — tap to lock, hold to open presets`
+          }
+          dataTip={
+            wheelLocked
+              ? `${presetName} locked — tap to unlock · hold for presets`
+              : `${presetName} unlocked — tap to lock · hold for presets`
+          }
+          dataTipPlacement="bottom"
+          className={[
+            "lc-preset-chip lc-tip-target",
+            wheelLocked ? "is-locked" : "",
+          ].join(" ")}
+          pressed={wheelLocked}
+          holdMs={WHEEL_OPEN_MS}
+          onTap={() => onToggleWheelLock?.()}
+          onConfirm={() => onOpenInkWheel?.()}
+          style={{
+            background: presetColour,
+            color: presetChipInk(presetColour),
+          }}
+        >
+          <MorphBar
+            active={presetName}
+            axis={axis === "column" ? "height" : "width"}
+            className="lc-preset-chip-morph"
+          >
+            <div data-morph-id={presetName}>
+              <span className="lc-preset-chip-name">{presetName}</span>
+            </div>
+          </MorphBar>
+        </HoldButton>
 
         {onStraightInk && (
           <button
@@ -603,53 +754,54 @@ export function BoardToolbar({
           </button>
         )}
 
-        {onToggleHighlight && (
-          <button
-            type="button"
-            className={
-              highlighting ? "lc-tool lc-tool-active lc-tip-target" : "lc-tool lc-tip-target"
-            }
-            aria-pressed={highlighting}
-            aria-label="Ask about an area"
-            data-tip="Select text, or hold then drag to mark an area"
-            data-tip-placement="bottom"
-            onClick={onToggleHighlight}
-          >
-            <span className="lc-tool-emoji" aria-hidden>
-              🔍
-            </span>
-          </button>
-        )}
-
         <div className="lc-tool-sep" />
 
         {renderToolButton("selection", "Select", "Move or resize work")}
 
         <div className="lc-shapes-wrap">
-          <button
-            type="button"
-            className={
-              shapeMenuOpen || shapesOpen || shapeToolActive
-                ? "lc-tool lc-tool-active lc-tip-target"
-                : "lc-tool lc-tip-target"
+          <HoldButton
+            label="Shapes"
+            ariaLabel={
+              shapeFlyout === "capture"
+                ? "Shapes — hold to switch to import photos"
+                : "Shapes — hold to switch to screencap"
             }
-            aria-label="Shapes"
-            data-tip="Shapes — Square, Circle, Arrow, Text box"
-            data-tip-placement="bottom"
-            aria-expanded={shapeMenuOpen}
-            aria-haspopup="menu"
-            onClick={() => {
+            dataTip="Shapes — tap Square Circle Arrow · hold photos or capture"
+            dataTipPlacement="bottom"
+            className={[
+              "lc-tool lc-tip-target lc-hold-icon",
+              shapesUiActive ? "lc-tool-active" : "",
+            ].join(" ")}
+            pressed={shapesUiActive}
+            holdMs={HOLD_MS}
+            onTap={() => {
               if (shapesOpen) onToggleShapes();
-              setShapeMenuOpen((open) => !open);
+              if (shapeMenuOpen && shapeFlyout === "shapes") {
+                setShapeMenuOpen(false);
+                return;
+              }
+              openShapeFlyout("shapes");
+            }}
+            onConfirm={() => {
+              if (shapesOpen) onToggleShapes();
+              const panel =
+                shapeMenuOpen &&
+                (shapeFlyout === "photos" || shapeFlyout === "capture")
+                  ? shapeFlyout === "photos"
+                    ? "capture"
+                    : "photos"
+                  : shapeMediaMode;
+              setShapeMediaMode(panel);
+              openShapeFlyout(panel);
             }}
           >
             <span className="lc-tool-emoji" aria-hidden>
               ⬡
             </span>
-          </button>
+          </HoldButton>
           {shapeMenuOpen && !shapesOpen && (
             <MorphBar
-              active="shapes"
+              active={shapeFlyout}
               className="lc-shape-flyout"
               axis="height"
               role="menu"
@@ -684,56 +836,30 @@ export function BoardToolbar({
                   Data structures…
                 </button>
               </div>
-            </MorphBar>
-          )}
-        </div>
-
-        <button
-          type="button"
-          className="lc-tool lc-tip-target"
-          aria-label="Add image"
-          data-tip="Add image"
-          data-tip-placement="bottom"
-          onClick={onPickImage}
-        >
-          <span className="lc-tool-emoji" aria-hidden>
-            🖼
-          </span>
-        </button>
-
-        <div className="lc-capture-wrap">
-          <button
-            type="button"
-            className={
-              captureMenuOpen ? "lc-tool lc-tool-active lc-tip-target" : "lc-tool lc-tip-target"
-            }
-            aria-label="Capture board"
-            aria-expanded={captureMenuOpen}
-            data-tip="Capture board"
-            data-tip-placement="bottom"
-            onClick={() => {
-              setShapeMenuOpen(false);
-              onToggleCaptureMenu();
-            }}
-          >
-            <span className="lc-tool-emoji" aria-hidden>
-              📷
-            </span>
-          </button>
-          {captureMenuOpen && (
-            <MorphBar
-              active="capture"
-              className="lc-shape-flyout"
-              axis="height"
-              role="menu"
-              aria-label="Capture"
-            >
+              <div data-morph-id="photos">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShapeMenuOpen(false);
+                    onPickImage();
+                  }}
+                >
+                  <span className="lc-shape-flyout-glyph" aria-hidden>
+                    🖼
+                  </span>
+                  Import photo
+                </button>
+              </div>
               <div data-morph-id="capture">
                 <button
                   type="button"
                   role="menuitem"
                   title="Shoot the whole board and drop the image on it"
-                  onClick={onCaptureEntire}
+                  onClick={() => {
+                    setShapeMenuOpen(false);
+                    onCaptureEntire();
+                  }}
                 >
                   <span className="lc-shape-flyout-glyph" aria-hidden>
                     ▣
@@ -744,7 +870,10 @@ export function BoardToolbar({
                   type="button"
                   role="menuitem"
                   title="Drag a rectangle to shoot part of the board"
-                  onClick={onCaptureRegion}
+                  onClick={() => {
+                    setShapeMenuOpen(false);
+                    onCaptureRegion();
+                  }}
                 >
                   <span className="lc-shape-flyout-glyph" aria-hidden>
                     ⧉
@@ -806,21 +935,6 @@ export function BoardToolbar({
           <ResetIcon />
         </HoldButton>
 
-        <div className="lc-tool-sep" />
-
-        <div className="lc-color-wrap">
-          <ColorRadial
-            colors={inkPalette ?? inkSwatches(themeId)}
-            onEditColor={onEditInkColor}
-            onCycleNext={onCycleInkPaletteNext}
-            onCyclePrev={onCycleInkPalettePrev}
-            value={inkColor}
-            onPick={onInk}
-            handedness={handedness}
-            compact={mobile}
-          />
-        </div>
-
         {showStrokeSizes && (
           <div className="lc-stroke-controls">
             <StrokeSizeSlider
@@ -858,23 +972,7 @@ export function BoardToolbar({
             <FontSizeSlider value={fontSize} onChange={onFontSize} />
           </div>
         )}
-
-        {!mobile && (
-          <button
-            type="button"
-            className={helpOpen ? "lc-tool lc-tool-active lc-tip-target" : "lc-tool lc-tip-target"}
-            data-tip="Keyboard shortcuts"
-            data-tip-placement="bottom"
-            aria-label="Keyboard shortcuts"
-            aria-expanded={helpOpen}
-            onClick={() => setHelpOpen((open) => !open)}
-          >
-            ?
-          </button>
-        )}
       </div>
-
-      {!mobile && helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
 
       {shapesOpen && (
         <div
@@ -994,104 +1092,6 @@ export function BoardToolbar({
         </div>
       )}
     </div>
-  );
-}
-
-/**
- * What the keyboard actually does on this board.
- *
- * Excalidraw's own single-key shortcuts are suppressed by the key guard in
- * `Board`, because they belong to a UI this app hides: pressing `s` or `g` on a
- * selected shape used to open a colour palette nobody asked for, and `1`–`9`
- * silently swapped tools out from under the pen. What is left is this list, and
- * this button is where you can read it.
- */
-function ShortcutsHelp({ onClose }: { onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
-
-  return (
-    <div className="lc-shortcuts" role="dialog" aria-label="Keyboard shortcuts">
-      <header className="lc-shortcuts-head">
-        <strong>Keyboard</strong>
-        <button type="button" className="lc-link" onClick={onClose}>
-          close
-        </button>
-      </header>
-      <dl className="lc-shortcuts-list">
-        {BOARD_SHORTCUTS.map(([keys, what]) => (
-          <div key={keys} className="lc-shortcut">
-            <dt>{keys}</dt>
-            <dd>{what}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
-  );
-}
-
-const BOARD_SHORTCUTS: Array<[string, string]> = [
-  ["Ctrl / ⌘ + Z", "Undo"],
-  ["Ctrl / ⌘ + Shift + Z", "Redo"],
-  ["Scroll", "Zoom toward the pointer"],
-  ["Shift + scroll", "Pan sideways"],
-  ["Space + drag", "Pan"],
-  ["Delete / Backspace", "Delete the selection"],
-  ["Escape", "Deselect / close a popover"],
-  ["Enter", "Finish a text box (Shift + Enter for a new line)"],
-  ["Arrow keys", "Nudge the selection"],
-];
-
-function PinkEraserIcon() {
-  return (
-    <svg className="lc-tool-svg lc-tool-eraser" viewBox="0 0 24 24" width="20" height="20" aria-hidden>
-      <g transform="rotate(-28 12 12)">
-        <rect x="4.5" y="7" width="15" height="11" rx="2.2" fill="#f9a8d4" stroke="#be185d" strokeWidth="1.2" />
-        <rect x="4.5" y="7" width="15" height="3.8" rx="1.2" fill="#fb7185" />
-        <rect x="4.5" y="15.2" width="15" height="2.8" fill="#fff1f2" opacity="0.95" />
-      </g>
-    </svg>
-  );
-}
-
-function PenIcon() {
-  return (
-    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="20" height="20" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M14.5 4.5 19.5 9.5 9 20H4v-5Z"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        d="m12.5 6.5 5 5"
-      />
-    </svg>
-  );
-}
-
-function StraightIcon() {
-  return (
-    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        d="M5 19 19 5"
-      />
-    </svg>
   );
 }
 

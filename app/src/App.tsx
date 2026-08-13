@@ -236,7 +236,7 @@ const SCRATCHPAD_PROBLEM: ProblemDetail = {
   question_id: null,
   difficulty: null,
   tags: ["scratchpad"],
-  problem_description: "Freeform scratchpad — no problem set.",
+  problem_description: "Freeform whiteboard — no problem set.",
   starter_code: null,
   entry_point: null,
   cases: [],
@@ -1762,7 +1762,7 @@ export function App() {
        */
       const fromBrowse = !problem;
       const switching = Boolean(problem);
-      setBusy("opening scratchpad…");
+      setBusy("opening whiteboard…");
       setError(null);
       setTests(null);
       setNudges([]);
@@ -1883,7 +1883,7 @@ export function App() {
         window.setTimeout(() => {
           setEntering(false);
           boardRef.current?.showPadTitle(
-            restored && notebook ? notebook.title : "ScratchPad",
+            restored && notebook ? notebook.title : "Whiteboard",
           );
         }, fadeMs);
       } catch (cause) {
@@ -2235,6 +2235,7 @@ export function App() {
   const stepProblem = useCallback(
     async (delta: number) => {
       if (!problem || busy !== null) return;
+      if (isLocalPad(problem)) return;
       // Queue entries are `dataset/task_id`, since the same slug can be in
       // several problem sets at once.
       const queue = session?.queue ?? [];
@@ -2277,7 +2278,7 @@ export function App() {
   );
 
   useEffect(() => {
-    if (!problem) {
+    if (!problem || isLocalPad(problem)) {
       setCanStepPrev(false);
       setCanStepNext(false);
       return;
@@ -4557,7 +4558,7 @@ export function App() {
       <header className="lc-header">
         <div className="lc-header-left">
           <Tip tip="lc whiteboard — your coding workspace">
-            <strong className="lc-brand">lc whiteboard</strong>
+            <span className="lc-brand">lc <strong>whiteboard</strong></span>
           </Tip>
           {problem ? (
             <>
@@ -4615,8 +4616,8 @@ export function App() {
                   {mdInkSource?.name ?? "Document"}
                 </span>
               ) : (
-                <span className="lc-current" title="Scratchpad">
-                  Scratchpad
+                <span className="lc-current" title="Whiteboard">
+                  Whiteboard
                 </span>
               )}
             </>
@@ -4761,10 +4762,10 @@ export function App() {
           */}
           {!problem && (
             <HoldButton
-              label="Scratchpad"
-              ariaLabel="Scratchpad: tap for a new notebook, hold to open the library"
+              label="Whiteboard"
+              ariaLabel="Whiteboard: tap for a new notebook, hold to open the library"
               className="lc-icon lc-tip-target lc-hold-icon"
-              dataTip="Scratchpad — tap for new, hold to load"
+              dataTip="Whiteboard — tap for new, hold to load"
               dataTipPlacement="bottom"
               disabled={busy !== null}
               onTap={() => void openScratchpad({ fresh: true })}
@@ -4798,10 +4799,10 @@ export function App() {
               One tap on the header is the short path; hold opens save / load.
             */
             <HoldButton
-              label="Scratchpad"
-              ariaLabel="Scratchpad: tap to save now, hold for save / load menu"
+              label="Whiteboard"
+              ariaLabel="Whiteboard: tap to save now, hold for save / load menu"
               className="lc-icon lc-hold-icon lc-tip-target is-active"
-              dataTip="Scratchpad — tap to save, hold for menu"
+              dataTip="Whiteboard — tap to save, hold for menu"
               dataTipPlacement="bottom"
               pressed
               disabled={busy !== null}
@@ -5551,7 +5552,7 @@ export function App() {
           onOffline={() =>
             closeGate(
               "offline",
-              gateKind === "dropped" ? "Continuing offline." : "Offline — scratchpad still works.",
+              gateKind === "dropped" ? "Continuing offline." : "Offline — whiteboard still works.",
             )
           }
         />

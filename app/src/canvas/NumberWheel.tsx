@@ -3,7 +3,8 @@
  * Flick continues with spring-damped momentum. Prevents default on pointerdown
  * so an open text box keeps focus.
  *
- * Direction: dragging down raises the value, dragging up lowers it.
+ * Direction: larger numbers sit above. Finger/wheel down follows the list
+ * (content moves down) and lowers the value. ArrowDown matches that.
  *
  * With {@link allowFineScrub}, hold and drag ~28px horizontally outward to
  * enter fine mode (step 0.1). Fine stays until pointer release.
@@ -284,7 +285,7 @@ export function NumberWheel({
     if (fineModeRef.current) {
       const deltaY = event.clientY - fineStartYRef.current;
       const next = clamp(
-        roundToStep(fineStartValueRef.current + (deltaY / ITEM_H) * fineStep, min, fineStep),
+        roundToStep(fineStartValueRef.current - (deltaY / ITEM_H) * fineStep, min, fineStep),
         min,
         max,
       );
@@ -294,7 +295,7 @@ export function NumberWheel({
 
     const delta = event.clientY - startYRef.current;
     const steps = Math.round(delta / ITEM_H);
-    const nextIndex = clamp(indexOf(startValueRef.current) + steps, 0, values.length - 1);
+    const nextIndex = clamp(indexOf(startValueRef.current) - steps, 0, values.length - 1);
     commitIndex(nextIndex);
   };
 
@@ -315,7 +316,7 @@ export function NumberWheel({
     }
     const v = velocityRef.current;
     if (Math.abs(v) >= FLICK_MIN) {
-      runMomentum(indexRef.current, v);
+      runMomentum(indexRef.current, -v);
     } else {
       commitIndex(indexRef.current);
     }
@@ -347,30 +348,39 @@ export function NumberWheel({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onWheel={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          stopMomentum();
+          const steps = Math.sign(event.deltaY);
+          if (!steps) return;
+          commitIndex(clamp(selectedIndex - steps, 0, values.length - 1));
+        }}
         onKeyDown={(event) => {
           const keyStep = fineMode ? fineStep : step;
-          if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-            event.preventDefault();
-            if (fineMode) commitValue(clamped + keyStep, keyStep);
+          const bump = (dir: 1 | -1) => {
+            if (fineMode) commitValue(clamped + dir * keyStep, keyStep);
             else {
               const next = clamp(
-                Math.trunc(clamped) + keyStep + fracPart(clamped),
+                Math.trunc(clamped) + dir * keyStep + fracPart(clamped),
                 min,
                 max,
               );
               onChangeRef.current(next);
             }
-          } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+          };
+          if (event.key === "ArrowDown") {
             event.preventDefault();
-            if (fineMode) commitValue(clamped - keyStep, keyStep);
-            else {
-              const next = clamp(
-                Math.trunc(clamped) - keyStep + fracPart(clamped),
-                min,
-                max,
-              );
-              onChangeRef.current(next);
-            }
+            bump(-1);
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            bump(1);
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            bump(1);
+          } else if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            bump(-1);
           } else if (event.key === "Home") {
             event.preventDefault();
             onChangeRef.current(min);

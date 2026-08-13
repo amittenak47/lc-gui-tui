@@ -66,10 +66,10 @@ export function ScratchpadLibraryDialog({
         className="lc-settings-modal lc-attempt-modal lc-scratch-lib-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Scratchpad library full"
+        aria-label="Whiteboard library full"
       >
         <div className="lc-settings-head">
-          <h2>Scratchpad library full</h2>
+          <h2>Whiteboard library full</h2>
           <p className="lc-muted">
             At most {SCRATCHPAD_LIBRARY_LIMIT} notebooks. Hold to delete one.
           </p>

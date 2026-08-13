@@ -37,6 +37,7 @@ pub async fn colorhunt_random(tags: Option<String>) -> Result<Vec<ColorHuntRow>,
     let client = reqwest::Client::builder()
         .timeout(TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
+        .user_agent("Mozilla/5.0 (compatible; lc-gui/1.0)")
         .build()
         .map_err(|err| format!("cannot build an HTTP client: {err}"))?;
 
@@ -46,6 +47,7 @@ pub async fn colorhunt_random(tags: Option<String>) -> Result<Vec<ColorHuntRow>,
             "Content-Type",
             "application/x-www-form-urlencoded; charset=UTF-8",
         )
+        .header("Accept", "application/json, text/plain, */*")
         .body(format!("step=0&sort=random&tags={tag}"))
         .send()
         .await
