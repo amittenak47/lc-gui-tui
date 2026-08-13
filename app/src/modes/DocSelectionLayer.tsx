@@ -24,6 +24,7 @@ import {
   scopeRootIn,
   scopeRootsIn,
   snapToWords,
+  streamOffsetAt,
   textForAnchor,
   textOf,
   type DocAnchor,
@@ -60,7 +61,7 @@ import {
   unionLocalRects,
   viewportToLocal,
 } from "../util/docMarquee";
-import { charOffsetAtPoint } from "../util/docSubMarkHit";
+import { caretPointIn } from "../util/docSubMarkHit";
 import {
   inkPaletteNow,
   onInkPaletteChange,
@@ -182,6 +183,8 @@ export interface DocSelectionLayerProps {
   subMarkMode?: DocFootnoteSubMarkKind | null;
   subMarkParent?: DocFootnote | null;
   onAddSubMark?: (mark: DocFootnoteSubMark) => void;
+  /** Hub-row hover — wash this committed sub-mark on the page. */
+  hoveredSubMarkId?: string | null;
 }
 
 /**
@@ -244,6 +247,7 @@ export function DocSelectionLayer({
   subMarkMode = null,
   subMarkParent = null,
   onAddSubMark,
+  hoveredSubMarkId = null,
 }: DocSelectionLayerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   /**
@@ -297,6 +301,9 @@ export function DocSelectionLayer({
     root: HTMLElement;
     scope?: string;
   } | null>(null);
+  /** ✓/✕ after a sub-mark drag — same pill as a new mark, not tap-to-commit. */
+  const [subMarkConfirm, setSubMarkConfirm] = useState(false);
+  const acceptSubMarkRef = useRef<(() => void) | null>(null);
   const subMarkDragRef = useRef<{
     pointerId: number;
     mode: "select" | "start" | "end";
@@ -307,8 +314,6 @@ export function DocSelectionLayer({
   } | null>(null);
   const subMarkLiveRef = useRef(subMarkLive);
   subMarkLiveRef.current = subMarkLive;
-  /** Mode while armed — needed to commit when the tool toggles off. */
-  const lastSubMarkModeRef = useRef<DocFootnoteSubMarkKind | null>(null);
   const bandFadeTimerRef = useRef<number | null>(null);
   /**
    * Where each ribbon is on screen, so the card it opens can hang off it.
@@ -375,6 +380,7 @@ export function DocSelectionLayer({
     setHitRects([]);
     setCopied(false);
     setSubMarkLive(null);
+    setSubMarkConfirm(false);
     subMarkDragRef.current = null;
     selectionScreenBoxRef.current = null;
     setActionsVia("native");
@@ -445,69 +451,14 @@ export function DocSelectionLayer({
     }
   }, [subMarkArmed, highlighting]);
 
-  useEffect(() => {
-    if (subMarkArmed && subMarkMode) {
-      lastSubMarkModeRef.current = subMarkMode;
-    }
-  }, [subMarkArmed, subMarkMode]);
-
   /*
-   * Leaving Underline: keep a finished live range as a real sub-mark.
-   * Clearing without commit made the underline vanish the moment the tool toggled off.
+   * Leaving Underline: drop an unconfirmed live range. Commit is ✓ on the
+   * same pill as a new mark — toggling the tool off is cancel, not save.
    */
-  const wasSubMarkArmedRef = useRef(false);
   useEffect(() => {
-    const wasArmed = wasSubMarkArmedRef.current;
-    wasSubMarkArmedRef.current = subMarkArmed;
-    if (!(wasArmed && !subMarkArmed)) {
-      if (!subMarkArmed) {
-        setSubMarkLive(null);
-        subMarkDragRef.current = null;
-      }
-      return;
-    }
-    const live = subMarkLiveRef.current;
-    const mode = lastSubMarkModeRef.current;
-    const parent = subMarkParent;
-    const add = onAddSubMark;
-    if (live && mode && parent && add && live.end - live.start >= 2) {
-      const stream = textOf(live.root);
-      const [start, end] = snapToWords(stream, live.start, live.end);
-      if (end > start) {
-        const range = rangeFromAnchor(live.root, {
-          kind: "text",
-          start,
-          end,
-          ...(live.scope ? { scope: live.scope } : {}),
-        });
-        const textAnchor = range
-          ? anchorFromRange(live.root, range, live.scope)
-          : null;
-        const excerpt = excerptOf(
-          textForAnchor(
-            live.root,
-            textAnchor ?? { kind: "text", start, end, scope: live.scope },
-          ),
-        );
-        if (excerpt) {
-          let relStart = start;
-          let relEnd = end;
-          if (isTextAnchor(parent.anchor)) {
-            relStart = start - parent.anchor.start;
-            relEnd = end - parent.anchor.start;
-          }
-          add({
-            id: "sm-pending",
-            kind: mode,
-            excerpt,
-            start: relStart,
-            end: relEnd,
-            ...(textAnchor ? { anchor: textAnchor } : {}),
-          });
-        }
-      }
-    }
+    if (subMarkArmed) return;
     setSubMarkLive(null);
+    setSubMarkConfirm(false);
     subMarkDragRef.current = null;
     try {
       window.getSelection()?.removeAllRanges();
@@ -515,7 +466,7 @@ export function DocSelectionLayer({
       /* ignore */
     }
     clearGesture();
-  }, [subMarkArmed, subMarkParent, onAddSubMark, clearGesture]);
+  }, [subMarkArmed, clearGesture]);
 
   /*
    * No auto-seed. Seeding the first word put overlapping grips on one glyph and
@@ -957,27 +908,21 @@ export function DocSelectionLayer({
         return Math.max(bounds.start, Math.min(Math.max(bounds.start, bounds.end - 1), raw));
       };
 
-      const fromRange = (range: Range | null) => {
-        if (!range || !root.contains(range.startContainer)) return null;
-        const anchor = anchorFromRange(root, range, scope);
-        if (anchor?.start == null) return null;
-        return { start: clampStart(anchor.start), root, scope };
-      };
-
-      const caret = caretRangeAt(clientX, clientY);
-      if (caret && root.contains(caret.startContainer)) {
-        const hit = fromRange(caret);
-        if (hit) return hit;
-      }
-
-      const nearBand = charOffsetAtPoint(root, clientX, clientY, { body, bands, scope });
-      if (nearBand) return { start: clampStart(nearBand.start), root, scope };
-
-      const loose =
-        fromRange(nearestCaretInRoot(root, clientX, clientY)) ??
-        charOffsetAtPoint(root, clientX, clientY, { scope });
-      if (!loose) return null;
-      return { start: clampStart(loose.start), root, scope };
+      /*
+       * Pointer → offset in the mark's character stream.
+       *
+       * Clamp, never discard. The bands say where the mark is, and staying inside
+       * it is what `bounds` is for; using them to *reject* a caret was the bug —
+       * they are body-local layout rectangles and a caret is in viewport pixels,
+       * so on a transformed slot a perfectly good caret failed the test and the
+       * lookup fell through to a coarse character grid.
+       */
+      const hit = caretPointIn(root, clientX, clientY, { bands, body });
+      if (!hit) return null;
+      // A caret is a boundary, not a range — `anchorFromRange` refuses those.
+      const start = streamOffsetAt(root, hit.node, hit.offset);
+      if (start == null) return null;
+      return { start: clampStart(start), root, scope };
     };
 
     const parentBlockText = (body: HTMLElement, bands: readonly LocalRect[]): string => {
@@ -1064,6 +1009,7 @@ export function DocSelectionLayer({
       event.preventDefault();
       event.stopPropagation();
       killNativeSelection();
+      setSubMarkConfirm(false);
       setSelection(null);
       setPhase("idle");
       setRects([]);
@@ -1224,6 +1170,7 @@ export function DocSelectionLayer({
       }
 
       setSubMarkLive(null);
+      setSubMarkConfirm(false);
       onAddSubMark({
         id: "sm-pending",
         kind: subMarkMode,
@@ -1232,6 +1179,12 @@ export function DocSelectionLayer({
         end: relEnd,
         ...(textAnchor ? { anchor: textAnchor } : {}),
       });
+    };
+
+    acceptSubMarkRef.current = () => {
+      const live = subMarkLiveRef.current;
+      if (!live || live.end - live.start < 2) return;
+      commitSubMark(live.start, live.end, live.root, live.scope);
     };
 
     const onPointerUp = (event: PointerEvent) => {
@@ -1249,9 +1202,13 @@ export function DocSelectionLayer({
 
       if (drag.mode === "start" || drag.mode === "end") {
         if (rawEnd <= rawStart) return;
-        const stream = textOf(drag.root);
-        const [start, end] = snapToWords(stream, rawStart, rawEnd);
-        const [clampedStart, clampedEnd] = clampToParent(start, end, region?.bounds ?? null);
+        /*
+         * The live range stays exactly where the finger left it. Snapping to word
+         * edges belongs to commit (`commitSubMark`) — doing it on every lift made
+         * a grip nudge jump a whole word and made the next drag start from
+         * somewhere the reader had not put it.
+         */
+        const [clampedStart, clampedEnd] = clampToParent(rawStart, rawEnd, region?.bounds ?? null);
         if (clampedEnd <= clampedStart) return;
         setSubMarkLive({
           start: clampedStart,
@@ -1259,21 +1216,18 @@ export function DocSelectionLayer({
           root: drag.root,
           scope: drag.scope,
         });
+        setSubMarkConfirm(true);
         return;
       }
 
       const moved = Math.abs(drag.focus - drag.anchor) > 1;
       if (!moved) {
         const live = subMarkLiveRef.current;
-        if (live && live.end - live.start >= 2) {
-          commitSubMark(live.start, live.end, live.root, live.scope);
-        }
+        if (live && live.end - live.start >= 2) setSubMarkConfirm(true);
         return;
       }
       if (rawEnd <= rawStart) return;
-      const stream = textOf(drag.root);
-      const [start, end] = snapToWords(stream, rawStart, rawEnd);
-      const [clampedStart, clampedEnd] = clampToParent(start, end, region?.bounds ?? null);
+      const [clampedStart, clampedEnd] = clampToParent(rawStart, rawEnd, region?.bounds ?? null);
       if (clampedEnd <= clampedStart) return;
       setSubMarkLive({
         start: clampedStart,
@@ -1281,6 +1235,7 @@ export function DocSelectionLayer({
         root: drag.root,
         scope: drag.scope,
       });
+      setSubMarkConfirm(true);
     };
 
     const onSelectStart = (event: Event) => event.preventDefault();
@@ -1518,7 +1473,7 @@ export function DocSelectionLayer({
   const highlightBox = (): DOMRect | null => {
     const painted = Array.from(
       document.querySelectorAll(
-        ".lc-doc-select-rect, .lc-doc-highlight-band:not(.is-fading), .lc-doc-marquee-band:not(.is-fading), .lc-doc-marquee-hit",
+        ".lc-doc-select-rect, .lc-doc-highlight-band:not(.is-fading), .lc-doc-marquee-band:not(.is-fading), .lc-doc-marquee-hit, .lc-doc-submark-live",
       ),
     );
     if (painted.length > 0) {
@@ -1627,10 +1582,10 @@ export function DocSelectionLayer({
 
   const placeSelectionChrome = useCallback(
     (node: HTMLDivElement | null) => {
-      if (phase === "confirm") placeConfirm(node);
+      if (phase === "confirm" || subMarkConfirm) placeConfirm(node);
       else if (phase === "actions") placeSheet(node);
     },
-    [phase, placeConfirm, placeSheet],
+    [phase, placeConfirm, placeSheet, subMarkConfirm],
   );
 
   const bindSelectionChrome = useCallback(
@@ -1642,7 +1597,7 @@ export function DocSelectionLayer({
   );
 
   useLayoutEffect(() => {
-    if (phase !== "confirm" && phase !== "actions") return;
+    if (phase !== "confirm" && phase !== "actions" && !subMarkConfirm) return;
     const node = selectionChromeRef.current;
     if (!node) return;
     placeSelectionChrome(node);
@@ -1651,7 +1606,7 @@ export function DocSelectionLayer({
       placeSelectionChrome(selectionChromeRef.current);
     });
     return () => cancelAnimationFrame(id);
-  }, [phase, placeSelectionChrome, overlaps.length, selection, copied]);
+  }, [phase, placeSelectionChrome, overlaps.length, selection, copied, subMarkConfirm, subMarkLive]);
 
   const paintedSubMarks = useMemo(() => {
     const body = bodyRef.current;
@@ -1681,6 +1636,10 @@ export function DocSelectionLayer({
     if (!range) return [];
     return localRects(body, range);
   }, [subMarkLive]);
+
+  const subMarkTint = subMarkParent
+    ? footnoteThemeVars(subMarkParent.color ?? inkPalette[0], inkPalette)
+    : undefined;
 
   return (
     <div className="lc-doc-selectable" ref={hostRef}>
@@ -1817,12 +1776,15 @@ export function DocSelectionLayer({
             entry.rects.map((rect, index) => (
               <div
                 key={`sub-${entry.id}-${index}`}
-                className={`lc-doc-submark-paint lc-doc-submark-${entry.kind}`}
+                className={`lc-doc-submark-paint lc-doc-submark-${entry.kind}${
+                  hoveredSubMarkId === entry.id ? " is-hovered" : ""
+                }`}
                 style={{
                   left: rect.left,
                   top: rect.top,
                   width: rect.width,
                   height: rect.height,
+                  ...subMarkTint,
                 }}
               />
             )),
@@ -1836,6 +1798,7 @@ export function DocSelectionLayer({
                 top: rect.top,
                 width: rect.width,
                 height: rect.height,
+                ...subMarkTint,
               }}
             />
           ))}
@@ -1846,9 +1809,9 @@ export function DocSelectionLayer({
               {(() => {
                 const startRect = subMarkLivePaint[0]!;
                 const endRect = subMarkLivePaint[subMarkLivePaint.length - 1]!;
-                const hit = 44;
-                const startStem = Math.max(14, Math.round(startRect.height));
-                const endStem = Math.max(14, Math.round(endRect.height));
+                const hit = 20;
+                const startStem = 6;
+                const endStem = 6;
                 return (
                   <>
                     <button
@@ -1859,6 +1822,7 @@ export function DocSelectionLayer({
                         left: startRect.left - hit / 2,
                         top: startRect.top + startRect.height - hit / 2,
                         ["--lc-grip-stem" as string]: `${startStem}px`,
+                        ...subMarkTint,
                       }}
                       aria-label="Adjust selection start"
                     />
@@ -1870,6 +1834,7 @@ export function DocSelectionLayer({
                         left: endRect.left + endRect.width - hit / 2,
                         top: endRect.top + endRect.height - hit / 2,
                         ["--lc-grip-stem" as string]: `${endStem}px`,
+                        ...subMarkTint,
                       }}
                       aria-label="Adjust selection end"
                     />
@@ -1890,8 +1855,10 @@ export function DocSelectionLayer({
         Out here the chip is an ordinary button. Shared `layoutId` grows the
         ✓/✕ pill into the action sheet so the two steps read as one control.
       */}
-      {(phase === "confirm" || phase === "actions") &&
-        selection &&
+      {(
+        ((phase === "confirm" || phase === "actions") && selection) ||
+        (subMarkArmed && subMarkConfirm)
+      ) &&
         createPortal(
           <>
             {phase === "actions" && (
@@ -1905,9 +1872,9 @@ export function DocSelectionLayer({
             <motion.div
               layoutId="doc-selection-chrome"
               className={
-                phase === "confirm"
-                  ? "lc-doc-confirm lc-doc-selection-chrome"
-                  : "lc-doc-sheet lc-doc-sheet-actions-menu lc-doc-selection-chrome"
+                phase === "actions"
+                  ? "lc-doc-sheet lc-doc-sheet-actions-menu lc-doc-selection-chrome"
+                  : "lc-doc-confirm lc-doc-selection-chrome"
               }
               role={phase === "actions" ? "menu" : undefined}
               ref={bindSelectionChrome}
@@ -1922,7 +1889,7 @@ export function DocSelectionLayer({
               }}
             >
               <AnimatePresence mode="popLayout" initial={false}>
-                {phase === "confirm" ? (
+                {phase !== "actions" ? (
                   <motion.div
                     key="confirm"
                     className="lc-doc-confirm-row"
@@ -1937,6 +1904,10 @@ export function DocSelectionLayer({
                       aria-label="Use this selection"
                       title="Use this selection"
                       onClick={() => {
+                        if (subMarkArmed && subMarkConfirm) {
+                          acceptSubMarkRef.current?.();
+                          return;
+                        }
                         /*
                          * Re-marking the very same words is not a new mark.
                          *
@@ -1964,7 +1935,14 @@ export function DocSelectionLayer({
                       className="lc-doc-confirm-btn lc-doc-confirm-no"
                       aria-label="Discard this selection"
                       title="Discard this selection"
-                      onClick={dismiss}
+                      onClick={() => {
+                        if (subMarkArmed && subMarkConfirm) {
+                          setSubMarkLive(null);
+                          setSubMarkConfirm(false);
+                          return;
+                        }
+                        dismiss();
+                      }}
                     >
                       ✕
                     </button>
@@ -2145,28 +2123,6 @@ function MarkActionIcon() {
  */
 function overlay(host: HTMLElement | null, node: React.ReactNode): React.ReactNode {
   return host ? createPortal(node, host) : node;
-}
-
-function caretRangeAt(clientX: number, clientY: number): Range | null {
-  if (document.caretRangeFromPoint) return document.caretRangeFromPoint(clientX, clientY);
-  const pos = document.caretPositionFromPoint?.(clientX, clientY);
-  if (!pos) return null;
-  const range = document.createRange();
-  range.setStart(pos.offsetNode, pos.offset);
-  range.collapse(true);
-  return range;
-}
-
-/** Probe around a point when caret APIs miss thin PDF glyphs. */
-function nearestCaretInRoot(root: HTMLElement, clientX: number, clientY: number): Range | null {
-  const deltas = [0, -3, 3, -6, 6, -10, 10, -16, 16];
-  for (const dy of deltas) {
-    for (const dx of deltas) {
-      const range = caretRangeAt(clientX + dx, clientY + dy);
-      if (range && root.contains(range.startContainer)) return range;
-    }
-  }
-  return null;
 }
 
 /**

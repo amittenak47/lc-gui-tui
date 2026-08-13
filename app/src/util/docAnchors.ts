@@ -239,7 +239,18 @@ export function textOf(root: Node): string {
   return streamOf(root).text;
 }
 
-/** Absolute offset of a `(node, offset)` boundary, or null if it is not inside. */
+/**
+ * Absolute offset of a `(node, offset)` boundary, or null if it is not inside.
+ *
+ * Exported because a caret is a boundary, not a range: `caretRangeFromPoint`
+ * answers with a collapsed range, and {@link anchorFromRange} refuses those
+ * (`end <= start`). Anything mapping a pointer to a character — the sub-mark
+ * underline path — needs the boundary on its own.
+ */
+export function streamOffsetAt(root: Node, node: Node, offset: number): number | null {
+  return offsetOfBoundary(root, node, offset);
+}
+
 function offsetOfBoundary(root: Node, node: Node, offset: number): number | null {
   const { nodes, starts } = streamOf(root);
   for (let i = 0; i < nodes.length; i += 1) {

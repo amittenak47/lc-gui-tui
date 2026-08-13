@@ -9009,21 +9009,6 @@ button.lc-row-selected:hover:not(:disabled) {
   max-height: min(62vh, calc(var(--lc-vvh, 100vh) - 32px), 520px);
 }
 
-.lc-footnote-overview.is-submark-armed {
-  max-width: min(220px, calc(var(--lc-vvw, 100vw) - 32px));
-  /*
-   * Pass hits through to the mark box so underline/highlight can drag text.
-   * Only the mode toggles / color control stay clickable.
-   */
-  pointer-events: none;
-}
-
-.lc-footnote-overview.is-submark-armed .lc-footnote-mark-tool,
-.lc-footnote-overview.is-submark-armed .lc-footnote-overview-color,
-.lc-footnote-overview.is-submark-armed .lc-footnote-panel-clear {
-  pointer-events: auto;
-}
-
 .lc-doc-sheet-backdrop.is-pass-through {
   pointer-events: none;
   background: transparent;
@@ -9092,6 +9077,24 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-footnote-mark-tool.is-active {
   border-color: color-mix(in srgb, var(--accent, #0d9488) 70%, transparent);
   background: color-mix(in srgb, var(--accent, #0d9488) 16%, transparent);
+  animation: lc-mark-tool-glow 1.4s ease-in-out infinite;
+}
+
+@keyframes lc-mark-tool-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--lc-fn-color, var(--accent, #0d9488)) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 8px 2px color-mix(in srgb, var(--lc-fn-color, var(--accent, #0d9488)) 55%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-footnote-mark-tool.is-active {
+    animation: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--lc-fn-color, var(--accent, #0d9488)) 45%, transparent);
+  }
 }
 
 .lc-footnote-overview-toolbar .lc-color-radial-compact .lc-color-dot {
@@ -9330,6 +9333,14 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow-y: auto;
 }
 
+/*
+ * Hub lists keep a track even when they fit, so adding a row does not pop a
+ * gutter in and shove the ✕. `lc-scroll-pane` kills Windows ↑↓ steppers.
+ */
+.lc-footnote-overview-link-list {
+  overflow-y: scroll;
+}
+
 .lc-doc-sheet-marks .lc-coach-scope-option,
 .lc-footnote-overview-link-list .lc-coach-scope-option {
   position: static;
@@ -9406,8 +9417,12 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-footnote-overview-link-row {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 3px;
+}
+
+.lc-footnote-overview-link-list[aria-label="Sub-marks"] .lc-footnote-overview-link-row:hover .lc-coach-scope-option {
+  background: color-mix(in srgb, var(--lc-fn-color, var(--accent, #0d9488)) 16%, var(--panel));
 }
 
 .lc-footnote-overview-link-row .lc-coach-scope-option {
@@ -9415,12 +9430,34 @@ button.lc-row-selected:hover:not(:disabled) {
   min-width: 0;
 }
 
-.lc-footnote-overview-link-row > .lc-secondary {
-  flex: 0 0 auto;
-  min-width: 22px;
-  min-height: 22px;
-  padding: 0 4px;
+.lc-footnote-overview-link-row .lc-footnote-overview-entry-text {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  -webkit-line-clamp: unset;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+}
+
+.lc-footnote-overview-row-remove {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 16px !important;
+  max-height: 16px;
+  border-radius: 4px;
   font-size: 10px;
+}
+
+.lc-footnote-overview-link-list.lc-scroll-pane::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.lc-footnote-overview-link-list.lc-scroll-pane::-webkit-scrollbar-thumb {
+  border-width: 2px;
 }
 
 /*
@@ -9471,13 +9508,13 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-footnote-overview-add-link {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   align-items: center;
 }
 
 .lc-footnote-overview-add-link input {
-  flex: 1 1 100px;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 24px;
   padding: 2px 6px;
@@ -9489,11 +9526,38 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 11px;
 }
 
+.lc-footnote-overview-add-link input[type="url"] {
+  flex: 1.35 1 0;
+}
+
 .lc-footnote-overview-add-link button {
   min-height: 24px;
   height: 24px;
   padding: 0 7px;
   font-size: 10px;
+}
+
+.lc-footnote-overview-task-compact .lc-footnote-bubble-actions {
+  align-items: center;
+}
+
+.lc-footnote-task-back {
+  width: auto;
+  min-width: 0;
+  height: 22px;
+  min-height: 22px !important;
+  max-height: 22px;
+  margin-right: auto;
+  padding: 0 8px !important;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--border, #ccc) 80%, transparent);
+  background: color-mix(in srgb, var(--panel, #fff) 92%, transparent) !important;
+  color: var(--ink, inherit) !important;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  box-sizing: border-box;
 }
 
 .lc-footnote-overview > .lc-footnote-overview-section > .lc-secondary {
@@ -9551,7 +9615,6 @@ button.lc-row-selected:hover:not(:disabled) {
   border-color: var(--lc-fn-color);
   color: var(--lc-fn-color);
   background: color-mix(in srgb, var(--lc-fn-color) 16%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lc-fn-color) 40%, transparent);
 }
 
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-section {
@@ -9566,7 +9629,8 @@ button.lc-row-selected:hover:not(:disabled) {
   color: var(--lc-fn-ink, var(--lc-fn-deep, var(--ink))) !important;
 }
 
-.lc-footnote-overview[style*="--lc-fn-color"] .lc-secondary {
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-secondary,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-task-back {
   color: color-mix(in srgb, var(--lc-fn-ink, var(--lc-fn-deep)) 72%, var(--lc-fn-mid));
   border-color: color-mix(in srgb, var(--lc-fn-mid) 45%, transparent);
 }
@@ -9742,27 +9806,36 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-doc-submark-underline {
-  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent, #0d9488) 85%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--lc-fn-color, var(--accent, #0d9488)) 85%, transparent);
+}
+
+.lc-doc-submark-underline.is-hovered {
+  background: color-mix(in srgb, var(--lc-fn-color, var(--accent, #0d9488)) 28%, transparent);
+  box-shadow: inset 0 -1.5px 0 color-mix(in srgb, var(--lc-fn-color, var(--accent, #0d9488)) 95%, transparent);
 }
 
 .lc-doc-submark-highlight {
   background: color-mix(in srgb, var(--lc-highlight, #f5b301) 42%, transparent);
 }
 
+.lc-doc-submark-highlight.is-hovered {
+  background: color-mix(in srgb, var(--lc-fn-color, var(--accent, #0d9488)) 36%, transparent);
+}
+
 .lc-doc-submark-live {
   /* Underline stroke only — no wash fill (fill + PDF ::selection looked like duplicate text). */
   outline: none;
   background: transparent;
-  box-shadow: inset 0 -2.5px 0 color-mix(in srgb, var(--accent, #0d9488) 90%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--lc-fn-color, var(--accent, #0d9488)) 90%, transparent);
 }
 
 /*
- * Selection handles — large enough to grab; stem still tracks the line.
+ * Selection handles — stem tracks the line; hit box stays bigger than the knob.
  */
 .lc-doc-submark-grip {
   position: absolute;
-  width: 44px;
-  height: 44px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   margin: 0;
   border: 0;
@@ -9785,13 +9858,13 @@ button.lc-row-selected:hover:not(:disabled) {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 18px;
-  height: 18px;
-  margin: -9px 0 0 -9px;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
   border-radius: 50%;
-  background: var(--select-edge, #3f4f63);
-  border: 2px solid #fff;
-  box-shadow: 0 1px 4px rgb(0 0 0 / 28%);
+  background: var(--lc-fn-color, var(--select-edge, #3f4f63));
+  border: 1px solid #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 28%);
 }
 
 .lc-doc-submark-grip::after {
@@ -9799,10 +9872,10 @@ button.lc-row-selected:hover:not(:disabled) {
   position: absolute;
   left: 50%;
   bottom: 50%;
-  width: 2px;
-  height: var(--lc-grip-stem, 16px);
-  margin-left: -1px;
-  background: var(--select-edge, #3f4f63);
+  width: 1px;
+  height: var(--lc-grip-stem, 6px);
+  margin-left: -0.5px;
+  background: var(--lc-fn-color, var(--select-edge, #3f4f63));
   border-radius: 1px;
   pointer-events: none;
 }
@@ -9814,7 +9887,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-doc-submark-armed .lc-pdf-text span {
   -webkit-user-select: none !important;
   user-select: none !important;
-  cursor: crosshair !important;
+  cursor: text !important;
 }
 
 /*

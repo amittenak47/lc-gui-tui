@@ -406,7 +406,6 @@ export function App() {
   const pendingQuoteRef = useRef<DocSelectionResult | null>(null);
   /** Footnote overview send upgrades this id from note → coach on first message. */
   const footnoteCoachUpgradeRef = useRef<string | null>(null);
-  const footnoteCoachUpgradeIdsRef = useRef<string[]>([]);
   const [attachedFootnoteIds, setAttachedFootnoteIds] = useState<string[]>([]);
   const attachedFootnoteIdsRef = useRef<string[]>([]);
   attachedFootnoteIdsRef.current = attachedFootnoteIds;
@@ -414,6 +413,7 @@ export function App() {
   const [footnoteOpenThreadId, setFootnoteOpenThreadId] = useState<string | null>(null);
   const [footnoteAnchorRect, setFootnoteAnchorRect] = useState<DOMRect | null>(null);
   const [subMarkMode, setSubMarkMode] = useState<DocFootnoteSubMarkKind | null>(null);
+  const [hoveredSubMarkId, setHoveredSubMarkId] = useState<string | null>(null);
   const [coachQuoteSeed, setCoachQuoteSeed] = useState<{
     token: number;
     text: string;
@@ -3052,11 +3052,8 @@ export function App() {
             draw: false,
             reviewBoard: false,
             lazy: false,
-            annotate: requestedFlags.annotate,
-            ...(requestedFlags.annotateScope
-              ? { annotateScope: requestedFlags.annotateScope }
-              : {}),
-            ...(requestedFlags.annotations ? { annotations: true } : {}),
+            handwriting: requestedFlags.handwriting,
+            annotations: requestedFlags.annotations,
             ...(requestedFlags.photos ? { photos: requestedFlags.photos } : {}),
             ...(requestedFlags.pageQuote ? { pageQuote: requestedFlags.pageQuote } : {}),
             ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}),
@@ -3071,7 +3068,7 @@ export function App() {
   const flagBitsFor = (flags: CoachSendFlags): string[] =>
     [
       flags.ask ? "Ask" : null,
-      flags.annotate ? (flags.annotateScope === "view" ? "View" : "Handwriting") : null,
+      flags.handwriting ? "Handwriting" : null,
       flags.annotations ? "Annotations" : null,
       flags.reviewBoard ? "Review" : null,
       flags.draw ? "Draw" : null,
@@ -3092,6 +3089,17 @@ export function App() {
       const quotedExcerpt = flags.pageQuote ? replyExcerpt(flags.pageQuote) : "";
       let attachments: CoachChatMessage["attachments"] =
         photos.length > 0 ? [...photos] : undefined;
+
+      /*
+       * Marks queued on the page, resolved before anything else needs to know
+       * how wide this send reaches. Taken from the ref: the queue was filled by
+       * a panel that has since closed, and this runs after that render.
+       */
+      const marks = flags.annotations
+        ? attachedFootnoteIdsRef.current
+            .map((id) => mdInkFootnotesRef.current.find((entry) => entry.id === id))
+            .filter((entry): entry is DocFootnote => Boolean(entry))
+        : [];
 
       const codeShot = (() => {
         const board = boardRef.current;
@@ -3129,13 +3137,26 @@ export function App() {
         return png ? { label: "Annotated code", png } : null;
       })();
 
-      if ((flags.reviewBoard || flags.lazy || flags.annotate) && boardRef.current) {
+      const wantsBoard =
+        flags.reviewBoard ||
+        flags.lazy ||
+        flags.handwriting ||
+        // Annotations with marks on it is a question about those passages; the
+        // mark text is the attachment, and a crop of the page would only be the
+        // same words again, blurrier.
+        (flags.annotations && marks.length === 0);
+      if (wantsBoard && boardRef.current) {
         try {
+          /*
+           * Annotations on its own is the narrow send: the crop in front of the
+           * writer. Handwriting (or a pipeline flag) means every page carrying
+           * their marks, backdrop composited under the ink.
+           */
           const narrow =
-            flags.annotate &&
+            flags.annotations &&
+            !flags.handwriting &&
             !flags.reviewBoard &&
-            !flags.lazy &&
-            flags.annotateScope === "view";
+            !flags.lazy;
           const board = boardRef.current;
           /*
            * Bounded, and loud when it fails.
@@ -3170,7 +3191,10 @@ export function App() {
           setNotice(`could not attach the board (${messageOf(cause)}) — sending the question alone`);
         }
       }
-      if (codeShot && (flags.annotate || flags.reviewBoard || flags.lazy)) {
+      if (
+        codeShot &&
+        (flags.handwriting || flags.annotations || flags.reviewBoard || flags.lazy)
+      ) {
         attachments = [...(attachments ?? []), codeShot];
       }
 
@@ -3179,31 +3203,32 @@ export function App() {
       const asked = flags.replyTo
         ? `Replying to your earlier message: “${flags.replyTo.excerpt}”\n\n${text}`
         : text;
-      let prompt = quotedPassage
+      const quoted = quotedPassage
         ? `From the document:\n\n“${quotedPassage}”\n\n${asked}`.trimEnd()
         : asked;
 
-      const attachedIds = attachedFootnoteIdsRef.current;
-      const attachedMarks = mdInkFootnotesRef.current.filter((entry) =>
-        attachedIds.includes(entry.id),
-      );
-      const markContext = packFootnoteContext(attachedMarks, {
-        numbers: numberFootnotes(mdInkFootnotesRef.current),
-      });
-      if (markContext) {
-        prompt = `${markContext}\n\n${prompt}`.trim();
-      }
-      const upgradeIds = [
-        ...new Set(
-          [footnoteCoachUpgradeRef.current, ...attachedIds].filter(
-            (id): id is string => Boolean(id),
-          ),
-        ),
-      ];
-      if (upgradeIds[0]) footnoteCoachUpgradeRef.current = upgradeIds[0];
-      footnoteCoachUpgradeIdsRef.current = upgradeIds;
-      if (attachedIds.length > 0) {
-        flags = { ...flags, annotations: true };
+      /*
+       * Attached marks are the send's context, so they go in front of the
+       * question — block text, notes, links, sub-marks and any threads those
+       * marks already belong to, deduped and budgeted by packFootnoteContext.
+       */
+      const markContext =
+        marks.length > 0
+          ? packFootnoteContext(marks, {
+              numbers: numberFootnotes(mdInkFootnotesRef.current),
+            })
+          : "";
+      const prompt = markContext ? `${markContext}\n\n${quoted}`.trimEnd() : quoted;
+
+      // One Send seeds one thread; the first mark claims it and the rest are
+      // given the same rootId when the reply lands.
+      const attachedFootnoteIds = marks.map((mark) => mark.id);
+      if (attachedFootnoteIds.length > 0) {
+        footnoteCoachUpgradeRef.current = attachedFootnoteIds[0]!;
+        setAttachedFootnoteIds([]);
+        flagBits.push(
+          `${attachedFootnoteIds.length} mark${attachedFootnoteIds.length === 1 ? "" : "s"}`,
+        );
       }
 
       return {
@@ -3217,28 +3242,50 @@ export function App() {
         quotedPassage,
         prompt,
         anchorId,
+        attachedFootnoteIds,
       };
     },
     [readingSize, themeId],
   );
 
   const applyCoachFootnote = useCallback(
-    (anchorId: string | null, userMessageId: string, asked: string) => {
+    (
+      anchorId: string | null,
+      userMessageId: string,
+      asked: string,
+      attachedIds: readonly string[] = [],
+    ) => {
       const quoted = pendingQuoteRef.current;
       pendingQuoteRef.current = null;
-      const upgradeIds = [
-        ...new Set(
-          [
-            footnoteCoachUpgradeRef.current,
-            ...footnoteCoachUpgradeIdsRef.current,
-          ].filter((id): id is string => Boolean(id)),
-        ),
-      ];
+      const upgradeId = footnoteCoachUpgradeRef.current;
       footnoteCoachUpgradeRef.current = null;
-      footnoteCoachUpgradeIdsRef.current = [];
       const rootId = anchorId ?? userMessageId;
       const now = Date.now();
       const thread = { rootId, title: threadTitleFrom(asked), createdAt: now };
+      /*
+       * Every attached mark lists the thread, not just the one that claimed the
+       * upgrade — the reader pointed at all of them, and the hub is where they
+       * go looking for the answer.
+       */
+      if (attachedIds.length > 0) {
+        const wanted = new Set(attachedIds);
+        setMdInkFootnotes((current) =>
+          current.map((entry) => {
+            if (!wanted.has(entry.id)) return entry;
+            const threads = entry.threads ?? [];
+            return {
+              ...entry,
+              kind: "coach" as const,
+              threadRootId: entry.threadRootId ?? rootId,
+              threads: threads.some((existing) => existing.rootId === rootId)
+                ? threads
+                : [...threads, thread],
+            };
+          }),
+        );
+        setCoachFocusThread({ token: now, rootId });
+        if (!quoted && (!upgradeId || wanted.has(upgradeId))) return;
+      }
       if (quoted) {
         setMdInkFootnotes((current) =>
           addFootnote(current, {
@@ -3255,10 +3302,10 @@ export function App() {
         );
         return;
       }
-      if (upgradeIds.length === 0) return;
+      if (!upgradeId) return;
       setMdInkFootnotes((current) =>
         current.map((entry) => {
-          if (!upgradeIds.includes(entry.id)) return entry;
+          if (entry.id !== upgradeId) return entry;
           const threads = entry.threads ?? [];
           return {
             ...entry,
@@ -3271,7 +3318,6 @@ export function App() {
         }),
       );
       setCoachFocusThread({ token: now, rootId });
-      if (attachedFootnoteIdsRef.current.length > 0) setAttachedFootnoteIds([]);
     },
     [],
   );
@@ -3295,7 +3341,8 @@ export function App() {
           hasQuestion: Boolean(text.trim() || quotedPassage),
           boardAttached:
             flags.reviewBoard ||
-            flags.annotate ||
+            flags.handwriting ||
+            flags.annotations ||
             flags.lazy ||
             flags.draw ||
             Boolean(attachments?.length),
@@ -3390,6 +3437,35 @@ export function App() {
     ],
   );
 
+  /**
+   * The turn the coach's answer hangs off.
+   *
+   * A send that carries marks *is* the start of their thread, so the answer has
+   * to reply to the message that carried them. Left as a plain room message it
+   * would still be on screen, but `groupThreads` would not put it under that
+   * root — and the mark's hub entry would open a transcript holding the
+   * question with no answer in it.
+   */
+  const sendThreadAnchor = useCallback(
+    (
+      prepared: {
+        threadAnchor: CoachReplyRef | null;
+        bubble: string;
+        attachedFootnoteIds: readonly string[];
+      },
+      userMessageId: string,
+    ): CoachReplyRef | null =>
+      prepared.threadAnchor ??
+      (prepared.attachedFootnoteIds.length > 0
+        ? {
+            id: userMessageId,
+            role: "user" as const,
+            excerpt: replyExcerpt(prepared.bubble) || "Message",
+          }
+        : null),
+    [],
+  );
+
   const enqueueCoachSend = useCallback(
     async (text: string, flags: CoachSendFlags) => {
       const prepared = await prepareCoachSend(text, flags);
@@ -3401,20 +3477,25 @@ export function App() {
           : {}),
         queued: true,
       });
-      applyCoachFootnote(prepared.anchorId, userMessageId, prepared.text);
+      applyCoachFootnote(
+        prepared.anchorId,
+        userMessageId,
+        prepared.text,
+        prepared.attachedFootnoteIds,
+      );
       coachSendQueueRef.current.push({
         text: prepared.text,
         flags: prepared.flags,
         userMessageId,
         prompt: prepared.prompt,
         attachments: prepared.attachments,
-        threadAnchor: prepared.threadAnchor,
+        threadAnchor: sendThreadAnchor(prepared, userMessageId),
         photos: prepared.photos,
         quotedPassage: prepared.quotedPassage,
         anchorId: prepared.anchorId,
       });
     },
-    [prepareCoachSend, pushCoachMessage, applyCoachFootnote],
+    [prepareCoachSend, pushCoachMessage, applyCoachFootnote, sendThreadAnchor],
   );
 
   const drainCoachSendQueue = useCallback(() => {
@@ -3463,14 +3544,19 @@ export function App() {
               ? { replyTo: flags.replyTo ?? prepared.threadAnchor ?? undefined }
               : {}),
           });
-          applyCoachFootnote(prepared.anchorId, userMessageId, prepared.text);
+          applyCoachFootnote(
+            prepared.anchorId,
+            userMessageId,
+            prepared.text,
+            prepared.attachedFootnoteIds,
+          );
           await executeCoachSend({
             text: prepared.text,
             flags: prepared.flags,
             userMessageId,
             prompt: prepared.prompt,
             attachments: prepared.attachments,
-            threadAnchor: prepared.threadAnchor,
+            threadAnchor: sendThreadAnchor(prepared, userMessageId),
             photos: prepared.photos,
             quotedPassage: prepared.quotedPassage,
             anchorId: prepared.anchorId,
@@ -3494,14 +3580,19 @@ export function App() {
             ? { replyTo: flags.replyTo ?? prepared.threadAnchor ?? undefined }
             : {}),
         });
-        applyCoachFootnote(prepared.anchorId, userMessageId, prepared.text);
+        applyCoachFootnote(
+          prepared.anchorId,
+          userMessageId,
+          prepared.text,
+          prepared.attachedFootnoteIds,
+        );
         await executeCoachSend({
           text: prepared.text,
           flags: prepared.flags,
           userMessageId,
           prompt: prepared.prompt,
           attachments: prepared.attachments,
-          threadAnchor: prepared.threadAnchor,
+          threadAnchor: sendThreadAnchor(prepared, userMessageId),
           photos: prepared.photos,
           quotedPassage: prepared.quotedPassage,
           anchorId: prepared.anchorId,
@@ -3516,6 +3607,7 @@ export function App() {
       executeCoachSend,
       enqueueCoachSend,
       finishCoachTurn,
+      sendThreadAnchor,
     ],
   );
 
@@ -3537,7 +3629,8 @@ export function App() {
         draw: false,
         reviewBoard: false,
         lazy: false,
-        annotate: false,
+        handwriting: false,
+        annotations: false,
         ...(footnote.excerpt ? { pageQuote: footnote.excerpt } : {}),
         ...(replyTo ? { replyTo } : {}),
         threadRootId,
@@ -4089,6 +4182,7 @@ export function App() {
 
   useEffect(() => {
     if (!openFootnoteId) setSubMarkMode(null);
+    setHoveredSubMarkId(null);
   }, [openFootnoteId]);
 
   const onDocAnnotate = useCallback(
@@ -4924,6 +5018,7 @@ export function App() {
                   subMarkMode={openFootnote ? subMarkMode : null}
                   subMarkParent={openFootnote}
                   onAddSubMark={onAddSubMark}
+                  hoveredSubMarkId={hoveredSubMarkId}
                 >
                   {mdInkSource.docType === "pdf" && mdInkSource.bytes ? (
                     <PdfDocument
@@ -4973,6 +5068,7 @@ export function App() {
                   subMarkMode={openFootnote ? subMarkMode : null}
                   subMarkParent={openFootnote}
                   onAddSubMark={onAddSubMark}
+                  hoveredSubMarkId={hoveredSubMarkId}
                 >
                   <StatementDocument
                     title={titleFromSlug(problem.task_id, problem.question_id)}
@@ -5116,10 +5212,6 @@ export function App() {
             onRemoveAttached={(id) =>
               setAttachedFootnoteIds((current) => current.filter((entry) => entry !== id))
             }
-            onSelectAllAnnotations={() => {
-              setAttachedFootnoteIds(mdInkFootnotes.map((entry) => entry.id));
-            }}
-            onClearAnnotations={() => setAttachedFootnoteIds([])}
             footnoteThreadRoots={footnoteThreadRoots}
             onOpenFootnoteThread={openCoachFootnoteThread}
             onThreadChange={(rootId) => {
@@ -5169,10 +5261,12 @@ export function App() {
             anchorRect={footnoteAnchorRect}
             subMarkMode={subMarkMode}
             onSubMarkModeChange={setSubMarkMode}
+            onHoverSubMark={setHoveredSubMarkId}
             onClose={() => {
               setOpenFootnoteId(null);
               setFootnoteAnchorRect(null);
               setSubMarkMode(null);
+              setHoveredSubMarkId(null);
               setFootnoteOpenThreadId(null);
             }}
             openThreadRootId={footnoteOpenThreadId}
