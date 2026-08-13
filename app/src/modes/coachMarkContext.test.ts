@@ -5,6 +5,7 @@ import {
   dedupeFootnoteThreads,
   formatFootnoteContext,
   packFootnoteContext,
+  assembleAskPrompt,
 } from "./coachMarkContext";
 
 function mark(partial: Partial<DocFootnote> & Pick<DocFootnote, "id">): DocFootnote {
@@ -72,5 +73,54 @@ describe("coachMarkContext", () => {
     expect(packed).toContain("Mark 2");
     expect(packed).toContain("deduped across marks");
     expect(packed.match(/\[t1\]/g)?.length).toBe(1);
+  });
+});
+
+describe("assembleAskPrompt", () => {
+  it("puts the question after marks and keeps it when marks would overflow", () => {
+    const marks = Array.from({ length: 8 }, (_, index) =>
+      mark({
+        id: `m${index}`,
+        excerpt: "x".repeat(400),
+        blockText: "x".repeat(400),
+      }),
+    );
+    const asked = "What is the invariant?";
+    const assembled = assembleAskPrompt({
+      question: asked,
+      quote: "A graph is undirected.",
+      marks,
+      numbers: new Map(marks.map((entry, index) => [entry.id, index + 1])),
+      budget: 1200,
+    });
+    expect(assembled.prompt.endsWith(asked)).toBe(true);
+    expect(assembled.prompt).toContain("A graph is undirected.");
+    expect(assembled.includedMarkIds.length).toBeGreaterThan(0);
+    expect(assembled.omittedMarkIds.length).toBeGreaterThan(0);
+    expect(assembled.prompt.length).toBeLessThanOrEqual(1200);
+    expect(assembled.questionTruncated).toBe(false);
+  });
+
+  it("truncates an oversize question and reports it", () => {
+    const asked = "Q".repeat(200);
+    const assembled = assembleAskPrompt({
+      question: asked,
+      budget: 80,
+    });
+    expect(assembled.questionTruncated).toBe(true);
+    expect(assembled.prompt.length).toBeLessThanOrEqual(80);
+    expect(assembled.prompt).toContain("truncated");
+  });
+
+  it("omits a whole mark rather than condensing it when omitOverflow is on", () => {
+    const packed = packFootnoteContext(
+      [
+        mark({ id: "a", excerpt: "short" }),
+        mark({ id: "b", excerpt: "y".repeat(800), blockText: "y".repeat(800) }),
+      ],
+      { numbers: new Map([["a", 1], ["b", 2]]), budget: 200, omitOverflow: true },
+    );
+    expect(packed).toContain("Mark 1");
+    expect(packed).not.toContain("Mark 2");
   });
 });

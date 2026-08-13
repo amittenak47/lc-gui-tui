@@ -15,7 +15,8 @@
  * the name is kept alongside purely so the library reads as file names.
  *
  * Mirrors `scratchpadStore` deliberately — same shape, same restore-for-discard
- * contract — so the two modes behave identically where the writer can tell.
+ * contract, same coach thread on the entry — so the two modes behave identically
+ * where the writer can tell.
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
@@ -89,6 +90,14 @@ export interface MdInkDoc extends MdInkDocMeta {
    * footnotes existed still load.
    */
   footnotes?: DocFootnote[];
+  /**
+   * Coach transcript for this document.
+   *
+   * Whiteboard notebooks already keep this on the entry. Documents used to
+   * skip it: a PDF mark only stored `rootId` + title, so reopening the book
+   * restored the ribbon and lost the thread. Optional so older entries load.
+   */
+  agent?: unknown[];
 }
 
 /**
@@ -107,6 +116,7 @@ interface MdInkContent {
   source: string;
   board: BoardBlob;
   footnotes: DocFootnote[];
+  agent: unknown[];
 }
 
 /**
@@ -217,6 +227,7 @@ async function readContent(meta: MdInkDocMeta): Promise<MdInkDoc | null> {
       source: typeof content.source === "string" ? content.source : "",
       board: content.board,
       footnotes: sanitizeFootnotes(content.footnotes),
+      agent: Array.isArray(content.agent) ? content.agent : [],
     };
   }
   // Written by the old build, still whole in the legacy key.
@@ -227,6 +238,7 @@ async function readContent(meta: MdInkDocMeta): Promise<MdInkDoc | null> {
     source: typeof legacy.source === "string" ? legacy.source : "",
     board: legacy.board,
     footnotes: sanitizeFootnotes(legacy.footnotes),
+    agent: Array.isArray(legacy.agent) ? legacy.agent : [],
   };
 }
 
@@ -286,6 +298,7 @@ export async function saveMdInkDoc(input: {
   source: string;
   board: BoardBlob;
   footnotes?: readonly DocFootnote[];
+  agent?: unknown[];
 }): Promise<MdInkDoc> {
   const index = readIndex();
   const now = Date.now();
@@ -301,12 +314,15 @@ export async function saveMdInkDoc(input: {
       `At most ${MD_INK_LIBRARY_LIMIT} annotated documents — delete one to keep another.`,
     );
   }
-  // Undefined means "this caller does not track footnotes", not "there are
-  // none" — an autosave from a path that never loaded them must not wipe the
-  // set the reading session built up.
-  const footnotes = input.footnotes
-    ? [...input.footnotes]
-    : (await getContent<MdInkContent>(id))?.footnotes ?? [];
+  // Undefined means "this caller does not track footnotes / the thread", not
+  // "there are none" — an autosave that omits them must not wipe the set the
+  // reading session built up.
+  const prior =
+    input.footnotes && Array.isArray(input.agent)
+      ? null
+      : await getContent<MdInkContent>(id);
+  const footnotes = input.footnotes ? [...input.footnotes] : prior?.footnotes ?? [];
+  const agent = Array.isArray(input.agent) ? input.agent : prior?.agent ?? [];
   const meta: MdInkDocMeta = {
     id,
     name: input.name.trim() || existing?.name || "Untitled.md",
@@ -319,8 +335,9 @@ export async function saveMdInkDoc(input: {
     source: input.source,
     board: input.board,
     footnotes,
+    agent,
   } satisfies MdInkContent);
-  return { ...meta, source: input.source, board: input.board, footnotes };
+  return { ...meta, source: input.source, board: input.board, footnotes, agent };
 }
 
 export async function deleteMdInkDoc(id: string): Promise<void> {
@@ -354,11 +371,12 @@ export async function deleteMdInkDoc(id: string): Promise<void> {
  * `restoreScratchNotebook` for why both of those would be wrong here.
  */
 export async function restoreMdInkDoc(entry: MdInkDoc): Promise<void> {
-  const { source, board, footnotes, ...meta } = entry;
+  const { source, board, footnotes, agent, ...meta } = entry;
   writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
   await putContent(entry.id, {
     source,
     board,
     footnotes: footnotes ?? [],
+    agent: Array.isArray(agent) ? agent : [],
   } satisfies MdInkContent);
 }

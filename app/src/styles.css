@@ -10059,6 +10059,18 @@ button.lc-row-selected:hover:not(:disabled) {
   color: var(--lc-fn-ink, var(--lc-fn-deep, inherit));
 }
 
+.lc-coach-mark-chips .lc-footnote-chip.is-overflow {
+  opacity: 0.42;
+  filter: grayscale(0.35);
+}
+
+.lc-coach-mark-fit {
+  margin: 0 10px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted, #6b7280);
+}
+
 .lc-footnote-chip-label {
   overflow: hidden;
   text-overflow: ellipsis;

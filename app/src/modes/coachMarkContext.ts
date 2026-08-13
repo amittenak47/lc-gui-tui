@@ -15,6 +15,18 @@ import {
 /** Soft budget for mark context (leaves room for the question + history). */
 export const MARK_CONTEXT_BUDGET_CHARS = 4500;
 
+/**
+ * Daemon `clip(question)` for corpus Ask. Keep in sync with
+ * `ASK_QUESTION_MAX` in `src/llm/helpers.rs`.
+ */
+export const PROBLEM_ASK_CLIP_CHARS = 4000;
+
+/**
+ * Document / whiteboard Ask — no code dump. Keep in sync with
+ * `PAD_ASK_QUESTION_MAX` in `src/llm/helpers.rs`.
+ */
+export const PAD_ASK_CLIP_CHARS = 12_000;
+
 export interface PackFootnoteContextOptions {
   numbers?: ReadonlyMap<string, number>;
   budget?: number;
@@ -23,6 +35,8 @@ export interface PackFootnoteContextOptions {
    * the live coach transcript can fill the title.
    */
   threadTitles?: ReadonlyMap<string, string>;
+  /** Drop marks that do not fit instead of condensing the last one. */
+  omitOverflow?: boolean;
 }
 
 function condense(text: string, max = 700): string {
@@ -168,6 +182,7 @@ export function packFootnoteContext(
     );
     if (!block) continue;
     if (used + block.length + 2 > budget) {
+      if (options?.omitOverflow) break;
       const room = Math.max(120, budget - used - 40);
       parts.push(condense(block, room));
       used = budget;
@@ -195,4 +210,102 @@ export function packFootnoteContext(
   }
 
   return parts.length > 1 ? parts.join("\n\n") : "";
+}
+
+/** Quote + question, the part of an Ask that must survive the daemon clip. */
+export function coreAskText(question: string, quote?: string): string {
+  const asked = question.trim();
+  const quoted = quote?.trim() ?? "";
+  if (quoted && asked) return `From the document:\n\n“${quoted}”\n\n${asked}`;
+  if (quoted) return `From the document:\n\n“${quoted}”`;
+  return asked;
+}
+
+export interface AssembleAskPromptInput {
+  question: string;
+  quote?: string;
+  marks?: readonly DocFootnote[];
+  numbers?: ReadonlyMap<string, number>;
+  /** Daemon clip for this workspace — {@link PROBLEM_ASK_CLIP_CHARS} or {@link PAD_ASK_CLIP_CHARS}. */
+  budget: number;
+  threadTitles?: ReadonlyMap<string, string>;
+}
+
+export interface AssembleAskPromptResult {
+  prompt: string;
+  includedMarkIds: string[];
+  omittedMarkIds: string[];
+  questionTruncated: boolean;
+}
+
+function includedIdsFromPack(
+  packed: string,
+  marks: readonly DocFootnote[],
+  numbers?: ReadonlyMap<string, number>,
+): string[] {
+  const ids: string[] = [];
+  for (const mark of marks) {
+    const number = numbers?.get(mark.id);
+    const needle = number != null ? `### Mark ${number}` : `### Mark ${mark.id.slice(0, 8)}`;
+    if (packed.includes(needle)) ids.push(mark.id);
+  }
+  return ids;
+}
+
+/**
+ * Build one Ask string that fits `budget`.
+ *
+ * The quote and question are reserved first so the daemon's front-clip cannot
+ * delete the ask. Whole marks that do not fit are omitted (not half-chopped).
+ * Marks that do fit are written *above* the question so the model still sees
+ * the ask last.
+ */
+export function assembleAskPrompt(input: AssembleAskPromptInput): AssembleAskPromptResult {
+  const budget = Math.max(0, input.budget);
+  const asked = input.question.trim();
+  const quote = input.quote?.trim() ?? "";
+  let questionTruncated = false;
+  let core = coreAskText(asked, quote);
+
+  if (core.length > budget) {
+    const prefix = "From the document:\n\n“";
+    const suffix = `”\n\n${asked}`;
+    const wrapping = prefix.length + suffix.length;
+    if (asked.length >= budget) {
+      core = `${asked.slice(0, Math.max(0, budget - 14))}\n…(truncated)`;
+      questionTruncated = true;
+    } else if (quote && wrapping < budget) {
+      const room = budget - wrapping;
+      core = coreAskText(asked, quote.slice(0, room));
+    } else {
+      core = asked.slice(0, budget);
+      questionTruncated = asked.length > budget;
+    }
+  }
+
+  const marks = input.marks ?? [];
+  if (marks.length === 0 || core.length >= budget) {
+    return {
+      prompt: core,
+      includedMarkIds: [],
+      omittedMarkIds: marks.map((mark) => mark.id),
+      questionTruncated,
+    };
+  }
+
+  const room = budget - core.length - 2;
+  const packed = packFootnoteContext(marks, {
+    numbers: input.numbers,
+    budget: room,
+    threadTitles: input.threadTitles,
+    omitOverflow: true,
+  });
+  const includedMarkIds = packed ? includedIdsFromPack(packed, marks, input.numbers) : [];
+  const includedSet = new Set(includedMarkIds);
+  return {
+    prompt: packed ? `${packed}\n\n${core}` : core,
+    includedMarkIds,
+    omittedMarkIds: marks.filter((mark) => !includedSet.has(mark.id)).map((mark) => mark.id),
+    questionTruncated,
+  };
 }

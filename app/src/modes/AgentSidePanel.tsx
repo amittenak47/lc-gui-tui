@@ -15,7 +15,8 @@ import { STAGE_LABELS } from "../api/types";
 import { HoldButton } from "../components/HoldButton";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
-import { footnoteChipLabel } from "../util/docFootnotes";
+import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
+import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { useIsMobile } from "../util/mobile";
 import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
@@ -380,6 +381,10 @@ export interface AgentSidePanelProps {
     color?: string;
     palette?: string[];
   }>;
+  /** Full mark bodies for the pre-send pack preview. */
+  attachedFootnotes?: DocFootnote[];
+  /** Daemon Ask clip for this workspace — pad vs problem. */
+  askClipChars?: number;
   onRemoveAttached?: (id: string) => void;
   /** Every mark on the open document — hold Annotations to pick from this list. */
   annotationChoices?: Array<{
@@ -426,6 +431,8 @@ export function AgentSidePanel({
   footnoteThreadRoots,
   onOpenFootnoteThread,
   attachedMarks = [],
+  attachedFootnotes = [],
+  askClipChars = PROBLEM_ASK_CLIP_CHARS,
   onRemoveAttached,
   annotationChoices = [],
   onToggleAttached,
@@ -495,6 +502,35 @@ export function AgentSidePanel({
    * still arrives whole.
    */
   const [pageQuote, setPageQuote] = useState<{ text: string; excerpt: string } | null>(null);
+  const askPackPreview = useMemo(() => {
+    if (!allowAnnotations || attachedMarks.length === 0) return null;
+    const asked =
+      draft.trim() ||
+      (pageQuote
+        ? "What should I make of this?"
+        : photos.length > 0
+          ? "What am I looking at?"
+          : "What should I focus on next?");
+    const numbers = new Map<string, number>();
+    for (const mark of attachedMarks) {
+      if (mark.number != null) numbers.set(mark.id, mark.number);
+    }
+    return assembleAskPrompt({
+      question: asked,
+      quote: pageQuote?.text,
+      marks: attachedFootnotes,
+      numbers,
+      budget: askClipChars,
+    });
+  }, [
+    allowAnnotations,
+    attachedMarks,
+    attachedFootnotes,
+    draft,
+    pageQuote,
+    photos.length,
+    askClipChars,
+  ]);
   /**
    * The thread filling the panel, or null for the main conversation.
    *
@@ -1486,12 +1522,20 @@ export function AgentSidePanel({
 
         <form className="lc-coach-composer" onSubmit={(event) => submit("queue", event)}>
           {allowAnnotations && attachedMarks.length > 0 && (
+            <>
             <div className="lc-coach-mark-chips" aria-label="Attached annotations">
-              {attachedMarks.map((mark) => (
+              {attachedMarks.map((mark) => {
+                const overflow = Boolean(askPackPreview?.omittedMarkIds.includes(mark.id));
+                return (
                 <span
-                  className="lc-footnote-chip"
+                  className={`lc-footnote-chip${overflow ? " is-overflow" : ""}`}
                   key={mark.id}
                   style={footnoteThemeVars(mark.color, mark.palette ?? [])}
+                  title={
+                    overflow
+                      ? "Will not be sent — this Ask is full"
+                      : footnoteChipLabel(mark.number, mark.title)
+                  }
                 >
                   <span
                     className="lc-fn-badge"
@@ -1513,8 +1557,24 @@ export function AgentSidePanel({
                     </button>
                   )}
                 </span>
-              ))}
+                );
+              })}
             </div>
+            {askPackPreview &&
+              (askPackPreview.omittedMarkIds.length > 0 || askPackPreview.questionTruncated) && (
+                <p className="lc-coach-mark-fit">
+                  {askPackPreview.questionTruncated
+                    ? "The question will be truncated for the model."
+                    : null}
+                  {askPackPreview.questionTruncated && askPackPreview.omittedMarkIds.length > 0
+                    ? " "
+                    : null}
+                  {askPackPreview.omittedMarkIds.length > 0
+                    ? `Only ${askPackPreview.includedMarkIds.length} of ${attachedMarks.length} marks fit this Ask. The rest stay on the page.`
+                    : null}
+                </p>
+              )}
+            </>
           )}
           {pageQuote && (
             <div className="lc-coach-reply-chip lc-coach-quote-chip">

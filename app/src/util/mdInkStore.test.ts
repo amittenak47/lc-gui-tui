@@ -211,3 +211,42 @@ describe("footnotes on an entry", () => {
     expect((await getMdInkDoc(saved.id))?.footnotes).toEqual([]);
   });
 });
+
+describe("coach thread on an entry", () => {
+  const turn = { id: "u1", role: "user", content: "what is this theorem?", at: 1 };
+
+  it("saves and reloads the transcript", async () => {
+    const saved = await saveMdInkDoc({
+      name: "notes.md",
+      hash: "h",
+      source: "# src",
+      board: board(),
+      agent: [turn],
+    });
+    expect((await getMdInkDoc(saved.id))?.agent).toEqual([turn]);
+  });
+
+  it("keeps the existing thread when a caller does not track it", async () => {
+    const saved = await saveMdInkDoc({
+      name: "notes.md",
+      hash: "h",
+      source: "# src",
+      board: board(),
+      agent: [turn],
+    });
+    await saveMdInkDoc({
+      id: saved.id,
+      name: "notes.md",
+      hash: "h",
+      source: "# src",
+      board: board(),
+      footnotes: [],
+    });
+    expect((await getMdInkDoc(saved.id))?.agent).toEqual([turn]);
+  });
+
+  it("reads an entry written before a thread existed as having none", async () => {
+    const saved = await saveMdInkDoc({ name: "old.md", hash: "h", source: "# src", board: board() });
+    expect((await getMdInkDoc(saved.id))?.agent).toEqual([]);
+  });
+});
