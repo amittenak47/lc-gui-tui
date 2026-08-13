@@ -10,9 +10,14 @@ import {
   listScratchNotebooks,
   type ScratchNotebookMeta,
 } from "../util/scratchpadStore";
+import {
+  listPadSnapshots,
+  PAD_SNAPSHOT_TIERS,
+  type PadSnapshotMeta,
+} from "../util/padSnapshotStore";
 
 export type ScratchLeaveChoice = "save" | "discard" | "load";
-export type ScratchEntryChoice = "new" | "load" | "save";
+export type ScratchEntryChoice = "new" | "load" | "save" | "snapshot";
 
 interface LeaveProps {
   mode: "leave";
@@ -36,6 +41,8 @@ interface EntryProps {
   error?: string | null;
   /** When already inside a notebook, offer Save alongside New / Load. */
   allowSave?: boolean;
+  /** Notebook id — used to list rolling snapshots. */
+  snapshotKey?: string | null;
   onChoose: (choice: ScratchEntryChoice, notebookId?: string) => void;
   onCancel: () => void;
 }
@@ -47,10 +54,13 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
     listScratchNotebooks(),
   );
   const [pickingLoad, setPickingLoad] = useState(false);
+  const [pickingSnapshots, setPickingSnapshots] = useState(false);
+  const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
 
   useEffect(() => {
     setNotebooks(listScratchNotebooks());
     setPickingLoad(false);
+    setPickingSnapshots(false);
   }, [props.mode]);
 
   useEffect(() => {
@@ -66,10 +76,20 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
   const error = props.error ?? null;
   const isLeave = props.mode === "leave";
   const allowSave = props.mode === "entry" && Boolean(props.allowSave);
+  const snapshotKey = props.mode === "entry" ? props.snapshotKey ?? null : null;
   const dirty = props.mode !== "leave" || props.dirty !== false;
   const locked = pending || exiting;
 
   const refreshList = () => setNotebooks(listScratchNotebooks());
+
+  const openSnapshots = () => {
+    setPickingSnapshots(true);
+    if (!snapshotKey) {
+      setSnapshots([]);
+      return;
+    }
+    void listPadSnapshots("whiteboard", snapshotKey).then(setSnapshots);
+  };
 
   const removeNotebook = (id: string) => {
     // See MdInkDialog: the index drops synchronously, the payload drops after.
@@ -96,7 +116,9 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
         <div className="lc-settings-head">
           <h2>{isLeave ? "Leave whiteboard?" : "Whiteboard"}</h2>
           <p className="lc-muted">
-            {pickingLoad
+            {pickingSnapshots
+              ? "Hold a snapshot to roll this notebook back. Latest autosave is the live library entry."
+              : pickingLoad
               ? "Hold an entry to open it, or hold its bin to delete it."
               : isLeave
                 ? dirty
@@ -111,7 +133,33 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
         <div className="lc-settings-body">
           {error && <div className="lc-warning">{error}</div>}
 
-          {pickingLoad ? (
+          {pickingSnapshots ? (
+            <div className="lc-settings-choice">
+              {PAD_SNAPSHOT_TIERS.map((tier) => {
+                const row = snapshots.find((snap) => snap.tier === tier.id);
+                return (
+                  <HoldButton
+                    key={tier.id}
+                    label={`Restore ${tier.label} snapshot`}
+                    className="lc-hold-choice"
+                    disabled={locked || !row}
+                    onConfirm={() => {
+                      if (props.mode !== "entry") return;
+                      props.onChoose("snapshot", tier.id);
+                    }}
+                    resetKey={error}
+                  >
+                    <strong>{tier.label}</strong>
+                    <span className="lc-muted">
+                      {row
+                        ? new Date(row.writtenAt).toLocaleString()
+                        : "No snapshot yet — write on this notebook and wait for autosave."}
+                    </span>
+                  </HoldButton>
+                );
+              })}
+            </div>
+          ) : pickingLoad ? (
             <div className="lc-settings-choice">
               {notebooks.length === 0 && (
                 <p className="lc-muted">No saved notebooks yet.</p>
@@ -252,6 +300,19 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                     <strong>Load…</strong>
                     <span className="lc-muted">Open a saved notebook.</span>
                   </HoldButton>
+                  {allowSave && (
+                    <HoldButton
+                      label="Restore snapshot"
+                      className="lc-hold-choice"
+                      disabled={locked || !snapshotKey}
+                      onConfirm={openSnapshots}
+                    >
+                      <strong>Restore snapshot…</strong>
+                      <span className="lc-muted">
+                        2h / 24h / 7d copies, written while you write.
+                      </span>
+                    </HoldButton>
+                  )}
                 </>
               )}
             </div>
@@ -259,12 +320,15 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
         </div>
 
         <div className="lc-settings-foot">
-          {pickingLoad && (
+          {(pickingLoad || pickingSnapshots) && (
             <button
               type="button"
               className="lc-secondary"
               disabled={locked}
-              onClick={() => setPickingLoad(false)}
+              onClick={() => {
+                setPickingLoad(false);
+                setPickingSnapshots(false);
+              }}
             >
               Back
             </button>

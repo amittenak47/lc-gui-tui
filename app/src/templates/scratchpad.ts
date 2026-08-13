@@ -11,7 +11,8 @@ import { SCRATCHPAD_PAGE_LIMIT } from "../util/scratchpadStore";
 import { defaultLineHeight, SCRATCH_LINE_PITCH, topYForLinedRow } from "../modes/textBaseline";
 
 export const SCRATCHPAD_TASK_ID = "__scratchpad__";
-export const SCRATCHPAD_DATASET = "scratchpad";
+/** Coach / HTTP dataset slug. Storage keys stay `lc.scratchpad.*`. */
+export const SCRATCHPAD_DATASET = "whiteboard";
 
 export { SCRATCHPAD_PAGE_LIMIT };
 

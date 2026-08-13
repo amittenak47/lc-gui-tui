@@ -12,9 +12,14 @@ import { useEffect, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import { deleteMdInkDoc, listMdInkDocs, type MdInkDocMeta } from "../util/mdInkStore";
+import {
+  listPadSnapshots,
+  PAD_SNAPSHOT_TIERS,
+  type PadSnapshotMeta,
+} from "../util/padSnapshotStore";
 
 export type MdInkLeaveChoice = "save" | "discard";
-export type MdInkEntryChoice = "open" | "recent" | "save" | "export" | "import";
+export type MdInkEntryChoice = "open" | "recent" | "save" | "export" | "import" | "snapshot";
 
 interface LeaveProps {
   mode: "leave";
@@ -40,6 +45,8 @@ interface EntryProps {
   error?: string | null;
   /** When a document is already open, offer Save alongside Open / Recent. */
   allowSave?: boolean;
+  /** Content hash of the open file — used to list rolling snapshots. */
+  snapshotKey?: string | null;
   onChoose: (choice: MdInkEntryChoice, docId?: string) => void;
   onCancel: () => void;
 }
@@ -49,11 +56,25 @@ export type MdInkDialogProps = LeaveProps | EntryProps;
 export function MdInkDialog(props: MdInkDialogProps) {
   const [docs, setDocs] = useState<MdInkDocMeta[]>(() => listMdInkDocs());
   const [pickingRecent, setPickingRecent] = useState(false);
+  const [pickingSnapshots, setPickingSnapshots] = useState(false);
+  const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
 
   useEffect(() => {
     setDocs(listMdInkDocs());
     setPickingRecent(false);
+    setPickingSnapshots(false);
   }, [props.mode]);
+
+  const snapshotKey = props.mode === "entry" ? props.snapshotKey ?? null : null;
+
+  const openSnapshots = () => {
+    setPickingSnapshots(true);
+    if (!snapshotKey) {
+      setSnapshots([]);
+      return;
+    }
+    void listPadSnapshots("md-ink", snapshotKey).then(setSnapshots);
+  };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -101,7 +122,9 @@ export function MdInkDialog(props: MdInkDialogProps) {
         <div className="lc-settings-head">
           <h2>{isLeave ? "Leave document?" : "Document"}</h2>
           <p className="lc-muted">
-            {pickingRecent
+            {pickingSnapshots
+              ? "Hold a snapshot to roll this file back. Latest autosave is the live library entry."
+              : pickingRecent
               ? "Hold a document to reopen it, or hold its bin to remove its annotations."
               : isLeave
                 ? dirty
@@ -116,7 +139,30 @@ export function MdInkDialog(props: MdInkDialogProps) {
         <div className="lc-settings-body">
           {error && <div className="lc-warning">{error}</div>}
 
-          {pickingRecent && entry ? (
+          {pickingSnapshots && entry ? (
+            <div className="lc-settings-choice">
+              {PAD_SNAPSHOT_TIERS.map((tier) => {
+                const row = snapshots.find((snap) => snap.tier === tier.id);
+                return (
+                  <HoldButton
+                    key={tier.id}
+                    label={`Restore ${tier.label} snapshot`}
+                    className="lc-hold-choice"
+                    disabled={locked || !row}
+                    onConfirm={() => entry.onChoose("snapshot", tier.id)}
+                    resetKey={error}
+                  >
+                    <strong>{tier.label}</strong>
+                    <span className="lc-muted">
+                      {row
+                        ? new Date(row.writtenAt).toLocaleString()
+                        : "No snapshot yet — write on this file and wait for autosave."}
+                    </span>
+                  </HoldButton>
+                );
+              })}
+            </div>
+          ) : pickingRecent && entry ? (
             <div className="lc-settings-choice">
               {docs.length === 0 && <p className="lc-muted">Nothing annotated yet.</p>}
               {docs.map((doc) => (
@@ -232,13 +278,28 @@ export function MdInkDialog(props: MdInkDialogProps) {
                   */}
                   {allowSave && (
                     <HoldButton
+                      label="Restore snapshot"
+                      className="lc-hold-choice"
+                      disabled={locked || !snapshotKey}
+                      onConfirm={openSnapshots}
+                    >
+                      <strong>Restore snapshot…</strong>
+                      <span className="lc-muted">
+                        2h / 24h / 7d copies, written while you annotate.
+                      </span>
+                    </HoldButton>
+                  )}
+                  {allowSave && (
+                    <HoldButton
                       label="Export annotations"
                       className="lc-hold-choice"
                       disabled={locked}
                       onConfirm={() => props.onChoose("export")}
                     >
                       <strong>Export annotations…</strong>
-                      <span className="lc-muted">Save a sidecar file beside the source.</span>
+                      <span className="lc-muted">
+                        Downloads a .lc-ink.json.gz to this device’s Downloads folder.
+                      </span>
                     </HoldButton>
                   )}
                   <HoldButton
@@ -257,12 +318,15 @@ export function MdInkDialog(props: MdInkDialogProps) {
         </div>
 
         <div className="lc-settings-foot">
-          {pickingRecent && (
+          {(pickingRecent || pickingSnapshots) && (
             <button
               type="button"
               className="lc-secondary"
               disabled={locked}
-              onClick={() => setPickingRecent(false)}
+              onClick={() => {
+                setPickingRecent(false);
+                setPickingSnapshots(false);
+              }}
             >
               Back
             </button>

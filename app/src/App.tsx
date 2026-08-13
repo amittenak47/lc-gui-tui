@@ -159,6 +159,7 @@ import {
   CODE_SOURCE_MAX_CHARS,
   sidecarWidthWarning,
   exportMdInkSidecar,
+  sidecarNameFor,
   languageForName,
   pickDocumentFile,
   pickSidecarFile,
@@ -190,6 +191,11 @@ import {
   type ScratchNotebook,
 } from "./util/scratchpadStore";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
+import {
+  getPadSnapshot,
+  recordRollingSnapshots,
+  type PadSnapshotTier,
+} from "./util/padSnapshotStore";
 import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
@@ -1377,6 +1383,13 @@ export function App() {
           .then((saved) => {
             if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
             setNotice(`Saved “${saved.name}”.`);
+            void recordRollingSnapshots({
+              kind: "md-ink",
+              key: saved.hash,
+              name: saved.name,
+              board: saved.board,
+              footnotes: saved.footnotes,
+            });
           })
           .catch((cause: unknown) => {
             // A *full library* is not worth interrupting a writing session for;
@@ -1418,6 +1431,14 @@ export function App() {
           .then((saved) => {
             if (!scratchNotebookId) setScratchNotebookId(saved.id);
             setNotice(`Saved “${saved.title}”.`);
+            void recordRollingSnapshots({
+              kind: "whiteboard",
+              key: saved.id,
+              name: saved.title,
+              board: saved.board,
+              agent: saved.agent,
+              pageCount: saved.pageCount,
+            });
           })
           .catch((cause: unknown) => {
             if (cause instanceof ScratchpadLibraryFullError) {
@@ -2152,8 +2173,8 @@ export function App() {
       }),
     ).catch((cause: unknown) => setError(messageOf(cause)));
     setNotice(
-      `Exported annotations for “${source.name}” — made at ` +
-        `${Math.round(mdInkPageWidthRef.current)}px page width.`,
+      `Downloaded “${sidecarNameFor(source.name)}” — look in this device’s Downloads folder. ` +
+        `Import it from the Document sheet after opening the same file.`,
     );
   }, []);
 
@@ -2213,6 +2234,60 @@ export function App() {
       setError(messageOf(cause));
     }
   }, [mdInkHeight, themeId]);
+
+  const restorePadSnapshot = useCallback(
+    async (kind: "md-ink" | "whiteboard", key: string, tier: PadSnapshotTier) => {
+      const snap = await getPadSnapshot(kind, key, tier);
+      if (!snap) {
+        setError("That snapshot is no longer on this device.");
+        return;
+      }
+      const board = boardRef.current;
+      if (!board) return;
+      const ink = inkOpsFrom(snap.board);
+      if (kind === "md-ink") {
+        if (snap.footnotes) {
+          setMdInkFootnotes(snap.footnotes);
+          mdInkFootnotesRef.current = snap.footnotes;
+        }
+        board.restoreBoard(snap.board.elements, snap.board.appState, {
+          skeletons: buildMdInkTemplate(
+            mdInkPageHeight(mdInkHeight),
+            isDarkTheme(themeId),
+            mdInkFrameWidthFromElements(
+              snap.board.elements as {
+                width?: number;
+                customData?: { lcMdInkFrame?: boolean } | null;
+              }[],
+            ) ?? mdInkPageWidth,
+          ),
+          ink,
+          files: snap.board.files,
+          inkPalettes: snap.board.inkPalettes,
+        });
+      } else {
+        const pages = Math.min(
+          SCRATCHPAD_PAGE_LIMIT,
+          Math.max(1, snap.pageCount ?? 1, countScratchPages(snap.board.elements)),
+        );
+        board.restoreBoard(snap.board.elements, snap.board.appState, {
+          skeletons: buildScratchpadTemplate(pages, isDarkTheme(themeId)),
+          ink,
+          files: snap.board.files,
+          inkPalettes: snap.board.inkPalettes,
+        });
+        setScratchPageCount(pages);
+        if (Array.isArray(snap.agent) && snap.agent.length > 0) {
+          setCoachMessages(restoreCoachMessages(snap.agent));
+        }
+      }
+      if (ink.length > 0) board.setInkOps(ink);
+      lastSavedHashRef.current = null;
+      const when = new Date(snap.writtenAt).toLocaleString();
+      setNotice(`Restored the ${tier} snapshot from ${when}.`);
+    },
+    [mdInkHeight, mdInkPageWidth, themeId],
+  );
 
   /** Pick a document from disk and open it on the pad. */
   const pickAndOpenMdInk = useCallback(async () => {
@@ -4058,6 +4133,14 @@ export function App() {
         // Discard now rolls back to this save, not past it.
         await rebaselineScratchSession(saved.id);
         setNotice(`Saved “${saved.title}”.`);
+        void recordRollingSnapshots({
+          kind: "whiteboard",
+          key: saved.id,
+          name: saved.title,
+          board: saved.board,
+          agent: saved.agent,
+          pageCount: saved.pageCount,
+        });
       } catch (cause) {
         if (cause instanceof ScratchpadLibraryFullError) {
           scratchLibResumeRef.current = onFull ?? null;
@@ -4160,6 +4243,13 @@ export function App() {
         board.getInkOpCount(),
       );
       mdInkPristineMarksRef.current = footnoteRevision(mdInkFootnotes);
+      void recordRollingSnapshots({
+        kind: "md-ink",
+        key: saved.hash,
+        name: saved.name,
+        board: saved.board,
+        footnotes: saved.footnotes,
+      });
       return saved;
     } catch (cause) {
       if (cause instanceof MdInkLibraryFullError) {
@@ -4387,6 +4477,14 @@ export function App() {
                 });
                 setScratchNotebookId(saved.id);
                 await rebaselineScratchSession(saved.id);
+                void recordRollingSnapshots({
+                  kind: "whiteboard",
+                  key: saved.id,
+                  name: saved.title,
+                  board: saved.board,
+                  agent: saved.agent,
+                  pageCount: saved.pageCount,
+                });
               } catch (cause) {
                 if (cause instanceof ScratchpadLibraryFullError) {
                   await dismissDialog();
@@ -5393,6 +5491,7 @@ export function App() {
           mode="entry"
           pending={busy !== null}
           allowSave={Boolean(problem && isMdInk(problem))}
+          snapshotKey={mdInkSource?.hash ?? null}
           onChoose={(choice, docId) => {
             setMdInkEntryOpen(false);
             if (choice === "save") {
@@ -5407,6 +5506,13 @@ export function App() {
             }
             if (choice === "import") {
               void importMdInkAnnotations();
+              return;
+            }
+            if (choice === "snapshot" && docId) {
+              const source = mdInkSourceRef.current;
+              if (source) {
+                void restorePadSnapshot("md-ink", source.hash, docId as PadSnapshotTier);
+              }
               return;
             }
             if (choice === "recent" && docId) {
@@ -5475,6 +5581,7 @@ export function App() {
           mode="entry"
           pending={busy !== null}
           allowSave={Boolean(problem && isScratchpad(problem))}
+          snapshotKey={scratchNotebookId}
           onChoose={(choice, notebookId) => {
             setScratchEntryOpen(false);
             if (choice === "save") {
@@ -5483,6 +5590,14 @@ export function App() {
             }
             if (choice === "load" && notebookId) {
               void openScratchpad({ notebookId });
+              return;
+            }
+            if (choice === "snapshot" && notebookId && scratchNotebookId) {
+              void restorePadSnapshot(
+                "whiteboard",
+                scratchNotebookId,
+                notebookId as PadSnapshotTier,
+              );
               return;
             }
             void openScratchpad({ fresh: true });

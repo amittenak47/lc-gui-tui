@@ -301,6 +301,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      */
     const alignedBoxRef = useRef<{ width: number; height: number; marginY: number } | null>(null);
     /**
+     * Committed overlay pixels at stroke start — live paints blit this then
+     * the in-progress op, instead of re-tiling the page on every sample.
+     *
+     * Cursor's embedded browser often delivers uncoalesced `pointermove`s;
+     * Chrome coalesces to one per frame. Skipping the tile pass is what keeps
+     * the two from feeling like different pens.
+     */
+    const committedSnapRef = useRef<HTMLCanvasElement | null>(null);
+    /** One live paint per animation frame while stamps keep arriving. */
+    const livePaintRafRef = useRef<number | null>(null);
+    /**
      * A background tile pass finished while the pen was down, so the overlay is
      * a frame behind the cache. Repaint once the stroke is off the paper.
      */
@@ -770,12 +781,31 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       ensureTiles().setOps(opsRef.current);
     }, [ensureTiles]);
 
+    const captureCommittedSnap = useCallback((canvas: HTMLCanvasElement) => {
+      if (canvas.width < 1 || canvas.height < 1) return;
+      let snap = committedSnapRef.current;
+      if (!snap) {
+        snap = document.createElement("canvas");
+        committedSnapRef.current = snap;
+      }
+      if (snap.width !== canvas.width || snap.height !== canvas.height) {
+        snap.width = canvas.width;
+        snap.height = canvas.height;
+      }
+      const sctx = snap.getContext("2d");
+      if (!sctx) return;
+      sctx.setTransform(1, 0, 0, 1, 0, 0);
+      sctx.clearRect(0, 0, snap.width, snap.height);
+      sctx.drawImage(canvas, 0, 0);
+    }, []);
+
     /**
-     * Hot path: full live redraw each frame under the stroke-start camera.
+     * Hot path: blit the stroke-start committed snapshot, then the live op.
      *
      * Incremental tail paint stacked overlapping butt-cap segments into spoke
      * artifacts on thick pens; clearing and repainting the whole live op avoids
-     * that without disturbing reshape/tip-lag callers.
+     * that. Re-tiling the page on every sample was the remaining cost — Chrome
+     * hides it by coalescing moves; Cursor's browser often does not.
      */
     const paintLiveIncremental = useCallback(() => {
       const canvas = canvasRef.current;
@@ -790,6 +820,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         canvas.width !== Math.round(box.width * dpr) ||
         canvas.height !== Math.round(box.height * dpr)
       ) {
+        committedSnapRef.current = null;
         repaint();
         return;
       }
@@ -797,7 +828,29 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       syncLiveHostBinding(live);
       // Host-bound live ink needs clip+translate — fall back to a full frame.
       if (isHostBoundOp(live)) {
+        committedSnapRef.current = null;
         repaint();
+        return;
+      }
+
+      const snap = committedSnapRef.current;
+      if (snap && snap.width === canvas.width && snap.height === canvas.height) {
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        const marginY = box.marginY;
+        const baseView: ViewportTransform = {
+          ...view,
+          scrollY: view.scrollY - marginY / view.zoom,
+          height: view.height - 2 * marginY,
+        };
+        const drawView = overdrawnViewport(baseView, marginY);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(snap, 0, 0);
+        paintLiveOp(ctx, live, drawView, dpr, clipRef.current, scrollHostLookup());
+        liveDrawnIndexRef.current =
+          live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
         return;
       }
 
@@ -809,6 +862,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       };
       paintFromBox(baseView, box);
     }, [paintFromBox, repaint]);
+    const captureCommittedSnapRef = useRef(captureCommittedSnap);
+    captureCommittedSnapRef.current = captureCommittedSnap;
 
     /**
      * True when open-stroke ink must be re-derived from raw stamps each paint.
@@ -843,8 +898,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const repaintLiveRef = useRef(repaint);
     repaintLiveRef.current = repaint;
 
-    /** After appending stamps: reshape+full paint in live mode, else full live redraw. */
-    const paintLiveAfterChange = useCallback(() => {
+    const flushLivePaint = useCallback(() => {
       if (reshapeLiveStrokeRef.current()) {
         liveDrawnIndexRef.current = 0;
         repaintLiveRef.current();
@@ -852,6 +906,23 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       }
       paintLiveIncrementalRef.current();
     }, []);
+
+    /** After appending stamps: reshape+paint, at most once per animation frame. */
+    const paintLiveAfterChange = useCallback((immediate = false) => {
+      if (immediate) {
+        if (livePaintRafRef.current != null) {
+          cancelAnimationFrame(livePaintRafRef.current);
+          livePaintRafRef.current = null;
+        }
+        flushLivePaint();
+        return;
+      }
+      if (livePaintRafRef.current != null) return;
+      livePaintRafRef.current = requestAnimationFrame(() => {
+        livePaintRafRef.current = null;
+        flushLivePaint();
+      });
+    }, [flushLivePaint]);
     const paintLiveAfterChangeRef = useRef(paintLiveAfterChange);
     paintLiveAfterChangeRef.current = paintLiveAfterChange;
 
@@ -1623,7 +1694,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           painted.width === cssW &&
           painted.height === visibleH &&
           painted.marginY === marginY;
+        const pendingLive = liveRef.current;
+        liveRef.current = null;
         if (!reusable) repaintRef.current();
+        captureCommittedSnapRef.current(canvas);
+        liveRef.current = pendingLive;
         drawingRef.current = true;
         activePointerRef.current = event.pointerId;
         strokeRecaptured = false;
@@ -1633,7 +1708,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           ((liveAfterBegin.kind === "draw" && liveAfterBegin.points.length > 0) ||
             liveAfterBegin.kind === "erase")
         ) {
-          paintLiveAfterChangeRef.current();
+          paintLiveAfterChangeRef.current(true);
         }
         if (activeTool === "pen" && speed > 0) {
           dwellTimerRef.current = setInterval(() => {
@@ -1950,6 +2025,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (!drawingRef.current) return;
         // A palm lifting off is not the pen lifting off.
         if (event.pointerId !== activePointerRef.current) return;
+        if (livePaintRafRef.current != null) {
+          cancelAnimationFrame(livePaintRafRef.current);
+          livePaintRafRef.current = null;
+        }
         clearDwellTimer();
         if (attackBufferRef.current) flushAttackBuffer();
         drawingRef.current = false;
@@ -1959,6 +2038,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         strokeViewRef.current = null;
         strokeBoxRef.current = null;
         strokeRectRef.current = null;
+        committedSnapRef.current = null;
         detachWindowFallback();
         try {
           canvas.releasePointerCapture(event.pointerId);
@@ -2009,6 +2089,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       abandonStrokeRef.current = () => {
         if (!drawingRef.current) return;
         if (DEBUG_INK) inkMetrics.note("stroke-abandoned");
+        if (livePaintRafRef.current != null) {
+          cancelAnimationFrame(livePaintRafRef.current);
+          livePaintRafRef.current = null;
+        }
         clearDwellTimer();
         attackBufferRef.current = null;
         liveRawPointsRef.current = null;
@@ -2017,6 +2101,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         strokeViewRef.current = null;
         strokeBoxRef.current = null;
         strokeRectRef.current = null;
+        committedSnapRef.current = null;
         lastPointRef.current = null;
         rawPointRef.current = null;
         detachWindowFallback();
