@@ -16,6 +16,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -64,10 +65,9 @@ describe("the fixture, through pdf.js", () => {
     pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
     // Point at the real worker file rather than disabling it: pdf.js's
     // no-worker path still insists on a workerSrc before it will fall back.
-    pdfjs.GlobalWorkerOptions.workerSrc = resolve(
-      process.cwd(),
-      "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
-    );
+    pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(
+      resolve(process.cwd(), "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"),
+    ).href;
   });
 
   async function open() {
