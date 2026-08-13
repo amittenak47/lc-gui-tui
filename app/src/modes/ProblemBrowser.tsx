@@ -580,7 +580,7 @@ export function ProblemBrowser({
               <p className="lc-muted">
                 {offlinePack
                   ? `Offline pack · ${offlinePack.problems.length.toLocaleString()} problems (no KodCode).`
-                  : "Offline — download a problem pack while online (Settings → Server), or open a scratchpad."}
+                  : "Offline — download a problem pack while online (Settings → Server), or open a whiteboard."}
               </p>
             )}
 

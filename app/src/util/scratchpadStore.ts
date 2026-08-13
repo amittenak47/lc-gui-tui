@@ -11,7 +11,7 @@ export const SCRATCHPAD_PAGE_LIMIT = 5;
 
 export class ScratchpadLibraryFullError extends Error {
   readonly code = "scratchpad-library-full" as const;
-  constructor(message = "Scratchpad library is full") {
+  constructor(message = "Whiteboard library is full") {
     super(message);
     this.name = "ScratchpadLibraryFullError";
   }
@@ -140,7 +140,7 @@ export async function saveScratchNotebook(input: {
   const existing = library.find((entry) => entry.id === id);
   if (!existing && library.length >= SCRATCHPAD_LIBRARY_LIMIT) {
     throw new ScratchpadLibraryFullError(
-      `At most ${SCRATCHPAD_LIBRARY_LIMIT} scratchpad notebooks — delete one to save another.`,
+      `At most ${SCRATCHPAD_LIBRARY_LIMIT} whiteboard notebooks — delete one to save another.`,
     );
   }
   const title =
@@ -216,7 +216,7 @@ export async function migrateLegacyScratchpad(
       /* ignore */
     }
     await saveScratchNotebook({
-      title: "Recovered scratchpad",
+      title: "Recovered whiteboard",
       board,
       agent,
       pageCount: pageCountFromElements(board.elements),

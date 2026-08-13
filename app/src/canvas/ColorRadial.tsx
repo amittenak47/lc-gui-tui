@@ -1,8 +1,8 @@
 /**
  * Ink colour control — radial wheel (SVG donut wedges).
  *
- * Toolbar: tap cycles the next palette; hold opens the wheel.
- * Open hub: tap cycles previous palettes; hold was reset (optional).
+ * Toolbar: tap cycles the next palette (fetch past the end); hold opens the
+ * wheel. Open hub: tap cycles palettes already in history, no fetch.
  * Wedge: tap/drag picks; hold opens the OS colour editor for that slot.
  *
  * Portaled with `position: fixed` so the toolbar scroller cannot clip the ring.
@@ -11,13 +11,21 @@
  * popping.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { MorphBar } from "../components/MorphBar";
 import type { InkHandedness } from "../util/inkHandedness";
 
-const HOLD_MS = 220;
+import { HOLD_MS } from "../util/gesture";
 /**
  * Hold on a wedge to change what colour lives there.
  *
@@ -26,9 +34,12 @@ const HOLD_MS = 220;
  * one that has to be meant. Long enough that a slow tap-to-pick never trips it.
  */
 const EDIT_HOLD_MS = 550;
-/** Outer / inner radius of the colour ring (CSS px). */
+/** Outer / inner radius of the colour ring (CSS px). Toolbar / flyout size. */
 export const OUTER_R = 78;
 const INNER_R = 34;
+/** Preset-sheet ring — large enough the full dial reads, still fits the left column. */
+const EMBEDDED_OUTER_R = 92;
+const EMBEDDED_INNER_R = 40;
 /** Hit slop beyond the ring for drag-pick. */
 const HIT_PAD = 10;
 /** Keep the ring this far inside the window when the swatch sits on an edge. */
@@ -51,6 +62,11 @@ interface ColorRadialProps {
   onEditColor?: (index: number, color: string) => void;
   handedness: InkHandedness;
   compact?: boolean;
+  /**
+   * Always-on ring inside a host (the 1D preset sheet). No swatch, no portal,
+   * no close-on-pick — the full dial stays in layout so MorphBar cannot clip it.
+   */
+  embedded?: boolean;
   /** Portaled wheel stacks above doc sheets (footnote hub uses ~240). */
   wheelZIndex?: number;
 }
@@ -94,7 +110,12 @@ function donutSlice(
 }
 
 /** Build equal wedges; slight rotation bias so seams sit clear of the writing hand. */
-function buildWedges(colors: readonly string[], handedness: InkHandedness): Wedge[] {
+function buildWedges(
+  colors: readonly string[],
+  handedness: InkHandedness,
+  outerR = OUTER_R,
+  innerR = INNER_R,
+): Wedge[] {
   const n = Math.max(colors.length, 1);
   const step = (Math.PI * 2) / n;
   // Rotate so a seam is not under the wrist; right-hand writers get a small CW bias.
@@ -109,7 +130,7 @@ function buildWedges(colors: readonly string[], handedness: InkHandedness): Wedg
       mid,
       start,
       end,
-      path: donutSlice(OUTER_R, OUTER_R, INNER_R, OUTER_R, start, end),
+      path: donutSlice(outerR, outerR, innerR, outerR, start, end),
     };
   });
 }
@@ -168,9 +189,13 @@ export function ColorRadial({
   onEditColor,
   handedness,
   compact = false,
+  embedded = false,
   wheelZIndex = 90,
 }: ColorRadialProps) {
-  const [open, setOpen] = useState(false);
+  const filterUid = useId().replace(/:/g, "");
+  const outerR = embedded ? EMBEDDED_OUTER_R : OUTER_R;
+  const innerR = embedded ? EMBEDDED_INNER_R : INNER_R;
+  const [open, setOpen] = useState(embedded);
   const [closing, setClosing] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
   /** Instant fill before parent `value` catches up after onPick. */
@@ -227,7 +252,10 @@ export function ColorRadial({
     input.click();
   }, []);
 
-  const wedges = useMemo(() => buildWedges(colors, handedness), [colors, handedness]);
+  const wedges = useMemo(
+    () => buildWedges(colors, handedness, outerR, innerR),
+    [colors, handedness, outerR, innerR],
+  );
   const paletteId = `${handedness}:${colors.join("|")}`;
   const currentFrame = useMemo<PaletteFrame>(
     () => ({ id: paletteId, wedges }),
@@ -245,7 +273,7 @@ export function ColorRadial({
     });
   }, [currentFrame]);
 
-  const size = OUTER_R * 2;
+  const size = outerR * 2;
 
   const clearHold = useCallback(() => {
     if (holdTimerRef.current != null) {
@@ -255,6 +283,7 @@ export function ColorRadial({
   }, []);
 
   const close = useCallback(() => {
+    if (embedded) return;
     clearHold();
     draggingRef.current = false;
     setHovered(null);
@@ -264,7 +293,7 @@ export function ColorRadial({
       return;
     }
     setClosing(true);
-  }, [clearHold]);
+  }, [clearHold, embedded]);
 
   const finishClose = useCallback(() => {
     setClosing(false);
@@ -287,7 +316,7 @@ export function ColorRadial({
         clampWheelAnchor(
           rect.left + rect.width / 2,
           rect.top + rect.height / 2,
-          OUTER_R,
+          outerR,
           { width: window.innerWidth, height: window.innerHeight },
         ),
       );
@@ -299,10 +328,10 @@ export function ColorRadial({
       window.removeEventListener("resize", sync);
       window.removeEventListener("scroll", sync, true);
     };
-  }, [wheelShown]);
+  }, [wheelShown, outerR]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || embedded) return;
     const onDown = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && rootRef.current?.contains(target)) return;
@@ -318,22 +347,30 @@ export function ColorRadial({
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [open, close]);
+  }, [open, close, embedded]);
 
   const colorAt = useCallback(
     (clientX: number, clientY: number): string | null => {
-      if (!anchor) return null;
-      const dx = clientX - anchor.x;
-      const dy = clientY - anchor.y;
+      const node = rootRef.current;
+      let cx = anchor?.x;
+      let cy = anchor?.y;
+      if (embedded && node) {
+        const rect = node.getBoundingClientRect();
+        cx = rect.left + rect.width / 2;
+        cy = rect.top + rect.height / 2;
+      }
+      if (cx == null || cy == null) return null;
+      const dx = clientX - cx;
+      const dy = clientY - cy;
       const dist = Math.hypot(dx, dy);
-      if (dist < INNER_R - HIT_PAD || dist > OUTER_R + HIT_PAD) return null;
+      if (dist < innerR - HIT_PAD || dist > outerR + HIT_PAD) return null;
       const angle = angleFromCentre(dx, dy);
       for (const wedge of wedges) {
         if (angleInWedge(angle, wedge.start, wedge.end)) return wedge.color;
       }
       return null;
     },
-    [anchor, wedges],
+    [anchor, wedges, embedded, innerR, outerR],
   );
 
   useEffect(() => {
@@ -368,17 +405,17 @@ export function ColorRadial({
       <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size}>
         {interactive ? (
           <defs>
-            <filter id="lc-color-wheel-soft" x="-20%" y="-20%" width="140%" height="140%">
+            <filter id={`lc-color-wheel-soft-${filterUid}`} x="-20%" y="-20%" width="140%" height="140%">
               <feDropShadow dx="0" dy="4" stdDeviation="6" floodOpacity="0.28" />
             </filter>
           </defs>
         ) : null}
         <circle
           className="lc-color-wheel-well"
-          cx={OUTER_R}
-          cy={OUTER_R}
-          r={OUTER_R - 0.5}
-          filter={interactive ? "url(#lc-color-wheel-soft)" : undefined}
+          cx={outerR}
+          cy={outerR}
+          r={outerR - 0.5}
+          filter={interactive ? `url(#lc-color-wheel-soft-${filterUid})` : undefined}
         />
         {frame.wedges.map((wedge, wedgeIndex) => {
           const state =
@@ -432,31 +469,37 @@ export function ColorRadial({
             />
           );
         })}
-        <circle className="lc-color-wheel-hub-ring" cx={OUTER_R} cy={OUTER_R} r={INNER_R} />
+        <circle className="lc-color-wheel-hub-ring" cx={outerR} cy={outerR} r={innerR} />
       </svg>
     </div>
   );
 
-  const wheel =
-    wheelShown &&
-    anchor &&
-    createPortal(
+  const wheelNode =
+    (embedded || (wheelShown && anchor)) && (
       <div
         className={
-          closing ? "lc-color-wheel is-closing" : "lc-color-wheel is-open"
+          embedded
+            ? "lc-color-wheel lc-color-wheel-embedded"
+            : closing
+              ? "lc-color-wheel is-closing"
+              : "lc-color-wheel is-open"
         }
         role="menu"
         aria-label="Ink colour"
         data-cycle={cycleDir}
-        style={{
-          left: anchor.x,
-          top: anchor.y,
-          width: size,
-          height: size,
-          marginLeft: -OUTER_R,
-          marginTop: -OUTER_R,
-          zIndex: wheelZIndex,
-        }}
+        style={
+          embedded || !anchor
+            ? { width: size, height: size }
+            : {
+                left: anchor.x,
+                top: anchor.y,
+                width: size,
+                height: size,
+                marginLeft: -outerR,
+                marginTop: -outerR,
+                zIndex: wheelZIndex,
+              }
+        }
         onAnimationEnd={(event) => {
           if (event.target !== event.currentTarget) return;
           if (closing) finishClose();
@@ -518,59 +561,72 @@ export function ColorRadial({
             close();
           }}
         />
-      </div>,
-      document.body,
+      </div>
     );
+
+  const wheel = embedded
+    ? wheelNode
+    : wheelNode
+      ? createPortal(wheelNode, document.body)
+      : null;
 
   return (
     <div
       ref={rootRef}
-      className={compact ? "lc-color-radial lc-color-radial-compact" : "lc-color-radial"}
+      className={
+        embedded
+          ? "lc-color-radial lc-color-radial-embedded"
+          : compact
+            ? "lc-color-radial lc-color-radial-compact"
+            : "lc-color-radial"
+      }
     >
-      <button
-        type="button"
-        className={open ? "lc-color-dot lc-color-dot-open" : "lc-color-dot"}
-        aria-label="Ink colour"
-        aria-haspopup="true"
-        aria-expanded={open}
-        title={
-          onCycleNext
-            ? "Tap for next palette · hold to open the wheel"
-            : "Ink colour — hold to open the wheel"
-        }
-        onPointerDown={() => {
-          draggingRef.current = true;
-          clearHold();
-          holdTimerRef.current = window.setTimeout(() => {
-            holdTimerRef.current = null;
-            setClosing(false);
-            setOpen(true);
-          }, HOLD_MS);
-        }}
-        onPointerUp={() => {
-          if (holdTimerRef.current != null) {
+      {!embedded && (
+        <button
+          type="button"
+          className={open ? "lc-color-dot lc-color-dot-open" : "lc-color-dot"}
+          aria-label="Ink colour"
+          aria-haspopup="true"
+          aria-expanded={open}
+          title={
+            onCycleNext
+              ? "Tap for next palette · hold to open the wheel"
+              : "Ink colour — hold to open the wheel"
+          }
+          onPointerDown={() => {
+            draggingRef.current = true;
+            clearHold();
+            holdTimerRef.current = window.setTimeout(() => {
+              holdTimerRef.current = null;
+              setClosing(false);
+              setOpen(true);
+            }, HOLD_MS);
+          }}
+          onPointerUp={() => {
+            if (holdTimerRef.current != null) {
+              clearHold();
+              draggingRef.current = false;
+              if (onCycleNext) {
+                setCycleDir("next");
+                onCycleNext();
+                return;
+              }
+              if (open) {
+                close();
+                return;
+              }
+              setClosing(false);
+              setOpen(true);
+            }
+          }}
+          onPointerCancel={() => {
             clearHold();
             draggingRef.current = false;
-            if (onCycleNext) {
-              setCycleDir("next");
-              onCycleNext();
-              return;
-            }
-            if (open) {
-              close();
-              return;
-            }
-            setClosing(false);
-            setOpen(true);
-          }
-        }}
-        onPointerCancel={() => {
-          clearHold();
-          draggingRef.current = false;
-        }}
-      >
-        <span className="lc-color-dot-fill" style={{ background: shown }} aria-hidden />
-      </button>
+          }}
+        >
+          <span className="lc-color-dot-fill" style={{ background: shown }} aria-hidden />
+        </button>
+      )}
       {wheel}
     </div>
   );

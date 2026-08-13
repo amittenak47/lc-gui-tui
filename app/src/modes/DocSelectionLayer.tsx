@@ -4,7 +4,9 @@
  * Two gestures in Scroll mode — and the same two when Ask-area (🔍) is on:
  * 1. Native text selection — down + drag immediately (any direction). Primary
  *    path for Copy / Google.
- * 2. Hold-still (~580ms) then drag — annotate region marquee (figures / Mark).
+ * 2. Hold-still then drag — annotate region marquee (figures / Mark).
+ *    Stillness of {@link SELECT_HOLD_ARM_MS} claims the finger; the drag
+ *    after that is the box. Immediate travel is native select or pan.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -36,7 +38,7 @@ import {
   type DocFootnoteSubMarkKind,
 } from "../util/docFootnotes";
 import { HoldButton } from "../components/HoldButton";
-import { HOLD_SENSITIVE_MS, LONG_PRESS_MS, SELECT_HOLD_SLOP_PX } from "../util/gesture";
+import { HOLD_SENSITIVE_MS, SELECT_HOLD_ARM_MS, SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import {
   claimSelectionGesture,
   isDocCameraLive,
@@ -335,8 +337,9 @@ export function DocSelectionLayer({
     pointerId: number;
     startX: number;
     startY: number;
-    timer: number | null;
     armTimer: number | null;
+    /** Stillness elapsed — pan must not steal; next move is the marquee. */
+    armed: boolean;
     held: boolean;
     root: HTMLElement | null;
     scope: string | undefined;
@@ -352,10 +355,17 @@ export function DocSelectionLayer({
       edgeFrameRef.current = null;
     }
     const hold = holdRef.current;
-    if (hold?.timer != null) window.clearTimeout(hold.timer);
+    const host = hostRef.current;
     if (hold?.armTimer != null) window.clearTimeout(hold.armTimer);
+    if (hold) {
+      try {
+        host?.releasePointerCapture(hold.pointerId);
+      } catch {
+        /* already released */
+      }
+    }
     holdRef.current = null;
-    hostRef.current?.classList.remove("lc-doc-selecting", "lc-doc-select-mode");
+    host?.classList.remove("lc-doc-selecting", "lc-doc-select-mode");
     releaseSelectionGesture();
   }, []);
 
@@ -674,76 +684,6 @@ export function DocSelectionLayer({
       paintMarquee(rect, hold.root);
     };
 
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      if (isOverlayControl(event.target)) return;
-      // Don't dismiss an open sheet on every down — only start a pending hold.
-      clearGesture();
-      const startX = event.clientX;
-      const startY = event.clientY;
-      holdRef.current = {
-        pointerId: event.pointerId,
-        startX,
-        startY,
-        armTimer: window.setTimeout(() => {
-          const hold = holdRef.current;
-          if (!hold || hold.held) return;
-          try {
-            host.setPointerCapture(hold.pointerId);
-          } catch {
-            /* pointer may already be gone */
-          }
-        }, 140),
-        timer: window.setTimeout(() => {
-          const hold = holdRef.current;
-          const body = bodyRef.current;
-          if (!hold || !body) return;
-          try {
-            window.getSelection()?.removeAllRanges();
-          } catch {
-            /* ignore */
-          }
-          dismiss();
-          const { root, scope } = scopeRootAtPoint(body, startX, startY);
-          hold.held = true;
-          hold.timer = null;
-          if (hold.armTimer != null) {
-            window.clearTimeout(hold.armTimer);
-            hold.armTimer = null;
-          }
-          hold.root = root;
-          hold.scope = scope;
-          hold.startLocal = viewportToLocal(body, startX, startY);
-          hold.sideScroll =
-            horizontalScrollHost(document.elementFromPoint(startX, startY)) ??
-            horizontalScrollHost(root);
-          claimSelectionGesture();
-          try {
-            host.setPointerCapture(hold.pointerId);
-          } catch {
-            /* window listeners still run */
-          }
-          host.classList.add("lc-doc-selecting", "lc-doc-select-mode");
-          paintFromFinger(hold);
-          if (edgeFrameRef.current == null) {
-            edgeFrameRef.current = requestAnimationFrame(autoScroll);
-          }
-          try {
-            navigator.vibrate?.(10);
-          } catch {
-            /* haptics are a nicety */
-          }
-        }, LONG_PRESS_MS),
-        held: false,
-        root: null,
-        scope: undefined,
-        startLocal: null,
-        lastX: startX,
-        lastY: startY,
-        sideScroll: null,
-      };
-    };
-
     const autoScroll = () => {
       const hold = holdRef.current;
       if (!hold?.held) {
@@ -786,13 +726,91 @@ export function DocSelectionLayer({
       edgeFrameRef.current = requestAnimationFrame(autoScroll);
     };
 
+    const beginMarquee = (hold: NonNullable<typeof holdRef.current>) => {
+      const body = bodyRef.current;
+      if (!body || hold.held) return;
+      try {
+        window.getSelection()?.removeAllRanges();
+      } catch {
+        /* ignore */
+      }
+      dismiss();
+      const { root, scope } = scopeRootAtPoint(body, hold.startX, hold.startY);
+      hold.held = true;
+      hold.root = root;
+      hold.scope = scope;
+      hold.startLocal = viewportToLocal(body, hold.startX, hold.startY);
+      hold.sideScroll =
+        horizontalScrollHost(document.elementFromPoint(hold.startX, hold.startY)) ??
+        horizontalScrollHost(root);
+      claimSelectionGesture();
+      try {
+        host.setPointerCapture(hold.pointerId);
+      } catch {
+        /* window listeners still run */
+      }
+      host.classList.add("lc-doc-selecting", "lc-doc-select-mode");
+      paintFromFinger(hold);
+      if (edgeFrameRef.current == null) {
+        edgeFrameRef.current = requestAnimationFrame(autoScroll);
+      }
+      try {
+        navigator.vibrate?.(10);
+      } catch {
+        /* haptics are a nicety */
+      }
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      if (isOverlayControl(event.target)) return;
+      // Don't dismiss an open sheet on every down — only start a pending hold.
+      clearGesture();
+      const startX = event.clientX;
+      const startY = event.clientY;
+      holdRef.current = {
+        pointerId: event.pointerId,
+        startX,
+        startY,
+        armTimer: window.setTimeout(() => {
+          const hold = holdRef.current;
+          if (!hold || hold.held || hold.armed) return;
+          hold.armed = true;
+          hold.armTimer = null;
+          // Claim before Android's ~500ms long-press can pointercancel. The
+          // box itself starts on the first move after this pause.
+          claimSelectionGesture();
+          try {
+            host.setPointerCapture(hold.pointerId);
+          } catch {
+            /* pointer may already be gone */
+          }
+          host.classList.add("lc-doc-selecting", "lc-doc-select-mode");
+        }, SELECT_HOLD_ARM_MS),
+        armed: false,
+        held: false,
+        root: null,
+        scope: undefined,
+        startLocal: null,
+        lastX: startX,
+        lastY: startY,
+        sideScroll: null,
+      };
+    };
+
     const onPointerMove = (event: PointerEvent) => {
       const hold = holdRef.current;
       if (!hold || hold.pointerId !== event.pointerId) return;
       if (!hold.held) {
         const moved = Math.hypot(event.clientX - hold.startX, event.clientY - hold.startY);
-        if (moved > SELECT_HOLD_SLOP_PX) clearGesture();
-        return;
+        if (!hold.armed) {
+          if (moved > SELECT_HOLD_SLOP_PX) clearGesture();
+          return;
+        }
+        if (moved === 0) return;
+        hold.lastX = event.clientX;
+        hold.lastY = event.clientY;
+        beginMarquee(hold);
       }
       event.preventDefault();
       hold.lastX = event.clientX;
@@ -836,17 +854,24 @@ export function DocSelectionLayer({
     const onPointerUp = (event: PointerEvent) => finishHold(event, true);
     const onPointerCancel = (event: PointerEvent) => finishHold(event, false);
     const onSelectStart = (event: Event) => {
-      // Only block native select once the annotate box owns the finger.
-      if (holdRef.current?.held) event.preventDefault();
+      if (holdRef.current?.armed || holdRef.current?.held) event.preventDefault();
+    };
+    const onContextMenu = (event: Event) => {
+      if (holdRef.current?.armed || holdRef.current?.held) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
     };
 
     host.addEventListener("selectstart", onSelectStart);
+    host.addEventListener("contextmenu", onContextMenu);
     host.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
     window.addEventListener("pointerup", onPointerUp, true);
     window.addEventListener("pointercancel", onPointerCancel, true);
     return () => {
       host.removeEventListener("selectstart", onSelectStart);
+      host.removeEventListener("contextmenu", onContextMenu);
       host.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointermove", onPointerMove, true);
       window.removeEventListener("pointerup", onPointerUp, true);

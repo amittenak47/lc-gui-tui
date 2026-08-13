@@ -91,10 +91,10 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
         className="lc-settings-modal lc-attempt-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={isLeave ? "Leave scratchpad?" : "Open scratchpad"}
+        aria-label={isLeave ? "Leave whiteboard?" : "Open whiteboard"}
       >
         <div className="lc-settings-head">
-          <h2>{isLeave ? "Leave scratchpad?" : "Scratchpad"}</h2>
+          <h2>{isLeave ? "Leave whiteboard?" : "Whiteboard"}</h2>
           <p className="lc-muted">
             {pickingLoad
               ? "Hold an entry to open it, or hold its bin to delete it."

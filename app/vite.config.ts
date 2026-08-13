@@ -63,6 +63,15 @@ export default defineConfig({
     watch: {
       ignored: ["**/src-tauri/**"],
     },
+    proxy: {
+      // ColorHunt has no CORS headers; the WebView/browser cannot hit it.
+      // Dev preview goes through Vite. Tauri uses the Rust `colorhunt_random` command.
+      "/colorhunt-feed": {
+        target: "https://colorhunt.co",
+        changeOrigin: true,
+        rewrite: () => "/php/feed.php",
+      },
+    },
   },
   define: {
     // Excalidraw reads process.env.IS_PREACT at module scope.

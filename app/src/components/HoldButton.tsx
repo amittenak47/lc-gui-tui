@@ -10,9 +10,10 @@
  *
  * The mechanics live here rather than in each dialog: a rAF loop drives
  * `--lc-hold` from 0 to 1 over {@link HOLD_MS}, and letting go before the end
- * resets it. Optional {@link HoldButtonProps.onTap} fires on a short release
- * before the fill completes. Keyboard holds (Space / Enter) work the same way,
- * so the gesture is not pointer-only.
+ * resets it. The wash clips in from the bottom (liquid rise). Optional
+ * {@link HoldButtonProps.onTap} fires on a short release before the fill
+ * completes. Keyboard holds (Space / Enter) work the same way, so the gesture
+ * is not pointer-only.
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";

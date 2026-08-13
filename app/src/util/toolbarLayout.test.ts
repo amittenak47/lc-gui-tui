@@ -1,20 +1,29 @@
 /** @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   clampToBox,
   loadToolbarLayout,
   saveToolbarLayout,
   TOOLBAR_DOCK_SNAP_PX,
+  toolbarAxis,
 } from "./toolbarLayout";
 
 const KEY = "lc.toolbar.layout.v1";
 
-describe("toolbarLayout", () => {
-  afterEach(() => {
-    localStorage?.removeItem(KEY);
+beforeEach(() => {
+  const store = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
   });
+});
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("toolbarLayout", () => {
   it("defaults to docked", () => {
     expect(loadToolbarLayout()).toEqual({ mode: "docked" });
   });
@@ -46,5 +55,23 @@ describe("clampToBox", () => {
     const next = clampToBox(1600, 900, 400, 40, hole);
     expect(next.x + 400).toBeLessThanOrEqual(hole.right - 8);
     expect(next.x).toBeGreaterThanOrEqual(hole.left + 8);
+  });
+});
+
+describe("toolbarAxis", () => {
+  it("stays a row when docked or near the dock snap", () => {
+    expect(toolbarAxis("docked", 0, 400, 1280, false)).toBe("row");
+    expect(toolbarAxis("floating", 10, 48, 1280, true)).toBe("row");
+  });
+
+  it("becomes a column in a left or right edge band", () => {
+    expect(toolbarAxis("floating", 8, 48, 1280, false)).toBe("column");
+    expect(toolbarAxis("floating", 1280 - 56, 48, 1280, false)).toBe("column");
+    expect(toolbarAxis("floating", 400, 400, 1280, false)).toBe("row");
+  });
+
+  it("uses hysteresis so the axis does not flicker at the band", () => {
+    expect(toolbarAxis("floating", 100, 48, 1280, false, "column")).toBe("column");
+    expect(toolbarAxis("floating", 200, 48, 1280, false, "column")).toBe("row");
   });
 });

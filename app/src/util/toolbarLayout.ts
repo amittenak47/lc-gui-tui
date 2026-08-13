@@ -36,6 +36,31 @@ export function saveToolbarLayout(layout: ToolbarLayout): void {
 /** How close (px) the toolbar centre must be to the dock slot to snap home. */
 export const TOOLBAR_DOCK_SNAP_PX = 72;
 
+/** Centre within this of a side edge → column. */
+export const TOOLBAR_SIDE_BAND_PX = 96;
+/** Stay in the previous axis until the centre clears the band by this much. */
+export const TOOLBAR_SIDE_HYSTERESIS_PX = 28;
+/** Extra left inset so a vertical island does not cover the annotate toggle. */
+export const TOOLBAR_LEFT_CHROME_INSET_PX = 52;
+
+export function toolbarAxis(
+  mode: "docked" | "floating",
+  x: number,
+  width: number,
+  viewWidth: number,
+  dockNear: boolean,
+  previous: "row" | "column" = "row",
+): "row" | "column" {
+  if (mode === "docked" || dockNear) return "row";
+  const cx = x + width / 2;
+  const enter = TOOLBAR_SIDE_BAND_PX;
+  const leave = TOOLBAR_SIDE_BAND_PX + TOOLBAR_SIDE_HYSTERESIS_PX;
+  const inEnter = cx < enter || cx > viewWidth - enter;
+  const inLeave = cx <= leave || cx >= viewWidth - leave;
+  if (previous === "column") return inLeave ? "column" : "row";
+  return inEnter ? "column" : "row";
+}
+
 export interface ClampBox {
   left: number;
   top: number;

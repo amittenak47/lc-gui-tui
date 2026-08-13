@@ -14,7 +14,7 @@ import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/t
 import { STAGE_LABELS } from "../api/types";
 import { HoldButton } from "../components/HoldButton";
 import { Tip } from "../components/Tip";
-import { LONG_PRESS_MS } from "../util/gesture";
+import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
 import { footnoteChipLabel } from "../util/docFootnotes";
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { useIsMobile } from "../util/mobile";
@@ -1094,7 +1094,7 @@ export function AgentSidePanel({
       } catch {
         /* capture can fail if the pointer already ended */
       }
-    }, 140);
+    }, SELECT_HOLD_ARM_MS);
     state.timer = window.setTimeout(() => {
       if (state.moved || state.messageId !== messageId) return;
       try {

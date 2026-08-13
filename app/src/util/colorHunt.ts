@@ -37,7 +37,7 @@ interface ColorHuntRow {
   code?: string;
 }
 
-function palettesFromFeed(body: unknown): InkPalette[] {
+export function palettesFromFeed(body: unknown): InkPalette[] {
   let rows: ColorHuntRow[] = [];
   if (typeof body === "string") {
     try {
@@ -69,11 +69,16 @@ async function fetchViaTauri(tags: string): Promise<InkPalette[]> {
 }
 
 async function fetchViaBrowser(tags: string): Promise<InkPalette[]> {
+  const url =
+    import.meta.env.DEV && !isTauriRuntime()
+      ? "/colorhunt-feed"
+      : "https://colorhunt.co/php/feed.php";
   try {
-    const response = await fetch("https://colorhunt.co/php/feed.php", {
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        Accept: "application/json, text/plain, */*",
       },
       body: `step=0&sort=random&tags=${encodeURIComponent(tags)}`,
     });

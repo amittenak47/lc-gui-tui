@@ -391,6 +391,7 @@ body {
 
 .lc-brand {
   font-size: 15px;
+  font-weight: 400;
   letter-spacing: -0.01em;
   line-height: 1;
   white-space: nowrap;
@@ -706,6 +707,8 @@ input[type="checkbox"] {
 .lc-board {
   position: relative;
   height: 100%;
+  container-type: size;
+  container-name: lc-board;
 }
 
 /*
@@ -1517,6 +1520,16 @@ input[type="checkbox"] {
   .lc-toolbar {
     transition: none;
   }
+
+  .lc-ink-wheel-hub.is-shake,
+  .lc-toolbar.is-shake {
+    animation: none;
+  }
+
+  .lc-ink-wheel-hub.is-ready::after {
+    animation: none;
+    opacity: 0.4;
+  }
 }
 
 /*
@@ -1722,6 +1735,541 @@ input[type="checkbox"] {
   display: none;
 }
 
+.lc-toolbar.is-column {
+  max-width: 56px;
+  overflow: visible;
+}
+
+.lc-toolbar.is-column .lc-toolbar-row {
+  flex-direction: column;
+  overflow-x: visible;
+  overflow-y: visible;
+  align-items: center;
+}
+
+.lc-toolbar.is-column .lc-tool-sep {
+  width: 28px;
+  height: 1px;
+  margin: 4px 0;
+}
+
+.lc-toolbar.is-column .lc-stroke-controls,
+.lc-toolbar.is-column .lc-color-wrap {
+  flex-direction: column;
+}
+
+.lc-preset-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  max-width: none;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms ease,
+    border-width 180ms ease;
+}
+
+.lc-hold-reveal.lc-preset-chip {
+  min-width: 0;
+  min-height: 32px !important;
+  height: 32px;
+  padding: 0 10px;
+  overflow: hidden;
+  /* Beat `.lc-hold-reveal { border: none }` — lock ring around the name. */
+  border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+}
+
+.lc-hold-reveal.lc-preset-chip.is-locked {
+  border: 3px solid currentColor;
+}
+
+.lc-hold-reveal.lc-preset-chip .lc-hold-reveal-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  min-height: 32px;
+}
+
+.lc-hold-reveal.lc-preset-chip .lc-hold-reveal-fill {
+  background: color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.lc-toolbar.is-column .lc-preset-chip,
+.lc-toolbar.is-column .lc-hold-reveal.lc-preset-chip {
+  max-width: 48px;
+  min-width: 0;
+  height: auto;
+  min-height: 0 !important;
+  padding: 8px 4px;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+.lc-toolbar.is-column .lc-hold-reveal.lc-preset-chip .lc-hold-reveal-label {
+  flex-direction: column;
+  padding: 0;
+}
+
+
+.lc-preset-chip-morph {
+  display: block;
+  overflow: hidden;
+  line-height: 1;
+}
+
+.lc-preset-chip-morph .lc-morph-panel.is-active {
+  display: flex;
+  align-items: center;
+}
+
+.lc-preset-chip-name {
+  letter-spacing: 0.01em;
+  flex-shrink: 0;
+}
+
+.lc-ink-wheel-layer,
+.lc-preset-sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 96;
+}
+
+.lc-ink-wheel {
+  position: fixed;
+  z-index: 97;
+  overflow: visible;
+  transform-origin: 50% 50%;
+  pointer-events: auto;
+}
+
+.lc-ink-wheel.is-open {
+  animation: lc-color-wheel-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-ink-wheel.is-closing {
+  animation: lc-color-wheel-out 220ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  pointer-events: none;
+}
+
+.lc-ink-wheel-tool {
+  fill: color-mix(in srgb, var(--surface) 88%, transparent);
+  stroke: var(--chrome-edge);
+  stroke-width: 1;
+  cursor: pointer;
+}
+
+.lc-ink-wheel-tool.is-active {
+  fill: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
+
+.lc-ink-wheel-wedge {
+  stroke: rgb(0 0 0 / 22%);
+  stroke-width: 1;
+  cursor: pointer;
+}
+
+.lc-ink-wheel-wedge.is-empty {
+  fill: transparent;
+  stroke-dasharray: 3 3;
+}
+
+.lc-ink-wheel-wedge.is-active {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+.lc-ink-wheel-tool-icon {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  font-size: 13px;
+}
+
+.lc-ink-wheel-hub {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--lc-hub-fill, var(--surface));
+  color: transparent;
+  font-size: 0;
+  line-height: 0;
+  cursor: default;
+}
+
+.lc-ink-wheel-hub.is-ready {
+  cursor: pointer;
+}
+
+.lc-ink-wheel-hub.is-ready::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background-image: repeating-conic-gradient(
+    rgb(255 255 255 / 34%) 0 90deg,
+    rgb(0 0 0 / 22%) 0 180deg
+  );
+  background-size: 6px 6px;
+  animation: lc-hub-pixel 420ms steps(4) infinite;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+@keyframes lc-hub-pixel {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 6px 6px;
+  }
+}
+
+.lc-ink-wheel-hub.is-idle {
+  opacity: 1;
+}
+
+.lc-ink-wheel-hub.is-shake,
+.lc-toolbar.is-shake {
+  animation: lc-stuck-shake 460ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes lc-stuck-shake {
+  0%,
+  100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  14% {
+    transform: translateX(-6px) rotate(-2.2deg);
+  }
+  28% {
+    transform: translateX(6px) rotate(2.2deg);
+  }
+  42% {
+    transform: translateX(-4px) rotate(-1.4deg);
+  }
+  56% {
+    transform: translateX(4px) rotate(1.2deg);
+  }
+  70% {
+    transform: translateX(-2px) rotate(-0.6deg);
+  }
+  84% {
+    transform: translateX(1px) rotate(0.3deg);
+  }
+}
+
+.lc-ink-wheel-wedge-hold-fill {
+  fill: color-mix(in srgb, var(--accent) 62%, transparent);
+  pointer-events: none;
+}
+
+.lc-ink-wheel-card {
+  position: absolute;
+  top: 8px;
+  width: 236px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 6px 22px rgb(0 0 0 / 14%);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.lc-ink-wheel-card.is-right {
+  left: calc(100% + 10px);
+}
+
+.lc-ink-wheel-card.is-left {
+  right: calc(100% + 10px);
+}
+
+.lc-ink-wheel-card .lc-morph-panel.is-active {
+  padding: 12px 14px 14px;
+}
+
+.lc-ink-wheel-card.is-idle {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.lc-ink-wheel-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--chrome-edge);
+}
+
+.lc-ink-wheel-card-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 20%);
+  flex-shrink: 0;
+}
+
+.lc-ink-wheel-card-name {
+  font-family: ui-serif, Georgia, "Times New Roman", serif;
+  font-weight: 600;
+  font-size: 17px;
+  color: var(--ink);
+}
+
+.lc-ink-wheel-card-slot {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lc-ink-wheel-card-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 10px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lc-ink-wheel-card-row {
+  display: contents;
+}
+
+.lc-ink-wheel-card-row dt {
+  margin: 0;
+}
+
+.lc-ink-wheel-card-row dd {
+  margin: 0;
+  color: var(--ink);
+  text-align: right;
+}
+
+.lc-ink-wheel-card-hint {
+  margin: 10px 0 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.lc-preset-sheet {
+  position: fixed;
+  left: 50%;
+  top: 8%;
+  z-index: 98;
+  width: min(720px, calc(100vw - 24px));
+  max-height: 84vh;
+  overflow: auto;
+  transform: translateX(-50%);
+  transform-origin: var(--lc-morph-x) var(--lc-morph-y);
+  border: 1px solid var(--chrome-edge);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 16%);
+  color: var(--ink);
+}
+
+.lc-preset-sheet.is-open {
+  animation: lc-color-wheel-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-preset-sheet.is-closing {
+  animation: lc-color-wheel-out 220ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.lc-preset-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--chrome-edge);
+}
+
+.lc-preset-sheet-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 22%);
+}
+
+.lc-preset-sheet-name {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 20px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: inherit;
+  min-width: 8rem;
+}
+
+.lc-preset-sheet-meta {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.lc-preset-sheet-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lc-preset-sheet-head .lc-hold-reveal {
+  min-width: 0;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.lc-preset-sheet-head .lc-hold-reveal-label {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lc-preset-sheet-head .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    var(--lc-hold-wash-top) 0%,
+    var(--lc-hold-wash-bottom) 100%
+  );
+}
+
+.lc-preset-sheet-save {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.lc-preset-sheet-morph {
+  width: 100%;
+}
+
+.lc-preset-sheet-morph .lc-morph-panel.is-active {
+  display: flex;
+  flex-direction: column;
+}
+
+.lc-preset-sheet-strip {
+  padding: 10px 16px 0;
+}
+
+.lc-preset-strip-canvas {
+  width: 100%;
+  height: 88px;
+  border-radius: 8px;
+  background: var(--paper, #fdf6e3);
+}
+
+.lc-preset-sheet-cols {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.9fr) minmax(280px, 1.1fr);
+  align-items: start;
+  gap: 16px 20px;
+  padding: 8px 16px 14px;
+}
+
+.lc-preset-sheet-cols.is-single {
+  grid-template-columns: 1fr;
+}
+
+.lc-preset-sheet-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lc-preset-sheet-draw {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.lc-preset-sheet-color {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 10px 0 4px;
+  min-height: 184px;
+}
+
+.lc-preset-sheet-physics {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.lc-preset-sheet-physics > .lc-preset-sheet-field:first-child .lc-settings-subhead {
+  margin-top: 0;
+}
+
+.lc-preset-sheet-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lc-preset-sheet-cols .lc-settings-slider {
+  margin: 0;
+}
+
+.lc-preset-sheet-cols .lc-settings-choice-compact {
+  margin: 0;
+}
+
+.lc-preset-sheet-toggles {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 4px 0 10px;
+}
+
+@media (max-width: 720px) {
+  .lc-preset-sheet-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Flyouts need to escape the scroller, so anchor them to the island instead. */
 .lc-hand-wrap,
 .lc-shapes-wrap,
@@ -1855,6 +2403,13 @@ input[type="checkbox"] {
   left: 0;
   right: 0;
   top: 0;
+  visibility: hidden;
+}
+
+.lc-morph-bar[data-axis="width"] .lc-morph-panel:not(.is-active) {
+  position: absolute;
+  top: 0;
+  left: 0;
   visibility: hidden;
 }
 
@@ -2068,6 +2623,29 @@ input[type="checkbox"] {
   height: 16px;
 }
 
+.lc-color-radial-embedded {
+  width: 184px;
+  height: 184px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lc-color-wheel-embedded {
+  position: relative;
+  left: auto;
+  top: auto;
+  margin: 0;
+  pointer-events: auto;
+  animation: none;
+}
+
+.lc-color-radial-embedded .lc-color-wheel-hub {
+  width: 64px;
+  height: 64px;
+  margin: -32px 0 0 -32px;
+}
+
 /* Bottom dock — pager stacked above the pen island.
  * Pager stays on the bottom baseline with Theme / Eye when the island is
  * hidden; opening annotate adds the island under the pager (dock grows up).
@@ -2132,13 +2710,10 @@ input[type="checkbox"] {
   color: #fff;
 }
 
-.lc-hold-reveal.lc-tool {
-  min-width: 0;
-  width: var(--touch);
-  min-height: calc(var(--touch) - 10px);
-  height: calc(var(--touch) - 10px);
-  border: 1px solid transparent;
-  border-radius: 8px;
+.lc-hold-reveal.lc-hold-icon.lc-tool-active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }
 
 .lc-tool.is-locked {
@@ -2616,16 +3191,90 @@ input[type="checkbox"] {
   align-items: flex-end;
   justify-content: flex-end;
   gap: 6px;
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
+/*
+ * One card for Recentre / lined / theme / eye — not four floating tiles.
+ *
+ * Column by default so a narrow board keeps the dock's width. A short, wide
+ * hole (resized desktop window) lays the same buttons in a row so the stack
+ * does not climb the page. Wake-dot mode drops the card chrome: that control
+ * is a corner, not a panel.
+ */
 .lc-map-chrome-stack {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: stretch;
   justify-content: flex-end;
-  gap: 4px;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
   opacity: calc(1 - var(--lc-coach-open, 0));
   transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-map-chrome-stack:has(> .lc-chrome-wake) {
+  position: relative;
+  gap: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  /* Same footprint as the 4-icon card. Idle used to shrink to a 56px
+   * wake-dot; a pen tap where Recentre / paper / theme sat inked a
+   * dot instead of bringing the stack back. */
+  min-width: 48px;
+  min-height: 148px;
+}
+
+.lc-map-chrome-stack > .lc-lined-toggle,
+.lc-map-chrome-stack > .lc-chrome-eye {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  border-radius: 7px;
+  min-height: 32px;
+}
+
+.lc-map-chrome-stack > .lc-palette-compact {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  overflow: visible;
+}
+
+.lc-map-chrome-stack > .lc-lined-toggle:hover,
+.lc-map-chrome-stack > .lc-chrome-eye:hover {
+  background: var(--panel);
+}
+
+.lc-map-chrome-stack > .lc-lined-toggle.is-active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+@media (max-height: 520px) and (min-width: 720px) {
+  .lc-map-chrome-stack:not(:has(> .lc-chrome-wake)) {
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
+@container lc-board (max-height: 480px) and (min-width: 720px) {
+  .lc-map-chrome-stack:not(:has(> .lc-chrome-wake)) {
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
+@media (max-width: 700px) {
+  .lc-map-chrome-stack:not(:has(> .lc-chrome-wake)) {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 .lc-map-chrome-row {
@@ -2756,31 +3405,18 @@ input[type="checkbox"] {
 }
 
 /*
- * The corner that brings the controls back.
+ * Idle wake: the whole right stack, not a 56px square on the eye.
  *
- * Invisible and finger-sized. It only exists while there is nothing else in
- * that corner to tap, so it can be this big without ever covering a control —
- * and it has to be, because the thing it is for is finding the controls again
- * without looking for them.
- */
-/*
- * The corner that brings the controls back — and says so.
- *
- * This was `background: transparent` and nothing else: a 56px hole in the
- * screen that had to be found from memory. "You have to tap that invisible spot
- * where the eye would be" is a fair description of a control with no pixels,
- * and it is the reason `hidden` felt like a trap rather than a mode.
- *
- * A dot is enough. Faint enough that it is not chrome — that is the whole point
- * of the mode — but present, so the corner is somewhere you can see rather than
- * somewhere you have to remember.
+ * A faint dot still sits where the eye was. The button fills the card
+ * footprint so a pen looking for the toggle cannot miss and stamp dots.
  */
 .lc-chrome-wake {
-  position: relative;
-  width: 56px;
-  height: 56px;
-  min-width: 56px;
-  min-height: 56px;
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
   padding: 0;
   border: none;
   background: transparent;
@@ -2794,10 +3430,11 @@ input[type="checkbox"] {
   content: "";
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: auto;
+  bottom: 18px;
   width: 7px;
   height: 7px;
-  margin: -3.5px 0 0 -3.5px;
+  margin: 0 0 0 -3.5px;
   border-radius: 50%;
   background: var(--ink);
   opacity: 0.16;
@@ -5531,6 +6168,50 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 18px;
 }
 
+.lc-settings-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lc-settings-head-row h2 {
+  flex: 1;
+  min-width: 0;
+}
+
+.lc-settings-back {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lc-settings-morph {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: calc(min(90vh, 720px) - 4.5rem);
+  width: 100%;
+}
+
+.lc-settings-morph .lc-morph-panel.is-active {
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.lc-settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 20px 20px;
+}
+
 .lc-settings-body {
   padding: 12px 20px 8px;
   overflow: auto;
@@ -5583,11 +6264,6 @@ button.lc-row-selected:hover:not(:disabled) {
   border-right: 1.5px solid var(--muted);
   border-bottom: 1.5px solid var(--muted);
   transform: rotate(-45deg);
-  transition: transform 160ms ease;
-}
-
-.lc-settings-fold.is-open > .lc-settings-fold-summary .lc-settings-fold-chevron {
-  transform: rotate(45deg);
 }
 
 .lc-settings-fold-title {
@@ -6219,7 +6895,10 @@ button.lc-row-selected:hover:not(:disabled) {
     var(--lc-hold-pill-mid) 55%,
     var(--lc-hold-pill-bottom) 100%
   );
-  transform: translateY(calc((1 - var(--lc-hold, 0)) * 100%));
+  /* Liquid rise — clip from the top so the wash grows bottom → top. */
+  transform: none;
+  clip-path: inset(calc((1 - var(--lc-hold, 0)) * 100%) 0 0 0);
+  -webkit-clip-path: inset(calc((1 - var(--lc-hold, 0)) * 100%) 0 0 0);
   transition: none;
   pointer-events: none;
 }
@@ -6239,6 +6918,8 @@ button.lc-row-selected:hover:not(:disabled) {
   inset: 0 auto 0 0;
   width: calc(var(--lc-hold, 0) * 100%);
   transform: none;
+  clip-path: none;
+  -webkit-clip-path: none;
   transition: width 120ms linear;
   background: linear-gradient(
     90deg,
@@ -6991,17 +7672,23 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 4px;
 }
 
-.lc-mobile .lc-map-btn {
-  width: 24px;
-  min-height: 24px;
-  font-size: 12px;
+.lc-mobile .lc-map-chrome-stack:not(:has(> .lc-chrome-wake)) {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.lc-mobile .lc-map-chrome-stack > .lc-lined-toggle,
+.lc-mobile .lc-map-chrome-stack > .lc-chrome-eye,
+.lc-mobile .lc-map-chrome-stack .lc-palette-trigger-map.lc-map-btn {
+  min-height: 36px;
+  width: 36px;
 }
 
 /* Theme map chip matches lined / eye square — don't inherit zoom-btn width. */
 .lc-mobile .lc-palette-trigger-map.lc-map-btn {
   width: 36px;
   min-width: 36px;
-  min-height: 28px;
+  min-height: 36px;
   height: auto;
   padding: 0;
   border-left: none;
@@ -7114,7 +7801,7 @@ button.lc-row-selected:hover:not(:disabled) {
   .lc-mobile .lc-palette-trigger-map.lc-map-btn {
     width: 36px;
     min-width: 36px;
-    min-height: 28px;
+    min-height: 36px;
   }
 }
 
@@ -7880,7 +8567,8 @@ button.lc-row-selected:hover:not(:disabled) {
  * dozen one-word colour families do not, and thirteen full-width rows would be
  * most of the Personalise tab.
  */
-.lc-settings-choice-wrap {
+.lc-settings-choice-wrap,
+.lc-settings-choice-compact {
   flex-direction: row;
   flex-wrap: wrap;
   gap: 6px;
@@ -7889,6 +8577,13 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-settings-choice-wrap .lc-settings-choice-option {
   flex: 0 0 auto;
   padding: 6px 12px;
+}
+
+.lc-settings-choice-compact .lc-settings-choice-option {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 10px;
+  align-items: center;
 }
 
 /* A dial where the choice rows would be a list of arbitrary percentages. Same
@@ -8046,29 +8741,6 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-scratch-load-trash:disabled {
   opacity: 0.4;
   cursor: default;
-}
-
-/* A coach feature flag: checkbox on the left, label and its one-line
-   explanation stacked beside it. */
-.lc-settings-toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 8px 0;
-  cursor: pointer;
-}
-
-.lc-settings-toggle input {
-  margin-top: 3px;
-  flex-shrink: 0;
-  width: auto;
-}
-
-.lc-settings-toggle > span {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
 }
 
 .lc-settings-choice-option {
@@ -8630,6 +9302,8 @@ button.lc-row-selected:hover:not(:disabled) {
 [data-handedness="left"] .lc-map-chrome-right,
 [data-handedness="left"] .lc-map-controls-collapsed .lc-map-chrome-right {
   align-items: flex-start;
+  padding-right: 0;
+  padding-left: env(safe-area-inset-left, 0px);
 }
 
 /*
@@ -8734,6 +9408,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-doc-selecting .lc-doc-selectable-body * {
   user-select: none !important;
   -webkit-user-select: none !important;
+  -webkit-touch-callout: none;
 }
 
 /*
@@ -8940,6 +9615,8 @@ button.lc-row-selected:hover:not(:disabled) {
   width: calc(var(--lc-hold, 0) * 100%);
   height: 100%;
   transform: none;
+  clip-path: none;
+  -webkit-clip-path: none;
   background: var(--lc-fn-edge);
   border-radius: 0;
 }
@@ -9647,6 +10324,8 @@ button.lc-row-selected:hover:not(:disabled) {
   width: calc(var(--lc-hold, 0) * 100%);
   height: 100%;
   transform: none;
+  clip-path: none;
+  -webkit-clip-path: none;
   background: linear-gradient(
     90deg,
     var(--lc-hold-danger-wash-top) 0%,

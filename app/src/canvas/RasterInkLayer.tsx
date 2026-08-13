@@ -66,6 +66,7 @@ import {
   smoothInkPoints,
   type InkSmoothingMode,
 } from "./inkSmoothing";
+import { WHEEL_OPEN_MS } from "../util/gesture";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
 import { INK_SPEED_BLOT_BLEND_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
@@ -158,6 +159,14 @@ export interface RasterInkLayerProps {
    * the stroke is not started.
    */
   onStylusAccessory?: (event: PointerEvent) => boolean;
+  /**
+   * Unlocked ink-tool dwell (pen, highlighter, eraser): pointer down starts
+   * ink immediately. Rest with no pointermove for {@link WHEEL_OPEN_MS} drops
+   * the starter and opens the preset wheel. The first real move cancels the
+   * timer — a drag never waits on the dial.
+   */
+  wheelHoldEnabled?: boolean;
+  onWheelHold?: (clientX: number, clientY: number) => void;
 }
 
 function cloneOps(ops: readonly InkOp[]): InkOp[] {
@@ -201,6 +210,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       getScrollHosts,
       onChange,
       onStylusAccessory,
+      wheelHoldEnabled = false,
+      onWheelHold,
     },
     ref,
   ) {
@@ -357,6 +368,19 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     getScrollHostsRef.current = getScrollHosts;
     const toolRef = useRef(tool);
     toolRef.current = tool;
+    const wheelHoldEnabledRef = useRef(wheelHoldEnabled);
+    wheelHoldEnabledRef.current = wheelHoldEnabled;
+    const onWheelHoldRef = useRef(onWheelHold);
+    onWheelHoldRef.current = onWheelHold;
+    const pendingHoldRef = useRef<{
+      pointerId: number;
+      down: PointerEvent;
+      opened: boolean;
+      decided: boolean;
+      recaptured: boolean;
+    } | null>(null);
+    const holdTimerRef = useRef<number | null>(null);
+    const forceInkRef = useRef(false);
 
     function scrollHostLookup(): ScrollHostLookup {
       const map = new Map<number, { bounds: SceneBounds; scrollLeft: number }>();
@@ -1067,6 +1091,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       if (!enabled) return;
       const onResize = () => {
         if (drawingRef.current) return;
+        // Stale aligned box after a window resize left the overlay at the
+        // original CSS size — scroll still moved the page, writing missed
+        // anything past that first rectangle.
+        alignedBoxRef.current = null;
         // Tiles live in scene space, so a window resize costs a repaint of the
         // overlay and nothing else — the cache survives intact.
         repaint();
@@ -1154,6 +1182,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       let windowFallback = false;
       /** Last move consumed, so the fallback and the canvas cannot double-stamp. */
       let lastHandledMove: PointerEvent | null = null;
+      /** Recapture once per stroke — looping setPointerCapture is the lag spam. */
+      let strokeRecaptured = false;
 
       const clearDwellTimer = () => {
         if (dwellTimerRef.current !== null) {
@@ -1279,6 +1309,72 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         }
         event.preventDefault();
         event.stopPropagation();
+
+        if (pendingHoldRef.current?.opened && pendingHoldRef.current.pointerId === event.pointerId) {
+          return;
+        }
+
+        if (
+          wheelHoldEnabledRef.current &&
+          toolRef.current &&
+          !drawingRef.current &&
+          !forceInkRef.current
+        ) {
+          pendingHoldRef.current = {
+            pointerId: event.pointerId,
+            down: event,
+            opened: false,
+            decided: false,
+            recaptured: false,
+          };
+          holdTimerRef.current = window.setTimeout(() => {
+            holdTimerRef.current = null;
+            const pending = pendingHoldRef.current;
+            if (
+              !pending ||
+              pending.pointerId !== event.pointerId ||
+              pending.opened ||
+              pending.decided
+            ) {
+              return;
+            }
+            pending.decided = true;
+            pending.opened = true;
+            const live = liveRef.current;
+            const painted =
+              (live?.points.length ?? 0) > 1 ||
+              (attackBufferRef.current?.length ?? 0) > 1;
+            if (drawingRef.current && painted) {
+              pendingHoldRef.current = null;
+              return;
+            }
+            // Still-nib: drop the live starter so the dial is not sitting on a
+            // dot. Pen, highlighter, and eraser all share this rest path.
+            drawingRef.current = false;
+            activePointerRef.current = null;
+            liveRef.current = null;
+            liveRawPointsRef.current = null;
+            liveDrawnIndexRef.current = 0;
+            attackBufferRef.current = null;
+            lastPointRef.current = null;
+            rawPointRef.current = null;
+            strokeViewRef.current = null;
+            strokeBoxRef.current = null;
+            strokeRectRef.current = null;
+            detachWindowFallback();
+            try {
+              canvas.releasePointerCapture(event.pointerId);
+            } catch {
+              /* ignore */
+            }
+            repaintRef.current();
+            onWheelHoldRef.current?.(pending.down.clientX, pending.down.clientY);
+          }, WHEEL_OPEN_MS);
+          // Fall through — ink starts now (pen, highlighter, eraser). The first
+          // real move cancels the timer. Returning here delayed every stroke
+          // until 8px, then opened the dial if the drag stayed inside slop.
+        }
+        forceInkRef.current = false;
 
         if (drawingRef.current) {
           /*
@@ -1530,6 +1626,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (!reusable) repaintRef.current();
         drawingRef.current = true;
         activePointerRef.current = event.pointerId;
+        strokeRecaptured = false;
         const liveAfterBegin = liveRef.current;
         if (
           liveAfterBegin &&
@@ -1593,6 +1690,35 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       };
 
       const move = (event: PointerEvent) => {
+        const pending = pendingHoldRef.current;
+        if (pending && event.pointerId === pending.pointerId) {
+          if (pending.opened) {
+            event.preventDefault();
+            return;
+          }
+          if (!pending.decided) {
+            const dx = event.clientX - pending.down.clientX;
+            const dy = event.clientY - pending.down.clientY;
+            // Any real travel is ink — pen, highlighter, and eraser share this
+            // path. Waiting for 8px (or 280ms) was the lag, and a slow start
+            // that never left slop opened the dial on top of the stroke.
+            if (dx !== 0 || dy !== 0 || drawingRef.current) {
+              pending.decided = true;
+              if (holdTimerRef.current != null) {
+                window.clearTimeout(holdTimerRef.current);
+                holdTimerRef.current = null;
+              }
+              pendingHoldRef.current = null;
+              if (!drawingRef.current) {
+                forceInkRef.current = true;
+                begin(pending.down);
+                if (!drawingRef.current) return;
+              }
+            } else if (!drawingRef.current) {
+              return;
+            }
+          }
+        }
         if (!drawingRef.current) return;
         // A palm dragging across the layer is not this stroke.
         if (event.pointerId !== activePointerRef.current) return;
@@ -1800,6 +1926,27 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       };
 
       const end = (event: PointerEvent) => {
+        const pending = pendingHoldRef.current;
+        if (pending && event.pointerId === pending.pointerId) {
+          if (holdTimerRef.current != null) {
+            window.clearTimeout(holdTimerRef.current);
+            holdTimerRef.current = null;
+          }
+          pendingHoldRef.current = null;
+          if (pending.opened) {
+            event.preventDefault();
+            try {
+              canvas.releasePointerCapture(event.pointerId);
+            } catch {
+              /* ignore */
+            }
+            return;
+          }
+          if (!drawingRef.current) {
+            forceInkRef.current = true;
+            begin(pending.down);
+          }
+        }
         if (!drawingRef.current) return;
         // A palm lifting off is not the pen lifting off.
         if (event.pointerId !== activePointerRef.current) return;
@@ -1807,6 +1954,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (attackBufferRef.current) flushAttackBuffer();
         drawingRef.current = false;
         activePointerRef.current = null;
+        strokeRecaptured = false;
         settleLiveTip();
         strokeViewRef.current = null;
         strokeBoxRef.current = null;
@@ -1882,14 +2030,53 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       // this the moves stop arriving and the stroke is stranded, unpainted and
       // uncommitted, until the next pointerdown notices. `end` is a no-op on the
       // release we do ourselves, since it clears `drawingRef` first.
-      canvas.addEventListener("lostpointercapture", end, true);
+      //
+      // Chromium also drops capture when a focused toolbar button blurs on the
+      // first canvas press. Treating that as a lift committed a starter dot,
+      // then Excalidraw ate the rest of the gesture (pen / highlighter / eraser
+      // all lagged). Recapture once; window fallback if that fails. A loop of
+      // setPointerCapture is the spam.
+      const onLostCapture = (event: PointerEvent) => {
+        const pending = pendingHoldRef.current;
+        const keepPending =
+          Boolean(pending) &&
+          event.pointerId === pending!.pointerId &&
+          !pending!.opened &&
+          !pending!.decided;
+        const keepStroke =
+          drawingRef.current && event.pointerId === activePointerRef.current;
+        if (keepPending || keepStroke) {
+          attachWindowFallback();
+          if (keepPending) {
+            if (pending!.recaptured) return;
+            pending!.recaptured = true;
+          } else if (strokeRecaptured) {
+            return;
+          } else {
+            strokeRecaptured = true;
+          }
+          try {
+            canvas.setPointerCapture(event.pointerId);
+          } catch {
+            /* window fallback tracks the rest */
+          }
+          return;
+        }
+        end(event);
+      };
+      canvas.addEventListener("lostpointercapture", onLostCapture, true);
       return () => {
         clearDwellTimer();
+        if (holdTimerRef.current != null) {
+          window.clearTimeout(holdTimerRef.current);
+          holdTimerRef.current = null;
+        }
+        pendingHoldRef.current = null;
         canvas.removeEventListener("pointerdown", begin, true);
         canvas.removeEventListener("pointermove", move, true);
         canvas.removeEventListener("pointerup", end, true);
         canvas.removeEventListener("pointercancel", end, true);
-        canvas.removeEventListener("lostpointercapture", end, true);
+        canvas.removeEventListener("lostpointercapture", onLostCapture, true);
         detachWindowFallback();
         abandonStrokeRef.current = () => {};
       };
