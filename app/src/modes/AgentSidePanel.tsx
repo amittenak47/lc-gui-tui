@@ -12,7 +12,6 @@ import { createPortal } from "react-dom";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
 import { STAGE_LABELS } from "../api/types";
-import { HoldButton } from "../components/HoldButton";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS } from "../util/gesture";
 import { useIsMobile } from "../util/mobile";
@@ -178,9 +177,6 @@ const REVIEW_DROPS_PHOTOS = "Review sends the board, not attachments";
  */
 export type CoachSurface = "problem" | "pad";
 
-/** What Annotate attaches — see {@link CoachSendFlags.annotateScope}. */
-export type AnnotateScope = "board" | "view";
-
 interface MessageMenuState {
   messageId: string;
   top: number;
@@ -216,21 +212,27 @@ export interface CoachSendFlags {
    */
   lazy: boolean;
   /**
-   * Attach board ink / annotated-code thumbnails to this send.
-   * Independent of Review — Ask alone must not sneak annotations in.
+   * Ink and what it was drawn on: every page carrying the writer's marks, the
+   * backdrop composited under them so the strokes mean something.
+   *
+   * Independent of Review — Ask alone must not sneak the board in.
    */
-  annotate: boolean;
+  handwriting: boolean;
   /**
-   * Attach selected document mark panels (selection blocks) as prompt context.
-   * Independent of {@link annotate} (handwriting / board PNG).
+   * The parts that were singled out, rather than everything.
+   *
+   * On a reading surface those are the mark blocks attached to this send; on a
+   * board it is the region in front of the writer. The question "what about
+   * this bit" is a different question from "look at my work", and sending the
+   * whole board for it makes the model rule out forty crops first.
    */
-  annotations?: boolean;
+  annotations: boolean;
   /**
    * Images the writer attached with (+), as base64 PNGs.
    *
-   * Not the same thing as `annotate`: those thumbnails are the board being
-   * described back to the coach, these are evidence from outside it — a photo
-   * of the page, a screenshot of an error, a diagram from somewhere else.
+   * Not the same thing as {@link handwriting}: those thumbnails are the board
+   * being described back to the coach, these are evidence from outside it — a
+   * photo of the page, a screenshot of an error, a diagram from somewhere else.
    * Absent rather than empty when nothing was attached.
    */
   photos?: CoachAttachment[];
@@ -242,16 +244,6 @@ export interface CoachSendFlags {
    * prefixes it onto the prompt, the same way it does a reply's excerpt.
    */
   pageQuote?: string;
-  /**
-   * How much of the board {@link annotate} should attach.
-   *
-   * `board` is every page with the writer's marks on it, which is the right
-   * answer when the question is about the shape of the work. `view` is the one
-   * crop the writer could see when they asked, which is the right answer when
-   * the question is about one figure on page forty — there, every other crop is
-   * context the model has to rule out before it can answer.
-   */
-  annotateScope?: AnnotateScope;
   /** The message this turn is answering, when the writer quoted one. */
   replyTo?: CoachReplyRef;
   /** The thread this send belongs to, or null when it is addressed to the room. */
@@ -373,8 +365,6 @@ export interface AgentSidePanelProps {
   /** Mark panels queued onto this send. */
   attachedMarks?: Array<{ id: string; excerpt: string; number?: number }>;
   onRemoveAttached?: (id: string) => void;
-  onSelectAllAnnotations?: () => void;
-  onClearAnnotations?: () => void;
   onSend: (text: string, flags: CoachSendFlags, mode?: "queue" | "merge") => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
@@ -411,8 +401,6 @@ export function AgentSidePanel({
   onOpenFootnoteThread,
   attachedMarks = [],
   onRemoveAttached,
-  onSelectAllAnnotations,
-  onClearAnnotations,
   onSend,
   onThreadChange,
   forwardFailures = false,
@@ -433,26 +421,24 @@ export function AgentSidePanel({
   );
   const [draft, setDraft] = useState("");
   /**
-   * Pads keep Ask and Annotate; the pipeline flags and the cadence toggles are
-   * gone rather than greyed. See {@link CoachSurface}.
+   * Pads keep Ask, Handwriting and Annotations; the pipeline flags and the
+   * cadence toggles are gone rather than greyed. See {@link CoachSurface}.
    */
   const padSurface = coachSurface === "pad";
-  /** Annotate is greyed only where there is genuinely nothing to attach. */
+  /** Handwriting is greyed only where there is genuinely nothing to attach. */
   const annotateUnavailable = askOnly && !padSurface;
   const flagUnavailable = askOnly ? " lc-flag-unavailable" : "";
   const [draw, setDraw] = useState(false);
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
-  const [annotate, setAnnotate] = useState(false);
+  const [handwriting, setHandwriting] = useState(false);
+  const [annotations, setAnnotations] = useState(false);
+  const attachedCount = attachedMarks?.length ?? 0;
   /**
-   * Annotate's reach, chosen by holding it.
-   *
-   * Sticky across sends: a reader working through one chapter asks about this
-   * figure, then the next one, and re-choosing "this view" every time would be
-   * a tax on the mode they have already told us they are in.
+   * Annotations has something to send when marks are attached, or when there is
+   * a board with a region in front of the writer.
    */
-  const [annotateScope, setAnnotateScope] = useState<AnnotateScope>("board");
-  const [scopeMenuOpen, setScopeMenuOpen] = useState(false);
+  const annotationsUnavailable = attachedCount === 0 && annotateUnavailable;
   /** Photos staged by (+), sent with the next message and cleared after. */
   const [photos, setPhotos] = useState<CoachAttachment[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -687,14 +673,25 @@ export function AgentSidePanel({
   }, [mobile, open]);
 
   // Ask-only workspaces clear the pipeline flags they cannot honour.
-  // Annotate is not one of them on a pad — see `annotateUnavailable`.
+  // Handwriting is not one of them on a pad — see `annotateUnavailable`.
   useEffect(() => {
     if (!askOnly) return;
     setDraw(false);
     setReviewBoard(false);
     setLazy(false);
-    if (!padSurface) setAnnotate(false);
+    if (!padSurface) setHandwriting(false);
   }, [askOnly, padSurface]);
+
+  /*
+   * Attaching a mark arms Annotations.
+   *
+   * Putting a passage on the message and then having to say "yes, send it" is
+   * one decision asked twice — and the chips are already the visible answer.
+   * Dropping the last chip disarms it again.
+   */
+  useEffect(() => {
+    setAnnotations(attachedCount > 0);
+  }, [attachedCount]);
 
   const endSheetDrag = useCallback(
     (event: PointerEvent<HTMLElement>) => {
@@ -1010,8 +1007,8 @@ export function AgentSidePanel({
     draw ||
     reviewBoard ||
     lazy ||
-    annotate ||
-    attachedMarks.length > 0 ||
+    handwriting ||
+    annotations ||
     photos.length > 0 ||
     // A quote on its own is a question: "what is this?".
     pageQuote != null;
@@ -1067,9 +1064,8 @@ export function AgentSidePanel({
         draw,
         reviewBoard,
         lazy,
-        annotate,
-        ...(annotate ? { annotateScope } : {}),
-        ...(attachedMarks.length > 0 ? { annotations: true } : {}),
+        handwriting,
+        annotations,
         ...(photos.length > 0 ? { photos } : {}),
         ...(pageQuote ? { pageQuote: pageQuote.text } : {}),
         threadRootId: openThreadId,
@@ -1083,7 +1079,8 @@ export function AgentSidePanel({
     setDraw(false);
     setReviewBoard(false);
     setLazy(false);
-    setAnnotate(false);
+    setHandwriting(false);
+    setAnnotations(false);
     setPhotos([]);
     setPhotoError(null);
     closeMessageMenu();
@@ -1585,7 +1582,7 @@ export function AgentSidePanel({
                 </Tip>
               )}
               {/*
-                Annotate survives on a pad where the pipeline flags do not: a
+                Handwriting survives on a pad where the pipeline flags do not: a
                 reading pad has exactly the thing this attaches — a board with
                 the writer's marks on the page. It is the natural partner to Ask
                 there, so it stays live rather than inheriting askOnly's grey.
@@ -1594,88 +1591,49 @@ export function AgentSidePanel({
                 tip={
                   annotateUnavailable
                     ? NOT_ON_SCRATCHPAD
-                    : annotateScope === "view"
-                      ? "Attach handwriting in this view — hold to send the whole board instead"
-                      : "Attach handwriting + the page under it — hold to send this view only"
+                    : "Send your ink with the page it was drawn on"
                 }
                 placement="left"
               >
-                <span className="lc-coach-annotate-wrap">
-                  <HoldButton
-                    label={annotateScope === "view" ? "View" : "Handwriting"}
-                    className={`lc-flag lc-coach-annotate${
-                      annotate ? " lc-flag-active" : ""
-                    }${annotateUnavailable ? " lc-flag-unavailable" : ""}`}
-                    pressed={annotate}
-                    disabled={busy || annotateUnavailable}
-                    // Tap is the toggle it always was; the hold is the new
-                    // reach chooser, so neither gesture loses its old meaning.
-                    onTap={() => setAnnotate((current) => !current)}
-                    onConfirm={() => setScopeMenuOpen(true)}
-                    resetKey={scopeMenuOpen}
-                  />
-                  {scopeMenuOpen && (
-                    <>
-                      <button
-                        type="button"
-                        className="lc-doc-sheet-backdrop"
-                        aria-label="Dismiss annotate reach"
-                        onClick={() => setScopeMenuOpen(false)}
-                      />
-                      <div className="lc-coach-scope-menu" role="menu">
-                        {(
-                          [
-                            ["board", "Whole board", "Every page you have marked."],
-                            ["view", "This view", "Just the crop you are looking at."],
-                          ] as const
-                        ).map(([id, title, hint]) => (
-                          <button
-                            key={id}
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={annotateScope === id}
-                            className={
-                              annotateScope === id
-                                ? "lc-coach-scope-option is-active"
-                                : "lc-coach-scope-option"
-                            }
-                            onClick={() => {
-                              setAnnotateScope(id);
-                              // Choosing a reach is choosing to attach: making
-                              // the writer then tap the button they just held
-                              // would be a second confirmation of one decision.
-                              setAnnotate(true);
-                              setScopeMenuOpen(false);
-                            }}
-                          >
-                            <strong>{title}</strong>
-                            <span className="lc-muted">{hint}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </span>
-              </Tip>
-              {onSelectAllAnnotations && (
-                <Tip
-                  tip="Attach selection-block annotations to this send"
-                  placement="left"
+                <button
+                  type="button"
+                  className={`lc-flag lc-coach-annotate${
+                    handwriting ? " lc-flag-active" : ""
+                  }${annotateUnavailable ? " lc-flag-unavailable" : ""}`}
+                  aria-pressed={handwriting}
+                  disabled={busy || annotateUnavailable}
+                  onClick={() => setHandwriting((current) => !current)}
                 >
-                  <button
-                    type="button"
-                    className={`lc-flag${attachedMarks.length > 0 ? " lc-flag-active" : ""}`}
-                    aria-pressed={attachedMarks.length > 0}
-                    disabled={busy}
-                    onClick={() => {
-                      if (attachedMarks.length > 0) onClearAnnotations?.();
-                      else onSelectAllAnnotations();
-                    }}
-                  >
-                    Annotations
-                  </button>
-                </Tip>
-              )}
+                  Handwriting
+                </button>
+              </Tip>
+              {/*
+                Annotations is the narrow one: the marks attached to this
+                message, or the region in front of you. Armed by attaching, so
+                the chips above the composer and this flag say the same thing.
+              */}
+              <Tip
+                tip={
+                  annotationsUnavailable
+                    ? NOT_ON_SCRATCHPAD
+                    : attachedCount > 0
+                      ? `Send ${attachedCount} attached mark${attachedCount === 1 ? "" : "s"}`
+                      : "Send the region you are looking at, not the whole board"
+                }
+                placement="left"
+              >
+                <button
+                  type="button"
+                  className={`lc-flag${annotations ? " lc-flag-active" : ""}${
+                    annotationsUnavailable ? " lc-flag-unavailable" : ""
+                  }`}
+                  aria-pressed={annotations}
+                  disabled={busy || annotationsUnavailable}
+                  onClick={() => setAnnotations((current) => !current)}
+                >
+                  Annotations
+                </button>
+              </Tip>
               {!padSurface && (
                 <>
                   <Tip

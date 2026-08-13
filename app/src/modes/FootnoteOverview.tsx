@@ -32,7 +32,7 @@ import {
 import { loadInkHandedness } from "../util/inkHandedness";
 import { currentInkPalette } from "../util/inkPaletteHistory";
 import { footnoteThemeVars } from "../util/footnoteTheme";
-import { isSafeExternalUrl } from "../util/openExternal";
+import { normalizeExternalUrl } from "../util/openExternal";
 import { HOLD_SENSITIVE_MS } from "../util/gesture";
 export interface FootnoteOverviewProps {
   footnote: DocFootnote;
@@ -51,6 +51,8 @@ export interface FootnoteOverviewProps {
   onSubMarkModeChange: (mode: DocFootnoteSubMarkKind | null) => void;
   /** Open directly into a saved coach thread from the mark hub. */
   openThreadRootId?: string | null;
+  /** Hub-row hover — page paints that sub-mark's span. */
+  onHoverSubMark?: (id: string | null) => void;
 }
 type Task =
   | { kind: "note"; id: string | null }
@@ -131,6 +133,7 @@ export function FootnoteOverview({
   subMarkMode,
   onSubMarkModeChange,
   openThreadRootId = null,
+  onHoverSubMark,
 }: FootnoteOverviewProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
@@ -148,7 +151,6 @@ export function FootnoteOverview({
     footnote.kind === "search" && footnote.url
       ? { title: footnote.query || "Search", url: footnote.url }
       : null;
-  const subMarkArmed = Boolean(subMarkMode) && !task;
   const [copied, setCopied] = useState(false);
   const footnoteRef = useRef(footnote);
   footnoteRef.current = footnote;
@@ -159,6 +161,8 @@ export function FootnoteOverview({
     if (!openThreadRootId) return;
     setTask({ kind: "thread", rootId: openThreadRootId });
   }, [openThreadRootId]);
+
+  useEffect(() => () => onHoverSubMark?.(null), [onHoverSubMark]);
 
   /*
    * Wheel cycle → same slot on the new set becomes mark colour, so the page
@@ -252,9 +256,9 @@ export function FootnoteOverview({
   const place = useCallback(() => {
     const node = panelRef.current;
     if (!node) return;
-    applyViewportSize(node, task, subMarkArmed);
+    applyViewportSize(node, task);
     clampPanel(node, anchorRect);
-  }, [anchorRect, task, subMarkArmed]);
+  }, [anchorRect, task]);
   useLayoutEffect(() => {
     place();
     const view = window.visualViewport;
@@ -266,7 +270,7 @@ export function FootnoteOverview({
       view?.removeEventListener("scroll", place);
       window.removeEventListener("resize", place);
     };
-  }, [place, task, subMarkArmed, notes.length, threads.length, userLinks.length, subMarks.length]);
+  }, [place, task, notes.length, threads.length, userLinks.length, subMarks.length]);
   const openThreadMessages = useMemo(
     () => (task?.kind === "thread" && task.rootId ? threadMessages(task.rootId) : []),
     [task, threadMessages],
@@ -302,8 +306,8 @@ export function FootnoteOverview({
   };
   const saveLink = (url: string, title?: string) => {
     if (task?.kind !== "link") return;
-    const trimmed = url.trim();
-    if (!trimmed || !isSafeExternalUrl(trimmed)) return;
+    const trimmed = normalizeExternalUrl(url);
+    if (!trimmed) return;
     const entry: DocFootnoteUserLink = title?.trim()
       ? { url: trimmed, title: title.trim() }
       : { url: trimmed };
@@ -340,6 +344,7 @@ export function FootnoteOverview({
     setTask(next);
   };
   const removeSubMark = (id: string) => {
+    onHoverSubMark?.(null);
     const next = subMarks.filter((mark) => mark.id !== id);
     onChange({ ...footnote, subMarks: next.length > 0 ? next : undefined });
   };
@@ -372,9 +377,7 @@ export function FootnoteOverview({
       <motion.div
         layout
         layoutId="footnote-sheet"
-        className={`lc-doc-sheet lc-footnote-overview${taskClass}${
-          subMarkArmed ? " is-submark-armed" : ""
-        }`}
+        className={`lc-doc-sheet lc-footnote-overview${taskClass}`}
         ref={panelRef}
         role="dialog"
         aria-label={
@@ -511,7 +514,7 @@ export function FootnoteOverview({
               {...taskMotion}
             >
               <header className="lc-footnote-overview-toolbar" aria-label="Mark style">
-                <div className="lc-footnote-submark-modes" role="group" aria-label="Sub-mark mode">
+                <div className="lc-footnote-submark-modes" role="group" aria-label="Mark actions">
                   <button
                     type="button"
                     className={`lc-footnote-mark-tool${subMarkMode === "underline" ? " is-active" : ""}`}
@@ -535,6 +538,17 @@ export function FootnoteOverview({
                   >
                     <span aria-hidden>{copied ? "✓" : "📋"}</span>
                   </button>
+                  {onAttachCoach && (
+                    <button
+                      type="button"
+                      className="lc-footnote-mark-tool"
+                      aria-label="Attach to chat"
+                      title="Attach to chat"
+                      onClick={() => onAttachCoach(footnote.id)}
+                    >
+                      <span aria-hidden>💬</span>
+                    </button>
+                  )}
                 </div>
                 <div className="lc-footnote-overview-color">
                   <ColorRadial
@@ -560,22 +574,24 @@ export function FootnoteOverview({
                   </button>
                 )}
               </header>
-              {subMarkMode && (
-                <p className="lc-muted lc-footnote-submark-hint">
-                  Drag to select text in the mark. Adjust handles, then tap to confirm.
-                </p>
-              )}
-              {!subMarkArmed && subMarks.length > 0 && (
-                <ul className="lc-footnote-overview-link-list" aria-label="Sub-marks">
+              {subMarks.length > 0 && (
+                <ul
+                  className="lc-footnote-overview-link-list lc-scroll-pane"
+                  aria-label="Sub-marks"
+                >
                   {subMarks.map((mark) => (
-                    <li key={mark.id} className="lc-footnote-overview-link-row">
+                    <li
+                      key={mark.id}
+                      className="lc-footnote-overview-link-row"
+                      onPointerEnter={() => onHoverSubMark?.(mark.id)}
+                      onPointerLeave={() => onHoverSubMark?.(null)}
+                    >
                       <span className="lc-coach-scope-option">
-                        <strong>{mark.kind}</strong>
-                        <span className="lc-muted">{mark.excerpt}</span>
+                        <span className="lc-footnote-overview-entry-text">{mark.excerpt}</span>
                       </span>
                       <button
                         type="button"
-                        className="lc-secondary"
+                        className="lc-footnote-overview-add lc-footnote-overview-row-remove"
                         aria-label={`Remove ${mark.kind}`}
                         onClick={() => removeSubMark(mark.id)}
                       >
@@ -584,17 +600,6 @@ export function FootnoteOverview({
                     </li>
                   ))}
                 </ul>
-              )}
-              {!subMarkArmed && (
-                <>
-              {onAttachCoach && (
-                <button
-                  type="button"
-                  className="lc-footnote-chip is-active"
-                  onClick={() => onAttachCoach(footnote.id)}
-                >
-                  Attach to chat
-                </button>
               )}
               <HubSection
                 title="Links"
@@ -669,8 +674,6 @@ export function FootnoteOverview({
                   </ul>
                 )}
               </HubSection>
-                </>
-              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -723,12 +726,6 @@ function NoteTask({
   }, []);
   return (
     <>
-      <div className="lc-footnote-task-head">
-        <button type="button" className="lc-secondary" onClick={onBack}>
-          Back
-        </button>
-        <span className="lc-footnote-task-title">{initial ? "Edit note" : "New note"}</span>
-      </div>
       <textarea
         ref={ref}
         className="lc-footnote-bubble-note lc-footnote-overview-task-field"
@@ -748,6 +745,9 @@ function NoteTask({
         }}
       />
       <div className="lc-footnote-bubble-actions">
+        <button type="button" className="lc-footnote-task-back" onClick={onBack}>
+          Back
+        </button>
         <button type="button" onClick={() => onSave(text)}>
           Save
         </button>
@@ -777,17 +777,6 @@ function LinkTask({
   const submit = () => onSave(url, title);
   return (
     <>
-      <div className="lc-footnote-task-head">
-        <button type="button" className="lc-secondary" onClick={onBack}>
-          Back
-        </button>
-        <span className="lc-footnote-task-title">{initialUrl ? "Edit link" : "New link"}</span>
-        {onRemove && (
-          <button type="button" className="lc-secondary" aria-label="Remove link" onClick={onRemove}>
-            ✕
-          </button>
-        )}
-      </div>
       <div className="lc-footnote-overview-add-link lc-footnote-overview-task-fields">
         <input
           ref={ref}
@@ -805,7 +794,7 @@ function LinkTask({
         />
         <input
           type="text"
-          placeholder="Title (optional)"
+          placeholder="Title"
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           aria-label="Link title"
@@ -818,7 +807,20 @@ function LinkTask({
         />
       </div>
       <div className="lc-footnote-bubble-actions">
-        <button type="button" onClick={submit}>
+        <button type="button" className="lc-footnote-task-back" onClick={onBack}>
+          Back
+        </button>
+        {onRemove && (
+          <button
+            type="button"
+            className="lc-footnote-overview-add"
+            aria-label="Remove link"
+            onClick={onRemove}
+          >
+            ✕
+          </button>
+        )}
+        <button type="button" onClick={submit} disabled={!url.trim()}>
           Save
         </button>
       </div>

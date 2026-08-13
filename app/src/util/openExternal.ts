@@ -33,6 +33,19 @@ export function isSafeExternalUrl(url: string): boolean {
   }
 }
 
+/**
+ * Trim, add `https://` when the scheme is missing, then require http(s).
+ * Bare hosts (`example.com`) used to fail `new URL` and Save looked dead.
+ */
+export function normalizeExternalUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  return isSafeExternalUrl(withScheme) ? withScheme : null;
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   if (!isSafeExternalUrl(url)) throw new Error(`refusing to open ${url}`);
   const invoke = await loadInvoke();

@@ -1,183 +1,213 @@
 /**
- * Character offset under a pointer for custom Underline (sub-mark) drags.
+ * Pointer → character, for the underline tool inside a mark.
  *
- * Native Selection already maps the pointer to a caret. The armed path must
- * not throw that caret away. Fallback is a line-box binary search — not
- * sampling every length/24 characters (that jumps by whole words on markdown).
+ * Why this is not `window.getSelection()`: while Underline is armed the browser
+ * Selection is killed on every move. On a PDF the text layer is already a glyph
+ * overlay on a bitmap, so a native selection wash paints a second, larger copy
+ * of the words (the "blurry duplicate"), and dragging a grip lets the browser
+ * flood-select past the mark. The custom path therefore has to answer the one
+ * question Selection was answering: which character is under the finger.
+ *
+ * Why the previous answer was wrong: it sampled every `length / 24` characters.
+ * A PDF text span is a dozen characters, so the step was 1 and nobody noticed;
+ * a markdown paragraph is one 400-character text node, so the step was ~17 and
+ * every drag landed most of a word away — then `snapToWords` widened it into a
+ * block. Character position along a line is monotonic, so it is a binary
+ * search, not a scan.
  */
 
-import { anchorFromRange } from "./docAnchors";
+import { textNodesOf } from "./docAnchors";
 import { scaleOf, type LocalRect } from "./docMarquee";
 
-export type CharHit = { start: number; root: HTMLElement; scope?: string };
+/** A caret: the boundary before `offset` in `node`. */
+export interface CaretPoint {
+  node: Text;
+  offset: number;
+}
 
-function caretBoxAt(text: Text, offset: number): DOMRect | null {
+export interface CaretPointOptions {
+  /**
+   * Mark bands in body-local layout coordinates, with the body they were
+   * measured against. Text inside them wins; text outside is the last resort,
+   * so a drag that leaves the mark still tracks instead of freezing.
+   */
+  bands?: readonly LocalRect[] | null;
+  body?: HTMLElement | null;
+  /** Skip the browser's own caret lookup (tests, and jsdom which has none). */
+  skipNative?: boolean;
+}
+
+interface ClientBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/** The browser's caret at a viewport point, across both spellings of the API. */
+export function caretRangeAtPoint(clientX: number, clientY: number): Range | null {
+  if (typeof document === "undefined") return null;
+  if (document.caretRangeFromPoint) return document.caretRangeFromPoint(clientX, clientY);
+  const pos = document.caretPositionFromPoint?.(clientX, clientY);
+  if (!pos) return null;
   const range = document.createRange();
   try {
-    range.setStart(text, Math.max(0, Math.min(offset, text.data.length)));
-    range.collapse(true);
+    range.setStart(pos.offsetNode, pos.offset);
   } catch {
     return null;
   }
-  return range.getBoundingClientRect();
+  range.collapse(true);
+  return range;
 }
 
-function lineRectsOf(text: Text): DOMRect[] {
-  const full = document.createRange();
-  try {
-    full.selectNodeContents(text);
-  } catch {
-    return [];
-  }
-  let rects: DOMRect[] = [];
-  try {
-    rects = Array.from(full.getClientRects()).filter(
-      (rect) => rect.width >= 0.25 || rect.height >= 0.25,
-    );
-  } catch {
-    rects = [];
-  }
-  if (rects.length > 0) return rects;
-  const box = full.getBoundingClientRect();
-  if (box.width < 0.25 && box.height < 0.25) return [];
-  return [box];
-}
-
-/**
- * Character index in a single text node closest to the pointer.
- * Binary search on the line that contains `clientY` (or the nearest line).
- */
-export function charIndexAtPoint(
-  text: Text,
-  clientX: number,
-  clientY: number,
-): number | null {
-  const length = text.data.length;
-  if (length === 0 || !/\S/.test(text.data)) return null;
-
-  const lines = lineRectsOf(text);
-  if (lines.length === 0) return null;
-
-  const yPad = 8;
-  const onLine = lines.filter(
-    (rect) => clientY >= rect.top - yPad && clientY <= rect.bottom + yPad,
-  );
-  const line = (onLine.length > 0 ? onLine : lines).reduce((best, rect) => {
-    const dy =
-      clientY < rect.top ? rect.top - clientY : clientY > rect.bottom ? clientY - rect.bottom : 0;
-    const bestDy =
-      clientY < best.top ? best.top - clientY : clientY > best.bottom ? clientY - best.bottom : 0;
-    return dy < bestDy ? rect : best;
-  });
-
-  let lo = 0;
-  let hi = length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    const box = caretBoxAt(text, mid);
-    if (!box) {
-      hi = mid;
-      continue;
-    }
-    if (box.top >= line.bottom - 0.5) {
-      hi = mid;
-      continue;
-    }
-    if (box.bottom <= line.top + 0.5) {
-      lo = mid + 1;
-      continue;
-    }
-    if (box.left < clientX) lo = mid + 1;
-    else hi = mid;
-  }
-  return Math.max(0, Math.min(length, lo));
-}
-
-function bandsToClient(
+/** Mark bands (body-local) as viewport boxes, so glyph rects can be tested. */
+export function bandClientBoxes(
   body: HTMLElement,
   bands: readonly LocalRect[],
-): Array<{ left: number; top: number; right: number; bottom: number }> {
+): ClientBox[] {
   const scale = scaleOf(body) || 1;
-  const bodyBox = body.getBoundingClientRect();
+  const box = body.getBoundingClientRect();
   return bands.map((band) => ({
-    left: bodyBox.left + band.left * scale,
-    top: bodyBox.top + band.top * scale,
-    right: bodyBox.left + (band.left + band.width) * scale,
-    bottom: bodyBox.top + (band.top + band.height) * scale,
+    left: box.left + band.left * scale,
+    top: box.top + band.top * scale,
+    right: box.left + (band.left + band.width) * scale,
+    bottom: box.top + (band.top + band.height) * scale,
   }));
 }
 
-function hitsClientBands(
-  rect: DOMRect,
-  bands: Array<{ left: number; top: number; right: number; bottom: number }>,
-): boolean {
-  return bands.some(
-    (band) =>
-      rect.left < band.right &&
-      rect.right > band.left &&
-      rect.top < band.bottom &&
-      rect.bottom > band.top,
+function overlaps(rect: ClientBox, box: ClientBox): boolean {
+  return (
+    rect.left < box.right &&
+    rect.right > box.left &&
+    rect.top < box.bottom &&
+    rect.bottom > box.top
   );
 }
 
-export type CharOffsetOpts = {
-  body?: HTMLElement;
-  bands?: readonly LocalRect[];
-  scope?: string;
-};
+function usable(rect: DOMRect): boolean {
+  return rect.width >= 0.25 || rect.height >= 0.25;
+}
 
-/**
- * Walk SHOW_TEXT under `root`. Optional `bands` skip nodes whose boxes miss
- * the mark. Cost is O(nodes_on_line * log(node.length)), not O(length/24).
- */
-export function charOffsetAtPoint(
-  root: HTMLElement,
-  clientX: number,
-  clientY: number,
-  opts?: CharOffsetOpts,
-): CharHit | null {
-  const clientBands =
-    opts?.body && opts.bands && opts.bands.length > 0
-      ? bandsToClient(opts.body, opts.bands)
-      : null;
+/** Squared distance from a point to a box (0 when inside). */
+function distanceTo(rect: ClientBox, x: number, y: number): number {
+  const cx = Math.min(Math.max(x, rect.left), rect.right);
+  const cy = Math.min(Math.max(y, rect.top), rect.bottom);
+  return (cx - x) ** 2 + (cy - y) ** 2;
+}
 
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let best: { dist: number; node: Text; offset: number } | null = null;
-  let node: Node | null;
-  while ((node = walker.nextNode())) {
-    const text = node as Text;
-    if (!text.data || !/\S/.test(text.data)) continue;
-    const lines = lineRectsOf(text);
-    if (lines.length === 0) continue;
-    if (clientBands && !lines.some((rect) => hitsClientBands(rect, clientBands))) continue;
+function rectsOf(node: Text): DOMRect[] {
+  const range = node.ownerDocument.createRange();
+  range.selectNodeContents(node);
+  return Array.from(range.getClientRects()).filter(usable);
+}
 
-    const index = charIndexAtPoint(text, clientX, clientY);
-    if (index == null) continue;
-    const caret = caretBoxAt(text, index);
-    if (!caret) continue;
-    const cx = Math.min(Math.max(clientX, caret.left), caret.right || caret.left);
-    const cy = Math.min(Math.max(clientY, caret.top), caret.bottom);
-    const dist = (cx - clientX) ** 2 + (cy - clientY) ** 2;
-    if (!best || dist < best.dist) best = { dist, node: text, offset: index };
-  }
-  if (!best) return null;
-  const range = document.createRange();
-  const i = Math.min(best.offset, best.node.data.length);
+/** Box of the single character at `index`, or null when it has no geometry. */
+function charRect(node: Text, index: number): DOMRect | null {
+  if (index < 0 || index >= node.data.length) return null;
+  const range = node.ownerDocument.createRange();
   try {
-    if (i < best.node.data.length) {
-      range.setStart(best.node, i);
-      range.setEnd(best.node, i + 1);
-    } else if (i > 0) {
-      range.setStart(best.node, i - 1);
-      range.setEnd(best.node, i);
-    } else {
-      return null;
-    }
+    range.setStart(node, index);
+    range.setEnd(node, index + 1);
   } catch {
     return null;
   }
-  const anchor = anchorFromRange(root, range, opts?.scope);
-  if (anchor?.start == null) return null;
-  const start = i < best.node.data.length ? anchor.start : anchor.end;
-  return { start, root, scope: opts?.scope };
+  const rect = range.getBoundingClientRect();
+  return usable(rect) ? rect : null;
+}
+
+/**
+ * Is the character at `index` before the pointer in reading order?
+ *
+ * Lines first, then x within a line — the ordering a caret follows. Characters
+ * with no box (a collapsed wrap space) answer "before", which keeps the search
+ * moving rather than stalling on a hole.
+ */
+function precedesPointer(node: Text, index: number, x: number, y: number): boolean {
+  const rect = charRect(node, index);
+  if (!rect) return true;
+  if (rect.bottom <= y) return true;
+  if (rect.top >= y) return false;
+  // Same line: past the midpoint counts as the next character's side.
+  return x >= (rect.left + rect.right) / 2;
+}
+
+/**
+ * Character index in `node` nearest a viewport point.
+ *
+ * `O(log length)` reads of a one-character range, so a long markdown paragraph
+ * costs the same as a short PDF span.
+ */
+export function charOffsetInNode(node: Text, clientX: number, clientY: number): number {
+  let lo = 0;
+  let hi = node.data.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (precedesPointer(node, mid, clientX, clientY)) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function nearestNode(
+  root: Node,
+  clientX: number,
+  clientY: number,
+  bands: ClientBox[] | null,
+): Text | null {
+  let best: { node: Text; distance: number } | null = null;
+  for (const node of textNodesOf(root)) {
+    if (!node.data || !/\S/.test(node.data)) continue;
+    const rects = rectsOf(node);
+    if (rects.length === 0) continue;
+    let distance = Infinity;
+    for (const rect of rects) {
+      if (bands && !bands.some((band) => overlaps(rect, band))) continue;
+      distance = Math.min(distance, distanceTo(rect, clientX, clientY));
+    }
+    if (!Number.isFinite(distance)) continue;
+    if (!best || distance < best.distance) best = { node, distance };
+  }
+  return best?.node ?? null;
+}
+
+/**
+ * Caret under a viewport point, inside `root`.
+ *
+ * The browser's own answer is taken whenever it lands in `root` — it is the
+ * same lookup that works when the tool is off, and it already knows about
+ * transforms, wrapping and bidi. It is deliberately *not* filtered by the mark
+ * bands: bands are body-local layout rectangles and the caret is in viewport
+ * pixels, and testing one against the other is what threw away good carets.
+ * Keeping the range inside the mark is the caller's clamp, not this lookup's.
+ */
+export function caretPointIn(
+  root: HTMLElement,
+  clientX: number,
+  clientY: number,
+  options?: CaretPointOptions,
+): CaretPoint | null {
+  if (!options?.skipNative) {
+    const range = caretRangeAtPoint(clientX, clientY);
+    const container = range?.startContainer;
+    if (
+      range &&
+      container &&
+      container.nodeType === Node.TEXT_NODE &&
+      root.contains(container)
+    ) {
+      const node = container as Text;
+      return { node, offset: Math.min(range.startOffset, node.data.length) };
+    }
+  }
+
+  const bands =
+    options?.bands && options.bands.length > 0 && options.body
+      ? bandClientBoxes(options.body, options.bands)
+      : null;
+
+  const node =
+    (bands ? nearestNode(root, clientX, clientY, bands) : null) ??
+    nearestNode(root, clientX, clientY, null);
+  if (!node) return null;
+  return { node, offset: charOffsetInNode(node, clientX, clientY) };
 }
