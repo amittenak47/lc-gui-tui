@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-set-gesture-exclusions"
+description = "Claim Android back-gesture strips while writing"
+commands.allow = ["set_gesture_exclusions"]
+
+[[permission]]
+identifier = "allow-set-drawing-immersive"
+description = "Sticky-immersive nav bar while a drawing tool is up"
+commands.allow = ["set_drawing_immersive"]
