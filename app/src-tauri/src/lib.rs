@@ -21,6 +21,7 @@ pub fn run() {
         capture_save::share_png_bytes,
         ink_available,
         set_gesture_exclusions,
+        set_drawing_immersive,
     ]);
 
     // ML Kit, the MediaStore gallery and the system gesture strips only exist
@@ -63,5 +64,27 @@ fn set_gesture_exclusions(
     #[cfg(not(target_os = "android"))]
     {
         Ok(0)
+    }
+}
+
+/// Sticky-immersive navigation bar while a drawing tool is up.
+///
+/// Home has no exclusion API. Hiding the bar with swipe-to-show is how a
+/// writing surface stops the Home gesture eating the first stroke on the
+/// bottom edge, without trapping the user in the app. A no-op off Android.
+#[tauri::command]
+fn set_drawing_immersive(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    #[allow(unused_variables)] enabled: bool,
+) -> std::result::Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_gestureguard::GestureGuardExt;
+        let guard = app.gesture_guard().ok_or("gesture guard unavailable")?;
+        return guard.set_immersive(enabled).map_err(|e| e.to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(false)
     }
 }

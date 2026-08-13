@@ -6,6 +6,11 @@ import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -19,26 +24,29 @@ import app.tauri.plugin.Plugin
  * On a gesture-navigation device the system claims a strip down each edge: a
  * drag inward from the left or the right is Back, and a drag up from the bottom
  * is Home. That is fine for a page you are reading and wrong for one you are
- * writing on, because the strip is exactly where the margin of a notebook is —
- * a downstroke that starts too near the edge leaves the app instead of leaving
- * ink, and the stroke is lost.
+ * writing on.
  *
- * `setSystemGestureExclusionRects` is the documented way to ask for the
- * gesture back. Android grants it grudgingly and with a budget: 200dp per side,
- * measured over all rects on that edge, and the framework silently keeps only
- * the bottom-most 200dp when more is asked for. Silently is the problem — a
- * caller that asks for the whole height gets an arbitrary slice of it and no
- * error — so the budget is enforced here, where it can be reasoned about,
- * rather than discovered on a device.
+ * Two tools, used together while a drawing tool is up:
  *
- * The bottom edge is deliberately *not* excluded. Home is the gesture people
- * use to leave, there is no API to take it (the exclusion list only governs the
- * back gesture's edges), and an app that made leaving unreliable would be a
- * worse bargain than one that loses the occasional stroke. The app's own bottom
- * chrome is already lifted clear of that band — see `--lc-coach-sheet-lift`.
+ * 1. `setSystemGestureExclusionRects` — documented way to take Back's edge
+ *    strips. Android grants 200dp per side and silently keeps only that much.
+ *    The budget is enforced here. Rects are CSS viewport-relative (the WebView);
+ *    converting them must *add* the WebView's screen origin, not subtract it,
+ *    or the strips land above the view and the framework clips them to nothing.
+ *
+ * 2. Sticky immersive on the navigation bar — there is no exclusion API for
+ *    Home. Hiding the bar with `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` means
+ *    the first swipe reveals chrome instead of leaving the app; a second swipe
+ *    after the bar is showing still goes Home. Back is also consumed while
+ *    immersive so a leaked edge swipe cannot pop the activity mid-stroke.
+ *
+ * Leaving writing mode restores bars, unregisters the back sink, and clears
+ * the exclusion list.
  */
 @TauriPlugin
 class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
+
+    private var backCallback: OnBackInvokedCallback? = null
 
     @InvokeArg
     class ExclusionArgs {
@@ -57,13 +65,16 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
         var height: Double = 0.0
     }
 
+    @InvokeArg
+    class ImmersiveArgs {
+        var enabled: Boolean = false
+    }
+
     @Command
     fun set_exclusions(invoke: Invoke) {
         val args = invoke.parseArgs(ExclusionArgs::class.java)
         val supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
         if (!supported) {
-            // Below API 29 there are no gesture strips to take back, so there is
-            // nothing to do and nothing has gone wrong.
             invoke.resolve(JSObject().apply { put("applied", 0) })
             return
         }
@@ -73,29 +84,93 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.reject("no content view")
             return
         }
-        val target = findWebView(content) ?: content
-
-        val density = if (args.density > 0) args.density else 1.0
-        val loc = IntArray(2)
-        target.getLocationOnScreen(loc)
-        val rects = args.rects
-            .map { cssViewportToViewLocal(it, density, loc) }
-            .filter { it.width() > 0 && it.height() > 0 }
-
-        // Budget is per edge (left / right). `Math.round(Float)` is Int; the
-        // budget walk keeps a Long so a tall strip in device px cannot overflow.
-        val budget =
-            Math.round(MAX_EXCLUSION_DP * activity.resources.displayMetrics.density).toLong()
-        val viewWidth =
-            if (target.width > 0) target.width
-            else activity.window?.decorView?.width ?: rects.maxOfOrNull { it.right } ?: 0
-        val (leftRects, rightRects) = partitionByEdge(rects, viewWidth)
-        val trimmed = withinBudget(leftRects, budget) + withinBudget(rightRects, budget)
 
         activity.runOnUiThread {
-            target.systemGestureExclusionRects = trimmed
+            val webView = findWebView(content)
+            val viewport = webView ?: content
+            val density = if (args.density > 0) args.density else 1.0
+            val viewportLoc = IntArray(2)
+            viewport.getLocationOnScreen(viewportLoc)
+
+            val screenRects = args.rects
+                .map { cssViewportToScreen(it, density, viewportLoc) }
+                .filter { it.width() > 0 && it.height() > 0 }
+
+            val budget =
+                Math.round(MAX_EXCLUSION_DP * activity.resources.displayMetrics.density).toLong()
+
+            // WebView often drops exclusion rects. The content parent and the decor
+            // view are what the window actually consults. Same screen rects on both
+            // union to one region, so the 200dp budget is not spent twice.
+            val targets = LinkedHashSet<View>()
+            targets.add(content)
+            activity.window?.decorView?.let { targets.add(it) }
+
+            var applied = 0
+            for (target in targets) {
+                val targetLoc = IntArray(2)
+                target.getLocationOnScreen(targetLoc)
+                val viewWidth =
+                    if (target.width > 0) target.width
+                    else activity.window?.decorView?.width ?: 0
+                val local = screenRects.map { screenToViewLocal(it, targetLoc) }
+                val (leftRects, rightRects) = partitionByEdge(local, viewWidth)
+                val trimmed = withinBudget(leftRects, budget) + withinBudget(rightRects, budget)
+                target.systemGestureExclusionRects = trimmed
+                applied = maxOf(applied, trimmed.size)
+            }
+            invoke.resolve(JSObject().apply { put("applied", applied) })
         }
-        invoke.resolve(JSObject().apply { put("applied", trimmed.size) })
+    }
+
+    /**
+     * Hide the navigation bar while writing so Home is not a hair-trigger, and
+     * swallow Back so a leaked edge swipe cannot finish the activity.
+     *
+     * First swipe still *shows* the bars (sticky immersive). Second swipe, with
+     * the bar visible, is still Home / Back — writing mode is not a trap.
+     */
+    @Command
+    fun set_immersive(invoke: Invoke) {
+        val args = invoke.parseArgs(ImmersiveArgs::class.java)
+        activity.runOnUiThread {
+            val window = activity.window
+            if (window == null) {
+                invoke.reject("no window")
+                return@runOnUiThread
+            }
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            if (args.enabled) {
+                controller.hide(WindowInsetsCompat.Type.navigationBars())
+                controller.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                registerBackSink()
+            } else {
+                controller.show(WindowInsetsCompat.Type.navigationBars())
+                controller.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+                unregisterBackSink()
+            }
+            invoke.resolve(JSObject().apply { put("ok", true) })
+        }
+    }
+
+    private fun registerBackSink() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (backCallback != null) return
+        val callback = OnBackInvokedCallback { /* stay in the activity while writing */ }
+        activity.onBackInvokedDispatcher.registerOnBackInvokedCallback(
+            OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+            callback,
+        )
+        backCallback = callback
+    }
+
+    private fun unregisterBackSink() {
+        val callback = backCallback ?: return
+        backCallback = null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        activity.onBackInvokedDispatcher.unregisterOnBackInvokedCallback(callback)
     }
 
     /** First WebView under `content`, if any — that is where Tauri renders. */
@@ -110,18 +185,27 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
-     * Viewport CSS px → view-local device px.
+     * Viewport CSS px → screen device px.
      *
-     * `getBoundingClientRect` is in CSS px relative to the viewport;
-     * `getLocationOnScreen` is device px. Scale with the WebView's DPR, then
-     * subtract the view's screen offset.
+     * `getBoundingClientRect` is relative to the WebView viewport, not the
+     * screen. Adding the viewport's screen origin is what puts the strip on
+     * the pixels the hand is actually touching.
      */
-    private fun cssViewportToViewLocal(rect: RectArg, density: Double, viewLoc: IntArray): Rect {
+    private fun cssViewportToScreen(rect: RectArg, density: Double, viewportLoc: IntArray): Rect {
         return Rect(
-            Math.round(rect.x * density).toInt() - viewLoc[0],
-            Math.round(rect.y * density).toInt() - viewLoc[1],
-            Math.round((rect.x + rect.width) * density).toInt() - viewLoc[0],
-            Math.round((rect.y + rect.height) * density).toInt() - viewLoc[1],
+            Math.round(rect.x * density).toInt() + viewportLoc[0],
+            Math.round(rect.y * density).toInt() + viewportLoc[1],
+            Math.round((rect.x + rect.width) * density).toInt() + viewportLoc[0],
+            Math.round((rect.y + rect.height) * density).toInt() + viewportLoc[1],
+        )
+    }
+
+    private fun screenToViewLocal(screen: Rect, targetLoc: IntArray): Rect {
+        return Rect(
+            screen.left - targetLoc[0],
+            screen.top - targetLoc[1],
+            screen.right - targetLoc[0],
+            screen.bottom - targetLoc[1],
         )
     }
 
@@ -145,10 +229,9 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
         /**
          * Keep the rects that fit in the budget, tallest-first.
          *
-         * Android measures the budget per edge and drops what does not fit,
-         * bottom-most first, without saying so. Choosing here means the strip
-         * that survives is the one covering the most writing rather than
-         * whichever one happened to be lowest on screen.
+         * A strip taller than the budget is clipped to a window *centred* in
+         * that strip — writing happens across the page, not only at the top
+         * (where chrome is absent) or the bottom (where the toolbar sits).
          */
         fun withinBudget(rects: List<Rect>, budgetPx: Long): List<Rect> {
             if (budgetPx <= 0) return emptyList()
@@ -161,9 +244,10 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
                     kept.add(rect)
                     left -= height
                 } else {
-                    // Part of a strip is still worth having: the top of it is
-                    // where the writing is, since the app's own chrome sits low.
-                    kept.add(Rect(rect.left, rect.top, rect.right, rect.top + left.toInt()))
+                    val keep = left.toInt()
+                    val extra = rect.height() - keep
+                    val top = rect.top + extra / 2
+                    kept.add(Rect(rect.left, top, rect.right, top + keep))
                     left = 0
                 }
             }

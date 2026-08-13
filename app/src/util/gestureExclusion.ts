@@ -10,12 +10,14 @@
  * `setSystemGestureExclusionRects` hands those strips back. It is granted
  * grudgingly: **200dp per edge**, and asking for more is silently trimmed
  * rather than refused, so what is asked for has to be chosen rather than
- * maximised. See the plugin for how the budget is spent.
+ * maximised. CSS pixels ≈ dp here, so the strip is {@link EXCLUSION_BUDGET_CSS}
+ * tall, centred on the writing hand (or the middle of the board before the
+ * first stroke). See the plugin for how leftover height is spent if a caller
+ * still sends a taller rect.
  *
- * The bottom edge is not asked for. Home is how people leave, there is no API
- * to take it, and an app that made leaving unreliable would be a worse bargain
- * than one that occasionally loses a stroke near the bottom — which the board's
- * own chrome already sits clear of.
+ * Home has no exclusion API. {@link setDrawingImmersive} hides the navigation
+ * bar with swipe-to-show while a drawing tool is up — first swipe reveals
+ * chrome, second swipe (bar visible) still leaves. Reading mode turns it off.
  *
  * This module is deliberately quiet everywhere else. On desktop and in a plain
  * browser build the command resolves to zero and nothing has gone wrong.
@@ -31,11 +33,19 @@ export interface ExclusionRect {
 /**
  * How wide a strip to claim on each side, in CSS pixels.
  *
- * Comfortably wider than the system's own strip (about 20dp on most devices),
- * because what matters is not covering the strip but covering the part of the
- * page a hand writes on near the edge — and a margin is wider than a gesture.
+ * Comfortably wider than the system's own strip (about 20–40dp on most
+ * devices), because what matters is not covering the strip but covering the
+ * part of the page a hand writes on near the edge.
  */
-export const EDGE_STRIP_PX = 32;
+export const EDGE_STRIP_PX = 48;
+
+/**
+ * Android's per-edge exclusion budget, in CSS pixels (≈ dp).
+ *
+ * Asking for the full board height is how the old path spent the budget on
+ * the top of the page — which is not where a stroke on a tall tablet lands.
+ */
+export const EXCLUSION_BUDGET_CSS = 200;
 
 let invokeLoader: Promise<
   ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null
@@ -57,22 +67,36 @@ function loadInvoke() {
  *
  * Pure, so the arithmetic that decides where the writing surface ends can be
  * tested without a device. Returns nothing for a board too narrow to have
- * margins — two 32px strips on a 100px board is not a margin, it is the page.
+ * margins — two 48px strips on a 100px board is not a margin, it is the page.
+ *
+ * `focusY` (viewport CSS px) centres the 200px budget on the writing hand.
+ * Without it the band sits in the middle of the board.
  */
-export function edgeStrips(rect: {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}): ExclusionRect[] {
+export function edgeStrips(
+  rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  },
+  focusY?: number | null,
+): ExclusionRect[] {
   if (rect.width < EDGE_STRIP_PX * 4 || rect.height <= 0) return [];
+  const height = Math.min(rect.height, EXCLUSION_BUDGET_CSS);
+  const minTop = rect.top;
+  const maxTop = rect.top + rect.height - height;
+  let top = rect.top + (rect.height - height) / 2;
+  if (typeof focusY === "number" && Number.isFinite(focusY)) {
+    top = focusY - height / 2;
+  }
+  top = Math.min(maxTop, Math.max(minTop, top));
   return [
-    { x: rect.left, y: rect.top, width: EDGE_STRIP_PX, height: rect.height },
+    { x: rect.left, y: top, width: EDGE_STRIP_PX, height },
     {
       x: rect.left + rect.width - EDGE_STRIP_PX,
-      y: rect.top,
+      y: top,
       width: EDGE_STRIP_PX,
-      height: rect.height,
+      height,
     },
   ];
 }
@@ -98,5 +122,16 @@ export async function applyGestureExclusions(rects: ExclusionRect[]): Promise<vo
     }
   } catch {
     /* not Android, or the window has gone — either way there is nothing to do */
+  }
+}
+
+/** Sticky-immersive nav bar on, or restore the bars for reading. */
+export async function setDrawingImmersive(enabled: boolean): Promise<void> {
+  const invoke = await loadInvoke();
+  if (!invoke) return;
+  try {
+    await invoke("set_drawing_immersive", { enabled });
+  } catch {
+    /* desktop, or the plugin is missing from this APK */
   }
 }

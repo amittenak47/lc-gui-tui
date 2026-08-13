@@ -53,6 +53,16 @@ struct ExclusionResponse {
     applied: u32,
 }
 
+#[derive(Debug, Serialize)]
+struct ImmersiveArgs {
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImmersiveResponse {
+    ok: bool,
+}
+
 pub struct GestureGuard<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> GestureGuard<R> {
@@ -65,6 +75,16 @@ impl<R: Runtime> GestureGuard<R> {
             .0
             .run_mobile_plugin::<ExclusionResponse>("set_exclusions", ExclusionArgs { rects, density })?;
         Ok(response.applied)
+    }
+
+    /// Sticky-immersive nav bar while writing, so Home is not a hair-trigger.
+    ///
+    /// An empty/false call is how reading mode gets the bars back.
+    pub fn set_immersive(&self, enabled: bool) -> Result<bool> {
+        let response = self
+            .0
+            .run_mobile_plugin::<ImmersiveResponse>("set_immersive", ImmersiveArgs { enabled })?;
+        Ok(response.ok)
     }
 }
 

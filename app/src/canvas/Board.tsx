@@ -155,7 +155,11 @@ import {
   slotCssPerScene,
 } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
-import { applyGestureExclusions, edgeStrips } from "../util/gestureExclusion";
+import {
+  applyGestureExclusions,
+  edgeStrips,
+  setDrawingImmersive,
+} from "../util/gestureExclusion";
 import { BoardToolbar } from "./BoardToolbar";
 import { ScrollBackHold } from "./ScrollBackHold";
 import {
@@ -3905,48 +3909,65 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [interactive]);
 
   /*
-   * Take the screen edges back from Android's Back gesture while writing.
+   * Take the screen edges back from Android while writing.
    *
-   * The system owns a strip down each side, and that strip is where the margin
-   * of the page is — a downstroke started too near the edge leaves the app
-   * rather than leaving ink, and the stroke goes with it because no `pointerup`
-   * ever arrives. `setSystemGestureExclusionRects` asks for them back; see
-   * `util/gestureExclusion` for the budget Android imposes and the reason the
-   * bottom edge is left alone.
-   *
-   * Claimed only while a drawing tool is up. In scroll mode a swipe from the
-   * edge *should* be Back, and an app that quietly kept the gesture for a page
-   * being read would be taking something without offering anything for it. The
-   * strips are handed back on unmount for the same reason.
+   * Back's left/right strips are claimed with exclusion rects (200dp budget,
+   * centred on the hand). Home has no exclusion API — sticky immersive hides
+   * the nav bar so the first swipe reveals chrome instead of leaving. Both
+   * are armed only for pen / highlighter / eraser; reading and select keep
+   * the system gestures. Strips and bars are restored on unmount.
    */
   useEffect(() => {
     const node = boardRef.current;
-    const drawing = DRAWING_TOOLS.has(activeTool);
-    if (!interactive || !node || !drawing) {
+    const writing =
+      interactive &&
+      (activeTool === "freedraw" || activeTool === "highlighter" || activeTool === "eraser");
+    if (!writing || !node) {
       void applyGestureExclusions([]);
+      void setDrawingImmersive(false);
       return;
     }
+
+    let focusY: number | null = null;
+    let lastClaimY = Number.NaN;
 
     const claim = () => {
       const box = node.getBoundingClientRect();
       void applyGestureExclusions(
-        edgeStrips({
-          left: box.left,
-          top: box.top,
-          width: box.width,
-          height: box.height,
-        }),
+        edgeStrips(
+          {
+            left: box.left,
+            top: box.top,
+            width: box.width,
+            height: box.height,
+          },
+          focusY,
+        ),
       );
     };
 
+    const onPointer = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") return;
+      focusY = event.clientY;
+      if (!Number.isNaN(lastClaimY) && Math.abs(focusY - lastClaimY) < 40) return;
+      lastClaimY = focusY;
+      claim();
+    };
+
+    void setDrawingImmersive(true);
     claim();
     const observer = new ResizeObserver(claim);
     observer.observe(node);
     window.addEventListener("orientationchange", claim);
+    node.addEventListener("pointerdown", onPointer);
+    node.addEventListener("pointermove", onPointer);
     return () => {
       observer.disconnect();
       window.removeEventListener("orientationchange", claim);
+      node.removeEventListener("pointerdown", onPointer);
+      node.removeEventListener("pointermove", onPointer);
       void applyGestureExclusions([]);
+      void setDrawingImmersive(false);
     };
   }, [interactive, activeTool]);
 

@@ -6,11 +6,15 @@
  * Wedge: tap/drag picks; hold opens the OS colour editor for that slot.
  *
  * Portaled with `position: fixed` so the toolbar scroller cannot clip the ring.
+ * Open/close and palette swaps use the same MorphBar timing as the shape flyout:
+ * the disc scales out of the swatch, and a new palette rotates in rather than
+ * popping.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { MorphBar } from "../components/MorphBar";
 import type { InkHandedness } from "../util/inkHandedness";
 
 const HOLD_MS = 220;
@@ -23,10 +27,12 @@ const HOLD_MS = 220;
  */
 const EDIT_HOLD_MS = 550;
 /** Outer / inner radius of the colour ring (CSS px). */
-const OUTER_R = 78;
+export const OUTER_R = 78;
 const INNER_R = 34;
 /** Hit slop beyond the ring for drag-pick. */
 const HIT_PAD = 10;
+/** Keep the ring this far inside the window when the swatch sits on an edge. */
+const VIEW_PAD = 8;
 
 interface ColorRadialProps {
   colors: readonly string[];
@@ -57,6 +63,8 @@ interface Wedge {
   end: number;
   path: string;
 }
+
+type PaletteFrame = { id: string; wedges: Wedge[] };
 
 function polar(cx: number, cy: number, r: number, angle: number): [number, number] {
   // 0 rad = straight up; positive clockwise (matches prior fan convention).
@@ -128,6 +136,29 @@ function angleInWedge(angle: number, start: number, end: number): boolean {
   return x >= s && x <= e;
 }
 
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || !window.matchMedia) return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
+ * Keep a ring of `radius` inside `view`, so a swatch on the bottom edge does
+ * not park half the wheel under the window.
+ */
+export function clampWheelAnchor(
+  x: number,
+  y: number,
+  radius: number,
+  view: { width: number; height: number },
+  pad = VIEW_PAD,
+): { x: number; y: number } {
+  const min = radius + pad;
+  return {
+    x: Math.min(Math.max(min, view.width - min), Math.max(min, x)),
+    y: Math.min(Math.max(min, view.height - min), Math.max(min, y)),
+  };
+}
+
 export function ColorRadial({
   colors,
   value,
@@ -140,10 +171,12 @@ export function ColorRadial({
   wheelZIndex = 90,
 }: ColorRadialProps) {
   const [open, setOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
   /** Instant fill before parent `value` catches up after onPick. */
   const [pending, setPending] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [cycleDir, setCycleDir] = useState<"next" | "prev">("next");
   const rootRef = useRef<HTMLDivElement | null>(null);
   const holdTimerRef = useRef<number | null>(null);
   const draggingRef = useRef(false);
@@ -195,6 +228,23 @@ export function ColorRadial({
   }, []);
 
   const wedges = useMemo(() => buildWedges(colors, handedness), [colors, handedness]);
+  const paletteId = `${handedness}:${colors.join("|")}`;
+  const currentFrame = useMemo<PaletteFrame>(
+    () => ({ id: paletteId, wedges }),
+    [paletteId, wedges],
+  );
+  const [frames, setFrames] = useState<PaletteFrame[]>([currentFrame]);
+
+  useLayoutEffect(() => {
+    setFrames((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.id === currentFrame.id) {
+        return prev.map((frame) => (frame.id === currentFrame.id ? currentFrame : frame));
+      }
+      return last ? [last, currentFrame] : [currentFrame];
+    });
+  }, [currentFrame]);
+
   const size = OUTER_R * 2;
 
   const clearHold = useCallback(() => {
@@ -209,12 +259,23 @@ export function ColorRadial({
     draggingRef.current = false;
     setHovered(null);
     setOpen(false);
+    if (prefersReducedMotion()) {
+      setClosing(false);
+      return;
+    }
+    setClosing(true);
   }, [clearHold]);
+
+  const finishClose = useCallback(() => {
+    setClosing(false);
+  }, []);
 
   useEffect(() => clearHold, [clearHold]);
 
+  const wheelShown = open || closing;
+
   useLayoutEffect(() => {
-    if (!open) {
+    if (!wheelShown) {
       setAnchor(null);
       return;
     }
@@ -222,10 +283,14 @@ export function ColorRadial({
       const node = rootRef.current;
       if (!node) return;
       const rect = node.getBoundingClientRect();
-      setAnchor({
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
-      });
+      setAnchor(
+        clampWheelAnchor(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+          OUTER_R,
+          { width: window.innerWidth, height: window.innerHeight },
+        ),
+      );
     };
     sync();
     window.addEventListener("resize", sync);
@@ -234,7 +299,7 @@ export function ColorRadial({
       window.removeEventListener("resize", sync);
       window.removeEventListener("scroll", sync, true);
     };
-  }, [open]);
+  }, [wheelShown]);
 
   useEffect(() => {
     if (!open) return;
@@ -298,14 +363,91 @@ export function ColorRadial({
     };
   }, [open, colorAt, pickColor, close]);
 
+  const renderDisc = (frame: PaletteFrame, interactive: boolean) => (
+    <div className="lc-color-wheel-disc" aria-hidden={!interactive}>
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size}>
+        {interactive ? (
+          <defs>
+            <filter id="lc-color-wheel-soft" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="4" stdDeviation="6" floodOpacity="0.28" />
+            </filter>
+          </defs>
+        ) : null}
+        <circle
+          className="lc-color-wheel-well"
+          cx={OUTER_R}
+          cy={OUTER_R}
+          r={OUTER_R - 0.5}
+          filter={interactive ? "url(#lc-color-wheel-soft)" : undefined}
+        />
+        {frame.wedges.map((wedge, wedgeIndex) => {
+          const state =
+            interactive && wedge.color === hovered
+              ? " is-hovered"
+              : wedge.color.toLowerCase() === shown.toLowerCase()
+                ? " is-current"
+                : "";
+          return (
+            <path
+              key={`${wedge.color}-${wedgeIndex}`}
+              className={`lc-color-wedge${state}`}
+              d={wedge.path}
+              fill={wedge.color}
+              role={interactive ? "menuitem" : undefined}
+              tabIndex={-1}
+              aria-label={interactive ? `Ink ${wedge.color}` : undefined}
+              onPointerDown={
+                interactive
+                  ? (event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      draggingRef.current = true;
+                      setHovered(wedge.color);
+                      if (!onEditColor) return;
+                      cancelEditHold();
+                      const slot = wedgeIndex;
+                      editTimerRef.current = window.setTimeout(() => {
+                        editTimerRef.current = 0;
+                        draggingRef.current = false;
+                        openSlotEditor(slot, wedge.color);
+                      }, EDIT_HOLD_MS);
+                    }
+                  : undefined
+              }
+              onPointerUp={interactive ? cancelEditHold : undefined}
+              onPointerLeave={interactive ? cancelEditHold : undefined}
+              onPointerCancel={interactive ? cancelEditHold : undefined}
+              onClick={
+                interactive
+                  ? (event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (editingSlotRef.current !== null) return;
+                      cancelEditHold();
+                      pickColor(wedge.color);
+                      close();
+                    }
+                  : undefined
+              }
+            />
+          );
+        })}
+        <circle className="lc-color-wheel-hub-ring" cx={OUTER_R} cy={OUTER_R} r={INNER_R} />
+      </svg>
+    </div>
+  );
+
   const wheel =
-    open &&
+    wheelShown &&
     anchor &&
     createPortal(
       <div
-        className="lc-color-wheel"
+        className={
+          closing ? "lc-color-wheel is-closing" : "lc-color-wheel is-open"
+        }
         role="menu"
         aria-label="Ink colour"
+        data-cycle={cycleDir}
         style={{
           left: anchor.x,
           top: anchor.y,
@@ -315,113 +457,67 @@ export function ColorRadial({
           marginTop: -OUTER_R,
           zIndex: wheelZIndex,
         }}
+        onAnimationEnd={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (closing) finishClose();
+        }}
       >
-        <div className="lc-color-wheel-disc" aria-hidden>
-          <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size}>
-            <defs>
-              <filter id="lc-color-wheel-soft" x="-20%" y="-20%" width="140%" height="140%">
-                <feDropShadow dx="0" dy="4" stdDeviation="6" floodOpacity="0.28" />
-              </filter>
-            </defs>
-            <circle
-              className="lc-color-wheel-well"
-              cx={OUTER_R}
-              cy={OUTER_R}
-              r={OUTER_R - 0.5}
-              filter="url(#lc-color-wheel-soft)"
-            />
-            {wedges.map((wedge, wedgeIndex) => {
-              const state =
-                wedge.color === hovered
-                  ? " is-hovered"
-                  : wedge.color.toLowerCase() === shown.toLowerCase()
-                    ? " is-current"
-                    : "";
-              return (
-                <path
-                  key={`${wedge.color}-${wedgeIndex}`}
-                  className={`lc-color-wedge${state}`}
-                  d={wedge.path}
-                  fill={wedge.color}
-                  role="menuitem"
-                  tabIndex={-1}
-                  aria-label={`Ink ${wedge.color}`}
-                  onPointerDown={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    draggingRef.current = true;
-                    setHovered(wedge.color);
-                    if (!onEditColor) return;
-                    cancelEditHold();
-                    const slot = wedgeIndex;
-                    editTimerRef.current = window.setTimeout(() => {
-                      editTimerRef.current = 0;
-                      // The hold has won: this is no longer a pick.
-                      draggingRef.current = false;
-                      openSlotEditor(slot, wedge.color);
-                    }, EDIT_HOLD_MS);
-                  }}
-                  onPointerUp={cancelEditHold}
-                  onPointerLeave={cancelEditHold}
-                  onPointerCancel={cancelEditHold}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    // A completed hold already opened the editor; the release
-                    // that follows it must not also pick the old colour.
-                    if (editingSlotRef.current !== null) return;
-                    cancelEditHold();
-                    pickColor(wedge.color);
-                    close();
-                  }}
-                />
-              );
-            })}
-            <circle className="lc-color-wheel-hub-ring" cx={OUTER_R} cy={OUTER_R} r={INNER_R} />
-          </svg>
-          <input
-            ref={colorInputRef}
-            type="color"
-            className="lc-color-slot-input"
-            aria-hidden
-            tabIndex={-1}
-            onChange={(event) => {
-              const slot = editingSlotRef.current;
-              editingSlotRef.current = null;
-              if (slot === null) return;
-              onEditColor?.(slot, event.target.value);
-            }}
-            onBlur={() => {
-              editingSlotRef.current = null;
-            }}
-          />
-          <button
-            type="button"
-            className="lc-color-wheel-hub"
-            style={{ background: shown }}
-            aria-label={
-              onCyclePrev || onCycleNext
-                ? "Current ink colour — tap to cycle palettes"
-                : "Current ink colour"
+        <MorphBar
+          active={paletteId}
+          axis="height"
+          className="lc-color-wheel-morph"
+          data-cycle={cycleDir}
+        >
+          {frames.map((frame) => (
+            <div key={frame.id} data-morph-id={frame.id}>
+              {renderDisc(frame, frame.id === paletteId)}
+            </div>
+          ))}
+        </MorphBar>
+        <input
+          ref={colorInputRef}
+          type="color"
+          className="lc-color-slot-input"
+          aria-hidden
+          tabIndex={-1}
+          onChange={(event) => {
+            const slot = editingSlotRef.current;
+            editingSlotRef.current = null;
+            if (slot === null) return;
+            onEditColor?.(slot, event.target.value);
+          }}
+          onBlur={() => {
+            editingSlotRef.current = null;
+          }}
+        />
+        <button
+          type="button"
+          className="lc-color-wheel-hub"
+          style={{ background: shown }}
+          aria-label={
+            onCyclePrev || onCycleNext
+              ? "Current ink colour — tap to cycle palettes"
+              : "Current ink colour"
+          }
+          title={
+            onCyclePrev || onCycleNext ? "Tap to cycle palettes" : undefined
+          }
+          onClick={() => {
+            if (editingSlotRef.current !== null) return;
+            cancelEditHold();
+            if (onCyclePrev) {
+              setCycleDir("prev");
+              onCyclePrev();
+              return;
             }
-            title={
-              onCyclePrev || onCycleNext ? "Tap to cycle palettes" : undefined
+            if (onCycleNext) {
+              setCycleDir("next");
+              onCycleNext();
+              return;
             }
-            onClick={() => {
-              if (editingSlotRef.current !== null) return;
-              cancelEditHold();
-              if (onCyclePrev) {
-                onCyclePrev();
-                return;
-              }
-              if (onCycleNext) {
-                onCycleNext();
-                return;
-              }
-              close();
-            }}
-          />
-        </div>
+            close();
+          }}
+        />
       </div>,
       document.body,
     );
@@ -447,6 +543,7 @@ export function ColorRadial({
           clearHold();
           holdTimerRef.current = window.setTimeout(() => {
             holdTimerRef.current = null;
+            setClosing(false);
             setOpen(true);
           }, HOLD_MS);
         }}
@@ -455,10 +552,16 @@ export function ColorRadial({
             clearHold();
             draggingRef.current = false;
             if (onCycleNext) {
+              setCycleDir("next");
               onCycleNext();
               return;
             }
-            setOpen((current) => !current);
+            if (open) {
+              close();
+              return;
+            }
+            setClosing(false);
+            setOpen(true);
           }
         }}
         onPointerCancel={() => {
