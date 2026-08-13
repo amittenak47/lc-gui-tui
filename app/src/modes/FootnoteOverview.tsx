@@ -5,7 +5,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -23,14 +22,13 @@ import { HoldButton } from "../components/HoldButton";
 import { UnderlineIcon } from "../components/MarkToolIcons";
 import { pointerInSubMark } from "../canvas/docSelectionGesture";
 import { copyTextToClipboard } from "../util/clipboard";
-import {
-  advanceInkPalette,
-  inkPaletteNow,
-  onInkPaletteChange,
-  retreatInkPalette,
-} from "../canvas/inkPaletteBridge";
 import { loadInkHandedness } from "../util/inkHandedness";
-import { currentInkPalette } from "../util/inkPaletteHistory";
+import {
+  normalizePalette,
+  paletteForMarkIndex,
+  remapColorToPalette,
+  stepFallbackPalette,
+} from "../util/inkPaletteHistory";
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { normalizeExternalUrl } from "../util/openExternal";
 import { HOLD_SENSITIVE_MS } from "../util/gesture";
@@ -139,8 +137,8 @@ export function FootnoteOverview({
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [task, setTask] = useState<Task | null>(null);
   const [draft, setDraft] = useState("");
-  const history = useSyncExternalStore(onInkPaletteChange, inkPaletteNow, inkPaletteNow);
-  const palette = currentInkPalette(history);
+  const palette =
+    normalizePalette(footnote.palette) ?? paletteForMarkIndex((number ?? 1) - 1);
   const handedness = loadInkHandedness();
   const markColor = footnote.color ?? palette[0] ?? "#0d9488";
   const userLinks = footnote.userLinks ?? [];
@@ -154,8 +152,15 @@ export function FootnoteOverview({
   const [copied, setCopied] = useState(false);
   const footnoteRef = useRef(footnote);
   footnoteRef.current = footnote;
-  const paletteRef = useRef(palette);
-  const paletteKey = palette.join("|").toLowerCase();
+
+  const persistMarkPalette = (nextPalette: string[], nextColor: string) => {
+    const current = footnoteRef.current;
+    onChange({ ...current, palette: nextPalette, color: nextColor });
+  };
+  const cycleMarkPalette = (delta: 1 | -1) => {
+    const next = stepFallbackPalette(palette, delta);
+    persistMarkPalette(next, remapColorToPalette(markColor, palette, next));
+  };
 
   useEffect(() => {
     if (!openThreadRootId) return;
@@ -163,31 +168,6 @@ export function FootnoteOverview({
   }, [openThreadRootId]);
 
   useEffect(() => () => onHoverSubMark?.(null), [onHoverSubMark]);
-
-  /*
-   * Wheel cycle → same slot on the new set becomes mark colour, so the page
-   * box wash + hub chrome rotate with the palette (not only the hub swatch).
-   */
-  useEffect(() => {
-    const prev = paletteRef.current;
-    paletteRef.current = palette;
-    if (prev.join("|").toLowerCase() === paletteKey) return;
-    const current = footnoteRef.current;
-    const slot = current.color
-      ? prev.findIndex(
-          (swatch) => swatch.trim().toLowerCase() === current.color!.trim().toLowerCase(),
-        )
-      : 0;
-    const next = palette[slot >= 0 ? slot : 0] ?? palette[0];
-    if (!next) return;
-    if (
-      current.color &&
-      current.color.trim().toLowerCase() === next.trim().toLowerCase()
-    ) {
-      return;
-    }
-    onChange({ ...current, color: next });
-  }, [paletteKey, palette, onChange]);
 
   const hasPanelContent =
     userLinks.length > 0 ||
@@ -554,9 +534,17 @@ export function FootnoteOverview({
                   <ColorRadial
                     colors={palette}
                     value={markColor}
-                    onPick={(color) => onChange({ ...footnote, color })}
-                    onCycleNext={advanceInkPalette}
-                    onCyclePrev={retreatInkPalette}
+                    onPick={(color) =>
+                      onChange({ ...footnote, color, palette: footnote.palette ?? palette })
+                    }
+                    onCycleNext={() => cycleMarkPalette(1)}
+                    onCyclePrev={() => cycleMarkPalette(-1)}
+                    onEditColor={(index, color) => {
+                      const next = palette.map((swatch, i) => (i === index ? color : swatch));
+                      const selected =
+                        palette[index]?.trim().toLowerCase() === markColor.trim().toLowerCase();
+                      persistMarkPalette(next, selected ? color : markColor);
+                    }}
                     handedness={handedness}
                     compact
                     wheelZIndex={240}
@@ -574,6 +562,27 @@ export function FootnoteOverview({
                   </button>
                 )}
               </header>
+              <label className="lc-footnote-overview-title-row">
+                {number != null && (
+                  <span className="lc-footnote-overview-title-num" aria-hidden>
+                    {number}.
+                  </span>
+                )}
+                <input
+                  className="lc-footnote-overview-title"
+                  value={footnote.title ?? ""}
+                  placeholder="Title"
+                  aria-label="Mark title"
+                  maxLength={80}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    onChange({
+                      ...footnote,
+                      title: next.length > 0 ? next : undefined,
+                    });
+                  }}
+                />
+              </label>
               {subMarks.length > 0 && (
                 <ul
                   className="lc-footnote-overview-link-list lc-scroll-pane"

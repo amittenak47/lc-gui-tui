@@ -9051,6 +9051,34 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 4px;
 }
 
+.lc-footnote-overview-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 2px;
+  min-width: 0;
+}
+
+.lc-footnote-overview-title-num {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--lc-fn-color, var(--muted));
+}
+
+.lc-footnote-overview-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border, var(--line)) 80%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel, #fff) 92%, transparent);
+  color: var(--ink, inherit);
+  font-size: 12px;
+  line-height: 1;
+}
+
 .lc-footnote-overview-toolbar .lc-footnote-submark-modes {
   margin: 0;
   gap: 2px;
@@ -9126,6 +9154,20 @@ button.lc-row-selected:hover:not(:disabled) {
   align-items: center;
   gap: 4px;
   max-width: 100%;
+}
+
+.lc-footnote-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 14em;
+  font-variant-numeric: tabular-nums;
+}
+
+.lc-footnote-chip.is-tinted {
+  border-color: color-mix(in srgb, var(--lc-fn-color) 70%, transparent);
+  background: color-mix(in srgb, var(--lc-fn-color) 16%, transparent);
+  color: var(--lc-fn-color);
 }
 
 .lc-footnote-chip {
@@ -10165,6 +10207,20 @@ button.lc-row-selected:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent, #6366f1) 12%, transparent);
 }
 
+.lc-coach-mark-menu {
+  max-height: min(40vh, 280px);
+  overflow-y: auto;
+  min-width: 7rem;
+}
+
+.lc-coach-mark-menu .lc-coach-scope-option {
+  font-variant-numeric: tabular-nums;
+}
+
+.lc-coach-mark-menu .lc-coach-scope-option[style*="--lc-fn-color"] {
+  color: var(--lc-fn-color);
+}
+
 
 /*
  * The marker layer: the page's transform, the chrome's z-index.
@@ -10219,7 +10275,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-board-highlighting .lc-page-content-slot {
-  cursor: crosshair;
+  cursor: auto;
 }
 
 /* Footnote panel open uses text-mark PE flip without Sweep — keep text cursor. */

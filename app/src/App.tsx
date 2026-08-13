@@ -131,6 +131,7 @@ import {
   type DocFootnoteSubMark,
   type DocFootnoteSubMarkKind,
 } from "./util/docFootnotes";
+import { footnoteThemeSeed } from "./util/inkPaletteHistory";
 import { getDocBytes, hashBytes, putDocBytes } from "./util/docBytes";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { openExternalUrl } from "./util/openExternal";
@@ -3296,6 +3297,7 @@ export function App() {
             createdAt: now,
             threadRootId: rootId,
             threads: [thread],
+            ...footnoteThemeSeed(current.length),
             ...(quoted.hitRects.length > 0 ? { bands: quoted.hitRects } : {}),
             ...(quoted.text.trim() ? { blockText: quoted.text } : {}),
           }),
@@ -4195,6 +4197,7 @@ export function App() {
           anchor: selection.anchor,
           excerpt: selection.excerpt,
           createdAt: Date.now(),
+          ...footnoteThemeSeed(current.length),
           ...(selection.hitRects.length > 0 ? { bands: selection.hitRects } : {}),
           ...(selection.text.trim() ? { blockText: selection.text } : {}),
         }),
@@ -4232,6 +4235,7 @@ export function App() {
           createdAt: Date.now(),
           query,
           url,
+          ...footnoteThemeSeed(current.length),
           ...(selection.hitRects.length > 0 ? { bands: selection.hitRects } : {}),
           ...(selection.text.trim() ? { blockText: selection.text } : {}),
         }),
@@ -4277,6 +4281,7 @@ export function App() {
         anchor: selection.anchor,
         excerpt: selection.excerpt,
         createdAt: Date.now(),
+        ...footnoteThemeSeed(current.length),
         ...(selection.hitRects.length > 0 ? { bands: selection.hitRects } : {}),
         ...(selection.text.trim() ? { blockText: selection.text } : {}),
       }),
@@ -5204,13 +5209,27 @@ export function App() {
               return [
                 {
                   id: mark.id,
-                  excerpt: mark.excerpt,
                   number: footnoteNumbers.get(mark.id),
+                  title: mark.title,
+                  color: mark.color,
                 },
               ];
             })}
+            annotationChoices={mdInkFootnotes.map((mark) => ({
+              id: mark.id,
+              number: footnoteNumbers.get(mark.id),
+              title: mark.title,
+              color: mark.color,
+            }))}
             onRemoveAttached={(id) =>
               setAttachedFootnoteIds((current) => current.filter((entry) => entry !== id))
+            }
+            onToggleAttached={(id) =>
+              setAttachedFootnoteIds((current) =>
+                current.includes(id)
+                  ? current.filter((entry) => entry !== id)
+                  : [...current, id],
+              )
             }
             footnoteThreadRoots={footnoteThreadRoots}
             onOpenFootnoteThread={openCoachFootnoteThread}

@@ -7,6 +7,7 @@ import {
   freshFootnoteId,
   freshNoteId,
   footnoteRevision,
+  footnoteChipLabel,
   threadTitleFrom,
   googleSearchUrl,
   removeFootnote,
@@ -469,7 +470,48 @@ describe("footnoteRevision", () => {
     expect(footnoteRevision([withThread])).not.toBe(footnoteRevision([base]));
   });
 
-  it("is stable when nothing the reader edits has changed", () => {
-    expect(footnoteRevision([{ ...base }])).toBe(footnoteRevision([base]));
+  it("changes when a title or palette is edited", () => {
+    const titled = { ...base, title: "Waveform" };
+    const recoloured = {
+      ...base,
+      palette: ["#111111", "#222222", "#333333", "#444444"],
+    };
+    expect(footnoteRevision([titled])).not.toBe(footnoteRevision([base]));
+    expect(footnoteRevision([recoloured])).not.toBe(footnoteRevision([base]));
+  });
+});
+
+describe("footnoteChipLabel", () => {
+  it("shows the number alone when there is no title", () => {
+    expect(footnoteChipLabel(2)).toBe("2.");
+    expect(footnoteChipLabel(2, "  ")).toBe("2.");
+  });
+
+  it("shows number and title together", () => {
+    expect(footnoteChipLabel(2, "MyTitle")).toBe("2. MyTitle");
+    expect(footnoteChipLabel(2, "  My  Title  ")).toBe("2. My Title");
+  });
+});
+
+describe("sanitizeFootnotes title and palette", () => {
+  it("keeps a title and a valid palette", () => {
+    const [kept] = sanitizeFootnotes([
+      footnote({
+        title: "  Waveform  ",
+        color: "#83e4b5",
+        palette: ["#83e4b5", "#3ec8ac", "#4e90a4", "#6e60a0"],
+      }),
+    ]);
+    expect(kept.title).toBe("Waveform");
+    expect(kept.color).toBe("#83e4b5");
+    expect(kept.palette).toEqual(["#83e4b5", "#3ec8ac", "#4e90a4", "#6e60a0"]);
+  });
+
+  it("drops a blank title and a short palette", () => {
+    const [kept] = sanitizeFootnotes([
+      footnote({ title: "   ", palette: ["#fff"] }),
+    ]);
+    expect(kept.title).toBeUndefined();
+    expect(kept.palette).toBeUndefined();
   });
 });
