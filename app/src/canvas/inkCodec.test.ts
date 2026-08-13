@@ -9,10 +9,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DENSE_PAGE_POINTS,
+  concatEncodedInk,
   decodeInkOps,
   encodeInkOps,
   inkOpsFrom,
+  inkStorageStats,
+  packEncodedInk,
   reviveEncodedInk,
+  scaleInkStorage,
+  unpackEncodedInk,
 } from "./inkCodec";
 import { NO_PRESSURE, type InkDrawOp, type InkEraseOp, type InkOp } from "./rasterInk";
 
@@ -371,5 +377,70 @@ describe("reviveEncodedInk", () => {
     expect(reviveEncodedInk(null)).toBeNull();
     expect(reviveEncodedInk({ v: 1, ops: [] })).toBeNull();
     expect(reviveEncodedInk({ v: 2 })).toBeNull();
+  });
+});
+
+describe("inkStorageStats (Phase 0)", () => {
+  it("measures one dense page and scales to a 1500-page textbook", () => {
+    const page = stampChain(DENSE_PAGE_POINTS);
+    const encoded = encodeInkOps([page]);
+    const one = inkStorageStats(encoded, [page]);
+    expect(one.points).toBe(DENSE_PAGE_POINTS);
+    expect(one.encodedPayloadBytes / one.points).toBeLessThan(7);
+    expect(one.encodedPayloadBytes).toBeLessThan(one.rawJsonBytes * 0.35);
+    const book = scaleInkStorage(one, 1500, 4);
+    expect(book.encodedPayloadBytes).toBe(one.encodedPayloadBytes * 1500);
+    expect(book.encodedWithSnapshotsBytes).toBe(one.encodedPayloadBytes * 1500 * 4);
+    // Visible in the vitest log so Phase 0 has numbers without a real PDF.
+    console.info("phase0-dense-page", {
+      points: one.points,
+      encodedPayloadKB: +(one.encodedPayloadBytes / 1024).toFixed(1),
+      rawJsonKB: +(one.rawJsonBytes / 1024).toFixed(1),
+      livePointRamKB: +(one.livePointRamBytes / 1024).toFixed(1),
+    });
+    console.info("phase0-1500-pages", {
+      encodedPayloadMB: +(book.encodedPayloadBytes / 1024 / 1024).toFixed(2),
+      encodedWithSnapshotsMB: +(book.encodedWithSnapshotsBytes / 1024 / 1024).toFixed(2),
+      rawJsonMB: +(book.rawJsonBytes / 1024 / 1024).toFixed(1),
+      livePointRamMB: +(book.livePointRamBytes / 1024 / 1024).toFixed(1),
+    });
+  });
+});
+
+describe("concatEncodedInk / packEncodedInk", () => {
+  it("joins shards in composite order, not page order", () => {
+    const a = stampChain(8);
+    a.id = 1;
+    a.seq = 2;
+    const b = stampChain(8);
+    b.id = 2;
+    b.seq = 1;
+    const joined = concatEncodedInk([encodeInkOps([a]), encodeInkOps([b])]);
+    const back = decodeInkOps(joined) as InkDrawOp[];
+    expect(back.map((op) => op.seq)).toEqual([1, 2]);
+  });
+
+  it("round-trips id/seq through the codec", () => {
+    const original = stampChain(12);
+    original.id = 9;
+    original.seq = 4;
+    const [back] = decodeInkOps(encodeInkOps([original])) as [InkDrawOp];
+    expect(back.id).toBe(9);
+    expect(back.seq).toBe(4);
+  });
+
+  it("packs and unpacks without moving points", () => {
+    const original = stampChain(40);
+    original.id = 3;
+    original.seq = 7;
+    const encoded = encodeInkOps([original]);
+    const packed = packEncodedInk(encoded);
+    const back = unpackEncodedInk(packed);
+    expect(back).not.toBeNull();
+    const [op] = decodeInkOps(back!) as [InkDrawOp];
+    expect(op.id).toBe(3);
+    expect(op.seq).toBe(7);
+    expect(op.points).toHaveLength(40);
+    expect(Math.abs(op.points[39]!.x - original.points[39]!.x)).toBeLessThanOrEqual(0.05);
   });
 });

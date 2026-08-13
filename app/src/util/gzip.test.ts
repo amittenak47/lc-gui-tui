@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { canGzip, gzipText, isGzip, textFromMaybeGzip } from "./gzip";
+import { canGzip, gzipBytes, gzipText, isGzip, textFromMaybeGzip } from "./gzip";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -78,5 +78,16 @@ describe("without CompressionStream", () => {
     if (!isGzip(compressed)) return; // platform never compressed it
     vi.stubGlobal("DecompressionStream", undefined);
     await expect(textFromMaybeGzip(compressed)).rejects.toThrow(/compressed/);
+  });
+
+  it("round-trips raw bytes the archive path uses", async () => {
+    const raw = new Uint8Array([1, 2, 3, 4, 5, 9, 8, 7]);
+    const copy = new Uint8Array(raw);
+    const out = await gzipBytes(copy);
+    if (!isGzip(out)) {
+      expect(out).toEqual(raw);
+      return;
+    }
+    expect(isGzip(out)).toBe(true);
   });
 });

@@ -34,6 +34,11 @@ export interface BoardBlob {
    * `inkOpsFrom(blob)` rather than either field.
    */
   inkC?: EncodedInk;
+  /**
+   * Per-page shard manifest. Live autosave may omit a full `inkC` and keep
+   * pages in the `ink_pages` store; readers load shards first, then `inkC`.
+   */
+  inkPages?: { v: 1; pageIds: number[] };
   /** Excalidraw binary files (images) keyed by file id. */
   files?: Record<string, BoardBinaryFile>;
   /**
@@ -117,6 +122,12 @@ export interface BoardHandle {
   isInking(): boolean;
   /** Replace raster ink (notebook restore after the ink layer has mounted). */
   setInkOps(ops: InkOp[]): void;
+  ingestInkPages(pages: Map<number, EncodedInk>): void;
+  takeDirtyInkPages(): Map<number, EncodedInk>;
+  markInkPagesFlushed(pageIds: Iterable<number>): void;
+  dirtyInkPageCount(): number;
+  encodedInkShards(): EncodedInk[];
+  assembleEncodedInk(): EncodedInk;
   /**
    * Say something briefly over the board, then let it go.
    *
@@ -178,7 +189,7 @@ export interface BoardHandle {
    */
   exportVizPng(programId: string): Promise<string>;
   /** Persistable board blob (excludes coach viz; includes raster ink). */
-  saveBoard(): BoardBlob;
+  saveBoard(opts?: { assembleInk?: boolean }): BoardBlob;
   /** Restore a saved board without recording undo history. */
   restoreBoard(
     elements: unknown[],
