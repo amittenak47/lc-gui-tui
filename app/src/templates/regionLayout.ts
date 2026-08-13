@@ -253,14 +253,17 @@ export function syncRegionLayout(
     y += height + PAGE_BREAK;
   }
 
-  const studentStackHeight = Math.max(0, y - PAGE_BREAK);
   const agent = frames.get("agent");
   if (agent) {
     const agentWidth = Math.max(REGION_MIN.agent.minW, num(agent.width, REGIONS.agent.w));
+    const agentOriginY = oldOrigins.get("agent")?.y ?? agent.y;
+    const agentContent = contentMinHeight([...byId.values()], "agent", agentOriginY);
+    // One sheet, same as Scratch. Stretching this to the student stack made a
+    // paged Coach view zoom out to the whole column — empty postage-stamp lane.
     const agentHeight = Math.max(
       REGION_MIN.agent.minH,
       num(agent.height, REGIONS.agent.h),
-      studentStackHeight,
+      agentContent,
     );
     const next = {
       ...agent,

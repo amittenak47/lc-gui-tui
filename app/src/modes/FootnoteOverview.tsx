@@ -114,6 +114,75 @@ function applyViewportSize(node: HTMLElement, task: Task | null, compact = false
     node.style.maxHeight = `${Math.min(Math.round(height * 0.7), maxH, 420)}px`;
   }
 }
+
+/** Hub heading: looks like a title until double-click opens a field. */
+function MarkTitle({
+  value,
+  onCommit,
+}: {
+  value: string | undefined;
+  onCommit: (next: string | undefined) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const labeled = value?.replace(/\s+/g, " ").trim() ?? "";
+
+  useLayoutEffect(() => {
+    if (!editing) return;
+    const node = inputRef.current;
+    if (!node) return;
+    node.focus();
+    node.select();
+  }, [editing]);
+
+  const commit = () => {
+    const next = draft.replace(/\s+/g, " ").trim();
+    onCommit(next.length > 0 ? next : undefined);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="lc-footnote-overview-title is-editing"
+        value={draft}
+        placeholder="Title"
+        aria-label="Mark title"
+        maxLength={80}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setDraft(value ?? "");
+            setEditing(false);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={`lc-footnote-overview-title-display${labeled ? "" : " is-empty"}`}
+      aria-label={labeled ? "Mark title, double-click to edit" : "Add title, double-click to edit"}
+      title="Double-click to edit title"
+      onDoubleClick={(event) => {
+        event.preventDefault();
+        setDraft(value ?? "");
+        setEditing(true);
+      }}
+    >
+      {labeled || "Title"}
+    </button>
+  );
+}
 /**
  * Footnote overview — doc-sheet chrome, user links only, mini coach thread.
  * Does not open the docked coach panel.
@@ -493,6 +562,10 @@ export function FootnoteOverview({
               layoutId="footnote-hub-body"
               {...taskMotion}
             >
+              <MarkTitle
+                value={footnote.title}
+                onCommit={(title) => onChange({ ...footnoteRef.current, title })}
+              />
               <header className="lc-footnote-overview-toolbar" aria-label="Mark style">
                 <div className="lc-footnote-submark-modes" role="group" aria-label="Mark actions">
                   <button
@@ -562,27 +635,6 @@ export function FootnoteOverview({
                   </button>
                 )}
               </header>
-              <label className="lc-footnote-overview-title-row">
-                {footnoteNumber != null && (
-                  <span className="lc-footnote-overview-title-num" aria-hidden>
-                    {footnoteNumber}.
-                  </span>
-                )}
-                <input
-                  className="lc-footnote-overview-title"
-                  value={footnote.title ?? ""}
-                  placeholder="Title"
-                  aria-label="Mark title"
-                  maxLength={80}
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    onChange({
-                      ...footnote,
-                      title: next.length > 0 ? next : undefined,
-                    });
-                  }}
-                />
-              </label>
               {subMarks.length > 0 && (
                 <ul
                   className="lc-footnote-overview-link-list lc-scroll-pane"

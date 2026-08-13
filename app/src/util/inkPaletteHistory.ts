@@ -211,7 +211,6 @@ function fallbackCodeIndex(palette: readonly string[]): number {
 
 /** Step this mark's ColorHunt set without touching the board wheel. */
 export function stepFallbackPalette(current: readonly string[], delta: 1 | -1): InkPalette {
-  const n = COLORHUNT_FALLBACK_CODES.length;
   const from = fallbackCodeIndex(current);
   const i = from >= 0 ? from : 0;
   return paletteForMarkIndex(i + delta);

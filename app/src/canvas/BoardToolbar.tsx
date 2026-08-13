@@ -28,6 +28,7 @@ import {
 import { LONG_PRESS_MS } from "../util/gesture";
 import type { InkHandedness } from "../util/inkHandedness";
 import {
+  clampToBox,
   loadToolbarLayout,
   saveToolbarLayout,
   TOOLBAR_DOCK_SNAP_PX,
@@ -42,19 +43,28 @@ import { InkFullnessSlider } from "./InkFullnessSlider";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
 
+/** Board hole when the desktop coach is open; otherwise the window. */
+function boardChromeBox(): { left: number; top: number; right: number; bottom: number } {
+  const app = document.querySelector(".lc-app");
+  const main = document.querySelector(".lc-main");
+  if (
+    app instanceof HTMLElement &&
+    main instanceof HTMLElement &&
+    app.classList.contains("lc-app-coach-open") &&
+    !app.classList.contains("lc-mobile")
+  ) {
+    return main.getBoundingClientRect();
+  }
+  return { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+}
+
 function clampFloatingPos(
   x: number,
   y: number,
   width: number,
   height: number,
 ): { x: number; y: number } {
-  const margin = 8;
-  const maxX = Math.max(margin, window.innerWidth - width - margin);
-  const maxY = Math.max(margin, window.innerHeight - height - margin);
-  return {
-    x: Math.min(maxX, Math.max(margin, x)),
-    y: Math.min(maxY, Math.max(margin, y)),
-  };
+  return clampToBox(x, y, width, height, boardChromeBox());
 }
 
 function dockAnchorRect(toolbar: HTMLElement | null): DOMRect | null {
@@ -293,19 +303,26 @@ export function BoardToolbar({
     }
   }, [shapesOpen]);
 
-  // Keep a restored floating position on-screen after rotate / resize.
+  // Keep a restored floating position inside the board hole after rotate /
+  // resize / coach open (App dispatches `resize` when the panel docks).
   useLayoutEffect(() => {
     if (layout.mode !== "floating" || dragging || docking) return;
-    const node = toolbarRootRef.current;
-    if (!node) return;
-    const rect = node.getBoundingClientRect();
-    const next = clampFloatingPos(layout.x, layout.y, rect.width, rect.height);
-    if (next.x !== layout.x || next.y !== layout.y) {
-      const updated: ToolbarLayout = { mode: "floating", ...next };
-      setLayout(updated);
-      saveToolbarLayout(updated);
-    }
-  }, [layout, dragging, docking]);
+    const clampNow = () => {
+      const node = toolbarRootRef.current;
+      const current = layoutRef.current;
+      if (!node || current.mode !== "floating") return;
+      const rect = node.getBoundingClientRect();
+      const next = clampFloatingPos(current.x, current.y, rect.width, rect.height);
+      if (next.x !== current.x || next.y !== current.y) {
+        const updated: ToolbarLayout = { mode: "floating", ...next };
+        setLayout(updated);
+        saveToolbarLayout(updated);
+      }
+    };
+    clampNow();
+    window.addEventListener("resize", clampNow);
+    return () => window.removeEventListener("resize", clampNow);
+  }, [layout.mode, dragging, docking]);
 
   const finishDockAnimation = useCallback(() => {
     const docked: ToolbarLayout = { mode: "docked" };

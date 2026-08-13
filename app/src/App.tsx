@@ -680,9 +680,9 @@ export function App() {
   const [llmDetail, setLlmDetail] = useState<string | null>(null);
   const [llmGateOpen, setLlmGateOpen] = useState(false);
   const [llmGatePhase, setLlmGatePhase] = useState<"enter" | "open" | "exit">("enter");
-  const [settingsTab, setSettingsTab] = useState<"workspace" | "personalise" | "server" | undefined>(
-    undefined,
-  );
+  const [settingsTab, setSettingsTab] = useState<
+    "workspace" | "personalise" | "ai" | "server" | undefined
+  >(undefined);
   const llmPromptedRef = useRef(false);
 
   const probeLlm = useCallback(async (): Promise<boolean> => {
@@ -1143,7 +1143,7 @@ export function App() {
   // Pads + mobile: coach overlays; refitting would reflow the reading column
   // into a thin strip the width of whatever is left beside the panel.
   useEffect(() => {
-    if (!problem || mobile || isLocalPad(problem)) return;
+    if (!problem || mobile) return;
     const timer = window.setTimeout(() => {
       window.dispatchEvent(new Event("resize"));
       boardRef.current?.refitToViewport();
@@ -4541,11 +4541,6 @@ export function App() {
     [mdInkFootnotes, openFootnoteOverview],
   );
 
-  useEffect(() => {
-    if (!problem || isLocalPad(problem) || mobile) return;
-    boardRef.current?.fitRegion(activeRegion);
-  }, [activeRegion, mobile, problem]);
-
   return (
     <div
       className={[
@@ -4633,8 +4628,7 @@ export function App() {
           )}
         </div>
 
-        {/* Screen-centered — not balanced against left/right header chrome. */}
-        <div className="lc-header-pairing-anchor">
+        <div className="lc-header-center">
           <HeaderPairingSlot
             serverLink={serverLink}
             pairing={pairing}
@@ -4648,9 +4642,6 @@ export function App() {
             }}
             onTapOffline={() => setPairingEditing(true)}
           />
-        </div>
-
-        <div className="lc-header-center">
           {problem && !isLocalPad(problem) && (
             <div className="lc-actions">
               <button
@@ -4937,17 +4928,14 @@ export function App() {
             transparentCanvas={Boolean(
               problem &&
                 (isMdInk(problem) ||
-                  (!isLocalPad(problem) &&
-                    (!mobile || activeRegion === "constraints"))),
+                  (!isLocalPad(problem) && activeRegion === "constraints")),
             )}
             docPaper={Boolean(
               problem &&
                 (isMdInk(problem) ||
                   isScratchpad(problem) ||
                   (!isLocalPad(problem) &&
-                    (!mobile ||
-                      activeRegion === "constraints" ||
-                      activeRegion === "code"))),
+                    (activeRegion === "constraints" || activeRegion === "code"))),
             )}
             annotateToggle={Boolean(problem)}
             onAnnotateCodeChange={setAnnotateCode}
@@ -4959,16 +4947,10 @@ export function App() {
                   ? scratchPageId(scratchPageIndex)
                   : isMdInk(problem)
                     ? MD_INK_REGION
-                    : mobile
-                      ? activeRegion
-                      : null
+                    : activeRegion
                 : null
             }
-            focusRegion={
-              problem && !isLocalPad(problem) && !isMdInk(problem) && !mobile
-                ? activeRegion
-                : null
-            }
+            focusRegion={null}
             bottomCenter={
               problem && !isLocalPad(problem) ? (
                 <RegionPager
@@ -4985,7 +4967,7 @@ export function App() {
                 : problem &&
                     !isLocalPad(problem) &&
                     !isMdInk(problem) &&
-                    (!mobile || activeRegion === "constraints")
+                    activeRegion === "constraints"
                   ? mdInkPageHeight(statementHeight)
                   : null
             }
@@ -4995,7 +4977,7 @@ export function App() {
               problem &&
               !isLocalPad(problem) &&
               codeContentHeight &&
-              (!mobile || activeRegion === "code")
+              activeRegion === "code"
                 ? codeContentHeight + CODE_PAGE_TAIL
                 : null
             }
@@ -5058,7 +5040,7 @@ export function App() {
               ) : problem &&
                 !isLocalPad(problem) &&
                 !isMdInk(problem) &&
-                (!mobile || activeRegion === "constraints") ? (
+                activeRegion === "constraints" ? (
                 <DocSelectionLayer
                   enabled={!annotateCode || Boolean(openFootnote) || highlighting}
                   highlighting={highlighting}
@@ -5145,7 +5127,7 @@ export function App() {
           )}
           {/* Monaco docks into the code frame — and on mobile that frame only
               exists on its own page, so the dock is mounted nowhere else. */}
-          {problem && !isLocalPad(problem) && (!mobile || activeRegion === "code") && (() => {
+          {problem && !isLocalPad(problem) && activeRegion === "code" && (() => {
             const slot = codeSlot ?? lastCodeSlotRef.current;
             if (!slot || slot.width <= 24 || slot.height <= 24) return null;
             const visible = Boolean(codeSlot);
@@ -5201,6 +5183,7 @@ export function App() {
             messages={coachMessages}
             askOnly={isLocalPad(problem)}
             coachSurface={isLocalPad(problem) ? "pad" : "problem"}
+            allowAnnotations={!isScratchpad(problem)}
             quoteSeed={coachQuoteSeed}
             focusThread={coachFocusThread}
             attachedMarks={attachedFootnoteIds.flatMap((id) => {
@@ -5212,6 +5195,7 @@ export function App() {
                   number: footnoteNumbers.get(mark.id),
                   title: mark.title,
                   color: mark.color,
+                  palette: mark.palette,
                 },
               ];
             })}
@@ -5220,6 +5204,7 @@ export function App() {
               number: footnoteNumbers.get(mark.id),
               title: mark.title,
               color: mark.color,
+              palette: mark.palette,
             }))}
             onRemoveAttached={(id) =>
               setAttachedFootnoteIds((current) => current.filter((entry) => entry !== id))
@@ -5700,8 +5685,7 @@ function HeaderOverflow({ items }: { items: OverflowItem[] }) {
 }
 
 /**
- * Offline chip or host pairing — shared between the mobile center anchor and
- * the desktop header-right cluster.
+ * Offline chip or host pairing — sits in the header center row with Run tests.
  */
 function HeaderPairingSlot({
   serverLink,
