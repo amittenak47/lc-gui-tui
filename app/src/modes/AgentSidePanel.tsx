@@ -221,6 +221,11 @@ export interface CoachSendFlags {
    */
   annotate: boolean;
   /**
+   * Attach selected document mark panels (selection blocks) as prompt context.
+   * Independent of {@link annotate} (handwriting / board PNG).
+   */
+  annotations?: boolean;
+  /**
    * Images the writer attached with (+), as base64 PNGs.
    *
    * Not the same thing as `annotate`: those thumbnails are the board being
@@ -365,6 +370,11 @@ export interface AgentSidePanelProps {
   /** Thread roots started from a page footnote — open the mark card, not the dock. */
   footnoteThreadRoots?: ReadonlySet<string>;
   onOpenFootnoteThread?: (rootId: string) => void;
+  /** Mark panels queued onto this send. */
+  attachedMarks?: Array<{ id: string; excerpt: string; number?: number }>;
+  onRemoveAttached?: (id: string) => void;
+  onSelectAllAnnotations?: () => void;
+  onClearAnnotations?: () => void;
   onSend: (text: string, flags: CoachSendFlags, mode?: "queue" | "merge") => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
@@ -399,6 +409,10 @@ export function AgentSidePanel({
   focusThread = null,
   footnoteThreadRoots,
   onOpenFootnoteThread,
+  attachedMarks = [],
+  onRemoveAttached,
+  onSelectAllAnnotations,
+  onClearAnnotations,
   onSend,
   onThreadChange,
   forwardFailures = false,
@@ -997,6 +1011,7 @@ export function AgentSidePanel({
     reviewBoard ||
     lazy ||
     annotate ||
+    attachedMarks.length > 0 ||
     photos.length > 0 ||
     // A quote on its own is a question: "what is this?".
     pageQuote != null;
@@ -1054,6 +1069,7 @@ export function AgentSidePanel({
         lazy,
         annotate,
         ...(annotate ? { annotateScope } : {}),
+        ...(attachedMarks.length > 0 ? { annotations: true } : {}),
         ...(photos.length > 0 ? { photos } : {}),
         ...(pageQuote ? { pageQuote: pageQuote.text } : {}),
         threadRootId: openThreadId,
@@ -1395,6 +1411,26 @@ export function AgentSidePanel({
         </div>
 
         <form className="lc-coach-composer" onSubmit={(event) => submit("queue", event)}>
+          {attachedMarks.length > 0 && (
+            <div className="lc-coach-mark-chips" aria-label="Attached annotations">
+              {attachedMarks.map((mark) => (
+                <span className="lc-footnote-chip is-active" key={mark.id}>
+                  {mark.number != null ? `${mark.number}. ` : ""}
+                  {mark.excerpt.slice(0, 48)}
+                  {onRemoveAttached && (
+                    <button
+                      type="button"
+                      className="lc-coach-reply-chip-clear"
+                      aria-label="Remove annotation"
+                      onClick={() => onRemoveAttached(mark.id)}
+                    >
+                      ×
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
           {pageQuote && (
             <div className="lc-coach-reply-chip lc-coach-quote-chip">
               <span className="lc-coach-reply-chip-mark" aria-hidden />
@@ -1559,14 +1595,14 @@ export function AgentSidePanel({
                   annotateUnavailable
                     ? NOT_ON_SCRATCHPAD
                     : annotateScope === "view"
-                      ? "Attach what you can see — hold to send the whole board instead"
-                      : "Attach board ink / annotated code — hold to send this view only"
+                      ? "Attach handwriting in this view — hold to send the whole board instead"
+                      : "Attach handwriting + the page under it — hold to send this view only"
                 }
                 placement="left"
               >
                 <span className="lc-coach-annotate-wrap">
                   <HoldButton
-                    label={annotateScope === "view" ? "View" : "Annotation"}
+                    label={annotateScope === "view" ? "View" : "Handwriting"}
                     className={`lc-flag lc-coach-annotate${
                       annotate ? " lc-flag-active" : ""
                     }${annotateUnavailable ? " lc-flag-unavailable" : ""}`}
@@ -1621,6 +1657,25 @@ export function AgentSidePanel({
                   )}
                 </span>
               </Tip>
+              {onSelectAllAnnotations && (
+                <Tip
+                  tip="Attach selection-block annotations to this send"
+                  placement="left"
+                >
+                  <button
+                    type="button"
+                    className={`lc-flag${attachedMarks.length > 0 ? " lc-flag-active" : ""}`}
+                    aria-pressed={attachedMarks.length > 0}
+                    disabled={busy}
+                    onClick={() => {
+                      if (attachedMarks.length > 0) onClearAnnotations?.();
+                      else onSelectAllAnnotations();
+                    }}
+                  >
+                    Annotations
+                  </button>
+                </Tip>
+              )}
               {!padSurface && (
                 <>
                   <Tip

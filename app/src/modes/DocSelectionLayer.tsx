@@ -60,6 +60,7 @@ import {
   unionLocalRects,
   viewportToLocal,
 } from "../util/docMarquee";
+import { charOffsetAtPoint } from "../util/docSubMarkHit";
 import {
   inkPaletteNow,
   onInkPaletteChange,
@@ -960,42 +961,22 @@ export function DocSelectionLayer({
         if (!range || !root.contains(range.startContainer)) return null;
         const anchor = anchorFromRange(root, range, scope);
         if (anchor?.start == null) return null;
-        if (bounds && (anchor.start < bounds.start || anchor.start >= bounds.end)) {
-          return null;
-        }
         return { start: clampStart(anchor.start), root, scope };
       };
 
       const caret = caretRangeAt(clientX, clientY);
-      if (caret) {
-        const caretBox = caret.getBoundingClientRect();
-        const inBands =
-          pointInLocalBands(body, bands, clientX, clientY, 40) ||
-          ((caretBox.width >= 0.25 || caretBox.height >= 0.25) &&
-            pointInLocalBands(
-              body,
-              bands,
-              caretBox.left + caretBox.width / 2,
-              caretBox.top + caretBox.height / 2,
-              24,
-            ));
-        if (inBands) {
-          const hit = fromRange(caret);
-          if (hit) return hit;
-        }
+      if (caret && root.contains(caret.startContainer)) {
+        const hit = fromRange(caret);
+        if (hit) return hit;
       }
 
-      const nearBand = nearestOffsetInBands(body, root, bands, clientX, clientY, scope);
+      const nearBand = charOffsetAtPoint(root, clientX, clientY, { body, bands, scope });
       if (nearBand) return { start: clampStart(nearBand.start), root, scope };
 
       const loose =
-        fromRange(caret) ??
         fromRange(nearestCaretInRoot(root, clientX, clientY)) ??
-        nearestOffsetInRoot(root, clientX, clientY, scope);
+        charOffsetAtPoint(root, clientX, clientY, { scope });
       if (!loose) return null;
-      if (bounds && (loose.start < bounds.start || loose.start >= bounds.end)) {
-        return { start: clampStart(loose.start), root, scope };
-      }
       return { start: clampStart(loose.start), root, scope };
     };
 
@@ -1127,21 +1108,25 @@ export function DocSelectionLayer({
           event.clientY,
           region.scope,
         ) ??
-        (live && region.bounds
+        (live
           ? {
-              start: Math.max(
-                region.bounds.start,
-                Math.min(region.bounds.end - 1, live.start),
-              ),
+              start: region.bounds
+                ? Math.max(
+                    region.bounds.start,
+                    Math.min(region.bounds.end - 1, live.start),
+                  )
+                : live.start,
               root: region.root,
               scope: region.scope,
             }
           : null);
-      if (!at || !region.bounds) {
+      if (!at) {
         releaseSubMarkGesture();
         return;
       }
-      const focus = Math.min(region.bounds.end, at.start + 1);
+      const focus = region.bounds
+        ? Math.min(region.bounds.end, at.start + 1)
+        : at.start + 1;
       subMarkDragRef.current = {
         pointerId: event.pointerId,
         mode: "select",
@@ -1165,7 +1150,7 @@ export function DocSelectionLayer({
       event.stopPropagation();
       killNativeSelection();
       const region = parentRegion();
-      if (!region?.bounds) return;
+      if (!region) return;
       const at = offsetAt(
         region.body,
         region.root,
@@ -2182,121 +2167,6 @@ function nearestCaretInRoot(root: HTMLElement, clientX: number, clientY: number)
     }
   }
   return null;
-}
-
-/**
- * Walk text under `root` and pick the closest character offset — no band filter.
- * Used when band-constrained lookup misses (scaled markdown / PDF text layer).
- */
-function nearestOffsetInRoot(
-  root: HTMLElement,
-  clientX: number,
-  clientY: number,
-  scope?: string,
-): { start: number; root: HTMLElement; scope?: string } | null {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let best: { dist: number; node: Text; offset: number } | null = null;
-  let node: Node | null;
-  while ((node = walker.nextNode())) {
-    const text = node as Text;
-    if (!text.data || !/\S/.test(text.data)) continue;
-    const length = text.data.length;
-    const step = Math.max(1, Math.floor(length / Math.max(1, Math.min(32, length))));
-    for (let i = 0; i < length; i += step) {
-      const range = document.createRange();
-      const end = Math.min(length, i + 1);
-      try {
-        range.setStart(text, i);
-        range.setEnd(text, end);
-      } catch {
-        continue;
-      }
-      const rect = range.getBoundingClientRect();
-      if (rect.width < 0.25 && rect.height < 0.25) continue;
-      const cx = Math.min(Math.max(clientX, rect.left), rect.right);
-      const cy = Math.min(Math.max(clientY, rect.top), rect.bottom);
-      const dist = (cx - clientX) ** 2 + (cy - clientY) ** 2;
-      const offset = clientX <= (rect.left + rect.right) / 2 ? i : end;
-      if (!best || dist < best.dist) best = { dist, node: text, offset };
-    }
-  }
-  if (!best) return null;
-  const range = document.createRange();
-  range.setStart(best.node, Math.min(best.offset, best.node.data.length));
-  range.collapse(true);
-  const anchor = anchorFromRange(root, range, scope);
-  if (anchor?.start == null) return null;
-  return { start: anchor.start, root, scope };
-}
-
-/**
- * Walk text rects under `root` that intersect `bands` and pick the closest
- * character offset to the pointer.
- */
-function nearestOffsetInBands(
-  body: HTMLElement,
-  root: HTMLElement,
-  bands: readonly LocalRect[],
-  clientX: number,
-  clientY: number,
-  scope?: string,
-): { start: number; root: HTMLElement; scope?: string } | null {
-  const scale = scaleOf(body) || 1;
-  const bodyBox = body.getBoundingClientRect();
-  const clientBands = bands.map((band) => ({
-    left: bodyBox.left + band.left * scale,
-    top: bodyBox.top + band.top * scale,
-    right: bodyBox.left + (band.left + band.width) * scale,
-    bottom: bodyBox.top + (band.top + band.height) * scale,
-  }));
-  const hitsBand = (rect: DOMRect) =>
-    clientBands.some(
-      (band) =>
-        rect.left < band.right &&
-        rect.right > band.left &&
-        rect.top < band.bottom &&
-        rect.bottom > band.top,
-    );
-
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let best: { dist: number; node: Text; offset: number } | null = null;
-  let node: Node | null;
-  while ((node = walker.nextNode())) {
-    const text = node as Text;
-    if (!text.data || !/\S/.test(text.data)) continue;
-    const full = document.createRange();
-    full.selectNodeContents(text);
-    const fullBox = full.getBoundingClientRect();
-    if ((fullBox.width > 0 || fullBox.height > 0) && !hitsBand(fullBox)) continue;
-
-    const length = text.data.length;
-    const step = Math.max(1, Math.floor(length / Math.max(1, Math.min(24, length))));
-    for (let i = 0; i < length; i += step) {
-      const range = document.createRange();
-      const end = Math.min(length, i + 1);
-      try {
-        range.setStart(text, i);
-        range.setEnd(text, end);
-      } catch {
-        continue;
-      }
-      const rect = range.getBoundingClientRect();
-      if (rect.width < 0.25 && rect.height < 0.25) continue;
-      if (!hitsBand(rect)) continue;
-      const cx = Math.min(Math.max(clientX, rect.left), rect.right);
-      const cy = Math.min(Math.max(clientY, rect.top), rect.bottom);
-      const dist = (cx - clientX) ** 2 + (cy - clientY) ** 2;
-      const offset = clientX <= (rect.left + rect.right) / 2 ? i : end;
-      if (!best || dist < best.dist) best = { dist, node: text, offset };
-    }
-  }
-  if (!best) return null;
-  const range = document.createRange();
-  range.setStart(best.node, Math.min(best.offset, best.node.data.length));
-  range.collapse(true);
-  const anchor = anchorFromRange(root, range, scope);
-  if (anchor?.start == null) return null;
-  return { start: anchor.start, root, scope };
 }
 
 /**

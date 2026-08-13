@@ -43,6 +43,8 @@ export interface FootnoteOverviewProps {
   onChange: (next: DocFootnote) => void;
   /** `null` starts a new thread; a rootId continues that one. */
   onSendCoach: (text: string, threadRootId: string | null) => void;
+  /** Queue this mark onto the main coach composer. */
+  onAttachCoach?: (footnoteId: string) => void;
   onOpenExternal: (url: string) => void;
   anchorRect?: DOMRect | null;
   subMarkMode: DocFootnoteSubMarkKind | null;
@@ -123,6 +125,7 @@ export function FootnoteOverview({
   onClose,
   onChange,
   onSendCoach,
+  onAttachCoach,
   onOpenExternal,
   anchorRect,
   subMarkMode,
@@ -273,15 +276,6 @@ export function FootnoteOverview({
     if (!node) return;
     node.scrollTop = node.scrollHeight;
   }, [openThreadMessages]);
-  const knownRootsRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (task?.kind !== "thread" || task.rootId) {
-      knownRootsRef.current = new Set(threads.map((thread) => thread.rootId));
-      return;
-    }
-    const fresh = threads.find((thread) => !knownRootsRef.current.has(thread.rootId));
-    if (fresh) setTask({ kind: "thread", rootId: fresh.rootId });
-  }, [task, threads]);
   const updateNotes = (next: DocFootnoteNote[]) => {
     onChange({ ...footnote, notes: next.length > 0 ? next : undefined });
   };
@@ -334,10 +328,9 @@ export function FootnoteOverview({
     if (task?.kind === "thread" && task.rootId === rootId) setTask(null);
   };
   const send = () => {
-    if (task?.kind !== "thread") return;
+    if (task?.kind !== "thread" || !task.rootId) return;
     const text = draft.trim();
     if (!text) return;
-    if (!task.rootId) knownRootsRef.current = new Set(threads.map((thread) => thread.rootId));
     onSendCoach(text, task.rootId);
     setDraft("");
   };
@@ -452,7 +445,7 @@ export function FootnoteOverview({
                 <span className="lc-footnote-task-title">
                   {task.rootId
                     ? threads.find((thread) => thread.rootId === task.rootId)?.title ?? "Thread"
-                    : "Ask AI"}
+                    : "Thread"}
                 </span>
                 {task.rootId && (
                   <button
@@ -490,7 +483,7 @@ export function FootnoteOverview({
                 <textarea
                   value={draft}
                   rows={1}
-                  placeholder="Ask…"
+                  placeholder="Reply…"
                   onChange={(event) => setDraft(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key !== "Enter") return;
@@ -498,7 +491,7 @@ export function FootnoteOverview({
                     event.preventDefault();
                     send();
                   }}
-                  aria-label="Ask AI"
+                  aria-label="Reply"
                 />
                 <div className="lc-coach-composer-bar">
                   <div className="lc-coach-composer-actions">
@@ -594,6 +587,15 @@ export function FootnoteOverview({
               )}
               {!subMarkArmed && (
                 <>
+              {onAttachCoach && (
+                <button
+                  type="button"
+                  className="lc-footnote-chip is-active"
+                  onClick={() => onAttachCoach(footnote.id)}
+                >
+                  Attach to chat
+                </button>
+              )}
               <HubSection
                 title="Links"
                 onAdd={() => openTask({ kind: "link", index: null })}
@@ -650,10 +652,7 @@ export function FootnoteOverview({
                   </ul>
                 )}
               </HubSection>
-              <HubSection
-                title="Send to chat"
-                onAdd={() => openTask({ kind: "thread", rootId: null })}
-              >
+              <HubSection title="Threads">
                 {threads.length > 0 && (
                   <ul className="lc-footnote-overview-link-list lc-footnote-overview-scroll-list lc-scroll-pane">
                     {threads.map((thread) => (
@@ -686,21 +685,23 @@ function HubSection({
   children,
 }: {
   title: string;
-  onAdd: () => void;
+  onAdd?: () => void;
   children?: ReactNode;
 }) {
   return (
     <section className="lc-footnote-overview-section" aria-label={title}>
       <div className="lc-footnote-overview-section-head">
         <h3 className="lc-coach-turn-role">{title}</h3>
-        <button
-          type="button"
-          className="lc-footnote-overview-add"
-          aria-label={`Add ${title}`}
-          onClick={onAdd}
-        >
-          +
-        </button>
+        {onAdd ? (
+          <button
+            type="button"
+            className="lc-footnote-overview-add"
+            aria-label={`Add ${title}`}
+            onClick={onAdd}
+          >
+            +
+          </button>
+        ) : null}
       </div>
       {children}
     </section>
