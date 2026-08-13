@@ -617,13 +617,17 @@ pub async fn run_ask(
     let dataset_slug = request.dataset.clone();
     let images = request.images.clone();
     let scratchpad = crate::scratchpad::is_request(dataset_slug.as_deref(), &task_id);
-    let dataset = if scratchpad {
+    let md_ink = crate::scratchpad::is_md_ink(dataset_slug.as_deref(), &task_id);
+    let local_pad = scratchpad || md_ink;
+    let dataset = if local_pad {
         None
     } else {
         Some(resolve_dataset(dataset_slug.as_deref())?)
     };
     let board_key = if scratchpad {
         crate::scratchpad::board_key()
+    } else if md_ink {
+        crate::scratchpad::md_ink_board_key()
     } else {
         dataset.unwrap().key(&task_id)
     };
@@ -646,6 +650,11 @@ pub async fn run_ask(
             (
                 crate::scratchpad::workspace_meta(),
                 Some(crate::scratchpad::COACH_DESCRIPTION.to_string()),
+            )
+        } else if md_ink {
+            (
+                crate::scratchpad::md_ink_workspace_meta(),
+                Some(crate::scratchpad::MD_INK_COACH_DESCRIPTION.to_string()),
             )
         } else {
             let dataset = dataset.expect("dataset resolved before blocking");
