@@ -85,6 +85,7 @@ import {
   type CoachSendFlags,
   replyExcerpt,
 } from "./modes/AgentSidePanel";
+import { packFootnoteContext } from "./modes/coachMarkContext";
 import { AttemptDialog } from "./modes/AttemptDialog";
 import { ScratchpadDialog } from "./modes/ScratchpadDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
@@ -405,6 +406,10 @@ export function App() {
   const pendingQuoteRef = useRef<DocSelectionResult | null>(null);
   /** Footnote overview send upgrades this id from note → coach on first message. */
   const footnoteCoachUpgradeRef = useRef<string | null>(null);
+  const footnoteCoachUpgradeIdsRef = useRef<string[]>([]);
+  const [attachedFootnoteIds, setAttachedFootnoteIds] = useState<string[]>([]);
+  const attachedFootnoteIdsRef = useRef<string[]>([]);
+  attachedFootnoteIdsRef.current = attachedFootnoteIds;
   const [openFootnoteId, setOpenFootnoteId] = useState<string | null>(null);
   const [footnoteOpenThreadId, setFootnoteOpenThreadId] = useState<string | null>(null);
   const [footnoteAnchorRect, setFootnoteAnchorRect] = useState<DOMRect | null>(null);
@@ -3051,6 +3056,7 @@ export function App() {
             ...(requestedFlags.annotateScope
               ? { annotateScope: requestedFlags.annotateScope }
               : {}),
+            ...(requestedFlags.annotations ? { annotations: true } : {}),
             ...(requestedFlags.photos ? { photos: requestedFlags.photos } : {}),
             ...(requestedFlags.pageQuote ? { pageQuote: requestedFlags.pageQuote } : {}),
             ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}),
@@ -3065,7 +3071,8 @@ export function App() {
   const flagBitsFor = (flags: CoachSendFlags): string[] =>
     [
       flags.ask ? "Ask" : null,
-      flags.annotate ? (flags.annotateScope === "view" ? "View" : "Annotation") : null,
+      flags.annotate ? (flags.annotateScope === "view" ? "View" : "Handwriting") : null,
+      flags.annotations ? "Annotations" : null,
       flags.reviewBoard ? "Review" : null,
       flags.draw ? "Draw" : null,
       flags.lazy ? "Lazy" : null,
@@ -3172,9 +3179,32 @@ export function App() {
       const asked = flags.replyTo
         ? `Replying to your earlier message: “${flags.replyTo.excerpt}”\n\n${text}`
         : text;
-      const prompt = quotedPassage
+      let prompt = quotedPassage
         ? `From the document:\n\n“${quotedPassage}”\n\n${asked}`.trimEnd()
         : asked;
+
+      const attachedIds = attachedFootnoteIdsRef.current;
+      const attachedMarks = mdInkFootnotesRef.current.filter((entry) =>
+        attachedIds.includes(entry.id),
+      );
+      const markContext = packFootnoteContext(attachedMarks, {
+        numbers: numberFootnotes(mdInkFootnotesRef.current),
+      });
+      if (markContext) {
+        prompt = `${markContext}\n\n${prompt}`.trim();
+      }
+      const upgradeIds = [
+        ...new Set(
+          [footnoteCoachUpgradeRef.current, ...attachedIds].filter(
+            (id): id is string => Boolean(id),
+          ),
+        ),
+      ];
+      if (upgradeIds[0]) footnoteCoachUpgradeRef.current = upgradeIds[0];
+      footnoteCoachUpgradeIdsRef.current = upgradeIds;
+      if (attachedIds.length > 0) {
+        flags = { ...flags, annotations: true };
+      }
 
       return {
         text,
@@ -3196,8 +3226,16 @@ export function App() {
     (anchorId: string | null, userMessageId: string, asked: string) => {
       const quoted = pendingQuoteRef.current;
       pendingQuoteRef.current = null;
-      const upgradeId = footnoteCoachUpgradeRef.current;
+      const upgradeIds = [
+        ...new Set(
+          [
+            footnoteCoachUpgradeRef.current,
+            ...footnoteCoachUpgradeIdsRef.current,
+          ].filter((id): id is string => Boolean(id)),
+        ),
+      ];
       footnoteCoachUpgradeRef.current = null;
+      footnoteCoachUpgradeIdsRef.current = [];
       const rootId = anchorId ?? userMessageId;
       const now = Date.now();
       const thread = { rootId, title: threadTitleFrom(asked), createdAt: now };
@@ -3217,13 +3255,10 @@ export function App() {
         );
         return;
       }
-      if (!upgradeId) return;
+      if (upgradeIds.length === 0) return;
       setMdInkFootnotes((current) =>
         current.map((entry) => {
-          if (entry.id !== upgradeId) return entry;
-          // A reply into an existing thread reaches here too (the anchor
-          // resolves to a rootId the mark already lists); only genuinely new
-          // conversations add a row.
+          if (!upgradeIds.includes(entry.id)) return entry;
           const threads = entry.threads ?? [];
           return {
             ...entry,
@@ -3236,6 +3271,7 @@ export function App() {
         }),
       );
       setCoachFocusThread({ token: now, rootId });
+      if (attachedFootnoteIdsRef.current.length > 0) setAttachedFootnoteIds([]);
     },
     [],
   );
@@ -5066,6 +5102,24 @@ export function App() {
             coachSurface={isLocalPad(problem) ? "pad" : "problem"}
             quoteSeed={coachQuoteSeed}
             focusThread={coachFocusThread}
+            attachedMarks={attachedFootnoteIds.flatMap((id) => {
+              const mark = mdInkFootnotes.find((entry) => entry.id === id);
+              if (!mark) return [];
+              return [
+                {
+                  id: mark.id,
+                  excerpt: mark.excerpt,
+                  number: footnoteNumbers.get(mark.id),
+                },
+              ];
+            })}
+            onRemoveAttached={(id) =>
+              setAttachedFootnoteIds((current) => current.filter((entry) => entry !== id))
+            }
+            onSelectAllAnnotations={() => {
+              setAttachedFootnoteIds(mdInkFootnotes.map((entry) => entry.id));
+            }}
+            onClearAnnotations={() => setAttachedFootnoteIds([])}
             footnoteThreadRoots={footnoteThreadRoots}
             onOpenFootnoteThread={openCoachFootnoteThread}
             onThreadChange={(rootId) => {
@@ -5124,6 +5178,12 @@ export function App() {
             openThreadRootId={footnoteOpenThreadId}
             onChange={onFootnoteChange}
             onSendCoach={sendCoachFromFootnote}
+            onAttachCoach={(id) => {
+              setAttachedFootnoteIds((current) =>
+                current.includes(id) ? current : [...current, id],
+              );
+              setCoachOpen(true);
+            }}
             onOpenExternal={(url) => {
               void openExternalUrl(url).catch(() => {
                 setError("could not hand the link to a browser on this device");

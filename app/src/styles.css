@@ -9110,6 +9110,21 @@ button.lc-row-selected:hover:not(:disabled) {
   height: 16px;
 }
 
+.lc-coach-mark-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 10px 6px;
+  align-items: center;
+}
+
+.lc-coach-mark-chips .lc-footnote-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+
 .lc-footnote-chip {
   min-height: 22px;
   height: 22px;
