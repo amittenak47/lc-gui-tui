@@ -113,6 +113,7 @@ import {
   type PageableElement,
 } from "./pageView";
 import { encodeInkOps } from "./inkCodec";
+import { fallbackPageFrames, pageFramesFromPdfSlot } from "./inkPageIndex";
 import { eraserScreenRadius } from "./rasterInk";
 import { reanchorInkOps } from "./reanchorInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
@@ -3011,6 +3012,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       scrollLeft: host.scrollLeft,
       bounds: host.bounds,
     }));
+  }, []);
+
+  const getPageFrames = useCallback(() => {
+    const fromPdf = pageFramesFromPdfSlot(contentSlotNodeRef.current, pageBoundsRef.current);
+    if (fromPdf.length > 0) return fromPdf;
+    return fallbackPageFrames(pageBoundsRef.current);
   }, []);
 
   /**
@@ -6607,8 +6614,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       },
       getStrokes: () => captureStrokes(elements()),
       getInkStrokes: () => inkStrokesFromOps(rasterInkRef.current?.getOps() ?? []),
-      getInkOpCount: () => (rasterInkRef.current?.getOps() ?? []).length,
+      getInkOpCount: () => rasterInkRef.current?.getOpCount() ?? 0,
       isInking: () => rasterInkRef.current?.isDrawing() ?? false,
+      dirtyInkPageCount: () => rasterInkRef.current?.dirtyInkPageCount() ?? 0,
+      takeDirtyInkPages: () => rasterInkRef.current?.takeDirtyInkPages() ?? new Map(),
+      markInkPagesFlushed: (pageIds) => {
+        rasterInkRef.current?.markInkPagesFlushed(pageIds);
+      },
+      ingestInkPages: (pages) => {
+        rasterInkRef.current?.ingestInkPages(pages);
+        if (maybeGrowDrawFrame()) scheduleSlotReports();
+        syncPageVisibility();
+      },
+      encodedInkShards: () => rasterInkRef.current?.encodedShards() ?? [],
+      assembleEncodedInk: () =>
+        rasterInkRef.current?.assembleEncoded() ?? encodeInkOps([]),
       announce: (label) => {
         modeIndicatorRef.current?.show(label, ANNOUNCE_HOLD_MS);
       },
@@ -6679,7 +6699,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       waitForTemplate,
       fitCodeToSource,
       hasRasterInk: () => rasterInkRef.current?.hasInk() ?? false,
-      saveBoard: () => {
+      saveBoard: (opts) => {
         const api = apiRef.current;
         const state = (api?.getAppState() ?? {}) as {
           scrollX?: number;
@@ -6687,7 +6707,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           zoom?: { value?: number };
         };
         const kept = elements().filter((element) => !isCoachElement(element));
-        const ink = rasterInkRef.current?.getOps() ?? [];
+        const assemble = opts?.assembleInk !== false;
+        const inkC = assemble
+          ? (rasterInkRef.current?.assembleEncoded() ?? encodeInkOps([]))
+          : { v: 2 as const, ops: [] };
+        const pageIds = rasterInkRef.current?.inkPageIds() ?? [];
         const rawFiles = (api?.getFiles() ?? {}) as Record<string, BoardBinaryFile>;
         const files: Record<string, BoardBinaryFile> = {};
         for (const [id, file] of Object.entries(rawFiles)) {
@@ -6709,7 +6733,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           },
           // Encoded, not raw — `ink` stays readable forever but is never
           // written again. See `inkCodec`; read it back with `inkOpsFrom`.
-          inkC: encodeInkOps(ink),
+          inkC,
+          ...(pageIds.length > 0 ? { inkPages: { v: 1 as const, pageIds } } : {}),
           inkPalettes: {
             items: inkPaletteHistoryRef.current.items,
             index: inkPaletteHistoryRef.current.index,
@@ -7291,6 +7316,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pressureSensitive={pressureSensitive}
         getViewport={getViewport}
         getScrollHosts={getScrollHosts}
+        getPageFrames={getPageFrames}
         clip={inkClip}
         onChange={handleInkChange}
         onStylusAccessory={interactive ? handleStylusAccessory : undefined}

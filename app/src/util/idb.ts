@@ -24,12 +24,12 @@
 const DB_NAME = "lc.docs";
 
 /**
- * Bumped from 2 when rolling pad snapshots moved in beside board content.
+ * Bumped from 3 when per-page ink shards moved in beside rolling snapshots.
  *
  * `onupgradeneeded` is additive and guarded per store, so an existing database
  * gains the new stores and keeps everything already in `bytes`.
  */
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 /** Binary documents — PDF and EPUB bytes, keyed by content hash. */
 export const STORE_BYTES = "bytes";
@@ -37,6 +37,8 @@ export const STORE_BYTES = "bytes";
 export const STORE_CONTENT = "content";
 /** Rolling 2h / 24h / 7d copies of a pad. Keyed by `kind:key:tier`. */
 export const STORE_SNAPSHOTS = "snapshots";
+/** Per-page encoded ink WAL / archive. Keyed by `docKey\\x1fpageId`. */
+export const STORE_INK_PAGES = "ink_pages";
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -54,6 +56,7 @@ export function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_BYTES)) db.createObjectStore(STORE_BYTES);
       if (!db.objectStoreNames.contains(STORE_CONTENT)) db.createObjectStore(STORE_CONTENT);
       if (!db.objectStoreNames.contains(STORE_SNAPSHOTS)) db.createObjectStore(STORE_SNAPSHOTS);
+      if (!db.objectStoreNames.contains(STORE_INK_PAGES)) db.createObjectStore(STORE_INK_PAGES);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
@@ -121,6 +124,45 @@ export function run<T>(
         };
         tx.onabort = () =>
           fail(tx.error ?? new Error("the document store ran out of room"));
+        tx.onerror = () => fail(tx.error ?? new Error("the document store failed"));
+      }),
+  );
+}
+
+/**
+ * Several requests in one transaction — per-page WAL flushes more than one key.
+ *
+ * Still waits on `tx.oncomplete`, not on the last request's success, for the
+ * same quota reason {@link run} exists.
+ */
+export function withStore(
+  storeName: string,
+  mode: IDBTransactionMode,
+  work: (store: IDBObjectStore) => void,
+): Promise<void> {
+  return openDb().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(storeName, mode);
+        let settled = false;
+        const fail = (cause: unknown) => {
+          if (settled) return;
+          settled = true;
+          reject(cause instanceof Error ? cause : new Error(String(cause)));
+        };
+        try {
+          work(tx.objectStore(storeName));
+        } catch (cause) {
+          fail(cause);
+          return;
+        }
+        tx.oncomplete = () => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        };
+        tx.onabort = () => fail(tx.error ?? new Error("the document store ran out of room"));
         tx.onerror = () => fail(tx.error ?? new Error("the document store failed"));
       }),
   );

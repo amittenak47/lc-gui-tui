@@ -289,6 +289,10 @@ export interface InkDrawOp {
   /** When set, the stroke tracks a nested horizontal scroller's `scrollLeft`. */
   hostKey?: number;
   scrollLeftAtDraw?: number;
+  /** Stable id for the global undo log. Assigned at commit. */
+  id?: number;
+  /** Global composite order. Assigned at commit. */
+  seq?: number;
   points: ScenePoint[];
 }
 
@@ -297,6 +301,10 @@ export interface InkEraseOp {
   radius: number;
   hostKey?: number;
   scrollLeftAtDraw?: number;
+  /** Stable id for the global undo log. Assigned at commit. */
+  id?: number;
+  /** Global composite order. Assigned at commit. */
+  seq?: number;
   points: ScenePoint[];
 }
 

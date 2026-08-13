@@ -51,7 +51,13 @@ import {
   scrollHostAtPoint,
 } from "./scrollHost";
 import { InkTileCache, paintHostBoundPass, paintLiveOp } from "./inkTiles";
-import { opsAfterStrokeErase } from "./strokeEraser";
+import { InkPageBook } from "./inkPageCache";
+import {
+  INK_PAGE_WINDOW_DEBOUNCE_MS,
+  fallbackPageFrames,
+  pageIdAtViewport,
+  type PageFrame,
+} from "./inkPageIndex";
 import {
   OVERDRAW_REBASE_HEADROOM,
   overdrawMarginPx,
@@ -114,6 +120,15 @@ export interface RasterInkHandle {
   getOps(): InkOp[];
   /** Replace committed ink (notebook restore). Clears undo/redo. */
   setOps(ops: readonly InkOp[]): void;
+  getOpCount(): number;
+  dirtyInkPageCount(): number;
+  takeDirtyInkPages(): Map<number, import("./inkCodec").EncodedInk>;
+  markInkPagesFlushed(pageIds: Iterable<number>): void;
+  ingestInkPages(pages: Map<number, import("./inkCodec").EncodedInk>): void;
+  assembleEncoded(): import("./inkCodec").EncodedInk;
+  encodedShards(): import("./inkCodec").EncodedInk[];
+  inkPageIds(): number[];
+  seedColdInkPages(pages: Iterable<[number, import("./inkCodec").EncodedInk]>): void;
 }
 
 export interface RasterInkLayerProps {
@@ -153,6 +168,8 @@ export interface RasterInkLayerProps {
   clip?: SceneBounds | null;
   /** Live nested scroll hosts for host-bound ink paint and stroke capture. */
   getScrollHosts?: () => readonly ScrollHostPaintState[];
+  /** PDF page frames in scene Y, or empty → single-page fallback. */
+  getPageFrames?: () => readonly PageFrame[];
   onChange?: () => void;
   /**
    * Stylus barrel / eraser tip: toggle pen↔eraser. Return true if handled so
@@ -171,21 +188,6 @@ export interface RasterInkLayerProps {
 
 function cloneOps(ops: readonly InkOp[]): InkOp[] {
   return ops.map((op) => ({ ...op, points: [...op.points] }));
-}
-
-/**
- * Remember *which* ops were on the page, not a copy of every point on it.
- *
- * A committed op is never written to again — only `liveRef` is pushed to, and
- * the lift hands its array straight over — so an undo step only has to hold the
- * list. Deep-cloning it meant every pen lift copied every stamp on the board,
- * which is a cost that grows with the page: the fortieth letter cloned
- * thirty-nine strokes' worth of points, and up to forty of those snapshots were
- * kept alive at once. That is the pause after the pen comes up, and the reason
- * it got worse the longer you wrote.
- */
-function snapshotOps(ops: readonly InkOp[]): InkOp[] {
-  return [...ops];
 }
 
 export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
@@ -208,6 +210,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       getViewport,
       clip = null,
       getScrollHosts,
+      getPageFrames,
       onChange,
       onStylusAccessory,
       wheelHoldEnabled = false,
@@ -217,8 +220,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const opsRef = useRef<InkOp[]>([]);
-    const undoRef = useRef<InkOp[][]>([]);
-    const redoRef = useRef<InkOp[][]>([]);
+    const bookRef = useRef(new InkPageBook());
     const liveRef = useRef<InkOp | null>(null);
     /** Last live point count painted — bookkeeping for callers, not a paint-from index. */
     const liveDrawnIndexRef = useRef(0);
@@ -349,6 +351,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     // drops pointer capture and cuts ink short.
     const getViewportRef = useRef(getViewport);
     getViewportRef.current = getViewport;
+    const getPageFramesRef = useRef(getPageFrames);
+    getPageFramesRef.current = getPageFrames;
+    const pageWindowTimerRef = useRef(0);
     const onStylusAccessoryRef = useRef(onStylusAccessory);
     onStylusAccessoryRef.current = onStylusAccessory;
     const inkColorRef = useRef(inkColor);
@@ -534,6 +539,47 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       return tilesRef.current;
     }, []);
 
+    const syncPaintFromBook = useCallback((invalidate = false) => {
+      opsRef.current = bookRef.current.paintOps();
+      if (invalidate) {
+        tilesDirtyRef.current = true;
+      } else {
+        tilesRef.current?.setOps(opsRef.current);
+      }
+    }, []);
+
+    const applyPageWindow = useCallback(
+      (viewport: ViewportTransform) => {
+        const frames = getPageFramesRef.current?.() ?? [];
+        const book = bookRef.current;
+        const nextFrames = frames.length > 0 ? frames : fallbackPageFrames(clipRef.current);
+        const rebin = book.setFrames(nextFrames);
+        const top = viewport.scrollY === 0 ? 0 : -viewport.scrollY;
+        const zoom = viewport.zoom || 1;
+        const bottom = top + viewport.height / zoom;
+        const page = pageIdAtViewport(book.frames, top, bottom);
+        const windowed = book.setVisiblePage(page);
+        if (rebin || windowed) {
+          syncPaintFromBook(rebin);
+          return true;
+        }
+        return false;
+      },
+      [syncPaintFromBook],
+    );
+
+    const schedulePageWindow = useCallback(
+      (viewport: ViewportTransform) => {
+        if (pageWindowTimerRef.current) return;
+        pageWindowTimerRef.current = window.setTimeout(() => {
+          pageWindowTimerRef.current = 0;
+          if (drawingRef.current) return;
+          if (applyPageWindow(viewport)) repaintRef.current();
+        }, INK_PAGE_WINDOW_DEBOUNCE_MS);
+      },
+      [applyPageWindow],
+    );
+
     /** Match the backing store to the CSS box, on whole device pixels. */
     const sizeCanvas = useCallback(
       (canvas: HTMLCanvasElement, cssW: number, cssH: number, dpr: number) => {
@@ -709,6 +755,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const canvas = canvasRef.current;
       const viewport = getViewport();
       if (!canvas || !viewport || viewport.width < 1 || viewport.height < 1) return;
+      schedulePageWindow(viewport);
       const excalRect = alignedBoxRef.current ?? alignToExcalidraw(canvas);
       alignedBoxRef.current = excalRect;
       if (excalRect) {
@@ -716,7 +763,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       } else {
         paintFrame(viewport, viewport.width, viewport.height);
       }
-    }, [alignToExcalidraw, getViewport, paintFrame, paintFromBox]);
+    }, [alignToExcalidraw, getViewport, paintFrame, paintFromBox, schedulePageWindow]);
 
     /** A camera repaint owed to the next frame, if one is already booked. */
     const cameraFrameRef = useRef(0);
@@ -940,7 +987,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
        * something they can see rather than rolling back a wave of the hand.
        */
       if (live.kind === "erase" && !partialEraseRef.current) {
-        const kept = opsAfterStrokeErase(opsRef.current, live);
+        const kept = bookRef.current.strokeErase(live);
         liveRef.current = null;
         liveRawPointsRef.current = null;
         liveDrawnIndexRef.current = 0;
@@ -950,26 +997,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           repaint();
           return;
         }
-        undoRef.current.push(snapshotOps(opsRef.current));
-        if (undoRef.current.length > 40) {
-          undoRef.current.splice(0, undoRef.current.length - 40);
-        }
-        redoRef.current = [];
         opsRef.current = kept;
-        // Strokes vanished from under the page rather than being drawn over it,
-        // so there is no tile to append to — the cache has to be rebuilt.
         tilesDirtyRef.current = true;
         repaint();
         onChange?.();
         return;
       }
-
-      undoRef.current.push(snapshotOps(opsRef.current));
-      // Cap undo depth — each snapshot clones every point, and erase stamps are dense.
-      if (undoRef.current.length > 40) {
-        undoRef.current.splice(0, undoRef.current.length - 40);
-      }
-      redoRef.current = [];
 
       /*
        * Smooth the pen stroke now that it is finished (lift mode).
@@ -1010,7 +1043,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           : live;
 
       const bound = bindStrokeHost(committed);
-      opsRef.current = [...opsRef.current, bound];
+      const stamped = bookRef.current.commit(bound);
+      opsRef.current = bookRef.current.paintOps();
       liveRef.current = null;
       liveRawPointsRef.current = null;
       liveDrawnIndexRef.current = 0;
@@ -1019,7 +1053,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
       // Only the tiles the stroke landed on are dropped, so committing on a
       // full page costs the same as committing on an empty one.
-      ensureTiles().appendOp(bound);
+      ensureTiles().appendOp(stamped);
       strokeHostRef.current = null;
       repaint();
       onChange?.();
@@ -1033,9 +1067,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       () => ({
         clear() {
           abandonStrokeRef.current();
-          if (opsRef.current.length === 0) return;
-          undoRef.current.push(snapshotOps(opsRef.current));
-          redoRef.current = [];
+          if (!bookRef.current.hasInk()) return;
+          bookRef.current.clear();
           opsRef.current = [];
           liveRef.current = null;
           liveRawPointsRef.current = null;
@@ -1046,9 +1079,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         },
         undo() {
           abandonStrokeRef.current();
-          if (undoRef.current.length === 0) return false;
-          redoRef.current.push(snapshotOps(opsRef.current));
-          opsRef.current = undoRef.current.pop() ?? [];
+          if (!bookRef.current.undoOnce()) return false;
+          opsRef.current = bookRef.current.paintOps();
           liveRef.current = null;
           liveRawPointsRef.current = null;
           liveDrawnIndexRef.current = 0;
@@ -1059,9 +1091,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         },
         redo() {
           abandonStrokeRef.current();
-          if (redoRef.current.length === 0) return false;
-          undoRef.current.push(snapshotOps(opsRef.current));
-          opsRef.current = redoRef.current.pop() ?? [];
+          if (!bookRef.current.redoOnce()) return false;
+          opsRef.current = bookRef.current.paintOps();
           liveRef.current = null;
           liveRawPointsRef.current = null;
           liveDrawnIndexRef.current = 0;
@@ -1071,24 +1102,55 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           return true;
         },
         canUndo() {
-          return undoRef.current.length > 0 || opsRef.current.length > 0;
+          return bookRef.current.canUndo();
         },
         hasInk() {
-          // An erase-only history still counts as "they drew something": the
-          // pixels are gone but the board is not the untouched one we seeded.
-          return opsRef.current.length > 0;
+          return bookRef.current.hasInk();
         },
         isDrawing() {
           return drawingRef.current;
         },
         getOps() {
-          return [...opsRef.current];
+          return bookRef.current.assembleOps();
+        },
+        getOpCount() {
+          return bookRef.current.opCount();
+        },
+        dirtyInkPageCount() {
+          return bookRef.current.dirtyCount();
+        },
+        takeDirtyInkPages() {
+          return bookRef.current.takeDirtyEncoded();
+        },
+        markInkPagesFlushed(pageIds) {
+          bookRef.current.markFlushed(pageIds);
+        },
+        ingestInkPages(pages) {
+          abandonStrokeRef.current();
+          bookRef.current.ingestEncodedPages(pages);
+          opsRef.current = bookRef.current.paintOps();
+          liveRef.current = null;
+          liveRawPointsRef.current = null;
+          liveDrawnIndexRef.current = 0;
+          invalidateTiles();
+          repaint();
+        },
+        seedColdInkPages(pages) {
+          bookRef.current.seedCold(pages);
+        },
+        assembleEncoded() {
+          return bookRef.current.assembleEncoded();
+        },
+        encodedShards() {
+          return bookRef.current.allEncodedShards();
+        },
+        inkPageIds() {
+          return bookRef.current.pageIds();
         },
         setOps(ops) {
           abandonStrokeRef.current();
-          opsRef.current = cloneOps(ops);
-          undoRef.current = [];
-          redoRef.current = [];
+          bookRef.current.replaceAll(cloneOps(ops));
+          opsRef.current = bookRef.current.paintOps();
           liveRef.current = null;
           liveRawPointsRef.current = null;
           liveDrawnIndexRef.current = 0;
@@ -1149,6 +1211,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       });
       observer.observe(board);
       return () => observer.disconnect();
+    }, []);
+
+    useEffect(() => {
+      return () => {
+        if (pageWindowTimerRef.current) window.clearTimeout(pageWindowTimerRef.current);
+      };
     }, []);
 
     // The clip is compared inside the cache, which drops its tiles only when the

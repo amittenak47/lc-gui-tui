@@ -85,6 +85,10 @@ export interface EncodedOp {
   hk?: number;
   /** Host `scrollLeft` when the stroke was written (not point slowness). */
   hsl?: number;
+  /** Stable stroke id for the global undo log. Absent on pre-shard blobs. */
+  i?: number;
+  /** Global composite order. Absent on pre-shard blobs. */
+  s?: number;
   /* erase only */
   r?: number;
   /** `dx, dy` in tenths for each point after the first — length `2 * (n - 1)`. */
@@ -208,6 +212,8 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       if (op.highlight) record.hl = 1;
       if (op.hostKey !== undefined) record.hk = op.hostKey;
       if (op.scrollLeftAtDraw !== undefined) record.hsl = op.scrollLeftAtDraw;
+      if (op.id != null) record.i = op.id;
+      if (op.seq != null) record.s = op.seq;
       record.pr = pressures;
       record.sl = slownesses;
     } else {
@@ -225,11 +231,99 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       record.r = op.radius;
       if (op.hostKey !== undefined) record.hk = op.hostKey;
       if (op.scrollLeftAtDraw !== undefined) record.hsl = op.scrollLeftAtDraw;
+      if (op.id != null) record.i = op.id;
+      if (op.seq != null) record.s = op.seq;
     }
     encoded.push(record);
   }
 
   return raw.length > 0 ? { v: 2, ops: encoded, raw } : { v: 2, ops: encoded };
+}
+
+/**
+ * How much one encoded ink blob costs — Phase 0 telemetry.
+ *
+ * `encodedPayloadBytes` is the typed-array payload IndexedDB actually clones
+ * (xy + pressure + slowness). That is the disk figure. Live RAM while writing
+ * is the decoded `InkOp[]` (one object per point) and is estimated separately
+ * because V8 hidden-class size is not something we can measure in Node tests
+ * with any honesty beyond an order of magnitude.
+ *
+ * The codec header's "few thousand" points per dense page is {@link DENSE_PAGE_POINTS}.
+ */
+export const DENSE_PAGE_POINTS = 3000;
+
+/** Conservative bytes per decoded point object in V8 (hidden class + 4 numbers). */
+export const LIVE_POINT_RAM_BYTES = 96;
+
+export interface InkStorageStats {
+  ops: number;
+  points: number;
+  /** Int16 xy + Uint8 pressure/slowness. What IDB stores for inkC. */
+  encodedPayloadBytes: number;
+  /** JSON.stringify of the encoded blob — sidecar / daemon path, before gzip. */
+  encodedJsonBytes: number;
+  /** JSON.stringify of the live ops — the old 78 KB/page encoding. */
+  rawJsonBytes: number;
+  /** Order-of-magnitude live RAM for decoded point objects. */
+  livePointRamBytes: number;
+}
+
+export function inkStorageStats(
+  encoded: EncodedInk,
+  rawOps?: readonly InkOp[],
+): InkStorageStats {
+  let points = 0;
+  let encodedPayloadBytes = 0;
+  for (const record of encoded.ops) {
+    points += record.n;
+    encodedPayloadBytes += record.xy.byteLength;
+    encodedPayloadBytes += record.pr?.byteLength ?? 0;
+    encodedPayloadBytes += record.sl?.byteLength ?? 0;
+  }
+  for (const op of encoded.raw ?? []) {
+    points += op.points.length;
+  }
+  const encodedJsonBytes = jsonUtf8Bytes(encoded);
+  const rawJsonBytes = rawOps ? jsonUtf8Bytes(rawOps) : 0;
+  return {
+    ops: encoded.ops.length + (encoded.raw?.length ?? 0),
+    points,
+    encodedPayloadBytes,
+    encodedJsonBytes,
+    rawJsonBytes,
+    livePointRamBytes: points * LIVE_POINT_RAM_BYTES,
+  };
+}
+
+function jsonUtf8Bytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
+/**
+ * Scale one measured dense page to a 1500-page textbook and ×4 snapshot copies.
+ */
+export function scaleInkStorage(
+  oneDensePage: InkStorageStats,
+  pages: number,
+  snapshotCopies = 4,
+): {
+  pages: number;
+  encodedPayloadBytes: number;
+  encodedJsonBytes: number;
+  rawJsonBytes: number;
+  livePointRamBytes: number;
+  encodedWithSnapshotsBytes: number;
+} {
+  const n = Math.max(0, pages);
+  return {
+    pages: n,
+    encodedPayloadBytes: oneDensePage.encodedPayloadBytes * n,
+    encodedJsonBytes: oneDensePage.encodedJsonBytes * n,
+    rawJsonBytes: oneDensePage.rawJsonBytes * n,
+    livePointRamBytes: oneDensePage.livePointRamBytes * n,
+    encodedWithSnapshotsBytes: oneDensePage.encodedPayloadBytes * n * snapshotCopies,
+  };
 }
 
 /**
@@ -291,11 +385,15 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
       if (record.hl === 1) op.highlight = true;
       if (record.hk !== undefined) op.hostKey = record.hk;
       if (typeof record.hsl === "number") op.scrollLeftAtDraw = record.hsl;
+      if (typeof record.i === "number") op.id = record.i;
+      if (typeof record.s === "number") op.seq = record.s;
       ops.push(op);
     } else {
       const erase: InkOp = { kind: "erase", radius: record.r ?? 1, points };
       if (record.hk !== undefined) erase.hostKey = record.hk;
       if (typeof record.hsl === "number") erase.scrollLeftAtDraw = record.hsl;
+      if (typeof record.i === "number") erase.id = record.i;
+      if (typeof record.s === "number") erase.seq = record.s;
       ops.push(erase);
     }
   }
@@ -384,4 +482,168 @@ function toTyped<T extends Int16Array | Uint8Array>(
     return out;
   }
   return new Ctor(0);
+}
+
+/**
+ * Join per-page shards into one blob, in composite (`s`) order.
+ *
+ * Typed arrays are shared, not copied — the caller must not mutate a shard
+ * after this returns. Used for snapshots and the sidecar, never on the
+ * pointer path.
+ */
+export function concatEncodedInk(shards: readonly EncodedInk[]): EncodedInk {
+  const ops: EncodedOp[] = [];
+  const raw: InkOp[] = [];
+  for (const shard of shards) {
+    ops.push(...shard.ops);
+    if (shard.raw) raw.push(...shard.raw);
+  }
+  ops.sort((a, b) => (a.s ?? 0) - (b.s ?? 0));
+  raw.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+  return raw.length > 0 ? { v: 2, ops, raw } : { v: 2, ops };
+}
+
+const PACK_MAGIC = 0x436b6e69; // "inkC" little-endian
+
+interface PackedOpMeta {
+  k: EncodedOp["k"];
+  x0: number;
+  y0: number;
+  n: number;
+  xyN: number;
+  prN: number;
+  slN: number;
+  c?: string;
+  w?: number;
+  f?: number;
+  pc?: number;
+  ps?: 0 | 1;
+  si?: number;
+  sbb?: number;
+  ib?: number;
+  hl?: 1;
+  hk?: number;
+  hsl?: number;
+  i?: number;
+  s?: number;
+  r?: number;
+}
+
+/**
+ * Pack encoded ink into a byte envelope the worker can gzip.
+ *
+ * Eviction itself never goes through this — dirty WAL is structured-clone
+ * `EncodedInk`. Gzip is a worker job on those bytes.
+ */
+export function packEncodedInk(encoded: EncodedInk): Uint8Array<ArrayBuffer> {
+  const meta: PackedOpMeta[] = encoded.ops.map((op) => ({
+    k: op.k,
+    x0: op.x0,
+    y0: op.y0,
+    n: op.n,
+    xyN: op.xy.length,
+    prN: op.pr?.length ?? 0,
+    slN: op.sl?.length ?? 0,
+    ...(op.c != null ? { c: op.c } : {}),
+    ...(op.w != null ? { w: op.w } : {}),
+    ...(op.f != null ? { f: op.f } : {}),
+    ...(op.pc != null ? { pc: op.pc } : {}),
+    ...(op.ps != null ? { ps: op.ps } : {}),
+    ...(op.si != null ? { si: op.si } : {}),
+    ...(op.sbb != null ? { sbb: op.sbb } : {}),
+    ...(op.ib != null ? { ib: op.ib } : {}),
+    ...(op.hl != null ? { hl: op.hl } : {}),
+    ...(op.hk != null ? { hk: op.hk } : {}),
+    ...(op.hsl != null ? { hsl: op.hsl } : {}),
+    ...(op.i != null ? { i: op.i } : {}),
+    ...(op.s != null ? { s: op.s } : {}),
+    ...(op.r != null ? { r: op.r } : {}),
+  }));
+  const metaBytes = new TextEncoder().encode(JSON.stringify({ meta, raw: encoded.raw }));
+  let payload = 0;
+  for (const op of encoded.ops) {
+    payload += op.xy.byteLength + (op.pr?.byteLength ?? 0) + (op.sl?.byteLength ?? 0);
+  }
+  const out = new Uint8Array(12 + metaBytes.length + payload);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, PACK_MAGIC, true);
+  view.setUint32(4, 1, true);
+  view.setUint32(8, metaBytes.length, true);
+  out.set(metaBytes, 12);
+  let offset = 12 + metaBytes.length;
+  for (const op of encoded.ops) {
+    out.set(new Uint8Array(op.xy.buffer, op.xy.byteOffset, op.xy.byteLength), offset);
+    offset += op.xy.byteLength;
+    if (op.pr) {
+      out.set(new Uint8Array(op.pr.buffer, op.pr.byteOffset, op.pr.byteLength), offset);
+      offset += op.pr.byteLength;
+    }
+    if (op.sl) {
+      out.set(new Uint8Array(op.sl.buffer, op.sl.byteOffset, op.sl.byteLength), offset);
+      offset += op.sl.byteLength;
+    }
+  }
+  return out;
+}
+
+export function unpackEncodedInk(bytes: Uint8Array): EncodedInk | null {
+  if (bytes.length < 12) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(0, true) !== PACK_MAGIC) return null;
+  if (view.getUint32(4, true) !== 1) return null;
+  const metaLen = view.getUint32(8, true);
+  if (metaLen < 0 || 12 + metaLen > bytes.length) return null;
+  let parsed: { meta?: PackedOpMeta[]; raw?: InkOp[] };
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes.subarray(12, 12 + metaLen))) as {
+      meta?: PackedOpMeta[];
+      raw?: InkOp[];
+    };
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed.meta)) return null;
+  let offset = 12 + metaLen;
+  const ops: EncodedOp[] = [];
+  for (const item of parsed.meta) {
+    const xy = new Int16Array(item.xyN);
+    new Uint8Array(xy.buffer).set(bytes.subarray(offset, offset + item.xyN * 2));
+    offset += item.xyN * 2;
+    let pr: Uint8Array | undefined;
+    let sl: Uint8Array | undefined;
+    if (item.prN > 0) {
+      pr = bytes.subarray(offset, offset + item.prN).slice();
+      offset += item.prN;
+    }
+    if (item.slN > 0) {
+      sl = bytes.subarray(offset, offset + item.slN).slice();
+      offset += item.slN;
+    }
+    const record: EncodedOp = {
+      k: item.k,
+      x0: item.x0,
+      y0: item.y0,
+      n: item.n,
+      xy,
+    };
+    if (item.c != null) record.c = item.c;
+    if (item.w != null) record.w = item.w;
+    if (item.f != null) record.f = item.f;
+    if (item.pc != null) record.pc = item.pc;
+    if (item.ps != null) record.ps = item.ps;
+    if (item.si != null) record.si = item.si;
+    if (item.sbb != null) record.sbb = item.sbb;
+    if (item.ib != null) record.ib = item.ib;
+    if (item.hl != null) record.hl = item.hl;
+    if (item.hk != null) record.hk = item.hk;
+    if (item.hsl != null) record.hsl = item.hsl;
+    if (item.i != null) record.i = item.i;
+    if (item.s != null) record.s = item.s;
+    if (item.r != null) record.r = item.r;
+    if (pr) record.pr = pr;
+    if (sl) record.sl = sl;
+    ops.push(record);
+  }
+  const raw = Array.isArray(parsed.raw) ? parsed.raw : undefined;
+  return raw ? { v: 2, ops, raw } : { v: 2, ops };
 }

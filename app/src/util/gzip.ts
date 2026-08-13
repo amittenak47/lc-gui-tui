@@ -41,6 +41,29 @@ export async function gzipText(text: string): Promise<Uint8Array<ArrayBuffer>> {
   }
 }
 
+/** gzip typed bytes (archive shards), or return them unchanged. */
+export async function gzipBytes(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  if (!canGzip()) return bytes;
+  try {
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch {
+    return bytes;
+  }
+}
+
+/** Inverse of {@link gzipBytes}; sniffs magic so uncompressed archives still open. */
+export async function bytesFromMaybeGzip(
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<Uint8Array<ArrayBuffer>> {
+  if (!isGzip(bytes)) return bytes;
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("this device cannot read a compressed annotation archive");
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 /**
  * Read bytes back as text, decompressing when they are gzipped.
  *

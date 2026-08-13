@@ -5,6 +5,7 @@
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { deleteContent, getContent, putContent } from "./contentStore";
 import { deletePadSnapshots } from "./padSnapshotStore";
+import { deleteInkPages, whiteboardDocKey } from "./inkPageStore";
 import { setStorageItem } from "./storageQuota";
 
 export const SCRATCHPAD_LIBRARY_LIMIT = 50;
@@ -173,6 +174,7 @@ export async function deleteScratchNotebook(id: string): Promise<void> {
   writeIndex(readIndex().filter((entry) => entry.id !== id));
   await deleteContent(id);
   void deletePadSnapshots("whiteboard", id).catch(() => {});
+  void deleteInkPages(whiteboardDocKey(id)).catch(() => {});
 }
 
 /**

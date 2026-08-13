@@ -57,8 +57,9 @@ import { StatusBanner } from "./components/StatusBanner";
 import { SmartTips } from "./components/SmartTips";
 import { Board } from "./canvas/Board";
 import { saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
-import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
 import { inkOpsFrom } from "./canvas/inkCodec";
+import { concatInkShards, drainDirtyInkArchives } from "./canvas/inkArchiveClient";
+import type { BoardBlob, BoardHandle, ScreenRect } from "./canvas/BoardHandle";
 import { studentAuthoredElements, studentElements } from "./canvas/capture";
 import type { StructureBaseline } from "./canvas/boardDelta";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
@@ -192,6 +193,12 @@ import {
 } from "./util/scratchpadStore";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
 import {
+  getInkPages,
+  mdInkDocKey,
+  putInkPages,
+  whiteboardDocKey,
+} from "./util/inkPageStore";
+import {
   getPadSnapshot,
   recordRollingSnapshots,
   type PadSnapshotTier,
@@ -250,6 +257,38 @@ const SCRATCHPAD_PROBLEM: ProblemDetail = {
 
 function isScratchpad(problem: ProblemDetail | null | undefined): boolean {
   return problem?.task_id === SCRATCHPAD_TASK_ID;
+}
+
+async function flushDirtyInk(board: BoardHandle, docKey: string | null): Promise<void> {
+  if (!docKey || board.isInking()) return;
+  const dirty = board.takeDirtyInkPages();
+  if (dirty.size === 0) return;
+  try {
+    await putInkPages(docKey, dirty, { dirty: true });
+    board.markInkPagesFlushed(dirty.keys());
+    // Phase 4: gzip is the worker's job. Do not await it under a save/tick.
+    void drainDirtyInkArchives();
+  } catch {
+    /* stay dirty — the next save retries */
+  }
+}
+
+async function boardWithAssembledInk(board: BoardHandle, blob: BoardBlob): Promise<BoardBlob> {
+  const shards = board.encodedInkShards();
+  if (shards.length === 0) return blob;
+  return { ...blob, inkC: await concatInkShards(shards) };
+}
+
+async function restoreInk(board: BoardHandle, docKey: string | null, blob: { ink?: unknown; inkC?: unknown }): Promise<void> {
+  if (docKey) {
+    const shards = await getInkPages(docKey);
+    if (shards.size > 0) {
+      board.ingestInkPages(shards);
+      return;
+    }
+  }
+  const ops = inkOpsFrom(blob);
+  if (ops.length > 0) board.setInkOps(ops);
 }
 
 /**
@@ -497,7 +536,35 @@ export function App() {
    */
   useEffect(() => {
     void requestPersistentStorage();
-  }, []);
+    void drainDirtyInkArchives();
+    const flush = () => {
+      const board = boardRef.current;
+      if (!board || board.isInking()) return;
+      const source = mdInkSourceRef.current;
+      const key = source
+        ? mdInkDocKey(source.hash)
+        : scratchNotebookId
+          ? whiteboardDocKey(scratchNotebookId)
+          : null;
+      void flushDirtyInk(board, key);
+    };
+    const onLeave = (event: BeforeUnloadEvent) => {
+      const board = boardRef.current;
+      if (!board || board.dirtyInkPageCount() === 0) return;
+      flush();
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const onHidden = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("beforeunload", onLeave);
+    document.addEventListener("visibilitychange", onHidden);
+    return () => {
+      window.removeEventListener("beforeunload", onLeave);
+      document.removeEventListener("visibilitychange", onHidden);
+    };
+  }, [scratchNotebookId]);
 
   /** Background offline pack download — survives leaving Settings; pauses on app background. */
   useEffect(() => {
@@ -1371,32 +1438,34 @@ export function App() {
         // refused. One attempt per change is the most that can ever help.
         lastSavedHashRef.current = hash;
         lastSavedMarksRef.current = marks;
-        void saveMdInkDoc({
-          id: mdInkDocIdRef.current ?? undefined,
-          name: source.name,
-          hash: source.hash,
-          source: source.text,
-          docType: source.docType,
-          board: board.saveBoard(),
-          footnotes: mdInkFootnotesRef.current,
-        })
-          .then((saved) => {
+        const docKey = mdInkDocKey(source.hash);
+        void (async () => {
+          await flushDirtyInk(board, docKey);
+          const liveBoard = board.saveBoard({ assembleInk: false });
+          try {
+            const saved = await saveMdInkDoc({
+              id: mdInkDocIdRef.current ?? undefined,
+              name: source.name,
+              hash: source.hash,
+              source: source.text,
+              docType: source.docType,
+              board: liveBoard,
+              footnotes: mdInkFootnotesRef.current,
+            });
             if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
             setNotice(`Saved “${saved.name}”.`);
+            const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void recordRollingSnapshots({
               kind: "md-ink",
               key: saved.hash,
               name: saved.name,
-              board: saved.board,
+              board: snapBoard,
               footnotes: saved.footnotes,
             });
-          })
-          .catch((cause: unknown) => {
-            // A *full library* is not worth interrupting a writing session for;
-            // the explicit Save on the way out reports it properly. A full
-            // *device* is, because nothing on the way out will succeed either.
+          } catch (cause: unknown) {
             noteStorageFull(cause);
-          });
+          }
+        })();
         return;
       }
 
@@ -1416,40 +1485,42 @@ export function App() {
         }
       }
 
-      const blob = board.saveBoard();
       dirtyRef.current = true;
       if (isScratchpad(problem)) {
-        // Marked attempted before the write — see the md-ink tick above for
-        // both halves of why.
         lastSavedHashRef.current = hash;
-        void saveScratchNotebook({
-          id: scratchNotebookId ?? undefined,
-          board: blob,
-          agent: persistableCoachMessages(coachMessages),
-          pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
-        })
-          .then((saved) => {
+        void (async () => {
+          const liveBoard = board.saveBoard({ assembleInk: false });
+          try {
+            const saved = await saveScratchNotebook({
+              id: scratchNotebookId ?? undefined,
+              board: liveBoard,
+              agent: persistableCoachMessages(coachMessages),
+              pageCount: Math.max(scratchPageCount, countScratchPages(liveBoard.elements)),
+            });
             if (!scratchNotebookId) setScratchNotebookId(saved.id);
+            await flushDirtyInk(board, whiteboardDocKey(saved.id));
             setNotice(`Saved “${saved.title}”.`);
+            const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void recordRollingSnapshots({
               kind: "whiteboard",
               key: saved.id,
               name: saved.title,
-              board: saved.board,
+              board: snapBoard,
               agent: saved.agent,
               pageCount: saved.pageCount,
             });
-          })
-          .catch((cause: unknown) => {
+          } catch (cause: unknown) {
             if (cause instanceof ScratchpadLibraryFullError) {
               scratchLibResumeRef.current = null;
               setScratchLibOpen(true);
             } else {
               noteStorageFull(cause);
             }
-          });
+          }
+        })();
         return;
       }
+      const blob = board.saveBoard();
       void client.putBoard(problem.task_id, blob, problem.dataset).then(() => {
         lastSavedHashRef.current = hash;
       }).catch(() => {
@@ -1721,8 +1792,9 @@ export function App() {
         syncDrawingsToBoard(resumedMessages);
         // Ink first: the page grows to it, and a fit taken before that is a fit
         // against a frame about to change size. See `openScratchpad`.
-        if (hasSavedBoard && savedInk.length > 0) {
-          boardRef.current?.setInkOps(savedInk);
+        if (hasSavedBoard && saved) {
+          const handle = boardRef.current;
+          if (handle) await restoreInk(handle, null, saved);
         }
         await boardRef.current?.settleFitView();
 
@@ -1873,8 +1945,8 @@ export function App() {
          * open, and why it came right the moment the pen touched down.
          */
         if (restored && notebook) {
-          const notebookInk = inkOpsFrom(notebook.board);
-          if (notebookInk.length > 0) boardRef.current?.setInkOps(notebookInk);
+          const handle = boardRef.current;
+          if (handle) await restoreInk(handle, whiteboardDocKey(notebook.id), notebook.board);
         }
         await boardRef.current?.settleFitView();
 
@@ -2077,7 +2149,10 @@ export function App() {
         await boardRef.current?.waitForTemplate();
         // Ink first — see `openScratchpad`. The second fit below still runs
         // once the document itself has finished measuring.
-        if (savedInk.length > 0) boardRef.current?.setInkOps(savedInk);
+        if (existing) {
+          const handle = boardRef.current;
+          if (handle) await restoreInk(handle, mdInkDocKey(hash), existing.board);
+        }
         await boardRef.current?.settleFitView();
 
         // Document must finish laying out (measure stable) before reveal.
@@ -4122,22 +4197,24 @@ export function App() {
       const board = boardRef.current;
       if (!board || !problem || !isScratchpad(problem)) return;
       try {
-        const blob = board.saveBoard();
+        await flushDirtyInk(board, scratchNotebookId ? whiteboardDocKey(scratchNotebookId) : null);
+        const liveBoard = board.saveBoard({ assembleInk: false });
         const saved = await saveScratchNotebook({
           id: scratchNotebookId ?? undefined,
-          board: blob,
+          board: liveBoard,
           agent: persistableCoachMessages(coachMessages),
-          pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
+          pageCount: Math.max(scratchPageCount, countScratchPages(liveBoard.elements)),
         });
         setScratchNotebookId(saved.id);
-        // Discard now rolls back to this save, not past it.
+        await flushDirtyInk(board, whiteboardDocKey(saved.id));
         await rebaselineScratchSession(saved.id);
         setNotice(`Saved “${saved.title}”.`);
+        const snapBoard = await boardWithAssembledInk(board, liveBoard);
         void recordRollingSnapshots({
           kind: "whiteboard",
           key: saved.id,
           name: saved.title,
-          board: saved.board,
+          board: snapBoard,
           agent: saved.agent,
           pageCount: saved.pageCount,
         });
@@ -4222,7 +4299,8 @@ export function App() {
     const board = boardRef.current;
     const source = mdInkSource;
     if (!board || !source) return null;
-    const blob = board.saveBoard();
+    await flushDirtyInk(board, mdInkDocKey(source.hash));
+    const blob = board.saveBoard({ assembleInk: false });
     if (!blob) return null;
     try {
       const saved = await saveMdInkDoc({
@@ -4235,19 +4313,18 @@ export function App() {
         footnotes: mdInkFootnotes,
       });
       setMdInkDocId(saved.id);
-      // Discard now rolls back to this save, not past it. `saved` is the entry
-      // just written, so there is nothing to be gained by reading it back.
       mdInkBaselineRef.current = { id: saved.id, entry: saved };
       mdInkPristineHashRef.current = padContentFingerprint(
         board.getElements(),
         board.getInkOpCount(),
       );
       mdInkPristineMarksRef.current = footnoteRevision(mdInkFootnotes);
+      const snapBoard = await boardWithAssembledInk(board, blob);
       void recordRollingSnapshots({
         kind: "md-ink",
         key: saved.hash,
         name: saved.name,
-        board: saved.board,
+        board: snapBoard,
         footnotes: saved.footnotes,
       });
       return saved;
@@ -4466,8 +4543,13 @@ export function App() {
         }
         if (isScratchpad(problem)) {
           if (save) {
-            const blob = boardRef.current?.saveBoard();
-            if (blob) {
+            const handle = boardRef.current;
+            if (handle) {
+              await flushDirtyInk(
+                handle,
+                scratchNotebookId ? whiteboardDocKey(scratchNotebookId) : null,
+              );
+              const blob = handle.saveBoard({ assembleInk: false });
               try {
                 const saved = await saveScratchNotebook({
                   id: scratchNotebookId ?? undefined,
@@ -4476,12 +4558,14 @@ export function App() {
                   pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
                 });
                 setScratchNotebookId(saved.id);
+                await flushDirtyInk(handle, whiteboardDocKey(saved.id));
                 await rebaselineScratchSession(saved.id);
+                const snapBoard = await boardWithAssembledInk(handle, blob);
                 void recordRollingSnapshots({
                   kind: "whiteboard",
                   key: saved.id,
                   name: saved.title,
-                  board: saved.board,
+                  board: snapBoard,
                   agent: saved.agent,
                   pageCount: saved.pageCount,
                 });
