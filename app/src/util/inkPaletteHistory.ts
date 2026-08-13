@@ -187,3 +187,53 @@ export function pickFallbackPalette(history: InkPaletteHistory): InkPalette {
   ];
   return paletteFromColorHuntCode(code) ?? ["#3d3d3d", "#6d7eae", "#c07d91", "#8a7aaf"];
 }
+
+const MARK_PALETTE_FALLBACK: InkPalette = ["#83e4b5", "#3ec8ac", "#4e90a4", "#6e60a0"];
+
+/**
+ * Palette owned by one annotation block, keyed by create-order index.
+ *
+ * Document ribbon numbers move when a mark is deleted; this index is snapshotted
+ * at create time so cycling one wheel cannot retint the others.
+ */
+export function paletteForMarkIndex(index: number): InkPalette {
+  const n = COLORHUNT_FALLBACK_CODES.length;
+  const i = ((index % n) + n) % n;
+  return (
+    paletteFromColorHuntCode(COLORHUNT_FALLBACK_CODES[i]!) ?? [...MARK_PALETTE_FALLBACK]
+  );
+}
+
+function fallbackCodeIndex(palette: readonly string[]): number {
+  const key = palette.map((c) => c.replace(/^#/, "").toLowerCase()).join("");
+  return COLORHUNT_FALLBACK_CODES.findIndex((code) => code === key);
+}
+
+/** Step this mark's ColorHunt set without touching the board wheel. */
+export function stepFallbackPalette(current: readonly string[], delta: 1 | -1): InkPalette {
+  const n = COLORHUNT_FALLBACK_CODES.length;
+  const from = fallbackCodeIndex(current);
+  const i = from >= 0 ? from : 0;
+  return paletteForMarkIndex(i + delta);
+}
+
+/** First swatch of {@link paletteForMarkIndex} — the colour a new mark starts on. */
+export function footnoteThemeSeed(existingCount: number): {
+  color: string;
+  palette: InkPalette;
+} {
+  const palette = paletteForMarkIndex(existingCount);
+  return { color: palette[0]!, palette };
+}
+
+/** Keep the same wheel slot when this mark's palette set changes. */
+export function remapColorToPalette(
+  color: string | undefined,
+  prev: readonly string[],
+  next: readonly string[],
+): string {
+  const slot = color
+    ? prev.findIndex((swatch) => swatch.trim().toLowerCase() === color.trim().toLowerCase())
+    : 0;
+  return next[slot >= 0 ? slot : 0] ?? next[0] ?? color ?? "#0d9488";
+}

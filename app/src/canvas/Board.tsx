@@ -2189,6 +2189,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [highlighting, onHighlightingChange]);
 
   /*
+   * 🔍 and the pen cannot both be armed. Ask-area parks the ink on `hand`
+   * (muted by `lc-board-highlighting`); leaving it restores the annotate pen.
+   */
+  useEffect(() => {
+    if (highlighting) {
+      setShapesOpen(false);
+      setCaptureMenuOpen(false);
+      if (activeToolRef.current !== "hand") setActiveToolRef.current("hand");
+      return;
+    }
+    if (annotateCode && activeToolRef.current === "hand") {
+      setActiveToolRef.current("freedraw");
+    }
+  }, [highlighting, annotateCode]);
+
+  /*
    * Entering annotate mode has to pick up a pen.
    *
    * The ink layer only accepts pointers while a drawing tool is active — that
@@ -2629,6 +2645,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const setActiveToolRef = useRef<(tool: ToolName) => void>(() => {});
   const setTool = useCallback((tool: ToolName) => {
+    // One tool at a time: picking a drawing / select tool drops Ask-area (🔍).
+    // `hand` is the parked tool while 🔍 owns the page — do not clear it here.
+    if (tool !== "hand") setHighlighting(false);
     if (tool === "freedraw" || tool === "highlighter") {
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcInk", locked: false });
       apiRef.current?.resetCursor?.();

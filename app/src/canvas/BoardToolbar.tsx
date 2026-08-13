@@ -110,12 +110,9 @@ export interface BoardToolbarProps {
   active: ToolName;
   onPick: (tool: ToolName) => void;
   /**
-   * Highlighter: sweep an area of the document and hand it to the coach.
-   *
-   * Not an Excalidraw tool, which is why it is a flag rather than a `ToolName`.
-   * What it produces is a footnote anchored to a rectangle of the *page* — the
-   * one kind of mark that works on a scanned plate or a figure, where there is
-   * no text to select. Absent on boards with no document under them.
+   * Ask-area: same two gestures as Scroll — native text drag, or hold then
+   * marquee. Not an Excalidraw tool, which is why it is a flag rather than a
+   * `ToolName`. Mutually exclusive with the pen.
    */
   highlighting?: boolean;
   onToggleHighlight?: () => void;
@@ -570,7 +567,7 @@ export function BoardToolbar({
             }
             aria-pressed={highlighting}
             aria-label="Ask about an area"
-            data-tip="Sweep an area of the page to ask the coach about it"
+            data-tip="Select text, or hold then drag to mark an area"
             data-tip-placement="bottom"
             onClick={onToggleHighlight}
           >

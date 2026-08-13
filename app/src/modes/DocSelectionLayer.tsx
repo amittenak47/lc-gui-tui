@@ -1,13 +1,10 @@
 /**
  * Picking a quote out of the page.
  *
- * Two gestures in Scroll mode:
+ * Two gestures in Scroll mode — and the same two when Ask-area (🔍) is on:
  * 1. Native text selection — down + drag immediately (any direction). Primary
  *    path for Copy / Google.
  * 2. Hold-still (~580ms) then drag — annotate region marquee (figures / Mark).
- *
- * Annotate + highlight/underline uses the same native Selection path (no hold
- * box). Sub-mark grips inside an open footnote stay custom.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -662,12 +659,12 @@ export function DocSelectionLayer({
     return () => setSubMarkPointerHit(null);
   }, [subMarkParent, subMarkArmed]);
 
-  // Reading mode: hold still to arm annotate marquee (region / Mark). Native
-  // drag-select is separate — do not preventDefault selectstart until armed.
+  // Reading mode (and Ask-area 🔍): hold still to arm annotate marquee.
+  // Native drag-select is separate — do not preventDefault selectstart until armed.
   // Panel open → native in-band only (no hold box fighting Copy).
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || !enabled || highlighting || subMarkArmed || subMarkParent) return;
+    if (!host || !enabled || subMarkArmed || subMarkParent) return;
 
     const paintFromFinger = (hold: NonNullable<typeof holdRef.current>) => {
       const body = bodyRef.current;

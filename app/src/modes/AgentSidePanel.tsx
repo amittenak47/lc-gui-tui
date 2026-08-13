@@ -12,8 +12,10 @@ import { createPortal } from "react-dom";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
 import { STAGE_LABELS } from "../api/types";
+import { HoldButton } from "../components/HoldButton";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS } from "../util/gesture";
+import { footnoteChipLabel } from "../util/docFootnotes";
 import { useIsMobile } from "../util/mobile";
 import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
 import type { MessageDrawing } from "../viz/drawingState";
@@ -363,8 +365,11 @@ export interface AgentSidePanelProps {
   footnoteThreadRoots?: ReadonlySet<string>;
   onOpenFootnoteThread?: (rootId: string) => void;
   /** Mark panels queued onto this send. */
-  attachedMarks?: Array<{ id: string; excerpt: string; number?: number }>;
+  attachedMarks?: Array<{ id: string; number?: number; title?: string; color?: string }>;
   onRemoveAttached?: (id: string) => void;
+  /** Every mark on the open document — hold Annotations to pick from this list. */
+  annotationChoices?: Array<{ id: string; number?: number; title?: string; color?: string }>;
+  onToggleAttached?: (id: string) => void;
   onSend: (text: string, flags: CoachSendFlags, mode?: "queue" | "merge") => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
@@ -401,6 +406,8 @@ export function AgentSidePanel({
   onOpenFootnoteThread,
   attachedMarks = [],
   onRemoveAttached,
+  annotationChoices = [],
+  onToggleAttached,
   onSend,
   onThreadChange,
   forwardFailures = false,
@@ -433,12 +440,16 @@ export function AgentSidePanel({
   const [lazy, setLazy] = useState(false);
   const [handwriting, setHandwriting] = useState(false);
   const [annotations, setAnnotations] = useState(false);
+  const [pickMarksOpen, setPickMarksOpen] = useState(false);
+  const pickMarksWrapRef = useRef<HTMLSpanElement | null>(null);
   const attachedCount = attachedMarks?.length ?? 0;
+  const canPickMarks = annotationChoices.length > 0;
   /**
    * Annotations has something to send when marks are attached, or when there is
-   * a board with a region in front of the writer.
+   * a board with a region in front of the writer. Hold-to-pick stays live as
+   * long as the document has marks at all.
    */
-  const annotationsUnavailable = attachedCount === 0 && annotateUnavailable;
+  const annotationsUnavailable = attachedCount === 0 && !canPickMarks && annotateUnavailable;
   /** Photos staged by (+), sent with the next message and cleared after. */
   const [photos, setPhotos] = useState<CoachAttachment[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -692,6 +703,17 @@ export function AgentSidePanel({
   useEffect(() => {
     setAnnotations(attachedCount > 0);
   }, [attachedCount]);
+
+  useEffect(() => {
+    if (!pickMarksOpen) return;
+    const close = (event: globalThis.PointerEvent) => {
+      const node = event.target;
+      if (node instanceof Node && pickMarksWrapRef.current?.contains(node)) return;
+      setPickMarksOpen(false);
+    };
+    document.addEventListener("pointerdown", close, true);
+    return () => document.removeEventListener("pointerdown", close, true);
+  }, [pickMarksOpen]);
 
   const endSheetDrag = useCallback(
     (event: PointerEvent<HTMLElement>) => {
@@ -1081,6 +1103,7 @@ export function AgentSidePanel({
     setLazy(false);
     setHandwriting(false);
     setAnnotations(false);
+    setPickMarksOpen(false);
     setPhotos([]);
     setPhotoError(null);
     closeMessageMenu();
@@ -1411,9 +1434,18 @@ export function AgentSidePanel({
           {attachedMarks.length > 0 && (
             <div className="lc-coach-mark-chips" aria-label="Attached annotations">
               {attachedMarks.map((mark) => (
-                <span className="lc-footnote-chip is-active" key={mark.id}>
-                  {mark.number != null ? `${mark.number}. ` : ""}
-                  {mark.excerpt.slice(0, 48)}
+                <span
+                  className={`lc-footnote-chip is-active${mark.color ? " is-tinted" : ""}`}
+                  key={mark.id}
+                  style={
+                    mark.color
+                      ? { ["--lc-fn-color" as string]: mark.color }
+                      : undefined
+                  }
+                >
+                  <span className="lc-footnote-chip-label">
+                    {footnoteChipLabel(mark.number, mark.title)}
+                  </span>
                   {onRemoveAttached && (
                     <button
                       type="button"
@@ -1616,23 +1648,70 @@ export function AgentSidePanel({
                 tip={
                   annotationsUnavailable
                     ? NOT_ON_SCRATCHPAD
-                    : attachedCount > 0
-                      ? `Send ${attachedCount} attached mark${attachedCount === 1 ? "" : "s"}`
-                      : "Send the region you are looking at, not the whole board"
+                    : canPickMarks
+                      ? "Tap to send attached marks. Hold to pick a numbered block."
+                      : attachedCount > 0
+                        ? `Send ${attachedCount} attached mark${attachedCount === 1 ? "" : "s"}`
+                        : "Send the region you are looking at, not the whole board"
                 }
                 placement="left"
               >
-                <button
-                  type="button"
-                  className={`lc-flag${annotations ? " lc-flag-active" : ""}${
-                    annotationsUnavailable ? " lc-flag-unavailable" : ""
-                  }`}
-                  aria-pressed={annotations}
-                  disabled={busy || annotationsUnavailable}
-                  onClick={() => setAnnotations((current) => !current)}
-                >
-                  Annotations
-                </button>
+                <span className="lc-coach-annotate-wrap" ref={pickMarksWrapRef}>
+                  <HoldButton
+                    label="Annotations"
+                    className={`lc-flag lc-coach-annotate${
+                      annotations ? " lc-flag-active" : ""
+                    }${annotationsUnavailable ? " lc-flag-unavailable" : ""}`}
+                    pressed={annotations}
+                    disabled={busy || annotationsUnavailable}
+                    resetKey={pickMarksOpen}
+                    onTap={() => {
+                      setPickMarksOpen(false);
+                      setAnnotations((current) => !current);
+                    }}
+                    onConfirm={() => {
+                      if (!canPickMarks) return;
+                      setPickMarksOpen(true);
+                    }}
+                    ariaLabel={
+                      canPickMarks
+                        ? "Annotations: tap to toggle, hold to pick a mark"
+                        : "Annotations"
+                    }
+                  >
+                    Annotations
+                  </HoldButton>
+                  {pickMarksOpen && canPickMarks && (
+                    <div className="lc-coach-scope-menu lc-coach-mark-menu" role="menu">
+                      {annotationChoices
+                        .slice()
+                        .sort((a, b) => (a.number ?? 0) - (b.number ?? 0))
+                        .map((choice) => {
+                        const attached = attachedMarks.some((mark) => mark.id === choice.id);
+                        return (
+                          <button
+                            type="button"
+                            role="menuitemcheckbox"
+                            aria-checked={attached}
+                            key={choice.id}
+                            className={`lc-coach-scope-option${attached ? " is-active" : ""}`}
+                            style={
+                              choice.color
+                                ? { ["--lc-fn-color" as string]: choice.color }
+                                : undefined
+                            }
+                            onClick={() => {
+                              onToggleAttached?.(choice.id);
+                              if (!attached) setAnnotations(true);
+                            }}
+                          >
+                            {footnoteChipLabel(choice.number, choice.title)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </span>
               </Tip>
               {!padSurface && (
                 <>

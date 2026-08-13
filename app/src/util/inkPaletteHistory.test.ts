@@ -4,10 +4,15 @@ import {
   appendInkPalette,
   cycleInkPaletteNext,
   cycleInkPalettePrev,
+  COLORHUNT_FALLBACK_CODES,
+  footnoteThemeSeed,
   normalizeInkPaletteHistory,
+  paletteForMarkIndex,
   paletteFromColorHuntCode,
+  remapColorToPalette,
   seedInkPaletteHistory,
   setInkPaletteSlot,
+  stepFallbackPalette,
 } from "./inkPaletteHistory";
 
 describe("paletteFromColorHuntCode", () => {
@@ -94,5 +99,36 @@ describe("ink palette history", () => {
       ).items[0][0],
     ).toBe("#abcdef");
     expect(normalizeInkPaletteHistory(null, "paper").items).toHaveLength(1);
+  });
+});
+
+describe("per-mark palettes", () => {
+  it("gives successive create-order indexes different palettes", () => {
+    const a = paletteForMarkIndex(0);
+    const b = paletteForMarkIndex(1);
+    expect(a).not.toEqual(b);
+    expect(a).toHaveLength(4);
+    expect(paletteForMarkIndex(COLORHUNT_FALLBACK_CODES.length)).toEqual(a);
+  });
+
+  it("seeds a new mark on the first swatch of its index", () => {
+    const seed = footnoteThemeSeed(3);
+    expect(seed.palette).toEqual(paletteForMarkIndex(3));
+    expect(seed.color).toBe(seed.palette[0]);
+  });
+
+  it("steps the ColorHunt set without sharing a wheel", () => {
+    const start = paletteForMarkIndex(0);
+    const next = stepFallbackPalette(start, 1);
+    const prev = stepFallbackPalette(next, -1);
+    expect(next).toEqual(paletteForMarkIndex(1));
+    expect(prev).toEqual(start);
+  });
+
+  it("keeps the same slot when remapping onto a new set", () => {
+    const prev = ["#111111", "#222222", "#333333", "#444444"];
+    const next = ["#aaaaaa", "#bbbbbb", "#cccccc", "#dddddd"];
+    expect(remapColorToPalette("#222222", prev, next)).toBe("#bbbbbb");
+    expect(remapColorToPalette(undefined, prev, next)).toBe("#aaaaaa");
   });
 });

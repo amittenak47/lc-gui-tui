@@ -23,6 +23,7 @@ import {
   type TextAnchor,
 } from "./docAnchors";
 import type { LocalRect } from "./docMarquee";
+import { normalizePalette } from "./inkPaletteHistory";
 
 export type DocFootnoteKind = "coach" | "search" | "note";
 
@@ -109,6 +110,22 @@ export interface DocFootnote {
    */
   color?: string;
   /**
+   * The four (or more) swatches this mark's colour wheel owns.
+   *
+   * Snapshotted at create from the ColorHunt fallback list so cycling or
+   * editing one hub does not retint the others. Absent = older marks that
+   * still borrow a fallback set from their live ribbon number until the
+   * writer first cycles.
+   */
+  palette?: string[];
+  /**
+   * Optional short label for coach chips (`2. MyTitle`).
+   *
+   * Absent = chips show the number alone. Not the excerpt: that text is already
+   * on the page, and a chip that quotes it is too wide to scan.
+   */
+  title?: string;
+  /**
    * Content-block boxes under the selection (body-local), for region chrome.
    *
    * When present, the page paints these instead of the full marquee rectangle
@@ -153,6 +170,16 @@ export interface DocFootnoteSubMark {
 /** `#rgb` or `#rrggbb`, which is all a palette ever produces. */
 export function isHexColor(value: unknown): value is string {
   return typeof value === "string" && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value.trim());
+}
+
+/** Coach chip / picker label: `2.` or `2. MyTitle`. */
+export function footnoteChipLabel(number?: number, title?: string): string {
+  const n = number != null ? `${number}.` : "";
+  const t = title?.replace(/\s+/g, " ").trim();
+  if (n && t) return `${n} ${t}`;
+  if (n) return n;
+  if (t) return t;
+  return "Mark";
 }
 
 /**
@@ -455,14 +482,20 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
       const now = Date.now();
       // `userNotes` was the single note box; it is read here and never written
       // again, so the property is stripped from the spread rather than carried.
-      const { userNotes, ...rest } = candidate as DocFootnote & { userNotes?: unknown };
+      const { userNotes, title: rawTitle, palette: rawPalette, color: rawColor, ...rest } =
+        candidate as DocFootnote & { userNotes?: unknown };
       const notes = sanitizeNotes(candidate.notes, userNotes, now);
       const excerpt = typeof candidate.excerpt === "string" ? candidate.excerpt : "";
       const threads = sanitizeThreads(candidate.threads, candidate.threadRootId, excerpt, now);
       const userLinks = sanitizeUserLinks(candidate.userLinks);
       // A colour that is not a colour is dropped rather than passed through to
       // an inline style, where anything at all would be accepted.
-      const color = isHexColor(candidate.color) ? candidate.color.trim() : undefined;
+      const color = isHexColor(rawColor) ? rawColor.trim() : undefined;
+      const palette = normalizePalette(rawPalette) ?? undefined;
+      const title =
+        typeof rawTitle === "string" && rawTitle.trim()
+          ? rawTitle.replace(/\s+/g, " ").trim()
+          : undefined;
       const bands = sanitizeBands(candidate.bands);
       const blockText =
         typeof candidate.blockText === "string" && candidate.blockText.trim()
@@ -477,6 +510,8 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
           threads,
           ...(userLinks ? { userLinks } : {}),
           ...(color ? { color } : {}),
+          ...(palette ? { palette } : {}),
+          ...(title ? { title } : {}),
           ...(bands ? { bands } : {}),
           ...(blockText ? { blockText } : {}),
           ...(subMarks ? { subMarks } : {}),
@@ -614,6 +649,8 @@ export function footnoteRevision(footnotes: readonly DocFootnote[]): string {
         entry.id,
         entry.kind,
         entry.color ?? "",
+        (entry.palette ?? []).join(","),
+        entry.title ?? "",
         (entry.notes ?? []).map((note) => `${note.id}:${note.updatedAt}:${note.text}`).join("\x1f"),
         entry.threadRootId ?? "",
         (entry.threads ?? []).map((thread) => `${thread.rootId}|${thread.title}`).join("\x1f"),
