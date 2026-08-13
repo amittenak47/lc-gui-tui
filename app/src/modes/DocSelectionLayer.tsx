@@ -1716,11 +1716,14 @@ export function DocSelectionLayer({
             const host = topBand ?? at;
             const chipPad = 3;
             const chipW = 16;
+            const chipLeft = host.left + Math.max(chipPad, host.width - chipW - chipPad);
+            const chipTop = host.top + chipPad;
             const chipStyle = {
-              left: host.left + Math.max(chipPad, host.width - chipW - chipPad),
-              top: host.top + chipPad,
+              left: chipLeft,
+              top: chipTop,
               ...tint,
             };
+            const caption = footnote.title?.replace(/\s+/g, " ").trim() ?? "";
             return (
               <span key={footnote.id} className="lc-doc-footnote-pack" style={tint}>
                 {paintBands.map((bandRect, bandIndex) => (
@@ -1736,6 +1739,14 @@ export function DocSelectionLayer({
                       }}
                     />
                   ))}
+                {caption ? (
+                  <span
+                    className="lc-doc-footnote-caption"
+                    style={{ left: chipLeft + chipW, top: chipTop }}
+                  >
+                    {caption}
+                  </span>
+                ) : null}
                 <HoldButton
                   label={String(number)}
                   className={`lc-doc-footnote lc-doc-footnote-bookmark lc-doc-footnote-${footnote.kind}`}
@@ -1986,7 +1997,7 @@ export function DocSelectionLayer({
                           <span>Mark</span>
                         </button>
                       )}
-                      {selection.text.trim().length > 0 && (
+                      {selection && selection.text.trim().length > 0 && (
                         <>
                           <button
                             type="button"
@@ -2046,14 +2057,16 @@ export function DocSelectionLayer({
 
 /** What a ribbon says on hover, and to a screen reader. */
 function footnoteTitle(footnote: DocFootnote, number: number): string {
+  const named = footnote.title?.replace(/\s+/g, " ").trim();
   const what = footnote.excerpt || "this area";
+  const head = named ? `${number}. ${named}` : `${number}.`;
   switch (footnote.kind) {
     case "search":
-      return `${number}. Search — ${footnote.query ?? what}`;
+      return `${head} Search — ${footnote.query ?? what}`;
     case "note":
-      return `${number}. Highlight — ${what}`;
+      return `${head} Highlight — ${what}`;
     default:
-      return `${number}. Coach — ${what}`;
+      return `${head} Coach — ${what}`;
   }
 }
 

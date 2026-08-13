@@ -3,7 +3,7 @@
  * Backdrop blurs the board the same way problem-load transitions do.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import type { LcClient } from "../api/client";
 import type { CoachFlags, DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
@@ -88,21 +88,38 @@ import { offlinePackDownloader } from "../util/offlinePackDownload";
 import { useIsMobile } from "../util/mobile";
 import { estimateStorage, formatBytes, type StorageUsage } from "../util/storageQuota";
 
-type TabId = "workspace" | "personalise" | "server";
+type TabId = "workspace" | "personalise" | "ai" | "server";
 
 const PRESSURE_CLIP_STEPS = [30, 40, 50, 60, 70, 80, 90, 100] as const;
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "personalise", label: "Personalise" },
+  { id: "ai", label: "AI Behavior" },
   { id: "workspace", label: "Workspace" },
   { id: "server", label: "Server" },
 ];
+
+/**
+ * One named fold in the settings body.
+ *
+ * The body stays the only scroller — these just hide the long lists so the
+ * tab is a map of topics instead of a wall of radios. Independent: two can
+ * be open at once. Start closed; `<details>` is uncontrolled.
+ */
+function SettingsFold({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <details className="lc-settings-fold">
+      <summary className="lc-settings-fold-summary">{title}</summary>
+      <div className="lc-settings-fold-body">{children}</div>
+    </details>
+  );
+}
 
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
 const MODES = ["ambient", "review", "bridge", "viz", "planner"] as const;
 
 /**
- * Settings → Coach, grouped by what the question actually is.
+ * Settings → AI Behavior, grouped by what the question actually is.
  *
  * Flat, these read as five unrelated switches, and "Plan the approaches first"
  * in particular looked like a mystery toggle rather than the one setting that
@@ -123,7 +140,7 @@ const COACH_FLAG_GROUPS: Array<{
       [
         "planner_enabled",
         "Plan the approaches first",
-        "One call per problem, to the planner provider below, cataloging the approach families the problem admits — so a small local model is asked the narrow questions it is good at and a bigger one answers the broad one. Built from the statement and the sample cases only: it cannot reach a solution, and a test keeps it that way.",
+        "One call per problem, to the planner provider on the Server tab, cataloging the approach families the problem admits — so a small local model is asked the narrow questions it is good at and a bigger one answers the broad one. Built from the statement and the sample cases only: it cannot reach a solution, and a test keeps it that way.",
       ],
       [
         "draw_review_enabled",
@@ -676,7 +693,7 @@ export function SettingsModal({
 
           {tab === "workspace" && (
             <div className="lc-settings-fields">
-              <div className="lc-settings-subhead">Paths</div>
+              <SettingsFold title="Paths">
               <label>
                 <span>Problems folder</span>
                 <input
@@ -713,8 +730,9 @@ export function SettingsModal({
                 />
                 <p className="lc-settings-hint">Python used to run tests.</p>
               </label>
+              </SettingsFold>
 
-              <div className="lc-settings-subhead">Datasets</div>
+              <SettingsFold title="Datasets">
               <p className="lc-muted">
                 Each problem set is indexed into its own table. By default a corpus lives in{" "}
                 <code>&lt;problems folder&gt;/&lt;dataset&gt;/</code>; override it below when it
@@ -751,11 +769,13 @@ export function SettingsModal({
                   </p>
                 </label>
               ))}
+              </SettingsFold>
             </div>
           )}
 
           {tab === "personalise" && (
             <div className="lc-settings-fields">
+              <SettingsFold title="Writing Behavior">
               <div className="lc-settings-subhead">Writing hand</div>
               <p className="lc-settings-hint">
                 Tilts the colour picker so swatches sit clear of your writing hand, and
@@ -1069,36 +1089,6 @@ export function SettingsModal({
                 </span>
               </div>
 
-              <div className="lc-settings-subhead">Autosave</div>
-              <p className="lc-settings-hint">
-                How often the board writes itself down, so a crash or a closed lid
-                costs nothing. This is not the same as saving: Discard still rolls
-                back to where the session started, whatever the autosave has
-                written since. Saved on this device only.
-              </p>
-              <div
-                className="lc-settings-choice lc-settings-choice-compact"
-                role="radiogroup"
-                aria-label="Autosave interval"
-              >
-                {AUTOSAVE_CHOICES.map(([ms, label]) => (
-                  <button
-                    key={ms}
-                    type="button"
-                    role="radio"
-                    aria-checked={autosaveMs === ms}
-                    className={
-                      autosaveMs === ms
-                        ? "lc-settings-choice-option is-active"
-                        : "lc-settings-choice-option"
-                    }
-                    onClick={() => setAutosaveMs(ms)}
-                  >
-                    <strong>{label}</strong>
-                  </button>
-                ))}
-              </div>
-
               <div className="lc-settings-subhead">Eraser</div>
               <p className="lc-settings-hint">
                 <strong>Rub out</strong> clears whatever the ring covers, so a small
@@ -1217,8 +1207,9 @@ export function SettingsModal({
               */}
               <div className="lc-settings-subhead">Ink palettes</div>
               <p className="lc-settings-hint">
-                What kind of colours the wheel pulls when you ask it for another
-                palette. Offline, the bundled palettes are used whatever this says.
+                What kind of colours the wheel pulls from ColorHunt when you ask
+                it for another palette. Offline — or if the feed fails — a local
+                list is used instead, and this tag does not apply.
               </p>
               <div
                 className="lc-settings-choice lc-settings-choice-wrap"
@@ -1244,7 +1235,106 @@ export function SettingsModal({
                   </button>
                 ))}
               </div>
+              </SettingsFold>
 
+              <SettingsFold title="Storage Settings">
+              <div className="lc-settings-subhead">Autosave</div>
+              <p className="lc-settings-hint">
+                How often the board writes itself down, so a crash or a closed lid
+                costs nothing. This is not the same as saving: Discard still rolls
+                back to where the session started, whatever the autosave has
+                written since. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Autosave interval"
+              >
+                {AUTOSAVE_CHOICES.map(([ms, label]) => (
+                  <button
+                    key={ms}
+                    type="button"
+                    role="radio"
+                    aria-checked={autosaveMs === ms}
+                    className={
+                      autosaveMs === ms
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setAutosaveMs(ms)}
+                  >
+                    <strong>{label}</strong>
+                  </button>
+                ))}
+              </div>
+
+              <div className="lc-settings-subhead">Offline ↔ online boards</div>
+              <p className="lc-settings-hint">
+                When the tablet reconnects after working offline, how should local and server
+                copies of the same problem board be reconciled? Saved on this device only.
+              </p>
+              <div className="lc-settings-choice" role="radiogroup" aria-label="Offline merge policy">
+                {(
+                  [
+                    ["ask", "Ask each time", "Show a chooser when both sides have work."],
+                    ["prefer-local", "Prefer this device", "Keep the tablet copy; overwrite the server."],
+                    ["prefer-server", "Prefer the server", "Keep the PC copy; discard local edits."],
+                  ] as const
+                ).map(([id, label, hint]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={offlineMerge === id}
+                    className={
+                      offlineMerge === id
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setOfflineMerge(id)}
+                  >
+                    <strong>{label}</strong>
+                    <span className="lc-muted">{hint}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="lc-settings-subhead">Storage on this device</div>
+              <p className="lc-settings-hint">
+                Annotated documents, scratchpad notebooks, board images and any offline
+                problem pack all share one budget. Handwriting is the expensive part — a
+                heavily annotated page costs far more than the document under it.
+              </p>
+              {storage ? (
+                <>
+                  <div
+                    className="lc-storage-bar"
+                    role="meter"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(storage.ratio * 100)}
+                    aria-label="Storage used"
+                  >
+                    <div
+                      className="lc-storage-bar-fill"
+                      style={{ width: `${Math.max(1, Math.round(storage.ratio * 100))}%` }}
+                    />
+                  </div>
+                  <p className="lc-muted">
+                    {formatBytes(storage.usage)} used of {formatBytes(storage.quota)}
+                    {storage.persisted ? " · kept when space runs short" : ""}
+                  </p>
+                </>
+              ) : (
+                <p className="lc-muted">This browser does not report a storage estimate.</p>
+              )}
+              </SettingsFold>
+            </div>
+          )}
+
+          {tab === "ai" && (
+            <div className="lc-settings-fields">
+              <SettingsFold title="Test Cases">
               <div className="lc-settings-subhead">When a case fails</div>
               <div className="lc-settings-choice" role="radiogroup" aria-label="Test run mode">
                 <button
@@ -1329,67 +1419,35 @@ export function SettingsModal({
                 Saved on this device only. Problems only — the scratchpad and document pads
                 have no test run to forward.
               </p>
+              </SettingsFold>
 
-              <div className="lc-settings-subhead">Offline ↔ online boards</div>
-              <p className="lc-settings-hint">
-                When the tablet reconnects after working offline, how should local and server
-                copies of the same problem board be reconciled? Saved on this device only.
-              </p>
-              <div className="lc-settings-choice" role="radiogroup" aria-label="Offline merge policy">
-                {(
-                  [
-                    ["ask", "Ask each time", "Show a chooser when both sides have work."],
-                    ["prefer-local", "Prefer this device", "Keep the tablet copy; overwrite the server."],
-                    ["prefer-server", "Prefer the server", "Keep the PC copy; discard local edits."],
-                  ] as const
-                ).map(([id, label, hint]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    role="radio"
-                    aria-checked={offlineMerge === id}
-                    className={
-                      offlineMerge === id
-                        ? "lc-settings-choice-option is-active"
-                        : "lc-settings-choice-option"
-                    }
-                    onClick={() => setOfflineMerge(id)}
-                  >
-                    <strong>{label}</strong>
-                    <span className="lc-muted">{hint}</span>
-                  </button>
-                ))}
-              </div>
-
-              <div className="lc-settings-subhead">Storage on this device</div>
-              <p className="lc-settings-hint">
-                Annotated documents, scratchpad notebooks, board images and any offline
-                problem pack all share one budget. Handwriting is the expensive part — a
-                heavily annotated page costs far more than the document under it.
-              </p>
-              {storage ? (
-                <>
-                  <div
-                    className="lc-storage-bar"
-                    role="meter"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={Math.round(storage.ratio * 100)}
-                    aria-label="Storage used"
-                  >
-                    <div
-                      className="lc-storage-bar-fill"
-                      style={{ width: `${Math.max(1, Math.round(storage.ratio * 100))}%` }}
-                    />
-                  </div>
-                  <p className="lc-muted">
-                    {formatBytes(storage.usage)} used of {formatBytes(storage.quota)}
-                    {storage.persisted ? " · kept when space runs short" : ""}
-                  </p>
-                </>
-              ) : (
-                <p className="lc-muted">This browser does not report a storage estimate.</p>
-              )}
+              {COACH_FLAG_GROUPS.map((group) => (
+                <SettingsFold key={group.title} title={group.title}>
+                  <p className="lc-settings-hint">{group.blurb}</p>
+                  {group.flags.map(([key, label, hint]) => (
+                    <label key={key} className="lc-settings-toggle">
+                      <input
+                        type="checkbox"
+                        checked={(draft.coach ?? DEFAULT_COACH_FLAGS)[key]}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            coach: {
+                              ...DEFAULT_COACH_FLAGS,
+                              ...(prev.coach ?? {}),
+                              [key]: e.target.checked,
+                            },
+                          }))
+                        }
+                      />
+                      <span>
+                        <strong>{label}</strong>
+                        <span className="lc-muted">{hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                </SettingsFold>
+              ))}
             </div>
           )}
 
@@ -1409,7 +1467,7 @@ export function SettingsModal({
                 </p>
               </div>
 
-              <div className="lc-settings-subhead">Offline problems</div>
+              <SettingsFold title="Offline problems">
               <p className="lc-settings-hint">
                 Download every indexed dataset except KodCode onto this device (~100–250&nbsp;MB).
                 Browse and open statements offline; tests need the server.
@@ -1453,7 +1511,9 @@ export function SettingsModal({
                     ? "Refresh only fetches changed datasets and problems — unchanged corpora stay on device."
                     : "Downloads in the background — you can close Settings. Closing the app pauses; reopening resumes."}
               </p>
+              </SettingsFold>
 
+              <SettingsFold title="LLM">
               <div className="lc-settings-subhead">Coach status</div>
               <p className="lc-coach-live" data-status={coachStatus}>
                 <span className="lc-coach-live-dot" aria-hidden />
@@ -1541,35 +1601,6 @@ export function SettingsModal({
                 <p className="lc-muted">API key from OPENAI_API_KEY env — not stored in config.toml.</p>
               )}
 
-              {COACH_FLAG_GROUPS.map((group) => (
-                <div key={group.title}>
-                  <div className="lc-settings-subhead">{group.title}</div>
-                  <p className="lc-settings-hint">{group.blurb}</p>
-                  {group.flags.map(([key, label, hint]) => (
-                    <label key={key} className="lc-settings-toggle">
-                      <input
-                        type="checkbox"
-                        checked={(draft.coach ?? DEFAULT_COACH_FLAGS)[key]}
-                        onChange={(e) =>
-                          setDraft((prev) => ({
-                            ...prev,
-                            coach: {
-                              ...DEFAULT_COACH_FLAGS,
-                              ...(prev.coach ?? {}),
-                              [key]: e.target.checked,
-                            },
-                          }))
-                        }
-                      />
-                      <span>
-                        <strong>{label}</strong>
-                        <span className="lc-muted">{hint}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              ))}
-
               <div className="lc-settings-subhead">Coach mode providers</div>
               {MODES.map((mode) => (
                 <label key={mode}>
@@ -1613,8 +1644,9 @@ export function SettingsModal({
                   Refresh
                 </button>
               </div>
+              </SettingsFold>
 
-              <div className="lc-settings-subhead">Serve</div>
+              <SettingsFold title="Serve">
               <label>
                 <span>Port</span>
                 <input
@@ -1661,6 +1693,7 @@ export function SettingsModal({
                   <code>lc serve --lan</code> to pair a tablet.
                 </p>
               )}
+              </SettingsFold>
             </div>
           )}
         </div>

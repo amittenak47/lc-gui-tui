@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use minijinja::{context, Environment};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
@@ -84,15 +84,12 @@ pub fn generate(
     let solution_path = dir.join("solution.py");
     if !solution_path.exists() || force {
         fs::write(&solution_path, solution)?;
-    } else if std::io::stderr().is_terminal() {
-        // Never `eprintln!` here: a closed stderr pipe (common when `lc serve`
-        // is hosted under Windows tooling) makes `eprintln!` panic the
-        // spawn_blocking task and `/problems/:id/load` returns 500.
-        let _ = writeln!(
-            std::io::stderr(),
-            "solution.py already exists — left untouched (pass --force to overwrite)"
-        );
     }
+    // Existing solution.py stays. Never print here: `eprintln!` on a closed
+    // stderr pipe (Windows os error 232, common when `lc serve` is hosted
+    // under Cursor) panics the spawn_blocking task, `/problems/:id/load`
+    // returns 500, and reopening the same problem after returning to the
+    // picker fails.
 
     fs::write(dir.join("run_tests.py"), RUN_TESTS_PY)?;
 
@@ -435,6 +432,55 @@ class TreeNode:\n\
         assert!(body.contains("class ListNode"));
         assert!(body.contains("reverseList"));
         assert!(!body.contains("class TreeNode"));
+    }
+}
+
+#[cfg(test)]
+mod generate_tests {
+    use super::generate;
+    use crate::config::Config;
+    use crate::dataset;
+    use crate::problem::Problem;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn second_generate_leaves_existing_solution() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "lc-generate-reopen-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut cfg = Config::default();
+        cfg.workspace.dir = root.display().to_string();
+        let problem = Problem {
+            task_id: "reopen-demo".into(),
+            question_id: None,
+            difficulty: None,
+            tags: vec![],
+            problem_description: Some("demo".into()),
+            prompt: None,
+            starter_code: Some("class Solution:\n    pass\n".into()),
+            entry_point: None,
+            test: None,
+            input_output: vec![],
+            estimated_date: None,
+        };
+        let json = root.join("reopen-demo.json");
+        let dataset = dataset::default();
+        let dir = generate(&cfg, dataset, &problem, &json, false).unwrap();
+        fs::write(dir.join("solution.py"), "# keep me\n").unwrap();
+        let again = generate(&cfg, dataset, &problem, &json, false).unwrap();
+        assert_eq!(dir, again);
+        assert_eq!(
+            fs::read_to_string(again.join("solution.py")).unwrap(),
+            "# keep me\n"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }
 

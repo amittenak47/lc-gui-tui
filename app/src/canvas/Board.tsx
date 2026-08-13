@@ -62,7 +62,7 @@ import {
 import { INK_REGION_GAP, INK_REGION_PAD, inkRegionSplit } from "./inkRegionSplit";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
-import { REGION_GUTTER, REGION_MIN, REGION_BLURB, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
+import { MOBILE_REGION_ORDER, REGION_GUTTER, REGION_MIN, REGION_BLURB, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
 import {
   BOARD_THEMES,
   DEFAULT_FONT_SIZE,
@@ -2395,9 +2395,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /**
    * Name the page the camera has arrived on, for boards that scroll freely.
    *
-   * Only the desktop stack: when `mobileRegion` is set the board shows one page
-   * at a time and the pager already says which, so a second label would be
-   * noise. The agent lane is deliberately not in the running — it sits beside
+   * Paged boards (`mobileRegion` set) fire the same pill from the pager
+   * effect — this walk is only the continuous-scroll desktop stack.
+   * The agent lane is deliberately not in the running — it sits beside
    * the column rather than below it, and spans the whole stack, so it would win
    * every vertical-overlap test from the first screen to the last.
    */
@@ -5013,6 +5013,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 ?.lcDocumentPage === true,
           ) ||
           page === "code" ||
+          page === "agent" ||
           isDrawPageRegion(page);
         const zoom = clampZoom(
           widthOnly
@@ -5222,14 +5223,38 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [mobileRegion, interactive, reportTitleSlot]);
 
   /**
-   * A new board — or a switch into paging — starts the wayfinding over, so the
-   * first scroll on the next board names its page instead of staying silent
-   * because the old one happened to end on the same region.
+   * A new board — or a page turn — starts the wayfinding over.
+   *
+   * Free-scroll: reset so the first camera move names the page. Paged: the
+   * pager already knows the region, so show the fade pill on a real turn
+   * (skip the first mount so opening a problem does not flash the title).
    */
   useEffect(() => {
-    lastNamedPageRef.current = null;
     lastPageCameraRef.current = null;
-    if (mobileRegion !== null) pageIndicatorRef.current?.hide();
+    if (!interactive) {
+      pageIndicatorRef.current?.hide();
+      return;
+    }
+    if (mobileRegion === null) {
+      lastNamedPageRef.current = null;
+      return;
+    }
+    const prev = lastNamedPageRef.current;
+    const index = MOBILE_REGION_ORDER.indexOf(mobileRegion as RegionId);
+    if (index < 0) {
+      lastNamedPageRef.current = null;
+      return;
+    }
+    const region = MOBILE_REGION_ORDER[index];
+    if (prev === region) return;
+    lastNamedPageRef.current = region;
+    if (prev === null) return;
+    pageIndicatorRef.current?.show(
+      REGIONS[region].label,
+      index,
+      MOBILE_REGION_ORDER.length,
+      REGION_BLURB[region],
+    );
   }, [mobileRegion, interactive]);
 
   /** Page-locked boards: grow the frame and refit width on every board resize. */
@@ -6881,10 +6906,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             </div>
             <div className="lc-board-dock">
               {/*
-                Pen island ABOVE the pager. Grid uses align-items:end so Annotate /
-                Eye / pager share one bottom baseline; opening the toolbar grows
-                upward and must not lift those controls.
+                Pager ABOVE the pen island. Grid uses align-items:end so Annotate /
+                Eye / the dock share one bottom baseline; the island sits under
+                the pager and grows the column upward instead of covering it.
+                Snap slot stays between them so a redock lands under the pager,
+                not on top of it.
               */}
+              {!mapChromeHidden && bottomCenter}
+              <div className="lc-toolbar-dock-anchor" aria-hidden />
               {!mapChromeHidden && annotateCode && (
               <div
                 onPointerDownCapture={() => {
@@ -6950,8 +6979,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               />
               </div>
               )}
-              <div className="lc-toolbar-dock-anchor" aria-hidden />
-              {!mapChromeHidden && bottomCenter}
             </div>
             <div className="lc-map-chrome-right">
               {/*
@@ -7082,7 +7109,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       {interactive && activeTool === "eraser" && <EraserBrush ref={eraserBrushRef} />}
       {interactive && <ModeIndicator ref={modeIndicatorRef} />}
       {interactive && <PadTitle ref={padTitleRef} />}
-      {interactive && mobileRegion === null && <PageIndicator ref={pageIndicatorRef} />}
+      {interactive && <PageIndicator ref={pageIndicatorRef} />}
       {interactive && (
         <ScrollBackHold
           boardRef={boardRef}

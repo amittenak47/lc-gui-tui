@@ -1,14 +1,8 @@
 /**
- * Brief page title — "Code · 2 of 6" as a scroll crosses onto a new page.
+ * Brief page title — "Code · 2 of 6" as you arrive on a new page.
  *
- * The desktop board is one continuous scroll, so nothing on screen says which
- * page you are on or how far through the stack you are. A page turner would
- * answer that, but there is nothing to turn: the pages grow as you write on
- * them, so a fixed selector would keep pointing at the wrong place. Reading the
- * camera and naming the page you arrived at says the same thing without
- * claiming the board is paginated.
- *
- * Transient by design. It is wayfinding for the moment you cross a boundary,
+ * On a freely-scrolling board that is a camera crossing. On a paged board it
+ * is a pager turn. Same pill either way: wayfinding for the moment you arrive,
  * not a permanent header — it fades once you settle in to read.
  *
  * Same imperative pattern as `ModeIndicator`: Board is heavy, and a React
@@ -24,7 +18,7 @@ const HOLD_MS = 1100;
 export interface PageIndicatorHandle {
   /** Name the page just scrolled onto, restarting the fade. */
   show(label: string, index: number, total: number, blurb?: string): void;
-  /** Drop the pill now — leaving the board, or paging took over. */
+  /** Drop the pill now — leaving the board. */
   hide(): void;
 }
 

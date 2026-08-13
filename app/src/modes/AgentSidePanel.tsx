@@ -16,6 +16,7 @@ import { HoldButton } from "../components/HoldButton";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS } from "../util/gesture";
 import { footnoteChipLabel } from "../util/docFootnotes";
+import { footnoteThemeVars } from "../util/footnoteTheme";
 import { useIsMobile } from "../util/mobile";
 import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
 import type { MessageDrawing } from "../viz/drawingState";
@@ -176,6 +177,8 @@ const REVIEW_DROPS_PHOTOS = "Review sends the board, not attachments";
  * ambient cadence is a property of a problem attempt rather than of a page
  * being read. Rendering them disabled taught the writer nothing except that
  * five of the seven controls are dead, so on a pad they are not rendered.
+ * Scratchpad also drops Annotations (`allowAnnotations`): there is no custom
+ * block select on a blank board.
  */
 export type CoachSurface = "problem" | "pad";
 
@@ -348,6 +351,11 @@ export interface AgentSidePanelProps {
    */
   coachSurface?: CoachSurface;
   /**
+   * Mark-block flag + picker. Scratchpad has no custom block select, so this
+   * is false there; document pads and problems keep it.
+   */
+  allowAnnotations?: boolean;
+  /**
    * A quote pushed in from outside the panel — the document pad's "Coach" on a
    * text selection.
    *
@@ -365,10 +373,22 @@ export interface AgentSidePanelProps {
   footnoteThreadRoots?: ReadonlySet<string>;
   onOpenFootnoteThread?: (rootId: string) => void;
   /** Mark panels queued onto this send. */
-  attachedMarks?: Array<{ id: string; number?: number; title?: string; color?: string }>;
+  attachedMarks?: Array<{
+    id: string;
+    number?: number;
+    title?: string;
+    color?: string;
+    palette?: string[];
+  }>;
   onRemoveAttached?: (id: string) => void;
   /** Every mark on the open document — hold Annotations to pick from this list. */
-  annotationChoices?: Array<{ id: string; number?: number; title?: string; color?: string }>;
+  annotationChoices?: Array<{
+    id: string;
+    number?: number;
+    title?: string;
+    color?: string;
+    palette?: string[];
+  }>;
   onToggleAttached?: (id: string) => void;
   onSend: (text: string, flags: CoachSendFlags, mode?: "queue" | "merge") => void;
   /** The open thread, so the caller can narrow what the coach is told. */
@@ -400,6 +420,7 @@ export function AgentSidePanel({
   messages,
   askOnly = false,
   coachSurface = "problem",
+  allowAnnotations = true,
   quoteSeed = null,
   focusThread = null,
   footnoteThreadRoots,
@@ -428,8 +449,9 @@ export function AgentSidePanel({
   );
   const [draft, setDraft] = useState("");
   /**
-   * Pads keep Ask, Handwriting and Annotations; the pipeline flags and the
-   * cadence toggles are gone rather than greyed. See {@link CoachSurface}.
+   * Pads keep Ask and Handwriting; document pads also keep Annotations. The
+   * pipeline flags and the cadence toggles are gone rather than greyed. See
+   * {@link CoachSurface}.
    */
   const padSurface = coachSurface === "pad";
   /** Handwriting is greyed only where there is genuinely nothing to attach. */
@@ -442,6 +464,8 @@ export function AgentSidePanel({
   const [annotations, setAnnotations] = useState(false);
   const [pickMarksOpen, setPickMarksOpen] = useState(false);
   const pickMarksWrapRef = useRef<HTMLSpanElement | null>(null);
+  const [pipelineOpen, setPipelineOpen] = useState(false);
+  const pipelineWrapRef = useRef<HTMLSpanElement | null>(null);
   const attachedCount = attachedMarks?.length ?? 0;
   const canPickMarks = annotationChoices.length > 0;
   /**
@@ -690,6 +714,7 @@ export function AgentSidePanel({
     setDraw(false);
     setReviewBoard(false);
     setLazy(false);
+    setPipelineOpen(false);
     if (!padSurface) setHandwriting(false);
   }, [askOnly, padSurface]);
 
@@ -701,19 +726,27 @@ export function AgentSidePanel({
    * Dropping the last chip disarms it again.
    */
   useEffect(() => {
+    if (!allowAnnotations) {
+      setAnnotations(false);
+      setPickMarksOpen(false);
+      return;
+    }
     setAnnotations(attachedCount > 0);
-  }, [attachedCount]);
+  }, [allowAnnotations, attachedCount]);
 
   useEffect(() => {
-    if (!pickMarksOpen) return;
+    if (!pickMarksOpen && !pipelineOpen) return;
     const close = (event: globalThis.PointerEvent) => {
       const node = event.target;
-      if (node instanceof Node && pickMarksWrapRef.current?.contains(node)) return;
+      if (!(node instanceof Node)) return;
+      if (pickMarksWrapRef.current?.contains(node)) return;
+      if (pipelineWrapRef.current?.contains(node)) return;
       setPickMarksOpen(false);
+      setPipelineOpen(false);
     };
     document.addEventListener("pointerdown", close, true);
     return () => document.removeEventListener("pointerdown", close, true);
-  }, [pickMarksOpen]);
+  }, [pickMarksOpen, pipelineOpen]);
 
   const endSheetDrag = useCallback(
     (event: PointerEvent<HTMLElement>) => {
@@ -1087,7 +1120,7 @@ export function AgentSidePanel({
         reviewBoard,
         lazy,
         handwriting,
-        annotations,
+        annotations: allowAnnotations && annotations,
         ...(photos.length > 0 ? { photos } : {}),
         ...(pageQuote ? { pageQuote: pageQuote.text } : {}),
         threadRootId: openThreadId,
@@ -1201,7 +1234,12 @@ export function AgentSidePanel({
         >
           {messages.length === 0 && !children && !thinking && (
             <p className="lc-muted lc-coach-empty">
-              {padSurface ? (
+              {padSurface && !allowAnnotations ? (
+                <>
+                  Ask about the board. Flag <strong>Handwriting</strong> to send
+                  your ink with the page it was drawn on.
+                </>
+              ) : padSurface ? (
                 <>
                   Ask about the page, or hold a passage to quote it. Flag{" "}
                   <strong>Annotation</strong> to send your marks — hold it to send just
@@ -1431,21 +1469,23 @@ export function AgentSidePanel({
         </div>
 
         <form className="lc-coach-composer" onSubmit={(event) => submit("queue", event)}>
-          {attachedMarks.length > 0 && (
+          {allowAnnotations && attachedMarks.length > 0 && (
             <div className="lc-coach-mark-chips" aria-label="Attached annotations">
               {attachedMarks.map((mark) => (
                 <span
-                  className={`lc-footnote-chip is-active${mark.color ? " is-tinted" : ""}`}
+                  className="lc-footnote-chip"
                   key={mark.id}
-                  style={
-                    mark.color
-                      ? { ["--lc-fn-color" as string]: mark.color }
-                      : undefined
-                  }
+                  style={footnoteThemeVars(mark.color, mark.palette ?? [])}
                 >
-                  <span className="lc-footnote-chip-label">
-                    {footnoteChipLabel(mark.number, mark.title)}
+                  <span
+                    className="lc-fn-badge"
+                    title={footnoteChipLabel(mark.number, mark.title)}
+                  >
+                    {mark.number ?? ""}
                   </span>
+                  {mark.title?.trim() ? (
+                    <span className="lc-footnote-chip-label">{mark.title.trim()}</span>
+                  ) : null}
                   {onRemoveAttached && (
                     <button
                       type="button"
@@ -1594,25 +1634,7 @@ export function AgentSidePanel({
               </Tip>
             </div>
             )}
-            <div className="lc-coach-composer-actions">
-              {!padSurface && (
-                <Tip
-                  tip={
-                    askOnly ? NOT_ON_SCRATCHPAD : "Allow coach to draw on the board"
-                  }
-                  placement="left"
-                >
-                  <button
-                    type="button"
-                    className={`lc-flag${draw ? " lc-flag-active" : ""}${flagUnavailable}`}
-                    aria-pressed={draw}
-                    disabled={busy || askOnly}
-                    onClick={() => setDraw((current) => !current)}
-                  >
-                    Draw
-                  </button>
-                </Tip>
-              )}
+            <div className="lc-coach-composer-mid">
               {/*
                 Handwriting survives on a pad where the pipeline flags do not: a
                 reading pad has exactly the thing this attaches — a board with
@@ -1644,19 +1666,8 @@ export function AgentSidePanel({
                 message, or the region in front of you. Armed by attaching, so
                 the chips above the composer and this flag say the same thing.
               */}
-              <Tip
-                tip={
-                  annotationsUnavailable
-                    ? NOT_ON_SCRATCHPAD
-                    : canPickMarks
-                      ? "Tap to send attached marks. Hold to pick a numbered block."
-                      : attachedCount > 0
-                        ? `Send ${attachedCount} attached mark${attachedCount === 1 ? "" : "s"}`
-                        : "Send the region you are looking at, not the whole board"
-                }
-                placement="left"
-              >
-                <span className="lc-coach-annotate-wrap" ref={pickMarksWrapRef}>
+              {allowAnnotations && (
+              <span className="lc-coach-annotate-wrap" ref={pickMarksWrapRef}>
                   <HoldButton
                     label="Annotations"
                     className={`lc-flag lc-coach-annotate${
@@ -1667,10 +1678,12 @@ export function AgentSidePanel({
                     resetKey={pickMarksOpen}
                     onTap={() => {
                       setPickMarksOpen(false);
+                      setPipelineOpen(false);
                       setAnnotations((current) => !current);
                     }}
                     onConfirm={() => {
                       if (!canPickMarks) return;
+                      setPipelineOpen(false);
                       setPickMarksOpen(true);
                     }}
                     ariaLabel={
@@ -1688,72 +1701,93 @@ export function AgentSidePanel({
                         .sort((a, b) => (a.number ?? 0) - (b.number ?? 0))
                         .map((choice) => {
                         const attached = attachedMarks.some((mark) => mark.id === choice.id);
+                        const title = choice.title?.trim() ?? "";
                         return (
                           <button
                             type="button"
                             role="menuitemcheckbox"
                             aria-checked={attached}
+                            aria-label={footnoteChipLabel(choice.number, choice.title)}
                             key={choice.id}
-                            className={`lc-coach-scope-option${attached ? " is-active" : ""}`}
-                            style={
-                              choice.color
-                                ? { ["--lc-fn-color" as string]: choice.color }
-                                : undefined
-                            }
+                            className={`lc-footnote-chip${attached ? " is-picked" : ""}`}
+                            style={footnoteThemeVars(choice.color, choice.palette ?? [])}
                             onClick={() => {
                               onToggleAttached?.(choice.id);
                               if (!attached) setAnnotations(true);
                             }}
                           >
-                            {footnoteChipLabel(choice.number, choice.title)}
+                            <span className="lc-fn-badge">
+                              {choice.number ?? ""}
+                            </span>
+                            {title ? (
+                              <span className="lc-footnote-chip-label">{title}</span>
+                            ) : null}
                           </button>
                         );
                       })}
                     </div>
                   )}
                 </span>
-              </Tip>
+              )}
+            </div>
+            <div className="lc-coach-composer-actions">
               {!padSurface && (
-                <>
-                  <Tip
-                    tip={
-                      askOnly
-                        ? NOT_ON_SCRATCHPAD
-                        : photos.length > 0
-                          ? REVIEW_DROPS_PHOTOS
-                          : "Run a staged review of the board"
-                    }
-                    placement="left"
+                <span className="lc-coach-pipeline-wrap" ref={pipelineWrapRef}>
+                  <button
+                    type="button"
+                    className={`lc-flag lc-coach-pipeline${
+                      draw || reviewBoard || lazy ? " lc-flag-active" : ""
+                    }${flagUnavailable}`}
+                    aria-pressed={draw || reviewBoard || lazy}
+                    aria-expanded={pipelineOpen}
+                    aria-haspopup="menu"
+                    aria-label="Draw, Review, and Lazy"
+                    disabled={busy || askOnly}
+                    onClick={() => {
+                      setPickMarksOpen(false);
+                      setPipelineOpen((open) => !open);
+                    }}
                   >
-                    <button
-                      type="button"
-                      className={`lc-flag${reviewBoard ? " lc-flag-active" : ""}${flagUnavailable}`}
-                      aria-pressed={reviewBoard}
-                      disabled={busy || askOnly || photos.length > 0}
-                      onClick={() => setReviewBoard((current) => !current)}
-                    >
-                      Review
-                    </button>
-                  </Tip>
-                  <Tip
-                    tip={
-                      askOnly
-                        ? NOT_ON_SCRATCHPAD
-                        : "Drawing-first: interpret the board and fill the correct earned parts of solution.py"
-                    }
-                    placement="left"
-                  >
-                    <button
-                      type="button"
-                      className={`lc-flag${lazy ? " lc-flag-active" : ""}${flagUnavailable}`}
-                      aria-pressed={lazy}
-                      disabled={busy || askOnly}
-                      onClick={() => setLazy((current) => !current)}
-                    >
-                      Lazy
-                    </button>
-                  </Tip>
-                </>
+                    Board
+                  </button>
+                  {pipelineOpen && (
+                    <div className="lc-coach-scope-menu lc-coach-pipeline-menu" role="menu">
+                      <button
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={draw}
+                        className={`lc-flag${draw ? " lc-flag-active" : ""}${flagUnavailable}`}
+                        disabled={busy || askOnly}
+                        onClick={() => setDraw((current) => !current)}
+                      >
+                        Draw
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={reviewBoard}
+                        className={`lc-flag${reviewBoard ? " lc-flag-active" : ""}${flagUnavailable}`}
+                        disabled={busy || askOnly || photos.length > 0}
+                        title={
+                          photos.length > 0 ? REVIEW_DROPS_PHOTOS : undefined
+                        }
+                        onClick={() => setReviewBoard((current) => !current)}
+                      >
+                        Review
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={lazy}
+                        className={`lc-flag${lazy ? " lc-flag-active" : ""}${flagUnavailable}`}
+                        disabled={busy || askOnly}
+                        onClick={() => setLazy((current) => !current)}
+                      >
+                        Lazy
+                      </button>
+                    </div>
+                  )}
+                </span>
               )}
               <Tip
                 tip={
@@ -1768,7 +1802,7 @@ export function AgentSidePanel({
                 <button
                   type="button"
                   className="lc-flag lc-coach-attach"
-                  aria-label="Attach a photo"
+                  aria-label="Add Photo"
                   disabled={
                     busy || picking || reviewBoard || photos.length >= PHOTO_ATTACH_LIMIT
                   }
@@ -1797,7 +1831,7 @@ export function AgentSidePanel({
                       .finally(() => setPicking(false));
                   }}
                 >
-                  +
+                  + Photo
                 </button>
               </Tip>
               <button type="submit" disabled={!canSend}>
