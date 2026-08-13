@@ -7,8 +7,8 @@ import { deleteContent, getContent, putContent } from "./contentStore";
 import { deletePadSnapshots } from "./padSnapshotStore";
 import { setStorageItem } from "./storageQuota";
 
-export const SCRATCHPAD_LIBRARY_LIMIT = 20;
-export const SCRATCHPAD_PAGE_LIMIT = 5;
+export const SCRATCHPAD_LIBRARY_LIMIT = 50;
+export const SCRATCHPAD_PAGE_LIMIT = 10;
 
 export class ScratchpadLibraryFullError extends Error {
   readonly code = "scratchpad-library-full" as const;
