@@ -27,12 +27,14 @@ import {
   INK_SPEED_NEUTRAL_PX_MS,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
+  HIGHLIGHT_WIDTH_SCALE,
   isHostBoundOp,
   NO_PRESSURE,
   scenePointFromPointer,
   smoothPressure,
   smoothSpeed,
   stampAlongSegment,
+  trimHighlightLiftHook,
   type InkOp,
   type ScenePoint,
   type SceneBounds,
@@ -125,6 +127,11 @@ export interface RasterInkLayerProps {
   smoothing?: number;
   /** Whether {@link smoothing} is applied on the lift or under the nib. */
   smoothingMode?: InkSmoothingMode;
+  /**
+   * Pen / highlighter draw a straight chord from the touch-down to the nib,
+   * instead of following the hand. Toolbar toggle — not the Settings smoothing dial.
+   */
+  straightInk?: boolean;
   /** Speed-ink strength (0–1): a slow nib lays down more than a fast one. */
   speedInk?: number;
   /** Soften speed-ink join/dwell discs (0–1). Stamped onto new pen strokes. */
@@ -184,6 +191,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       pressureSensitive,
       smoothing = 0,
       smoothingMode = "lift",
+      straightInk = false,
       speedInk = 0,
       speedBlotBlend = INK_SPEED_BLOT_BLEND_DEFAULT,
       inkBoldness = INK_BOLDNESS_DEFAULT,
@@ -335,6 +343,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     smoothingRef.current = smoothing;
     const smoothingModeRef = useRef(smoothingMode);
     smoothingModeRef.current = smoothingMode;
+    const straightInkRef = useRef(straightInk);
+    straightInkRef.current = straightInk;
     const speedInkRef = useRef(speedInk);
     speedInkRef.current = speedInk;
     const speedBlotBlendRef = useRef(speedBlotBlend);
@@ -876,43 +886,31 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
        */
       const isLive = smoothingModeRef.current === "live";
       const strength = smoothingRef.current;
-      /*
-       * Pressure strokes paint many translucent abutting runs. Storage RDP
-       * (always-on 1/15-nib thin) drops samples on lift, runs regroup, and the
-       * fill jumps — ugly on bold nibs. So they are still kept off the storage
-       * floor: `minFraction 0` when smoothing is on, and the dial at zero means
-       * the geometric pass is skipped entirely.
-       *
-       * What they no longer escape is `simplifyModulatedInkPoints`. Those
-       * strokes used to be stored with *every* stamp — a point every 0.55 of a
-       * nib, for the life of the document — and the argument for that only ever
-       * covered points that carry modulation. A sample that sits on the line
-       * between its neighbours in position, pressure *and* slowness carries
-       * none: it cannot move a pixel, cannot shift a run boundary, and cannot
-       * change the fill. Dropping those leaves the swell of the stroke exactly
-       * where it was and takes out the pen sitting still.
-       */
+      const straight = straightInkRef.current;
       const committed =
-        live.kind === "draw" && !isLive
+        live.kind === "draw"
           ? (() => {
-              const nib = inkLineWidth(live.baseWidth, 0, false);
-              if (!live.pressureSensitive) {
-                return {
-                  ...live,
-                  points: smoothInkPoints(live.points, strength, nib),
-                };
+              let pts = live.points;
+              if (live.highlight) {
+                const chisel =
+                  inkLineWidth(live.baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE;
+                pts = trimHighlightLiftHook(pts, chisel);
               }
-              const shaped =
-                strength <= 0
-                  ? live.points
-                  : smoothInkPoints(live.points, strength, nib, 0);
-              return {
-                ...live,
-                points: simplifyModulatedInkPoints(
+              if (straight && pts.length >= 2) {
+                pts = [pts[0]!, pts[pts.length - 1]!];
+              } else if (!isLive && !live.pressureSensitive) {
+                const nib = inkLineWidth(live.baseWidth, 0, false);
+                pts = smoothInkPoints(pts, strength, nib);
+              } else if (!isLive && live.pressureSensitive) {
+                const nib = inkLineWidth(live.baseWidth, 0, false);
+                const shaped =
+                  strength <= 0 ? pts : smoothInkPoints(pts, strength, nib, 0);
+                pts = simplifyModulatedInkPoints(
                   shaped,
                   nib * SIMPLIFY_MODULATED_FRACTION,
-                ),
-              };
+                );
+              }
+              return { ...live, points: pts };
             })()
           : live;
 
@@ -1736,6 +1734,30 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           // Tip tracks the pen. Live reshape tidies earlier points on paint;
           // lift mode keeps raw stamps until commit.
           const point = raw;
+
+          if (live.kind === "draw" && straightInkRef.current) {
+            const start = live.points[0] ?? last;
+            live.points = [start, point];
+            if (reshapeLive) {
+              liveRawPointsRef.current = [start, point];
+            }
+            lastPointRef.current = point;
+            continue;
+          }
+
+          if (live.kind === "draw" && live.highlight === true) {
+            const chisel =
+              inkLineWidth(live.baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE;
+            const next = [...live.points, point];
+            const trimmed = trimHighlightLiftHook(next, chisel);
+            const lastKept = trimmed[trimmed.length - 1];
+            if (
+              lastKept &&
+              (lastKept.x !== point.x || lastKept.y !== point.y)
+            ) {
+              continue;
+            }
+          }
 
           const step =
             live.kind === "erase"

@@ -22,6 +22,8 @@ export interface InkToolPrefs {
   pressureSensitive: boolean;
   /** Last ink colour — validated against the current theme's swatches on load. */
   inkColor: string | null;
+  /** Pen / highlighter draw a straight chord from touch-down. */
+  straightInk: boolean;
 }
 
 const DEFAULTS: InkToolPrefs = {
@@ -30,6 +32,7 @@ const DEFAULTS: InkToolPrefs = {
   inkFullness: INK_FULLNESS_DEFAULT,
   pressureSensitive: true,
   inkColor: null,
+  straightInk: false,
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -63,6 +66,8 @@ export function loadInkToolPrefs(): InkToolPrefs {
           ? parsed.pressureSensitive
           : DEFAULTS.pressureSensitive,
       inkColor: typeof parsed.inkColor === "string" ? parsed.inkColor : null,
+      straightInk:
+        typeof parsed.straightInk === "boolean" ? parsed.straightInk : DEFAULTS.straightInk,
     };
   } catch {
     return { ...DEFAULTS };

@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { MorphBar } from "../components/MorphBar";
+import { HoldButton } from "../components/HoldButton";
 import {
   SHAPES,
   SHAPE_GROUPS,
@@ -152,6 +153,9 @@ export interface BoardToolbarProps {
   onCaptureRegion: () => void;
   /** Back to the original problem layout — the only destructive control here. */
   onReset: () => void;
+  /** Pen / highlighter draw a straight chord from the starting point. */
+  straightInk?: boolean;
+  onStraightInk?: (on: boolean) => void;
   onUndo: () => void;
   onRedo: () => void;
   mobile?: boolean;
@@ -191,6 +195,8 @@ export function BoardToolbar({
   onCaptureEntire,
   onCaptureRegion,
   onReset,
+  straightInk = false,
+  onStraightInk,
   onUndo,
   onRedo,
   mobile = false,
@@ -205,6 +211,7 @@ export function BoardToolbar({
     active === "arrow" ||
     active === "eraser";
   const [shapeMenuOpen, setShapeMenuOpen] = useState(false);
+  const [resetLocked, setResetLocked] = useState(true);
   const [configuring, setConfiguring] = useState<ShapeStamp | null>(null);
   const [mods, setMods] = useState<Record<string, ShapeModValue>>({});
   const [moveAsOne, setMoveAsOne] = useState(true);
@@ -576,6 +583,26 @@ export function BoardToolbar({
           renderToolButton(tool, label, hint, icon),
         )}
 
+        {onStraightInk && (
+          <button
+            type="button"
+            className={
+              straightInk ? "lc-tool lc-tool-active lc-tip-target" : "lc-tool lc-tip-target"
+            }
+            aria-label="Straight stroke"
+            aria-pressed={straightInk}
+            data-tip={
+              straightInk
+                ? "Straight — line from where you put the nib down"
+                : "Straight — pen and highlighter draw a line from the start"
+            }
+            data-tip-placement="bottom"
+            onClick={() => onStraightInk(!straightInk)}
+          >
+            <StraightIcon />
+          </button>
+        )}
+
         {onToggleHighlight && (
           <button
             type="button"
@@ -751,16 +778,33 @@ export function BoardToolbar({
         >
           <RedoIcon />
         </button>
-        <button
-          type="button"
-          className="lc-tool lc-tip-target"
-          aria-label="Reset board"
-          data-tip="Reset board"
-          data-tip-placement="bottom"
-          onClick={onReset}
+        <HoldButton
+          label="Reset board"
+          ariaLabel={
+            resetLocked
+              ? "Reset board locked — hold to unlock"
+              : "Reset board unlocked — tap to reset, hold to lock"
+          }
+          dataTip={
+            resetLocked
+              ? "Reset locked — hold to unlock"
+              : "Reset — tap to reset, hold to lock"
+          }
+          dataTipPlacement="bottom"
+          className={[
+            "lc-tool lc-tip-target lc-hold-icon",
+            resetLocked ? "is-locked" : "lc-hold-danger",
+          ].join(" ")}
+          pressed={!resetLocked}
+          onConfirm={() => setResetLocked((locked) => !locked)}
+          onTap={() => {
+            if (resetLocked) return;
+            onReset();
+            setResetLocked(true);
+          }}
         >
           <ResetIcon />
-        </button>
+        </HoldButton>
 
         <div className="lc-tool-sep" />
 
@@ -1032,6 +1076,20 @@ function PenIcon() {
         strokeWidth="1.8"
         strokeLinecap="round"
         d="m12.5 6.5 5 5"
+      />
+    </svg>
+  );
+}
+
+function StraightIcon() {
+  return (
+    <svg className="lc-tool-svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        d="M5 19 19 5"
       />
     </svg>
   );

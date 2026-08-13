@@ -104,14 +104,26 @@ const TABS: { id: TabId; label: string }[] = [
  *
  * The body stays the only scroller — these just hide the long lists so the
  * tab is a map of topics instead of a wall of radios. Independent: two can
- * be open at once. Start closed; `<details>` is uncontrolled.
+ * be open at once. Start closed.
+ *
+ * A `<button>` not `<details>`: native summary eats Android overflow pans,
+ * and the disclosure triangle never matched the rest of the chrome.
  */
 function SettingsFold({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
   return (
-    <details className="lc-settings-fold">
-      <summary className="lc-settings-fold-summary">{title}</summary>
-      <div className="lc-settings-fold-body">{children}</div>
-    </details>
+    <div className={open ? "lc-settings-fold is-open" : "lc-settings-fold"}>
+      <button
+        type="button"
+        className="lc-settings-fold-summary"
+        aria-expanded={open}
+        onClick={() => setOpen((on) => !on)}
+      >
+        <span className="lc-settings-fold-chevron" aria-hidden />
+        <span className="lc-settings-fold-title">{title}</span>
+      </button>
+      {open ? <div className="lc-settings-fold-body">{children}</div> : null}
+    </div>
   );
 }
 

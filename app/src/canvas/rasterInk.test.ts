@@ -8,6 +8,7 @@ import {
   exportScaleFrom,
   hasStylusPressure,
   HIGHLIGHT_WIDTH_SCALE,
+  trimHighlightLiftHook,
   inkBaseWidthForZoom,
   inkLineWidth,
   inkOpsBounds,
@@ -198,6 +199,28 @@ describe("rasterInk sizing", () => {
       const thin = inkStrokeStyle(1, 1, NO_PRESSURE, 1, false, 0, 0.5, 0, true);
       const fat = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.5, 0, true);
       expect(fat.lineWidth).toBeGreaterThan(thin.lineWidth);
+    });
+
+    it("drops a short reverse tail at lift-off", () => {
+      const pts = [
+        { x: 0, y: 0, pressure: 0.5 },
+        { x: 40, y: 0, pressure: 0.5 },
+        { x: 80, y: 0, pressure: 0.5 },
+        { x: 76, y: 0.5, pressure: 0.2 },
+        { x: 72, y: 0, pressure: 0.05 },
+      ];
+      const kept = trimHighlightLiftHook(pts, 20);
+      expect(kept[kept.length - 1]?.x).toBe(80);
+    });
+
+    it("keeps a real U-turn that travels farther than the chisel", () => {
+      const pts = [
+        { x: 0, y: 0, pressure: 0.5 },
+        { x: 40, y: 0, pressure: 0.5 },
+        { x: 0, y: 0, pressure: 0.5 },
+      ];
+      const kept = trimHighlightLiftHook(pts, 8);
+      expect(kept).toHaveLength(3);
     });
   });
 

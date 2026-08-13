@@ -359,6 +359,46 @@ export const HIGHLIGHT_WIDTH_SCALE = 8;
 export const HIGHLIGHT_ALPHA = 0.3;
 
 /**
+ * Drop the lift-off hook on a highlighter stroke.
+ *
+ * Multiply compositing darkens wherever the chisel retraces. A stylus lifting
+ * often backtracks a millimetre; those samples look like a second pass at the
+ * tip. Trim a short reverse tail. A real U-turn that travels farther than
+ * ~1.25× the chisel stays.
+ */
+export function trimHighlightLiftHook(
+  points: readonly ScenePoint[],
+  chiselWidth: number,
+): ScenePoint[] {
+  if (points.length < 3) return points.slice();
+  const maxHook = Math.max(chiselWidth * 1.25, 6);
+  const hi = Math.max(1, Math.min(points.length - 2, Math.floor((points.length - 1) * 0.7)));
+  const hx = points[hi]!.x - points[0]!.x;
+  const hy = points[hi]!.y - points[0]!.y;
+  const hLen = Math.hypot(hx, hy);
+  if (hLen < 1e-6) return points.slice();
+  let end = points.length - 1;
+  let trimmed = 0;
+  while (end >= 2) {
+    const b = points[end - 1]!;
+    const c = points[end]!;
+    const wx = c.x - b.x;
+    const wy = c.y - b.y;
+    const wLen = Math.hypot(wx, wy);
+    if (wLen < 1e-6) {
+      end -= 1;
+      continue;
+    }
+    const cos = (hx * wx + hy * wy) / (hLen * wLen);
+    if (cos >= -0.15) break;
+    if (trimmed + wLen > maxHook) break;
+    trimmed += wLen;
+    end -= 1;
+  }
+  return end + 1 === points.length ? points.slice() : points.slice(0, end + 1);
+}
+
+/**
  * Hard floor on a tip, for degenerate input only.
  *
  * {@link INK_TIP_MIN} is the *slider's* minimum and used to be the clamp as
