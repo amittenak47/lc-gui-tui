@@ -42,6 +42,15 @@ pub fn write_problem_header(out: &mut String, meta: &WorkspaceMeta, description:
         let _ = writeln!(out, "\n## Context\n\n{}", clip(desc, MAX_DESCRIPTION));
         return;
     }
+    if crate::scratchpad::is_md_ink_meta(meta) {
+        let _ = writeln!(out, "# Document");
+        if !meta.tags.is_empty() {
+            let _ = writeln!(out, "Tags: {}", meta.tags.join(", "));
+        }
+        let desc = description.unwrap_or(crate::scratchpad::MD_INK_COACH_DESCRIPTION);
+        let _ = writeln!(out, "\n## Context\n\n{}", clip(desc, MAX_DESCRIPTION));
+        return;
+    }
     let _ = writeln!(out, "# Problem: {}", meta.task_id);
     if let Some(q) = &meta.question_id {
         let _ = writeln!(out, "LeetCode question id: {q}");
