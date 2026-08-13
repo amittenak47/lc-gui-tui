@@ -19,6 +19,16 @@ pub const MAX_CASE: usize = 400;
 /// small enough to leave room for the board on a 8k-context local model.
 pub const MAX_CASES_SHOWN: usize = 12;
 
+/// Hard cap on the Ask `question` field for corpus problems.
+///
+/// Leaves room for the statement and code on an ~8k local model. Keep in sync
+/// with `PROBLEM_ASK_CLIP_CHARS` in `app/src/modes/coachMarkContext.ts`.
+pub const ASK_QUESTION_MAX: usize = 4000;
+
+/// Document / whiteboard Ask has no code dump competing for context.
+/// Keep in sync with `PAD_ASK_CLIP_CHARS` in `coachMarkContext.ts`.
+pub const PAD_ASK_QUESTION_MAX: usize = 12_000;
+
 /// Shared by coach (and ask), which follow the same section-heading style.
 pub fn clip(text: &str, max: usize) -> String {
     if text.chars().count() <= max {

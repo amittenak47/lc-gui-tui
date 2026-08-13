@@ -86,7 +86,7 @@ import {
   type CoachSendFlags,
   replyExcerpt,
 } from "./modes/AgentSidePanel";
-import { packFootnoteContext } from "./modes/coachMarkContext";
+import { assembleAskPrompt, PAD_ASK_CLIP_CHARS, PROBLEM_ASK_CLIP_CHARS } from "./modes/coachMarkContext";
 import { AttemptDialog } from "./modes/AttemptDialog";
 import { ScratchpadDialog } from "./modes/ScratchpadDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
@@ -240,6 +240,9 @@ interface CoachSendQueueItem {
   photos: CoachAttachment[];
   quotedPassage?: string;
   anchorId: string | null;
+  omittedMarkCount?: number;
+  includedMarkCount?: number;
+  questionTruncated?: boolean;
 }
 
 const SCRATCHPAD_PROBLEM: ProblemDetail = {
@@ -518,6 +521,8 @@ export function App() {
   const mdInkPristineHashRef = useRef<number | null>(null);
   /** Footnote revision at open / last explicit save — not merely "any footnotes". */
   const mdInkPristineMarksRef = useRef("");
+  /** Persistable coach thread at open / last explicit save. */
+  const mdInkPristineAgentRef = useRef("");
   mdInkSourceRef.current = mdInkSource;
   mdInkDocIdRef.current = mdInkDocId;
 
@@ -1451,6 +1456,7 @@ export function App() {
               docType: source.docType,
               board: liveBoard,
               footnotes: mdInkFootnotesRef.current,
+              agent: persistableCoachMessages(coachMessages),
             });
             if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
             setNotice(`Saved “${saved.name}”.`);
@@ -1461,6 +1467,7 @@ export function App() {
               name: saved.name,
               board: snapBoard,
               footnotes: saved.footnotes,
+              agent: saved.agent,
             });
           } catch (cause: unknown) {
             noteStorageFull(cause);
@@ -2137,6 +2144,8 @@ export function App() {
         setMdInkFootnotes(existing?.footnotes ?? []);
         mdInkFootnotesRef.current = existing?.footnotes ?? [];
         pendingQuoteRef.current = null;
+        const resumed = restoreCoachMessages(existing?.agent ?? []);
+        if (resumed.length > 0) setCoachMessages(resumed);
 
         mdInkBaselineRef.current = {
           id: existing?.id ?? null,
@@ -2175,6 +2184,7 @@ export function App() {
             ? padContentFingerprint(board.getElements(), board.getInkOpCount())
             : null;
           mdInkPristineMarksRef.current = footnoteRevision(mdInkFootnotesRef.current);
+          mdInkPristineAgentRef.current = JSON.stringify(persistableCoachMessages(resumed));
         }
 
         // Complete the loading transition (same beats and teardown as
@@ -2324,6 +2334,9 @@ export function App() {
         if (snap.footnotes) {
           setMdInkFootnotes(snap.footnotes);
           mdInkFootnotesRef.current = snap.footnotes;
+        }
+        if (Array.isArray(snap.agent) && snap.agent.length > 0) {
+          setCoachMessages(restoreCoachMessages(snap.agent));
         }
         board.restoreBoard(snap.board.elements, snap.board.appState, {
           skeletons: buildMdInkTemplate(
@@ -3148,6 +3161,12 @@ export function App() {
          */
         const asked = withConversationContext(note, coachMessagesRef.current, {
           threadRootId: threadAnchor?.id ?? null,
+          budget: Math.max(
+            400,
+            (isLocalPad(problem) ? PAD_ASK_CLIP_CHARS : PROBLEM_ASK_CLIP_CHARS) -
+              note.length -
+              40,
+          ),
         });
         // Attached photos ride the same payload on both transports — the WS
         // run frame and POST /coach/ask deserialize the one AskRequest.
@@ -3352,34 +3371,37 @@ export function App() {
 
       const bubble = text || (quotedExcerpt ? `“${quotedExcerpt}”` : "Send");
       const quotedPassage = flags.pageQuote?.trim();
-      const asked = flags.replyTo
+      const askedRaw = flags.replyTo
         ? `Replying to your earlier message: “${flags.replyTo.excerpt}”\n\n${text}`
-        : text;
-      const quoted = quotedPassage
-        ? `From the document:\n\n“${quotedPassage}”\n\n${asked}`.trimEnd()
-        : asked;
+        : text.trim();
+      const asked =
+        askedRaw ||
+        (quotedPassage
+          ? "What should I make of this?"
+          : photos.length > 0
+            ? "What am I looking at?"
+            : "What should I focus on next?");
+      const assembled = assembleAskPrompt({
+        question: asked,
+        quote: quotedPassage,
+        marks,
+        numbers: numberFootnotes(mdInkFootnotesRef.current),
+        budget: isLocalPad(problem) ? PAD_ASK_CLIP_CHARS : PROBLEM_ASK_CLIP_CHARS,
+      });
+      const prompt = assembled.prompt;
 
-      /*
-       * Attached marks are the send's context, so they go in front of the
-       * question — block text, notes, links, sub-marks and any threads those
-       * marks already belong to, deduped and budgeted by packFootnoteContext.
-       */
-      const markContext =
-        marks.length > 0
-          ? packFootnoteContext(marks, {
-              numbers: numberFootnotes(mdInkFootnotesRef.current),
-            })
-          : "";
-      const prompt = markContext ? `${markContext}\n\n${quoted}`.trimEnd() : quoted;
-
-      // One Send seeds one thread; the first mark claims it and the rest are
-      // given the same rootId when the reply lands.
-      const attachedFootnoteIds = marks.map((mark) => mark.id);
-      if (attachedFootnoteIds.length > 0) {
-        footnoteCoachUpgradeRef.current = attachedFootnoteIds[0]!;
+      // One Send seeds one thread on the marks the model actually received.
+      const attachedFootnoteIds =
+        assembled.includedMarkIds.length > 0 || assembled.omittedMarkIds.length > 0
+          ? assembled.includedMarkIds
+          : marks.map((mark) => mark.id);
+      if (marks.length > 0) {
+        footnoteCoachUpgradeRef.current = attachedFootnoteIds[0] ?? null;
         setAttachedFootnoteIds([]);
         flagBits.push(
-          `${attachedFootnoteIds.length} mark${attachedFootnoteIds.length === 1 ? "" : "s"}`,
+          assembled.omittedMarkIds.length > 0
+            ? `${assembled.includedMarkIds.length} of ${marks.length} marks`
+            : `${marks.length} mark${marks.length === 1 ? "" : "s"}`,
         );
       }
 
@@ -3395,9 +3417,12 @@ export function App() {
         prompt,
         anchorId,
         attachedFootnoteIds,
+        omittedMarkCount: assembled.omittedMarkIds.length,
+        includedMarkCount: assembled.includedMarkIds.length,
+        questionTruncated: assembled.questionTruncated,
       };
     },
-    [readingSize, themeId],
+    [readingSize, themeId, problem],
   );
 
   const applyCoachFootnote = useCallback(
@@ -3482,6 +3507,14 @@ export function App() {
         const { text, flags, prompt, attachments, threadAnchor, photos, quotedPassage, userMessageId } =
           item;
 
+        if (item.questionTruncated) {
+          setNotice("The question was truncated for the model.");
+        } else if ((item.omittedMarkCount ?? 0) > 0) {
+          const sent = item.includedMarkCount ?? 0;
+          const total = sent + (item.omittedMarkCount ?? 0);
+          setNotice(`Only ${sent} of ${total} attached marks fit this Ask.`);
+        }
+
         setCoachMessages((current) =>
           current.map((message) =>
             message.id === userMessageId ? { ...message, queued: undefined } : message,
@@ -3512,11 +3545,6 @@ export function App() {
             pendingAck,
           );
         } else if (flags.ask || text || photos.length > 0 || quotedPassage) {
-          const fallback = quotedPassage
-            ? "What should I make of this?"
-            : photos.length > 0
-              ? "What am I looking at?"
-              : "What should I focus on next?";
           /*
            * The board pictures go with the question, not just onto the bubble.
            *
@@ -3526,13 +3554,17 @@ export function App() {
            * Annotate > Whole board" asked the coach about pages it could not
            * see. Same asymmetry the Review/photo interlock fixed, one endpoint
            * over.
+           *
+           * Fallback wording is already reserved inside `prompt` by
+           * assembleAskPrompt — do not append it after the packed marks, or
+           * the daemon's front-clip can delete the ask.
            */
           const boardShots: CoachAttachment[] = (attachments ?? []).map((shot) => ({
             label: shot.label,
             png: shot.png,
           }));
           await askCoach(
-            text ? prompt : `${prompt}\n\n${fallback}`.trim(),
+            prompt,
             threadAnchor,
             [...photos, ...boardShots],
             pendingAck,
@@ -3646,6 +3678,9 @@ export function App() {
         photos: prepared.photos,
         quotedPassage: prepared.quotedPassage,
         anchorId: prepared.anchorId,
+        omittedMarkCount: prepared.omittedMarkCount,
+        includedMarkCount: prepared.includedMarkCount,
+        questionTruncated: prepared.questionTruncated,
       });
     },
     [prepareCoachSend, pushCoachMessage, applyCoachFootnote, sendThreadAnchor],
@@ -3713,6 +3748,9 @@ export function App() {
             photos: prepared.photos,
             quotedPassage: prepared.quotedPassage,
             anchorId: prepared.anchorId,
+            omittedMarkCount: prepared.omittedMarkCount,
+            includedMarkCount: prepared.includedMarkCount,
+            questionTruncated: prepared.questionTruncated,
           });
         })();
         return;
@@ -3749,6 +3787,9 @@ export function App() {
           photos: prepared.photos,
           quotedPassage: prepared.quotedPassage,
           anchorId: prepared.anchorId,
+          omittedMarkCount: prepared.omittedMarkCount,
+          includedMarkCount: prepared.includedMarkCount,
+          questionTruncated: prepared.questionTruncated,
         });
       })();
     },
@@ -3955,13 +3996,48 @@ export function App() {
    * Written on every change rather than only on leave: a crash or a closed lid
    * should not cost the conversation, and `attempt::finish` is what decides
    * whether the stored thread survives into the next attempt.
+   *
+   * Documents write the thread onto the library entry (with the board and
+   * marks). They must not hit `putAgentSession` — md-ink is not a corpus slug.
    */
   useEffect(() => {
     if (!problem || coachMessages.length === 0) return;
     const timer = window.setTimeout(() => {
       if (agentSaveSuspendedRef.current) return;
       const agent = persistableCoachMessages(coachMessages);
-      if (isMdInk(problem)) return;
+      if (isMdInk(problem)) {
+        // Board autosave only writes when the scene + marks fingerprint moves,
+        // so a chat-only exchange would otherwise be lost — same reason the
+        // whiteboard writes the notebook here. A PDF mark still only stores a
+        // rootId pointer; the transcript lives on the library entry.
+        const board = boardRef.current;
+        const source = mdInkSourceRef.current;
+        if (!board || !source) return;
+        void (async () => {
+          await flushDirtyInk(board, mdInkDocKey(source.hash));
+          const liveBoard = board.saveBoard({ assembleInk: false });
+          try {
+            const saved = await saveMdInkDoc({
+              id: mdInkDocIdRef.current ?? undefined,
+              name: source.name,
+              hash: source.hash,
+              source: source.text,
+              docType: source.docType,
+              board: liveBoard,
+              footnotes: mdInkFootnotesRef.current,
+              agent,
+            });
+            if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
+          } catch (cause: unknown) {
+            if (cause instanceof MdInkLibraryFullError) {
+              setError(cause.message);
+            } else {
+              noteStorageFull(cause);
+            }
+          }
+        })();
+        return;
+      }
       if (isScratchpad(problem)) {
         // Board autosave only writes when the scene + ink fingerprint moves, so
         // a chat-only exchange would otherwise be lost. Write the notebook with
@@ -3995,7 +4071,7 @@ export function App() {
         });
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [client, problem, coachMessages, scratchNotebookId, scratchPageCount]);
+  }, [client, problem, coachMessages, scratchNotebookId, scratchPageCount, noteStorageFull]);
 
   const confirmReveal = useCallback(async (mode: "bridge" | "lazy" = "bridge") => {
     const board = boardRef.current;
@@ -4262,6 +4338,12 @@ export function App() {
     if (footnoteRevision(mdInkFootnotesRef.current) !== mdInkPristineMarksRef.current) {
       return false;
     }
+    if (
+      JSON.stringify(persistableCoachMessages(coachMessagesRef.current)) !==
+      mdInkPristineAgentRef.current
+    ) {
+      return false;
+    }
     return padContentFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
   }, []);
 
@@ -4285,6 +4367,7 @@ export function App() {
     mdInkBaselineRef.current = { id: null, entry: null };
     mdInkPristineHashRef.current = null;
     mdInkPristineMarksRef.current = "";
+    mdInkPristineAgentRef.current = "";
     setMdInkDocId(null);
     setMdInkFootnotes([]);
     mdInkFootnotesRef.current = [];
@@ -4311,6 +4394,7 @@ export function App() {
         docType: source.docType,
         board: blob,
         footnotes: mdInkFootnotes,
+        agent: persistableCoachMessages(coachMessages),
       });
       setMdInkDocId(saved.id);
       mdInkBaselineRef.current = { id: saved.id, entry: saved };
@@ -4319,6 +4403,7 @@ export function App() {
         board.getInkOpCount(),
       );
       mdInkPristineMarksRef.current = footnoteRevision(mdInkFootnotes);
+      mdInkPristineAgentRef.current = JSON.stringify(persistableCoachMessages(coachMessages));
       const snapBoard = await boardWithAssembledInk(board, blob);
       void recordRollingSnapshots({
         kind: "md-ink",
@@ -4326,6 +4411,7 @@ export function App() {
         name: saved.name,
         board: snapBoard,
         footnotes: saved.footnotes,
+        agent: saved.agent,
       });
       return saved;
     } catch (cause) {
@@ -4336,7 +4422,7 @@ export function App() {
       setError(messageOf(cause));
       return null;
     }
-  }, [mdInkDocId, mdInkFootnotes, mdInkSource]);
+  }, [mdInkDocId, mdInkFootnotes, mdInkSource, coachMessages]);
 
 
   /*
@@ -5382,6 +5468,11 @@ export function App() {
                 },
               ];
             })}
+            attachedFootnotes={attachedFootnoteIds.flatMap((id) => {
+              const mark = mdInkFootnotes.find((entry) => entry.id === id);
+              return mark ? [mark] : [];
+            })}
+            askClipChars={isLocalPad(problem) ? PAD_ASK_CLIP_CHARS : PROBLEM_ASK_CLIP_CHARS}
             annotationChoices={mdInkFootnotes.map((mark) => ({
               id: mark.id,
               number: footnoteNumbers.get(mark.id),
