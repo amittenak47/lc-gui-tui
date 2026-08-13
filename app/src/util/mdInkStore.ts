@@ -22,6 +22,7 @@ import type { BoardBlob } from "../canvas/BoardHandle";
 import { deleteContent, getContent, putContent } from "./contentStore";
 import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
+import { deletePadSnapshots } from "./padSnapshotStore";
 import { setStorageItem } from "./storageQuota";
 
 export const MD_INK_LIBRARY_LIMIT = 30;
@@ -327,6 +328,7 @@ export async function deleteMdInkDoc(id: string): Promise<void> {
   const kept = index.filter((entry) => entry.id !== id);
   writeIndex(kept);
   await deleteContent(id);
+  if (going) void deletePadSnapshots("md-ink", going.hash).catch(() => {});
   /*
    * A binary document's bytes outlive its entry unless something removes them.
    *

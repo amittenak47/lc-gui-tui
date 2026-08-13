@@ -6,6 +6,8 @@
 use crate::generator::WorkspaceMeta;
 
 pub const DATASET_ID: &str = "scratchpad";
+/// Client dataset slug after the notebook was renamed Whiteboard in the UI.
+pub const DATASET_ID_PUBLIC: &str = "whiteboard";
 pub const TASK_ID: &str = "__scratchpad__";
 
 /// Board-session key — same shape as [`crate::dataset::Dataset::key`].
@@ -17,7 +19,10 @@ pub fn board_key() -> String {
 pub fn is_request(dataset: Option<&str>, task_id: &str) -> bool {
     task_id.trim() == TASK_ID
         || dataset
-            .map(|slug| slug.trim() == DATASET_ID)
+            .map(|slug| {
+                let slug = slug.trim();
+                slug == DATASET_ID || slug == DATASET_ID_PUBLIC
+            })
             .unwrap_or(false)
 }
 
@@ -59,6 +64,7 @@ mod tests {
     #[test]
     fn request_detected_by_slug_or_task_id() {
         assert!(is_request(Some("scratchpad"), "anything"));
+        assert!(is_request(Some("whiteboard"), "anything"));
         assert!(is_request(None, TASK_ID));
         assert!(!is_request(Some("leetcode"), "two-sum"));
     }

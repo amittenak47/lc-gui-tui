@@ -24,17 +24,19 @@
 const DB_NAME = "lc.docs";
 
 /**
- * Bumped from 1 when board content moved in beside the PDF bytes.
+ * Bumped from 2 when rolling pad snapshots moved in beside board content.
  *
  * `onupgradeneeded` is additive and guarded per store, so an existing database
  * gains the new stores and keeps everything already in `bytes`.
  */
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 /** Binary documents — PDF and EPUB bytes, keyed by content hash. */
 export const STORE_BYTES = "bytes";
 /** Entry content: the board blob, the source copy, the footnotes. Keyed by entry id. */
 export const STORE_CONTENT = "content";
+/** Rolling 2h / 24h / 7d copies of a pad. Keyed by `kind:key:tier`. */
+export const STORE_SNAPSHOTS = "snapshots";
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -51,6 +53,7 @@ export function openDb(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_BYTES)) db.createObjectStore(STORE_BYTES);
       if (!db.objectStoreNames.contains(STORE_CONTENT)) db.createObjectStore(STORE_CONTENT);
+      if (!db.objectStoreNames.contains(STORE_SNAPSHOTS)) db.createObjectStore(STORE_SNAPSHOTS);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
