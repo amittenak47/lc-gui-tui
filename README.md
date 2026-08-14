@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="docs/icons/icon-512.png" alt="lc" width="128">
+  <img src="docs/icons/icon-512.png" alt="Whiteboard" width="128">
 </p>
 
-# lc
+# Whiteboard
 
 A Rust CLI and terminal UI for practicing LeetCode-style problems from **local JSON corpora**. Index thousands of problems into SQLite, browse and filter them, generate Python workspaces, run tests, and ask an LLM tutor for hints — **without ever loading or sending reference solutions** from the dataset.
 
-There is a second path: sketch the approach by hand on a tablet or desktop canvas while a coach watches, grills you, and points at the sample case your approach breaks on.
+There is a second path: sketch the approach by hand on a tablet or desktop canvas while an agent watches, grills you, and points at the sample case your approach breaks on.
 
 `5 problem sets` · `local or Groq` · `tablet or desktop` · `PolyForm Noncommercial`
 
@@ -17,14 +17,14 @@ There is a second path: sketch the approach by hand on a tablet or desktop canva
 | Surface | What it is |
 | --- | --- |
 | **CLI** | Index corpora, search, load workspaces, run tests, ask the tutor |
-| **TUI** | Full-screen practice UI in the terminal (`lc` / `lc tui`) |
+| **TUI** | Full-screen practice UI in the terminal (`whiteboard` / `whiteboard tui`) |
 | **IDE** | Edit `solution.py` in Cursor or VS Code; optional LLM Autocorrect |
 | **GUI** | Whiteboard app (`app/`) talking to `whiteboard serve` over HTTP/WS |
 
 ```
-JSON corpora ─lc index──▶ SQLite (problems.db)
+JSON corpora ─whiteboard index──▶ SQLite (problems.db)
                               │
-                        lc load <id>
+                        whiteboard load <id>
                               ▼
         ~/lc-workspace/[<dataset>/]<task_id>/
         ├── solution.py
@@ -34,6 +34,8 @@ JSON corpora ─lc index──▶ SQLite (problems.db)
                               │
                         whiteboard test · whiteboard ask · whiteboard serve → app/
 ```
+
+The crate and binary are `whiteboard`. Config still lives under the OS project dir named `lc` (`whiteboard config path`). Workspace and data defaults (`~/lc-workspace`, `~/lc-data`) and env vars (`GROQ_API_KEY`, `LC_LOCAL_API_KEY`, `OPENAI_API_KEY`) are unchanged.
 
 ---
 
@@ -48,32 +50,32 @@ pip install -U huggingface_hub pyarrow
 python scripts/fetch_dataset.py leetcode --data-dir ~/lc-data
 # or: python scripts/fetch_dataset.py --all --data-dir ~/lc-data
 
-lc config set data-dir ~/lc-data
-lc index
-lc                                  # TUI
+whiteboard config set data-dir ~/lc-data
+whiteboard index
+whiteboard                            # TUI
 ```
 
 Client internals, Android sideload, and cleartext-HTTP notes → [`app/README.md`](app/README.md).
 
 ### Model config
 
-Point `lc` at any OpenAI-compatible endpoint (vLLM, llama.cpp, Ollama, LM Studio) or Groq:
+Point `whiteboard` at any OpenAI-compatible endpoint (vLLM, llama.cpp, Ollama, LM Studio) or Groq:
 
 ```bash
-lc config set llm.provider local
-lc config set llm.local.base_url http://127.0.0.1:8000/v1
-lc config set llm.local.model qwen3-vl-8b
-lc config set llm.local.vision_model qwen3-vl-8b
+whiteboard config set llm.provider local
+whiteboard config set llm.local.base_url http://127.0.0.1:8000/v1
+whiteboard config set llm.local.model qwen3-vl-8b
+whiteboard config set llm.local.vision_model qwen3-vl-8b
 ```
 
-API keys stay in the environment (`GROQ_API_KEY`, optional `LC_LOCAL_API_KEY`) — not in the TOML. Config path: `lc config path`.
+API keys stay in the environment (`GROQ_API_KEY`, optional `LC_LOCAL_API_KEY`) — not in the TOML. Config path: `whiteboard config path`.
 
 ---
 
 ## 2. TUI usage
 
 ```bash
-lc                  # or: lc tui
+whiteboard                  # or: whiteboard tui
 ```
 
 On the browse screen:
@@ -98,18 +100,18 @@ Coach chat in the TUI can play structure traces as an **ASCII morph** between ke
 Generate a workspace, then open it in Cursor or VS Code:
 
 ```bash
-lc load two-sum --open
+whiteboard load two-sum --open
 # or from the TUI action menu → open in editor
 ```
 
-`lc` looks for `cursor` then `code` on your PATH (`-r` reuses a window). You edit `solution.py`; tests stay local:
+`whiteboard` looks for `cursor` then `code` on your PATH (`-r` reuses a window). You edit `solution.py`; tests stay local:
 
 ```bash
-lc test two-sum --verbose
-lc ask two-sum --case 3        # tutor never sees corpus solutions
+whiteboard test two-sum --verbose
+whiteboard ask two-sum --case 3        # tutor never sees corpus solutions
 ```
 
-Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorrect)**: `lc` handles problem selection, workspaces, and testing; the extension fixes code as you type.
+Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorrect)**: `whiteboard` handles problem selection, workspaces, and testing; the extension fixes code as you type.
 
 ---
 
@@ -129,7 +131,7 @@ On desktop the app defaults to `http://127.0.0.1:7878` (no pairing). On a tablet
 
 **Draw it** — diagram answer instead of prose (multi-frame traces share one scrubber).
 
-**Reveal** — explicit, confirmed opt-in for a stepwise path from your approach; never a solution dump; logged in `lc stats`.
+**Reveal** — explicit, confirmed opt-in for a stepwise path from your approach; never a solution dump; logged in `whiteboard stats`.
 
 **Lazy** — turns a justified board into `solution.py` (earned steps implemented, the rest stubbed).
 
@@ -146,9 +148,9 @@ families a problem admits before the local agent reads your board, and a
 **drawn-diagram check** that looks at each rendered diagram and redraws it once
 if the picture does not show what it claims.
 
-How the agent works, and why — redaction, diagrams as programs rather than
-pictures, the approach commitment model, and the socket frame contract →
-[`docs/coach.md`](docs/coach.md).
+How the agent works: redaction, diagrams as programs rather than pictures, the
+approach commitment model, and the socket frame contract live under
+`src/llm/coach/` (HTTP routes stay `/coach/*`).
 
 Browser-over-LAN, spacedesk, and Android build details → [`app/README.md`](app/README.md).
 
@@ -158,19 +160,19 @@ Browser-over-LAN, spacedesk, and Android build details → [`app/README.md`](app
 
 | Command | Purpose |
 | --- | --- |
-| `lc` / `lc tui` | Interactive practice UI |
-| `lc index [--rebuild] [--dataset S]` | Build or refresh the SQLite index |
-| `lc datasets [--inspect]` | Problem sets and indexed counts; `--inspect` reports corpus columns |
-| `lc search` / `lc random` | Filter or pick (`--dataset`, `--difficulty`, `--tag`, `-q`, `--sort`) |
-| `lc load <id> [--open] [--force]` | Generate a workspace; id = slug, question #, or prefix |
-| `lc test [id] [--case N] [--full] [-v]` | Run Python tests — exits `0` when every case passes |
-| `lc ask [id] [--case N] [--provider local\|groq]` | LLM debugging help |
+| `whiteboard` / `whiteboard tui` | Interactive practice UI |
+| `whiteboard index [--rebuild] [--dataset S]` | Build or refresh the SQLite index |
+| `whiteboard datasets [--inspect]` | Problem sets and indexed counts; `--inspect` reports corpus columns |
+| `whiteboard search` / `whiteboard random` | Filter or pick (`--dataset`, `--difficulty`, `--tag`, `-q`, `--sort`) |
+| `whiteboard load <id> [--open] [--force]` | Generate a workspace; id = slug, question #, or prefix |
+| `whiteboard test [id] [--case N] [--full] [-v]` | Run Python tests — exits `0` when every case passes |
+| `whiteboard ask [id] [--case N] [--provider local\|groq]` | LLM debugging help |
 | `whiteboard serve [--port N] [--lan]` | Daemon for the whiteboard client |
-| `lc stats` · `lc session reset` · `lc list …` | Progress, session, named lists |
-| `lc config set/get/show/path` | Manage `config.toml` |
+| `whiteboard stats` · `whiteboard session reset` · `whiteboard list …` | Progress, session, named lists |
+| `whiteboard config set/get/show/path` | Manage `config.toml` |
 
 Coach modes are per-provider (`llm.modes.<ambient\|review\|bridge\|viz\|planner>`) and
-the coach feature flags are `coach.<ws_runs\|process_events_ui\|approach_commitment\|planner_enabled\|draw_review_enabled>`.
+the coach feature flags are `coach.<ws_runs\|process_events_ui\|approach_commitment\|planner_enabled\|draw_review_enabled>`. Those TOML keys are unchanged.
 
 ---
 
@@ -179,17 +181,17 @@ the coach feature flags are `coach.<ws_runs\|process_events_ui\|approach_commitm
 | Slug | Hugging Face | What you get |
 | --- | --- | --- |
 | `leetcode` *(default)* | [newfacade/LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) | ~2.9k Python LeetCode problems |
-| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | Large synthetic set — `lc` indexes **Complete** style only |
+| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | Large synthetic set — `whiteboard` indexes **Complete** style only |
 | `ms-python-q` | [morganstanley/sft-python-q-problems](https://huggingface.co/datasets/morganstanley/sft-python-q-problems) | Structured `test_cases` |
 | `deepseek-leetcode` | [davidheineman/deepseek-leetcode](https://huggingface.co/datasets/davidheineman/deepseek-leetcode) | DeepSeek contest benchmark |
 | `leetcode-with-tests` | [kr4t0n/leetcode-with-tests](https://huggingface.co/datasets/kr4t0n/leetcode-with-tests) | Community pack with pytest-style checks |
 
 ```bash
 python scripts/fetch_dataset.py <slug> --data-dir ~/lc-data
-lc index --dataset <slug>
+whiteboard index --dataset <slug>
 ```
 
-Adapters: [`src/datasets/`](src/datasets/). After adapter changes: `lc index --dataset <slug> --rebuild`.
+Adapters: [`src/datasets/`](src/datasets/). After adapter changes: `whiteboard index --dataset <slug> --rebuild`.
 
 ---
 
