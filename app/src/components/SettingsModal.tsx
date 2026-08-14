@@ -1031,8 +1031,8 @@ export function SettingsModal({
 
               <div className="lc-settings-subhead">Marker colour</div>
               <p className="lc-settings-hint">
-                Black and white is the current grey smear and checkerboard. Gradient
-                pulse recolors both with a cycling colour, not black and white.
+                Black and white is the grey smear and checkerboard. Rainbow pulse
+                crawls the full ROYGBIV spectrum across both marks.
               </p>
               <div
                 className="lc-settings-choice"
@@ -1047,7 +1047,7 @@ export function SettingsModal({
                     ],
                     [
                       "color",
-                      "A cycling colour gradient on the smear and the checkerboard, not black and white.",
+                      "ROYGBIV crawl on the smear and the checkerboard — not black and white.",
                     ],
                   ] as Array<[ChromeWakeTint, string]>
                 ).map(([tint, blurb]) => (

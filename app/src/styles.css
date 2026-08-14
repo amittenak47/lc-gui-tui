@@ -1106,6 +1106,7 @@ input[type="checkbox"] {
 
 .lc-number-wheel-wrap {
   min-height: 0;
+  overscroll-behavior: contain;
 }
 
 .lc-number-wheel {
@@ -1546,7 +1547,7 @@ input[type="checkbox"] {
     transition: none;
   }
 
-  .lc-ink-wheel-hub.is-shake,
+  .lc-ink-wheel-dial.is-shake,
   .lc-toolbar.is-shake {
     animation: none;
   }
@@ -1889,6 +1890,12 @@ input[type="checkbox"] {
   pointer-events: none;
 }
 
+.lc-ink-wheel-dial {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 50%;
+}
+
 .lc-ink-wheel-tool {
   fill: color-mix(in srgb, var(--surface) 88%, transparent);
   stroke: var(--chrome-edge);
@@ -1974,7 +1981,7 @@ input[type="checkbox"] {
   opacity: 1;
 }
 
-.lc-ink-wheel-hub.is-shake,
+.lc-ink-wheel-dial.is-shake,
 .lc-toolbar.is-shake {
   animation: lc-stuck-shake 460ms cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -2171,14 +2178,17 @@ input[type="checkbox"] {
   border: none;
   background: transparent;
   color: inherit;
-  min-width: 8rem;
+  min-width: 4rem;
+  flex: 1 1 8rem;
 }
 
 .lc-preset-sheet-meta {
+  flex: 0 0 auto;
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   opacity: 0.7;
+  white-space: nowrap;
 }
 
 .lc-preset-sheet-actions {
@@ -2239,6 +2249,10 @@ input[type="checkbox"] {
   padding: 10px 16px 0;
 }
 
+.lc-preset-sheet-strip > .lc-preset-sheet-field > .lc-settings-subhead {
+  margin-top: 0;
+}
+
 .lc-preset-strip-canvas {
   width: 100%;
   height: 88px;
@@ -2283,6 +2297,18 @@ input[type="checkbox"] {
   box-sizing: border-box;
 }
 
+.lc-preset-fullness-morph {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 44px;
+  align-self: center;
+}
+
+.lc-preset-fullness-morph.is-collapsed {
+  margin-inline-end: -8px;
+}
+
 .lc-preset-sheet-color {
   display: flex;
   justify-content: center;
@@ -2316,29 +2342,18 @@ input[type="checkbox"] {
 
 .lc-preset-sheet-cols .lc-settings-choice-compact {
   margin: 0;
-}
-
-.lc-preset-sheet-cols .lc-settings-choice-compact:not(.lc-settings-choice-quad) {
   flex-wrap: nowrap;
   align-items: stretch;
   width: 100%;
 }
 
-.lc-preset-sheet-cols .lc-settings-choice-compact:not(.lc-settings-choice-quad) .lc-settings-choice-option {
+.lc-preset-sheet-cols .lc-settings-choice-compact .lc-settings-choice-option {
   flex: 1 1 0;
   min-width: 0;
   white-space: nowrap;
   justify-content: center;
   align-items: center;
   text-align: center;
-}
-
-.lc-preset-sheet-physics .lc-settings-choice-quad .lc-settings-choice-option {
-  flex: 1 1 calc(25% - 6px);
-  min-width: 3.25rem;
-  max-width: calc(25% - 6px);
-  padding: 6px 4px;
-  box-sizing: border-box;
 }
 
 .lc-preset-sheet-toggles {
@@ -3595,62 +3610,76 @@ input[type="checkbox"] {
   transform: translate(-50%, -50%);
 }
 
-@keyframes lc-wake-gradient {
-  0%,
-  100% {
-    background-position: 0% 50%;
-    opacity: 0.32;
-  }
-  50% {
-    background-position: 100% 50%;
-    opacity: 0.55;
-  }
-}
-
-@keyframes lc-wake-hue {
+@keyframes lc-wake-rainbow {
   from {
-    filter: hue-rotate(0deg);
+    background-position: 0% 50%;
   }
   to {
-    filter: hue-rotate(360deg);
+    background-position: 100% 50%;
   }
 }
 
 /*
- * Gradient pulse tint — Settings option. Recolors the grey smear and the
- * black-and-white checkerboard; `off` stays empty.
+ * Rainbow pulse — Settings option. Full ROYGBIV crawl. Hue-rotate of the
+ * grey / black-and-white marks is a no-op because those have no chroma.
  */
-.lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off) .lc-chrome-wake-ghost {
+.lc-chrome-wake.is-tint:not(.is-off) .lc-chrome-wake-ghost {
+  overflow: hidden;
+  border-radius: 5px;
   color: rgb(255 255 255 / 90%);
   background-image: linear-gradient(
-    125deg,
-    #a78bfa,
-    #22d3ee,
-    #f472b6,
-    #34d399,
-    #a78bfa
+    90deg,
+    #ff0040,
+    #ff8a00,
+    #ffd000,
+    #2ee66b,
+    #00c8ff,
+    #4d6bff,
+    #c44dff,
+    #ff0040
   );
-  background-size: 280% 280%;
-  border-radius: 6px;
-  animation: lc-wake-gradient 2.4s ease-in-out infinite;
+  background-size: 300% 100%;
+  animation: lc-wake-rainbow 1.8s linear infinite;
+  opacity: 0.82;
+  filter: none;
+}
+
+.lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off) .lc-chrome-wake-ghost {
+  filter: blur(2.2px);
+  opacity: 0.55;
 }
 
 .lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off):hover .lc-chrome-wake-ghost,
 .lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off):focus-visible .lc-chrome-wake-ghost {
   filter: blur(1.4px);
-  opacity: 0.7;
+  opacity: 0.75;
 }
 
 .lc-chrome-wake.is-pulse.is-tint .lc-chrome-wake-ghost {
-  background-image: repeating-conic-gradient(#a78bfa 0 90deg, #22d3ee 0 180deg);
-  animation:
-    lc-hub-pixel 420ms steps(4) infinite,
-    lc-wake-hue 3.2s linear infinite;
+  color: transparent;
+  opacity: 0.9;
+  filter: none;
+}
+
+.lc-chrome-wake.is-pulse.is-tint .lc-chrome-wake-ghost::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-image: repeating-conic-gradient(
+    rgb(255 255 255 / 55%) 0 90deg,
+    rgb(0 0 0 / 42%) 0 180deg
+  );
+  background-size: 6px 6px;
+  mix-blend-mode: overlay;
+  animation: lc-hub-pixel 420ms steps(4) infinite;
+  pointer-events: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .lc-chrome-wake.is-pulse .lc-chrome-wake-ghost,
-  .lc-chrome-wake.is-tint .lc-chrome-wake-ghost {
+  .lc-chrome-wake.is-tint .lc-chrome-wake-ghost,
+  .lc-chrome-wake.is-pulse.is-tint .lc-chrome-wake-ghost::after {
     animation: none;
   }
 }
