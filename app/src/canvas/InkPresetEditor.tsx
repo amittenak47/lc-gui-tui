@@ -381,23 +381,19 @@ function DrawKnobs({
           onChange={(width) => onChange({ ...snap, width })}
           label="Nib size"
         />
-        <MorphBar
-          active={snap.pressureSensitive ? "fullness" : "off"}
-          axis="width"
+        <div
           className={
-            snap.pressureSensitive
-              ? "lc-preset-fullness-morph"
-              : "lc-preset-fullness-morph is-collapsed"
+            snap.pressureSensitive ? "lc-ink-fold is-open" : "lc-ink-fold"
           }
         >
-          <div data-morph-id="off" />
-          <div data-morph-id="fullness">
+          <div className="lc-ink-fold-inner">
             <InkFullnessSlider
               value={snap.fullness}
               onChange={(fullness) => onChange({ ...snap, fullness })}
+              enabled={snap.pressureSensitive}
             />
           </div>
-        </MorphBar>
+        </div>
         <PressureSensitiveToggle
           enabled={snap.pressureSensitive}
           onChange={(pressureSensitive) => onChange({ ...snap, pressureSensitive })}

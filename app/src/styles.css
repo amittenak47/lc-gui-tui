@@ -2234,6 +2234,14 @@ input[type="checkbox"] {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.lc-preset-sheet-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .lc-preset-sheet-morph {
@@ -2295,18 +2303,6 @@ input[type="checkbox"] {
   min-height: 44px;
   padding: 0;
   box-sizing: border-box;
-}
-
-.lc-preset-fullness-morph {
-  position: relative;
-  flex: 0 0 auto;
-  min-width: 0;
-  min-height: 44px;
-  align-self: center;
-}
-
-.lc-preset-fullness-morph.is-collapsed {
-  margin-inline-end: -8px;
 }
 
 .lc-preset-sheet-color {
@@ -3546,19 +3542,17 @@ input[type="checkbox"] {
   transition: opacity 160ms ease-out, filter 160ms ease-out;
 }
 
-.lc-chrome-wake:hover .lc-chrome-wake-ghost,
-.lc-chrome-wake:focus-visible .lc-chrome-wake-ghost {
+.lc-chrome-wake:not(.is-pulse):not(.is-tint):hover .lc-chrome-wake-ghost,
+.lc-chrome-wake:not(.is-pulse):not(.is-tint):focus-visible .lc-chrome-wake-ghost {
   opacity: 0.42;
   filter: blur(1.4px);
 }
 
 /*
  * Checkerboard pulse — same crawl as `.lc-ink-wheel-hub.is-ready::after`.
- * Replaces the smear so the wake target is findable without a grey blob.
- * Fill lives on the ghost itself (not mix-blend overlay): there is no hub
- * behind this mark, and overlay on empty pixels would vanish.
+ * Mono only; rainbow tint uses a colored checkerboard below.
  */
-.lc-chrome-wake.is-pulse .lc-chrome-wake-ghost {
+.lc-chrome-wake.is-pulse:not(.is-tint) .lc-chrome-wake-ghost {
   opacity: 0.72;
   filter: none;
   overflow: hidden;
@@ -3572,8 +3566,8 @@ input[type="checkbox"] {
   animation: lc-hub-pixel 420ms steps(4) infinite;
 }
 
-.lc-chrome-wake.is-pulse:hover .lc-chrome-wake-ghost,
-.lc-chrome-wake.is-pulse:focus-visible .lc-chrome-wake-ghost {
+.lc-chrome-wake.is-pulse:not(.is-tint):hover .lc-chrome-wake-ghost,
+.lc-chrome-wake.is-pulse:not(.is-tint):focus-visible .lc-chrome-wake-ghost {
   opacity: 0.9;
   filter: none;
 }
@@ -3619,11 +3613,17 @@ input[type="checkbox"] {
   }
 }
 
-/*
- * Rainbow pulse — Settings option. Full ROYGBIV crawl. Hue-rotate of the
- * grey / black-and-white marks is a no-op because those have no chroma.
- */
-.lc-chrome-wake.is-tint:not(.is-off) .lc-chrome-wake-ghost {
+@keyframes lc-wake-hue {
+  from {
+    filter: hue-rotate(0deg);
+  }
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+
+/* Rainbow smear — not the checkerboard pulse. */
+.lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off) .lc-chrome-wake-ghost {
   overflow: hidden;
   border-radius: 5px;
   color: rgb(255 255 255 / 90%);
@@ -3640,13 +3640,8 @@ input[type="checkbox"] {
   );
   background-size: 300% 100%;
   animation: lc-wake-rainbow 1.8s linear infinite;
-  opacity: 0.82;
-  filter: none;
-}
-
-.lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off) .lc-chrome-wake-ghost {
-  filter: blur(2.2px);
   opacity: 0.55;
+  filter: blur(2.2px);
 }
 
 .lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off):hover .lc-chrome-wake-ghost,
@@ -3655,31 +3650,34 @@ input[type="checkbox"] {
   opacity: 0.75;
 }
 
+/*
+ * Rainbow checkerboard pulse — colored cells crawl and hue-shift through
+ * ROYGBIV. No grey overlay on top (that was hiding the spectrum).
+ */
 .lc-chrome-wake.is-pulse.is-tint .lc-chrome-wake-ghost {
+  opacity: 0.88;
   color: transparent;
-  opacity: 0.9;
-  filter: none;
-}
-
-.lc-chrome-wake.is-pulse.is-tint .lc-chrome-wake-ghost::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
+  overflow: hidden;
+  border-radius: 5px;
   background-image: repeating-conic-gradient(
-    rgb(255 255 255 / 55%) 0 90deg,
-    rgb(0 0 0 / 42%) 0 180deg
+    #ff0040 0 90deg,
+    #00e5ff 0 180deg
   );
   background-size: 6px 6px;
-  mix-blend-mode: overlay;
-  animation: lc-hub-pixel 420ms steps(4) infinite;
-  pointer-events: none;
+  animation:
+    lc-hub-pixel 420ms steps(4) infinite,
+    lc-wake-hue 2.4s linear infinite;
+}
+
+.lc-chrome-wake.is-pulse.is-tint:hover .lc-chrome-wake-ghost,
+.lc-chrome-wake.is-pulse.is-tint:focus-visible .lc-chrome-wake-ghost {
+  opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lc-chrome-wake.is-pulse .lc-chrome-wake-ghost,
-  .lc-chrome-wake.is-tint .lc-chrome-wake-ghost,
-  .lc-chrome-wake.is-pulse.is-tint .lc-chrome-wake-ghost::after {
+  .lc-chrome-wake.is-pulse:not(.is-tint) .lc-chrome-wake-ghost,
+  .lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off) .lc-chrome-wake-ghost,
+  .lc-chrome-wake.is-pulse.is-tint .lc-chrome-wake-ghost {
     animation: none;
   }
 }
