@@ -14,10 +14,11 @@ export const HOLD_SENSITIVE_MS = 666;
 /**
  * Canvas dwell before the ink-tool wheel opens.
  *
- * Rest = down on one spot: no moves, or a zig-zag whose *net* stays inside
- * {@link WHEEL_HOLD_SLOP_PX}. Writing = a directed stroke (raw net / path,
- * no interpolation — there are too few samples in {@link WHEEL_OPEN_MS} to
- * fit a curve). Own constant — do not reuse {@link HOLD_SENSITIVE_MS}.
+ * Rest = planted still for {@link WHEEL_OPEN_MS} after the last drawing-like
+ * hop (or after down, if there was none). Zig-zag contact noise does not
+ * reset that clock. Writing = a directed stroke, a small orbit, or ongoing
+ * fine marks in one patch (each drawing hop restarts the clock). No
+ * interpolation. Own constant — do not reuse {@link HOLD_SENSITIVE_MS}.
  */
 export const WHEEL_OPEN_MS = 280;
 
@@ -40,6 +41,18 @@ export const WHEEL_HOLD_CLEAR_PX = 12;
  * back (low). Needs two move samples; one hop uses {@link WHEEL_HOLD_CLEAR_PX}.
  */
 export const WHEEL_HOLD_STRAIGHTNESS = 0.6;
+
+/**
+ * |signed turning angle| of the raw polyline (radians). A bullet is a
+ * small spiral — net stays in the slop circle, heading does not cancel.
+ * Jitter zig-zag reverses, so this stays near 0.
+ */
+export const WHEEL_HOLD_WIND_RAD = Math.PI / 2;
+
+/**
+ * Two raw hops shorter than this (combined) are contact noise, not a letter.
+ */
+export const WHEEL_HOLD_DRAW_PATH_PX = 1.2;
 
 /** Long-press to open a secondary menu (scratchpad load, coach message). */
 export const LONG_PRESS_MS = 580;

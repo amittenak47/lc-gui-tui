@@ -4932,7 +4932,13 @@ export function App() {
           )}
         </div>
 
-        <div className="lc-header-center">
+        {/*
+          Screen-centered on the header (50% of the window), not the middle
+          grid column. Left/right chrome are unequal, Run tests share that
+          column, and the agent-open padding shifts the grid into the board
+          hole — none of that should move Offline / host:IP.
+        */}
+        <div className="lc-header-pairing-anchor">
           <HeaderPairingSlot
             serverLink={serverLink}
             pairing={pairing}
@@ -4946,6 +4952,9 @@ export function App() {
             }}
             onTapOffline={() => setPairingEditing(true)}
           />
+        </div>
+
+        <div className="lc-header-center">
           {problem && !isLocalPad(problem) && (
             <div className="lc-actions">
               <button
@@ -6011,7 +6020,7 @@ function HeaderOverflow({ items }: { items: OverflowItem[] }) {
 }
 
 /**
- * Offline chip or host pairing — sits in the header center row with Run tests.
+ * Offline chip or host pairing — screen-centered overlay, not the Run tests row.
  */
 function HeaderPairingSlot({
   serverLink,

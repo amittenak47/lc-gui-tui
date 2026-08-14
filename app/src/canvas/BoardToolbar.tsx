@@ -955,6 +955,7 @@ export function BoardToolbar({
                     <InkFullnessSlider
                       value={inkFullness}
                       onChange={onInkFullness}
+                      enabled={pressureSensitive}
                     />
                   </div>
                 </div>

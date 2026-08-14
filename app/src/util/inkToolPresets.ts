@@ -20,8 +20,10 @@ import {
 } from "./eraserPartialPref";
 import {
   WHEEL_HOLD_CLEAR_PX,
+  WHEEL_HOLD_DRAW_PATH_PX,
   WHEEL_HOLD_SLOP_PX,
   WHEEL_HOLD_STRAIGHTNESS,
+  WHEEL_HOLD_WIND_RAD,
   WHEEL_OPEN_MS,
 } from "./gesture";
 import {
@@ -461,19 +463,64 @@ export function specCardSide(
   return anchorX + wheelR + cardW < viewW - pad ? "right" : "left";
 }
 
+/** Signed turn from one raw hop to the next (radians). No smoothing. */
+export function wheelHoldTurn(
+  prevDx: number,
+  prevDy: number,
+  dx: number,
+  dy: number,
+): number {
+  const cross = prevDx * dy - prevDy * dx;
+  const dot = prevDx * dx + prevDy * dy;
+  if (cross === 0 && dot === 0) return 0;
+  const turn = Math.atan2(cross, dot);
+  // A zig-zag reversal is ~π and would pile up. A bullet/spiral hop is a
+  // small arc. Drop flips so only orbits count.
+  if (Math.abs(turn) > (Math.PI * 2) / 3) return 0;
+  return turn;
+}
+
 /**
- * Raw samples only — no smoothing. One hop in the slop–clear band cannot
- * tell bounce from a letter start; two hops with net/path high can.
- * Clear applies only to a single coalesced jump (zig-zag has moves ≥ 2).
+ * This hop continues a letter (tiny line or arc), not a zig-zag rest.
+ * Used to restart the dwell clock while writing finely in one patch.
+ */
+export function wheelHoldIsDrawingHop(
+  prevDx: number,
+  prevDy: number,
+  dx: number,
+  dy: number,
+  minPathPx = WHEEL_HOLD_DRAW_PATH_PX,
+  straightness = WHEEL_HOLD_STRAIGHTNESS,
+): boolean {
+  const prevLen = Math.hypot(prevDx, prevDy);
+  const len = Math.hypot(dx, dy);
+  if (prevLen < 1e-6 || len < 1e-6) return false;
+  const cross = prevDx * dy - prevDy * dx;
+  const dot = prevDx * dx + prevDy * dy;
+  const turn = Math.atan2(cross, dot);
+  if (Math.abs(turn) > (Math.PI * 2) / 3) return false;
+  const localPath = prevLen + len;
+  if (localPath < minPathPx) return false;
+  if (Math.abs(turn) >= 0.12) return true;
+  const localNet = Math.hypot(prevDx + dx, prevDy + dy);
+  return localNet / localPath >= straightness;
+}
+
+/**
+ * Raw samples only — no smoothing. A rest is a point or a zig-zag (heading
+ * cancels). A stroke goes somewhere (net/path) or orbits (winding).
  */
 export function wheelHoldIsStroke(
   netPx: number,
   pathPx: number,
   moves = 0,
+  windRad = 0,
   slopPx = WHEEL_HOLD_SLOP_PX,
   clearPx = WHEEL_HOLD_CLEAR_PX,
   straightness = WHEEL_HOLD_STRAIGHTNESS,
+  windMin = WHEEL_HOLD_WIND_RAD,
 ): boolean {
+  if (Math.abs(windRad) >= windMin) return true;
   if (netPx <= slopPx) return false;
   if (moves < 2) return netPx >= clearPx;
   const path = Math.max(pathPx, netPx);
@@ -485,10 +532,11 @@ export function wheelHoldOutcome(
   elapsedMs: number,
   pathPx = 0,
   moves = 0,
+  windRad = 0,
   slopPx = WHEEL_HOLD_SLOP_PX,
   holdMs = WHEEL_OPEN_MS,
 ): "pending" | "ink" | "wheel" {
-  if (wheelHoldIsStroke(movedPx, pathPx, moves, slopPx)) return "ink";
+  if (wheelHoldIsStroke(movedPx, pathPx, moves, windRad, slopPx)) return "ink";
   if (elapsedMs >= holdMs) return "wheel";
   return "pending";
 }

@@ -16,8 +16,6 @@ import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../uti
 import { loadInkToolPresets, saveInkToolPresets } from "../util/inkToolPresets";
 import {
   loadInkPressureClip,
-  pressureClipFromPercent,
-  pressureClipToPercent,
   saveInkPressureClip,
 } from "../util/inkPressureClip";
 import {
@@ -25,8 +23,6 @@ import {
   loadInkSmoothingMode,
   saveInkSmoothing,
   saveInkSmoothingMode,
-  smoothingFromPercent,
-  smoothingToPercent,
   type InkSmoothingMode,
 } from "../util/inkSmoothingPref";
 import {
@@ -42,21 +38,22 @@ import {
   saveEraserPartial,
 } from "../util/eraserPartialPref";
 import {
+  CHROME_WAKE_EVENT,
+  chromeWakeMarkerLabel,
+  loadChromeWakeMarker,
+  saveChromeWakeMarker,
+  type ChromeWakeMarker,
+} from "../util/chromeWakePref";
+import {
   loadInkSpeed,
   loadInkSpeedBlotBlend,
   saveInkSpeed,
   saveInkSpeedBlotBlend,
-  speedBlotBlendFromPercent,
-  speedBlotBlendToPercent,
-  speedInkFromPercent,
-  speedInkToPercent,
   INK_SPEED_BLOT_BLEND_EVENT,
 } from "../util/inkSpeedPref";
 import {
   loadInkBoldness,
   saveInkBoldness,
-  inkBoldnessFromPercent,
-  inkBoldnessToPercent,
   INK_BOLDNESS_EVENT,
 } from "../util/inkBoldnessPref";
 import {
@@ -92,8 +89,6 @@ import { useIsMobile } from "../util/mobile";
 import { estimateStorage, formatBytes, type StorageUsage } from "../util/storageQuota";
 
 type TabId = "workspace" | "personalise" | "ai" | "server";
-
-const PRESSURE_CLIP_STEPS = [30, 40, 50, 60, 70, 80, 90, 100] as const;
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "personalise", label: "Personalise" },
@@ -303,6 +298,8 @@ interface DevicePrefs {
   colorWheelOnToolbar: boolean;
   /** Hub tap to apply a wheel pick. Off applies on the inner wedge. */
   tapOk: boolean;
+  /** Hidden-chrome wake mark: smear, checkerboard pulse, or nothing. */
+  chromeWake: ChromeWakeMarker;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -325,6 +322,7 @@ function loadDevicePrefs(): DevicePrefs {
     paletteTag: loadPaletteTag(),
     colorWheelOnToolbar: loadInkToolPresets().colorWheelOnToolbar,
     tapOk: loadInkToolPresets().tapOk,
+    chromeWake: loadChromeWakeMarker(),
   };
 }
 
@@ -347,7 +345,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.autosaveMs === b.autosaveMs &&
     a.paletteTag === b.paletteTag &&
     a.colorWheelOnToolbar === b.colorWheelOnToolbar &&
-    a.tapOk === b.tapOk
+    a.tapOk === b.tapOk &&
+    a.chromeWake === b.chromeWake
   );
 }
 
@@ -408,6 +407,9 @@ export function SettingsModal({
     () => loadInkToolPresets().colorWheelOnToolbar,
   );
   const [tapOk, setTapOk] = useState(() => loadInkToolPresets().tapOk);
+  const [chromeWake, setChromeWake] = useState<ChromeWakeMarker>(() =>
+    loadChromeWakeMarker(),
+  );
   const [forwardFailures, setForwardFailures] = useState<boolean>(() =>
     loadForwardFailures(),
   );
@@ -551,6 +553,7 @@ export function SettingsModal({
     setPaletteTag(prefs.paletteTag);
     setColorWheelOnToolbar(prefs.colorWheelOnToolbar);
     setTapOk(prefs.tapOk);
+    setChromeWake(prefs.chromeWake);
     setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     setPage("root");
@@ -594,6 +597,18 @@ export function SettingsModal({
     };
   }, [open, client, refreshLlm, initialTab]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (page !== "root") setPage("root");
+      else onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, page, onClose]);
+
   if (!open) return null;
 
   const draftPrefs: DevicePrefs = {
@@ -615,6 +630,7 @@ export function SettingsModal({
     paletteTag,
     colorWheelOnToolbar,
     tapOk,
+    chromeWake,
   };
   const dirty =
     !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
@@ -664,6 +680,7 @@ export function SettingsModal({
           colorWheelOnToolbar,
           tapOk,
         });
+        saveChromeWakeMarker(chromeWake);
         setBaselinePrefs(draftPrefs);
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
@@ -680,6 +697,7 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent(INK_BOLDNESS_EVENT));
         window.dispatchEvent(new CustomEvent(ERASER_PARTIAL_EVENT));
         window.dispatchEvent(new CustomEvent(AUTOSAVE_EVENT));
+        window.dispatchEvent(new CustomEvent(CHROME_WAKE_EVENT));
       }
       if (configDirty) {
         const saved = await client.putConfig(draft, { timeoutMs: CONFIG_SAVE_TIMEOUT_MS });
@@ -726,17 +744,6 @@ export function SettingsModal({
       : (COACH_FLAG_GROUPS.find((group) => group.id === page)?.title ??
         SETTINGS_PAGE_TITLES[page] ??
         "Settings");
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      if (page !== "root") setPage("root");
-      else cancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [page]);
 
   return (
     <div
@@ -953,6 +960,50 @@ export function SettingsModal({
                   <strong>Left hand</strong>
                   <span className="lc-muted">Chrome sits below-left of the tip, panels mirrored left.</span>
                 </button>
+              </div>
+
+              <div className="lc-settings-subhead">Hidden-controls marker</div>
+              <p className="lc-settings-hint">
+                When the eye is off screen, a mark can sit in that corner so you can find
+                it again. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice"
+                role="radiogroup"
+                aria-label="Hidden-controls marker"
+              >
+                {(
+                  [
+                    [
+                      "smear",
+                      "A blurred ghost of the eye — the current grey-black smear.",
+                    ],
+                    [
+                      "pulse",
+                      "The same checkerboard pulse as the tool-menu confirm, on that spot.",
+                    ],
+                    [
+                      "off",
+                      "Nothing on the page. Tap that corner anyway — for drawings the smear would sit on.",
+                    ],
+                  ] as Array<[ChromeWakeMarker, string]>
+                ).map(([marker, blurb]) => (
+                  <button
+                    key={marker}
+                    type="button"
+                    role="radio"
+                    aria-checked={chromeWake === marker}
+                    className={
+                      chromeWake === marker
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setChromeWake(marker)}
+                  >
+                    <strong>{chromeWakeMarkerLabel(marker)}</strong>
+                    <span className="lc-muted">{blurb}</span>
+                  </button>
+                ))}
               </div>
 
               <div className="lc-settings-subhead">Photo settings</div>
@@ -1205,228 +1256,6 @@ export function SettingsModal({
                   <strong>On</strong>
                 </button>
               </div>
-
-              {/* Ink physics UI moved to the 1D preset sheet. Kept for revert. */}
-              {false && (
-              <>
-              <div className="lc-settings-subhead">Pressure clip</div>
-              <p className="lc-settings-hint">
-                How hard you press before the pen reads as &ldquo;full&rdquo; pressure. Lower
-                values make light strokes reach max ink sooner — useful on a stiff nib or a tablet
-                that reports low pressure. Saved on this device only.
-              </p>
-              <div
-                className="lc-settings-choice lc-settings-choice-compact"
-                role="radiogroup"
-                aria-label="Pressure clip"
-              >
-                {PRESSURE_CLIP_STEPS.map((percent) => (
-                  <button
-                    key={percent}
-                    type="button"
-                    role="radio"
-                    aria-checked={pressureClipToPercent(pressureClip) === percent}
-                    className={
-                      pressureClipToPercent(pressureClip) === percent
-                        ? "lc-settings-choice-option is-active"
-                        : "lc-settings-choice-option"
-                    }
-                    onClick={() => setPressureClip(pressureClipFromPercent(percent))}
-                  >
-                    <strong>{percent}%</strong>
-                  </button>
-                ))}
-              </div>
-
-              <div className="lc-settings-subhead">Speed ink</div>
-              <p className="lc-settings-hint">
-                Let the pace of your hand change what the nib leaves behind — ink pools
-                where you dwell and thins out where you run, the way it does on paper.
-                Off leaves the stroke the same weight however fast you write. Saved on
-                this device only.
-              </p>
-              <div className="lc-settings-slider">
-                <input
-                  type="range"
-                  className="lc-settings-slider-input"
-                  min={0}
-                  max={100}
-                  step={5}
-                  value={speedInkToPercent(inkSpeed)}
-                  aria-label="Speed ink"
-                  onChange={(event) =>
-                    setInkSpeed(speedInkFromPercent(Number(event.target.value)))
-                  }
-                />
-                <span className="lc-settings-slider-value">
-                  {speedInkToPercent(inkSpeed) === 0 ? "Off" : `${speedInkToPercent(inkSpeed)}%`}
-                </span>
-              </div>
-              {speedInkToPercent(inkSpeed) > 0 && (
-                <>
-                  <div className="lc-settings-subhead">Speed blot blend</div>
-                  <p className="lc-settings-hint">
-                    Soft rim on the dwell pool and how fast it spreads from a small
-                    core out to the tip — not a halo past the stroke. 0% keeps a hard
-                    expanding disc; 100% softens the rim and grows faster. Saved on
-                    this device only.
-                  </p>
-                  <div className="lc-settings-slider">
-                    <input
-                      type="range"
-                      className="lc-settings-slider-input"
-                      min={0}
-                      max={100}
-                      step={5}
-                      value={speedBlotBlendToPercent(inkSpeedBlotBlend)}
-                      aria-label="Speed blot blend"
-                      onChange={(event) =>
-                        setInkSpeedBlotBlend(
-                          speedBlotBlendFromPercent(Number(event.target.value)),
-                        )
-                      }
-                    />
-                    <span className="lc-settings-slider-value">
-                      {speedBlotBlendToPercent(inkSpeedBlotBlend)}%
-                    </span>
-                  </div>
-                </>
-              )}
-
-              <div className="lc-settings-subhead">Ink boldness</div>
-              <p className="lc-settings-hint">
-                Boost stroke opacity to compensate for softer speed blot blend —
-                100% is the current alpha, 0% is transparent, 300% is three
-                times as dark (clamped to opaque at paint). Saved on this device
-                only.
-              </p>
-              <div className="lc-settings-slider">
-                <input
-                  type="range"
-                  className="lc-settings-slider-input"
-                  min={0}
-                  max={300}
-                  step={5}
-                  value={inkBoldnessToPercent(inkBoldness)}
-                  aria-label="Ink boldness"
-                  onChange={(event) =>
-                    setInkBoldness(inkBoldnessFromPercent(Number(event.target.value)))
-                  }
-                />
-                <span className="lc-settings-slider-value">
-                  {inkBoldnessToPercent(inkBoldness)}%
-                </span>
-              </div>
-
-              <div className="lc-settings-subhead">Eraser</div>
-              <p className="lc-settings-hint">
-                <strong>Rub out</strong> clears whatever the ring covers, so a small
-                eraser takes a bite out of the side of a letter and leaves the rest —
-                the way a real one does. <strong>Whole strokes</strong> removes any
-                stroke you touch, which is what you want for pulling one wrong line out
-                of a diagram. Saved on this device only.
-              </p>
-              <div
-                className="lc-settings-choice lc-settings-choice-compact"
-                role="radiogroup"
-                aria-label="What the eraser removes"
-              >
-                {(
-                  [
-                    [true, "Rub out"],
-                    [false, "Whole strokes"],
-                  ] as Array<[boolean, string]>
-                ).map(([partial, label]) => (
-                  <button
-                    key={label}
-                    type="button"
-                    role="radio"
-                    aria-checked={eraserPartial === partial}
-                    className={
-                      eraserPartial === partial
-                        ? "lc-settings-choice-option is-active"
-                        : "lc-settings-choice-option"
-                    }
-                    onClick={() => setEraserPartial(partial)}
-                  >
-                    <strong>{label}</strong>
-                  </button>
-                ))}
-              </div>
-
-              <div className="lc-settings-subhead">Stroke smoothing</div>
-              <p className="lc-settings-hint">
-                How much of the shake to take out of a pen stroke. Higher steadies a
-                shaky hand; lower keeps every kink you actually drew. Saved on this
-                device only.
-              </p>
-              <div className="lc-settings-slider">
-                <input
-                  type="range"
-                  className="lc-settings-slider-input"
-                  min={0}
-                  max={100}
-                  step={5}
-                  value={smoothingToPercent(inkSmoothing)}
-                  aria-label="Stroke smoothing"
-                  onChange={(event) => {
-                    const next = smoothingFromPercent(Number(event.target.value));
-                    setInkSmoothing(next);
-                    saveInkSmoothing(next);
-                    window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
-                  }}
-                />
-                <span className="lc-settings-slider-value">
-                  {smoothingToPercent(inkSmoothing) === 0
-                    ? "Off"
-                    : `${smoothingToPercent(inkSmoothing)}%`}
-                </span>
-              </div>
-
-              {smoothingToPercent(inkSmoothing) > 0 && (
-                <>
-                  <p className="lc-settings-hint">
-                    When it is applied. <strong>On the lift</strong> tidies the stroke once
-                    you finish it, so the ink is always exactly under the nib as you write.
-                    <strong> While you write</strong> keeps re-smoothing the stroke under
-                    your hand — earlier bends tidy before you lift, and the tip still
-                    tracks the pen. Changes apply immediately.
-                  </p>
-                  <div
-                    className="lc-settings-choice lc-settings-choice-compact"
-                    role="radiogroup"
-                    aria-label="When to smooth"
-                  >
-                    {(
-                      [
-                        ["lift", "On the lift"],
-                        ["live", "While you write"],
-                      ] as Array<[InkSmoothingMode, string]>
-                    ).map(([mode, label]) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        role="radio"
-                        aria-checked={inkSmoothingMode === mode}
-                        className={
-                          inkSmoothingMode === mode
-                            ? "lc-settings-choice-option is-active"
-                            : "lc-settings-choice-option"
-                        }
-                        onClick={() => {
-                          setInkSmoothingMode(mode);
-                          saveInkSmoothingMode(mode);
-                          window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
-                        }}
-                      >
-                        <strong>{label}</strong>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-              </>
-              )}
 
               {/*
                 What the ⟳ on the colour wheel asks for.

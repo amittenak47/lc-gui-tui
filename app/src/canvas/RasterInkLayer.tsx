@@ -73,7 +73,7 @@ import {
   type InkSmoothingMode,
 } from "./inkSmoothing";
 import { WHEEL_OPEN_MS } from "../util/gesture";
-import { wheelHoldOutcome } from "../util/inkToolPresets";
+import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
 import { INK_SPEED_BLOT_BLEND_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
@@ -179,9 +179,9 @@ export interface RasterInkLayerProps {
   onStylusAccessory?: (event: PointerEvent) => boolean;
   /**
    * Unlocked ink-tool dwell (pen, highlighter, eraser): pointer down starts
-   * ink immediately. A rest or zig-zag in {@link WHEEL_HOLD_SLOP_PX} for
-   * {@link WHEEL_OPEN_MS} drops the starter and opens the preset wheel.
-   * A directed stroke (raw net/path, no interpolation) cancels the timer.
+   * ink immediately. The wheel opens only after {@link WHEEL_OPEN_MS} with no
+   * drawing-like hops. Fine writing in one patch restarts that clock. A
+   * planted rest or zig-zag does not.
    */
   wheelHoldEnabled?: boolean;
   onWheelHold?: (clientX: number, clientY: number) => void;
@@ -397,6 +397,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       recaptured: boolean;
       pathPx: number;
       moves: number;
+      windRad: number;
+      lastStepX: number;
+      lastStepY: number;
       lastX: number;
       lastY: number;
     } | null>(null);
@@ -1426,6 +1429,59 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         lastPointRef.current = raw;
       };
 
+      const openWheelFromPending = () => {
+        const pending = pendingHoldRef.current;
+        if (!pending || pending.opened || pending.decided) return;
+        const movedPx = Math.hypot(
+          pending.lastX - pending.down.clientX,
+          pending.lastY - pending.down.clientY,
+        );
+        if (
+          wheelHoldOutcome(
+            movedPx,
+            WHEEL_OPEN_MS,
+            pending.pathPx,
+            pending.moves,
+            pending.windRad,
+          ) !== "wheel"
+        ) {
+          pending.decided = true;
+          pendingHoldRef.current = null;
+          return;
+        }
+        pending.decided = true;
+        pending.opened = true;
+        drawingRef.current = false;
+        activePointerRef.current = null;
+        liveRef.current = null;
+        liveRawPointsRef.current = null;
+        liveDrawnIndexRef.current = 0;
+        attackBufferRef.current = null;
+        lastPointRef.current = null;
+        rawPointRef.current = null;
+        strokeViewRef.current = null;
+        strokeBoxRef.current = null;
+        strokeRectRef.current = null;
+        detachWindowFallback();
+        try {
+          canvas.releasePointerCapture(pending.pointerId);
+        } catch {
+          /* ignore */
+        }
+        repaintRef.current();
+        onWheelHoldRef.current?.(pending.down.clientX, pending.down.clientY);
+      };
+
+      const armWheelTimer = () => {
+        if (holdTimerRef.current != null) {
+          window.clearTimeout(holdTimerRef.current);
+        }
+        holdTimerRef.current = window.setTimeout(() => {
+          holdTimerRef.current = null;
+          openWheelFromPending();
+        }, WHEEL_OPEN_MS);
+      };
+
       const begin = (event: PointerEvent) => {
         if (!toolRef.current) {
           if (DEBUG_INK) inkMetrics.note("no-tool");
@@ -1472,56 +1528,15 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             recaptured: false,
             pathPx: 0,
             moves: 0,
+            windRad: 0,
+            lastStepX: 0,
+            lastStepY: 0,
             lastX: event.clientX,
             lastY: event.clientY,
           };
-          holdTimerRef.current = window.setTimeout(() => {
-            holdTimerRef.current = null;
-            const pending = pendingHoldRef.current;
-            if (
-              !pending ||
-              pending.pointerId !== event.pointerId ||
-              pending.opened ||
-              pending.decided
-            ) {
-              return;
-            }
-            const movedPx = Math.hypot(
-              pending.lastX - pending.down.clientX,
-              pending.lastY - pending.down.clientY,
-            );
-            if (wheelHoldOutcome(movedPx, WHEEL_OPEN_MS, pending.pathPx, pending.moves) !== "wheel") {
-              pending.decided = true;
-              pendingHoldRef.current = null;
-              return;
-            }
-            pending.decided = true;
-            pending.opened = true;
-            // Jitter can stamp a few live points inside the rest circle. That
-            // is still a rest — drop the starter so the dial is not sitting
-            // on a dot.
-            drawingRef.current = false;
-            activePointerRef.current = null;
-            liveRef.current = null;
-            liveRawPointsRef.current = null;
-            liveDrawnIndexRef.current = 0;
-            attackBufferRef.current = null;
-            lastPointRef.current = null;
-            rawPointRef.current = null;
-            strokeViewRef.current = null;
-            strokeBoxRef.current = null;
-            strokeRectRef.current = null;
-            detachWindowFallback();
-            try {
-              canvas.releasePointerCapture(event.pointerId);
-            } catch {
-              /* ignore */
-            }
-            repaintRef.current();
-            onWheelHoldRef.current?.(pending.down.clientX, pending.down.clientY);
-          }, WHEEL_OPEN_MS);
-          // Fall through — ink starts now. A directed stroke (raw net/path)
-          // cancels the timer. A rest or zig-zag in place opens the dial.
+          armWheelTimer();
+          // Fall through — ink starts now. Drawing hops restart the dwell
+          // clock. A planted rest or zig-zag in place opens the dial.
         }
         forceInkRef.current = false;
 
@@ -1850,23 +1865,56 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             return;
           }
           if (!pending.decided) {
-            const dx = event.clientX - pending.down.clientX;
-            const dy = event.clientY - pending.down.clientY;
-            const step = Math.hypot(
-              event.clientX - pending.lastX,
-              event.clientY - pending.lastY,
-            );
-            if (step > 0) {
+            const coalesced = event.getCoalescedEvents?.();
+            const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
+            let drawingHop = false;
+            for (const sample of batch) {
+              const stepX = sample.clientX - pending.lastX;
+              const stepY = sample.clientY - pending.lastY;
+              const step = Math.hypot(stepX, stepY);
+              if (step === 0) continue;
+              if (pending.moves >= 1) {
+                pending.windRad += wheelHoldTurn(
+                  pending.lastStepX,
+                  pending.lastStepY,
+                  stepX,
+                  stepY,
+                );
+                if (
+                  wheelHoldIsDrawingHop(
+                    pending.lastStepX,
+                    pending.lastStepY,
+                    stepX,
+                    stepY,
+                  )
+                ) {
+                  drawingHop = true;
+                }
+              }
+              pending.lastStepX = stepX;
+              pending.lastStepY = stepY;
               pending.pathPx += step;
               pending.moves += 1;
-              pending.lastX = event.clientX;
-              pending.lastY = event.clientY;
+              pending.lastX = sample.clientX;
+              pending.lastY = sample.clientY;
             }
-            const movedPx = Math.hypot(dx, dy);
+            const movedPx = Math.hypot(
+              pending.lastX - pending.down.clientX,
+              pending.lastY - pending.down.clientY,
+            );
             // Rest / zig-zag stays pending so the dwell can still open.
             // drawingRef is already true from the down fall-through — do not
-            // treat that as "decided".
-            if (wheelHoldOutcome(movedPx, 0, pending.pathPx, pending.moves) === "ink") {
+            // treat that as "decided". Fine writing in the same patch restarts
+            // the clock instead of counting as a rest.
+            if (
+              wheelHoldOutcome(
+                movedPx,
+                0,
+                pending.pathPx,
+                pending.moves,
+                pending.windRad,
+              ) === "ink"
+            ) {
               pending.decided = true;
               if (holdTimerRef.current != null) {
                 window.clearTimeout(holdTimerRef.current);
@@ -1878,6 +1926,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                 begin(pending.down);
                 if (!drawingRef.current) return;
               }
+            } else if (drawingHop) {
+              armWheelTimer();
             } else if (!drawingRef.current) {
               return;
             }
