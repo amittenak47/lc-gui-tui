@@ -4639,12 +4639,14 @@ input[type="checkbox"] {
   cursor: default;
 }
 
-/* What the coach did on the way to an answer. Quiet by default — it is
-   context for the answer, not the answer. */
+/* What the agent did on the way to an answer. Quiet by default — it is
+   context for the answer, not the answer. Timeline, not a prose dump. */
 .lc-agent-process {
-  margin-bottom: 6px;
+  margin: 0 0 6px;
   min-width: 0;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted-ink, var(--muted));
 }
 
 .lc-agent-process-toggle {
@@ -4654,13 +4656,29 @@ input[type="checkbox"] {
   width: 100%;
   border: 0;
   background: transparent;
-  color: var(--muted-ink, inherit);
-  opacity: 0.85;
+  color: inherit;
+  opacity: 0.9;
   cursor: pointer;
-  padding: 2px 0;
+  padding: 0;
   text-align: left;
   font: inherit;
   min-width: 0;
+}
+
+.lc-agent-process-chevron {
+  flex-shrink: 0;
+  width: 0.42em;
+  height: 0.42em;
+  margin: 0 1px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transform-origin: 60% 60%;
+  transition: transform 140ms ease;
+}
+
+.lc-agent-process-toggle[aria-expanded="true"] .lc-agent-process-chevron {
+  transform: rotate(45deg);
 }
 
 .lc-agent-process-label {
@@ -4668,18 +4686,46 @@ input[type="checkbox"] {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .lc-agent-process-steps {
-  margin: 4px 0 0;
-  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0 7px;
+  padding: 0 0 0 10px;
   list-style: none;
-  border-left: 1px solid var(--chrome-edge);
+  border-left: 1px solid color-mix(in srgb, var(--chrome-edge) 85%, transparent);
 }
 
 .lc-agent-process-step {
-  padding: 1px 0;
-  opacity: 0.8;
+  position: relative;
+  margin: 0;
+  padding: 0;
+  line-height: 1.35;
+  opacity: 0.72;
+}
+
+.lc-agent-process-step::before {
+  content: "";
+  position: absolute;
+  left: -13px;
+  top: 0.45em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--muted, currentColor) 70%, transparent);
+}
+
+.lc-agent-process-step-current {
+  opacity: 1;
+  color: var(--ink);
+}
+
+.lc-agent-process-step-current::before {
+  background: var(--accent);
 }
 
 .lc-agent-process-step-rejected {
@@ -7585,7 +7631,10 @@ button.lc-row-selected:hover:not(:disabled) {
   top: auto;
   left: 0;
   right: 0;
-  bottom: var(--lc-keyboard-inset, 0px);
+  /* Parked peek sits on the screen bottom. Keyboard inset only while the
+     sheet is open — otherwise closing chat left the strip (and chrome
+     riding it) stranded at the last keyboard height. */
+  bottom: 0;
   width: auto;
   height: calc(var(--lc-agent-sheet) + var(--lc-agent-sheet-lift) + var(--lc-safe-bottom));
   max-height: none;
@@ -7595,6 +7644,11 @@ button.lc-row-selected:hover:not(:disabled) {
   background: var(--panel);
   /* Peek handle stays visible when parked; board chrome sits above it. */
   z-index: 40;
+}
+
+.lc-mobile.lc-app-agent-open .lc-side,
+.lc-mobile .lc-side-sheet-dragging {
+  bottom: var(--lc-keyboard-inset, 0px);
 }
 
 .lc-mobile .lc-agent-chat {
@@ -10809,17 +10863,42 @@ button.lc-row-selected:hover:not(:disabled) {
  *
  * Full board palette arrives as `--lc-fn-p0`…`p3` plus light/mid/deep roles.
  * Selected swatch (`--lc-fn-color`) owns accents — borders, chips, active tools,
- * inset bar. Labels / body copy use `--lc-fn-ink` so a pastel pick cannot bleach
- * LINKS / NOTES on the light panel wash. Page bands stay separately pale.
+ * inset bar. Labels / body copy use `--lc-fn-ink` against `--lc-fn-wash`
+ * (palette mixed into the theme panel), so type stays readable on Storm as
+ * well as on a light pastel card. Nested chips use `--lc-fn-chip`.
  */
 .lc-footnote-overview[style*="--lc-fn-color"],
 .lc-footnote-overview.is-task[style*="--lc-fn-color"] {
-  background: color-mix(in srgb, var(--lc-fn-light) 42%, var(--overlay-bg, var(--panel)));
+  background: var(--lc-fn-wash, color-mix(in srgb, var(--lc-fn-light) 42%, var(--overlay-bg, var(--panel))));
   border-color: color-mix(in srgb, var(--lc-fn-color) 72%, var(--lc-fn-deep));
   color: var(--lc-fn-ink, var(--lc-fn-deep, var(--ink)));
   box-shadow:
     0 8px 28px color-mix(in srgb, var(--lc-fn-deep) 32%, transparent),
     inset 0 2px 0 0 var(--lc-fn-color);
+}
+
+/*
+ * Nested chrome used to paint `--panel` / `--surface` (black on Storm).
+ * Same wash family as the card, so underline / copy / chat / + and thread
+ * turns sit on the palette instead of a black chip.
+ */
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-mark-tool,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-add,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-task-back,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-title.is-editing,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-doc-sheet-marks .lc-agent-scope-option,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-link-list .lc-agent-scope-option,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-entry-hold,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-entry-hold.lc-hold-danger,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-thread .lc-agent-turn,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-composer textarea,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-task-field,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-add-link input,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-color-dot,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-secondary {
+  background: var(--lc-fn-chip, var(--lc-fn-wash)) !important;
+  color: var(--lc-fn-ink, var(--ink)) !important;
+  border-color: color-mix(in srgb, var(--lc-fn-mid) 50%, transparent);
 }
 
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-doc-sheet-excerpt,
@@ -10845,13 +10924,17 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-mark-tool {
   border-color: color-mix(in srgb, var(--lc-fn-mid) 55%, transparent);
-  color: color-mix(in srgb, var(--lc-fn-ink, var(--lc-fn-deep)) 75%, var(--lc-fn-color));
+  color: var(--lc-fn-ink, var(--ink)) !important;
 }
 
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-mark-tool.is-active {
   border-color: var(--lc-fn-color);
-  color: var(--lc-fn-color);
-  background: color-mix(in srgb, var(--lc-fn-color) 16%, transparent);
+  color: var(--lc-fn-color) !important;
+  background: color-mix(in srgb, var(--lc-fn-color) 22%, var(--lc-fn-chip, var(--lc-fn-wash))) !important;
+}
+
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-thread .lc-agent-turn-user {
+  background: color-mix(in srgb, var(--lc-fn-color) 24%, var(--lc-fn-chip, var(--lc-fn-wash))) !important;
 }
 
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-section {
@@ -10878,7 +10961,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-muted {
-  color: color-mix(in srgb, var(--lc-fn-ink, var(--lc-fn-deep)) 58%, transparent);
+  color: var(--lc-fn-muted, color-mix(in srgb, var(--lc-fn-ink, var(--lc-fn-deep)) 62%, var(--lc-fn-wash, transparent)));
 }
 
 /*
@@ -11173,6 +11256,64 @@ button.lc-row-selected:hover:not(:disabled) {
  * because pages in one book are not always the same width — a scanned plate
  * among typeset pages otherwise makes the whole column look crooked.
  */
+/*
+ * Viewport PDF page rail — chrome, not scene. Pages stay stacked in the
+ * camera; this is just an index that jumps scrollY to a `.lc-pdf-page`.
+ */
+.lc-pdf-rail {
+  position: absolute;
+  left: 4px;
+  top: 44px;
+  bottom: calc(
+    12px + var(--lc-agent-peek, 0px) + var(--lc-agent-sheet-lift, 0px) +
+      var(--lc-safe-bottom, 0px)
+  );
+  z-index: 28;
+  width: 34px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 4px 0;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 12%);
+  pointer-events: auto;
+  touch-action: pan-y;
+}
+
+[data-handedness="left"] .lc-pdf-rail {
+  left: auto;
+  right: 4px;
+}
+
+.lc-pdf-rail-page {
+  display: block;
+  width: 100%;
+  border: 0;
+  margin: 0;
+  padding: 3px 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.lc-pdf-rail-page[aria-current="page"] {
+  color: var(--ink);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.lc-mobile .lc-pdf-rail {
+  top: 8px;
+  width: 32px;
+}
+
 .lc-pdf-doc {
   display: flex;
   flex-direction: column;

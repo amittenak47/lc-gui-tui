@@ -432,15 +432,15 @@ export type RunAction = "ask" | "review" | "viz" | "lazy" | "draw_review";
  * string — but these are the ones it labels itself.
  */
 export const STAGE_LABELS: Record<string, string> = {
-  received: "Got your inputs",
-  perceive: "Reading your board",
-  claim: "Naming your approach",
-  commit_approach: "Sticking with your approach",
-  plan_approaches: "Planning the approaches",
-  verdict: "Checking it against the cases",
+  received: "Got it",
+  perceive: "Reading the board",
+  claim: "Naming the approach",
+  commit_approach: "Sticking with the approach",
+  plan_approaches: "Planning approaches",
+  verdict: "Checking the cases",
   code: "Reading solution.py",
-  retrace: "Re-tracing the case it cited",
-  ask: "Thinking",
+  retrace: "Re-tracing the cited case",
+  ask: "Thinking…",
   lazy: "Writing the earned code",
   draw_tools: "Choosing what to draw",
   validate: "Checking the diagram schema",

@@ -113,7 +113,7 @@ import {
   type PageableElement,
 } from "./pageView";
 import { encodeInkOps } from "./inkCodec";
-import { fallbackPageFrames, pageFramesFromPdfSlot } from "./inkPageIndex";
+import { fallbackPageFrames, pageFramesFromPdfSlot, pageIdFromCamera } from "./inkPageIndex";
 import { eraserScreenRadius } from "./rasterInk";
 import { reanchorInkOps } from "./reanchorInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
@@ -6155,7 +6155,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     prevMobileRegionRef.current = next;
     if (!interactive) return;
     if (!becameInteractive && previous === next) return;
-    userAdjustedCameraRef.current = false;
+    /*
+     * A saved PDF camera is applied before interactive flips true. The open
+     * fit here used to wipe that and land on page 1 every time.
+     */
+    const keepCamera = becameInteractive && userAdjustedCameraRef.current;
+    if (!keepCamera) userAdjustedCameraRef.current = false;
     // Hide the other pages *before* fitting: a page is the only thing on the
     // canvas, so zooming out on a tablet shows one frame, not the whole column.
     // Ink clip tracks the same box — without this, marks from the previous page
@@ -6163,6 +6168,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     syncPageVisibility();
     reportCodeSlot();
     rasterInkRef.current?.syncCamera();
+    if (keepCamera) {
+      if (!annotateCodeRef.current) armReadingScroll();
+      return;
+    }
     void settleFitView().then(() => {
       reportCodeSlot();
       rasterInkRef.current?.syncCamera();
@@ -6952,6 +6961,91 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       fitRegion: (regionId: RegionId | string) => {
         refitToViewport(regionId);
       },
+      scrollToPdfPage: (pageId: number) => {
+        const api = apiRef.current;
+        const slot = contentSlotNodeRef.current;
+        const bounds = pageBoundsRef.current;
+        if (!api || !slot || !bounds || pageId < 1) return;
+        const node = slot.querySelector<HTMLElement>(`[data-pdf-page="${pageId}"]`);
+        if (!node) return;
+        const slotRect = slot.getBoundingClientRect();
+        const box = node.getBoundingClientRect();
+        const pageH = bounds.maxY - bounds.minY;
+        if (slotRect.height < 1 || pageH <= 0) return;
+        const sy = slotRect.height / pageH;
+        const minY = bounds.minY + (box.top - slotRect.top) / sy;
+        const state = api.getAppState() as { zoom?: { value?: number } };
+        const zoom = state.zoom?.value ?? 1;
+        if (!(zoom > 0)) return;
+        const measured = measureChromeInsets(
+          boardRef.current,
+          toolbarHeightRef.current,
+          mapChromeHiddenRef.current,
+          mobileRef.current,
+        );
+        const insetTop = measured.top + (mobileRef.current ? 0 : safeCssPx("--lc-safe-top"));
+        userAdjustedCameraRef.current = true;
+        api.updateScene({
+          appState: { scrollY: insetTop / zoom - minY },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        scheduleSlotReports();
+      },
+      restoreView: (saved) => {
+        const api = apiRef.current;
+        if (!api || !saved) return;
+        userAdjustedCameraRef.current = true;
+        const zoom = saved.zoom > 0 ? saved.zoom : 1;
+        const frames = pageFramesFromPdfSlot(
+          contentSlotNodeRef.current,
+          pageBoundsRef.current,
+        );
+        if (frames.length >= 2) {
+          const state = api.getAppState() as { height?: number };
+          const page = pageIdFromCamera(frames, saved.scrollY, zoom, state.height ?? 800);
+          const node = contentSlotNodeRef.current?.querySelector<HTMLElement>(
+            `[data-pdf-page="${page}"]`,
+          );
+          if (node) {
+            const slot = contentSlotNodeRef.current;
+            const bounds = pageBoundsRef.current;
+            if (slot && bounds) {
+              const slotRect = slot.getBoundingClientRect();
+              const box = node.getBoundingClientRect();
+              const pageH = bounds.maxY - bounds.minY;
+              if (slotRect.height >= 1 && pageH > 0) {
+                const sy = slotRect.height / pageH;
+                const minY = bounds.minY + (box.top - slotRect.top) / sy;
+                const liveZoom =
+                  (api.getAppState() as { zoom?: { value?: number } }).zoom?.value ?? zoom;
+                const measured = measureChromeInsets(
+                  boardRef.current,
+                  toolbarHeightRef.current,
+                  mapChromeHiddenRef.current,
+                  mobileRef.current,
+                );
+                const insetTop =
+                  measured.top + (mobileRef.current ? 0 : safeCssPx("--lc-safe-top"));
+                api.updateScene({
+                  appState: { scrollY: insetTop / liveZoom - minY },
+                  captureUpdate: CaptureUpdateAction.NEVER,
+                });
+                scheduleSlotReports();
+                return;
+              }
+            }
+          }
+        }
+        api.updateScene({
+          appState: {
+            scrollX: saved.scrollX,
+            scrollY: saved.scrollY,
+            zoom: { value: zoom },
+          },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        scheduleSlotReports();
+      },
       appendScratchPage: (skeletons: Skeleton[]) => {
         const api = apiRef.current;
         if (!api || skeletons.length === 0) return 0;
@@ -7116,7 +7210,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         requestAnimationFrame(() => {
           apiRef.current?.history?.clear();
           syncPageVisibility();
-          scheduleFitView();
+          if (!options?.skipFit) scheduleFitView();
           ensureReadingHand();
         });
       },

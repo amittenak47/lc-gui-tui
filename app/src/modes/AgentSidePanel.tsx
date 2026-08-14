@@ -2124,9 +2124,11 @@ function ProcessBlock({
         onClick={() => setOpen((current) => !current)}
       >
         {running && <span className="lc-agent-spinner" aria-hidden />}
-        <span aria-hidden>{expanded ? "▾" : "▸"}</span>
+        <span className="lc-agent-process-chevron" aria-hidden />
         <span className="lc-agent-process-label">
-          {running ? processLine(latest) : `${shown.length} step${shown.length === 1 ? "" : "s"}`}
+          {running
+            ? processLine(latest)
+            : `Thought · ${shown.length} step${shown.length === 1 ? "" : "s"}`}
         </span>
       </button>
       {expanded && (
@@ -2134,11 +2136,13 @@ function ProcessBlock({
           {shown.map((event, index) => (
             <li
               key={`${event.ts}-${index}`}
-              className={
-                event.status === "rejected"
-                  ? "lc-agent-process-step lc-agent-process-step-rejected"
-                  : "lc-agent-process-step"
-              }
+              className={[
+                "lc-agent-process-step",
+                event.status === "rejected" ? "lc-agent-process-step-rejected" : "",
+                running && index === shown.length - 1 ? "lc-agent-process-step-current" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
             >
               {processLine(event)}
             </li>
