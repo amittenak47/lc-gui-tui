@@ -14,20 +14,26 @@ export const HOLD_SENSITIVE_MS = 666;
 /**
  * Canvas dwell before the ink-tool wheel opens.
  *
- * Shorter than the old 667ms rest. Writing is gated by
- * {@link WHEEL_HOLD_SLOP_PX}: the first move off the down-spot cancels the
- * timer and never re-arms for that pointer. Own constant — do not reuse
- * {@link HOLD_SENSITIVE_MS}.
+ * Rest = pointer down, staying on the spot ({@link WHEEL_HOLD_SLOP_PX} of
+ * jitter). Writing = a directed stroke: displacement past that radius, or
+ * cumulative path {@link WHEEL_HOLD_PATH_PX} even if the nib has not left
+ * the circle. Own constant — do not reuse {@link HOLD_SENSITIVE_MS}.
  */
 export const WHEEL_OPEN_MS = 280;
 
 /**
- * Finger travel that turns a pending wheel dwell into ink.
- *
- * Tighter than a pan, looser than a hair: stylus contact jitter is often
- * 8–12px, and 8px cancelled tablet dwell before the dial could open.
+ * Rest radius from the down-spot. Contact noise is 1–3 CSS px; anything
+ * larger is the start of a stroke, not a dwell.
  */
-export const WHEEL_HOLD_SLOP_PX = 16;
+export const WHEEL_HOLD_SLOP_PX = 4;
+
+/**
+ * Cumulative path inside the rest circle that still counts as writing.
+ *
+ * A letter can wander without ever sitting 4px from origin. Jitter wiggles
+ * in place and stays under this; a stroke does not.
+ */
+export const WHEEL_HOLD_PATH_PX = 8;
 
 /** Long-press to open a secondary menu (scratchpad load, coach message). */
 export const LONG_PRESS_MS = 580;

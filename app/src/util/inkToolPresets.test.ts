@@ -105,7 +105,7 @@ describe("inkToolPresets", () => {
 });
 
 describe("wheel confirm / hold", () => {
-  it("disables hub until the pair differs from the open defaults", () => {
+  it("disables hub until the pair differs from the open defaults, unless a wedge was tapped", () => {
     expect(
       wheelConfirmEnabled({
         openKind: "pen",
@@ -130,6 +130,15 @@ describe("wheel confirm / hold", () => {
         selectedWedge: null,
       }),
     ).toBe(false);
+    expect(
+      wheelConfirmEnabled({
+        openKind: "pen",
+        openWedge: 2,
+        selectedKind: "pen",
+        selectedWedge: 2,
+        innerChosen: true,
+      }),
+    ).toBe(true);
   });
 
   it("places the spec card right when there is room, else left", () => {
@@ -137,12 +146,13 @@ describe("wheel confirm / hold", () => {
     expect(specCardSide(800, 124, 180, 900)).toBe("left");
   });
 
-  it("starts ink if the nib moves before the dwell, else opens the wheel", () => {
-    expect(wheelHoldOutcome(17, 100)).toBe("ink");
+  it("starts ink on a directed stroke, else opens the wheel after a rest", () => {
+    expect(wheelHoldOutcome(5, 100)).toBe("ink");
     expect(wheelHoldOutcome(2, 200)).toBe("pending");
     expect(wheelHoldOutcome(2, 280)).toBe("wheel");
-    expect(wheelHoldOutcome(9, 50)).toBe("pending");
-    expect(wheelHoldOutcome(9, 280)).toBe("wheel");
+    expect(wheelHoldOutcome(3, 50)).toBe("pending");
+    expect(wheelHoldOutcome(2, 100, 9)).toBe("ink");
+    expect(wheelHoldOutcome(2, 280, 3)).toBe("wheel");
   });
 
   it("yields a post-arm marquee to a vertical reading pan", () => {
@@ -151,7 +161,7 @@ describe("wheel confirm / hold", () => {
     expect(selectHoldYieldsToScroll(-8, -8)).toBe(false);
   });
 
-  it("auto-applies only after outer then a new inner, when Tap OK is off", () => {
+  it("auto-applies only after an inner tap, when Tap OK is off", () => {
     expect(
       wheelAutoApply({
         tapOk: true,
@@ -160,12 +170,13 @@ describe("wheel confirm / hold", () => {
         openWedge: 0,
         selectedKind: "pen",
         selectedWedge: 2,
+        innerChosen: true,
       }),
     ).toBe(false);
     expect(
       wheelAutoApply({
         tapOk: false,
-        outerDone: false,
+        outerDone: true,
         openKind: "pen",
         openWedge: 0,
         selectedKind: "highlighter",
@@ -188,8 +199,9 @@ describe("wheel confirm / hold", () => {
         outerDone: true,
         openKind: "pen",
         openWedge: 0,
-        selectedKind: "highlighter",
-        selectedWedge: 1,
+        selectedKind: "pen",
+        selectedWedge: 2,
+        innerChosen: true,
       }),
     ).toBe(true);
   });

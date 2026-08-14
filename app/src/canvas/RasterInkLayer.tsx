@@ -72,7 +72,8 @@ import {
   smoothInkPoints,
   type InkSmoothingMode,
 } from "./inkSmoothing";
-import { WHEEL_HOLD_SLOP_PX, WHEEL_OPEN_MS } from "../util/gesture";
+import { WHEEL_OPEN_MS } from "../util/gesture";
+import { wheelHoldOutcome } from "../util/inkToolPresets";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
 import { INK_SPEED_BLOT_BLEND_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
@@ -178,9 +179,9 @@ export interface RasterInkLayerProps {
   onStylusAccessory?: (event: PointerEvent) => boolean;
   /**
    * Unlocked ink-tool dwell (pen, highlighter, eraser): pointer down starts
-   * ink immediately. Rest with no pointermove for {@link WHEEL_OPEN_MS} drops
-   * the starter and opens the preset wheel. The first real move cancels the
-   * timer — a drag never waits on the dial.
+   * ink immediately. Rest inside {@link WHEEL_HOLD_SLOP_PX} with little path
+   * for {@link WHEEL_OPEN_MS} drops the starter and opens the preset wheel.
+   * A directed stroke cancels the timer — writing never waits on the dial.
    */
   wheelHoldEnabled?: boolean;
   onWheelHold?: (clientX: number, clientY: number) => void;
@@ -394,6 +395,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       opened: boolean;
       decided: boolean;
       recaptured: boolean;
+      pathPx: number;
+      lastX: number;
+      lastY: number;
     } | null>(null);
     const holdTimerRef = useRef<number | null>(null);
     const forceInkRef = useRef(false);
@@ -1465,6 +1469,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             opened: false,
             decided: false,
             recaptured: false,
+            pathPx: 0,
+            lastX: event.clientX,
+            lastY: event.clientY,
           };
           holdTimerRef.current = window.setTimeout(() => {
             holdTimerRef.current = null;
@@ -1477,10 +1484,20 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             ) {
               return;
             }
+            const movedPx = Math.hypot(
+              pending.lastX - pending.down.clientX,
+              pending.lastY - pending.down.clientY,
+            );
+            if (wheelHoldOutcome(movedPx, WHEEL_OPEN_MS, pending.pathPx) !== "wheel") {
+              pending.decided = true;
+              pendingHoldRef.current = null;
+              return;
+            }
             pending.decided = true;
             pending.opened = true;
-            // Jitter can stamp a few live points inside slop. That is still a
-            // rest — drop the starter so the dial is not sitting on a dot.
+            // Jitter can stamp a few live points inside the rest circle. That
+            // is still a rest — drop the starter so the dial is not sitting
+            // on a dot.
             drawingRef.current = false;
             activePointerRef.current = null;
             liveRef.current = null;
@@ -1501,9 +1518,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             repaintRef.current();
             onWheelHoldRef.current?.(pending.down.clientX, pending.down.clientY);
           }, WHEEL_OPEN_MS);
-          // Fall through — ink starts now (pen, highlighter, eraser). Travel
-          // past slop cancels the timer. Staying inside it until dwell opens
-          // the dial (tablet nib jitter is often 8–12px).
+          // Fall through — ink starts now (pen, highlighter, eraser). A
+          // directed stroke cancels the timer. Rest in a ~4px circle until
+          // dwell opens the dial.
         }
         forceInkRef.current = false;
 
@@ -1834,10 +1851,18 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           if (!pending.decided) {
             const dx = event.clientX - pending.down.clientX;
             const dy = event.clientY - pending.down.clientY;
-            // Past slop is ink. Sub-pixel / tablet shake stays pending so the
-            // dwell can still open the dial. drawingRef is already true from
-            // the down fall-through — do not treat that as "decided".
-            if (Math.hypot(dx, dy) > WHEEL_HOLD_SLOP_PX) {
+            const step = Math.hypot(
+              event.clientX - pending.lastX,
+              event.clientY - pending.lastY,
+            );
+            pending.pathPx += step;
+            pending.lastX = event.clientX;
+            pending.lastY = event.clientY;
+            const movedPx = Math.hypot(dx, dy);
+            // Rest stays pending so the dwell can still open the dial.
+            // drawingRef is already true from the down fall-through — do not
+            // treat that as "decided".
+            if (wheelHoldOutcome(movedPx, 0, pending.pathPx) === "ink") {
               pending.decided = true;
               if (holdTimerRef.current != null) {
                 window.clearTimeout(holdTimerRef.current);
