@@ -97,6 +97,8 @@ export interface PdfDocumentProps {
   frameWidth: number;
   /** Reported whenever the rendered stack height changes, in scene units. */
   onMeasure?: (height: number) => void;
+  /** Page count and the page filling most of the viewport — for the side rail. */
+  onNav?: (nav: { count: number; current: number } | null) => void;
   /** Scroll mode: the text layer answers the pointer so quotes can be picked. */
   selectable?: boolean;
   onError?: (message: string) => void;
@@ -145,6 +147,7 @@ export function PdfDocument({
   bytes,
   frameWidth,
   onMeasure,
+  onNav,
   selectable = false,
   onError,
 }: PdfDocumentProps) {
@@ -152,8 +155,11 @@ export function PdfDocument({
   const [pages, setPages] = useState<RenderedPage[]>([]);
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
+  const onNavRef = useRef(onNav);
+  onNavRef.current = onNav;
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
+  const visibleRatioRef = useRef<Map<number, number>>(new Map());
   /** The open document, shared by the layout pass and the paint pass. */
   const docRef = useRef<Awaited<
     ReturnType<typeof import("pdfjs-dist").getDocument>["promise"]
@@ -189,6 +195,8 @@ export function PdfDocument({
     paintedRef.current.clear();
     wantedRef.current = new Set();
     visibleRef.current = new Set();
+    visibleRatioRef.current = new Map();
+    onNavRef.current?.(null);
 
     void (async () => {
       try {
@@ -292,14 +300,31 @@ export function PdfDocument({
       setWindowTick((tick) => tick + 1);
     };
 
+    const publishNav = () => {
+      const ratios = visibleRatioRef.current;
+      let current = 1;
+      let best = -1;
+      for (const [page, ratio] of ratios) {
+        if (ratio > best || (ratio === best && page < current)) {
+          best = ratio;
+          current = page;
+        }
+      }
+      if (best < 0 && visibleRef.current.size > 0) {
+        current = Math.min(...visibleRef.current);
+      }
+      onNavRef.current?.({ count: last, current });
+    };
+
     rebuild();
+    publishNav();
 
     if (typeof IntersectionObserver !== "function") {
       // No observer: paint everything, as this component always used to. Worse
       // on a textbook, but a working reader beats a blank one.
       wantedRef.current = new Set(pages.map((page) => page.pageNumber));
       setWindowTick((tick) => tick + 1);
-      return;
+      return () => onNavRef.current?.(null);
     }
 
     const observer = new IntersectionObserver(
@@ -307,15 +332,24 @@ export function PdfDocument({
         for (const entry of entries) {
           const n = Number((entry.target as HTMLElement).dataset.pdfPage);
           if (!Number.isFinite(n)) continue;
-          if (entry.isIntersecting) visibleRef.current.add(n);
-          else visibleRef.current.delete(n);
+          if (entry.isIntersecting) {
+            visibleRef.current.add(n);
+            visibleRatioRef.current.set(n, entry.intersectionRatio);
+          } else {
+            visibleRef.current.delete(n);
+            visibleRatioRef.current.delete(n);
+          }
         }
         rebuild();
+        publishNav();
       },
       { rootMargin: PAGE_VISIBLE_MARGIN },
     );
     for (const slot of slots) observer.observe(slot);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      onNavRef.current?.(null);
+    };
   }, [pages]);
 
   /**

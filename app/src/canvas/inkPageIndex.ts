@@ -161,3 +161,33 @@ export function lastPageId(frames: readonly PageFrame[]): number {
   }
   return last;
 }
+
+/**
+ * Which PDF page a saved camera was looking at.
+ *
+ * Reopen fits the column to today's viewport, then jumps here — raw scrollY
+ * from another screen size would land between pages.
+ */
+export function pageIdFromCamera(
+  frames: readonly PageFrame[],
+  scrollY: number,
+  zoom: number,
+  viewHeight: number,
+): number {
+  if (!(viewHeight > 0) || !(zoom > 0) || frames.length === 0) return 1;
+  const top = scrollY === 0 ? 0 : -scrollY;
+  return pageIdAtViewport(frames, top, top + viewHeight / zoom);
+}
+
+/** Excalidraw `scrollY` that puts a page's top just under the chrome inset. */
+export function scrollYForPage(
+  frames: readonly PageFrame[],
+  pageId: number,
+  zoom: number,
+  insetTop = 0,
+): number | null {
+  if (!(zoom > 0)) return null;
+  const frame = frames.find((item) => item.pageId === pageId);
+  if (!frame) return null;
+  return insetTop / zoom - frame.minY;
+}

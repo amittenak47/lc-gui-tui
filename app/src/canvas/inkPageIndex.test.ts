@@ -9,7 +9,9 @@ import {
   lruWindow,
   pageIdAtViewport,
   pageIdForOp,
+  pageIdFromCamera,
   pageIndexForSceneY,
+  scrollYForPage,
   type PageFrame,
 } from "./inkPageIndex";
 
@@ -108,5 +110,20 @@ describe("lastPageId", () => {
   it("is the highest 1-based page, ignoring spanning", () => {
     expect(lastPageId(frames())).toBe(3);
     expect(lastPageId([])).toBe(1);
+  });
+});
+
+describe("pageIdFromCamera", () => {
+  it("maps a saved camera onto the page that filled the viewport", () => {
+    expect(pageIdFromCamera(frames(), 0, 1, 80)).toBe(1);
+    expect(pageIdFromCamera(frames(), -160, 1, 80)).toBe(2);
+  });
+});
+
+describe("scrollYForPage", () => {
+  it("puts the page top at the chrome inset", () => {
+    expect(scrollYForPage(frames(), 2, 1, 0)).toBe(-118);
+    expect(scrollYForPage(frames(), 2, 1, 10)).toBe(-108);
+    expect(scrollYForPage(frames(), 9, 1)).toBeNull();
   });
 });

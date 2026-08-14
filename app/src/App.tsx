@@ -143,6 +143,7 @@ import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelection
 import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
 import { PdfDocument } from "./modes/PdfDocument";
+import { PdfPageRail } from "./modes/PdfPageRail";
 import { AnnotateDialog } from "./modes/AnnotateDialog";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
 import { StatementDocument } from "./modes/StatementDocument";
@@ -515,6 +516,7 @@ export function App() {
   const [annotateHeight, setAnnotateHeight] = useState<number | null>(null);
   const annotateHeightRef = useRef<number | null>(null);
   annotateHeightRef.current = annotateHeight;
+  const [pdfNav, setPdfNav] = useState<{ count: number; current: number } | null>(null);
   /** Scene width of the open markdown page — viewport-sized on fresh opens. */
   const [annotatePageWidth, setAnnotatePageWidth] = useState(ANNOTATE_PAGE_W);
   /** The width marks were placed at — recorded in an exported sidecar. */
@@ -2176,6 +2178,7 @@ export function App() {
             ink: savedInk,
             files: existing.board.files,
             inkPalettes: existing.board.inkPalettes,
+            skipFit: true,
           });
           const live = boardRef.current?.getElements() ?? [];
           boardRef.current?.setElements(
@@ -2233,6 +2236,9 @@ export function App() {
           );
         }
         await boardRef.current?.settleFitView();
+        if (existing?.board.appState) {
+          boardRef.current?.restoreView(existing.board.appState);
+        }
 
         {
           const board = boardRef.current;
@@ -5384,6 +5390,7 @@ export function App() {
                       bytes={annotateSource.bytes}
                       frameWidth={annotatePageWidth}
                       onMeasure={onMdInkMeasure}
+                      onNav={setPdfNav}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                       onError={setError}
                     />
@@ -5445,6 +5452,13 @@ export function App() {
             sheetDragLocked={mobile ? sheetDragLocked : false}
             onToggleSheetLock={mobile ? onToggleSheetLock : undefined}
           />
+          {pdfNav && pdfNav.count >= 2 && (
+            <PdfPageRail
+              count={pdfNav.count}
+              current={pdfNav.current}
+              onJump={(page) => boardRef.current?.scrollToPdfPage(page)}
+            />
+          )}
           {(!problem || holdBrowseOverlay) && (
             <div
               className={[

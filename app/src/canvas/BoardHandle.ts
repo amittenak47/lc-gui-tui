@@ -199,8 +199,20 @@ export interface BoardHandle {
       ink?: InkOp[];
       files?: Record<string, BoardBinaryFile>;
       inkPalettes?: { items: string[][]; index: number };
+      /** Skip the post-restore fit — caller will size the frame then restoreView. */
+      skipFit?: boolean;
     },
   ): void;
+  /**
+   * Jump the camera so a 1-based PDF page sits under the chrome.
+   * No-op when that page is not in the document slot.
+   */
+  scrollToPdfPage(pageId: number): void;
+  /**
+   * Reopen camera: PDF jumps to the saved page at today's fit zoom;
+   * single-page docs restore scroll/zoom as written.
+   */
+  restoreView(saved: { scrollX: number; scrollY: number; zoom: number }): void;
   /** Recolor template scaffolding for the current theme (after restore/seed). */
   applyThemeInk(themeId: string): void;
   /** Drop all coach viz elements — used before re-applying from chat drawings. */

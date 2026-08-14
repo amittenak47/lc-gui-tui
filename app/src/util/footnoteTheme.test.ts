@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { footnoteThemeVars, readableInk, relativeLuminance } from "./footnoteTheme";
+import {
+  footnoteThemeVars,
+  readableInk,
+  readableInkOn,
+  relativeLuminance,
+} from "./footnoteTheme";
 
 describe("footnoteThemeVars", () => {
   it("puts selected color in --lc-fn-color and rotates it to --lc-fn-p0", () => {
@@ -26,10 +31,24 @@ describe("footnoteThemeVars", () => {
 
   it("keeps label ink dark when the selected primary is a pastel", () => {
     const palette = ["#90b77d", "#b6d7a8", "#d9ead3", "#eef6eb"];
-    const style = footnoteThemeVars("#b6d7a8", palette);
+    const style = footnoteThemeVars("#b6d7a8", palette, "#f8fafc");
     expect(style["--lc-fn-color" as keyof typeof style]).toBe("#b6d7a8");
     const ink = String(style["--lc-fn-ink" as keyof typeof style]);
     expect(relativeLuminance(ink)).toBeLessThanOrEqual(0.38);
+  });
+
+  it("uses light label ink on a dark theme panel", () => {
+    const palette = ["#90b77d", "#b6d7a8", "#d9ead3", "#eef6eb"];
+    const style = footnoteThemeVars("#b6d7a8", palette, "#141416");
+    const ink = String(style["--lc-fn-ink" as keyof typeof style]);
+    expect(relativeLuminance(ink)).toBeGreaterThan(0.5);
+  });
+
+  it("tints nested chips from the palette, not the raw panel", () => {
+    const palette = ["#90b77d", "#b6d7a8", "#d9ead3", "#eef6eb"];
+    const style = footnoteThemeVars("#b6d7a8", palette, "#141416");
+    expect(style["--lc-fn-chip" as keyof typeof style]).not.toBe("#141416");
+    expect(style["--lc-fn-wash" as keyof typeof style]).not.toBe("#141416");
   });
 });
 
@@ -40,6 +59,13 @@ describe("readableInk", () => {
 
   it("falls back when every candidate is too light", () => {
     expect(readableInk("#eef6eb", "#d9ead3", "#b6d7a8")).toBe("#1c1917");
+  });
+});
+
+describe("readableInkOn", () => {
+  it("picks light ink on a dark wash", () => {
+    const ink = readableInkOn("#1a1a1c", ["#eef6eb", "#1c1917"]);
+    expect(relativeLuminance(ink)).toBeGreaterThan(0.5);
   });
 });
 
