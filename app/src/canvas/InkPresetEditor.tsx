@@ -43,8 +43,6 @@ import {
   speedInkToPercent,
 } from "../util/inkSpeedPref";
 
-const PRESSURE_CLIP_STEPS = [30, 40, 50, 60, 70, 80, 90, 100] as const;
-
 function paintStrip(
   canvas: HTMLCanvasElement | null,
   kind: InkPresetKind,
@@ -260,7 +258,12 @@ export function InkPresetEditor({
           <MorphBar active="body" axis="height" className="lc-preset-sheet-morph">
           <div data-morph-id="body">
             <section className="lc-preset-sheet-strip">
-              <TestStrip kind={kind} snap={named} />
+              <SettingsBlock
+                title="Preview"
+                hint="How this preset draws. Updates as you change the knobs."
+              >
+                <TestStrip kind={kind} snap={named} />
+              </SettingsBlock>
             </section>
 
             <div className={draw ? "lc-preset-sheet-cols" : "lc-preset-sheet-cols is-single"}>
@@ -378,11 +381,23 @@ function DrawKnobs({
           onChange={(width) => onChange({ ...snap, width })}
           label="Nib size"
         />
-        <InkFullnessSlider
-          value={snap.fullness}
-          onChange={(fullness) => onChange({ ...snap, fullness })}
-          enabled={snap.pressureSensitive}
-        />
+        <MorphBar
+          active={snap.pressureSensitive ? "fullness" : "off"}
+          axis="width"
+          className={
+            snap.pressureSensitive
+              ? "lc-preset-fullness-morph"
+              : "lc-preset-fullness-morph is-collapsed"
+          }
+        >
+          <div data-morph-id="off" />
+          <div data-morph-id="fullness">
+            <InkFullnessSlider
+              value={snap.fullness}
+              onChange={(fullness) => onChange({ ...snap, fullness })}
+            />
+          </div>
+        </MorphBar>
         <PressureSensitiveToggle
           enabled={snap.pressureSensitive}
           onChange={(pressureSensitive) => onChange({ ...snap, pressureSensitive })}
@@ -427,30 +442,16 @@ function PhysicsKnobs({
           </>
         }
       >
-        <div
-          className="lc-settings-choice lc-settings-choice-compact lc-settings-choice-quad"
-          role="radiogroup"
-          aria-label="Pressure clip"
-        >
-          {PRESSURE_CLIP_STEPS.map((percent) => (
-            <button
-              key={percent}
-              type="button"
-              role="radio"
-              aria-checked={clipPct === percent}
-              className={
-                clipPct === percent
-                  ? "lc-settings-choice-option is-active"
-                  : "lc-settings-choice-option"
-              }
-              onClick={() =>
-                onChange({ ...snap, pressureClip: pressureClipFromPercent(percent) })
-              }
-            >
-              <strong>{percent}%</strong>
-            </button>
-          ))}
-        </div>
+        <SettingsRange
+          label="Pressure clip"
+          min={30}
+          max={100}
+          step={1}
+          value={clipPct}
+          onChange={(n) =>
+            onChange({ ...snap, pressureClip: pressureClipFromPercent(n) })
+          }
+        />
       </SettingsBlock>
 
       <SettingsBlock

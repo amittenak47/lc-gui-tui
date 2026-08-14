@@ -203,7 +203,7 @@ export function InkToolWheel({
   const [linger, setLinger] = useState<number | null>(null);
   const [armed, setArmed] = useState(false);
   const [hold, setHold] = useState<{ index: number; t: number } | null>(null);
-  const [hubShake, setHubShake] = useState(false);
+  const [dialShake, setDialShake] = useState(false);
   const openKindRef = useRef(liveKind);
   const openWedgeRef = useRef(store.lastWedge[liveKind]);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -214,6 +214,11 @@ export function InkToolWheel({
   const confirmedHoldRef = useRef(false);
   const appliedRef = useRef(false);
   const pressedWedgeRef = useRef<number | null>(null);
+  const holdPointerIdRef = useRef<number | null>(null);
+  const attachHoldWindowRef = useRef<(pointerId: number) => void>(() => {});
+  const detachHoldWindowRef = useRef<() => void>(() => {});
+  const storeRef = useRef(store);
+  storeRef.current = store;
   const tapOkRef = useRef(store.tapOk);
   tapOkRef.current = store.tapOk;
   const outerDoneRef = useRef(true);
@@ -229,6 +234,7 @@ export function InkToolWheel({
       cancelAnimationFrame(holdRafRef.current);
       holdRafRef.current = null;
     }
+    detachHoldWindowRef.current();
     const index = holdIndexRef.current;
     holdIndexRef.current = null;
     if (opts.confirm && index != null && !confirmedHoldRef.current) {
@@ -271,6 +277,50 @@ export function InkToolWheel({
     },
     [tickHold],
   );
+
+  useEffect(() => {
+    const onUp = (event: PointerEvent) => {
+      if (
+        holdPointerIdRef.current != null &&
+        event.pointerId !== holdPointerIdRef.current
+      ) {
+        return;
+      }
+      const useIndex = pressedWedgeRef.current;
+      pressedWedgeRef.current = null;
+      detachHoldWindowRef.current();
+      const held = confirmedHoldRef.current;
+      if (!held) stopHold({ confirm: false });
+      if (held || appliedRef.current || useIndex == null) return;
+      const useSnap = wedgeAt(storeRef.current, kindRef.current, useIndex);
+      if (!useSnap) return;
+      if (
+        !wheelAutoApply({
+          tapOk: tapOkRef.current,
+          outerDone: outerDoneRef.current,
+          openKind: openKindRef.current,
+          openWedge: openWedgeRef.current,
+          selectedKind: kindRef.current,
+          selectedWedge: useIndex,
+          innerChosen: true,
+        })
+      ) {
+        return;
+      }
+      appliedRef.current = true;
+      onConfirmRef.current(kindRef.current, useIndex);
+    };
+    attachHoldWindowRef.current = (pointerId: number) => {
+      detachHoldWindowRef.current();
+      holdPointerIdRef.current = pointerId;
+      window.addEventListener("pointerup", onUp, true);
+    };
+    detachHoldWindowRef.current = () => {
+      window.removeEventListener("pointerup", onUp, true);
+      holdPointerIdRef.current = null;
+    };
+    return () => detachHoldWindowRef.current();
+  }, [stopHold]);
 
   useEffect(() => () => stopHold({ confirm: false }), [stopHold]);
 
@@ -397,6 +447,12 @@ export function InkToolWheel({
         aria-label="Ink presets"
         onPointerDown={(event) => event.stopPropagation()}
       >
+        <div
+          className={dialShake ? "lc-ink-wheel-dial is-shake" : "lc-ink-wheel-dial"}
+          onAnimationEnd={(event) => {
+            if (event.animationName === "lc-stuck-shake") setDialShake(false);
+          }}
+        >
         <svg
           viewBox={`0 0 ${WHEEL_R * 2} ${WHEEL_R * 2}`}
           width={WHEEL_R * 2}
@@ -458,6 +514,7 @@ export function InkToolWheel({
                   onPointerEnter={() => setLinger(index)}
                   onPointerLeave={() => setLinger((cur) => (cur === index ? null : cur))}
                   onPointerDown={(event) => {
+                    event.preventDefault();
                     event.stopPropagation();
                     if (!armed) return;
                     const local = localFromSvgPointer(event);
@@ -467,11 +524,6 @@ export function InkToolWheel({
                         : null;
                     const useIndex = hit ?? index;
                     const useSnap = wedgeAt(store, kind, useIndex);
-                    try {
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                    } catch {
-                      /* already captured */
-                    }
                     pressedWedgeRef.current = useIndex;
                     if (useSnap) {
                       setSelectedKind(kind);
@@ -480,53 +532,24 @@ export function InkToolWheel({
                     }
                     setLinger(useIndex);
                     holdFromRef.current = event.currentTarget.getBoundingClientRect();
+                    attachHoldWindowRef.current(event.pointerId);
                     startHold(useIndex);
                   }}
-                  onPointerUp={(event) => {
-                    event.stopPropagation();
-                    const useIndex = pressedWedgeRef.current ?? index;
-                    pressedWedgeRef.current = null;
-                    const held = confirmedHoldRef.current;
-                    if (!held) stopHold({ confirm: false });
-                    if (held || appliedRef.current) return;
-                    const useSnap = wedgeAt(store, kindRef.current, useIndex);
-                    if (!useSnap) return;
-                    if (
-                      !wheelAutoApply({
-                        tapOk: tapOkRef.current,
-                        outerDone: outerDoneRef.current,
-                        openKind: openKindRef.current,
-                        openWedge: openWedgeRef.current,
-                        selectedKind: kindRef.current,
-                        selectedWedge: useIndex,
-                        innerChosen: true,
-                      })
-                    ) {
-                      return;
-                    }
-                    appliedRef.current = true;
-                    onConfirmRef.current(kindRef.current, useIndex);
-                  }}
-                  onPointerCancel={() => {
-                    pressedWedgeRef.current = null;
-                    stopHold({ confirm: false });
-                  }}
                 />
-                {holding && fillT > 0 && (
-                  <path
-                    d={donutSlice(
-                      WHEEL_R,
-                      WHEEL_R,
-                      INNER_INNER,
-                      INNER_OUTER,
-                      slice.start,
-                      slice.end,
-                    )}
-                    className="lc-ink-wheel-wedge-hold-fill"
-                    clipPath="url(#lc-wedge-hold-clip)"
-                    pointerEvents="none"
-                  />
-                )}
+                <path
+                  d={donutSlice(
+                    WHEEL_R,
+                    WHEEL_R,
+                    INNER_INNER,
+                    INNER_OUTER,
+                    slice.start,
+                    slice.end,
+                  )}
+                  className="lc-ink-wheel-wedge-hold-fill"
+                  clipPath="url(#lc-wedge-hold-clip)"
+                  pointerEvents="none"
+                  opacity={holding && fillT > 0 ? 1 : 0}
+                />
               </g>
             );
           })}
@@ -556,7 +579,6 @@ export function InkToolWheel({
           className={[
             "lc-ink-wheel-hub",
             canConfirm && store.tapOk ? "is-ready" : "is-idle",
-            hubShake ? "is-shake" : "",
           ]
             .filter(Boolean)
             .join(" ")}
@@ -573,19 +595,17 @@ export function InkToolWheel({
                 : `${kind} — pick a wedge`
               : `${kind} colour`
           }
-          onAnimationEnd={(event) => {
-            if (event.animationName === "lc-stuck-shake") setHubShake(false);
-          }}
           onClick={() => {
             if (!store.tapOk) return;
             if (!canConfirm || selectedKind == null || selectedWedge == null) {
-              setHubShake(false);
-              requestAnimationFrame(() => setHubShake(true));
+              setDialShake(false);
+              requestAnimationFrame(() => setDialShake(true));
               return;
             }
             onConfirm(selectedKind, selectedWedge);
           }}
         />
+        </div>
         <MorphBar
           active={linger != null ? "card" : "idle"}
           className={[

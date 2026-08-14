@@ -199,6 +199,28 @@ export function NumberWheel({
     [commitValue, fineStep, max, min],
   );
 
+  /*
+   * React's onWheel is passive, so preventDefault is ignored and the preset
+   * sheet (or the page) scrolls instead of the dial. Native + {passive:false}
+   * keeps the gesture on this control.
+   */
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!enabledRef.current) return;
+      event.preventDefault();
+      event.stopPropagation();
+      stopMomentum();
+      const steps = Math.sign(event.deltaY);
+      if (!steps) return;
+      const list = valuesRef.current;
+      commitIndex(clamp(indexRef.current - steps, 0, list.length - 1));
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, [commitIndex, stopMomentum]);
+
   const enterFineMode = useCallback(
     (clientY: number) => {
       if (!allowFineScrub || fineModeRef.current) return;
@@ -360,15 +382,6 @@ export function NumberWheel({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        onWheel={(event) => {
-          if (!enabledRef.current) return;
-          event.preventDefault();
-          event.stopPropagation();
-          stopMomentum();
-          const steps = Math.sign(event.deltaY);
-          if (!steps) return;
-          commitIndex(clamp(selectedIndex - steps, 0, values.length - 1));
-        }}
         onKeyDown={(event) => {
           if (!enabledRef.current) return;
           const keyStep = fineMode ? fineStep : step;

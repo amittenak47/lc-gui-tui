@@ -78,6 +78,6 @@ describe("chrome wake tint", () => {
 
   it("names each tint for Settings", () => {
     expect(chromeWakeTintLabel("mono")).toBe("Black and white");
-    expect(chromeWakeTintLabel("color")).toBe("Gradient pulse");
+    expect(chromeWakeTintLabel("color")).toBe("Rainbow pulse");
   });
 });

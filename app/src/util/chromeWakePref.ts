@@ -11,7 +11,7 @@
  *   - **off** — no mark. The hit target is still there; you tap that corner.
  *
  * **Tint** is a second choice that recolors both smear and pulse: mono (the
- * grey / black-and-white marks) or a cycling colour gradient.
+ * grey / black-and-white marks) or a ROYGBIV rainbow crawl.
  */
 
 export type ChromeWakeMarker = "smear" | "pulse" | "off";
@@ -86,5 +86,5 @@ export function chromeWakeMarkerLabel(marker: ChromeWakeMarker): string {
 }
 
 export function chromeWakeTintLabel(tint: ChromeWakeTint): string {
-  return tint === "color" ? "Gradient pulse" : "Black and white";
+  return tint === "color" ? "Rainbow pulse" : "Black and white";
 }
