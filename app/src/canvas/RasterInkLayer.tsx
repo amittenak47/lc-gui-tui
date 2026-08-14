@@ -179,9 +179,9 @@ export interface RasterInkLayerProps {
   onStylusAccessory?: (event: PointerEvent) => boolean;
   /**
    * Unlocked ink-tool dwell (pen, highlighter, eraser): pointer down starts
-   * ink immediately. Rest inside {@link WHEEL_HOLD_SLOP_PX} with little path
-   * for {@link WHEEL_OPEN_MS} drops the starter and opens the preset wheel.
-   * A directed stroke cancels the timer — writing never waits on the dial.
+   * ink immediately. A rest or zig-zag in {@link WHEEL_HOLD_SLOP_PX} for
+   * {@link WHEEL_OPEN_MS} drops the starter and opens the preset wheel.
+   * A directed stroke (raw net/path, no interpolation) cancels the timer.
    */
   wheelHoldEnabled?: boolean;
   onWheelHold?: (clientX: number, clientY: number) => void;
@@ -396,6 +396,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       decided: boolean;
       recaptured: boolean;
       pathPx: number;
+      moves: number;
       lastX: number;
       lastY: number;
     } | null>(null);
@@ -1470,6 +1471,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             decided: false,
             recaptured: false,
             pathPx: 0,
+            moves: 0,
             lastX: event.clientX,
             lastY: event.clientY,
           };
@@ -1488,7 +1490,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               pending.lastX - pending.down.clientX,
               pending.lastY - pending.down.clientY,
             );
-            if (wheelHoldOutcome(movedPx, WHEEL_OPEN_MS, pending.pathPx) !== "wheel") {
+            if (wheelHoldOutcome(movedPx, WHEEL_OPEN_MS, pending.pathPx, pending.moves) !== "wheel") {
               pending.decided = true;
               pendingHoldRef.current = null;
               return;
@@ -1518,9 +1520,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             repaintRef.current();
             onWheelHoldRef.current?.(pending.down.clientX, pending.down.clientY);
           }, WHEEL_OPEN_MS);
-          // Fall through — ink starts now (pen, highlighter, eraser). A
-          // directed stroke cancels the timer. Rest in a ~4px circle until
-          // dwell opens the dial.
+          // Fall through — ink starts now. A directed stroke (raw net/path)
+          // cancels the timer. A rest or zig-zag in place opens the dial.
         }
         forceInkRef.current = false;
 
@@ -1855,14 +1856,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               event.clientX - pending.lastX,
               event.clientY - pending.lastY,
             );
-            pending.pathPx += step;
-            pending.lastX = event.clientX;
-            pending.lastY = event.clientY;
+            if (step > 0) {
+              pending.pathPx += step;
+              pending.moves += 1;
+              pending.lastX = event.clientX;
+              pending.lastY = event.clientY;
+            }
             const movedPx = Math.hypot(dx, dy);
-            // Rest stays pending so the dwell can still open the dial.
+            // Rest / zig-zag stays pending so the dwell can still open.
             // drawingRef is already true from the down fall-through — do not
             // treat that as "decided".
-            if (wheelHoldOutcome(movedPx, 0, pending.pathPx) === "ink") {
+            if (wheelHoldOutcome(movedPx, 0, pending.pathPx, pending.moves) === "ink") {
               pending.decided = true;
               if (holdTimerRef.current != null) {
                 window.clearTimeout(holdTimerRef.current);

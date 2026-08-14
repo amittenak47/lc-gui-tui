@@ -147,12 +147,21 @@ describe("wheel confirm / hold", () => {
   });
 
   it("starts ink on a directed stroke, else opens the wheel after a rest", () => {
-    expect(wheelHoldOutcome(5, 100)).toBe("ink");
+    // Same spot, no path.
     expect(wheelHoldOutcome(2, 200)).toBe("pending");
     expect(wheelHoldOutcome(2, 280)).toBe("wheel");
-    expect(wheelHoldOutcome(3, 50)).toBe("pending");
-    expect(wheelHoldOutcome(2, 100, 9)).toBe("ink");
-    expect(wheelHoldOutcome(2, 280, 3)).toBe("wheel");
+    // Zig-zag: long path, small net — still a rest.
+    expect(wheelHoldOutcome(3, 100, 14, 5)).toBe("pending");
+    expect(wheelHoldOutcome(3, 280, 14, 5)).toBe("wheel");
+    // Two hops the same way.
+    expect(wheelHoldOutcome(8, 50, 8.4, 2)).toBe("ink");
+    // One coalesced jump past clear.
+    expect(wheelHoldOutcome(13, 40, 13, 1)).toBe("ink");
+    // One hop in the bounce band — wait.
+    expect(wheelHoldOutcome(8, 100, 8, 1)).toBe("pending");
+    expect(wheelHoldOutcome(8, 280, 8, 1)).toBe("wheel");
+    // Drifted zig-zag: net left the slop but folded back.
+    expect(wheelHoldOutcome(8, 280, 20, 4)).toBe("wheel");
   });
 
   it("yields a post-arm marquee to a vertical reading pan", () => {
