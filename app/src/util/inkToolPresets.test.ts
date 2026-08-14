@@ -223,6 +223,19 @@ describe("wheel confirm / hold", () => {
         innerChosen: true,
       }),
     ).toBe(true);
+    // Re-tapping the already-live wedge still applies (pointerup, not the
+    // lastWedge seed). Hover / linger must not set innerChosen.
+    expect(
+      wheelAutoApply({
+        tapOk: false,
+        outerDone: true,
+        openKind: "pen",
+        openWedge: 0,
+        selectedKind: "pen",
+        selectedWedge: 0,
+        innerChosen: true,
+      }),
+    ).toBe(true);
   });
 });
 

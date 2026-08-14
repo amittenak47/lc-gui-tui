@@ -17,9 +17,9 @@ There is a second path: sketch the approach by hand on a tablet or desktop canva
 | Surface | What it is |
 | --- | --- |
 | **CLI** | Index corpora, search, load workspaces, run tests, ask the tutor |
-| **TUI** | Full-screen practice UI in the terminal (`whiteboard` / `whiteboard tui`) |
+| **TUI** | Full-screen practice UI in the terminal (`lc` / `lc tui`) |
 | **IDE** | Edit `solution.py` in Cursor or VS Code; optional LLM Autocorrect |
-| **GUI** | Whiteboard app (`app/`) talking to `whiteboard serve` over HTTP/WS |
+| **GUI** | Whiteboard app (`app/`) talking to `lc serve` over HTTP/WS |
 
 ```
 JSON corpora ─whiteboard index──▶ SQLite (problems.db)
@@ -32,10 +32,10 @@ JSON corpora ─whiteboard index──▶ SQLite (problems.db)
         ├── run_tests.py
         └── .lc/meta.json       ← cases / entry point (no reference solution)
                               │
-                        whiteboard test · whiteboard ask · whiteboard serve → app/
+                        whiteboard test · whiteboard ask · lc serve → app/
 ```
 
-The crate and binary are `whiteboard`. Config still lives under the OS project dir named `lc` (`whiteboard config path`). Workspace and data defaults (`~/lc-workspace`, `~/lc-data`) and env vars (`GROQ_API_KEY`, `LC_LOCAL_API_KEY`, `OPENAI_API_KEY`) are unchanged.
+The crate stays `whiteboard`; the CLI binary is `lc`. Config still lives under the OS project dir named `lc` (`lc config path`). Workspace and data defaults (`~/lc-workspace`, `~/lc-data`) and env vars (`GROQ_API_KEY`, `LC_LOCAL_API_KEY`, `OPENAI_API_KEY`) are unchanged.
 
 ---
 
@@ -52,7 +52,7 @@ python scripts/fetch_dataset.py leetcode --data-dir ~/lc-data
 
 whiteboard config set data-dir ~/lc-data
 whiteboard index
-whiteboard                            # TUI
+lc                            # TUI
 ```
 
 Client internals, Android sideload, and cleartext-HTTP notes → [`app/README.md`](app/README.md).
@@ -75,7 +75,7 @@ API keys stay in the environment (`GROQ_API_KEY`, optional `LC_LOCAL_API_KEY`) �
 ## 2. TUI usage
 
 ```bash
-whiteboard                  # or: whiteboard tui
+lc                  # or: lc tui
 ```
 
 On the browse screen:
@@ -117,10 +117,10 @@ Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorre
 
 ## 4. GUI usage
 
-The canvas lives in [`app/`](app/). The corpus, workspaces, and Python runner stay on the PC behind `whiteboard serve`.
+The canvas lives in [`app/`](app/). The corpus, workspaces, and Python runner stay on the PC behind `lc serve`.
 
 ```bash
-whiteboard serve --lan          # daemon (prints Host / Port / 6-digit Code)
+lc serve --lan          # daemon (prints Host / Port / 6-digit Code)
 cd app && npm install && npm run tauri dev
 # Android APK: cd app && npm run android:apk
 ```
@@ -160,14 +160,14 @@ Browser-over-LAN, spacedesk, and Android build details → [`app/README.md`](app
 
 | Command | Purpose |
 | --- | --- |
-| `whiteboard` / `whiteboard tui` | Interactive practice UI |
+| `lc` / `lc tui` | Interactive practice UI |
 | `whiteboard index [--rebuild] [--dataset S]` | Build or refresh the SQLite index |
 | `whiteboard datasets [--inspect]` | Problem sets and indexed counts; `--inspect` reports corpus columns |
 | `whiteboard search` / `whiteboard random` | Filter or pick (`--dataset`, `--difficulty`, `--tag`, `-q`, `--sort`) |
 | `whiteboard load <id> [--open] [--force]` | Generate a workspace; id = slug, question #, or prefix |
 | `whiteboard test [id] [--case N] [--full] [-v]` | Run Python tests — exits `0` when every case passes |
 | `whiteboard ask [id] [--case N] [--provider local\|groq]` | LLM debugging help |
-| `whiteboard serve [--port N] [--lan]` | Daemon for the whiteboard client |
+| `lc serve [--port N] [--lan]` | Daemon for the whiteboard client |
 | `whiteboard stats` · `whiteboard session reset` · `whiteboard list …` | Progress, session, named lists |
 | `whiteboard config set/get/show/path` | Manage `config.toml` |
 

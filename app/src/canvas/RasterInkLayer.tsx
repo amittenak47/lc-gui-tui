@@ -249,7 +249,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      */
     const rawPointRef = useRef<ScenePoint | null>(null);
     /**
-     * Raw stamps for the open pen stroke when **While you write** is on.
+     * Raw stamps for the open pen stroke when **While Writing** is on.
      *
      * Display points are a reshape of this buffer (`smoothInkPoints`) every
      * paint, so earlier bends can tidy while the tip still tracks the pen.

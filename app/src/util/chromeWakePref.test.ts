@@ -2,9 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   chromeWakeMarkerLabel,
+  chromeWakeTintLabel,
   isChromeWakeMarker,
+  isChromeWakeTint,
   loadChromeWakeMarker,
+  loadChromeWakeTint,
   saveChromeWakeMarker,
+  saveChromeWakeTint,
 } from "./chromeWakePref";
 
 beforeEach(() => {
@@ -46,5 +50,34 @@ describe("chrome wake marker", () => {
     expect(chromeWakeMarkerLabel("smear")).toBe("Grey smear");
     expect(chromeWakeMarkerLabel("pulse")).toBe("Checkerboard pulse");
     expect(chromeWakeMarkerLabel("off")).toBe("Hidden");
+  });
+});
+
+describe("chrome wake tint", () => {
+  it("defaults to black and white", () => {
+    expect(loadChromeWakeTint()).toBe("mono");
+  });
+
+  it("round-trips both tints", () => {
+    saveChromeWakeTint("color");
+    expect(loadChromeWakeTint()).toBe("color");
+    saveChromeWakeTint("mono");
+    expect(loadChromeWakeTint()).toBe("mono");
+  });
+
+  it("falls back when the stored value is not one we know", () => {
+    localStorage.setItem("whiteboard.chromeWakeTint.v1", "rainbow");
+    expect(loadChromeWakeTint()).toBe("mono");
+  });
+
+  it("rejects a stored value that is not a tint", () => {
+    expect(isChromeWakeTint("color")).toBe(true);
+    expect(isChromeWakeTint("smear")).toBe(false);
+    expect(isChromeWakeTint(null)).toBe(false);
+  });
+
+  it("names each tint for Settings", () => {
+    expect(chromeWakeTintLabel("mono")).toBe("Black and white");
+    expect(chromeWakeTintLabel("color")).toBe("Gradient pulse");
   });
 });

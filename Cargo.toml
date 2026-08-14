@@ -5,6 +5,10 @@ edition = "2021"
 description = "LeetCode practice harness: index a local JSON corpus, materialize Python workspaces, run tests, ask an LLM tutor"
 license = "PolyForm-Noncommercial-1.0.0"
 
+[[bin]]
+name = "lc"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

@@ -434,10 +434,12 @@ export function wheelConfirmEnabled(args: {
 }
 
 /**
- * Tap OK off: apply once the inner wedge is a new pair.
+ * Tap OK off: inner wedge is ready to apply. Callers must apply on
+ * pointerup, not when `innerChosen` first becomes true — pointerdown starts
+ * hold-to-edit, and applying there closes the wheel before the fill can finish.
  *
  * Current tool is outer on open. Switching the tool ring pre-selects that
- * tool's last wedge; an inner tap (including the already-highlighted one)
+ * tool's last wedge; an inner press (including the already-highlighted one)
  * is what commits when Tap OK is off.
  */
 export function wheelAutoApply(args: {

@@ -1903,6 +1903,7 @@ input[type="checkbox"] {
 .lc-ink-wheel-wedge {
   stroke: rgb(0 0 0 / 22%);
   stroke-width: 1;
+  pointer-events: fill;
   cursor: pointer;
 }
 
@@ -2110,9 +2111,11 @@ input[type="checkbox"] {
   left: 50%;
   top: 8%;
   z-index: 98;
+  display: flex;
+  flex-direction: column;
   width: min(640px, calc(100vw - 24px));
   max-height: min(78vh, 720px);
-  overflow: auto;
+  overflow: hidden;
   transform: translateX(-50%);
   transform-origin: var(--lc-morph-x) var(--lc-morph-y);
   border: 1px solid var(--chrome-edge);
@@ -2133,9 +2136,25 @@ input[type="checkbox"] {
 .lc-preset-sheet-head {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--chrome-edge);
+}
+
+.lc-preset-sheet-back {
+  flex: 0 0 auto;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
 }
 
 .lc-preset-sheet-swatch {
@@ -2201,6 +2220,12 @@ input[type="checkbox"] {
   color: var(--accent) !important;
 }
 
+.lc-preset-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
 .lc-preset-sheet-morph {
   width: 100%;
 }
@@ -2211,12 +2236,12 @@ input[type="checkbox"] {
 }
 
 .lc-preset-sheet-strip {
-  padding: 8px 12px 0;
+  padding: 10px 16px 0;
 }
 
 .lc-preset-strip-canvas {
   width: 100%;
-  height: 56px;
+  height: 88px;
   border-radius: 8px;
   background: var(--paper, #fdf6e3);
 }
@@ -2245,7 +2270,7 @@ input[type="checkbox"] {
   flex-direction: row;
   flex-wrap: nowrap;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 8px;
 }
 
@@ -2262,7 +2287,8 @@ input[type="checkbox"] {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 10px 0 4px;
+  width: 100%;
+  padding: 4px 0 0;
   min-height: 148px;
 }
 
@@ -2273,6 +2299,7 @@ input[type="checkbox"] {
   min-width: 0;
 }
 
+.lc-preset-sheet-side > .lc-preset-sheet-field:first-child .lc-settings-subhead,
 .lc-preset-sheet-physics > .lc-preset-sheet-field:first-child .lc-settings-subhead {
   margin-top: 0;
 }
@@ -2291,7 +2318,22 @@ input[type="checkbox"] {
   margin: 0;
 }
 
-.lc-preset-sheet-physics .lc-settings-choice-compact .lc-settings-choice-option {
+.lc-preset-sheet-cols .lc-settings-choice-compact:not(.lc-settings-choice-quad) {
+  flex-wrap: nowrap;
+  align-items: stretch;
+  width: 100%;
+}
+
+.lc-preset-sheet-cols .lc-settings-choice-compact:not(.lc-settings-choice-quad) .lc-settings-choice-option {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+
+.lc-preset-sheet-physics .lc-settings-choice-quad .lc-settings-choice-option {
   flex: 1 1 calc(25% - 6px);
   min-width: 3.25rem;
   max-width: calc(25% - 6px);
@@ -2668,9 +2710,12 @@ input[type="checkbox"] {
 .lc-color-radial-embedded {
   width: 148px;
   height: 148px;
+  max-width: 148px;
+  margin: 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .lc-color-wheel-embedded {
@@ -3529,8 +3574,83 @@ input[type="checkbox"] {
   filter: none;
 }
 
+/*
+ * Annotate / scroll wake — same mark as the eye, parked on the left toggle's
+ * footprint. Relative so the left column keeps a size; the eye wake is
+ * absolute over the right stack.
+ */
+.lc-chrome-wake-annotate {
+  position: relative;
+  inset: auto;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+}
+
+.lc-chrome-wake-annotate .lc-chrome-wake-ghost {
+  left: 50%;
+  bottom: auto;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+@keyframes lc-wake-gradient {
+  0%,
+  100% {
+    background-position: 0% 50%;
+    opacity: 0.32;
+  }
+  50% {
+    background-position: 100% 50%;
+    opacity: 0.55;
+  }
+}
+
+@keyframes lc-wake-hue {
+  from {
+    filter: hue-rotate(0deg);
+  }
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+
+/*
+ * Gradient pulse tint — Settings option. Recolors the grey smear and the
+ * black-and-white checkerboard; `off` stays empty.
+ */
+.lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off) .lc-chrome-wake-ghost {
+  color: rgb(255 255 255 / 90%);
+  background-image: linear-gradient(
+    125deg,
+    #a78bfa,
+    #22d3ee,
+    #f472b6,
+    #34d399,
+    #a78bfa
+  );
+  background-size: 280% 280%;
+  border-radius: 6px;
+  animation: lc-wake-gradient 2.4s ease-in-out infinite;
+}
+
+.lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off):hover .lc-chrome-wake-ghost,
+.lc-chrome-wake.is-tint:not(.is-pulse):not(.is-off):focus-visible .lc-chrome-wake-ghost {
+  filter: blur(1.4px);
+  opacity: 0.7;
+}
+
+.lc-chrome-wake.is-pulse.is-tint .lc-chrome-wake-ghost {
+  background-image: repeating-conic-gradient(#a78bfa 0 90deg, #22d3ee 0 180deg);
+  animation:
+    lc-hub-pixel 420ms steps(4) infinite,
+    lc-wake-hue 3.2s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .lc-chrome-wake.is-pulse .lc-chrome-wake-ghost {
+  .lc-chrome-wake.is-pulse .lc-chrome-wake-ghost,
+  .lc-chrome-wake.is-tint .lc-chrome-wake-ghost {
     animation: none;
   }
 }
@@ -6268,6 +6388,14 @@ button.lc-row-selected:hover:not(:disabled) {
   min-width: 0;
 }
 
+.lc-settings-head-save {
+  flex: 0 0 auto;
+  min-height: 32px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
 .lc-settings-back {
   flex: 0 0 auto;
   min-height: 32px;
@@ -6299,6 +6427,10 @@ button.lc-row-selected:hover:not(:disabled) {
   flex-direction: column;
   gap: 12px;
   padding: 12px 20px 20px;
+}
+
+.lc-settings-sub-error {
+  margin: 0 20px 0;
 }
 
 .lc-settings-body {
@@ -7578,7 +7710,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-brand {
-  display: none;
+  flex-shrink: 0;
 }
 
 .lc-mobile .lc-header-center {
@@ -7595,10 +7727,6 @@ button.lc-row-selected:hover:not(:disabled) {
 /* On a problem, the board already shows the title — drop the duplicate in the
    header so Run / Submit / Coach aren't crushed into the pairing URL. */
 .lc-mobile.lc-app-problem .lc-current {
-  display: none;
-}
-
-.lc-mobile.lc-app-problem .lc-pairing {
   display: none;
 }
 

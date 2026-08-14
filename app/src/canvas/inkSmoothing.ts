@@ -6,10 +6,10 @@
  * meant to draw. Smoothing drops the samples that carry no shape, then rounds
  * off what is left.
  *
- * **On the lift:** run once at commit. Ink stays under the nib while writing;
+ * **On Lift:** run once at commit. Ink stays under the nib while writing;
  * the settle is barely visible at default strength.
  *
- * **While you write:** re-run on the open stroke's raw stamps every paint so
+ * **While Writing:** re-run on the open stroke's raw stamps every paint so
  * earlier bends tidy before the pen lifts. Endpoints stay fixed, so the tip
  * still tracks the pen — only the path behind it moves.
  *
@@ -31,7 +31,7 @@ export const INK_SMOOTHING_MODE_DEFAULT: InkSmoothingMode = "lift";
 /**
  * Causal tip-lag helpers (time-constant EMA + spatial clamp).
  *
- * Kept for tests and experiments. The board's **While you write** mode does
+ * Kept for tests and experiments. The board's **While Writing** mode does
  * not use these — it reshapes the open stroke with {@link smoothInkPoints}
  * instead, so earlier letters tidy without the ink trailing the hand.
  */

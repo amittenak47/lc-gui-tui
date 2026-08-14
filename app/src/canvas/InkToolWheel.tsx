@@ -62,6 +62,42 @@ function buildSlices(count: number, handedness: InkHandedness) {
   });
 }
 
+function angleInWedge(a: number, start: number, end: number): boolean {
+  const tau = Math.PI * 2;
+  let x = a;
+  while (x < start) x += tau;
+  while (x >= start + tau) x -= tau;
+  return x < end;
+}
+
+/** SVG-local coords, origin at wheel center, y down. Matches `polar()`. */
+function innerWedgeIndexAt(
+  lx: number,
+  ly: number,
+  slices: Array<{ start: number; end: number }>,
+): number | null {
+  const r = Math.hypot(lx, ly);
+  if (r < INNER_INNER - 1 || r > INNER_OUTER + 1) return null;
+  const a = Math.atan2(lx, -ly);
+  for (let i = 0; i < slices.length; i++) {
+    if (angleInWedge(a, slices[i].start, slices[i].end)) return i;
+  }
+  return null;
+}
+
+function localFromSvgPointer(event: React.PointerEvent<SVGElement>): { lx: number; ly: number } | null {
+  const svg =
+    event.currentTarget.ownerSVGElement ??
+    (event.currentTarget as SVGSVGElement);
+  const rect = svg.getBoundingClientRect();
+  if (rect.width === 0) return null;
+  const scale = (WHEEL_R * 2) / rect.width;
+  return {
+    lx: (event.clientX - (rect.left + rect.width / 2)) * scale,
+    ly: (event.clientY - (rect.top + rect.height / 2)) * scale,
+  };
+}
+
 function wedgeFill(kind: InkPresetKind, snap: InkWedgeSnapshot | null): string {
   if (!snap) return "transparent";
   if (kind === "eraser" && isEraserWedge(snap)) return eraserWedgeFill(snap.eraserWidth);
@@ -144,6 +180,8 @@ export interface InkToolWheelProps {
   onClose: () => void;
   onConfirm: (kind: InkPresetKind, wedge: number) => void;
   onEdit: (kind: InkPresetKind, wedge: number, from: DOMRect) => void;
+  /** Editor is up — keep the dial mounted but ignore Escape / backdrop. */
+  locked?: boolean;
 }
 
 export function InkToolWheel({
@@ -155,6 +193,7 @@ export function InkToolWheel({
   onClose,
   onConfirm,
   onEdit,
+  locked = false,
 }: InkToolWheelProps) {
   const [closing, setClosing] = useState(false);
   const [selectedKind, setSelectedKind] = useState<InkPresetKind | null>(liveKind);
@@ -174,6 +213,10 @@ export function InkToolWheel({
   const holdFromRef = useRef<DOMRect | null>(null);
   const confirmedHoldRef = useRef(false);
   const appliedRef = useRef(false);
+  const pressedWedgeRef = useRef<number | null>(null);
+  const tapOkRef = useRef(store.tapOk);
+  tapOkRef.current = store.tapOk;
+  const outerDoneRef = useRef(true);
   const onConfirmRef = useRef(onConfirm);
   onConfirmRef.current = onConfirm;
   const onEditRef = useRef(onEdit);
@@ -236,12 +279,14 @@ export function InkToolWheel({
       setClosing(false);
       setArmed(false);
       appliedRef.current = false;
+      pressedWedgeRef.current = null;
       stopHold({ confirm: false });
       return;
     }
     openKindRef.current = liveKind;
     openWedgeRef.current = store.lastWedge[liveKind];
     appliedRef.current = false;
+    pressedWedgeRef.current = null;
     setSelectedKind(liveKind);
     setSelectedWedge(store.lastWedge[liveKind]);
     setOuterDone(true);
@@ -264,13 +309,13 @@ export function InkToolWheel({
   }, [onClose, stopHold]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || locked) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, close]);
+  }, [open, locked, close]);
 
   const [placed, setPlaced] = useState(() =>
     anchor === "canvas"
@@ -309,16 +354,8 @@ export function InkToolWheel({
   const wedgeSlices = useMemo(() => buildSlices(6, handedness), [handedness]);
 
   const kind = selectedKind ?? liveKind;
+  outerDoneRef.current = outerDone;
   const canConfirm = wheelConfirmEnabled({
-    openKind: openKindRef.current,
-    openWedge: openWedgeRef.current,
-    selectedKind,
-    selectedWedge,
-    innerChosen,
-  });
-  const autoApply = wheelAutoApply({
-    tapOk: store.tapOk,
-    outerDone,
     openKind: openKindRef.current,
     openWedge: openWedgeRef.current,
     selectedKind,
@@ -331,17 +368,10 @@ export function InkToolWheel({
   const hubFill = wedgeFill(kind, hubSnap);
   const cardSide = specCardSide(placed.x, WHEEL_R, CARD_W, window.innerWidth, VIEW_PAD);
 
-  useEffect(() => {
-    if (!open || !autoApply || appliedRef.current) return;
-    if (selectedKind == null || selectedWedge == null) return;
-    appliedRef.current = true;
-    onConfirmRef.current(selectedKind, selectedWedge);
-  }, [open, autoApply, selectedKind, selectedWedge]);
-
   if (!open && !closing) return null;
 
   const onBackdrop = (event: React.PointerEvent) => {
-    if (!armed) return;
+    if (locked || !armed) return;
     const node = rootRef.current;
     if (node && event.target instanceof Node && node.contains(event.target)) return;
     close();
@@ -430,24 +460,57 @@ export function InkToolWheel({
                   onPointerDown={(event) => {
                     event.stopPropagation();
                     if (!armed) return;
+                    const local = localFromSvgPointer(event);
+                    const hit =
+                      local != null
+                        ? innerWedgeIndexAt(local.lx, local.ly, wedgeSlices)
+                        : null;
+                    const useIndex = hit ?? index;
+                    const useSnap = wedgeAt(store, kind, useIndex);
                     try {
                       event.currentTarget.setPointerCapture(event.pointerId);
                     } catch {
                       /* already captured */
                     }
-                    if (snap) {
+                    pressedWedgeRef.current = useIndex;
+                    if (useSnap) {
                       setSelectedKind(kind);
-                      setSelectedWedge(index);
+                      setSelectedWedge(useIndex);
                       setInnerChosen(true);
                     }
-                    setLinger(index);
+                    setLinger(useIndex);
                     holdFromRef.current = event.currentTarget.getBoundingClientRect();
-                    startHold(index);
+                    startHold(useIndex);
                   }}
-                  onPointerUp={() => {
-                    if (!confirmedHoldRef.current) stopHold({ confirm: false });
+                  onPointerUp={(event) => {
+                    event.stopPropagation();
+                    const useIndex = pressedWedgeRef.current ?? index;
+                    pressedWedgeRef.current = null;
+                    const held = confirmedHoldRef.current;
+                    if (!held) stopHold({ confirm: false });
+                    if (held || appliedRef.current) return;
+                    const useSnap = wedgeAt(store, kindRef.current, useIndex);
+                    if (!useSnap) return;
+                    if (
+                      !wheelAutoApply({
+                        tapOk: tapOkRef.current,
+                        outerDone: outerDoneRef.current,
+                        openKind: openKindRef.current,
+                        openWedge: openWedgeRef.current,
+                        selectedKind: kindRef.current,
+                        selectedWedge: useIndex,
+                        innerChosen: true,
+                      })
+                    ) {
+                      return;
+                    }
+                    appliedRef.current = true;
+                    onConfirmRef.current(kindRef.current, useIndex);
                   }}
-                  onPointerCancel={() => stopHold({ confirm: false })}
+                  onPointerCancel={() => {
+                    pressedWedgeRef.current = null;
+                    stopHold({ confirm: false });
+                  }}
                 />
                 {holding && fillT > 0 && (
                   <path

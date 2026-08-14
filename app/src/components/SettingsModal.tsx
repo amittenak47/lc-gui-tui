@@ -40,9 +40,13 @@ import {
 import {
   CHROME_WAKE_EVENT,
   chromeWakeMarkerLabel,
+  chromeWakeTintLabel,
   loadChromeWakeMarker,
+  loadChromeWakeTint,
   saveChromeWakeMarker,
+  saveChromeWakeTint,
   type ChromeWakeMarker,
+  type ChromeWakeTint,
 } from "../util/chromeWakePref";
 import {
   loadInkSpeed,
@@ -300,6 +304,8 @@ interface DevicePrefs {
   tapOk: boolean;
   /** Hidden-chrome wake mark: smear, checkerboard pulse, or nothing. */
   chromeWake: ChromeWakeMarker;
+  /** Recolor smear + checkerboard with a cycling gradient, or leave them mono. */
+  chromeWakeTint: ChromeWakeTint;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -323,6 +329,7 @@ function loadDevicePrefs(): DevicePrefs {
     colorWheelOnToolbar: loadInkToolPresets().colorWheelOnToolbar,
     tapOk: loadInkToolPresets().tapOk,
     chromeWake: loadChromeWakeMarker(),
+    chromeWakeTint: loadChromeWakeTint(),
   };
 }
 
@@ -346,7 +353,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.paletteTag === b.paletteTag &&
     a.colorWheelOnToolbar === b.colorWheelOnToolbar &&
     a.tapOk === b.tapOk &&
-    a.chromeWake === b.chromeWake
+    a.chromeWake === b.chromeWake &&
+    a.chromeWakeTint === b.chromeWakeTint
   );
 }
 
@@ -409,6 +417,9 @@ export function SettingsModal({
   const [tapOk, setTapOk] = useState(() => loadInkToolPresets().tapOk);
   const [chromeWake, setChromeWake] = useState<ChromeWakeMarker>(() =>
     loadChromeWakeMarker(),
+  );
+  const [chromeWakeTint, setChromeWakeTint] = useState<ChromeWakeTint>(() =>
+    loadChromeWakeTint(),
   );
   const [forwardFailures, setForwardFailures] = useState<boolean>(() =>
     loadForwardFailures(),
@@ -554,6 +565,7 @@ export function SettingsModal({
     setColorWheelOnToolbar(prefs.colorWheelOnToolbar);
     setTapOk(prefs.tapOk);
     setChromeWake(prefs.chromeWake);
+    setChromeWakeTint(prefs.chromeWakeTint);
     setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     setPage("root");
@@ -631,6 +643,7 @@ export function SettingsModal({
     colorWheelOnToolbar,
     tapOk,
     chromeWake,
+    chromeWakeTint,
   };
   const dirty =
     !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
@@ -647,9 +660,10 @@ export function SettingsModal({
   /** How long Save waits on PUT /config before surfacing an error. */
   const CONFIG_SAVE_TIMEOUT_MS = 30_000;
 
-  const save = async () => {
+  const save = async (opts?: { close?: boolean }) => {
+    const shouldClose = opts?.close !== false;
     if (!dirty) {
-      onClose();
+      if (shouldClose) onClose();
       return;
     }
     setSaving(true);
@@ -681,6 +695,7 @@ export function SettingsModal({
           tapOk,
         });
         saveChromeWakeMarker(chromeWake);
+        saveChromeWakeTint(chromeWakeTint);
         setBaselinePrefs(draftPrefs);
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
@@ -705,7 +720,7 @@ export function SettingsModal({
         setBaselineConfig(saved);
       }
       onSaved?.();
-      onClose();
+      if (shouldClose) onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -766,6 +781,14 @@ export function SettingsModal({
                 Back
               </button>
               <h2>{pageTitle}</h2>
+              <button
+                type="button"
+                className="lc-primary lc-settings-head-save"
+                disabled={!dirty || saving}
+                onClick={() => void save({ close: false })}
+              >
+                {saving ? "Saving…" : "Save"}
+              </button>
             </div>
           )}
         </div>
@@ -1006,6 +1029,46 @@ export function SettingsModal({
                 ))}
               </div>
 
+              <div className="lc-settings-subhead">Marker colour</div>
+              <p className="lc-settings-hint">
+                Black and white is the current grey smear and checkerboard. Gradient
+                pulse recolors both with a cycling colour, not black and white.
+              </p>
+              <div
+                className="lc-settings-choice"
+                role="radiogroup"
+                aria-label="Hidden-controls marker colour"
+              >
+                {(
+                  [
+                    [
+                      "mono",
+                      "Grey smear and black-and-white checkerboard — the current marks.",
+                    ],
+                    [
+                      "color",
+                      "A cycling colour gradient on the smear and the checkerboard, not black and white.",
+                    ],
+                  ] as Array<[ChromeWakeTint, string]>
+                ).map(([tint, blurb]) => (
+                  <button
+                    key={tint}
+                    type="button"
+                    role="radio"
+                    aria-checked={chromeWakeTint === tint}
+                    className={
+                      chromeWakeTint === tint
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setChromeWakeTint(tint)}
+                  >
+                    <strong>{chromeWakeTintLabel(tint)}</strong>
+                    <span className="lc-muted">{blurb}</span>
+                  </button>
+                ))}
+              </div>
+
               <div className="lc-settings-subhead">Photo settings</div>
               <p className="lc-settings-hint">
                 What happens when you capture the board — entire or a region. Files are
@@ -1182,8 +1245,9 @@ export function SettingsModal({
               </p>
               <div className="lc-settings-subhead">Tap OK</div>
               <p className="lc-settings-hint">
-                Confirm the pair at the hub. Off applies as soon as you pick the
-                inner wedge — outer tool first, then a colour. The tool you already
+                Confirm the pair at the hub. Off applies when you release the
+                inner wedge — outer tool first, then a colour. Hold until the
+                wedge fills to edit, same as when OK is on. The tool you already
                 have counts as the outer pick. Switching tools clears the colour;
                 switching back is still the outer step. Saved on this device only.
               </p>
@@ -1731,13 +1795,16 @@ export function SettingsModal({
             type="button"
             className="lc-primary"
             disabled={!dirty || saving}
-            onClick={() => void save()}
+            onClick={() => void save({ close: true })}
           >
             {saving ? "Saving…" : "Save"}
           </button>
         </div>
         </div>
         <div data-morph-id="sub">
+          {error && (
+            <div className="lc-warning lc-settings-sub-error">{error}</div>
+          )}
           <div className="lc-settings-page lc-settings-fields" ref={setSubHost} />
         </div>
         </MorphBar>

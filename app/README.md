@@ -5,11 +5,11 @@ watches, grills you, and points at the specific test case your approach breaks
 on.
 
 The canvas runs on the tablet. The corpus, the workspaces, and the Python test
-runner stay on the PC, behind `whiteboard serve`.
+runner stay on the PC, behind `lc serve`.
 
 ```
 ┌─ XPPen Magic Note Pad (Android 14) ─┐        ┌─ PC / Mac ────────────────────┐
-│  Tauri v2 app (this directory)       │        │  whiteboard serve (axum)      │
+│  Tauri v2 app (this directory)       │        │  lc serve (axum)              │
 │   • Excalidraw canvas                │  HTTP  │   • index.rs   (SQLite corpus)│
 │   • ML Kit ink→text (Kotlin plugin)  │◄──────►│   • generator.rs (workspaces) │
 │   • viz renderer + frame scrubber    │   WS   │   • runner.rs  (python tests) │
@@ -231,7 +231,7 @@ needs are scripted rather than hand-applied — `npm run android:overlay` (which
 every android script runs first) copies
 `src-tauri/android-overlay/network_security_config.xml` into the project's
 `res/xml/` and points the manifest's `<application>` at it. Android 9+ blocks
-cleartext HTTP and `whiteboard serve` speaks plain HTTP on the LAN; without this the app
+cleartext HTTP and `lc serve` speaks plain HTTP on the LAN; without this the app
 looks like it simply cannot see the PC. The script is idempotent, so re-run it
 after any `init`/regeneration.
 
