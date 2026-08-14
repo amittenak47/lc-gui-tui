@@ -14,26 +14,32 @@ export const HOLD_SENSITIVE_MS = 666;
 /**
  * Canvas dwell before the ink-tool wheel opens.
  *
- * Rest = pointer down, staying on the spot ({@link WHEEL_HOLD_SLOP_PX} of
- * jitter). Writing = a directed stroke: displacement past that radius, or
- * cumulative path {@link WHEEL_HOLD_PATH_PX} even if the nib has not left
- * the circle. Own constant — do not reuse {@link HOLD_SENSITIVE_MS}.
+ * Rest = down on one spot: no moves, or a zig-zag whose *net* stays inside
+ * {@link WHEEL_HOLD_SLOP_PX}. Writing = a directed stroke (raw net / path,
+ * no interpolation — there are too few samples in {@link WHEEL_OPEN_MS} to
+ * fit a curve). Own constant — do not reuse {@link HOLD_SENSITIVE_MS}.
  */
 export const WHEEL_OPEN_MS = 280;
 
 /**
- * Rest radius from the down-spot. Contact noise is 1–3 CSS px; anything
- * larger is the start of a stroke, not a dwell.
+ * Same-spot radius. A rest is that point, or jitter folding back into this
+ * circle. Net past this is either a stroke or a coalesced jump.
  */
 export const WHEEL_HOLD_SLOP_PX = 4;
 
 /**
- * Cumulative path inside the rest circle that still counts as writing.
+ * One sample this far from down is a stroke even with no second point.
  *
- * A letter can wander without ever sitting 4px from origin. Jitter wiggles
- * in place and stays under this; a stroke does not.
+ * Below this, a single hop is bounce vs letter-start — wait for another
+ * sample or the dwell timer. Zig-zag never reaches this net.
  */
-export const WHEEL_HOLD_PATH_PX = 8;
+export const WHEEL_HOLD_CLEAR_PX = 12;
+
+/**
+ * net / path on the raw polyline. A letter start is ~1. Jitter folds
+ * back (low). Needs two move samples; one hop uses {@link WHEEL_HOLD_CLEAR_PX}.
+ */
+export const WHEEL_HOLD_STRAIGHTNESS = 0.6;
 
 /** Long-press to open a secondary menu (scratchpad load, coach message). */
 export const LONG_PRESS_MS = 580;

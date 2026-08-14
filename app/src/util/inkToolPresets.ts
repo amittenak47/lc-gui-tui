@@ -19,8 +19,9 @@ import {
   saveEraserPartial,
 } from "./eraserPartialPref";
 import {
-  WHEEL_HOLD_PATH_PX,
+  WHEEL_HOLD_CLEAR_PX,
   WHEEL_HOLD_SLOP_PX,
+  WHEEL_HOLD_STRAIGHTNESS,
   WHEEL_OPEN_MS,
 } from "./gesture";
 import {
@@ -460,15 +461,34 @@ export function specCardSide(
   return anchorX + wheelR + cardW < viewW - pad ? "right" : "left";
 }
 
+/**
+ * Raw samples only — no smoothing. One hop in the slop–clear band cannot
+ * tell bounce from a letter start; two hops with net/path high can.
+ * Clear applies only to a single coalesced jump (zig-zag has moves ≥ 2).
+ */
+export function wheelHoldIsStroke(
+  netPx: number,
+  pathPx: number,
+  moves = 0,
+  slopPx = WHEEL_HOLD_SLOP_PX,
+  clearPx = WHEEL_HOLD_CLEAR_PX,
+  straightness = WHEEL_HOLD_STRAIGHTNESS,
+): boolean {
+  if (netPx <= slopPx) return false;
+  if (moves < 2) return netPx >= clearPx;
+  const path = Math.max(pathPx, netPx);
+  return netPx / path >= straightness;
+}
+
 export function wheelHoldOutcome(
   movedPx: number,
   elapsedMs: number,
   pathPx = 0,
+  moves = 0,
   slopPx = WHEEL_HOLD_SLOP_PX,
   holdMs = WHEEL_OPEN_MS,
-  pathSlopPx = WHEEL_HOLD_PATH_PX,
 ): "pending" | "ink" | "wheel" {
-  if (movedPx > slopPx || pathPx > pathSlopPx) return "ink";
+  if (wheelHoldIsStroke(movedPx, pathPx, moves, slopPx)) return "ink";
   if (elapsedMs >= holdMs) return "wheel";
   return "pending";
 }
