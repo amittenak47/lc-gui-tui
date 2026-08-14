@@ -173,6 +173,18 @@ export interface RasterInkLayerProps {
   getPageFrames?: () => readonly PageFrame[];
   onChange?: () => void;
   /**
+   * Straight pen lift: turn the chord into an Excalidraw line (midpoint bend
+   * handle) instead of a raster stroke. Return true to skip the ink commit.
+   * Highlighter chords stay raster.
+   */
+  onStraightLine?: (stroke: {
+    start: ScenePoint;
+    end: ScenePoint;
+    color: string;
+    width: number;
+    opacity: number;
+  }) => boolean;
+  /**
    * Stylus barrel / eraser tip: toggle pen↔eraser. Return true if handled so
    * the stroke is not started.
    */
@@ -216,6 +228,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       onStylusAccessory,
       wheelHoldEnabled = false,
       onWheelHold,
+      onStraightLine,
     },
     ref,
   ) {
@@ -389,6 +402,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     wheelHoldEnabledRef.current = wheelHoldEnabled;
     const onWheelHoldRef = useRef(onWheelHold);
     onWheelHoldRef.current = onWheelHold;
+    const onStraightLineRef = useRef(onStraightLine);
+    onStraightLineRef.current = onStraightLine;
     const pendingHoldRef = useRef<{
       pointerId: number;
       down: PointerEvent;
@@ -1049,6 +1064,34 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               return { ...live, points: pts };
             })()
           : live;
+
+      if (
+        committed.kind === "draw" &&
+        !committed.highlight &&
+        straight &&
+        committed.points.length >= 2
+      ) {
+        const start = committed.points[0]!;
+        const end = committed.points[committed.points.length - 1]!;
+        const taken = onStraightLineRef.current?.({
+          start,
+          end,
+          color: committed.color,
+          width: inkLineWidth(committed.baseWidth, 0, false),
+          opacity: committed.maxFullness,
+        });
+        if (taken) {
+          liveRef.current = null;
+          liveRawPointsRef.current = null;
+          liveDrawnIndexRef.current = 0;
+          lastPointRef.current = null;
+          rawPointRef.current = null;
+          strokeHostRef.current = null;
+          repaint();
+          onChange?.();
+          return;
+        }
+      }
 
       const bound = bindStrokeHost(committed);
       const stamped = bookRef.current.commit(bound);

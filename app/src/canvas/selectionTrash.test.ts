@@ -4,6 +4,7 @@ import {
   isDeletableElement,
   selectionBounds,
   trashAnchor,
+  withLiveTrashEls,
   TRASH_GAP_PX,
   TRASH_SIZE_PX,
   type TrashEl,
@@ -118,6 +119,14 @@ describe("selectionBounds", () => {
 
   it("has nothing to say about an empty selection", () => {
     expect(selectionBounds([])).toBeNull();
+  });
+});
+
+describe("withLiveTrashEls", () => {
+  it("prefers the in-flight clone over the committed scene copy", () => {
+    const scene = el({ id: "arrow", x: 0, y: 0, points: [[0, 0], [40, 0]] });
+    const dragging = el({ id: "arrow", x: 80, y: 10, points: [[0, 0], [40, 20]] });
+    expect(withLiveTrashEls([scene], [dragging])).toEqual([dragging]);
   });
 });
 

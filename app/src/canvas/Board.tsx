@@ -168,6 +168,7 @@ import {
   isDeletableElement,
   selectionBounds,
   trashAnchor,
+  withLiveTrashEls,
   type TrashEl,
 } from "./selectionTrash";
 import {
@@ -733,6 +734,37 @@ const DRAWING_TOOLS = new Set<ToolName>([
   "arrow",
 ]);
 
+function isLinearElementType(type: string | undefined): boolean {
+  return type === "arrow" || type === "line";
+}
+
+/**
+ * Excalidraw paints the midpoint bend handle only while `selectedLinearElement`
+ * matches the selected arrow/line. `editingLinearElement` is the other field —
+ * that one is the tap-to-add-bends trap we keep closed.
+ */
+function linearEditorState(element: { id: string; elbowed?: boolean }) {
+  return {
+    elementId: element.id,
+    selectedPointsIndices: null,
+    isDragging: false,
+    lastUncommittedPoint: null,
+    pointerOffset: { x: 0, y: 0 },
+    startBindingElement: "keep" as const,
+    endBindingElement: "keep" as const,
+    hoverPointIndex: -1,
+    segmentMidPointHoveredCoords: null,
+    elbowed: Boolean(element.elbowed),
+    pointerDownState: {
+      prevSelectedPointsIndices: null,
+      lastClickedPoint: -1,
+      lastClickedIsEndPoint: false,
+      origin: null,
+      segmentMidpoint: { value: null, index: null, added: false },
+    },
+  };
+}
+
 const ZOOM_MIN = 0.15;
 const ZOOM_MAX = 1.75;
 const ZOOM_STEP = 1.15;
@@ -1191,10 +1223,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkBoldness, setInkBoldness] = useState(() => loadInkBoldness());
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
   const [stampTrash, setStampTrash] = useState<{
-    left: number;
-    top: number;
     ids: string[];
   } | null>(null);
+  const stampTrashNodeRef = useRef<HTMLButtonElement | null>(null);
+  const stampTrashPosRef = useRef<{ left: number; top: number } | null>(null);
+  const syncStampTrashRef = useRef<() => void>(() => {});
+  const attachStampTrash = useCallback((node: HTMLButtonElement | null) => {
+    stampTrashNodeRef.current = node;
+    const pos = stampTrashPosRef.current;
+    if (node && pos) {
+      node.style.left = `${pos.left}px`;
+      node.style.top = `${pos.top}px`;
+    }
+  }, []);
   /**
    * Markdown content slot — width is React state (rare); left/top/zoom are
    * written to the DOM node so a scroll frame does not re-render Board.
@@ -3191,6 +3232,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
     }
     pulseCameraMotionRef.current();
+    if (stampTrashPosRef.current) syncStampTrashRef.current();
 
     /*
      * Ride, or rebase.
@@ -3958,6 +4000,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       const live = api.getSceneElements() as Array<{
         id: string;
+        type?: string;
+        elbowed?: boolean;
         width?: number;
         height?: number;
         points?: readonly (readonly [number, number])[];
@@ -4000,6 +4044,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           editingLinearElement: null,
           selectedElementIds: selected,
           selectedGroupIds: {},
+          selectedLinearElement:
+            kept.length === 1 && isLinearElementType(kept[0]?.type)
+              ? linearEditorState({
+                  id: kept[0]!.id,
+                  elbowed: Boolean(kept[0]!.elbowed),
+                })
+              : null,
         },
         captureUpdate: CaptureUpdateAction.NEVER,
       });
@@ -4235,6 +4286,53 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return applyMetadata(converted as never, skeletons);
     },
     [],
+  );
+
+  const commitStraightLine = useCallback(
+    (stroke: {
+      start: { x: number; y: number };
+      end: { x: number; y: number };
+      color: string;
+      width: number;
+      opacity: number;
+    }) => {
+      const api = apiRef.current;
+      if (!api) return false;
+      const dx = stroke.end.x - stroke.start.x;
+      const dy = stroke.end.y - stroke.start.y;
+      if (Math.hypot(dx, dy) < 4) return false;
+      const pieces = convert([
+        {
+          type: "line",
+          x: stroke.start.x,
+          y: stroke.start.y,
+          points: [
+            [0, 0],
+            [dx, dy],
+          ],
+          strokeColor: stroke.color,
+          strokeWidth: Math.max(1, stroke.width),
+          roughness: 0,
+          opacity: Math.max(20, Math.min(100, Math.round(stroke.opacity * 100))),
+          roundness: null,
+        },
+      ]) as Array<{ id: string; elbowed?: boolean }>;
+      const line = pieces[0];
+      if (!line?.id) return false;
+      api.updateScene({
+        elements: [...(api.getSceneElements() as unknown[]), line],
+        appState: {
+          selectedElementIds: { [line.id]: true },
+          selectedGroupIds: {},
+          multiElement: null,
+          editingLinearElement: null,
+          selectedLinearElement: linearEditorState(line),
+        },
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+      return true;
+    },
+    [convert],
   );
 
   /**
@@ -6101,6 +6199,148 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
   }, [interactive, armReadingScroll]);
 
+  /**
+   * Place the selection trash from live geometry, not from the last committed
+   * scene snapshot.
+   *
+   * `handleSceneChange` skips most work when Excalidraw reuses the elements
+   * array or leaves `version` alone — which is what a move and a linear-point
+   * drag do until pointer-up. The trash used to live behind that skip, so it
+   * sat still until the gesture committed. This path reads `getSceneElements`
+   * plus in-flight clones (`draggingElement` / `resizingElement`) and writes
+   * left/top to the button node so a follow frame does not re-render Board.
+   */
+  const syncStampTrash = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) {
+      stampTrashPosRef.current = null;
+      setStampTrash((current) => (current ? null : current));
+      return;
+    }
+    const state = api.getAppState() as {
+      selectedElementIds?: Record<string, boolean>;
+      scrollX?: number;
+      scrollY?: number;
+      zoom?: { value?: number };
+      draggingElement?: TrashEl | null;
+      resizingElement?: TrashEl | null;
+      newElement?: TrashEl | null;
+    };
+    const selectedIds = new Set(
+      Object.entries(state.selectedElementIds ?? {})
+        .filter(([, on]) => on)
+        .map(([id]) => id),
+    );
+    const hide = () => {
+      stampTrashPosRef.current = null;
+      setStampTrash((current) => (current ? null : current));
+    };
+    if (selectedIds.size === 0) {
+      hide();
+      return;
+    }
+    const els = withLiveTrashEls(api.getSceneElements() as TrashEl[], [
+      state.draggingElement,
+      state.resizingElement,
+      state.newElement,
+    ]);
+    const selected = els.filter(
+      (el) => selectedIds.has(el.id) && !el.isDeleted && isDeletableElement(el),
+    );
+    if (selected.length === 0) {
+      hide();
+      return;
+    }
+    const groupIds = new Set(
+      selected
+        .map((el) => el.customData?.lcStampGroup)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const toDelete = els.filter((el) => {
+      if (el.isDeleted || !isDeletableElement(el)) return false;
+      if (selectedIds.has(el.id)) return true;
+      const g = el.customData?.lcStampGroup;
+      return Boolean(g && groupIds.has(g) && el.customData?.lcStamp);
+    });
+    const live = liveCameraRef.current;
+    const camera = live?.live
+      ? { scrollX: live.scrollX, scrollY: live.scrollY, zoom: live.zoom }
+      : {
+          scrollX: state.scrollX ?? 0,
+          scrollY: state.scrollY ?? 0,
+          zoom: state.zoom?.value ?? 1,
+        };
+    const board = boardRef.current;
+    const bounds = selectionBounds(toDelete);
+    const anchor = bounds
+      ? trashAnchor(bounds, camera, {
+          width: board?.clientWidth ?? window.innerWidth,
+          height: board?.clientHeight ?? window.innerHeight,
+        })
+      : null;
+    if (!anchor) {
+      hide();
+      return;
+    }
+    stampTrashPosRef.current = anchor;
+    const node = stampTrashNodeRef.current;
+    if (node) {
+      node.style.left = `${anchor.left}px`;
+      node.style.top = `${anchor.top}px`;
+    }
+    const ids = toDelete.map((el) => el.id);
+    setStampTrash((current) => {
+      if (
+        current &&
+        current.ids.length === ids.length &&
+        current.ids.every((id, i) => id === ids[i])
+      ) {
+        return current;
+      }
+      return { ids };
+    });
+  }, []);
+  syncStampTrashRef.current = syncStampTrash;
+
+  useEffect(() => {
+    if (!interactive) return;
+    const root = boardRef.current;
+    if (!root) return;
+    let tracking = false;
+    let raf = 0;
+    const tick = () => {
+      raf = 0;
+      syncStampTrashRef.current();
+    };
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(tick);
+    };
+    const onDown = () => {
+      tracking = true;
+    };
+    const onMove = () => {
+      if (!tracking) return;
+      schedule();
+    };
+    const onUp = () => {
+      if (!tracking) return;
+      tracking = false;
+      schedule();
+    };
+    root.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onUp, true);
+    return () => {
+      root.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onUp, true);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [interactive]);
+
   const handleSceneChange = useCallback(
     (
       _elements?: readonly unknown[],
@@ -6110,6 +6350,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         resizingElement?: { id?: string; type?: string } | null;
         newElement?: { type?: string } | null;
         selectedElementIds?: Record<string, boolean>;
+        selectedLinearElement?: { elementId?: string } | null;
       },
     ) => {
       const api = apiRef.current;
@@ -6134,6 +6375,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         layoutSyncingRef.current ||
         liveCameraRef.current?.live
       ) {
+        syncStampTrash();
         return;
       }
 
@@ -6177,6 +6419,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
       }
 
+      if (selectedIds.length === 1) {
+        const hit = (
+          api.getSceneElements() as Array<{
+            id: string;
+            type?: string;
+            elbowed?: boolean;
+            isDeleted?: boolean;
+          }>
+        ).find((candidate) => candidate.id === selectedIds[0] && !candidate.isDeleted);
+        if (
+          hit &&
+          isLinearElementType(hit.type) &&
+          appState?.selectedLinearElement?.elementId !== hit.id
+        ) {
+          api.updateScene({
+            appState: { selectedLinearElement: linearEditorState(hit) },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+          return;
+        }
+      }
+
       const editingId = appState?.editingTextElement?.id ?? null;
       const structuralUi =
         Boolean(appState?.isResizing) ||
@@ -6196,6 +6460,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         selectionSig === lastSelectionSigRef.current &&
         editingId === editingTextIdRef.current
       ) {
+        syncStampTrash();
         return;
       }
       if (_elements !== undefined) lastElementsArgRef.current = _elements;
@@ -6233,6 +6498,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         selectionSig === lastSelectionSigRef.current &&
         editingId === editingTextIdRef.current
       ) {
+        syncStampTrash();
         return;
       }
       lastSceneElementsRevRef.current = elementsRev;
@@ -6322,88 +6588,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // Anything drawn, pasted or restored since the last change joins the page
       // it landed on; everything else goes back under.
       syncPageVisibility();
-
-      /*
-       * Selection trash: a delete control at the top-right of whatever is
-       * selected.
-       *
-       * It used to appear only for library stamps, which meant a rectangle you
-       * drew yourself could be selected, moved and resized but not removed —
-       * there is no keyboard on the tablet this is written on, and nothing else
-       * on screen deletes. Any element the reader could have put there is
-       * deletable now; the page's own scaffolding is not.
-       */
-      {
-        const selectedIds = new Set(
-          Object.entries(appState?.selectedElementIds ?? {})
-            .filter(([, on]) => on)
-            .map(([id]) => id),
-        );
-        if (selectedIds.size === 0) {
-          setStampTrash((current) => (current ? null : current));
-        } else {
-          const els = api.getSceneElements() as TrashEl[];
-          const selected = els.filter(
-            (el) => selectedIds.has(el.id) && !el.isDeleted && isDeletableElement(el),
-          );
-          if (selected.length === 0) {
-            setStampTrash((current) => (current ? null : current));
-          } else {
-            // A stamp is drawn as several elements sharing a group id; deleting
-            // one has to take its siblings or half a stamp is left behind.
-            const groupIds = new Set(
-              selected
-                .map((el) => el.customData?.lcStampGroup)
-                .filter((id): id is string => Boolean(id)),
-            );
-            const toDelete = els.filter((el) => {
-              if (el.isDeleted || !isDeletableElement(el)) return false;
-              if (selectedIds.has(el.id)) return true;
-              const g = el.customData?.lcStampGroup;
-              return Boolean(g && groupIds.has(g) && el.customData?.lcStamp);
-            });
-            const state = api.getAppState() as {
-              scrollX?: number;
-              scrollY?: number;
-              zoom?: { value?: number };
-            };
-            const board = boardRef.current;
-            const bounds = selectionBounds(toDelete);
-            const anchor = bounds
-              ? trashAnchor(
-                  bounds,
-                  {
-                    scrollX: state.scrollX ?? 0,
-                    scrollY: state.scrollY ?? 0,
-                    zoom: state.zoom?.value ?? 1,
-                  },
-                  {
-                    width: board?.clientWidth ?? window.innerWidth,
-                    height: board?.clientHeight ?? window.innerHeight,
-                  },
-                )
-              : null;
-            const ids = toDelete.map((el) => el.id);
-            setStampTrash((current) => {
-              if (!anchor) return current ? null : current;
-              if (
-                current &&
-                current.left === anchor.left &&
-                current.top === anchor.top &&
-                current.ids.length === ids.length &&
-                current.ids.every((id, i) => id === ids[i])
-              ) {
-                return current;
-              }
-              return { left: anchor.left, top: anchor.top, ids };
-            });
-          }
-        }
-      }
+      syncStampTrash();
 
       onChange?.();
     },
-    [activeTool, applyRegionLayout, maybeGrowDrawFrame, onChange, reportCodeSlot, setTool, syncPageVisibility],
+    [
+      activeTool,
+      applyRegionLayout,
+      maybeGrowDrawFrame,
+      onChange,
+      reportCodeSlot,
+      setTool,
+      syncPageVisibility,
+      syncStampTrash,
+    ],
   );
 
   const handleInkChange = useCallback(() => {
@@ -7435,6 +7633,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         getPageFrames={getPageFrames}
         clip={inkClip}
         onChange={handleInkChange}
+        onStraightLine={commitStraightLine}
         onStylusAccessory={interactive ? handleStylusAccessory : undefined}
         wheelHoldEnabled={
           interactive && inkToolActive && !presetStore.wheelLocked
@@ -7681,9 +7880,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       {interactive && activeTool === "text" && <TextPlaceGhost ref={textPlaceGhostRef} />}
       {interactive && stampTrash && (
         <button
+          ref={attachStampTrash}
           type="button"
           className="lc-stamp-trash"
-          style={{ left: stampTrash.left, top: stampTrash.top }}
+          style={
+            stampTrashPosRef.current
+              ? {
+                  left: stampTrashPosRef.current.left,
+                  top: stampTrashPosRef.current.top,
+                }
+              : undefined
+          }
           aria-label="Delete selection"
           title="Delete"
           onPointerDown={(event) => event.stopPropagation()}

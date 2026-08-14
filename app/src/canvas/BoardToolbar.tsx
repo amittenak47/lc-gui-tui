@@ -9,9 +9,10 @@
  * write on every stroke end, competing with the ink layer for the same frames.
  * One island, one row, always the same height, is what is left.
  *
- * Everything that is not a tool hides behind a press: shapes fan out of one
- * button, colour fans out of one dot ({@link ColorRadial}), pen / highlighter /
- * eraser live on the ink wheel (hold the preset chip).
+ * Everything that is not a tool hides behind a press: the hex hold-cycles
+ * shapes / import photo / screencap, colour fans out of one dot
+ * ({@link ColorRadial}), pen / highlighter / eraser live on the ink wheel
+ * (hold the preset chip).
  *
  * Long-press the grip to undock and drag the island anywhere on the workspace;
  * drop near the bottom dock slot to snap it home with a short settle animation.
@@ -99,6 +100,20 @@ const SHAPE_TOOLS: Array<{ tool: ToolName; label: string; glyph: string }> = [
   { tool: "arrow", label: "Arrow", glyph: "↗" },
   { tool: "text", label: "Text box", glyph: "T" },
 ];
+
+/** Hold-to-fill on the hex cycles this slot; tap uses whatever is showing. */
+const SHAPE_SLOTS = ["shapes", "photos", "capture"] as const;
+type ShapeSlot = (typeof SHAPE_SLOTS)[number];
+
+const SHAPE_SLOT_GLYPH: Record<ShapeSlot, string> = {
+  shapes: "⬡",
+  photos: "🖼",
+  capture: "▣",
+};
+
+export function nextShapeSlot(slot: ShapeSlot): ShapeSlot {
+  return SHAPE_SLOTS[(SHAPE_SLOTS.indexOf(slot) + 1) % SHAPE_SLOTS.length]!;
+}
 
 export interface BoardToolbarProps {
   /**
@@ -211,12 +226,8 @@ export function BoardToolbar({
   // Ink nib / fullness / pressure live on presets. Text still has a size wheel.
   const showStrokeSizes = false;
   const [shapeMenuOpen, setShapeMenuOpen] = useState(false);
-  const [shapeFlyout, setShapeFlyout] = useState<"shapes" | "photos" | "capture">(
-    "shapes",
-  );
-  const [shapeMediaMode, setShapeMediaMode] = useState<"photos" | "capture">(
-    "photos",
-  );
+  const [shapeSlot, setShapeSlot] = useState<ShapeSlot>("shapes");
+  const [shapeFlyout, setShapeFlyout] = useState<"shapes" | "capture">("shapes");
   const [resetLocked, setResetLocked] = useState(true);
   const [configuring, setConfiguring] = useState<ShapeStamp | null>(null);
   const [mods, setMods] = useState<Record<string, ShapeModValue>>({});
@@ -590,13 +601,26 @@ export function BoardToolbar({
     active === "ellipse" ||
     active === "arrow" ||
     active === "text";
-  const shapesUiActive = shapeMenuOpen || shapeToolActive;
+  const shapesUiActive =
+    shapeMenuOpen || (shapeSlot === "shapes" && shapeToolActive);
 
-  const openShapeFlyout = (panel: "shapes" | "photos" | "capture") => {
+  const openShapeFlyout = (panel: "shapes" | "capture") => {
     if (shapesOpen) onToggleShapes();
     setShapeFlyout(panel);
     setShapeMenuOpen(true);
   };
+
+  const closeShapeMenus = () => {
+    if (shapesOpen) onToggleShapes();
+    setShapeMenuOpen(false);
+  };
+
+  const shapeHoldHint =
+    shapeSlot === "shapes"
+      ? "Shapes — tap for stamps · hold to switch to import photo"
+      : shapeSlot === "photos"
+        ? "Import photo — tap to pick · hold to switch to screencap"
+        : "Screencap — tap for entire board or region · hold to switch to shapes";
 
   const renderToolButton = (tool: ToolName, label: string, hint: string) => (
     <button
@@ -760,13 +784,15 @@ export function BoardToolbar({
 
         <div className="lc-shapes-wrap">
           <HoldButton
-            label="Shapes"
-            ariaLabel={
-              shapeFlyout === "capture"
-                ? "Shapes — hold to switch to import photos"
-                : "Shapes — hold to switch to screencap"
+            label={
+              shapeSlot === "shapes"
+                ? "Shapes"
+                : shapeSlot === "photos"
+                  ? "Import photo"
+                  : "Screencap"
             }
-            dataTip="Shapes — tap Square Circle Arrow · hold photos or capture"
+            ariaLabel={shapeHoldHint}
+            dataTip={shapeHoldHint}
             dataTipPlacement="bottom"
             className={[
               "lc-tool lc-tip-target lc-hold-icon",
@@ -775,6 +801,20 @@ export function BoardToolbar({
             pressed={shapesUiActive}
             holdMs={HOLD_MS}
             onTap={() => {
+              if (shapeSlot === "photos") {
+                closeShapeMenus();
+                onPickImage();
+                return;
+              }
+              if (shapeSlot === "capture") {
+                if (shapesOpen) onToggleShapes();
+                if (shapeMenuOpen && shapeFlyout === "capture") {
+                  setShapeMenuOpen(false);
+                  return;
+                }
+                openShapeFlyout("capture");
+                return;
+              }
               if (shapesOpen) onToggleShapes();
               if (shapeMenuOpen && shapeFlyout === "shapes") {
                 setShapeMenuOpen(false);
@@ -783,20 +823,13 @@ export function BoardToolbar({
               openShapeFlyout("shapes");
             }}
             onConfirm={() => {
-              if (shapesOpen) onToggleShapes();
-              const panel =
-                shapeMenuOpen &&
-                (shapeFlyout === "photos" || shapeFlyout === "capture")
-                  ? shapeFlyout === "photos"
-                    ? "capture"
-                    : "photos"
-                  : shapeMediaMode;
-              setShapeMediaMode(panel);
-              openShapeFlyout(panel);
+              const next = nextShapeSlot(shapeSlot);
+              setShapeSlot(next);
+              closeShapeMenus();
             }}
           >
             <span className="lc-tool-emoji" aria-hidden>
-              ⬡
+              {SHAPE_SLOT_GLYPH[shapeSlot]}
             </span>
           </HoldButton>
           {shapeMenuOpen && !shapesOpen && (
@@ -805,7 +838,7 @@ export function BoardToolbar({
               className="lc-shape-flyout"
               axis="height"
               role="menu"
-              aria-label="Shapes"
+              aria-label={shapeFlyout === "capture" ? "Screencap" : "Shapes"}
             >
               <div data-morph-id="shapes">
                 {SHAPE_TOOLS.map(({ tool, label, glyph }) => (
@@ -834,21 +867,6 @@ export function BoardToolbar({
                     ⊞
                   </span>
                   Data structures…
-                </button>
-              </div>
-              <div data-morph-id="photos">
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setShapeMenuOpen(false);
-                    onPickImage();
-                  }}
-                >
-                  <span className="lc-shape-flyout-glyph" aria-hidden>
-                    🖼
-                  </span>
-                  Import photo
                 </button>
               </div>
               <div data-morph-id="capture">

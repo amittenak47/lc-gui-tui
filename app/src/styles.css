@@ -1752,8 +1752,7 @@ input[type="checkbox"] {
   align-items: center;
   gap: 3px;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: visible;
+  overflow: visible;
   scrollbar-width: none;
 }
 
@@ -2365,12 +2364,12 @@ input[type="checkbox"] {
   }
 }
 
-/* Flyouts need to escape the scroller, so anchor them to the island instead. */
+/* Flyouts rise out of the hex, not the island centre. */
 .lc-hand-wrap,
 .lc-shapes-wrap,
 .lc-capture-wrap,
 .lc-color-wrap {
-  position: static;
+  position: relative;
   display: inline-flex;
   flex-shrink: 0;
 }
