@@ -1,6 +1,6 @@
-# lc whiteboard coach
+# Whiteboard
 
-Practice LeetCode by *whiteboarding*: sketch an approach by hand while a coach
+Practice LeetCode by *whiteboarding*: sketch an approach by hand while an agent
 watches, grills you, and points at the specific test case your approach breaks
 on.
 

@@ -196,7 +196,7 @@ export class AmbientCoach {
       try {
         frame = JSON.parse(event.data) as ServerFrame;
       } catch {
-        this.handlers.onError?.("unreadable frame from the coach");
+        this.handlers.onError?.("unreadable frame from the agent");
         return;
       }
       // A frame that names a request belongs to that chat turn and to nothing
@@ -204,10 +204,10 @@ export class AmbientCoach {
       if (this.routeRunFrame(frame)) return;
       this.handlers.onFrame(frame);
     };
-    socket.onerror = () => this.handlers.onError?.("the coach connection failed");
+    socket.onerror = () => this.handlers.onError?.("the agent connection failed");
     socket.onclose = () => {
       this.open = false;
-      this.failPending("the coach connection closed before it answered");
+      this.failPending("the agent connection closed before it answered");
       this.handlers.onClose?.();
     };
   }
@@ -263,7 +263,7 @@ export class AmbientCoach {
        */
       if (!this.send({ type: "run", request_id: requestId, action, payload })) {
         this.settle(requestId, (run) =>
-          run.reject(new Error("the request was too large to send to the coach")),
+          run.reject(new Error("the request was too large to send to the agent")),
         );
       }
     });
@@ -433,7 +433,7 @@ export class AmbientCoach {
     for (const requestId of this.pending.keys()) {
       this.send({ type: "cancel", request_id: requestId });
     }
-    this.failPending("the coach was stopped before it answered");
+    this.failPending("the agent was stopped before it answered");
     this.socket?.close();
     this.socket = null;
     this.open = false;
@@ -477,7 +477,7 @@ export class AmbientCoach {
       this.socket?.send(frame);
       return true;
     } catch {
-      this.handlers.onError?.("could not reach the coach");
+      this.handlers.onError?.("could not reach the agent");
       return false;
     }
   }
@@ -492,13 +492,13 @@ export class AmbientCoach {
  */
 function stallReason(run: PendingRun): string {
   if (!run.acked) {
-    return "the coach never picked up the request — it may be busy with another turn, or the board was too large to send";
+    return "the agent never picked up the request — it may be busy with another turn, or the board was too large to send";
   }
   const where = run.stage ? `during “${run.stage}”` : "mid-run";
   if (run.tool?.failed) {
-    return `the coach stopped answering ${where}, after ${run.tool.name} failed`;
+    return `the agent stopped answering ${where}, after ${run.tool.name} failed`;
   }
-  return `the coach stopped answering ${where} — nothing came back for two minutes`;
+  return `the agent stopped answering ${where} — nothing came back for two minutes`;
 }
 
 /** Older daemons reject `run`/`cancel` with a serde unknown-variant parse error. */

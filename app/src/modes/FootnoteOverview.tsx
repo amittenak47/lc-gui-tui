@@ -9,7 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import type { CoachChatMessage } from "./AgentSidePanel";
+import type { AgentChatMessage } from "./AgentSidePanel";
 import {
   freshNoteId,
   type DocFootnote,
@@ -36,7 +36,7 @@ export interface FootnoteOverviewProps {
   footnote: DocFootnote;
   number?: number;
   /** The turns of one saved thread — the card asks per thread, as it opens them. */
-  threadMessages: (rootId: string) => CoachChatMessage[];
+  threadMessages: (rootId: string) => AgentChatMessage[];
   onClose: () => void;
   onChange: (next: DocFootnote) => void;
   /** `null` starts a new thread; a rootId continues that one. */
@@ -56,7 +56,7 @@ type Task =
   | { kind: "note"; id: string | null }
   | { kind: "thread"; rootId: string | null }
   | { kind: "link"; index: number | null };
-function turnKind(role: CoachChatMessage["role"]): "user" | "assistant" | "system" | "app" {
+function turnKind(role: AgentChatMessage["role"]): "user" | "assistant" | "system" | "app" {
   if (role === "user" || role === "system" || role === "app") return role;
   return "assistant";
 }
@@ -510,23 +510,23 @@ export function FootnoteOverview({
                   </button>
                 )}
               </div>
-              <div className="lc-coach-messages lc-footnote-overview-thread" ref={transcriptRef}>
+              <div className="lc-agent-messages lc-footnote-overview-thread" ref={transcriptRef}>
                 {openThreadMessages.map((message) => (
                   <div
                     key={message.id}
-                    className={`lc-coach-turn lc-coach-turn-${turnKind(message.role)}`}
+                    className={`lc-agent-turn lc-agent-turn-${turnKind(message.role)}`}
                   >
-                    <div className="lc-coach-turn-role">
-                      {turnKind(message.role) === "user" ? "You" : "Coach"}
+                    <div className="lc-agent-turn-role">
+                      {turnKind(message.role) === "user" ? "You" : "Agent"}
                     </div>
-                    <div className="lc-coach-turn-body">
+                    <div className="lc-agent-turn-body">
                       {message.content || (message.pending ? "…" : "")}
                     </div>
                   </div>
                 ))}
               </div>
               <form
-                className="lc-coach-composer lc-footnote-overview-composer"
+                className="lc-agent-composer lc-footnote-overview-composer"
                 onSubmit={(event) => {
                   event.preventDefault();
                   send();
@@ -545,8 +545,8 @@ export function FootnoteOverview({
                   }}
                   aria-label="Reply"
                 />
-                <div className="lc-coach-composer-bar">
-                  <div className="lc-coach-composer-actions">
+                <div className="lc-agent-composer-bar">
+                  <div className="lc-agent-composer-actions">
                     <button type="submit" disabled={draft.trim().length === 0}>
                       Send
                     </button>
@@ -647,7 +647,7 @@ export function FootnoteOverview({
                       onPointerEnter={() => onHoverSubMark?.(mark.id)}
                       onPointerLeave={() => onHoverSubMark?.(null)}
                     >
-                      <span className="lc-coach-scope-option">
+                      <span className="lc-agent-scope-option">
                         <span className="lc-footnote-overview-entry-text">{mark.excerpt}</span>
                       </span>
                       <button
@@ -672,7 +672,7 @@ export function FootnoteOverview({
                       <li>
                         <button
                           type="button"
-                          className="lc-coach-scope-option"
+                          className="lc-agent-scope-option"
                           onClick={() => onOpenExternal(searchLink.url)}
                         >
                           <strong>{searchLink.title}</strong>
@@ -684,7 +684,7 @@ export function FootnoteOverview({
                       <li key={`user-${index}-${link.url}`}>
                         <button
                           type="button"
-                          className="lc-coach-scope-option"
+                          className="lc-agent-scope-option"
                           onClick={() => openTask({ kind: "link", index })}
                         >
                           <strong>{link.title || link.url}</strong>
@@ -702,7 +702,7 @@ export function FootnoteOverview({
                       <li key={note.id}>
                         <HoldButton
                           label={note.text}
-                          className="lc-coach-scope-option lc-footnote-overview-entry-hold lc-hold-danger"
+                          className="lc-agent-scope-option lc-footnote-overview-entry-hold lc-hold-danger"
                           ariaLabel={`${note.text} — tap to edit, hold to delete`}
                           holdMs={HOLD_SENSITIVE_MS}
                           holdThrough
@@ -725,7 +725,7 @@ export function FootnoteOverview({
                       <li key={thread.rootId}>
                         <button
                           type="button"
-                          className="lc-coach-scope-option"
+                          className="lc-agent-scope-option"
                           onClick={() => openTask({ kind: "thread", rootId: thread.rootId })}
                         >
                           <strong className="lc-footnote-overview-entry-text">{thread.title}</strong>
@@ -755,7 +755,7 @@ function HubSection({
   return (
     <section className="lc-footnote-overview-section" aria-label={title}>
       <div className="lc-footnote-overview-section-head">
-        <h3 className="lc-coach-turn-role">{title}</h3>
+        <h3 className="lc-agent-turn-role">{title}</h3>
         {onAdd ? (
           <button
             type="button"

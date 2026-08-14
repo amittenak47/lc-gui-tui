@@ -40,6 +40,27 @@ export function migrateLocalStorageKeys(storage: Storage = localStorage): void {
   }
 }
 
+/** Copy `whiteboard.coach.*` onto `whiteboard.agent.*` without clobbering newer dest. */
+export function remapCoachStorageKeys(storage: Storage = localStorage): void {
+  const keys: string[] = [];
+  for (let i = 0; i < storage.length; i += 1) {
+    const key = storage.key(i);
+    if (key) keys.push(key);
+  }
+  for (const key of keys) {
+    if (!key.startsWith("whiteboard.coach.")) continue;
+    const next = `whiteboard.agent.${key.slice("whiteboard.coach.".length)}`;
+    try {
+      if (storage.getItem(next) == null) {
+        const value = storage.getItem(key);
+        if (value != null) storage.setItem(next, value);
+      }
+    } catch {
+      /* quota — leave the old key; retry next launch */
+    }
+  }
+}
+
 function deleteMigratedLocalStorageKeys(): void {
   if (typeof localStorage === "undefined") return;
   const keys: string[] = [];
@@ -160,27 +181,33 @@ async function migrateDocsDatabase(): Promise<void> {
 }
 
 /**
- * Copy `lc.*` / `lc.docs` onto `whiteboard.*`. Idempotent after the marker.
+ * Copy `lc.*` / `lc.docs` onto `whiteboard.*`, then `whiteboard.coach.*` onto
+ * `whiteboard.agent.*`. Idempotent after the marker reaches `"2"`.
  *
  * Call once before pairing, the library, or IndexedDB reads.
  */
 export async function migrateWhiteboardStorage(): Promise<void> {
   if (typeof localStorage === "undefined") return;
+  let marker: string | null = null;
   try {
-    if (localStorage.getItem(MIGRATED_MARKER) === "1") return;
+    marker = localStorage.getItem(MIGRATED_MARKER);
   } catch {
     return;
   }
+  if (marker === "2") return;
 
   migrateLocalStorageKeys();
-  try {
-    await migrateDocsDatabase();
-  } catch {
-    return;
+  if (marker !== "1") {
+    try {
+      await migrateDocsDatabase();
+    } catch {
+      return;
+    }
   }
+  remapCoachStorageKeys();
   deleteMigratedLocalStorageKeys();
   try {
-    localStorage.setItem(MIGRATED_MARKER, "1");
+    localStorage.setItem(MIGRATED_MARKER, "2");
   } catch {
     /* private browsing — copy already happened this session */
   }

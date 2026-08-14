@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { pendingAckLine, type CoachChatMessage } from "./AgentSidePanel";
+import { pendingAckLine, type AgentChatMessage } from "./AgentSidePanel";
 
-function pendingMessage(pendingAck: CoachChatMessage["pendingAck"]): CoachChatMessage {
+function pendingMessage(pendingAck: AgentChatMessage["pendingAck"]): AgentChatMessage {
   return {
     id: "assistant-1",
     role: "assistant",

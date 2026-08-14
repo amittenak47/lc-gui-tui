@@ -13,13 +13,19 @@ export const THEME_KEY = "whiteboard.app-theme";
 export const LEGACY_THEME_KEY = "lc-app-theme";
 
 /**
- * Map a pre-rename storage key onto its `whiteboard.*` name.
+ * Map a pre-rename storage key onto its current `whiteboard.*` name.
  *
  * Returns null when the key is already new, or is unrelated.
  */
 export function remapLcKey(key: string): string | null {
   if (key === LEGACY_THEME_KEY) return THEME_KEY;
   if (key === MIGRATED_MARKER) return null;
+  if (key.startsWith("whiteboard.coach.")) {
+    return `whiteboard.agent.${key.slice("whiteboard.coach.".length)}`;
+  }
+  if (key.startsWith("lc.coach.")) {
+    return `whiteboard.agent.${key.slice("lc.coach.".length)}`;
+  }
   if (!key.startsWith("lc.")) return null;
   if (key.startsWith("lc.scratchpad.")) {
     return `whiteboard.notebook.${key.slice("lc.scratchpad.".length)}`;

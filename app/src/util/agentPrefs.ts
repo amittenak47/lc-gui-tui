@@ -1,10 +1,11 @@
 /**
  * Chat behaviour the student chooses, kept next to the chat rather than in
  * Settings — the Settings modal is the daemon's configuration, and whether the
- * coach gets told about a failed test run is a property of this conversation.
+ * agent gets told about a failed test run is a property of this conversation.
  */
 
-const FORWARD_FAILURES_KEY = "whiteboard.coach.forwardFailures.v1";
+const FORWARD_FAILURES_KEY = "whiteboard.agent.forwardFailures.v1";
+const LEGACY_FORWARD_FAILURES_KEYS = ["whiteboard.coach.forwardFailures.v1"];
 
 /**
  * Off by default.
@@ -16,10 +17,16 @@ const FORWARD_FAILURES_KEY = "whiteboard.coach.forwardFailures.v1";
  */
 export function loadForwardFailures(): boolean {
   try {
-    return localStorage.getItem(FORWARD_FAILURES_KEY) === "1";
+    const current = localStorage.getItem(FORWARD_FAILURES_KEY);
+    if (current != null) return current === "1";
+    for (const old of LEGACY_FORWARD_FAILURES_KEYS) {
+      const value = localStorage.getItem(old);
+      if (value != null) return value === "1";
+    }
   } catch {
     return false;
   }
+  return false;
 }
 
 export function saveForwardFailures(on: boolean): void {

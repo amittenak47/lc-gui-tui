@@ -2023,7 +2023,7 @@ export function DocSelectionLayer({
                             <button
                               type="button"
                               role="menuitem"
-                              className="lc-coach-scope-option"
+                              className="lc-agent-scope-option"
                               onClick={() => {
                                 const rect = highlightBox();
                                 dismiss();
@@ -2118,7 +2118,7 @@ function footnoteTitle(footnote: DocFootnote, number: number): string {
     case "note":
       return `${head} Highlight — ${what}`;
     default:
-      return `${head} Coach — ${what}`;
+      return `${head} Agent — ${what}`;
   }
 }
 

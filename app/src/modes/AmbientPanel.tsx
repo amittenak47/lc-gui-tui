@@ -35,10 +35,10 @@ export function AmbientPanel({
   onReset,
 }: AmbientPanelProps) {
   return (
-    <section className="lc-panel lc-ambient" aria-label="Ambient coach" aria-live="polite">
+    <section className="lc-panel lc-ambient" aria-label="Ambient agent" aria-live="polite">
       <header className="lc-panel-head">
         <span className={connected ? "lc-dot lc-dot-on" : "lc-dot"} aria-hidden="true" />
-        <strong>Coach</strong>
+        <strong>Agent</strong>
         <span className="lc-muted">{connected ? "watching" : "offline"}</span>
         <button type="button" className="lc-link" onClick={onAnalyzeNow}>
           look now

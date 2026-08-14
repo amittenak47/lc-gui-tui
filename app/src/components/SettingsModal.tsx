@@ -11,7 +11,7 @@ import type { CoachFlags, DatasetInfo, LcConfig, LlmStatus, ProviderConfig } fro
 import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { HoldButton } from "./HoldButton";
 import { MorphBar } from "./MorphBar";
-import { loadForwardFailures, saveForwardFailures } from "../util/coachPrefs";
+import { loadForwardFailures, saveForwardFailures } from "../util/agentPrefs";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkToolPresets, saveInkToolPresets } from "../util/inkToolPresets";
 import {
@@ -170,7 +170,7 @@ const COACH_FLAG_GROUPS: Array<{
 }> = [
   {
     id: "coach-knows",
-    title: "What the coach knows before it looks",
+    title: "What the agent knows before it looks",
     blurb:
       "Extra model calls made once per problem, before your board is read. Both cost a call, so both start off.",
     flags: [
@@ -189,12 +189,12 @@ const COACH_FLAG_GROUPS: Array<{
   {
     id: "coach-reads",
     title: "How it reads your board",
-    blurb: "What the coach does when the board argues for something.",
+    blurb: "What the agent does when the board argues for something.",
     flags: [
       [
         "approach_commitment",
         "Stick to one approach per board",
-        "Coach the approach your board argues for, and say so when a change of board changes it — instead of quietly switching between valid approaches.",
+        "Keep the approach your board argues for, and say so when a change of board changes it — instead of quietly switching between valid approaches.",
       ],
     ],
   },
@@ -210,7 +210,7 @@ const COACH_FLAG_GROUPS: Array<{
       ],
       [
         "process_events_ui",
-        "Show what the coach is doing",
+        "Show what the agent is doing",
         "A collapsible list of stages and diagram tool calls above each answer.",
       ],
     ],
@@ -224,7 +224,7 @@ const MODE_HINTS: Record<(typeof MODES)[number], string> = {
   bridge: "The stepwise path shown after an explicit reveal.",
   viz: "Tool calls for diagrams and animations.",
   planner:
-    "One call per problem that catalogs the approaches it admits. Point this at a frontier model to guide the local coach — it never sees or writes a solution.",
+    "One call per problem that catalogs the approaches it admits. Point this at a frontier model to guide the local agent — it never sees or writes a solution.",
 };
 
 function llmServerHint(provider: "local" | "ollama" | "openai" | "groq"): string {
@@ -669,7 +669,7 @@ export function SettingsModal({
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
         );
         window.dispatchEvent(
-          new CustomEvent<boolean>("lc-coach-forward-failures", {
+          new CustomEvent<boolean>("lc-agent-forward-failures", {
             detail: forwardFailures,
           }),
         );
@@ -921,7 +921,7 @@ export function SettingsModal({
               <div className="lc-settings-subhead">Writing hand</div>
               <p className="lc-settings-hint">
                 Tilts the colour picker so swatches sit clear of your writing hand, and
-                mirrors the chrome — coach panel, board dock, toolbars and action sheets —
+                mirrors the chrome — agent panel, board dock, toolbars and action sheets —
                 to the same side. Saved on this device only — not in <code>config.toml</code>.
               </p>
               <div className="lc-settings-choice" role="radiogroup" aria-label="Writing hand">
@@ -1605,13 +1605,13 @@ export function SettingsModal({
               </div>
               <p className="lc-settings-hint">
                 Applies to <strong>Run tests</strong>, <strong>Submit</strong>, and{" "}
-                <code>lc test</code>. Running every case is what lets the coach pick a real
+                <code>lc test</code>. Running every case is what lets the agent pick a real
                 counterexample, so leave it on unless a run is slow.
               </p>
               <div
                 className="lc-settings-choice"
                 role="radiogroup"
-                aria-label="Forward failed runs to the coach"
+                aria-label="Forward failed runs to the agent"
               >
                 <button
                   type="button"
@@ -1640,7 +1640,7 @@ export function SettingsModal({
                   }
                   onClick={() => setForwardFailures(true)}
                 >
-                  <strong>Send failures to the coach</strong>
+                  <strong>Send failures to the agent</strong>
                   <span className="lc-muted">
                     Hand every failed run over the moment it goes red — one model call each.
                   </span>
@@ -1710,15 +1710,15 @@ export function SettingsModal({
               </div>
 
               <SettingsFold id="llm" title="LLM">
-              <div className="lc-settings-subhead">Coach status</div>
-              <p className="lc-coach-live" data-status={coachStatus}>
-                <span className="lc-coach-live-dot" aria-hidden />
+              <div className="lc-settings-subhead">Agent status</div>
+              <p className="lc-agent-live" data-status={coachStatus}>
+                <span className="lc-agent-live-dot" aria-hidden />
                 <span>
                   {coachStatus === "online"
-                    ? "Coach LLM online"
+                    ? "Agent LLM online"
                     : coachStatus === "offline"
-                      ? "Coach LLM offline"
-                      : "Coach LLM status unknown"}
+                      ? "Agent LLM offline"
+                      : "Agent LLM status unknown"}
                 </span>
               </p>
               {coachDetail && <p className="lc-settings-hint">{coachDetail}</p>}
@@ -1797,7 +1797,7 @@ export function SettingsModal({
                 <p className="lc-muted">API key from OPENAI_API_KEY env — not stored in config.toml.</p>
               )}
 
-              <div className="lc-settings-subhead">Coach mode providers</div>
+              <div className="lc-settings-subhead">Agent mode providers</div>
               {MODES.map((mode) => (
                 <label key={mode}>
                   <span>{mode}</span>
