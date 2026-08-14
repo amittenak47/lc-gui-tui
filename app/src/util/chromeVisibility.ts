@@ -19,7 +19,7 @@
 
 export type ChromeMode = "visible" | "fade" | "hidden";
 
-const KEY = "lc.chromeMode.v1";
+const KEY = "whiteboard.chromeMode.v1";
 
 export const CHROME_MODES: readonly ChromeMode[] = ["visible", "fade", "hidden"];
 

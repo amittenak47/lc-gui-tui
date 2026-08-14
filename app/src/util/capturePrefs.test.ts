@@ -35,7 +35,7 @@ describe("capture destination", () => {
   });
 
   it("falls back when the stored value is not one we know", () => {
-    localStorage.setItem("lc.capture.destination", "dropbox");
+    localStorage.setItem("whiteboard.capture.destination", "dropbox");
     expect(loadCaptureDestination()).toBe("photos");
   });
 });
@@ -64,7 +64,7 @@ describe("capture countdown", () => {
   });
 
   it("refuses a value that is not on the dial", () => {
-    localStorage.setItem("lc.capture.countdown", "42");
+    localStorage.setItem("whiteboard.capture.countdown", "42");
     expect(loadCaptureCountdown()).toBe(CAPTURE_COUNTDOWN_DEFAULT);
   });
 });
@@ -139,9 +139,9 @@ describe("capture mode", () => {
   it("reads the old boolean when no mode was ever chosen", () => {
     localStorage.clear();
     expect(loadCaptureMode()).toBe("board");
-    localStorage.setItem("lc.capture.autoSave", "1");
+    localStorage.setItem("whiteboard.capture.autoSave", "1");
     expect(loadCaptureMode()).toBe("board-save");
-    localStorage.setItem("lc.capture.autoSave", "0");
+    localStorage.setItem("whiteboard.capture.autoSave", "0");
     expect(loadCaptureMode()).toBe("board");
   });
 
@@ -149,8 +149,8 @@ describe("capture mode", () => {
     localStorage.clear();
     saveCaptureMode("save");
     expect(loadCaptureMode()).toBe("save");
-    expect(localStorage.getItem("lc.capture.autoSave")).toBe("1");
+    expect(localStorage.getItem("whiteboard.capture.autoSave")).toBe("1");
     saveCaptureMode("board");
-    expect(localStorage.getItem("lc.capture.autoSave")).toBe("0");
+    expect(localStorage.getItem("whiteboard.capture.autoSave")).toBe("0");
   });
 })

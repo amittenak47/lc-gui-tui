@@ -3,7 +3,7 @@
  * floating freely over the workspace.
  */
 
-const STORAGE_KEY = "lc.toolbar.layout.v1";
+const STORAGE_KEY = "whiteboard.toolbar.layout.v1";
 
 export type ToolbarLayout =
   | { mode: "docked" }

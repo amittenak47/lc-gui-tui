@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   inkPageKey,
-  mdInkDocKey,
+  annotateDocKey,
   shouldPromoteToArchive,
   whiteboardDocKey,
   type InkPageRecord,
@@ -12,7 +12,7 @@ import { NO_PRESSURE, type InkDrawOp } from "../canvas/rasterInk";
 
 describe("ink page keys", () => {
   it("scopes md-ink by content hash and whiteboard by notebook id", () => {
-    expect(mdInkDocKey("abc")).toBe("md:abc");
+    expect(annotateDocKey("abc")).toBe("md:abc");
     expect(whiteboardDocKey("n1")).toBe("wb:n1");
   });
 

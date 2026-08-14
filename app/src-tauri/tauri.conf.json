@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "lc-whiteboard",
+  "productName": "Whiteboard",
   "version": "0.1.0",
   "identifier": "dev.lc.whiteboard",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "lc whiteboard",
+        "title": "Whiteboard",
         "width": 1600,
         "height": 1000,
         "resizable": true

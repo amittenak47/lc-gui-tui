@@ -34,10 +34,10 @@ import { setStorageItem } from "./storageQuota";
 
 /** Per-entry spill key. Per-entry, not per-library, so a fallback save is still small. */
 function spillKey(id: string): string {
-  return `lc.content.v1.${id}`;
+  return `whiteboard.content.v1.${id}`;
 }
 
-const SPILL_PREFIX = "lc.content.v1.";
+const SPILL_PREFIX = "whiteboard.content.v1.";
 
 /**
  * Which backend the last write used.

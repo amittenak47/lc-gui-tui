@@ -14,7 +14,8 @@
 
 import { lcFetch } from "./nativeHttp";
 
-const STORAGE_KEY = "lc.pairing";
+const STORAGE_KEY = "whiteboard.pairing";
+const LEGACY_STORAGE_KEY = "lc.pairing";
 
 export interface Pairing {
   baseUrl: string;
@@ -139,7 +140,7 @@ export async function pairWithCode(
 
 export function loadPairing(storage: Storage | undefined = globalThis.localStorage): Pairing {
   if (!storage) return DEFAULT_PAIRING;
-  const raw = storage.getItem(STORAGE_KEY);
+  const raw = storage.getItem(STORAGE_KEY) ?? storage.getItem(LEGACY_STORAGE_KEY);
   if (!raw) return DEFAULT_PAIRING;
   try {
     const parsed = JSON.parse(raw) as Partial<Pairing>;

@@ -19,7 +19,7 @@ There is a second path: sketch the approach by hand on a tablet or desktop canva
 | **CLI** | Index corpora, search, load workspaces, run tests, ask the tutor |
 | **TUI** | Full-screen practice UI in the terminal (`lc` / `lc tui`) |
 | **IDE** | Edit `solution.py` in Cursor or VS Code; optional LLM Autocorrect |
-| **GUI** | Whiteboard coach (`app/`) talking to `lc serve` over HTTP/WS |
+| **GUI** | Whiteboard app (`app/`) talking to `whiteboard serve` over HTTP/WS |
 
 ```
 JSON corpora ─lc index──▶ SQLite (problems.db)
@@ -32,7 +32,7 @@ JSON corpora ─lc index──▶ SQLite (problems.db)
         ├── run_tests.py
         └── .lc/meta.json       ← cases / entry point (no reference solution)
                               │
-                        lc test · lc ask · lc serve → app/
+                        whiteboard test · whiteboard ask · whiteboard serve → app/
 ```
 
 ---
@@ -115,10 +115,10 @@ Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorre
 
 ## 4. GUI usage
 
-The canvas lives in [`app/`](app/). The corpus, workspaces, and Python runner stay on the PC behind `lc serve`.
+The canvas lives in [`app/`](app/). The corpus, workspaces, and Python runner stay on the PC behind `whiteboard serve`.
 
 ```bash
-lc serve --lan                  # daemon (prints Host / Port / 6-digit Code)
+whiteboard serve --lan          # daemon (prints Host / Port / 6-digit Code)
 cd app && npm install && npm run tauri dev
 # Android APK: cd app && npm run android:apk
 ```
@@ -165,7 +165,7 @@ Browser-over-LAN, spacedesk, and Android build details → [`app/README.md`](app
 | `lc load <id> [--open] [--force]` | Generate a workspace; id = slug, question #, or prefix |
 | `lc test [id] [--case N] [--full] [-v]` | Run Python tests — exits `0` when every case passes |
 | `lc ask [id] [--case N] [--provider local\|groq]` | LLM debugging help |
-| `lc serve [--port N] [--lan]` | Daemon for the whiteboard client |
+| `whiteboard serve [--port N] [--lan]` | Daemon for the whiteboard client |
 | `lc stats` · `lc session reset` · `lc list …` | Progress, session, named lists |
 | `lc config set/get/show/path` | Manage `config.toml` |
 

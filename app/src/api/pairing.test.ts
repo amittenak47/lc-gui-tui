@@ -66,7 +66,7 @@ describe("pairing storage", () => {
 
   it("falls back rather than crashing on corrupt storage", () => {
     const storage = memoryStorage();
-    storage.setItem("lc.pairing", "{not json");
+    storage.setItem("whiteboard.pairing", "{not json");
     expect(loadPairing(storage)).toEqual(DEFAULT_PAIRING);
   });
 

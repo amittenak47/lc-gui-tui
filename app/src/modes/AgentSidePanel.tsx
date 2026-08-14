@@ -181,7 +181,7 @@ const REVIEW_DROPS_PHOTOS = "Review sends the board, not attachments";
  * Scratchpad also drops Annotations (`allowAnnotations`): there is no custom
  * block select on a blank board.
  */
-export type CoachSurface = "problem" | "pad";
+export type AgentSurface = "problem" | "pad";
 
 interface MessageMenuState {
   messageId: string;
@@ -350,7 +350,7 @@ export interface AgentSidePanelProps {
    * Problem attempt or reading pad — decides which composer controls exist at
    * all. Defaults to `problem` so nothing changes for the attempt flow.
    */
-  coachSurface?: CoachSurface;
+  agentSurface?: AgentSurface;
   /**
    * Mark-block flag + picker. Scratchpad has no custom block select, so this
    * is false there; document pads and problems keep it.
@@ -424,7 +424,7 @@ export function AgentSidePanel({
   thinkingPhase = null,
   messages,
   askOnly = false,
-  coachSurface = "problem",
+  agentSurface = "problem",
   allowAnnotations = true,
   quoteSeed = null,
   focusThread = null,
@@ -458,9 +458,9 @@ export function AgentSidePanel({
   /**
    * Pads keep Ask and Handwriting; document pads also keep Annotations. The
    * pipeline flags and the cadence toggles are gone rather than greyed. See
-   * {@link CoachSurface}.
+   * {@link AgentSurface}.
    */
-  const padSurface = coachSurface === "pad";
+  const padSurface = agentSurface === "pad";
   /** Handwriting is greyed only where there is genuinely nothing to attach. */
   const annotateUnavailable = askOnly && !padSurface;
   const flagUnavailable = askOnly ? " lc-flag-unavailable" : "";

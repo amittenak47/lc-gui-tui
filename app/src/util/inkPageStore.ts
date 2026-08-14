@@ -31,7 +31,7 @@ export interface InkPageRecord {
   updatedAt: number;
 }
 
-export function mdInkDocKey(hash: string): string {
+export function annotateDocKey(hash: string): string {
   return `md:${hash}`;
 }
 

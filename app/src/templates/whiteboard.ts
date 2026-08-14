@@ -7,14 +7,16 @@
  */
 
 import { FONT_UI, templatePalette, type Skeleton } from "./skeleton";
-import { SCRATCHPAD_PAGE_LIMIT } from "../util/scratchpadStore";
+import { WHITEBOARD_PAGE_LIMIT } from "../util/whiteboardStore";
 import { defaultLineHeight, SCRATCH_LINE_PITCH, topYForLinedRow } from "../modes/textBaseline";
 
-export const SCRATCHPAD_TASK_ID = "__scratchpad__";
-/** Coach / HTTP dataset slug. Storage keys stay `lc.scratchpad.*`. */
-export const SCRATCHPAD_DATASET = "whiteboard";
+export const WHITEBOARD_TASK_ID = "__whiteboard__";
+/** Pre-rename task id. Still recognised when restoring an old session. */
+export const LEGACY_SCRATCHPAD_TASK_ID = "__scratchpad__";
+/** Wire `surface` / problem dataset slug for a blank notebook. */
+export const WHITEBOARD_DATASET = "whiteboard";
 
-export { SCRATCHPAD_PAGE_LIMIT };
+export { WHITEBOARD_PAGE_LIMIT };
 
 /** Scene size of one notebook page (student-column scale). */
 export const SCRATCH_PAGE_W = 3920;
@@ -25,7 +27,7 @@ export const SCRATCH_PAGE_W = 3920;
 export const SCRATCH_PAGE_H = 4200;
 export const SCRATCH_PAGE_GUTTER = 64;
 
-export function scratchPageId(index: number): string {
+export function whiteboardPageId(index: number): string {
   return `pad-${index}`;
 }
 
@@ -52,7 +54,7 @@ export function buildScratchPageSkeletons(
 ): Skeleton[] {
   const ink = templatePalette(dark);
   const { x, y } = scratchPageOrigin(index);
-  const region = scratchPageId(index);
+  const region = whiteboardPageId(index);
 
   const skeletons: Skeleton[] = [
     {
@@ -137,9 +139,9 @@ export function scratchTitleAnchor(index: number): { x: number; y: number } {
 }
 
 /** Fresh notebook with `pageCount` blank pages (at least one). */
-export function buildScratchpadTemplate(pageCount = 1, dark = false): Skeleton[] {
+export function buildWhiteboardTemplate(pageCount = 1, dark = false): Skeleton[] {
   const count = Math.min(
-    SCRATCHPAD_PAGE_LIMIT,
+    WHITEBOARD_PAGE_LIMIT,
     Math.max(1, Math.floor(pageCount)),
   );
   const skeletons: Skeleton[] = [];
@@ -150,7 +152,7 @@ export function buildScratchpadTemplate(pageCount = 1, dark = false): Skeleton[]
 }
 
 /** Highest page index present in a saved element list (0 if none). */
-export function countScratchPages(elements: readonly unknown[]): number {
+export function countWhiteboardPages(elements: readonly unknown[]): number {
   let max = -1;
   for (const raw of elements) {
     if (!raw || typeof raw !== "object") continue;

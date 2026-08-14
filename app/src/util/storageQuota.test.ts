@@ -50,15 +50,15 @@ describe("isQuotaError", () => {
 
 describe("setStorageItem", () => {
   it("writes through when there is room", () => {
-    setStorageItem("lc.test.key", "value");
-    expect(localStorage.getItem("lc.test.key")).toBe("value");
+    setStorageItem("whiteboard.test.key", "value");
+    expect(localStorage.getItem("whiteboard.test.key")).toBe("value");
   });
 
   it("turns a quota failure into a StorageFullError", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw quotaError("QuotaExceededError", 22);
     });
-    expect(() => setStorageItem("lc.test.key", "value")).toThrow(StorageFullError);
+    expect(() => setStorageItem("whiteboard.test.key", "value")).toThrow(StorageFullError);
   });
 
   it("rethrows anything that is not the quota untouched", () => {
@@ -69,7 +69,7 @@ describe("setStorageItem", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw other;
     });
-    expect(() => setStorageItem("lc.test.key", "value")).toThrow(other);
+    expect(() => setStorageItem("whiteboard.test.key", "value")).toThrow(other);
   });
 
   it("keeps the original failure as the cause", () => {
@@ -78,7 +78,7 @@ describe("setStorageItem", () => {
       throw raw;
     });
     try {
-      setStorageItem("lc.test.key", "value");
+      setStorageItem("whiteboard.test.key", "value");
       expect.unreachable("should have thrown");
     } catch (cause) {
       expect(cause).toBeInstanceOf(StorageFullError);

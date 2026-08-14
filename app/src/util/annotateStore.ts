@@ -14,7 +14,7 @@
  * an old annotation set gets a soft warning rather than a silent mismatch, and
  * the name is kept alongside purely so the library reads as file names.
  *
- * Mirrors `scratchpadStore` deliberately — same shape, same restore-for-discard
+ * Mirrors `whiteboardStore` deliberately — same shape, same restore-for-discard
  * contract, same coach thread on the entry — so the two modes behave identically
  * where the writer can tell.
  */
@@ -24,10 +24,10 @@ import { deleteContent, getContent, putContent } from "./contentStore";
 import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 import { deletePadSnapshots } from "./padSnapshotStore";
-import { deleteInkPages, mdInkDocKey } from "./inkPageStore";
+import { deleteInkPages, annotateDocKey } from "./inkPageStore";
 import { setStorageItem } from "./storageQuota";
 
-export const MD_INK_LIBRARY_LIMIT = 30;
+export const ANNOTATE_LIBRARY_LIMIT = 30;
 
 /**
  * What kind of document an entry was drawn over.
@@ -48,15 +48,15 @@ export function isBinaryDocType(docType: DocType): boolean {
   return docType === "pdf" || docType === "epub";
 }
 
-export class MdInkLibraryFullError extends Error {
+export class AnnotateLibraryFullError extends Error {
   readonly code = "md-ink-library-full" as const;
   constructor(message = "Markdown annotation library is full") {
     super(message);
-    this.name = "MdInkLibraryFullError";
+    this.name = "AnnotateLibraryFullError";
   }
 }
 
-export interface MdInkDocMeta {
+export interface AnnotateDocMeta {
   id: string;
   /** File name as opened, for display. */
   name: string;
@@ -66,7 +66,7 @@ export interface MdInkDocMeta {
   updatedAt: number;
 }
 
-export interface MdInkDoc extends MdInkDocMeta {
+export interface AnnotateDoc extends AnnotateDocMeta {
   /**
    * The markdown or source text, so an entry can be reopened without hunting
    * for the file again.
@@ -107,12 +107,14 @@ export interface MdInkDoc extends MdInkDocMeta {
  * {@link adoptLegacyLibrary}. Never written again.
  */
 const LEGACY_KEY = "lc.md-ink.library.v1";
+const MIGRATED_LEGACY_KEY = "whiteboard.annotate.library.v1";
 
 /** Meta only — thirty entries of a few hundred bytes each. */
-const LIBRARY_KEY = "lc.md-ink.index.v1";
+const LIBRARY_KEY = "whiteboard.annotate.index.v1";
+const PRE_RENAME_INDEX = "lc.md-ink.index.v1";
 
 /** The heavy half of an entry, stored per-id in IndexedDB. See `contentStore`. */
-interface MdInkContent {
+interface AnnotateContent {
   source: string;
   board: BoardBlob;
   footnotes: DocFootnote[];
@@ -144,11 +146,12 @@ export function hashMarkdown(source: string): string {
  * legacy blob is left as a fallback for {@link readContent}, so nothing has to
  * succeed at a bulk write for someone's annotations to still open.
  */
-function adoptLegacyLibrary(): MdInkDocMeta[] {
+function adoptLegacyLibrary(): AnnotateDocMeta[] {
   try {
-    const raw = localStorage.getItem(LEGACY_KEY);
+    const raw =
+      localStorage.getItem(MIGRATED_LEGACY_KEY) ?? localStorage.getItem(LEGACY_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as MdInkDoc[];
+    const parsed = JSON.parse(raw) as AnnotateDoc[];
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(
@@ -172,22 +175,23 @@ function adoptLegacyLibrary(): MdInkDocMeta[] {
 }
 
 /** The legacy entry for an id, if the old library is still on this device. */
-function legacyEntry(id: string): MdInkDoc | null {
+function legacyEntry(id: string): AnnotateDoc | null {
   try {
-    const raw = localStorage.getItem(LEGACY_KEY);
+    const raw =
+      localStorage.getItem(MIGRATED_LEGACY_KEY) ?? localStorage.getItem(LEGACY_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as MdInkDoc[];
+    const parsed = JSON.parse(raw) as AnnotateDoc[];
     return Array.isArray(parsed) ? parsed.find((entry) => entry?.id === id) ?? null : null;
   } catch {
     return null;
   }
 }
 
-function readIndex(): MdInkDocMeta[] {
+function readIndex(): AnnotateDocMeta[] {
   try {
-    const raw = localStorage.getItem(LIBRARY_KEY);
+    const raw = localStorage.getItem(LIBRARY_KEY) ?? localStorage.getItem(PRE_RENAME_INDEX);
     if (!raw) return adoptLegacyLibrary();
-    const parsed = JSON.parse(raw) as MdInkDocMeta[];
+    const parsed = JSON.parse(raw) as AnnotateDocMeta[];
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((entry) => entry && typeof entry.id === "string" && typeof entry.hash === "string")
@@ -198,7 +202,7 @@ function readIndex(): MdInkDocMeta[] {
 }
 
 /** Throws {@link StorageFullError} when the origin is out of room — see `storageQuota`. */
-function writeIndex(entries: MdInkDocMeta[]): void {
+function writeIndex(entries: AnnotateDocMeta[]): void {
   setStorageItem(LIBRARY_KEY, JSON.stringify(entries));
 }
 
@@ -210,17 +214,17 @@ function writeIndex(entries: MdInkDocMeta[]): void {
  * the point of splitting content out — this used to `JSON.parse` every board in
  * the store to show their file names.
  */
-export function listMdInkDocs(): MdInkDocMeta[] {
+export function listAnnotateDocs(): AnnotateDocMeta[] {
   return readIndex().sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 /** Meta for one entry, without touching its content. */
-export function getMdInkDocMeta(id: string): MdInkDocMeta | null {
+export function getAnnotateDocMeta(id: string): AnnotateDocMeta | null {
   return readIndex().find((entry) => entry.id === id) ?? null;
 }
 
-async function readContent(meta: MdInkDocMeta): Promise<MdInkDoc | null> {
-  const content = await getContent<MdInkContent>(meta.id);
+async function readContent(meta: AnnotateDocMeta): Promise<AnnotateDoc | null> {
+  const content = await getContent<AnnotateContent>(meta.id);
   if (content?.board) {
     return {
       ...meta,
@@ -242,13 +246,13 @@ async function readContent(meta: MdInkDocMeta): Promise<MdInkDoc | null> {
   };
 }
 
-export async function getMdInkDoc(id: string): Promise<MdInkDoc | null> {
-  const meta = getMdInkDocMeta(id);
+export async function getAnnotateDoc(id: string): Promise<AnnotateDoc | null> {
+  const meta = getAnnotateDocMeta(id);
   return meta ? readContent(meta) : null;
 }
 
 /** The annotation set drawn over this exact markdown, if there is one. */
-export async function findMdInkDocByHash(hash: string): Promise<MdInkDoc | null> {
+export async function findAnnotateDocByHash(hash: string): Promise<AnnotateDoc | null> {
   const meta = readIndex().find((entry) => entry.hash === hash);
   return meta ? readContent(meta) : null;
 }
@@ -263,12 +267,12 @@ export async function findMdInkDocByHash(hash: string): Promise<MdInkDoc | null>
  * the outside it looks like the annotations were lost. Naming the stale set
  * lets the writer be told what happened.
  */
-export function findStaleMdInkDoc(name: string, hash: string): MdInkDocMeta | null {
+export function findStaleAnnotateDoc(name: string, hash: string): AnnotateDocMeta | null {
   return readIndex().find((entry) => entry.name === name && entry.hash !== hash) ?? null;
 }
 
-/** See the note on `freshId` in `scratchpadStore` — same millisecond, same trap. */
-function freshId(library: readonly MdInkDocMeta[], now: number): string {
+/** See the note on `freshId` in `whiteboardStore` — same millisecond, same trap. */
+function freshId(library: readonly AnnotateDocMeta[], now: number): string {
   const base = `mdink-${now.toString(36)}`;
   if (!library.some((entry) => entry.id === base)) return base;
   for (let suffix = 1; ; suffix += 1) {
@@ -290,7 +294,7 @@ function freshId(library: readonly MdInkDocMeta[], now: number): string {
  * board". The other order loses the entry entirely on a failure that only
  * affected its payload.
  */
-export async function saveMdInkDoc(input: {
+export async function saveAnnotateDoc(input: {
   id?: string;
   name: string;
   hash: string;
@@ -299,7 +303,7 @@ export async function saveMdInkDoc(input: {
   board: BoardBlob;
   footnotes?: readonly DocFootnote[];
   agent?: unknown[];
-}): Promise<MdInkDoc> {
+}): Promise<AnnotateDoc> {
   const index = readIndex();
   const now = Date.now();
   // An annotation set is identified by what it was drawn over, so re-saving the
@@ -309,9 +313,9 @@ export async function saveMdInkDoc(input: {
     index.find((entry) => entry.hash === input.hash) ??
     null;
   const id = existing?.id ?? input.id ?? freshId(index, now);
-  if (!existing && index.length >= MD_INK_LIBRARY_LIMIT) {
-    throw new MdInkLibraryFullError(
-      `At most ${MD_INK_LIBRARY_LIMIT} annotated documents — delete one to keep another.`,
+  if (!existing && index.length >= ANNOTATE_LIBRARY_LIMIT) {
+    throw new AnnotateLibraryFullError(
+      `At most ${ANNOTATE_LIBRARY_LIMIT} annotated documents — delete one to keep another.`,
     );
   }
   // Undefined means "this caller does not track footnotes / the thread", not
@@ -320,10 +324,10 @@ export async function saveMdInkDoc(input: {
   const prior =
     input.footnotes && Array.isArray(input.agent)
       ? null
-      : await getContent<MdInkContent>(id);
+      : await getContent<AnnotateContent>(id);
   const footnotes = input.footnotes ? [...input.footnotes] : prior?.footnotes ?? [];
   const agent = Array.isArray(input.agent) ? input.agent : prior?.agent ?? [];
-  const meta: MdInkDocMeta = {
+  const meta: AnnotateDocMeta = {
     id,
     name: input.name.trim() || existing?.name || "Untitled.md",
     hash: input.hash,
@@ -336,19 +340,19 @@ export async function saveMdInkDoc(input: {
     board: input.board,
     footnotes,
     agent,
-  } satisfies MdInkContent);
+  } satisfies AnnotateContent);
   return { ...meta, source: input.source, board: input.board, footnotes, agent };
 }
 
-export async function deleteMdInkDoc(id: string): Promise<void> {
+export async function deleteAnnotateDoc(id: string): Promise<void> {
   const index = readIndex();
   const going = index.find((entry) => entry.id === id) ?? null;
   const kept = index.filter((entry) => entry.id !== id);
   writeIndex(kept);
   await deleteContent(id);
   if (going) {
-    void deletePadSnapshots("md-ink", going.hash).catch(() => {});
-    void deleteInkPages(mdInkDocKey(going.hash)).catch(() => {});
+    void deletePadSnapshots("annotate", going.hash).catch(() => {});
+    void deleteInkPages(annotateDocKey(going.hash)).catch(() => {});
   }
   /*
    * A binary document's bytes outlive its entry unless something removes them.
@@ -368,9 +372,9 @@ export async function deleteMdInkDoc(id: string): Promise<void> {
  * Put an annotation set back exactly as it was, for Discard.
  *
  * Same contract as the scratchpad's: no fresh timestamp, no limit check. See
- * `restoreScratchNotebook` for why both of those would be wrong here.
+ * `restoreWhiteboardNotebook` for why both of those would be wrong here.
  */
-export async function restoreMdInkDoc(entry: MdInkDoc): Promise<void> {
+export async function restoreAnnotateDoc(entry: AnnotateDoc): Promise<void> {
   const { source, board, footnotes, agent, ...meta } = entry;
   writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
   await putContent(entry.id, {
@@ -378,5 +382,5 @@ export async function restoreMdInkDoc(entry: MdInkDoc): Promise<void> {
     board,
     footnotes: footnotes ?? [],
     agent: Array.isArray(agent) ? agent : [],
-  } satisfies MdInkContent);
+  } satisfies AnnotateContent);
 }

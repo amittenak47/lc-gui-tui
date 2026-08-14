@@ -8,11 +8,11 @@
  * did and where, which is what the toast reads out.
  */
 
-const AUTO_KEY = "lc.capture.autoSave";
-const MODE_KEY = "lc.capture.mode";
-const DEST_KEY = "lc.capture.destination";
-const FOLDER_KEY = "lc.capture.folder";
-const COUNTDOWN_KEY = "lc.capture.countdown";
+const AUTO_KEY = "whiteboard.capture.autoSave";
+const MODE_KEY = "whiteboard.capture.mode";
+const DEST_KEY = "whiteboard.capture.destination";
+const FOLDER_KEY = "whiteboard.capture.folder";
+const COUNTDOWN_KEY = "whiteboard.capture.countdown";
 
 /** Where auto-saved captures go. Default: device Photos / Pictures. */
 export type CaptureDestination = "photos" | "downloads" | "folder" | "share";

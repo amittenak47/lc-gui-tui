@@ -1,4 +1,4 @@
-//! `lc` as a library.
+//! `whiteboard` as a library.
 //!
 //! The CLI (`src/main.rs`) and the LAN daemon ([`serve`]) are both thin shells
 //! over the same modules. Package layout groups harness concerns (`corpus`,
@@ -25,7 +25,7 @@ pub mod design;
 pub mod gate;
 pub mod llm;
 pub mod practice;
-pub mod scratchpad;
+pub mod pad;
 pub mod serve;
 pub mod tui;
 pub mod workspace;

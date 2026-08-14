@@ -1,7 +1,7 @@
 /**
  * A source file as the page under the ink — read-only, locked, camera-synced.
  *
- * Same contract as {@link MdInkDocument}: full content height inside the board
+ * Same contract as {@link AnnotateDocument}: full content height inside the board
  * page frame, no own scrollbar, rides the camera with the ink. The source is
  * never edited here and never run through a markdown parser — fencing a whole
  * file into `marked` would turn `#` into headings and trip on closing fences

@@ -5,11 +5,11 @@ watches, grills you, and points at the specific test case your approach breaks
 on.
 
 The canvas runs on the tablet. The corpus, the workspaces, and the Python test
-runner stay on the PC, behind `lc serve`.
+runner stay on the PC, behind `whiteboard serve`.
 
 ```
 ┌─ XPPen Magic Note Pad (Android 14) ─┐        ┌─ PC / Mac ────────────────────┐
-│  Tauri v2 app (this directory)       │        │  lc serve (axum daemon)       │
+│  Tauri v2 app (this directory)       │        │  whiteboard serve (axum)      │
 │   • Excalidraw canvas                │  HTTP  │   • index.rs   (SQLite corpus)│
 │   • ML Kit ink→text (Kotlin plugin)  │◄──────►│   • generator.rs (workspaces) │
 │   • viz renderer + frame scrubber    │   WS   │   • runner.rs  (python tests) │

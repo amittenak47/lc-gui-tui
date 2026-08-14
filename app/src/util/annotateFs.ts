@@ -4,14 +4,14 @@
  * Deliberately not a Tauri filesystem plugin in v1. The app runs in a WebView on
  * the tablet as well as on the desktop, and a hidden `<input type="file">` is
  * the one path that works in both without a Rust dependency, a capability
- * grant, or a permission prompt. Annotations live in `mdInkStore` keyed by the
+ * grant, or a permission prompt. Annotations live in `annotateStore` keyed by the
  * document's content hash, so reopening the same file finds its ink again
  * without ever knowing where on disk the file came from.
  *
- * {@link exportMdInkSidecar} is the escape hatch: it hands back a
+ * {@link exportAnnotateSidecar} is the escape hatch: it hands back a
  * `.lc-ink.json.gz` the writer can keep beside the source, so an annotation set
  * is not trapped in one browser's storage. Reading one back is
- * {@link readMdInkSidecar}, and the import path sniffs gzip rather than
+ * {@link readAnnotateSidecar}, and the import path sniffs gzip rather than
  * trusting the extension, so an uncompressed sidecar still opens.
  */
 
@@ -19,7 +19,7 @@ import type { BoardBlob } from "../canvas/BoardHandle";
 import { codeAcceptExtensions, isCodeName } from "./codeLanguages";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 import { canGzip, gzipText, textFromMaybeGzip } from "./gzip";
-import type { DocType } from "./mdInkStore";
+import type { DocType } from "./annotateStore";
 
 export { CODE_SOURCE_MAX_CHARS, languageForName } from "./codeLanguages";
 
@@ -189,7 +189,7 @@ export function pickSidecarFile(): Promise<{ name: string; text: string } | null
   });
 }
 
-export interface MdInkSidecar {
+export interface AnnotateSidecar {
   v: 1;
   sourceName: string;
   contentHash: string;
@@ -218,7 +218,7 @@ export interface MdInkSidecar {
  * everything has moved.
  */
 export function sidecarWidthWarning(
-  sidecar: MdInkSidecar,
+  sidecar: AnnotateSidecar,
   frameWidth: number | null,
 ): string | null {
   const was = sidecar.frameWidth;
@@ -231,13 +231,13 @@ export function sidecarWidthWarning(
   );
 }
 
-export function buildMdInkSidecar(input: {
+export function buildAnnotateSidecar(input: {
   sourceName: string;
   contentHash: string;
   board: BoardBlob;
   footnotes?: readonly DocFootnote[];
   frameWidth?: number | null;
-}): MdInkSidecar {
+}): AnnotateSidecar {
   return {
     v: 1,
     sourceName: input.sourceName,
@@ -263,9 +263,9 @@ export function sidecarNameFor(sourceName: string, compressed = canGzip()): stri
 }
 
 /** Parse a sidecar, returning null for anything that is not one. */
-export function readMdInkSidecar(raw: string): MdInkSidecar | null {
+export function readAnnotateSidecar(raw: string): AnnotateSidecar | null {
   try {
-    const parsed = JSON.parse(raw) as MdInkSidecar;
+    const parsed = JSON.parse(raw) as AnnotateSidecar;
     if (parsed?.v !== 1) return null;
     if (typeof parsed.sourceName !== "string") return null;
     if (parsed.board?.v !== 1 || !Array.isArray(parsed.board.elements)) return null;
@@ -283,7 +283,7 @@ export function readMdInkSidecar(raw: string): MdInkSidecar | null {
  * ~2 KB. That is the difference between a file someone can mail themselves and
  * one they cannot.
  */
-export async function exportMdInkSidecar(sidecar: MdInkSidecar): Promise<void> {
+export async function exportAnnotateSidecar(sidecar: AnnotateSidecar): Promise<void> {
   const compressed = canGzip();
   const bytes = await gzipText(JSON.stringify(sidecar));
   const blob = new Blob([bytes], {

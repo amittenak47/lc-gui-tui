@@ -5,13 +5,13 @@ import {
   languageForName,
 } from "./codeLanguages";
 import {
-  buildMdInkSidecar,
+  buildAnnotateSidecar,
   DOCUMENT_ACCEPT,
   docTypeForName,
   isMarkdownName,
   isTextDocType,
-  readMdInkSidecar,
-} from "./mdInkFs";
+  readAnnotateSidecar,
+} from "./annotateFs";
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { encodeInkOps, inkOpsFrom } from "../canvas/inkCodec";
 import type { InkDrawOp } from "../canvas/rasterInk";
@@ -133,12 +133,12 @@ describe("sidecar round trip", () => {
   }
 
   it("brings the handwriting back through the file", () => {
-    const sidecar = buildMdInkSidecar({
+    const sidecar = buildAnnotateSidecar({
       sourceName: "notes.md",
       contentHash: "md1-1",
       board: inkedBoard(),
     });
-    const parsed = readMdInkSidecar(JSON.stringify(sidecar));
+    const parsed = readAnnotateSidecar(JSON.stringify(sidecar));
     expect(parsed).not.toBeNull();
     const ops = inkOpsFrom(parsed!.board) as InkDrawOp[];
     expect(ops).toHaveLength(1);
@@ -151,7 +151,7 @@ describe("sidecar round trip", () => {
   });
 
   it("still reads a sidecar written before the codec", () => {
-    const legacy = buildMdInkSidecar({
+    const legacy = buildAnnotateSidecar({
       sourceName: "notes.md",
       contentHash: "md1-1",
       board: {
@@ -171,13 +171,13 @@ describe("sidecar round trip", () => {
         ],
       },
     });
-    const parsed = readMdInkSidecar(JSON.stringify(legacy));
+    const parsed = readAnnotateSidecar(JSON.stringify(legacy));
     const ops = inkOpsFrom(parsed!.board) as InkDrawOp[];
     expect(ops[0].points[0]).toEqual({ x: 1, y: 2, pressure: -1 });
   });
 
   it("keeps footnotes across the file", () => {
-    const sidecar = buildMdInkSidecar({
+    const sidecar = buildAnnotateSidecar({
       sourceName: "notes.md",
       contentHash: "md1-1",
       board: inkedBoard(),
@@ -192,13 +192,13 @@ describe("sidecar round trip", () => {
         },
       ],
     });
-    const parsed = readMdInkSidecar(JSON.stringify(sidecar));
+    const parsed = readAnnotateSidecar(JSON.stringify(sidecar));
     expect(parsed!.footnotes).toHaveLength(1);
     expect(parsed!.footnotes![0].excerpt).toBe("a passage");
   });
 
   it("refuses something that is not a sidecar", () => {
-    expect(readMdInkSidecar("{}")).toBeNull();
-    expect(readMdInkSidecar("not json")).toBeNull();
+    expect(readAnnotateSidecar("{}")).toBeNull();
+    expect(readAnnotateSidecar("not json")).toBeNull();
   });
 });

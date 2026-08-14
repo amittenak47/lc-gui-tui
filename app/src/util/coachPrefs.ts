@@ -4,7 +4,7 @@
  * coach gets told about a failed test run is a property of this conversation.
  */
 
-const FORWARD_FAILURES_KEY = "lc.coach.forwardFailures.v1";
+const FORWARD_FAILURES_KEY = "whiteboard.coach.forwardFailures.v1";
 
 /**
  * Off by default.

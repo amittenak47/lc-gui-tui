@@ -12,16 +12,24 @@
 import { READING_COLUMN_MAX, READING_COLUMN_MIN, readingColumnWidth } from "./readingColumn";
 import type { Skeleton } from "./skeleton";
 
-export const MD_INK_TASK_ID = "__md_ink__";
-export const MD_INK_DATASET = "md-ink";
+export const ANNOTATE_TASK_ID = "__annotate__";
+/** Pre-rename task id. Still recognised when restoring an old session. */
+export const LEGACY_MD_INK_TASK_ID = "__md_ink__";
+/** Wire `surface` for any captured source (file now, URL later). */
+export const ANNOTATE_DATASET = "annotate";
 
-/** Region id the camera fits to — one page, so one id. */
-export const MD_INK_REGION = "mdink-0";
+/**
+ * Region id the camera fits to — one page, so one id.
+ *
+ * Value stays `mdink-0`: it is persisted as `customData.lcRegion` on saved
+ * boards, and renaming it would orphan every annotated document.
+ */
+export const ANNOTATE_REGION = "mdink-0";
 
 /**
  * Scene width of the document page — a reading column, not a desk.
  *
- * {@link MD_INK_PAGE_W} is the *ceiling* (Obsidian's `--file-line-width`
+ * {@link ANNOTATE_PAGE_W} is the *ceiling* (Obsidian's `--file-line-width`
  * default). On a phone, fitting that ceiling to ~400 CSS px used to render
  * body text near 8px — unreadable. New sessions size the page to the viewport
  * instead so width-fit lands near zoom 1 and type stays Obsidian-sized. The
@@ -33,10 +41,10 @@ export const MD_INK_REGION = "mdink-0";
  * markdown and leaves marks on the wrong words — so restores with ink keep
  * their saved frame width.
  */
-export const MD_INK_PAGE_W = READING_COLUMN_MAX;
+export const ANNOTATE_PAGE_W = READING_COLUMN_MAX;
 
 /** Narrowest column we will author — below this, chrome eats the prose. */
-export const MD_INK_PAGE_W_MIN = READING_COLUMN_MIN;
+export const ANNOTATE_PAGE_W_MIN = READING_COLUMN_MIN;
 
 /**
  * Page width for a fresh markdown session on this screen.
@@ -44,12 +52,12 @@ export const MD_INK_PAGE_W_MIN = READING_COLUMN_MIN;
  * The problem statement is set the same way now, so the arithmetic lives in
  * {@link readingColumnWidth} and both documents share it.
  */
-export function mdInkPageWidthForViewport(cssWidth: number): number {
+export function annotatePageWidthForViewport(cssWidth: number): number {
   return readingColumnWidth(cssWidth);
 }
 
 /** Width stamped on a saved md-ink frame, if any. */
-export function mdInkFrameWidthFromElements(
+export function annotateFrameWidthFromElements(
   elements: readonly { width?: number; customData?: { lcMdInkFrame?: boolean } | null }[],
 ): number | null {
   for (const el of elements) {
@@ -67,7 +75,7 @@ export const MD_INK_MIN_PAGE_H = 1100;
 /**
  * Scene units per CSS pixel of rendered markdown.
  *
- * The document layer is laid out at {@link MD_INK_PAGE_W} scene units wide and
+ * The document layer is laid out at {@link ANNOTATE_PAGE_W} scene units wide and
  * scaled by the camera, so one CSS pixel in the renderer *is* one scene unit.
  * Kept as a named constant because the height that comes back from the measure
  * is in those units and the arithmetic reads like nonsense without a name for
@@ -78,7 +86,7 @@ export const MD_INK_SCENE_PER_PX = 1;
 /** Room under the last line so a note can be written past the end of the text. */
 export const MD_INK_TAIL_PAD = 180;
 
-export function mdInkPageHeight(measuredPx: number | null): number {
+export function annotatePageHeight(measuredPx: number | null): number {
   if (measuredPx === null || !Number.isFinite(measuredPx) || measuredPx <= 0) {
     return MD_INK_MIN_PAGE_H;
   }
@@ -92,15 +100,15 @@ export function mdInkPageHeight(measuredPx: number | null): number {
  * and measure it — the *markdown* is what is locked, and it is HTML under the
  * canvas rather than an element on it, so there is nothing here to lock.
  */
-export function buildMdInkTemplate(
+export function buildAnnotateTemplate(
   height: number,
   _dark = false,
-  width: number = MD_INK_PAGE_W,
+  width: number = ANNOTATE_PAGE_W,
 ): Skeleton[] {
   const pageW = Math.round(
     Number.isFinite(width) && width > 0
-      ? Math.min(MD_INK_PAGE_W, Math.max(MD_INK_PAGE_W_MIN, width))
-      : MD_INK_PAGE_W,
+      ? Math.min(ANNOTATE_PAGE_W, Math.max(ANNOTATE_PAGE_W_MIN, width))
+      : ANNOTATE_PAGE_W,
   );
   return [
     {
@@ -134,7 +142,7 @@ export function buildMdInkTemplate(
       locked: true,
       angle: 0,
       customData: {
-        lcRegion: MD_INK_REGION,
+        lcRegion: ANNOTATE_REGION,
         lcRegionFrame: true,
         lcMdInkFrame: true,
         lcDocumentPage: true,

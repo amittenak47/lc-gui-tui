@@ -10,7 +10,7 @@
  * default: a preference nobody asked for should not narrow what they get.
  */
 
-const KEY = "lc.palette.tag";
+const KEY = "whiteboard.palette.tag";
 
 /**
  * The tags worth offering, in the feed's own vocabulary.

@@ -7,6 +7,7 @@
  */
 
 import { BOARD_THEMES, type BoardTheme } from "../templates/skeleton";
+import { getStorageItem, LEGACY_THEME_KEY, THEME_KEY } from "../util/storageKeys";
 
 export type ThemeMode = "light" | "dark";
 
@@ -163,8 +164,6 @@ export function themeTokens(theme: AppTheme): typeof LIGHT_TOKENS {
   return { ...base, ...(CHROME[theme.id]?.tokens ?? {}) };
 }
 
-const STORAGE_KEY = "lc-app-theme";
-
 /** Map retired theme ids onto the current hue-ordered palette. */
 const LEGACY_THEME_IDS: Record<string, string> = {
   // Classic neutrals → nearest hue
@@ -183,7 +182,7 @@ const LEGACY_THEME_IDS: Record<string, string> = {
 
 export function loadThemeId(): string {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
+    const stored = getStorageItem(THEME_KEY, LEGACY_THEME_KEY);
     if (!stored) return APP_THEMES[0].id;
     const resolved = LEGACY_THEME_IDS[stored] ?? stored;
     if (APP_THEMES.some((theme) => theme.id === resolved)) return resolved;
@@ -195,7 +194,7 @@ export function loadThemeId(): string {
 
 export function saveThemeId(id: string): void {
   try {
-    localStorage.setItem(STORAGE_KEY, id);
+    localStorage.setItem(THEME_KEY, id);
   } catch {
     /* private browsing */
   }
@@ -232,14 +231,14 @@ export function isDarkTheme(id: string): boolean {
   return APP_THEMES.find((theme) => theme.id === id)?.mode === "dark";
 }
 
-/** Carbon OLED — md-ink document paper always uses this, not the app chrome theme. */
-export const MD_INK_DISPLAY_THEME_ID = "graphite";
+/** Carbon OLED — annotate document paper always uses this, not the app chrome theme. */
+export const ANNOTATE_DISPLAY_THEME_ID = "graphite";
 
-export function mdInkDisplayTheme(): AppTheme {
-  return APP_THEMES.find((theme) => theme.id === MD_INK_DISPLAY_THEME_ID) ?? APP_THEMES[0];
+export function annotateDisplayTheme(): AppTheme {
+  return APP_THEMES.find((theme) => theme.id === ANNOTATE_DISPLAY_THEME_ID) ?? APP_THEMES[0];
 }
 
-export function mdInkDisplayTokens(): typeof LIGHT_TOKENS & { background: string } {
-  const theme = mdInkDisplayTheme();
+export function annotateDisplayTokens(): typeof LIGHT_TOKENS & { background: string } {
+  const theme = annotateDisplayTheme();
   return { background: theme.background, ...themeTokens(theme) };
 }

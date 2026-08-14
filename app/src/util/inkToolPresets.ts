@@ -54,7 +54,7 @@ import {
   type InkToolPrefs,
 } from "./inkToolPrefs";
 
-const KEY = "lc.inkToolPresets.v2";
+const KEY = "whiteboard.inkToolPresets.v2";
 export const CUSTOM_WEDGE_COUNT = 5;
 export const WEDGE_COUNT = 1 + CUSTOM_WEDGE_COUNT;
 

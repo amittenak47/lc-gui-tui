@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    lc_whiteboard_lib::run();
+    whiteboard_lib::run();
 }

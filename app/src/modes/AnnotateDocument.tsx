@@ -17,7 +17,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useEffect, useMemo, useRef } from "react";
 
-export interface MdInkDocumentProps {
+export interface AnnotateDocumentProps {
   source: string;
   /**
    * Called with the rendered height in scene units whenever it changes.
@@ -57,7 +57,7 @@ export function renderMarkdown(source: string): string {
   });
 }
 
-export function MdInkDocument({ source, onMeasure, selectable = false }: MdInkDocumentProps) {
+export function AnnotateDocument({ source, onMeasure, selectable = false }: AnnotateDocumentProps) {
   const nodeRef = useRef<HTMLDivElement | null>(null);
   const html = useMemo(() => renderMarkdown(source), [source]);
   const onMeasureRef = useRef(onMeasure);

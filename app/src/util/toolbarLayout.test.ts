@@ -10,7 +10,7 @@ import {
   toolbarAxis,
 } from "./toolbarLayout";
 
-const KEY = "lc.toolbar.layout.v1";
+const KEY = "whiteboard.toolbar.layout.v1";
 
 beforeEach(() => {
   const store = new Map<string, string>();

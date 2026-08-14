@@ -21,7 +21,9 @@
  *     `tx.onabort` below, and it is the reason this file exists at all.
  */
 
-const DB_NAME = "lc.docs";
+export const DB_NAME = "whiteboard.docs";
+/** Pre-rename database. Copied once by `storageMigration`, then deleted. */
+export const LEGACY_DB_NAME = "lc.docs";
 
 /**
  * Bumped from 3 when per-page ink shards moved in beside rolling snapshots.
@@ -29,7 +31,7 @@ const DB_NAME = "lc.docs";
  * `onupgradeneeded` is additive and guarded per store, so an existing database
  * gains the new stores and keeps everything already in `bytes`.
  */
-const DB_VERSION = 4;
+export const DB_VERSION = 4;
 
 /** Binary documents — PDF and EPUB bytes, keyed by content hash. */
 export const STORE_BYTES = "bytes";

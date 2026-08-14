@@ -5,7 +5,7 @@
  * 100% = current alpha; 0% = transparent; 300% = 3× alpha (clamped to opaque at paint).
  */
 
-const KEY = "lc.inkBoldness";
+const KEY = "whiteboard.inkBoldness";
 
 export const INK_BOLDNESS_MIN = 0;
 export const INK_BOLDNESS_MAX = 3;

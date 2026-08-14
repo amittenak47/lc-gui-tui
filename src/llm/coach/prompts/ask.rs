@@ -27,7 +27,7 @@ pub fn build_ask_prompt(
         write_committed_approach(&mut out, committed);
     }
     let question_max =
-        if crate::scratchpad::is_meta(meta) || crate::scratchpad::is_md_ink_meta(meta) {
+        if crate::pad::is_pad_meta(meta) {
             PAD_ASK_QUESTION_MAX
         } else {
             ASK_QUESTION_MAX
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn document_ask_keeps_a_question_past_the_old_4000_cap() {
-        let meta = crate::scratchpad::md_ink_workspace_meta();
+        let meta = crate::pad::annotate_meta();
         let question = "q".repeat(5000);
         let prompt = build_ask_prompt(&meta, None, &question, &CoachContext::default());
         assert!(prompt.contains(&question));

@@ -43,7 +43,7 @@ import {
   parseScratchPageId,
   scratchTitleAnchor,
   SCRATCH_PAGE_W,
-} from "../templates/scratchpad";
+} from "../templates/whiteboard";
 import {
   isReadingColumnFrame,
   regionFrameId,
@@ -1791,7 +1791,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    *
    * Library stamps must stay draggable — older imports may still be locked.
    * Page frames must not be: they are scaffolding, and an unlocked one is the
-   * whole-note-dragged-off-screen bug (see `buildScratchpadTemplate`). Boards
+   * whole-note-dragged-off-screen bug (see `buildWhiteboardTemplate`). Boards
    * written before that fix carry `locked: false` on the frame, so opening one
    * would put the trap straight back.
    */
@@ -2079,7 +2079,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     let bounds = pageBoundsRef.current;
     // Desktop / race: pageBoundsRef may lag one frame — measure the open page.
-    // Do not hardcode constraints: md-ink uses MD_INK_REGION.
+    // Do not hardcode constraints: md-ink uses ANNOTATE_REGION.
     if (!bounds) {
       const live = api.getSceneElements() as unknown as PageableElement[];
       const page = mobileRegionRef.current ?? "constraints";
@@ -5285,7 +5285,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             // match against.
             ...el,
             height: pageContentHeight,
-            // Md frame must stay locked — see buildMdInkTemplate.
+            // Md frame must stay locked — see buildAnnotateTemplate.
             ...(isMdFrame ? { locked: true } : {}),
             versionNonce: Math.random() * 2 ** 31,
           } as LayoutElement)
