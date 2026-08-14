@@ -1,4 +1,4 @@
-# Android tablet setup — lc whiteboard coach
+# Android tablet setup — Whiteboard
 
 Guide for installing the APK on an Android tablet (e.g. XPPen Magic Note Pad), fixing PATH on Windows, pairing with the PC daemon, and connecting when your home network uses a VPN router.
 
@@ -25,11 +25,11 @@ npm install
 npm run android:init
 ```
 
-`android:init` generates `src-tauri/gen/android/` and applies the cleartext-HTTP overlay (required for `lc serve` on LAN).
+`android:init` generates `src-tauri/gen/android/` and applies the cleartext-HTTP overlay (required for `whiteboard serve` on LAN).
 
 ### What is `android-overlay.mjs`?
 
-`src-tauri/gen/android/` is **generated** by `tauri android init` and is not in git. Android 9+ blocks cleartext HTTP in WebViews by default, which breaks calls to `lc serve` on your LAN (`http://192.168.x.x:7878`).
+`src-tauri/gen/android/` is **generated** by `tauri android init` and is not in git. Android 9+ blocks cleartext HTTP in WebViews by default, which breaks calls to `whiteboard serve` on your LAN (`http://192.168.x.x:7878`).
 
 `scripts/android-overlay.mjs` re-applies two edits after every init or regen:
 
@@ -173,7 +173,7 @@ Tap the arrow to pair. The app calls `POST /pair` and stores the long token.
 ### Architecture (what talks to what)
 
 ```
-Tablet app  ──HTTP──►  lc serve on PC (:7878)  ──►  Ollama / OpenAI / Groq on PC (127.0.0.1)
+Tablet app  ──HTTP──►  whiteboard serve on PC (:7878)  ──►  Ollama / OpenAI / Groq on PC (127.0.0.1)
 ```
 
 - The tablet **never** calls Ollama directly.
@@ -181,7 +181,7 @@ Tablet app  ──HTTP──►  lc serve on PC (:7878)  ──►  Ollama / Ope
 - Settings → **Serve** shows the pairing code for tablets (read-only on tablet; edit config on PC).
 - You do **not** configure a separate "app URL" for the LLM.
 
-### "Cannot reach lc serve" but browser works
+### "Cannot reach whiteboard serve" but browser works
 
 The Android WebView blocks cleartext HTTP unless the network overlay is applied. Rebuild the APK after pulling fixes:
 
@@ -233,7 +233,7 @@ If it still feels tight on your device, the constant lives in `app/src/styles.cs
 
 ### Short answer
 
-**Sometimes on plain LAN IP, often not reliably through a VPN router.** The app does not use a cloud URL by default — the tablet talks directly to `lc serve` on your PC.
+**Sometimes on plain LAN IP, often not reliably through a VPN router.** The app does not use a cloud URL by default — the tablet talks directly to `whiteboard serve` on your PC.
 
 ### What to try first (same home network)
 
@@ -264,12 +264,12 @@ This is the most reliable option when a VPN router blocks or rewrites LAN traffi
 | **Browser on LAN** | No APK rebuild | No ML Kit ink recognition; needs `npm run dev` on PC |
 | **spacedesk** | No network pairing; mirrors PC screen | Pen latency; no native ink |
 | **Port forward + public IP** | Works from anywhere | Security risk; dynamic IP; use token + firewall |
-| **Cloudflare Tunnel + Access** | HTTPS, email/device gate | Setup heavy; `lc serve` is HTTP-only today |
-| **VPS running `lc serve`** | Always-on remote host | Must sync data dir / corpora; not built-in |
+| **Cloudflare Tunnel + Access** | HTTPS, email/device gate | Setup heavy; `whiteboard serve` is HTTP-only today |
+| **VPS running `whiteboard serve`** | Always-on remote host | Must sync data dir / corpora; not built-in |
 
 ### “Whitelist only my tablet”
 
-`lc serve --lan` already requires a **pairing code** (6 digits, new each restart) and a **long token** after pair. There is no per-device MAC whitelist in the app today.
+`whiteboard serve --lan` already requires a **pairing code** (6 digits, new each restart) and a **long token** after pair. There is no per-device MAC whitelist in the app today.
 
 Practical equivalents:
 
@@ -277,7 +277,7 @@ Practical equivalents:
 2. **Windows Firewall** — allow inbound TCP 7878 only from the tablet’s LAN or Tailscale IP.
 3. **Do not port-forward** to the public internet unless you accept the risk; the token is the only auth layer.
 
-The APK bundles the frontend — only the **API** (`lc serve`) must be reachable. You do **not** need to host the React app remotely for the APK; you only need the daemon.
+The APK bundles the frontend — only the **API** (`whiteboard serve`) must be reachable. You do **not** need to host the React app remotely for the APK; you only need the daemon.
 
 ### Browser-only remote path (no APK)
 

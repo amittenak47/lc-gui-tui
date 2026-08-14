@@ -46,11 +46,11 @@ The app defaults to `http://127.0.0.1:7878`, so nothing needs pairing on desktop
 
 ## Modes
 
-**Review** — draw, tap **Submit**. The coach returns a verdict, ratings,
+**Review** — draw, tap **Submit**. The agent returns a verdict, ratings,
 strengths, gaps, a Socratic question, and — when your approach is wrong — a
 counterexample citing one of the problem's real sample cases.
 
-**Ambient** — *off.* The coach used to glance at the board every 60 seconds,
+**Ambient** — *off.* The agent used to glance at the board every 60 seconds,
 escalating rather than repeating itself. In practice it re-asked the same
 question on a board that changes slowly and blocked the pen while a local model
 thought. The button stays in the composer, greyed, behind one flag —
@@ -58,23 +58,24 @@ thought. The button stays in the composer, greyed, behind one flag —
 the socket, the escalation ladder, and the side panel; nothing else was
 removed.
 
-**Draw it** — the coach answers with a diagram instead of prose. Multi-frame
+**Draw it** — the agent answers with a diagram instead of prose. Multi-frame
 traces become *one* diagram with a scrubber, not five copies of the same array.
 
 **Reveal** — an explicit, confirmed opt-in that produces a stepwise path from
 your approach to a working one. It is never a solution dump, and it is logged so
-`lc stats` shows how often you tapped out.
+`whiteboard stats` shows how often you tapped out.
 
 ## Problem sets
 
-A tab strip above the problem table switches between the five corpora `lc`
-indexes. Everything under it — search, filters, paging, session Start / Reset /
-Select / Random — works the same on any tab: the dataset is one more parameter
-on the same queries. Filters do reset on a switch, since a tag from one corpus
-matches nothing in another's tables.
+A tab strip above the problem table switches between the five corpora
+`whiteboard` indexes. Everything under it — search, filters, paging, session
+Start / Reset / Select / Random — works the same on any tab: the dataset is one
+more parameter on the same queries. Filters do reset on a switch, since a tag
+from one corpus matches nothing in another's tables.
 
 A tab whose corpus has not been downloaded still appears, showing `0`, and its
-empty table says which repo to fetch and which `lc index --dataset …` to run.
+empty table says which repo to fetch and which `whiteboard index --dataset …`
+to run.
 Pass/fail badges are per problem set: the daemon keys session progress on
 `dataset/task_id`, so solving `two-sum` in one corpus does not mark the
 identically-named problem in another.
@@ -82,13 +83,13 @@ identically-named problem in another.
 ## Test results
 
 **Run tests** and **Submit** open a modal over the board — same shell as
-Settings. The same run also lands in the coach thread as an `app` turn and rides
-along with your next question on its own channel, so the coach can answer *"why
+Settings. The same run also lands in the agent thread as an `app` turn and rides
+along with your next question on its own channel, so the agent can answer *"why
 did case 3 fail?"* without you pasting anything. Closing the modal loses
 nothing.
 
 Settings → **Tests** picks between running every case and stopping at the first
-failure. Running every case is the default: it is what lets the coach choose a
+failure. Running every case is the default: it is what lets the agent choose a
 real counterexample.
 
 ## Leaving a problem
@@ -96,14 +97,14 @@ real counterexample.
 Stepping away asks what to keep, and asks a different question depending on
 whether the problem is solved:
 
-| | layout | code | coach session |
+| | layout | code | agent session |
 | --- | --- | --- | --- |
 | unsolved, **save** | resumes | resumes | resumes |
 | unsolved, **discard** | cleared | reset to starter | cleared |
 | solved, **save attempt** | archived | kept | archived |
 | solved, **clear attempt** | cleared | reset to starter | archived |
 
-Two rules are not symmetric, and both are deliberate: the coach session is
+Two rules are not symmetric, and both are deliberate: the agent session is
 always saved once a problem is solved, and re-attempting a solved problem always
 starts from a fresh board and a fresh session — re-solving while looking at the
 answer you already drew is not practice. The daemon owns the rules
@@ -165,8 +166,8 @@ its own port — read the one it prints).
 > `http://<pc-ip>:7878` in a browser will not give you the app.
 
 What you give up is the part that needs native code: **ML Kit handwriting
-recognition is Android-only**, so pen strokes reach the coach as the board
-picture rather than as text. Pick a vision-capable review model and the coach
+recognition is Android-only**, so pen strokes reach the agent as the board
+picture rather than as text. Pick a vision-capable review model and the agent
 still reads handwriting — see *Modes* above. If your review model has no vision,
 type the approach with the text tool instead.
 
@@ -230,7 +231,7 @@ needs are scripted rather than hand-applied — `npm run android:overlay` (which
 every android script runs first) copies
 `src-tauri/android-overlay/network_security_config.xml` into the project's
 `res/xml/` and points the manifest's `<application>` at it. Android 9+ blocks
-cleartext HTTP and `lc serve` speaks plain HTTP on the LAN; without this the app
+cleartext HTTP and `whiteboard serve` speaks plain HTTP on the LAN; without this the app
 looks like it simply cannot see the PC. The script is idempotent, so re-run it
 after any `init`/regeneration.
 
@@ -287,7 +288,7 @@ fallback is a raw-canvas ink layer under Excalidraw — `Board.tsx` sits behind
 `BoardHandle`, so that swap stays local to `canvas/`.
 
 The pen already draws on that raw-canvas layer (`RasterInkLayer.tsx`) rather than
-on Excalidraw, so both ways the coach reads a board go through `rasterInk.ts`:
+on Excalidraw, so both ways the agent reads a board go through `rasterInk.ts`:
 `getInkStrokes()` feeds the ops to ML Kit on Android, and `exportPng()` repaints
 them into the PNG when the selected model has vision. Neither Excalidraw's
 `freedraw` capture nor its exporter knows the pen exists.
@@ -323,12 +324,12 @@ npm run build
 ## Notes on the design
 
 **The model never emits coordinates.** LLMs are unreliable at coordinate
-geometry and reliable at structured semantic state, so the coach emits a *viz
+geometry and reliable at structured semantic state, so the agent emits a *viz
 program* — full state per frame — and `viz/render/<kind>.ts` lays it out
 deterministically into a reserved agent lane on the right of the board.
 
-**The coach never reads its own output back.** Injected diagrams are tagged and
-excluded from capture; otherwise the coach starts agreeing with itself.
+**The agent never reads its own output back.** Injected diagrams are tagged and
+excluded from capture; otherwise the agent starts agreeing with itself.
 
 **Cited test cases are verified, not trusted.** The daemon checks the cited
 index against the workspace's real cases and replaces the quoted input/expected
@@ -342,5 +343,5 @@ degrades in latency rather than in existence.
 
 **Test results are the app's voice, not the student's.** They travel on their
 own `app_messages` channel and the prompt tells the model to read them as fact.
-Everything else on the board is something the student claimed and the coach is
+Everything else on the board is something the student claimed and the agent is
 meant to question; a real test run is not.
