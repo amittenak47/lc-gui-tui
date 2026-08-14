@@ -121,6 +121,28 @@ export function selectionBounds(els: readonly TrashEl[]): TrashBounds | null {
 }
 
 /**
+ * Scene copies Excalidraw still has at the last commit, plus the clones it
+ * holds while a transform is in flight.
+ *
+ * A move or a linear-point drag often mutates `draggingElement` /
+ * `resizingElement` without bumping the scene array or `version` until
+ * pointer-up. Bounds that only read `getSceneElements()` then stay where the
+ * shape started, which is why the trash used to jump after the gesture ended.
+ */
+export function withLiveTrashEls(
+  els: readonly TrashEl[],
+  live: ReadonlyArray<TrashEl | null | undefined>,
+): TrashEl[] {
+  const byId = new Map<string, TrashEl>();
+  for (const el of els) byId.set(el.id, el);
+  for (const patch of live) {
+    if (!patch?.id) continue;
+    byId.set(patch.id, patch);
+  }
+  return Array.from(byId.values());
+}
+
+/**
  * Where the delete button goes, in CSS px from the board's top-left.
  *
  * **Outside the selection, not on it.** It used to sit 36px in from the right
