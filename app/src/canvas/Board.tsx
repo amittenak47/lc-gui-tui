@@ -1106,6 +1106,11 @@ export interface BoardProps {
   /** Pin the mobile coach sheet against drag gestures. */
   sheetDragLocked?: boolean;
   onToggleSheetLock?: () => void;
+  /**
+   * PDF page-preview filmstrip. Only passed for a stacked PDF — EPUB and
+   * markdown are one flowing document and have nothing to thumbnail.
+   */
+  pageFilm?: { open: boolean; onToggle: () => void } | null;
 }
 
 /** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
@@ -1171,6 +1176,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     coachFold = null,
     sheetDragLocked = false,
     onToggleSheetLock,
+    pageFilm = null,
   },
   ref,
 ) {
@@ -7634,6 +7640,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <LockIcon locked={sheetDragLocked} />
                   </button>
                 )}
+                {!mapChromeHidden && pageFilm && (
+                  <button
+                    type="button"
+                    className={
+                      pageFilm.open
+                        ? "lc-lined-toggle lc-tip-target is-active"
+                        : "lc-lined-toggle lc-tip-target"
+                    }
+                    aria-pressed={pageFilm.open}
+                    aria-label={
+                      pageFilm.open ? "Hide page previews" : "Show page previews"
+                    }
+                    data-tip={
+                      pageFilm.open ? "Hide page previews" : "Show page previews"
+                    }
+                    data-tip-placement="bottom"
+                    onClick={pageFilm.onToggle}
+                  >
+                    <PagesFilmIcon />
+                  </button>
+                )}
                 {chromeShown.eye && (
                   <button
                     type="button"
@@ -8150,6 +8177,25 @@ function EyeIcon({ closed = false, half = false }: { closed?: boolean; half?: bo
     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
       <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function PagesFilmIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="4" y="7" width="11" height="14" rx="1.5" />
+      <path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4H19a1.5 1.5 0 0 1 1.5 1.5V17A1.5 1.5 0 0 1 19 18.5h-4" />
     </svg>
   );
 }

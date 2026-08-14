@@ -142,8 +142,9 @@ import { CodeDocument } from "./modes/CodeDocument";
 import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelectionLayer";
 import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
-import { PdfDocument } from "./modes/PdfDocument";
+import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
+import { loadPdfFilmPref, savePdfFilmPref } from "./modes/pdfFilm";
 import { AnnotateDialog } from "./modes/AnnotateDialog";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
 import { StatementDocument } from "./modes/StatementDocument";
@@ -516,7 +517,24 @@ export function App() {
   const [annotateHeight, setAnnotateHeight] = useState<number | null>(null);
   const annotateHeightRef = useRef<number | null>(null);
   annotateHeightRef.current = annotateHeight;
-  const [pdfNav, setPdfNav] = useState<{ count: number; current: number } | null>(null);
+  const [pdfNav, setPdfNav] = useState<PdfNav | null>(null);
+  const pdfThumbRef = useRef<PdfThumbRenderer | null>(null);
+  const [pdfThumbReady, setPdfThumbReady] = useState(false);
+  const [pdfFilmOpen, setPdfFilmOpen] = useState(loadPdfFilmPref);
+  const onPdfThumbRenderer = useCallback((render: PdfThumbRenderer | null) => {
+    pdfThumbRef.current = render;
+    setPdfThumbReady(Boolean(render));
+  }, []);
+  const renderPdfThumb = useCallback((page: number) => {
+    return pdfThumbRef.current?.(page) ?? Promise.resolve(null);
+  }, [pdfThumbReady]);
+  const togglePdfFilm = useCallback(() => {
+    setPdfFilmOpen((on) => {
+      const next = !on;
+      savePdfFilmPref(next);
+      return next;
+    });
+  }, []);
   /** Scene width of the open markdown page — viewport-sized on fresh opens. */
   const [annotatePageWidth, setAnnotatePageWidth] = useState(ANNOTATE_PAGE_W);
   /** The width marks were placed at — recorded in an exported sidecar. */
@@ -5284,6 +5302,7 @@ export function App() {
             (switchMotion === "busy" || switchMotion === "done") && "lc-switching",
             // Lifts the ink layer over the dock — see the rule in styles.css.
             annotateCode && "lc-annotating-code",
+            pdfFilmOpen && pdfNav && pdfNav.count >= 2 && "lc-has-pdf-film",
           ]
             .filter(Boolean)
             .join(" ")}
@@ -5391,6 +5410,7 @@ export function App() {
                       frameWidth={annotatePageWidth}
                       onMeasure={onMdInkMeasure}
                       onNav={setPdfNav}
+                      onThumbRenderer={onPdfThumbRenderer}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                       onError={setError}
                     />
@@ -5451,11 +5471,18 @@ export function App() {
             coachFold={null}
             sheetDragLocked={mobile ? sheetDragLocked : false}
             onToggleSheetLock={mobile ? onToggleSheetLock : undefined}
+            pageFilm={
+              pdfNav && pdfNav.count >= 2
+                ? { open: pdfFilmOpen, onToggle: togglePdfFilm }
+                : null
+            }
           />
-          {pdfNav && pdfNav.count >= 2 && (
+          {pdfFilmOpen && pdfNav && pdfNav.count >= 2 && (
             <PdfPageRail
               count={pdfNav.count}
               current={pdfNav.current}
+              aspects={pdfNav.aspects}
+              renderThumb={renderPdfThumb}
               onJump={(page) => boardRef.current?.scrollToPdfPage(page)}
             />
           )}
