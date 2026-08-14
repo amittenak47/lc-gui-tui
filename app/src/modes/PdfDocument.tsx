@@ -36,6 +36,8 @@
 
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 
+import type { PdfThumbRenderer } from "./pdfFilm";
+
 /**
  * Supersampling of the page bitmap relative to its scene size.
  *
@@ -97,12 +99,26 @@ export interface PdfDocumentProps {
   frameWidth: number;
   /** Reported whenever the rendered stack height changes, in scene units. */
   onMeasure?: (height: number) => void;
-  /** Page count and the page filling most of the viewport — for the side rail. */
-  onNav?: (nav: { count: number; current: number } | null) => void;
+  /** Page count and the page filling most of the viewport — for the filmstrip. */
+  onNav?: (nav: PdfNav | null) => void;
+  /**
+   * Cheap page bitmaps for the filmstrip. Same open document as the scene —
+   * a second `getDocument` would double the worker and fight the paint pump.
+   */
+  onThumbRenderer?: (render: PdfThumbRenderer | null) => void;
   /** Scroll mode: the text layer answers the pointer so quotes can be picked. */
   selectable?: boolean;
   onError?: (message: string) => void;
 }
+
+/** Viewport index plus per-page width/height for filmstrip placeholders. */
+export interface PdfNav {
+  count: number;
+  current: number;
+  aspects: number[];
+}
+
+export type { PdfThumbRenderer } from "./pdfFilm";
 
 /**
  * Loaded lazily: pdf.js is ~1 MB and no problem board ever needs it.
@@ -148,6 +164,7 @@ export function PdfDocument({
   frameWidth,
   onMeasure,
   onNav,
+  onThumbRenderer,
   selectable = false,
   onError,
 }: PdfDocumentProps) {
@@ -157,6 +174,8 @@ export function PdfDocument({
   onMeasureRef.current = onMeasure;
   const onNavRef = useRef(onNav);
   onNavRef.current = onNav;
+  const onThumbRendererRef = useRef(onThumbRenderer);
+  onThumbRendererRef.current = onThumbRenderer;
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
   const visibleRatioRef = useRef<Map<number, number>>(new Map());
@@ -313,7 +332,10 @@ export function PdfDocument({
       if (best < 0 && visibleRef.current.size > 0) {
         current = Math.min(...visibleRef.current);
       }
-      onNavRef.current?.({ count: last, current });
+      const aspects = pages.map((page) =>
+        page.height > 0 ? page.width / page.height : 612 / 792,
+      );
+      onNavRef.current?.({ count: last, current, aspects });
     };
 
     rebuild();
@@ -350,6 +372,48 @@ export function PdfDocument({
       observer.disconnect();
       onNavRef.current?.(null);
     };
+  }, [pages]);
+
+  /**
+   * Hand the filmstrip a renderer that uses this document, not a second load.
+   *
+   * Low scale, JPEG, throwaway canvas — the scene paint still owns the page
+   * slots. Cancelled when the file changes or this tree unmounts.
+   */
+  useEffect(() => {
+    if (pages.length === 0) {
+      onThumbRendererRef.current?.(null);
+      return;
+    }
+    const last = pages.length;
+    const render: PdfThumbRenderer = async (pageNumber) => {
+      const doc = docRef.current;
+      if (!doc || disposedRef.current) return null;
+      if (pageNumber < 1 || pageNumber > last) return null;
+      try {
+        const page = await doc.getPage(pageNumber);
+        if (disposedRef.current) return null;
+        const natural = page.getViewport({ scale: 1 });
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const targetW = 56 * dpr;
+        const scale = natural.width > 0 ? targetW / natural.width : 0.12;
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(viewport.width));
+        canvas.height = Math.max(1, Math.round(viewport.height));
+        const ctx = canvas.getContext("2d", { alpha: false });
+        if (!ctx) return null;
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+        if (disposedRef.current) return null;
+        return canvas.toDataURL("image/jpeg", 0.62);
+      } catch {
+        return null;
+      }
+    };
+    onThumbRendererRef.current?.(render);
+    return () => onThumbRendererRef.current?.(null);
   }, [pages]);
 
   /**
