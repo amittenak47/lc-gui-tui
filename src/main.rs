@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 // The CLI and `whiteboard serve` are both shells over the same library crate.
 use whiteboard::{
-    config, dataset, generator, index, lists, llm, loader, problem, runner, serve, session, stats,
+    config, dataset, datasets, generator, index, lists, llm, loader, problem, runner, serve, session, stats,
     tui,
 };
 
@@ -494,9 +494,9 @@ fn cmd_ask(
 /// `lc datasets --inspect`: the corpus as it is on disk, not as the adapter
 /// hopes it is. See `src/datasets/inspect.rs` for why this exists.
 fn inspect_datasets(cfg: &Config, only: Option<&str>) -> Result<()> {
-    let targets: Vec<&'static lc::dataset::Dataset> = match only {
-        Some(id) => vec![lc::dataset::get(id)?],
-        None => lc::dataset::DATASETS.iter().collect(),
+    let targets: Vec<&'static dataset::Dataset> = match only {
+        Some(id) => vec![dataset::get(id)?],
+        None => dataset::DATASETS.iter().collect(),
     };
     for dataset in targets {
         let dir = dataset.corpus_dir(cfg).ok();
@@ -507,7 +507,7 @@ fn inspect_datasets(cfg: &Config, only: Option<&str>) -> Result<()> {
                 .map(|d| d.display().to_string())
                 .unwrap_or_else(|| "no corpus dir".into())
         );
-        let reports = lc::datasets::inspect::inspect(cfg, dataset)?;
+        let reports = datasets::inspect::inspect(cfg, dataset)?;
         if reports.is_empty() {
             println!("  no .json / .jsonl files — download it, e.g.");
             println!("    python scripts/fetch_dataset.py {}", dataset.id);
@@ -526,7 +526,7 @@ fn inspect_datasets(cfg: &Config, only: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn print_datasets(infos: &[lc::dataset::DatasetInfo]) {
+fn print_datasets(infos: &[dataset::DatasetInfo]) {
     let mut table = Table::new();
     table.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED);
     table.set_header(["dataset", "problems", "source", "corpus dir"]);
