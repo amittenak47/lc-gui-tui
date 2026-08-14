@@ -124,7 +124,9 @@ export interface InkPresetEditorProps {
   onEditInkColor?: (index: number, color: string) => void;
   onCycleNext?: () => void;
   onCyclePrev?: () => void;
-  onClose: () => void;
+  onClose: (reason: "back" | "dismiss") => void;
+  /** Wheel remounts under the sheet so the morph-out lands on the wedge. */
+  onBackReveal?: () => void;
   onSave: (snap: InkWedgeSnapshot) => void;
   onDuplicate: (snap: InkWedgeSnapshot) => void;
 }
@@ -142,6 +144,7 @@ export function InkPresetEditor({
   onCycleNext,
   onCyclePrev,
   onClose,
+  onBackReveal,
   onSave,
   onDuplicate,
 }: InkPresetEditorProps) {
@@ -153,15 +156,36 @@ export function InkPresetEditor({
   const [draft, setDraft] = useState<InkWedgeSnapshot>(seed);
   const [name, setName] = useState(seed.name);
   const [closing, setClosing] = useState(false);
+  const closeReasonRef = useRef<"back" | "dismiss">("dismiss");
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const onBackRevealRef = useRef(onBackReveal);
+  onBackRevealRef.current = onBackReveal;
 
   useEffect(() => {
     setDraft({ ...seed, name });
   }, [seed, name]);
 
-  const close = () => {
+  const close = (reason: "back" | "dismiss" = "dismiss") => {
+    if (closing) return;
+    closeReasonRef.current = reason;
+    if (reason === "back") onBackRevealRef.current?.();
     setClosing(true);
-    window.setTimeout(onClose, 220);
+    window.setTimeout(() => onCloseRef.current(closeReasonRef.current), 220);
   };
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close("back");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // close is stable enough via closing guard + refs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closing]);
 
   const named = { ...draft, name: name.trim() || seed.name };
   const draw = !isEraserWedge(named);
@@ -179,12 +203,9 @@ export function InkPresetEditor({
   }, [inkColor, inkPalette]);
 
   return createPortal(
-    <div className="lc-preset-sheet-layer" onPointerDown={close}>
+    <div className="lc-preset-sheet-layer" onPointerDown={() => close("dismiss")}>
       <div
-        className={[
-          closing ? "lc-preset-sheet is-closing" : "lc-preset-sheet is-open",
-          "lc-scroll-pane",
-        ].join(" ")}
+        className={closing ? "lc-preset-sheet is-closing" : "lc-preset-sheet is-open"}
         style={{
           ["--lc-morph-x" as string]: `${from.left + from.width / 2}px`,
           ["--lc-morph-y" as string]: `${from.top + from.height / 2}px`,
@@ -194,6 +215,13 @@ export function InkPresetEditor({
         onPointerDown={(event) => event.stopPropagation()}
       >
         <header className="lc-preset-sheet-head">
+          <button
+            type="button"
+            className="lc-preset-sheet-back"
+            onClick={() => close("back")}
+          >
+            Back
+          </button>
           <span
             className="lc-preset-sheet-swatch"
             style={{
@@ -228,7 +256,8 @@ export function InkPresetEditor({
           </div>
         </header>
 
-        <MorphBar active="body" axis="height" className="lc-preset-sheet-morph">
+        <div className="lc-preset-sheet-body lc-scroll-pane">
+          <MorphBar active="body" axis="height" className="lc-preset-sheet-morph">
           <div data-morph-id="body">
             <section className="lc-preset-sheet-strip">
               <TestStrip kind={kind} snap={named} />
@@ -237,7 +266,18 @@ export function InkPresetEditor({
             <div className={draw ? "lc-preset-sheet-cols" : "lc-preset-sheet-cols is-single"}>
               <div className="lc-preset-sheet-side">
                 {kind === "eraser" && isEraserWedge(named) ? (
-                  <>
+                  <SettingsBlock
+                    title="Eraser"
+                    hint={
+                      <>
+                        <strong>Rub out</strong> clears whatever the ring covers, so a small
+                        eraser takes a bite out of the side of a letter and leaves the rest —
+                        the way a real one does. <strong>Whole strokes</strong> removes any
+                        stroke you touch, which is what you want for pulling one wrong line out
+                        of a diagram. Saved on this device only.
+                      </>
+                    }
+                  >
                     <div className="lc-preset-sheet-draw">
                       <StrokeSizeSlider
                         value={named.eraserWidth}
@@ -246,48 +286,45 @@ export function InkPresetEditor({
                         eraser
                       />
                     </div>
-                    <SettingsBlock
-                      title="Eraser"
-                      hint={
-                        <>
-                          <strong>Rub out</strong> clears whatever the ring covers, so a small
-                          eraser takes a bite out of the side of a letter and leaves the rest —
-                          the way a real one does. <strong>Whole strokes</strong> removes any
-                          stroke you touch, which is what you want for pulling one wrong line out
-                          of a diagram. Saved on this device only.
-                        </>
-                      }
-                    >
-                      <SettingsChoice
-                        label="What the eraser removes"
-                        value={named.partialErase}
-                        options={[
-                          [true, "Rub out"],
-                          [false, "Whole strokes"],
-                        ]}
-                        onChange={(partialErase) => setDraft({ ...named, partialErase })}
-                      />
-                    </SettingsBlock>
-                  </>
+                    <SettingsChoice
+                      label="What the eraser removes"
+                      value={named.partialErase}
+                      options={[
+                        [true, "Rub out"],
+                        [false, "Whole strokes"],
+                      ]}
+                      onChange={(partialErase) => setDraft({ ...named, partialErase })}
+                    />
+                  </SettingsBlock>
                 ) : (
                   draw && <DrawKnobs snap={named} onChange={setDraft} />
                 )}
                 {draw && (
-                  <div className="lc-preset-sheet-color">
-                    <ColorRadial
-                      colors={inkPalette}
-                      value={named.colour}
-                      onPick={(colour) => setDraft({ ...named, colour })}
-                      onEditColor={(slot, colour) => {
-                        onEditInkColor?.(slot, colour);
-                        setDraft({ ...named, colour });
-                      }}
-                      onCycleNext={onCycleNext}
-                      onCyclePrev={onCyclePrev}
-                      handedness={handedness}
-                      embedded
-                    />
-                  </div>
+                  <SettingsBlock
+                    title="Colour"
+                    hint={
+                      <>
+                        Tap a wedge to pick it. Tap the hub to cycle palettes. Hold a wedge
+                        to edit that slot. Saved on this device only.
+                      </>
+                    }
+                  >
+                    <div className="lc-preset-sheet-color">
+                      <ColorRadial
+                        colors={inkPalette}
+                        value={named.colour}
+                        onPick={(colour) => setDraft({ ...named, colour })}
+                        onEditColor={(slot, colour) => {
+                          onEditInkColor?.(slot, colour);
+                          setDraft({ ...named, colour });
+                        }}
+                        onCycleNext={onCycleNext}
+                        onCyclePrev={onCyclePrev}
+                        handedness={handedness}
+                        embedded
+                      />
+                    </div>
+                  </SettingsBlock>
                 )}
               </div>
               {draw && (
@@ -298,6 +335,7 @@ export function InkPresetEditor({
             </div>
           </div>
         </MorphBar>
+        </div>
       </div>
     </div>,
     document.body,
@@ -324,35 +362,46 @@ function DrawKnobs({
   onChange: (next: InkDrawSnapshot) => void;
 }) {
   return (
-    <div className="lc-preset-sheet-draw">
-      <StrokeSizeSlider
-        value={snap.width}
-        onChange={(width) => onChange({ ...snap, width })}
-        label="Nib size"
-      />
-      <InkFullnessSlider
-        value={snap.fullness}
-        onChange={(fullness) => onChange({ ...snap, fullness })}
-        enabled={snap.pressureSensitive}
-      />
-      <PressureSensitiveToggle
-        enabled={snap.pressureSensitive}
-        onChange={(pressureSensitive) => onChange({ ...snap, pressureSensitive })}
-      />
-      <button
-        type="button"
-        className={
-          snap.straightInk
-            ? "lc-tool lc-tool-mini lc-tool-active"
-            : "lc-tool lc-tool-mini"
-        }
-        aria-label="Straight stroke"
-        aria-pressed={snap.straightInk}
-        onClick={() => onChange({ ...snap, straightInk: !snap.straightInk })}
-      >
-        <StraightIcon />
-      </button>
-    </div>
+    <SettingsBlock
+      title="Stroke"
+      hint={
+        <>
+          Nib width, how full the ink sits, whether the stylus can thin the line, and a
+          straight-stroke lock. Fullness only applies when pressure is on. Saved on this
+          device only.
+        </>
+      }
+    >
+      <div className="lc-preset-sheet-draw">
+        <StrokeSizeSlider
+          value={snap.width}
+          onChange={(width) => onChange({ ...snap, width })}
+          label="Nib size"
+        />
+        <InkFullnessSlider
+          value={snap.fullness}
+          onChange={(fullness) => onChange({ ...snap, fullness })}
+          enabled={snap.pressureSensitive}
+        />
+        <PressureSensitiveToggle
+          enabled={snap.pressureSensitive}
+          onChange={(pressureSensitive) => onChange({ ...snap, pressureSensitive })}
+        />
+        <button
+          type="button"
+          className={
+            snap.straightInk
+              ? "lc-tool lc-tool-mini lc-tool-active"
+              : "lc-tool lc-tool-mini"
+          }
+          aria-label="Straight stroke"
+          aria-pressed={snap.straightInk}
+          onClick={() => onChange({ ...snap, straightInk: !snap.straightInk })}
+        >
+          <StraightIcon />
+        </button>
+      </div>
+    </SettingsBlock>
   );
 }
 
@@ -379,7 +428,7 @@ function PhysicsKnobs({
         }
       >
         <div
-          className="lc-settings-choice lc-settings-choice-compact"
+          className="lc-settings-choice lc-settings-choice-compact lc-settings-choice-quad"
           role="radiogroup"
           aria-label="Pressure clip"
         >
@@ -494,9 +543,9 @@ function PhysicsKnobs({
       {smoothPct > 0 && (
         <>
           <p className="lc-settings-hint">
-            When it is applied. <strong>On the lift</strong> tidies the stroke once
+            When it is applied. <strong>On Lift</strong> tidies the stroke once
             you finish it, so the ink is always exactly under the nib as you write.
-            <strong> While you write</strong> keeps re-smoothing the stroke under
+            <strong> While Writing</strong> keeps re-smoothing the stroke under
             your hand — earlier bends tidy before you lift, and the tip still
             tracks the pen. Changes apply immediately.
           </p>
@@ -505,8 +554,8 @@ function PhysicsKnobs({
             value={snap.smoothingMode}
             options={
               [
-                ["lift", "On the lift"],
-                ["live", "While you write"],
+                ["lift", "On Lift"],
+                ["live", "While Writing"],
               ] as Array<[InkSmoothingMode, string]>
             }
             onChange={(smoothingMode) => onChange({ ...snap, smoothingMode })}

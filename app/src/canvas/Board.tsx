@@ -182,7 +182,9 @@ import {
 import {
   CHROME_WAKE_EVENT,
   loadChromeWakeMarker,
+  loadChromeWakeTint,
   type ChromeWakeMarker,
+  type ChromeWakeTint,
 } from "../util/chromeWakePref";
 import {
   linedPaperLabel,
@@ -1167,6 +1169,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     index: number;
     from: DOMRect;
   } | null>(null);
+  const [wheelPeek, setWheelPeek] = useState(false);
   const [inkColor, setInkColor] = useState(() =>
     resolveInkColor(themeId, inkPrefsRef.current.inkColor),
   );
@@ -1393,6 +1396,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [chromeMode, setChromeMode] = useState<ChromeMode>(loadChromeMode);
   const [chromeWakeMarker, setChromeWakeMarker] =
     useState<ChromeWakeMarker>(loadChromeWakeMarker);
+  const [chromeWakeTint, setChromeWakeTint] =
+    useState<ChromeWakeTint>(loadChromeWakeTint);
   const [chromeAwake, setChromeAwake] = useState(true);
   const chromeShown = chromeVisibility(chromeMode, {
     awake: chromeAwake,
@@ -1402,6 +1407,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const mapChromeHidden = !chromeShown.chrome;
   const mapChromeHiddenRef = useRef(mapChromeHidden);
   mapChromeHiddenRef.current = mapChromeHidden;
+  const chromeWakeClass = [
+    "lc-chrome-wake",
+    "lc-tip-target",
+    `is-${chromeWakeMarker}`,
+    chromeWakeTint === "color" ? "is-tint" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   /*
    * The idle timer, and the tap that restarts it.
@@ -1418,6 +1431,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   // Read from a native listener installed once — see the tap-to-wake guard.
   const wakeChromeRef = useRef(wakeChrome);
   wakeChromeRef.current = wakeChrome;
+  /*
+   * Left-corner peek: same smear as the eye, but it only brings back the
+   * annotate / scroll toggle. Independent of `chromeAwake` so a tap there
+   * does not also raise Recentre / theme / the eye.
+   */
+  const [annotatePeek, setAnnotatePeek] = useState(false);
+  const [annotatePeekGen, setAnnotatePeekGen] = useState(0);
+  const peekAnnotate = useCallback(() => {
+    setAnnotatePeek(true);
+    setAnnotatePeekGen((n) => n + 1);
+  }, []);
+  useEffect(() => {
+    if (!annotatePeek) return;
+    const timer = window.setTimeout(() => setAnnotatePeek(false), CHROME_IDLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [annotatePeek, annotatePeekGen]);
+  useEffect(() => {
+    if (chromeShown.chrome) setAnnotatePeek(false);
+  }, [chromeShown.chrome]);
   useEffect(() => {
     if (chromeMode === "visible" || !chromeAwake) return;
     const timer = window.setTimeout(() => setChromeAwake(false), CHROME_IDLE_MS);
@@ -2945,7 +2977,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   useEffect(() => {
-    const onWake = () => setChromeWakeMarker(loadChromeWakeMarker());
+    const onWake = () => {
+      setChromeWakeMarker(loadChromeWakeMarker());
+      setChromeWakeTint(loadChromeWakeTint());
+    };
     window.addEventListener(CHROME_WAKE_EVENT, onWake);
     return () => window.removeEventListener(CHROME_WAKE_EVENT, onWake);
   }, []);
@@ -7059,7 +7094,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               .join(" ")}
           >
             <div className="lc-map-chrome-left">
-              {!mapChromeHidden && annotateToggle && (
+              {annotateToggle && (chromeShown.chrome || annotatePeek) && (
                 <div className="lc-map-chrome-row">
                   <button
                     type="button"
@@ -7076,11 +7111,35 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                         : "Toolbar — annotate this page"
                     }
                     data-tip-placement="bottom"
+                    onPointerDown={() => {
+                      if (annotatePeek) peekAnnotate();
+                    }}
                     onClick={toggleAnnotate}
                   >
                     <AnnotateIcon on={annotateCode} />
                   </button>
                 </div>
+              )}
+              {annotateToggle && !chromeShown.chrome && !annotatePeek && (
+                <button
+                  type="button"
+                  className={`${chromeWakeClass} lc-chrome-wake-annotate`}
+                  aria-label="Show annotate mode"
+                  data-tip={
+                    chromeWakeMarker === "off" ? undefined : "Show annotate / scroll"
+                  }
+                  data-tip-placement="bottom"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    peekAnnotate();
+                  }}
+                  onClick={peekAnnotate}
+                >
+                  <span className="lc-chrome-wake-ghost" aria-hidden>
+                    <AnnotateIcon on={annotateCode} />
+                  </span>
+                </button>
               )}
             </div>
             <div className="lc-board-dock">
@@ -7313,7 +7372,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 {!chromeShown.eye && (
                   <button
                     type="button"
-                    className={`lc-chrome-wake lc-tip-target is-${chromeWakeMarker}`}
+                    className={chromeWakeClass}
                     aria-label="Show board controls"
                     data-tip={
                       chromeWakeMarker === "off" ? undefined : "Show controls"
@@ -7382,9 +7441,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
         onWheelHold={(x, y) => setInkWheel({ x, y })}
       />
-      {inkWheel && (
+      {inkWheel && !(presetEditor && !wheelPeek) && (
         <InkToolWheel
           open
+          locked={!!presetEditor}
           anchor={inkWheel}
           handedness={inkHandedness}
           store={presetStore}
@@ -7396,8 +7456,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             setInkWheel(null);
           }}
           onEdit={(kind, index, from) => {
-            setInkWheel(null);
             setPresetEditor({ kind, index, from });
+            setWheelPeek(false);
           }}
         />
       )}
@@ -7418,7 +7478,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           }}
           onCycleNext={cycleInkPaletteForward}
           onCyclePrev={cycleInkPaletteBackward}
-          onClose={() => setPresetEditor(null)}
+          onClose={(reason) => {
+            setPresetEditor(null);
+            setWheelPeek(false);
+            if (reason !== "back") setInkWheel(null);
+          }}
+          onBackReveal={() => setWheelPeek(true)}
           onSave={(snap) => {
             let next = saveWedge(
               presetStoreRef.current,
@@ -7430,6 +7495,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             setPresetStore(next);
             syncInkFromPrefs();
             setPresetEditor(null);
+            setWheelPeek(false);
+            setInkWheel(null);
           }}
           onDuplicate={(snap) => {
             const copied = duplicateWedge(

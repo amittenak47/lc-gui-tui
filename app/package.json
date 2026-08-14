@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Handwriting whiteboard — Tauri v2 shell around an Excalidraw canvas, talking to `whiteboard serve` over the LAN.",
+  "description": "Handwriting whiteboard — Tauri v2 shell around an Excalidraw canvas, talking to `lc serve` over the LAN.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "scripts": {
     "dev": "vite",
