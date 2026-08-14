@@ -1,7 +1,7 @@
 /**
  * A PDF as the page under the ink.
  *
- * Same contract as `MdInkDocument`: no scrollbar of its own, no pointer of its
+ * Same contract as `AnnotateDocument`: no scrollbar of its own, no pointer of its
  * own in Annotate mode, laid out at full content height inside the board's page
  * frame so the whole stack rides the board camera as one thing. What is
  * different is that a PDF is not one flowing document but a run of fixed-size

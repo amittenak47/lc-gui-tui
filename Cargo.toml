@@ -1,5 +1,5 @@
 [package]
-name = "lc"
+name = "whiteboard"
 version = "0.1.0"
 edition = "2021"
 description = "LeetCode practice harness: index a local JSON corpus, materialize Python workspaces, run tests, ask an LLM tutor"

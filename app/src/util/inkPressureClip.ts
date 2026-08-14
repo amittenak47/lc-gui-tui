@@ -1,6 +1,6 @@
 /** Device-local preference: how much stylus pressure counts as "full" press. */
 
-const KEY = "lc.inkPressureClip";
+const KEY = "whiteboard.inkPressureClip";
 
 export const PRESSURE_CLIP_MIN = 0.3;
 export const PRESSURE_CLIP_MAX = 1;

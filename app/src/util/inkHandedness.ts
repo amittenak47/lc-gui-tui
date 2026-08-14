@@ -13,7 +13,7 @@
 
 export type InkHandedness = "right" | "left";
 
-const KEY = "lc.inkHandedness";
+const KEY = "whiteboard.inkHandedness";
 
 export function loadInkHandedness(): InkHandedness {
   try {

@@ -21,7 +21,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { withConversationContext } from "./coachContext";
 import { MARK_CONTEXT_BUDGET_CHARS, packFootnoteContext } from "./coachMarkContext";
-import { MD_INK_DATASET, MD_INK_TASK_ID } from "../templates/mdInk";
 import {
   addFootnote,
   numberFootnotes,
@@ -122,13 +121,13 @@ async function probeLiveCoach() {
   }
 }
 
-async function coachAsk(question, dataset, taskId) {
+async function coachAsk(question) {
   const response = await fetch(`${DAEMON}/coach/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
-      task_id: taskId,
-      dataset,
+      surface: "annotate",
+      task_id: ANNOTATE_TASK_ID,
       question,
     }),
     signal: AbortSignal.timeout(120_000),
@@ -270,15 +269,8 @@ describe("textbook selection marks from Downloads", () => {
           const prompt = `${markContext}\n\nFrom the document:\n\n“${passage}”\n\n${asked}`;
           expect(prompt.length).toBeLessThan(DAEMON_ASK_CLIP_CHARS);
 
-          let used = { dataset: MD_INK_DATASET, taskId: MD_INK_TASK_ID };
-          let first = await coachAsk(prompt, used.dataset, used.taskId);
-          if (!first.ok && first.status === 400) {
-            used = { dataset: "scratchpad", taskId: "__scratchpad__" };
-            first = await coachAsk(prompt, used.dataset, used.taskId);
-            console.info(
-              "textbook-marks live ask fell back to scratchpad — rebuild `lc serve` for md-ink",
-            );
-          }
+          let used = { surface: "annotate" };
+          let first = await coachAsk(prompt);
           expect(first.ok, first.raw?.slice?.(0, 400) ?? String(first.status)).toBe(true);
           const reply = String(first.body.reply ?? "").trim();
           expect(reply.length).toBeGreaterThan(20);
@@ -318,7 +310,7 @@ describe("textbook selection marks from Downloads", () => {
           expect(followUp).toContain(asked.slice(0, 20));
 
           const secondPrompt = `${packFootnoteContext(marks, { numbers })}\n\n${followUp}`;
-          const second = await coachAsk(secondPrompt, used.dataset, used.taskId);
+          const second = await coachAsk(secondPrompt);
           expect(second.ok, second.raw?.slice?.(0, 400) ?? String(second.status)).toBe(true);
           const followReply = String(second.body.reply ?? "").trim();
           expect(followReply.length).toBeGreaterThan(8);
@@ -330,7 +322,7 @@ describe("textbook selection marks from Downloads", () => {
           ];
 
           console.info("textbook-marks-live-kleinberg", {
-            dataset: used.dataset,
+            surface: used.surface,
             promptChars: prompt.length,
             followUpChars: secondPrompt.length,
             firstReplyChars: reply.length,

@@ -11,7 +11,7 @@ import type { BoardBlob } from "../canvas/BoardHandle";
 import { run, STORE_SNAPSHOTS } from "./idb";
 import type { DocFootnote } from "./docFootnotes";
 
-export type PadSnapshotKind = "md-ink" | "whiteboard";
+export type PadSnapshotKind = "annotate" | "whiteboard";
 export type PadSnapshotTier = "2h" | "24h" | "7d";
 
 export const PAD_SNAPSHOT_TIERS: ReadonlyArray<{

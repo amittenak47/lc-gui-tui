@@ -1,7 +1,7 @@
 /**
  * Picking a photo for the coach composer, and getting it down to a payload.
  *
- * Same hidden-`<input type="file">` path as `mdInkFs` and the board's image
+ * Same hidden-`<input type="file">` path as `annotateFs` and the board's image
  * tool, for the same reason: it is the one picker that works in the desktop
  * WebView and on the tablet without a Rust dependency or a capability grant.
  * On Android that input already offers the gallery and the camera, so there is
@@ -120,7 +120,7 @@ export async function photoFromFile(file: File): Promise<PickedPhoto> {
 /**
  * Ask for one or more images and normalise them.
  *
- * Resolves `[]` when the picker is dismissed — see the note in `mdInkFs` about
+ * Resolves `[]` when the picker is dismissed — see the note in `annotateFs` about
  * why cancel resolves rather than rejects, and why the input is off-screen
  * rather than `display: none`.
  */

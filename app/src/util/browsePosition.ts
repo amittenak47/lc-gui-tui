@@ -4,7 +4,7 @@
 
 import { DEFAULT_DATASET } from "../api/types";
 
-const STORAGE_KEY = "lc.browse.position.v1";
+const STORAGE_KEY = "whiteboard.browse.position.v1";
 
 export interface BrowsePosition {
   dataset: string;

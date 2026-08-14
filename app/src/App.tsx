@@ -88,7 +88,7 @@ import {
 } from "./modes/AgentSidePanel";
 import { assembleAskPrompt, PAD_ASK_CLIP_CHARS, PROBLEM_ASK_CLIP_CHARS } from "./modes/coachMarkContext";
 import { AttemptDialog } from "./modes/AttemptDialog";
-import { ScratchpadDialog } from "./modes/ScratchpadDialog";
+import { WhiteboardDialog } from "./modes/WhiteboardDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { groupThreads, threadAnchorRef, visibleThreadMessages } from "./modes/coachThreads";
 import { loadForwardFailures, saveForwardFailures } from "./util/coachPrefs";
@@ -101,7 +101,7 @@ import { ensureTypingImports } from "./util/pythonImports";
 
 /** Room under the last line of code so a note fits below it. */
 const CODE_PAGE_TAIL = 160;
-import { ScratchpadLibraryDialog } from "./modes/ScratchpadLibraryDialog";
+import { WhiteboardLibraryDialog } from "./modes/WhiteboardLibraryDialog";
 import { formatTestReport, TestResultsModal } from "./modes/TestResultsModal";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
@@ -109,12 +109,13 @@ import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { RevealDialog } from "./modes/RevealDialog";
 import { buildProblemTemplate } from "./templates/problemBoard";
 import {
-  buildScratchpadTemplate,
-  countScratchPages,
-  SCRATCHPAD_DATASET,
-  SCRATCHPAD_TASK_ID,
-  scratchPageId,
-} from "./templates/scratchpad";
+  buildWhiteboardTemplate,
+  countWhiteboardPages,
+  WHITEBOARD_DATASET,
+  WHITEBOARD_TASK_ID,
+  LEGACY_SCRATCHPAD_TASK_ID,
+  whiteboardPageId,
+} from "./templates/whiteboard";
 import { MOBILE_REGION_ORDER, REGION_BLURB, REGIONS, type RegionId } from "./templates/regions";
 import { splitProblemKey } from "./util/datasetKey";
 import { useIsMobile } from "./util/mobile";
@@ -142,59 +143,60 @@ import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelection
 import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
 import { PdfDocument } from "./modes/PdfDocument";
-import { MdInkDialog } from "./modes/MdInkDialog";
-import { MdInkDocument } from "./modes/MdInkDocument";
+import { AnnotateDialog } from "./modes/AnnotateDialog";
+import { AnnotateDocument } from "./modes/AnnotateDocument";
 import { StatementDocument } from "./modes/StatementDocument";
 import {
-  buildMdInkTemplate,
-  mdInkFrameWidthFromElements,
-  mdInkPageHeight,
-  mdInkPageWidthForViewport,
-  MD_INK_DATASET,
-  MD_INK_PAGE_W,
-  MD_INK_REGION,
-  MD_INK_TASK_ID,
-} from "./templates/mdInk";
+  buildAnnotateTemplate,
+  annotateFrameWidthFromElements,
+  annotatePageHeight,
+  annotatePageWidthForViewport,
+  ANNOTATE_DATASET,
+  ANNOTATE_PAGE_W,
+  ANNOTATE_REGION,
+  ANNOTATE_TASK_ID,
+  LEGACY_MD_INK_TASK_ID,
+} from "./templates/annotate";
 import {
-  buildMdInkSidecar,
+  buildAnnotateSidecar,
   CODE_SOURCE_MAX_CHARS,
   sidecarWidthWarning,
-  exportMdInkSidecar,
+  exportAnnotateSidecar,
   sidecarNameFor,
   languageForName,
   pickDocumentFile,
   pickSidecarFile,
-  readMdInkSidecar,
-} from "./util/mdInkFs";
+  readAnnotateSidecar,
+} from "./util/annotateFs";
 import {
-  deleteMdInkDoc,
-  findMdInkDocByHash,
-  findStaleMdInkDoc,
-  getMdInkDoc,
+  deleteAnnotateDoc,
+  findAnnotateDocByHash,
+  findStaleAnnotateDoc,
+  getAnnotateDoc,
   hashMarkdown,
   isBinaryDocType,
-  MdInkLibraryFullError,
-  restoreMdInkDoc,
-  saveMdInkDoc,
+  AnnotateLibraryFullError,
+  restoreAnnotateDoc,
+  saveAnnotateDoc,
   type DocType,
-  type MdInkDoc,
-} from "./util/mdInkStore";
+  type AnnotateDoc,
+} from "./util/annotateStore";
 import {
-  deleteScratchNotebook,
-  getScratchNotebook,
-  migrateLegacyScratchpad,
-  restoreScratchNotebook,
-  saveScratchNotebook,
-  ScratchpadLibraryFullError,
-  SCRATCHPAD_PAGE_LIMIT,
-  scratchLibraryCount,
-  SCRATCHPAD_LIBRARY_LIMIT,
-  type ScratchNotebook,
-} from "./util/scratchpadStore";
+  deleteWhiteboardNotebook,
+  getWhiteboardNotebook,
+  migrateLegacyWhiteboard,
+  restoreWhiteboardNotebook,
+  saveWhiteboardNotebook,
+  WhiteboardLibraryFullError,
+  WHITEBOARD_PAGE_LIMIT,
+  whiteboardLibraryCount,
+  WHITEBOARD_LIBRARY_LIMIT,
+  type WhiteboardNotebook,
+} from "./util/whiteboardStore";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
 import {
   getInkPages,
-  mdInkDocKey,
+  annotateDocKey,
   putInkPages,
   whiteboardDocKey,
 } from "./util/inkPageStore";
@@ -245,21 +247,26 @@ interface CoachSendQueueItem {
   questionTruncated?: boolean;
 }
 
-const SCRATCHPAD_PROBLEM: ProblemDetail = {
-  dataset: SCRATCHPAD_DATASET,
-  key: `${SCRATCHPAD_DATASET}/${SCRATCHPAD_TASK_ID}`,
-  task_id: SCRATCHPAD_TASK_ID,
+const WHITEBOARD_PROBLEM: ProblemDetail = {
+  dataset: WHITEBOARD_DATASET,
+  key: `${WHITEBOARD_DATASET}/${WHITEBOARD_TASK_ID}`,
+  task_id: WHITEBOARD_TASK_ID,
   question_id: null,
   difficulty: null,
-  tags: ["scratchpad"],
+  tags: ["whiteboard"],
   problem_description: "Freeform whiteboard — no problem set.",
   starter_code: null,
   entry_point: null,
   cases: [],
 };
 
-function isScratchpad(problem: ProblemDetail | null | undefined): boolean {
-  return problem?.task_id === SCRATCHPAD_TASK_ID;
+function isWhiteboard(problem: ProblemDetail | null | undefined): boolean {
+  return (
+    problem?.task_id === WHITEBOARD_TASK_ID ||
+    problem?.task_id === LEGACY_SCRATCHPAD_TASK_ID ||
+    problem?.dataset === WHITEBOARD_DATASET ||
+    problem?.dataset === "scratchpad"
+  );
 }
 
 async function flushDirtyInk(board: BoardHandle, docKey: string | null): Promise<void> {
@@ -326,21 +333,32 @@ const LLM_ONLINE_POLL_MS = 20_000;
 const LLM_OFFLINE_POLL_MS = 60_000;
 const LLM_OFFLINE_POLL_MAX_MS = 120_000;
 
-const MD_INK_PROBLEM: ProblemDetail = {
-  dataset: MD_INK_DATASET,
-  key: `${MD_INK_DATASET}/${MD_INK_TASK_ID}`,
-  task_id: MD_INK_TASK_ID,
+const ANNOTATE_PROBLEM: ProblemDetail = {
+  dataset: ANNOTATE_DATASET,
+  key: `${ANNOTATE_DATASET}/${ANNOTATE_TASK_ID}`,
+  task_id: ANNOTATE_TASK_ID,
   question_id: null,
   difficulty: null,
-  tags: ["md-ink"],
+  tags: ["annotate"],
   problem_description: "Document annotation — no problem set.",
   starter_code: null,
   entry_point: null,
   cases: [],
 };
 
-function isMdInk(problem: ProblemDetail | null | undefined): boolean {
-  return problem?.task_id === MD_INK_TASK_ID;
+function isAnnotate(problem: ProblemDetail | null | undefined): boolean {
+  return (
+    problem?.task_id === ANNOTATE_TASK_ID ||
+    problem?.task_id === LEGACY_MD_INK_TASK_ID ||
+    problem?.dataset === ANNOTATE_DATASET ||
+    problem?.dataset === "md-ink"
+  );
+}
+
+function askSurface(problem: ProblemDetail): "whiteboard" | "annotate" | "problem" {
+  if (isWhiteboard(problem)) return "whiteboard";
+  if (isAnnotate(problem)) return "annotate";
+  return "problem";
 }
 
 /**
@@ -350,7 +368,7 @@ function isMdInk(problem: ProblemDetail | null | undefined): boolean {
  * persist to a local library and both offer save / discard on the way out.
  */
 function isLocalPad(problem: ProblemDetail | null | undefined): boolean {
-  return isScratchpad(problem) || isMdInk(problem);
+  return isWhiteboard(problem) || isAnnotate(problem);
 }
 
 export function App() {
@@ -370,10 +388,10 @@ export function App() {
    * actually moves through them.
    */
   const [activeRegion, setActiveRegion] = useState<RegionId>("constraints");
-  const [scratchPageIndex, setScratchPageIndex] = useState(0);
-  const [scratchPageCount, setScratchPageCount] = useState(1);
-  const [scratchNotebookId, setScratchNotebookId] = useState<string | null>(null);
-  const [scratchEntryOpen, setScratchEntryOpen] = useState(false);
+  const [whiteboardPageIndex, setWhiteboardPageIndex] = useState(0);
+  const [whiteboardPageCount, setWhiteboardPageCount] = useState(1);
+  const [whiteboardNotebookId, setWhiteboardNotebookId] = useState<string | null>(null);
+  const [whiteboardEntryOpen, setWhiteboardEntryOpen] = useState(false);
   /**
    * The pen owns the code page: the editor stops taking pointers so strokes
    * reach the ink layer instead of the textarea underneath them.
@@ -389,8 +407,8 @@ export function App() {
    * both on the one transform.
    */
   const [codeContentHeight, setCodeContentHeight] = useState<number | null>(null);
-  const [scratchLibOpen, setScratchLibOpen] = useState(false);
-  const scratchLibResumeRef = useRef<(() => void) | null>(null);
+  const [whiteboardLibOpen, setWhiteboardLibOpen] = useState(false);
+  const whiteboardLibResumeRef = useRef<(() => void) | null>(null);
   /**
    * What the library held for this notebook when the session opened.
    *
@@ -406,18 +424,18 @@ export function App() {
    * restored by deleting it. The autosave keeps its real job — surviving a
    * crash or a killed tab — without deciding what the writer meant to keep.
    */
-  const scratchBaselineRef = useRef<{ id: string | null; entry: ScratchNotebook | null }>({
+  const whiteboardBaselineRef = useRef<{ id: string | null; entry: WhiteboardNotebook | null }>({
     id: null,
     entry: null,
   });
   /**
    * Fingerprint of the notebook as it was opened, for "did they write
-   * anything?". Compared against the live board — see {@link scratchUntouched}.
+   * anything?". Compared against the live board — see {@link whiteboardUntouched}.
    */
-  const scratchPristineHashRef = useRef<number | null>(null);
+  const whiteboardPristineHashRef = useRef<number | null>(null);
 
   /** The document being annotated: its text, its name, and its content hash. */
-  const [mdInkSource, setMdInkSource] = useState<{
+  const [annotateSource, setAnnotateSource] = useState<{
     name: string;
     /** Markdown/code text; empty for PDF and EPUB. */
     text: string;
@@ -434,16 +452,16 @@ export function App() {
     bytes?: ArrayBuffer | null;
   } | null>(null);
   /** Library entry this session is writing to, once it has one. */
-  const [mdInkDocId, setMdInkDocId] = useState<string | null>(null);
+  const [annotateDocId, setAnnotateDocId] = useState<string | null>(null);
   /**
    * Marks this reading session has left on the page.
    *
    * State as well as a ref: the ribbons are rendered from it, and the autosave
    * tick — which runs outside React — writes it to the library entry.
    */
-  const [mdInkFootnotes, setMdInkFootnotes] = useState<DocFootnote[]>([]);
-  const mdInkFootnotesRef = useRef<DocFootnote[]>([]);
-  mdInkFootnotesRef.current = mdInkFootnotes;
+  const [annotateFootnotes, setAnnotateFootnotes] = useState<DocFootnote[]>([]);
+  const annotateFootnotesRef = useRef<DocFootnote[]>([]);
+  annotateFootnotesRef.current = annotateFootnotes;
   /**
    * A quote waiting for the send that will give it a thread to point at.
    *
@@ -476,16 +494,16 @@ export function App() {
   const [marksSlot, setMarksSlot] = useState<HTMLElement | null>(null);
   /** Highlighter mode, owned by the board toolbar and read by the doc layer. */
   const [highlighting, setHighlighting] = useState(false);
-  const [mdInkEntryOpen, setMdInkEntryOpen] = useState(false);
+  const [annotateEntryOpen, setAnnotateEntryOpen] = useState(false);
   // Read from the autosave interval, which must not be torn down and rebuilt
   // every time one of these changes — a restarted timer is a skipped save.
-  const mdInkSourceRef = useRef<{
+  const annotateSourceRef = useRef<{
     name: string;
     text: string;
     hash: string;
     docType: DocType;
   } | null>(null);
-  const mdInkDocIdRef = useRef<string | null>(null);
+  const annotateDocIdRef = useRef<string | null>(null);
   /**
    * Measured document height, in scene units, driving the page frame.
    *
@@ -493,16 +511,16 @@ export function App() {
    * long document, so the frame is grown to the markdown rather than the other
    * way round.
    */
-  const [mdInkHeight, setMdInkHeight] = useState<number | null>(null);
-  const mdInkHeightRef = useRef<number | null>(null);
-  mdInkHeightRef.current = mdInkHeight;
+  const [annotateHeight, setAnnotateHeight] = useState<number | null>(null);
+  const annotateHeightRef = useRef<number | null>(null);
+  annotateHeightRef.current = annotateHeight;
   /** Scene width of the open markdown page — viewport-sized on fresh opens. */
-  const [mdInkPageWidth, setMdInkPageWidth] = useState(MD_INK_PAGE_W);
+  const [annotatePageWidth, setAnnotatePageWidth] = useState(ANNOTATE_PAGE_W);
   /** The width marks were placed at — recorded in an exported sidecar. */
-  const mdInkPageWidthRef = useRef(MD_INK_PAGE_W);
-  mdInkPageWidthRef.current = mdInkPageWidth;
+  const annotatePageWidthRef = useRef(ANNOTATE_PAGE_W);
+  annotatePageWidthRef.current = annotatePageWidth;
   const onMdInkMeasure = useCallback((height: number) => {
-    setMdInkHeight((prev) =>
+    setAnnotateHeight((prev) =>
       prev !== null && Math.abs(prev - height) < 1 ? prev : height,
     );
   }, []);
@@ -513,18 +531,18 @@ export function App() {
       prev !== null && Math.abs(prev - height) < 1 ? prev : height,
     );
   }, []);
-  /** Same discard contract as the scratchpad — see `scratchBaselineRef`. */
-  const mdInkBaselineRef = useRef<{ id: string | null; entry: MdInkDoc | null }>({
+  /** Same discard contract as the scratchpad — see `whiteboardBaselineRef`. */
+  const annotateBaselineRef = useRef<{ id: string | null; entry: AnnotateDoc | null }>({
     id: null,
     entry: null,
   });
-  const mdInkPristineHashRef = useRef<number | null>(null);
+  const annotatePristineHashRef = useRef<number | null>(null);
   /** Footnote revision at open / last explicit save — not merely "any footnotes". */
-  const mdInkPristineMarksRef = useRef("");
+  const annotatePristineMarksRef = useRef("");
   /** Persistable coach thread at open / last explicit save. */
-  const mdInkPristineAgentRef = useRef("");
-  mdInkSourceRef.current = mdInkSource;
-  mdInkDocIdRef.current = mdInkDocId;
+  const annotatePristineAgentRef = useRef("");
+  annotateSourceRef.current = annotateSource;
+  annotateDocIdRef.current = annotateDocId;
 
   const [pairing, setPairing] = useState<Pairing>(() => loadPairing());
   const [pairingEditing, setPairingEditing] = useState(false);
@@ -545,11 +563,11 @@ export function App() {
     const flush = () => {
       const board = boardRef.current;
       if (!board || board.isInking()) return;
-      const source = mdInkSourceRef.current;
+      const source = annotateSourceRef.current;
       const key = source
-        ? mdInkDocKey(source.hash)
-        : scratchNotebookId
-          ? whiteboardDocKey(scratchNotebookId)
+        ? annotateDocKey(source.hash)
+        : whiteboardNotebookId
+          ? whiteboardDocKey(whiteboardNotebookId)
           : null;
       void flushDirtyInk(board, key);
     };
@@ -569,7 +587,7 @@ export function App() {
       window.removeEventListener("beforeunload", onLeave);
       document.removeEventListener("visibilitychange", onHidden);
     };
-  }, [scratchNotebookId]);
+  }, [whiteboardNotebookId]);
 
   /** Background offline pack download — survives leaving Settings; pauses on app background. */
   useEffect(() => {
@@ -1384,7 +1402,7 @@ export function App() {
        * note. Mixing the marks into the same comparison is what makes them
        * count as work.
        */
-      const marks = isMdInk(problem) ? footnoteRevision(mdInkFootnotesRef.current) : "";
+      const marks = isAnnotate(problem) ? footnoteRevision(annotateFootnotesRef.current) : "";
       if (lastSavedHashRef.current === hash && lastSavedMarksRef.current === marks) {
         lastTickInkOpsRef.current = inkOps;
         return;
@@ -1413,7 +1431,7 @@ export function App() {
       lastTickInkOpsRef.current = inkOps;
       if (board.isInking()) return;
 
-      if (isMdInk(problem)) {
+      if (isAnnotate(problem)) {
         /*
          * Annotations autosave, the document does not.
          *
@@ -1426,14 +1444,14 @@ export function App() {
         // can leave footnotes without ever putting the pen down, and those are
         // exactly as worth keeping as ink.
         if (
-          mdInkPristineHashRef.current === padContentFingerprint(elements, inkOps) &&
-          footnoteRevision(mdInkFootnotesRef.current) === mdInkPristineMarksRef.current
+          annotatePristineHashRef.current === padContentFingerprint(elements, inkOps) &&
+          footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current
         ) {
           lastSavedHashRef.current = hash;
           lastSavedMarksRef.current = marks;
           return;
         }
-        const source = mdInkSourceRef.current;
+        const source = annotateSourceRef.current;
         if (!source) return;
         // Marked attempted before the write rather than after it. The save is
         // async now, so a tick three seconds later would otherwise start a
@@ -1443,26 +1461,26 @@ export function App() {
         // refused. One attempt per change is the most that can ever help.
         lastSavedHashRef.current = hash;
         lastSavedMarksRef.current = marks;
-        const docKey = mdInkDocKey(source.hash);
+        const docKey = annotateDocKey(source.hash);
         void (async () => {
           await flushDirtyInk(board, docKey);
           const liveBoard = board.saveBoard({ assembleInk: false });
           try {
-            const saved = await saveMdInkDoc({
-              id: mdInkDocIdRef.current ?? undefined,
+            const saved = await saveAnnotateDoc({
+              id: annotateDocIdRef.current ?? undefined,
               name: source.name,
               hash: source.hash,
               source: source.text,
               docType: source.docType,
               board: liveBoard,
-              footnotes: mdInkFootnotesRef.current,
+              footnotes: annotateFootnotesRef.current,
               agent: persistableCoachMessages(coachMessages),
             });
-            if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
+            if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
             setNotice(`Saved “${saved.name}”.`);
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void recordRollingSnapshots({
-              kind: "md-ink",
+              kind: "annotate",
               key: saved.hash,
               name: saved.name,
               board: snapBoard,
@@ -1476,7 +1494,7 @@ export function App() {
         return;
       }
 
-      if (isScratchpad(problem)) {
+      if (isWhiteboard(problem)) {
         /*
          * Don't put an untouched notebook in the library.
          *
@@ -1486,25 +1504,25 @@ export function App() {
          * your mind, and three seconds later it is a permanent entry. There is
          * also nothing to protect: a crash here loses a blank page.
          */
-        if (scratchPristineHashRef.current === padContentFingerprint(elements, inkOps)) {
+        if (whiteboardPristineHashRef.current === padContentFingerprint(elements, inkOps)) {
           lastSavedHashRef.current = hash;
           return;
         }
       }
 
       dirtyRef.current = true;
-      if (isScratchpad(problem)) {
+      if (isWhiteboard(problem)) {
         lastSavedHashRef.current = hash;
         void (async () => {
           const liveBoard = board.saveBoard({ assembleInk: false });
           try {
-            const saved = await saveScratchNotebook({
-              id: scratchNotebookId ?? undefined,
+            const saved = await saveWhiteboardNotebook({
+              id: whiteboardNotebookId ?? undefined,
               board: liveBoard,
               agent: persistableCoachMessages(coachMessages),
-              pageCount: Math.max(scratchPageCount, countScratchPages(liveBoard.elements)),
+              pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
             });
-            if (!scratchNotebookId) setScratchNotebookId(saved.id);
+            if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
             await flushDirtyInk(board, whiteboardDocKey(saved.id));
             setNotice(`Saved “${saved.title}”.`);
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
@@ -1517,9 +1535,9 @@ export function App() {
               pageCount: saved.pageCount,
             });
           } catch (cause: unknown) {
-            if (cause instanceof ScratchpadLibraryFullError) {
-              scratchLibResumeRef.current = null;
-              setScratchLibOpen(true);
+            if (cause instanceof WhiteboardLibraryFullError) {
+              whiteboardLibResumeRef.current = null;
+              setWhiteboardLibOpen(true);
             } else {
               noteStorageFull(cause);
             }
@@ -1539,8 +1557,8 @@ export function App() {
     autosaveMs,
     client,
     problem,
-    scratchNotebookId,
-    scratchPageCount,
+    whiteboardNotebookId,
+    whiteboardPageCount,
     coachMessages,
     noteStorageFull,
   ]);
@@ -1603,8 +1621,8 @@ export function App() {
       setTests(null);
       setNudges([]);
       setCoachMessages([]);
-      setMdInkFootnotes([]);
-      mdInkFootnotesRef.current = [];
+      setAnnotateFootnotes([]);
+      annotateFootnotesRef.current = [];
       pendingQuoteRef.current = null;
       footnoteCoachUpgradeRef.current = null;
       setOpenFootnoteId(null);
@@ -1798,7 +1816,7 @@ export function App() {
         await boardRef.current?.waitForTemplate();
         syncDrawingsToBoard(resumedMessages);
         // Ink first: the page grows to it, and a fit taken before that is a fit
-        // against a frame about to change size. See `openScratchpad`.
+        // against a frame about to change size. See `openWhiteboard`.
         if (hasSavedBoard && saved) {
           const handle = boardRef.current;
           if (handle) await restoreInk(handle, null, saved);
@@ -1841,18 +1859,18 @@ export function App() {
     ],
   );
 
-  const openScratchpad = useCallback(
+  const openWhiteboard = useCallback(
     async (opts?: { notebookId?: string | null; fresh?: boolean }) => {
       if (busy !== null) return;
-      if (opts?.fresh && !opts.notebookId && scratchLibraryCount() >= SCRATCHPAD_LIBRARY_LIMIT) {
-        scratchLibResumeRef.current = () => {
-          void openScratchpad({ fresh: true });
+      if (opts?.fresh && !opts.notebookId && whiteboardLibraryCount() >= WHITEBOARD_LIBRARY_LIMIT) {
+        whiteboardLibResumeRef.current = () => {
+          void openWhiteboard({ fresh: true });
         };
-        setScratchLibOpen(true);
+        setWhiteboardLibOpen(true);
         return;
       }
       /*
-       * Same loading transition as pickProblem / openMdInk — do not invent a
+       * Same loading transition as pickProblem / openAnnotate — do not invent a
        * parallel path. Scratchpad used to skip the overlay and reveal the
        * board (and coach sheet) mid-prep, which flashed the coach panel open
        * for a frame before it parked at the peek strip.
@@ -1867,8 +1885,8 @@ export function App() {
       setTests(null);
       setNudges([]);
       setCoachMessages([]);
-      setScratchPageIndex(0);
-      setScratchEntryOpen(false);
+      setWhiteboardPageIndex(0);
+      setWhiteboardEntryOpen(false);
       setCoachOpen(false);
       boardSaveSuspendedRef.current = true;
       agentSaveSuspendedRef.current = true;
@@ -1882,11 +1900,11 @@ export function App() {
         setBoardPreparing(true);
       }
       try {
-        await migrateLegacyScratchpad(countScratchPages);
+        await migrateLegacyWhiteboard(countWhiteboardPages);
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the coach sheet never paints mid-open.
         setBoardPreparing(true);
-        setProblem(SCRATCHPAD_PROBLEM);
+        setProblem(WHITEBOARD_PROBLEM);
         setPseudocode("");
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
@@ -1899,22 +1917,22 @@ export function App() {
         // discard baseline, and again for the ink re-apply after the layer
         // mounts. Three reads of the same record would be three trips to the
         // store for a value that cannot have changed in between.
-        const notebook = !opts?.fresh && notebookId ? await getScratchNotebook(notebookId) : null;
+        const notebook = !opts?.fresh && notebookId ? await getWhiteboardNotebook(notebookId) : null;
         if (notebookId) {
           if (notebook) {
             const pages = Math.min(
-              SCRATCHPAD_PAGE_LIMIT,
-              Math.max(1, notebook.pageCount, countScratchPages(notebook.board.elements)),
+              WHITEBOARD_PAGE_LIMIT,
+              Math.max(1, notebook.pageCount, countWhiteboardPages(notebook.board.elements)),
             );
-            const skeletons = buildScratchpadTemplate(pages, dark);
+            const skeletons = buildWhiteboardTemplate(pages, dark);
             boardRef.current?.restoreBoard(notebook.board.elements, notebook.board.appState, {
               skeletons,
               ink: inkOpsFrom(notebook.board),
               files: notebook.board.files,
               inkPalettes: notebook.board.inkPalettes,
             });
-            setScratchPageCount(pages);
-            setScratchNotebookId(notebook.id);
+            setWhiteboardPageCount(pages);
+            setWhiteboardNotebookId(notebook.id);
             if (notebook.agent.length > 0) {
               setCoachMessages(restoreCoachMessages(notebook.agent));
             }
@@ -1923,16 +1941,16 @@ export function App() {
         }
 
         if (!restored) {
-          const skeletons = buildScratchpadTemplate(1, dark);
+          const skeletons = buildWhiteboardTemplate(1, dark);
           boardRef.current?.seedTemplate(skeletons);
-          setScratchPageCount(1);
-          setScratchNotebookId(null);
+          setWhiteboardPageCount(1);
+          setWhiteboardNotebookId(null);
           notebookId = null;
         }
 
         // A blank notebook has no baseline, and that is the point: discarding
         // one means deleting whatever the autosave went on to create for it.
-        scratchBaselineRef.current = {
+        whiteboardBaselineRef.current = {
           id: restored ? notebookId : null,
           entry: restored ? notebook : null,
         };
@@ -1962,13 +1980,13 @@ export function App() {
         // number from here is something they did.
         {
           const board = boardRef.current;
-          scratchPristineHashRef.current = board
+          whiteboardPristineHashRef.current = board
             ? padContentFingerprint(board.getElements(), board.getInkOpCount())
             : null;
         }
 
         // Complete the loading transition (same beats and teardown as
-        // pickProblem / openMdInk). Coach stays closed through the reveal.
+        // pickProblem / openAnnotate). Coach stays closed through the reveal.
         await finishLoadingTransition(fromBrowse, switching);
 
         setBrowseMotion("idle");
@@ -2012,7 +2030,7 @@ export function App() {
    * loading transition — is deliberately one path, because a reader switching
    * between a note and a textbook should not be switching between two apps.
    */
-  const openMdInk = useCallback(
+  const openAnnotate = useCallback(
     async (input: {
       name: string;
       docType?: DocType;
@@ -2035,7 +2053,7 @@ export function App() {
       setTests(null);
       setNudges([]);
       setCoachMessages([]);
-      setMdInkEntryOpen(false);
+      setAnnotateEntryOpen(false);
       boardSaveSuspendedRef.current = true;
       agentSaveSuspendedRef.current = true;
       if (fromBrowse) {
@@ -2069,8 +2087,8 @@ export function App() {
         }
         const hash = bytes ? hashBytes(bytes) : hashMarkdown(text);
         const existing = input.docId
-          ? await getMdInkDoc(input.docId)
-          : await findMdInkDocByHash(hash);
+          ? await getAnnotateDoc(input.docId)
+          : await findAnnotateDocByHash(hash);
 
         /*
          * The bytes go in before anything is restored over them.
@@ -2093,26 +2111,26 @@ export function App() {
          * shifted or gone — but it is still in the library under Recent, so
          * naming it is enough to make the situation legible.
          */
-        const stale = existing ? null : findStaleMdInkDoc(input.name, hash);
+        const stale = existing ? null : findStaleAnnotateDoc(input.name, hash);
 
         // Mount the board under the overlay / blur, but keep it invisible until
         // the document is laid out and refreshed — then crossfade.
         setBoardPreparing(true);
-        setProblem(MD_INK_PROBLEM);
+        setProblem(ANNOTATE_PROBLEM);
         setPseudocode("");
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
-        setMdInkSource({ name: input.name, text, hash, docType, bytes });
-        setMdInkHeight(null);
-        mdInkHeightRef.current = null;
+        setAnnotateSource({ name: input.name, text, hash, docType, bytes });
+        setAnnotateHeight(null);
+        annotateHeightRef.current = null;
 
         const dark = isDarkTheme(themeId);
         const savedInk = existing ? inkOpsFrom(existing.board) : [];
-        const pageWidth = mdInkPageWidthForViewport(
-          typeof window !== "undefined" ? window.innerWidth : MD_INK_PAGE_W,
+        const pageWidth = annotatePageWidthForViewport(
+          typeof window !== "undefined" ? window.innerWidth : ANNOTATE_PAGE_W,
         );
-        setMdInkPageWidth(pageWidth);
-        const skeletons = buildMdInkTemplate(mdInkPageHeight(null), dark, pageWidth);
+        setAnnotatePageWidth(pageWidth);
+        const skeletons = buildAnnotateTemplate(annotatePageHeight(null), dark, pageWidth);
 
         if (existing) {
           boardRef.current?.restoreBoard(existing.board.elements, existing.board.appState, {
@@ -2134,20 +2152,20 @@ export function App() {
               };
             }),
           );
-          setMdInkDocId(existing.id);
+          setAnnotateDocId(existing.id);
         } else {
           boardRef.current?.seedTemplate(skeletons);
-          setMdInkDocId(null);
+          setAnnotateDocId(null);
         }
         // Footnotes belong to the entry, so a fresh open of the same file gets
         // its marks back and an unrelated document starts clean.
-        setMdInkFootnotes(existing?.footnotes ?? []);
-        mdInkFootnotesRef.current = existing?.footnotes ?? [];
+        setAnnotateFootnotes(existing?.footnotes ?? []);
+        annotateFootnotesRef.current = existing?.footnotes ?? [];
         pendingQuoteRef.current = null;
         const resumed = restoreCoachMessages(existing?.agent ?? []);
         if (resumed.length > 0) setCoachMessages(resumed);
 
-        mdInkBaselineRef.current = {
+        annotateBaselineRef.current = {
           id: existing?.id ?? null,
           entry: existing,
         };
@@ -2156,20 +2174,20 @@ export function App() {
         boardRef.current?.stripCoachViz();
         lastIdsRef.current = new Set();
         await boardRef.current?.waitForTemplate();
-        // Ink first — see `openScratchpad`. The second fit below still runs
+        // Ink first — see `openWhiteboard`. The second fit below still runs
         // once the document itself has finished measuring.
         if (existing) {
           const handle = boardRef.current;
-          if (handle) await restoreInk(handle, mdInkDocKey(hash), existing.board);
+          if (handle) await restoreInk(handle, annotateDocKey(hash), existing.board);
         }
         await boardRef.current?.settleFitView();
 
         // Document must finish laying out (measure stable) before reveal.
         // PDFs can take longer than markdown; a soft timeout used to clear the
         // loading overlay while PdfDocument still showed "Opening…".
-        let laidOut = await waitForMdInkLaidOut(() => mdInkHeightRef.current);
+        let laidOut = await waitForAnnotateLaidOut(() => annotateHeightRef.current);
         if (!laidOut && bytes) {
-          laidOut = await waitForMdInkLaidOut(() => mdInkHeightRef.current, 25000);
+          laidOut = await waitForAnnotateLaidOut(() => annotateHeightRef.current, 25000);
         }
         if (!laidOut) {
           throw new Error(
@@ -2180,11 +2198,11 @@ export function App() {
 
         {
           const board = boardRef.current;
-          mdInkPristineHashRef.current = board
+          annotatePristineHashRef.current = board
             ? padContentFingerprint(board.getElements(), board.getInkOpCount())
             : null;
-          mdInkPristineMarksRef.current = footnoteRevision(mdInkFootnotesRef.current);
-          mdInkPristineAgentRef.current = JSON.stringify(persistableCoachMessages(resumed));
+          annotatePristineMarksRef.current = footnoteRevision(annotateFootnotesRef.current);
+          annotatePristineAgentRef.current = JSON.stringify(persistableCoachMessages(resumed));
         }
 
         // Complete the loading transition (same beats and teardown as
@@ -2244,17 +2262,17 @@ export function App() {
    * Annotations live in this browser's storage, which is fine right up until
    * the tablet is not the device they have. The sidecar is the way out.
    */
-  const exportMdInkAnnotations = useCallback(() => {
+  const exportAnnotateAnnotations = useCallback(() => {
     const board = boardRef.current;
-    const source = mdInkSourceRef.current;
+    const source = annotateSourceRef.current;
     if (!board || !source) return;
-    void exportMdInkSidecar(
-      buildMdInkSidecar({
+    void exportAnnotateSidecar(
+      buildAnnotateSidecar({
         sourceName: source.name,
         contentHash: source.hash,
         board: board.saveBoard(),
-        footnotes: mdInkFootnotesRef.current,
-        frameWidth: mdInkPageWidthRef.current,
+        footnotes: annotateFootnotesRef.current,
+        frameWidth: annotatePageWidthRef.current,
       }),
     ).catch((cause: unknown) => setError(messageOf(cause)));
     setNotice(
@@ -2271,7 +2289,7 @@ export function App() {
    * would scatter ink across the wrong words with no way back.
    */
   const importMdInkAnnotations = useCallback(async () => {
-    const source = mdInkSourceRef.current;
+    const source = annotateSourceRef.current;
     if (!source) {
       setError("Open a document first, then import its annotations.");
       return;
@@ -2279,7 +2297,7 @@ export function App() {
     try {
       const picked = await pickSidecarFile();
       if (!picked) return;
-      const sidecar = readMdInkSidecar(picked.text);
+      const sidecar = readAnnotateSidecar(picked.text);
       if (!sidecar) {
         setError(`“${picked.name}” is not an annotation sidecar.`);
         return;
@@ -2291,23 +2309,23 @@ export function App() {
         );
         return;
       }
-      const widthNote = sidecarWidthWarning(sidecar, mdInkPageWidthRef.current);
+      const widthNote = sidecarWidthWarning(sidecar, annotatePageWidthRef.current);
       if (widthNote) setNotice(widthNote);
       const sidecarInk = inkOpsFrom(sidecar.board);
       if (sidecar.footnotes) {
-        setMdInkFootnotes(sidecar.footnotes);
-        mdInkFootnotesRef.current = sidecar.footnotes;
+        setAnnotateFootnotes(sidecar.footnotes);
+        annotateFootnotesRef.current = sidecar.footnotes;
       }
       boardRef.current?.restoreBoard(sidecar.board.elements, sidecar.board.appState, {
-        skeletons: buildMdInkTemplate(
-          mdInkPageHeight(mdInkHeight),
+        skeletons: buildAnnotateTemplate(
+          annotatePageHeight(annotateHeight),
           isDarkTheme(themeId),
-          mdInkFrameWidthFromElements(
+          annotateFrameWidthFromElements(
             sidecar.board.elements as {
               width?: number;
               customData?: { lcMdInkFrame?: boolean } | null;
             }[],
-          ) ?? mdInkPageWidth,
+          ) ?? annotatePageWidth,
         ),
         ink: sidecarInk,
         files: sidecar.board.files,
@@ -2318,10 +2336,10 @@ export function App() {
     } catch (cause) {
       setError(messageOf(cause));
     }
-  }, [mdInkHeight, themeId]);
+  }, [annotateHeight, themeId]);
 
   const restorePadSnapshot = useCallback(
-    async (kind: "md-ink" | "whiteboard", key: string, tier: PadSnapshotTier) => {
+    async (kind: "annotate" | "whiteboard", key: string, tier: PadSnapshotTier) => {
       const snap = await getPadSnapshot(kind, key, tier);
       if (!snap) {
         setError("That snapshot is no longer on this device.");
@@ -2330,24 +2348,24 @@ export function App() {
       const board = boardRef.current;
       if (!board) return;
       const ink = inkOpsFrom(snap.board);
-      if (kind === "md-ink") {
+      if (kind === "annotate") {
         if (snap.footnotes) {
-          setMdInkFootnotes(snap.footnotes);
-          mdInkFootnotesRef.current = snap.footnotes;
+          setAnnotateFootnotes(snap.footnotes);
+          annotateFootnotesRef.current = snap.footnotes;
         }
         if (Array.isArray(snap.agent) && snap.agent.length > 0) {
           setCoachMessages(restoreCoachMessages(snap.agent));
         }
         board.restoreBoard(snap.board.elements, snap.board.appState, {
-          skeletons: buildMdInkTemplate(
-            mdInkPageHeight(mdInkHeight),
+          skeletons: buildAnnotateTemplate(
+            annotatePageHeight(annotateHeight),
             isDarkTheme(themeId),
-            mdInkFrameWidthFromElements(
+            annotateFrameWidthFromElements(
               snap.board.elements as {
                 width?: number;
                 customData?: { lcMdInkFrame?: boolean } | null;
               }[],
-            ) ?? mdInkPageWidth,
+            ) ?? annotatePageWidth,
           ),
           ink,
           files: snap.board.files,
@@ -2355,16 +2373,16 @@ export function App() {
         });
       } else {
         const pages = Math.min(
-          SCRATCHPAD_PAGE_LIMIT,
-          Math.max(1, snap.pageCount ?? 1, countScratchPages(snap.board.elements)),
+          WHITEBOARD_PAGE_LIMIT,
+          Math.max(1, snap.pageCount ?? 1, countWhiteboardPages(snap.board.elements)),
         );
         board.restoreBoard(snap.board.elements, snap.board.appState, {
-          skeletons: buildScratchpadTemplate(pages, isDarkTheme(themeId)),
+          skeletons: buildWhiteboardTemplate(pages, isDarkTheme(themeId)),
           ink,
           files: snap.board.files,
           inkPalettes: snap.board.inkPalettes,
         });
-        setScratchPageCount(pages);
+        setWhiteboardPageCount(pages);
         if (Array.isArray(snap.agent) && snap.agent.length > 0) {
           setCoachMessages(restoreCoachMessages(snap.agent));
         }
@@ -2374,16 +2392,16 @@ export function App() {
       const when = new Date(snap.writtenAt).toLocaleString();
       setNotice(`Restored the ${tier} snapshot from ${when}.`);
     },
-    [mdInkHeight, mdInkPageWidth, themeId],
+    [annotateHeight, annotatePageWidth, themeId],
   );
 
   /** Pick a document from disk and open it on the pad. */
-  const pickAndOpenMdInk = useCallback(async () => {
+  const pickAndOpenAnnotate = useCallback(async () => {
     if (busy !== null) return;
     try {
       const picked = await pickDocumentFile();
       if (!picked) return;
-      await openMdInk({
+      await openAnnotate({
         name: picked.name,
         docType: picked.docType,
         text: picked.text,
@@ -2392,7 +2410,7 @@ export function App() {
     } catch (cause) {
       setError(messageOf(cause));
     }
-  }, [busy, openMdInk]);
+  }, [busy, openAnnotate]);
 
   /** Session queue after Start / Random; otherwise the filtered problem bank. */
   const stepProblem = useCallback(
@@ -3171,16 +3189,33 @@ export function App() {
         // Attached photos ride the same payload on both transports — the WS
         // run frame and POST /coach/ask deserialize the one AskRequest.
         const images = (photos ?? []).map((photo) => photo.png);
+        const surface = askSurface(problem);
+        const askPayload =
+          surface === "problem"
+            ? {
+                surface,
+                task_id: problem.task_id,
+                dataset: problem.dataset,
+                question: asked,
+                ...(images.length > 0 ? { images } : {}),
+              }
+            : {
+                surface,
+                task_id: problem.task_id,
+                question: asked,
+                ...(images.length > 0 ? { images } : {}),
+              };
         const result = await runCoachJob<{ reply: string }>(
           "ask",
-          {
-            task_id: problem.task_id,
-            dataset: problem.dataset,
-            question: asked,
-            ...(images.length > 0 ? { images } : {}),
-          },
+          askPayload,
           turnId,
-          () => client.ask(problem.task_id, asked, problem.dataset, images),
+          () =>
+            client.ask(asked, {
+              surface,
+              task_id: problem.task_id,
+              ...(surface === "problem" ? { dataset: problem.dataset } : {}),
+              ...(images.length > 0 ? { images } : {}),
+            }),
         );
         if (coachRunGenRef.current !== genAtStart) return;
         finished = true;
@@ -3268,7 +3303,7 @@ export function App() {
        */
       const marks = flags.annotations
         ? attachedFootnoteIdsRef.current
-            .map((id) => mdInkFootnotesRef.current.find((entry) => entry.id === id))
+            .map((id) => annotateFootnotesRef.current.find((entry) => entry.id === id))
             .filter((entry): entry is DocFootnote => Boolean(entry))
         : [];
 
@@ -3385,7 +3420,7 @@ export function App() {
         question: asked,
         quote: quotedPassage,
         marks,
-        numbers: numberFootnotes(mdInkFootnotesRef.current),
+        numbers: numberFootnotes(annotateFootnotesRef.current),
         budget: isLocalPad(problem) ? PAD_ASK_CLIP_CHARS : PROBLEM_ASK_CLIP_CHARS,
       });
       const prompt = assembled.prompt;
@@ -3446,7 +3481,7 @@ export function App() {
        */
       if (attachedIds.length > 0) {
         const wanted = new Set(attachedIds);
-        setMdInkFootnotes((current) =>
+        setAnnotateFootnotes((current) =>
           current.map((entry) => {
             if (!wanted.has(entry.id)) return entry;
             const threads = entry.threads ?? [];
@@ -3464,7 +3499,7 @@ export function App() {
         if (!quoted && (!upgradeId || wanted.has(upgradeId))) return;
       }
       if (quoted) {
-        setMdInkFootnotes((current) =>
+        setAnnotateFootnotes((current) =>
           addFootnote(current, {
             id: freshFootnoteId(current),
             kind: "coach",
@@ -3481,7 +3516,7 @@ export function App() {
         return;
       }
       if (!upgradeId) return;
-      setMdInkFootnotes((current) =>
+      setAnnotateFootnotes((current) =>
         current.map((entry) => {
           if (entry.id !== upgradeId) return entry;
           const threads = entry.threads ?? [];
@@ -3807,7 +3842,7 @@ export function App() {
 
   const sendCoachFromFootnote = useCallback(
     (text: string, threadRootId: string | null) => {
-      const footnote = mdInkFootnotes.find((entry) => entry.id === openFootnoteId);
+      const footnote = annotateFootnotes.find((entry) => entry.id === openFootnoteId);
       if (!footnote) return;
       // Every send from the card claims the mark, not just the first: a second
       // thread has to be recorded on the footnote the same way the first was,
@@ -3835,7 +3870,7 @@ export function App() {
         setCoachFocusThread({ token: Date.now(), rootId: threadRootId });
       }
     },
-    [mdInkFootnotes, openFootnoteId, sendCoachChat],
+    [annotateFootnotes, openFootnoteId, sendCoachChat],
   );
 
   /**
@@ -4005,31 +4040,31 @@ export function App() {
     const timer = window.setTimeout(() => {
       if (agentSaveSuspendedRef.current) return;
       const agent = persistableCoachMessages(coachMessages);
-      if (isMdInk(problem)) {
+      if (isAnnotate(problem)) {
         // Board autosave only writes when the scene + marks fingerprint moves,
         // so a chat-only exchange would otherwise be lost — same reason the
         // whiteboard writes the notebook here. A PDF mark still only stores a
         // rootId pointer; the transcript lives on the library entry.
         const board = boardRef.current;
-        const source = mdInkSourceRef.current;
+        const source = annotateSourceRef.current;
         if (!board || !source) return;
         void (async () => {
-          await flushDirtyInk(board, mdInkDocKey(source.hash));
+          await flushDirtyInk(board, annotateDocKey(source.hash));
           const liveBoard = board.saveBoard({ assembleInk: false });
           try {
-            const saved = await saveMdInkDoc({
-              id: mdInkDocIdRef.current ?? undefined,
+            const saved = await saveAnnotateDoc({
+              id: annotateDocIdRef.current ?? undefined,
               name: source.name,
               hash: source.hash,
               source: source.text,
               docType: source.docType,
               board: liveBoard,
-              footnotes: mdInkFootnotesRef.current,
+              footnotes: annotateFootnotesRef.current,
               agent,
             });
-            if (!mdInkDocIdRef.current) setMdInkDocId(saved.id);
+            if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
           } catch (cause: unknown) {
-            if (cause instanceof MdInkLibraryFullError) {
+            if (cause instanceof AnnotateLibraryFullError) {
               setError(cause.message);
             } else {
               noteStorageFull(cause);
@@ -4038,26 +4073,26 @@ export function App() {
         })();
         return;
       }
-      if (isScratchpad(problem)) {
+      if (isWhiteboard(problem)) {
         // Board autosave only writes when the scene + ink fingerprint moves, so
         // a chat-only exchange would otherwise be lost. Write the notebook with
         // the current board so the thread survives a crash or a closed lid.
         const board = boardRef.current;
         const blob = board?.saveBoard();
         if (!blob) return;
-        void saveScratchNotebook({
-          id: scratchNotebookId ?? undefined,
+        void saveWhiteboardNotebook({
+          id: whiteboardNotebookId ?? undefined,
           board: blob,
           agent,
-          pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
+          pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(blob.elements)),
         })
           .then((saved) => {
-            if (!scratchNotebookId) setScratchNotebookId(saved.id);
+            if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
           })
           .catch((cause: unknown) => {
-            if (cause instanceof ScratchpadLibraryFullError) {
-              scratchLibResumeRef.current = null;
-              setScratchLibOpen(true);
+            if (cause instanceof WhiteboardLibraryFullError) {
+              whiteboardLibResumeRef.current = null;
+              setWhiteboardLibOpen(true);
             } else {
               noteStorageFull(cause);
             }
@@ -4071,7 +4106,7 @@ export function App() {
         });
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [client, problem, coachMessages, scratchNotebookId, scratchPageCount, noteStorageFull]);
+  }, [client, problem, coachMessages, whiteboardNotebookId, whiteboardPageCount, noteStorageFull]);
 
   const confirmReveal = useCallback(async (mode: "bridge" | "lazy" = "bridge") => {
     const board = boardRef.current;
@@ -4212,10 +4247,10 @@ export function App() {
    * a pristine hash — a notebook opened before this ran, say — the honest
    * answer is "assume they did something" and show the menu.
    */
-  const scratchUntouched = useCallback(() => {
+  const whiteboardUntouched = useCallback(() => {
     const board = boardRef.current;
     if (!board) return false;
-    const pristine = scratchPristineHashRef.current;
+    const pristine = whiteboardPristineHashRef.current;
     // Open race: pristine not snapshotted yet. Only claim untouched when the
     // board still looks blank (no ink) — never show Discard for a mid-open board.
     if (pristine === null) return board.getInkOpCount() === 0;
@@ -4239,8 +4274,8 @@ export function App() {
    * the save the writer had just asked for — the worst possible reading of a
    * button labelled Discard.
    */
-  const rebaselineScratchSession = useCallback(async (id: string) => {
-    scratchBaselineRef.current = { id, entry: await getScratchNotebook(id) };
+  const rebaselineWhiteboardSession = useCallback(async (id: string) => {
+    whiteboardBaselineRef.current = { id, entry: await getWhiteboardNotebook(id) };
     /*
      * Move the "have they written anything?" mark up to the save as well.
      *
@@ -4251,7 +4286,7 @@ export function App() {
      * baseline exists to stop it doing.
      */
     const board = boardRef.current;
-    scratchPristineHashRef.current = board
+    whiteboardPristineHashRef.current = board
       ? padContentFingerprint(board.getElements(), board.getInkOpCount())
       : null;
   }, []);
@@ -4268,22 +4303,22 @@ export function App() {
    * `onFull` is how the caller says what to reopen once a full library has been
    * pruned, since that differs between the sheet and the header.
    */
-  const saveScratchpadNow = useCallback(
+  const saveWhiteboardNow = useCallback(
     async (onFull?: () => void) => {
       const board = boardRef.current;
-      if (!board || !problem || !isScratchpad(problem)) return;
+      if (!board || !problem || !isWhiteboard(problem)) return;
       try {
-        await flushDirtyInk(board, scratchNotebookId ? whiteboardDocKey(scratchNotebookId) : null);
+        await flushDirtyInk(board, whiteboardNotebookId ? whiteboardDocKey(whiteboardNotebookId) : null);
         const liveBoard = board.saveBoard({ assembleInk: false });
-        const saved = await saveScratchNotebook({
-          id: scratchNotebookId ?? undefined,
+        const saved = await saveWhiteboardNotebook({
+          id: whiteboardNotebookId ?? undefined,
           board: liveBoard,
           agent: persistableCoachMessages(coachMessages),
-          pageCount: Math.max(scratchPageCount, countScratchPages(liveBoard.elements)),
+          pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
         });
-        setScratchNotebookId(saved.id);
+        setWhiteboardNotebookId(saved.id);
         await flushDirtyInk(board, whiteboardDocKey(saved.id));
-        await rebaselineScratchSession(saved.id);
+        await rebaselineWhiteboardSession(saved.id);
         setNotice(`Saved “${saved.title}”.`);
         const snapBoard = await boardWithAssembledInk(board, liveBoard);
         void recordRollingSnapshots({
@@ -4295,30 +4330,30 @@ export function App() {
           pageCount: saved.pageCount,
         });
       } catch (cause) {
-        if (cause instanceof ScratchpadLibraryFullError) {
-          scratchLibResumeRef.current = onFull ?? null;
-          setScratchLibOpen(true);
+        if (cause instanceof WhiteboardLibraryFullError) {
+          whiteboardLibResumeRef.current = onFull ?? null;
+          setWhiteboardLibOpen(true);
           return;
         }
         setError(messageOf(cause));
       }
     },
-    [coachMessages, problem, rebaselineScratchSession, scratchNotebookId, scratchPageCount],
+    [coachMessages, problem, rebaselineWhiteboardSession, whiteboardNotebookId, whiteboardPageCount],
   );
 
-  const discardScratchSession = useCallback(() => {
-    const baseline = scratchBaselineRef.current;
+  const discardWhiteboardSession = useCallback(() => {
+    const baseline = whiteboardBaselineRef.current;
     // Fire-and-forget, as with the document pad: the session is torn down
     // below regardless, and Discard should not wait on a store write.
     if (baseline.entry && baseline.id) {
-      void restoreScratchNotebook(baseline.entry).catch(() => {});
-    } else if (scratchNotebookId) {
-      void deleteScratchNotebook(scratchNotebookId).catch(() => {});
+      void restoreWhiteboardNotebook(baseline.entry).catch(() => {});
+    } else if (whiteboardNotebookId) {
+      void deleteWhiteboardNotebook(whiteboardNotebookId).catch(() => {});
     }
-    scratchBaselineRef.current = { id: null, entry: null };
-    scratchPristineHashRef.current = null;
-    setScratchNotebookId(null);
-  }, [scratchNotebookId]);
+    whiteboardBaselineRef.current = { id: null, entry: null };
+    whiteboardPristineHashRef.current = null;
+    setWhiteboardNotebookId(null);
+  }, [whiteboardNotebookId]);
 
   /** Nothing drawn on this document since it opened. */
   /**
@@ -4331,16 +4366,16 @@ export function App() {
    * without so much as offering to save it — the leave dialog never appeared,
    * because from the board's point of view nothing had happened.
    */
-  const mdInkUntouched = useCallback(() => {
+  const annotateUntouched = useCallback(() => {
     const board = boardRef.current;
-    const pristine = mdInkPristineHashRef.current;
+    const pristine = annotatePristineHashRef.current;
     if (!board || pristine === null) return false;
-    if (footnoteRevision(mdInkFootnotesRef.current) !== mdInkPristineMarksRef.current) {
+    if (footnoteRevision(annotateFootnotesRef.current) !== annotatePristineMarksRef.current) {
       return false;
     }
     if (
       JSON.stringify(persistableCoachMessages(coachMessagesRef.current)) !==
-      mdInkPristineAgentRef.current
+      annotatePristineAgentRef.current
     ) {
       return false;
     }
@@ -4354,59 +4389,59 @@ export function App() {
    * ever read, and the library's copy of the text goes away with the entry it
    * belongs to. Discarding leaves the writer's document exactly as it was.
    */
-  const discardMdInkSession = useCallback(() => {
-    const baseline = mdInkBaselineRef.current;
+  const discardAnnotateSession = useCallback(() => {
+    const baseline = annotateBaselineRef.current;
     // Fire-and-forget: the in-memory session is torn down below either way, and
     // making Discard wait on a store write would put a spinner on the one
     // action whose whole point is that it costs nothing.
     if (baseline.entry && baseline.id) {
-      void restoreMdInkDoc(baseline.entry).catch(() => {});
-    } else if (mdInkDocId) {
-      void deleteMdInkDoc(mdInkDocId).catch(() => {});
+      void restoreAnnotateDoc(baseline.entry).catch(() => {});
+    } else if (annotateDocId) {
+      void deleteAnnotateDoc(annotateDocId).catch(() => {});
     }
-    mdInkBaselineRef.current = { id: null, entry: null };
-    mdInkPristineHashRef.current = null;
-    mdInkPristineMarksRef.current = "";
-    mdInkPristineAgentRef.current = "";
-    setMdInkDocId(null);
-    setMdInkFootnotes([]);
-    mdInkFootnotesRef.current = [];
+    annotateBaselineRef.current = { id: null, entry: null };
+    annotatePristineHashRef.current = null;
+    annotatePristineMarksRef.current = "";
+    annotatePristineAgentRef.current = "";
+    setAnnotateDocId(null);
+    setAnnotateFootnotes([]);
+    annotateFootnotesRef.current = [];
     pendingQuoteRef.current = null;
     footnoteCoachUpgradeRef.current = null;
     setOpenFootnoteId(null);
     setFootnoteAnchorRect(null);
-  }, [mdInkDocId]);
+  }, [annotateDocId]);
 
   /** Commit the annotations to the library. Returns the entry, or null on failure. */
-  const saveMdInkSession = useCallback(async (): Promise<MdInkDoc | null> => {
+  const saveAnnotateSession = useCallback(async (): Promise<AnnotateDoc | null> => {
     const board = boardRef.current;
-    const source = mdInkSource;
+    const source = annotateSource;
     if (!board || !source) return null;
-    await flushDirtyInk(board, mdInkDocKey(source.hash));
+    await flushDirtyInk(board, annotateDocKey(source.hash));
     const blob = board.saveBoard({ assembleInk: false });
     if (!blob) return null;
     try {
-      const saved = await saveMdInkDoc({
-        id: mdInkDocId ?? undefined,
+      const saved = await saveAnnotateDoc({
+        id: annotateDocId ?? undefined,
         name: source.name,
         hash: source.hash,
         source: source.text,
         docType: source.docType,
         board: blob,
-        footnotes: mdInkFootnotes,
+        footnotes: annotateFootnotes,
         agent: persistableCoachMessages(coachMessages),
       });
-      setMdInkDocId(saved.id);
-      mdInkBaselineRef.current = { id: saved.id, entry: saved };
-      mdInkPristineHashRef.current = padContentFingerprint(
+      setAnnotateDocId(saved.id);
+      annotateBaselineRef.current = { id: saved.id, entry: saved };
+      annotatePristineHashRef.current = padContentFingerprint(
         board.getElements(),
         board.getInkOpCount(),
       );
-      mdInkPristineMarksRef.current = footnoteRevision(mdInkFootnotes);
-      mdInkPristineAgentRef.current = JSON.stringify(persistableCoachMessages(coachMessages));
+      annotatePristineMarksRef.current = footnoteRevision(annotateFootnotes);
+      annotatePristineAgentRef.current = JSON.stringify(persistableCoachMessages(coachMessages));
       const snapBoard = await boardWithAssembledInk(board, blob);
       void recordRollingSnapshots({
-        kind: "md-ink",
+        kind: "annotate",
         key: saved.hash,
         name: saved.name,
         board: snapBoard,
@@ -4415,14 +4450,14 @@ export function App() {
       });
       return saved;
     } catch (cause) {
-      if (cause instanceof MdInkLibraryFullError) {
+      if (cause instanceof AnnotateLibraryFullError) {
         setError(cause.message);
         return null;
       }
       setError(messageOf(cause));
       return null;
     }
-  }, [mdInkDocId, mdInkFootnotes, mdInkSource, coachMessages]);
+  }, [annotateDocId, annotateFootnotes, annotateSource, coachMessages]);
 
 
   /*
@@ -4443,8 +4478,8 @@ export function App() {
 
   const onDocAnnotate = useCallback(
     (selection: DocSelectionResult, anchorRect: DOMRect | null) => {
-      const id = freshFootnoteId(mdInkFootnotesRef.current);
-      setMdInkFootnotes((current) =>
+      const id = freshFootnoteId(annotateFootnotesRef.current);
+      setAnnotateFootnotes((current) =>
         addFootnote(current, {
           id,
           kind: "note",
@@ -4479,8 +4514,8 @@ export function App() {
       const url = googleSearchUrl(query);
       // The footnote is written before the browser opens, not after: leaving the
       // app is exactly when a promise callback is least likely to be waited for.
-      const id = freshFootnoteId(mdInkFootnotesRef.current);
-      setMdInkFootnotes((current) =>
+      const id = freshFootnoteId(annotateFootnotesRef.current);
+      setAnnotateFootnotes((current) =>
         addFootnote(current, {
           id,
           kind: "search",
@@ -4507,13 +4542,13 @@ export function App() {
   }, [openFootnoteOverview]);
 
   const onFootnoteChange = useCallback((next: DocFootnote) => {
-    setMdInkFootnotes((current) => current.map((entry) => (entry.id === next.id ? next : entry)));
+    setAnnotateFootnotes((current) => current.map((entry) => (entry.id === next.id ? next : entry)));
   }, []);
 
   const onAddSubMark = useCallback(
     (mark: DocFootnoteSubMark) => {
       if (!openFootnoteId) return;
-      setMdInkFootnotes((current) =>
+      setAnnotateFootnotes((current) =>
         current.map((entry) => {
           if (entry.id !== openFootnoteId) return entry;
           const existing = entry.subMarks ?? [];
@@ -4528,7 +4563,7 @@ export function App() {
 
   /** The highlighter's plain outcome: a mark, pointing at nothing but itself. */
   const onDocMark = useCallback((selection: DocSelectionResult) => {
-    setMdInkFootnotes((current) =>
+    setAnnotateFootnotes((current) =>
       addFootnote(current, {
         id: freshFootnoteId(current),
         kind: "note",
@@ -4543,7 +4578,7 @@ export function App() {
   }, []);
 
   const onRemoveFootnote = useCallback((footnote: DocFootnote) => {
-    setMdInkFootnotes((current) => removeFootnote(current, footnote.id));
+    setAnnotateFootnotes((current) => removeFootnote(current, footnote.id));
   }, []);
 
   const leaveProblem = useCallback(
@@ -4552,12 +4587,12 @@ export function App() {
         next();
         return;
       }
-      if (isScratchpad(problem)) {
+      if (isWhiteboard(problem)) {
         // A notebook nobody wrote in is not a decision worth interrupting for.
         // Leave straight away and take the autosave's placeholder with us.
-        if (scratchUntouched()) {
+        if (whiteboardUntouched()) {
           boardSaveSuspendedRef.current = true;
-          discardScratchSession();
+          discardWhiteboardSession();
           next();
           return;
         }
@@ -4566,12 +4601,12 @@ export function App() {
         setLeaving({ run: next });
         return;
       }
-      if (isMdInk(problem)) {
+      if (isAnnotate(problem)) {
         // Same rule, same reason: an unannotated document is a document that
         // was only read, and reading it is not a decision.
-        if (mdInkUntouched()) {
+        if (annotateUntouched()) {
           boardSaveSuspendedRef.current = true;
-          discardMdInkSession();
+          discardAnnotateSession();
           next();
           return;
         }
@@ -4588,7 +4623,7 @@ export function App() {
       setLeavingPhase("open");
       setLeaving({ run: next });
     },
-    [discardMdInkSession, discardScratchSession, mdInkUntouched, problem, scratchUntouched],
+    [discardAnnotateSession, discardWhiteboardSession, annotateUntouched, problem, whiteboardUntouched],
   );
 
   const resolveLeave = useCallback(
@@ -4615,37 +4650,37 @@ export function App() {
       };
 
       try {
-        if (isMdInk(problem)) {
+        if (isAnnotate(problem)) {
           if (save) {
-            const saved = await saveMdInkSession();
+            const saved = await saveAnnotateSession();
             if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
           } else {
-            discardMdInkSession();
+            discardAnnotateSession();
           }
           await dismissDialog();
           setLeavingPending(false);
           pending.run();
           return;
         }
-        if (isScratchpad(problem)) {
+        if (isWhiteboard(problem)) {
           if (save) {
             const handle = boardRef.current;
             if (handle) {
               await flushDirtyInk(
                 handle,
-                scratchNotebookId ? whiteboardDocKey(scratchNotebookId) : null,
+                whiteboardNotebookId ? whiteboardDocKey(whiteboardNotebookId) : null,
               );
               const blob = handle.saveBoard({ assembleInk: false });
               try {
-                const saved = await saveScratchNotebook({
-                  id: scratchNotebookId ?? undefined,
+                const saved = await saveWhiteboardNotebook({
+                  id: whiteboardNotebookId ?? undefined,
                   board: blob,
                   agent: persistableCoachMessages(coachMessages),
-                  pageCount: Math.max(scratchPageCount, countScratchPages(blob.elements)),
+                  pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(blob.elements)),
                 });
-                setScratchNotebookId(saved.id);
+                setWhiteboardNotebookId(saved.id);
                 await flushDirtyInk(handle, whiteboardDocKey(saved.id));
-                await rebaselineScratchSession(saved.id);
+                await rebaselineWhiteboardSession(saved.id);
                 const snapBoard = await boardWithAssembledInk(handle, blob);
                 void recordRollingSnapshots({
                   kind: "whiteboard",
@@ -4656,16 +4691,16 @@ export function App() {
                   pageCount: saved.pageCount,
                 });
               } catch (cause) {
-                if (cause instanceof ScratchpadLibraryFullError) {
+                if (cause instanceof WhiteboardLibraryFullError) {
                   await dismissDialog();
                   setSwitchMotion("idle");
                   setLeavingPending(false);
                   // Re-open leave flow after the library dialog frees a slot.
                   setLeaving({ run: pending.run });
-                  scratchLibResumeRef.current = () => {
+                  whiteboardLibResumeRef.current = () => {
                     void resolveLeave(true);
                   };
-                  setScratchLibOpen(true);
+                  setWhiteboardLibOpen(true);
                   return;
                 }
                 throw cause;
@@ -4675,7 +4710,7 @@ export function App() {
           } else {
             // The autosave has been committing to the library all along, so
             // discarding is real work, not a skipped save.
-            discardScratchSession();
+            discardWhiteboardSession();
           }
           await dismissDialog();
           setLeavingPending(false);
@@ -4724,18 +4759,18 @@ export function App() {
     },
     [
       client,
-      discardMdInkSession,
-      discardScratchSession,
-      saveMdInkSession,
-      rebaselineScratchSession,
+      discardAnnotateSession,
+      discardWhiteboardSession,
+      saveAnnotateSession,
+      rebaselineWhiteboardSession,
       problem,
       leaving,
       leavingPending,
       coachMessages,
       attemptState,
       tests,
-      scratchNotebookId,
-      scratchPageCount,
+      whiteboardNotebookId,
+      whiteboardPageCount,
     ],
   );
 
@@ -4768,8 +4803,8 @@ export function App() {
 
   const groupedCoachThreads = useMemo(() => groupThreads(coachMessages), [coachMessages]);
   const openFootnote = useMemo(
-    () => mdInkFootnotes.find((entry) => entry.id === openFootnoteId) ?? null,
-    [mdInkFootnotes, openFootnoteId],
+    () => annotateFootnotes.find((entry) => entry.id === openFootnoteId) ?? null,
+    [annotateFootnotes, openFootnoteId],
   );
   /**
    * The turns of one saved thread, asked for by the card as it opens them.
@@ -4782,20 +4817,20 @@ export function App() {
     (rootId: string) => visibleThreadMessages(coachMessages, rootId, groupedCoachThreads),
     [coachMessages, groupedCoachThreads],
   );
-  const footnoteNumbers = useMemo(() => numberFootnotes(mdInkFootnotes), [mdInkFootnotes]);
+  const footnoteNumbers = useMemo(() => numberFootnotes(annotateFootnotes), [annotateFootnotes]);
   const footnoteThreadRoots = useMemo(() => {
     const roots = new Set<string>();
-    for (const entry of mdInkFootnotes) {
+    for (const entry of annotateFootnotes) {
       if (entry.threadRootId) roots.add(entry.threadRootId);
       for (const thread of entry.threads ?? []) roots.add(thread.rootId);
     }
     return roots;
-  }, [mdInkFootnotes]);
+  }, [annotateFootnotes]);
 
   const openCoachFootnoteThread = useCallback(
     (rootId: string) => {
       const footnote =
-        mdInkFootnotes.find(
+        annotateFootnotes.find(
           (entry) =>
             entry.threadRootId === rootId ||
             (entry.threads ?? []).some((thread) => thread.rootId === rootId),
@@ -4807,7 +4842,7 @@ export function App() {
       }
       setCoachFocusThread({ token: Date.now(), rootId });
     },
-    [mdInkFootnotes, openFootnoteOverview],
+    [annotateFootnotes, openFootnoteOverview],
   );
 
   return (
@@ -4877,11 +4912,11 @@ export function App() {
                   ›
                 </button>
               </div>
-              ) : isMdInk(problem) ? (
+              ) : isAnnotate(problem) ? (
                 // The document is the thing being worked on, so it gets the
                 // slot the problem's name would have had.
-                <span className="lc-current" title={mdInkSource?.name ?? "Document"}>
-                  {mdInkSource?.name ?? "Document"}
+                <span className="lc-current" title={annotateSource?.name ?? "Document"}>
+                  {annotateSource?.name ?? "Document"}
                 </span>
               ) : (
                 <span className="lc-current" title="Whiteboard">
@@ -4966,8 +5001,8 @@ export function App() {
               dataTip="Document — tap to open a .md, source file, .pdf or .epub, hold for recent"
               dataTipPlacement="bottom"
               disabled={busy !== null}
-              onTap={() => void pickAndOpenMdInk()}
-              onConfirm={() => setMdInkEntryOpen(true)}
+              onTap={() => void pickAndOpenAnnotate()}
+              onConfirm={() => setAnnotateEntryOpen(true)}
             >
               <svg
                 className="lc-icon-svg"
@@ -4989,7 +5024,7 @@ export function App() {
               </svg>
             </HoldButton>
           )}
-          {problem && isMdInk(problem) && (
+          {problem && isAnnotate(problem) && (
             /* Tap to save now, hold for the sheet. */
             <HoldButton
               label="Markdown"
@@ -5000,11 +5035,11 @@ export function App() {
               pressed
               disabled={busy !== null}
               onTap={() => {
-                void saveMdInkSession().then((saved) => {
+                void saveAnnotateSession().then((saved) => {
                   if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
                 });
               }}
-              onConfirm={() => setMdInkEntryOpen(true)}
+              onConfirm={() => setAnnotateEntryOpen(true)}
             >
               <svg
                 className="lc-icon-svg lc-icon-svg-filled"
@@ -5036,8 +5071,8 @@ export function App() {
               dataTip="Whiteboard — tap for new, hold to load"
               dataTipPlacement="bottom"
               disabled={busy !== null}
-              onTap={() => void openScratchpad({ fresh: true })}
-              onConfirm={() => setScratchEntryOpen(true)}
+              onTap={() => void openWhiteboard({ fresh: true })}
+              onConfirm={() => setWhiteboardEntryOpen(true)}
             >
               <svg
                 className="lc-icon-svg"
@@ -5058,7 +5093,7 @@ export function App() {
               </svg>
             </HoldButton>
           )}
-          {problem && isScratchpad(problem) && (
+          {problem && isWhiteboard(problem) && (
             /*
               Tap to save now, hold for the sheet.
 
@@ -5074,8 +5109,8 @@ export function App() {
               dataTipPlacement="bottom"
               pressed
               disabled={busy !== null}
-              onTap={() => void saveScratchpadNow()}
-              onConfirm={() => setScratchEntryOpen(true)}
+              onTap={() => void saveWhiteboardNow()}
+              onConfirm={() => setWhiteboardEntryOpen(true)}
             >
               <svg
                 className="lc-icon-svg lc-icon-svg-filled"
@@ -5196,26 +5231,26 @@ export function App() {
             onCodeSlot={onCodeSlot}
             transparentCanvas={Boolean(
               problem &&
-                (isMdInk(problem) ||
+                (isAnnotate(problem) ||
                   (!isLocalPad(problem) && activeRegion === "constraints")),
             )}
             docPaper={Boolean(
               problem &&
-                (isMdInk(problem) ||
-                  isScratchpad(problem) ||
+                (isAnnotate(problem) ||
+                  isWhiteboard(problem) ||
                   (!isLocalPad(problem) &&
                     (activeRegion === "constraints" || activeRegion === "code"))),
             )}
             annotateToggle={Boolean(problem)}
             onAnnotateCodeChange={setAnnotateCode}
             // Ruled lines under somebody else's typography would be noise.
-            linedPaperToggle={Boolean(problem) && !isMdInk(problem)}
+            linedPaperToggle={Boolean(problem) && !isAnnotate(problem)}
             mobileRegion={
               problem
-                ? isScratchpad(problem)
-                  ? scratchPageId(scratchPageIndex)
-                  : isMdInk(problem)
-                    ? MD_INK_REGION
+                ? isWhiteboard(problem)
+                  ? whiteboardPageId(whiteboardPageIndex)
+                  : isAnnotate(problem)
+                    ? ANNOTATE_REGION
                     : activeRegion
                 : null
             }
@@ -5231,13 +5266,13 @@ export function App() {
             }
             pageTitle={null}
             pageContentHeight={
-              problem && isMdInk(problem)
-                ? mdInkPageHeight(mdInkHeight)
+              problem && isAnnotate(problem)
+                ? annotatePageHeight(annotateHeight)
                 : problem &&
                     !isLocalPad(problem) &&
-                    !isMdInk(problem) &&
+                    !isAnnotate(problem) &&
                     activeRegion === "constraints"
-                  ? mdInkPageHeight(statementHeight)
+                  ? annotatePageHeight(statementHeight)
                   : null
             }
             codeContentHeight={
@@ -5252,19 +5287,19 @@ export function App() {
             }
             selectableContent={Boolean(
               problem &&
-                ((isMdInk(problem) && mdInkSource) ||
-                  (!isLocalPad(problem) && !isMdInk(problem))),
+                ((isAnnotate(problem) && annotateSource) ||
+                  (!isLocalPad(problem) && !isAnnotate(problem))),
             )}
             textMarkSelecting={Boolean(openFootnote)}
             onMarksSlot={setMarksSlot}
             onHighlightingChange={setHighlighting}
             pageContent={
-              problem && isMdInk(problem) && mdInkSource ? (
+              problem && isAnnotate(problem) && annotateSource ? (
                 <DocSelectionLayer
                   enabled={!annotateCode || Boolean(openFootnote) || highlighting}
                   highlighting={highlighting}
                   marksHost={marksSlot}
-                  footnotes={mdInkFootnotes}
+                  footnotes={annotateFootnotes}
                   onAnnotate={onDocAnnotate}
                   onCopy={onDocCopy}
                   onSearch={onDocSearch}
@@ -5276,31 +5311,31 @@ export function App() {
                   onAddSubMark={onAddSubMark}
                   hoveredSubMarkId={hoveredSubMarkId}
                 >
-                  {mdInkSource.docType === "pdf" && mdInkSource.bytes ? (
+                  {annotateSource.docType === "pdf" && annotateSource.bytes ? (
                     <PdfDocument
-                      bytes={mdInkSource.bytes}
-                      frameWidth={mdInkPageWidth}
+                      bytes={annotateSource.bytes}
+                      frameWidth={annotatePageWidth}
                       onMeasure={onMdInkMeasure}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                       onError={setError}
                     />
-                  ) : mdInkSource.docType === "epub" && mdInkSource.bytes ? (
+                  ) : annotateSource.docType === "epub" && annotateSource.bytes ? (
                     <EpubDocument
-                      bytes={mdInkSource.bytes}
+                      bytes={annotateSource.bytes}
                       onMeasure={onMdInkMeasure}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                       onError={setError}
                     />
-                  ) : mdInkSource.docType === "code" ? (
+                  ) : annotateSource.docType === "code" ? (
                     <CodeDocument
-                      source={mdInkSource.text}
-                      language={languageForName(mdInkSource.name)}
+                      source={annotateSource.text}
+                      language={languageForName(annotateSource.name)}
                       onMeasure={onMdInkMeasure}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                     />
                   ) : (
-                    <MdInkDocument
-                      source={mdInkSource.text}
+                    <AnnotateDocument
+                      source={annotateSource.text}
                       onMeasure={onMdInkMeasure}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                     />
@@ -5308,13 +5343,13 @@ export function App() {
                 </DocSelectionLayer>
               ) : problem &&
                 !isLocalPad(problem) &&
-                !isMdInk(problem) &&
+                !isAnnotate(problem) &&
                 activeRegion === "constraints" ? (
                 <DocSelectionLayer
                   enabled={!annotateCode || Boolean(openFootnote) || highlighting}
                   highlighting={highlighting}
                   marksHost={marksSlot}
-                  footnotes={mdInkFootnotes}
+                  footnotes={annotateFootnotes}
                   onAnnotate={onDocAnnotate}
                   onCopy={onDocCopy}
                   onSearch={onDocSearch}
@@ -5451,12 +5486,12 @@ export function App() {
             thinkingPhase={coachPhase}
             messages={coachMessages}
             askOnly={isLocalPad(problem)}
-            coachSurface={isLocalPad(problem) ? "pad" : "problem"}
-            allowAnnotations={!isScratchpad(problem)}
+            agentSurface={isLocalPad(problem) ? "pad" : "problem"}
+            allowAnnotations={!isWhiteboard(problem)}
             quoteSeed={coachQuoteSeed}
             focusThread={coachFocusThread}
             attachedMarks={attachedFootnoteIds.flatMap((id) => {
-              const mark = mdInkFootnotes.find((entry) => entry.id === id);
+              const mark = annotateFootnotes.find((entry) => entry.id === id);
               if (!mark) return [];
               return [
                 {
@@ -5469,11 +5504,11 @@ export function App() {
               ];
             })}
             attachedFootnotes={attachedFootnoteIds.flatMap((id) => {
-              const mark = mdInkFootnotes.find((entry) => entry.id === id);
+              const mark = annotateFootnotes.find((entry) => entry.id === id);
               return mark ? [mark] : [];
             })}
             askClipChars={isLocalPad(problem) ? PAD_ASK_CLIP_CHARS : PROBLEM_ASK_CLIP_CHARS}
-            annotationChoices={mdInkFootnotes.map((mark) => ({
+            annotationChoices={annotateFootnotes.map((mark) => ({
               id: mark.id,
               number: footnoteNumbers.get(mark.id),
               title: mark.title,
@@ -5620,10 +5655,10 @@ export function App() {
         canNext={canStepNext}
       />
 
-      {leaving && problem && isScratchpad(problem) && (
-        <ScratchpadDialog
+      {leaving && problem && isWhiteboard(problem) && (
+        <WhiteboardDialog
           mode="leave"
-          dirty={!scratchUntouched()}
+          dirty={!whiteboardUntouched()}
           pending={leavingPending}
           exiting={leavingPhase === "exit"}
           error={leavingError}
@@ -5631,7 +5666,7 @@ export function App() {
             if (choice === "load" && notebookId) {
               setLeaving(null);
               setLeavingPhase("open");
-              void openScratchpad({ notebookId });
+              void openWhiteboard({ notebookId });
               return;
             }
             void resolveLeave(choice === "save");
@@ -5644,11 +5679,11 @@ export function App() {
         />
       )}
 
-      {leaving && problem && isMdInk(problem) && (
-        <MdInkDialog
+      {leaving && problem && isAnnotate(problem) && (
+        <AnnotateDialog
           mode="leave"
-          dirty={!mdInkUntouched()}
-          docName={mdInkSource?.name ?? "this document"}
+          dirty={!annotateUntouched()}
+          docName={annotateSource?.name ?? "this document"}
           pending={leavingPending}
           exiting={leavingPhase === "exit"}
           error={leavingError}
@@ -5661,22 +5696,22 @@ export function App() {
         />
       )}
 
-      {mdInkEntryOpen && (
-        <MdInkDialog
+      {annotateEntryOpen && (
+        <AnnotateDialog
           mode="entry"
           pending={busy !== null}
-          allowSave={Boolean(problem && isMdInk(problem))}
-          snapshotKey={mdInkSource?.hash ?? null}
+          allowSave={Boolean(problem && isAnnotate(problem))}
+          snapshotKey={annotateSource?.hash ?? null}
           onChoose={(choice, docId) => {
-            setMdInkEntryOpen(false);
+            setAnnotateEntryOpen(false);
             if (choice === "save") {
-              void saveMdInkSession().then((saved) => {
+              void saveAnnotateSession().then((saved) => {
                 if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
               });
               return;
             }
             if (choice === "export") {
-              exportMdInkAnnotations();
+              exportAnnotateAnnotations();
               return;
             }
             if (choice === "import") {
@@ -5684,21 +5719,21 @@ export function App() {
               return;
             }
             if (choice === "snapshot" && docId) {
-              const source = mdInkSourceRef.current;
+              const source = annotateSourceRef.current;
               if (source) {
-                void restorePadSnapshot("md-ink", source.hash, docId as PadSnapshotTier);
+                void restorePadSnapshot("annotate", source.hash, docId as PadSnapshotTier);
               }
               return;
             }
             if (choice === "recent" && docId) {
               void (async () => {
-                const entry = await getMdInkDoc(docId);
+                const entry = await getAnnotateDoc(docId);
                 if (!entry) {
                   setError("That document is no longer in the library.");
                   return;
                 }
                 if (!isBinaryDocType(entry.docType)) {
-                  await openMdInk({
+                  await openAnnotate({
                     name: entry.name,
                     docType: entry.docType,
                     text: entry.source,
@@ -5720,7 +5755,7 @@ export function App() {
                   );
                   return;
                 }
-                await openMdInk({
+                await openAnnotate({
                   name: entry.name,
                   docType: entry.docType,
                   bytes,
@@ -5729,9 +5764,9 @@ export function App() {
               })();
               return;
             }
-            void pickAndOpenMdInk();
+            void pickAndOpenAnnotate();
           }}
-          onCancel={() => setMdInkEntryOpen(false)}
+          onCancel={() => setAnnotateEntryOpen(false)}
         />
       )}
 
@@ -5751,47 +5786,47 @@ export function App() {
         />
       )}
 
-      {scratchEntryOpen && (
-        <ScratchpadDialog
+      {whiteboardEntryOpen && (
+        <WhiteboardDialog
           mode="entry"
           pending={busy !== null}
-          allowSave={Boolean(problem && isScratchpad(problem))}
-          snapshotKey={scratchNotebookId}
+          allowSave={Boolean(problem && isWhiteboard(problem))}
+          snapshotKey={whiteboardNotebookId}
           onChoose={(choice, notebookId) => {
-            setScratchEntryOpen(false);
+            setWhiteboardEntryOpen(false);
             if (choice === "save") {
-              void saveScratchpadNow(() => setScratchEntryOpen(true));
+              void saveWhiteboardNow(() => setWhiteboardEntryOpen(true));
               return;
             }
             if (choice === "load" && notebookId) {
-              void openScratchpad({ notebookId });
+              void openWhiteboard({ notebookId });
               return;
             }
-            if (choice === "snapshot" && notebookId && scratchNotebookId) {
+            if (choice === "snapshot" && notebookId && whiteboardNotebookId) {
               void restorePadSnapshot(
                 "whiteboard",
-                scratchNotebookId,
+                whiteboardNotebookId,
                 notebookId as PadSnapshotTier,
               );
               return;
             }
-            void openScratchpad({ fresh: true });
+            void openWhiteboard({ fresh: true });
           }}
-          onCancel={() => setScratchEntryOpen(false)}
+          onCancel={() => setWhiteboardEntryOpen(false)}
         />
       )}
 
-      {scratchLibOpen && (
-        <ScratchpadLibraryDialog
+      {whiteboardLibOpen && (
+        <WhiteboardLibraryDialog
           onFreed={() => {
-            setScratchLibOpen(false);
-            const resume = scratchLibResumeRef.current;
-            scratchLibResumeRef.current = null;
+            setWhiteboardLibOpen(false);
+            const resume = whiteboardLibResumeRef.current;
+            whiteboardLibResumeRef.current = null;
             resume?.();
           }}
           onCancel={() => {
-            setScratchLibOpen(false);
-            scratchLibResumeRef.current = null;
+            setWhiteboardLibOpen(false);
+            whiteboardLibResumeRef.current = null;
           }}
         />
       )}
@@ -6323,13 +6358,13 @@ function waitMs(ms: number): Promise<void> {
 }
 
 /**
- * Wait until MdInkDocument has reported a stable height.
+ * Wait until AnnotateDocument has reported a stable height.
  * Used under the existing loading overlay so refresh runs on a finished page.
  *
  * Returns false when the timeout fires without a height — callers must not
  * treat that as "document ready" or the board reveals on a stuck "Opening…".
  */
-function waitForMdInkLaidOut(
+function waitForAnnotateLaidOut(
   readHeight: () => number | null,
   timeoutMs = 8000,
 ): Promise<boolean> {

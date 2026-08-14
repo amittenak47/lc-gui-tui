@@ -13,10 +13,10 @@
  *
  * Note what the autosave is *not*. It survives a crash or a closed lid; it does
  * not decide what the writer meant to keep. Discard still rolls back to the
- * session's baseline, autosaved or not — see `scratchBaselineRef` in App.
+ * session's baseline, autosaved or not — see `whiteboardBaselineRef` in App.
  */
 
-const KEY = "lc.autosave.ms";
+const KEY = "whiteboard.autosave.ms";
 
 /** Off, or how many milliseconds between writes. */
 export type AutosaveInterval = 0 | 3000 | 15000 | 60000;

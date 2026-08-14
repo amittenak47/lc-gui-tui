@@ -200,7 +200,7 @@ pub const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 async fn health(State(state): State<Shared>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "ok": true,
-        "service": "lc",
+        "service": "whiteboard",
         "version": env!("CARGO_PKG_VERSION"),
         "requires_token": state.token.is_some(),
     }))

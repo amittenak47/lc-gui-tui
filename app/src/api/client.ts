@@ -525,28 +525,36 @@ export class LcClient {
    * the request it always saw.
    */
   async ask(
-    taskId: string,
     question: string,
-    dataset?: string,
-    images?: string[],
-    opts?: { timeoutMs?: number },
+    opts: {
+      surface: "whiteboard" | "annotate" | "problem";
+      task_id?: string;
+      dataset?: string;
+      images?: string[];
+      timeoutMs?: number;
+    },
   ): Promise<{ task_id: string; provider: string; reply: string }> {
+    const { surface, task_id, dataset, images, timeoutMs } = opts;
+    const body: Record<string, unknown> = {
+      surface,
+      question,
+      ...(task_id ? { task_id } : {}),
+      ...(images && images.length > 0 ? { images } : {}),
+    };
+    if (surface === "problem") {
+      body.dataset = dataset;
+    }
     try {
       return await this.request(
         "POST",
         "/coach/ask",
-        {
-          task_id: taskId,
-          dataset,
-          question,
-          ...(images && images.length > 0 ? { images } : {}),
-        },
-        { timeoutMs: opts?.timeoutMs ?? COACH_HTTP_TIMEOUT_MS },
+        body,
+        { timeoutMs: timeoutMs ?? COACH_HTTP_TIMEOUT_MS },
       );
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 404) {
         throw new LcApiError(
-          "Ask needs a daemon that serves POST /coach/ask — rebuild and restart `lc serve`",
+          "Ask needs a daemon that serves POST /coach/ask — rebuild and restart `whiteboard serve`",
           404,
         );
       }

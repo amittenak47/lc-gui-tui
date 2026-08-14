@@ -1,36 +1,40 @@
 /**
- * Scratchpad leave / entry menus — save, discard, load, or start blank.
+ * Markdown Ink entry / leave menus.
+ *
+ * Deliberately the same dialog as {@link WhiteboardDialog} down to the class
+ * names: the two modes are the same shape of thing — a local surface with a
+ * library, saved or discarded on the way out — and a writer who has learned one
+ * should not have to learn the other. What differs is only the nouns: documents
+ * rather than notebooks, and Open rather than New.
  */
 
 import { useEffect, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
-import {
-  deleteScratchNotebook,
-  listScratchNotebooks,
-  type ScratchNotebookMeta,
-} from "../util/scratchpadStore";
+import { deleteAnnotateDoc, listAnnotateDocs, type AnnotateDocMeta } from "../util/annotateStore";
 import {
   listPadSnapshots,
   PAD_SNAPSHOT_TIERS,
   type PadSnapshotMeta,
 } from "../util/padSnapshotStore";
 
-export type ScratchLeaveChoice = "save" | "discard" | "load";
-export type ScratchEntryChoice = "new" | "load" | "save" | "snapshot";
+export type MdInkLeaveChoice = "save" | "discard";
+export type MdInkEntryChoice = "open" | "recent" | "save" | "export" | "import" | "snapshot";
 
 interface LeaveProps {
   mode: "leave";
   /**
-   * Anything has been written since the notebook was opened or last saved.
+   * Anything has been annotated since the document was opened or last saved.
    *
    * When nothing has, Discard has nothing to discard — see the button below.
    */
   dirty?: boolean;
+  /** Name of the document being annotated, for the prompt. */
+  docName: string;
   pending: boolean;
   exiting?: boolean;
   error: string | null;
-  onChoose: (choice: ScratchLeaveChoice, notebookId?: string) => void;
+  onChoose: (choice: MdInkLeaveChoice) => void;
   onCancel: () => void;
 }
 
@@ -39,29 +43,38 @@ interface EntryProps {
   pending?: boolean;
   exiting?: boolean;
   error?: string | null;
-  /** When already inside a notebook, offer Save alongside New / Load. */
+  /** When a document is already open, offer Save alongside Open / Recent. */
   allowSave?: boolean;
-  /** Notebook id — used to list rolling snapshots. */
+  /** Content hash of the open file — used to list rolling snapshots. */
   snapshotKey?: string | null;
-  onChoose: (choice: ScratchEntryChoice, notebookId?: string) => void;
+  onChoose: (choice: MdInkEntryChoice, docId?: string) => void;
   onCancel: () => void;
 }
 
-export type ScratchpadDialogProps = LeaveProps | EntryProps;
+export type AnnotateDialogProps = LeaveProps | EntryProps;
 
-export function ScratchpadDialog(props: ScratchpadDialogProps) {
-  const [notebooks, setNotebooks] = useState<ScratchNotebookMeta[]>(() =>
-    listScratchNotebooks(),
-  );
-  const [pickingLoad, setPickingLoad] = useState(false);
+export function AnnotateDialog(props: AnnotateDialogProps) {
+  const [docs, setDocs] = useState<AnnotateDocMeta[]>(() => listAnnotateDocs());
+  const [pickingRecent, setPickingRecent] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
 
   useEffect(() => {
-    setNotebooks(listScratchNotebooks());
-    setPickingLoad(false);
+    setDocs(listAnnotateDocs());
+    setPickingRecent(false);
     setPickingSnapshots(false);
   }, [props.mode]);
+
+  const snapshotKey = props.mode === "entry" ? props.snapshotKey ?? null : null;
+
+  const openSnapshots = () => {
+    setPickingSnapshots(true);
+    if (!snapshotKey) {
+      setSnapshots([]);
+      return;
+    }
+    void listPadSnapshots("annotate", snapshotKey).then(setSnapshots);
+  };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -75,26 +88,19 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
   const exiting = Boolean(props.exiting);
   const error = props.error ?? null;
   const isLeave = props.mode === "leave";
-  const allowSave = props.mode === "entry" && Boolean(props.allowSave);
-  const snapshotKey = props.mode === "entry" ? props.snapshotKey ?? null : null;
   const dirty = props.mode !== "leave" || props.dirty !== false;
+  // Only the entry dialog lists documents — leaving one is a save/discard
+  // decision about the ink in hand, not a moment to go opening another.
+  const entry = props.mode === "entry" ? props : null;
+  const allowSave = Boolean(entry?.allowSave);
   const locked = pending || exiting;
 
-  const refreshList = () => setNotebooks(listScratchNotebooks());
-
-  const openSnapshots = () => {
-    setPickingSnapshots(true);
-    if (!snapshotKey) {
-      setSnapshots([]);
-      return;
-    }
-    void listPadSnapshots("whiteboard", snapshotKey).then(setSnapshots);
-  };
-
-  const removeNotebook = (id: string) => {
-    // See MdInkDialog: the index drops synchronously, the payload drops after.
-    void deleteScratchNotebook(id).catch(() => {});
-    refreshList();
+  const removeDoc = (id: string) => {
+    // The index write is synchronous, so the list below is already correct;
+    // dropping the content is the async half and nothing on screen waits for
+    // it. A failure there strands a payload, not an entry.
+    void deleteAnnotateDoc(id).catch(() => {});
+    setDocs(listAnnotateDocs());
   };
 
   return (
@@ -111,29 +117,29 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
         className="lc-settings-modal lc-attempt-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={isLeave ? "Leave whiteboard?" : "Open whiteboard"}
+        aria-label={isLeave ? "Leave document?" : "Document pad"}
       >
         <div className="lc-settings-head">
-          <h2>{isLeave ? "Leave whiteboard?" : "Whiteboard"}</h2>
+          <h2>{isLeave ? "Leave document?" : "Document"}</h2>
           <p className="lc-muted">
             {pickingSnapshots
-              ? "Hold a snapshot to roll this notebook back. Latest autosave is the live library entry."
-              : pickingLoad
-              ? "Hold an entry to open it, or hold its bin to delete it."
+              ? "Hold a snapshot to roll this file back. Latest autosave is the live library entry."
+              : pickingRecent
+              ? "Hold a document to reopen it, or hold its bin to remove its annotations."
               : isLeave
                 ? dirty
-                  ? "Discard undoes everything written since this notebook was opened. Hold to confirm."
-                  : "Nothing written since the last save — leaving changes nothing."
+                  ? "Discard throws away this session's annotations. The file itself is never changed. Hold to confirm."
+                  : "Nothing annotated since the last save — leaving changes nothing."
                 : allowSave
-                  ? "Save this notebook, load another, or start blank."
-                  : "Start blank or load a saved notebook."}
+                  ? "Save these annotations, open another document, or reopen a recent one."
+                  : "Open a document to annotate, or reopen a recent one."}
           </p>
         </div>
 
         <div className="lc-settings-body">
           {error && <div className="lc-warning">{error}</div>}
 
-          {pickingSnapshots ? (
+          {pickingSnapshots && entry ? (
             <div className="lc-settings-choice">
               {PAD_SNAPSHOT_TIERS.map((tier) => {
                 const row = snapshots.find((snap) => snap.tier === tier.id);
@@ -143,66 +149,42 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                     label={`Restore ${tier.label} snapshot`}
                     className="lc-hold-choice"
                     disabled={locked || !row}
-                    onConfirm={() => {
-                      if (props.mode !== "entry") return;
-                      props.onChoose("snapshot", tier.id);
-                    }}
+                    onConfirm={() => entry.onChoose("snapshot", tier.id)}
                     resetKey={error}
                   >
                     <strong>{tier.label}</strong>
                     <span className="lc-muted">
                       {row
                         ? new Date(row.writtenAt).toLocaleString()
-                        : "No snapshot yet — write on this notebook and wait for autosave."}
+                        : "No snapshot yet — write on this file and wait for autosave."}
                     </span>
                   </HoldButton>
                 );
               })}
             </div>
-          ) : pickingLoad ? (
+          ) : pickingRecent && entry ? (
             <div className="lc-settings-choice">
-              {notebooks.length === 0 && (
-                <p className="lc-muted">No saved notebooks yet.</p>
-              )}
-              {/*
-                The row *is* the entry: it carries the card's edge and fill,
-                and the trash sits inside it rather than beside it. Two
-                separate cards read as two separate things, and the one on the
-                right had no label to say which notebook it would delete. A
-                button cannot legally nest inside a button, so the entry's own
-                surface is the row and the hold target fills what the trash
-                leaves.
-              */}
-              {notebooks.map((entry) => (
-                <div key={entry.id} className="lc-scratch-load-entry">
+              {docs.length === 0 && <p className="lc-muted">Nothing annotated yet.</p>}
+              {docs.map((doc) => (
+                <div key={doc.id} className="lc-scratch-load-entry">
                   <HoldButton
-                    label={`Load ${entry.title}`}
+                    label={`Open ${doc.name}`}
                     className="lc-scratch-load-hold"
                     disabled={locked}
-                    onConfirm={() => props.onChoose("load", entry.id)}
+                    onConfirm={() => entry.onChoose("recent", doc.id)}
                     resetKey={error}
                   >
-                    <strong>{entry.title}</strong>
+                    <strong>{doc.name}</strong>
                     <span className="lc-muted">
-                      {entry.pageCount} page{entry.pageCount === 1 ? "" : "s"} ·{" "}
-                      {new Date(entry.updatedAt).toLocaleString()}
+                      Annotated {new Date(doc.updatedAt).toLocaleString()}
                     </span>
                   </HoldButton>
-                  {/*
-                    Hold to delete, the same as everything else that cannot be
-                    undone.
-
-                    The two controls on this row were the wrong way round:
-                    *opening* a notebook wanted a deliberate hold, and throwing
-                    one away was a single tap on a small target sitting right
-                    beside it. A slip on a list of notebooks is not a slip you
-                    can take back — the entry and its ink both go.
-                  */}
+                  {/* Hold to delete — see WhiteboardDialog for why. */}
                   <HoldButton
-                    label={`Delete ${entry.title}`}
+                    label={`Delete annotations for ${doc.name}`}
                     className="lc-scratch-load-trash"
                     disabled={locked}
-                    onConfirm={() => removeNotebook(entry.id)}
+                    onConfirm={() => removeDoc(doc.id)}
                     resetKey={error}
                   >
                     <svg
@@ -230,33 +212,19 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
               {isLeave ? (
                 <>
                   <HoldButton
-                    label="Load"
-                    className="lc-hold-choice"
-                    disabled={locked || notebooks.length === 0}
-                    onConfirm={() => setPickingLoad(true)}
-                    resetKey={error}
-                  >
-                    Load…
-                  </HoldButton>
-                  <HoldButton
                     label="Save"
                     className="lc-hold-choice"
                     disabled={locked}
                     onConfirm={() => props.onChoose("save")}
                     resetKey={error}
                   >
-                    Save
+                    <strong>Save annotations</strong>
+                    <span className="lc-muted">
+                      Keep this ink with “{(props as LeaveProps).docName}”.
+                    </span>
                   </HoldButton>
-                  {/*
-                    Discard, or Exit when there is nothing to discard.
-                    
-                    They do the same thing — roll back to the baseline — but
-                    when the board already *is* the baseline that rollback is a
-                    no-op, and calling it Discard asks the writer to confirm
-                    throwing away work that is not at risk. Worse, it teaches
-                    them to hold the red button on the way out, which is a habit
-                    that costs them the day they have not saved.
-                  */}
+                  {/* Discard, or Exit when there is nothing to discard — see
+                      WhiteboardDialog for why the label moves. */}
                   <HoldButton
                     label={dirty ? "Discard" : "Exit"}
                     className={
@@ -266,7 +234,8 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                     onConfirm={() => props.onChoose("discard")}
                     resetKey={error}
                   >
-                    {dirty ? "Discard" : "Exit"}
+                    <strong>{dirty ? "Discard annotations" : "Exit"}</strong>
+                    <span className="lc-muted">The file on disk is left alone.</span>
                   </HoldButton>
                 </>
               ) : (
@@ -279,27 +248,34 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                       onConfirm={() => props.onChoose("save")}
                     >
                       <strong>Save</strong>
-                      <span className="lc-muted">Keep this notebook in the library.</span>
+                      <span className="lc-muted">Keep these annotations.</span>
                     </HoldButton>
                   )}
                   <HoldButton
-                    label="New notebook"
+                    label="Open document"
                     className="lc-hold-choice"
                     disabled={locked}
-                    onConfirm={() => props.onChoose("new")}
+                    onConfirm={() => props.onChoose("open")}
                   >
-                    <strong>New notebook</strong>
-                    <span className="lc-muted">Blank first page.</span>
+                    <strong>Open document…</strong>
+                    <span className="lc-muted">
+                      Pick a .md, source file, .pdf or .epub to annotate.
+                    </span>
                   </HoldButton>
                   <HoldButton
-                    label="Load"
+                    label="Recent"
                     className="lc-hold-choice"
-                    disabled={locked || notebooks.length === 0}
-                    onConfirm={() => setPickingLoad(true)}
+                    disabled={locked || docs.length === 0}
+                    onConfirm={() => setPickingRecent(true)}
                   >
-                    <strong>Load…</strong>
-                    <span className="lc-muted">Open a saved notebook.</span>
+                    <strong>Recent…</strong>
+                    <span className="lc-muted">Reopen something already annotated.</span>
                   </HoldButton>
+                  {/*
+                    Annotations live in this browser's storage, which is fine
+                    until the tablet is not the device you have. The sidecar is
+                    the way out and back in — a file to keep beside the source.
+                  */}
                   {allowSave && (
                     <HoldButton
                       label="Restore snapshot"
@@ -309,10 +285,32 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
                     >
                       <strong>Restore snapshot…</strong>
                       <span className="lc-muted">
-                        2h / 24h / 7d copies, written while you write.
+                        2h / 24h / 7d copies, written while you annotate.
                       </span>
                     </HoldButton>
                   )}
+                  {allowSave && (
+                    <HoldButton
+                      label="Export annotations"
+                      className="lc-hold-choice"
+                      disabled={locked}
+                      onConfirm={() => props.onChoose("export")}
+                    >
+                      <strong>Export annotations…</strong>
+                      <span className="lc-muted">
+                        Downloads a .lc-ink.json.gz to this device’s Downloads folder.
+                      </span>
+                    </HoldButton>
+                  )}
+                  <HoldButton
+                    label="Import annotations"
+                    className="lc-hold-choice"
+                    disabled={locked}
+                    onConfirm={() => props.onChoose("import")}
+                  >
+                    <strong>Import annotations…</strong>
+                    <span className="lc-muted">Open a sidecar exported elsewhere.</span>
+                  </HoldButton>
                 </>
               )}
             </div>
@@ -320,13 +318,13 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
         </div>
 
         <div className="lc-settings-foot">
-          {(pickingLoad || pickingSnapshots) && (
+          {(pickingRecent || pickingSnapshots) && (
             <button
               type="button"
               className="lc-secondary"
               disabled={locked}
               onClick={() => {
-                setPickingLoad(false);
+                setPickingRecent(false);
                 setPickingSnapshots(false);
               }}
             >
@@ -334,7 +332,7 @@ export function ScratchpadDialog(props: ScratchpadDialogProps) {
             </button>
           )}
           <button type="button" className="lc-secondary" disabled={locked} onClick={props.onCancel}>
-            {isLeave ? "Keep writing" : "Cancel"}
+            {isLeave ? "Keep annotating" : "Cancel"}
           </button>
         </div>
       </div>

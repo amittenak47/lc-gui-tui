@@ -46,7 +46,7 @@ describe("with no IndexedDB", () => {
     await putContent("b", { n: 2 });
     const keys = [...store.keys()];
     expect(keys).toHaveLength(2);
-    expect(keys.every((key) => key.startsWith("lc.content.v1."))).toBe(true);
+    expect(keys.every((key) => key.startsWith("whiteboard.content.v1."))).toBe(true);
   });
 
   it("overwrites rather than accumulating", async () => {

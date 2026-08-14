@@ -4,8 +4,8 @@ use colored::Colorize;
 use comfy_table::Table;
 use std::path::{Path, PathBuf};
 
-// The CLI and `lc serve` are both shells over the same library crate.
-use lc::{
+// The CLI and `whiteboard serve` are both shells over the same library crate.
+use whiteboard::{
     config, dataset, generator, index, lists, llm, loader, problem, runner, serve, session, stats,
     tui,
 };
@@ -17,7 +17,7 @@ use session::Session;
 
 #[derive(Parser)]
 #[command(
-    name = "lc",
+    name = "whiteboard",
     version,
     about = "LeetCode practice harness: index a local JSON corpus, load problems into a Python workspace, run tests, and ask an LLM tutor (which never sees reference solutions)."
 )]

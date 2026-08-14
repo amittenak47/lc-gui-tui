@@ -6,7 +6,7 @@
  * stops accidental opens while annotating near the bottom.
  */
 
-const KEY = "lc.coach.sheetLock.v1";
+const KEY = "whiteboard.coach.sheetLock.v1";
 
 /** Fired on the window when the preference changes. */
 export const COACH_SHEET_LOCK_EVENT = "lc-coach-sheet-lock";

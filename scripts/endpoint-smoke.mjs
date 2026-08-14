@@ -259,7 +259,7 @@ async function phase3Coach() {
     const ask = await req(
       "POST",
       "/coach/ask",
-      { task_id: TASK_ID, dataset: DATASET, question: "Reply with exactly: pong" },
+      { task_id: TASK_ID, dataset: DATASET, surface: "problem", question: "Reply with exactly: pong" },
       { timeoutMs: 120_000 },
     );
     const reply = ask.json?.reply ?? "";
@@ -326,47 +326,63 @@ async function phase3Coach() {
   }
 }
 
-async function phase3Scratchpad() {
-  // Client-only: scratchpad has no daemon problem row
-  const r = await req("GET", `/problems/__scratchpad__?dataset=scratchpad`);
-  const clientOnly = r.status === 404;
+async function phase3Whiteboard() {
+  // Client-only: whiteboard has no daemon problem row
+  const r = await req("GET", `/problems/__whiteboard__?dataset=whiteboard`);
+  const legacy = await req("GET", `/problems/__scratchpad__?dataset=scratchpad`);
+  const clientOnly = r.status === 404 && legacy.status === 404;
   record(
-    "3.scratchpad.http",
+    "3.whiteboard.http",
     true,
     clientOnly
-      ? "404 as expected — scratchpad is client-local (dataset=scratchpad, task_id=__scratchpad__)"
-      : `unexpected ${r.status} — scratchpad may have HTTP backing`,
+      ? "404 as expected — whiteboard is client-local (dataset=whiteboard, task_id=__whiteboard__)"
+      : `unexpected ${r.status}/${legacy.status} — whiteboard may have HTTP backing`,
     r.text?.slice(0, 200),
   );
 
   // Static assert normalizeCoachFlags behavior (mirrors App.tsx)
-  const isLocalPad = (problem) =>
+  const isWhiteboard = (problem) =>
+    problem?.task_id === "__whiteboard__" ||
     problem?.task_id === "__scratchpad__" ||
-    (problem?.dataset === "md-ink" || problem?.tags?.includes?.("md-ink"));
+    problem?.dataset === "whiteboard" ||
+    problem?.dataset === "scratchpad";
+  const isAnnotate = (problem) =>
+    problem?.task_id === "__annotate__" ||
+    problem?.task_id === "__md_ink__" ||
+    problem?.dataset === "annotate" ||
+    problem?.dataset === "md-ink";
+  const isLocalPad = (problem) => isWhiteboard(problem) || isAnnotate(problem);
   const normalizeCoachFlags = (requestedFlags, problem) =>
     isLocalPad(problem)
       ? { ask: true, draw: false, reviewBoard: false, lazy: false, annotate: requestedFlags.annotate }
       : requestedFlags;
 
-  const scratch = { task_id: "__scratchpad__", dataset: "scratchpad", tags: ["scratchpad"] };
+  const whiteboard = { task_id: "__whiteboard__", dataset: "whiteboard", tags: ["whiteboard"] };
+  const annotate = { task_id: "__annotate__", dataset: "annotate", tags: ["annotate"] };
   const problem = { task_id: TASK_ID, dataset: DATASET, tags: [] };
   const full = { ask: false, draw: true, reviewBoard: true, lazy: true, annotate: false };
-  const normScratch = normalizeCoachFlags(full, scratch);
+  const normWhiteboard = normalizeCoachFlags(full, whiteboard);
+  const normAnnotate = normalizeCoachFlags(full, annotate);
   const normProblem = normalizeCoachFlags(full, problem);
   const ok =
-    normScratch.ask === true &&
-    normScratch.draw === false &&
-    normScratch.reviewBoard === false &&
-    normScratch.lazy === false &&
+    normWhiteboard.ask === true &&
+    normWhiteboard.draw === false &&
+    normWhiteboard.reviewBoard === false &&
+    normWhiteboard.lazy === false &&
+    normAnnotate.ask === true &&
     normProblem.draw === true;
-  record("3.scratchpad.normalizeCoachFlags", ok, JSON.stringify({ scratch: normScratch, problem: normProblem }));
+  record(
+    "3.whiteboard.normalizeCoachFlags",
+    ok,
+    JSON.stringify({ whiteboard: normWhiteboard, annotate: normAnnotate, problem: normProblem }),
+  );
 }
 
 async function phase3ClientOnly() {
   record(
     "3.client.md-pdf-epub",
     true,
-    "No HTTP routes for md/pdf/epub open — client-side via Tauri/file picker (templates/scratchpad, util/scratchpadStore)",
+    "No HTTP routes for md/pdf/epub open — client-side via Tauri/file picker (templates/whiteboard, util/whiteboardStore)",
     "Daemon routes: see src/serve/mod.rs — no /document or /library endpoints",
   );
 }
@@ -404,6 +420,7 @@ async function phase3Ws() {
             payload: {
               task_id: TASK_ID,
               dataset: DATASET,
+              surface: "problem",
               question: "Reply pong only",
             },
           }),
@@ -464,7 +481,7 @@ async function main() {
   await phase3Reads();
   await phase3Writes();
   await phase3Coach();
-  await phase3Scratchpad();
+  await phase3Whiteboard();
   await phase3ClientOnly();
   await phase3Ws();
 

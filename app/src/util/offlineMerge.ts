@@ -2,7 +2,7 @@
  * Device-local Personalise prefs (not config.toml).
  */
 
-const MERGE_KEY = "lc.offlineMerge.v1";
+const MERGE_KEY = "whiteboard.offlineMerge.v1";
 
 export type OfflineMergePolicy = "ask" | "prefer-local" | "prefer-server";
 

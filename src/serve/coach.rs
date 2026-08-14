@@ -25,6 +25,7 @@ use crate::llm::coach::{
     LAZY_HINT_SYSTEM_PROMPT, PLANNER_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
 };
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
+use crate::pad::AgentSurface;
 use crate::reveal::{SolutionReveal, UserConsent};
 use crate::runner;
 use crate::session::Session;
@@ -573,7 +574,14 @@ pub async fn scaffold(
 
 #[derive(Debug, Deserialize)]
 pub struct AskRequest {
+    /// What is open: `whiteboard` | `annotate` | `problem`.
+    ///
+    /// Older clients omit this and put a fake corpus slug in [`dataset`].
+    #[serde(default)]
+    pub surface: Option<String>,
+    #[serde(default)]
     pub task_id: String,
+    /// Corpus slug when [`surface`] is `problem`. Ignored for pads.
     #[serde(default)]
     pub dataset: Option<String>,
     pub question: String,
@@ -616,21 +624,21 @@ pub async fn run_ask(
     let task_id = request.task_id.clone();
     let dataset_slug = request.dataset.clone();
     let images = request.images.clone();
-    let scratchpad = crate::scratchpad::is_request(dataset_slug.as_deref(), &task_id);
-    let md_ink = crate::scratchpad::is_md_ink(dataset_slug.as_deref(), &task_id);
-    let local_pad = scratchpad || md_ink;
+    let surface = crate::pad::parse_surface(
+        request.surface.as_deref(),
+        dataset_slug.as_deref(),
+        &task_id,
+    );
+    let local_pad = surface.is_pad();
     let dataset = if local_pad {
         None
     } else {
-        Some(resolve_dataset(dataset_slug.as_deref())?)
+        let AgentSurface::Problem { dataset: slug } = &surface else {
+            unreachable!("non-pad is Problem");
+        };
+        Some(resolve_dataset(Some(slug))?)
     };
-    let board_key = if scratchpad {
-        crate::scratchpad::board_key()
-    } else if md_ink {
-        crate::scratchpad::md_ink_board_key()
-    } else {
-        dataset.unwrap().key(&task_id)
-    };
+    let board_key = crate::pad::session_key(&surface, &task_id);
     let cfg = state.cfg_snapshot();
     let ctx = {
         let mut store = state.board_sessions.lock().await;
@@ -646,21 +654,21 @@ pub async fn run_ask(
         }
     };
     let envelope = blocking(move || {
-        let (meta, description) = if scratchpad {
-            (
-                crate::scratchpad::workspace_meta(),
-                Some(crate::scratchpad::COACH_DESCRIPTION.to_string()),
-            )
-        } else if md_ink {
-            (
-                crate::scratchpad::md_ink_workspace_meta(),
-                Some(crate::scratchpad::MD_INK_COACH_DESCRIPTION.to_string()),
-            )
-        } else {
-            let dataset = dataset.expect("dataset resolved before blocking");
-            let meta = load_meta(&cfg, dataset, &task_id)?;
-            let description = description_for(&meta);
-            (meta, description)
+        let (meta, description) = match &surface {
+            AgentSurface::Whiteboard => (
+                crate::pad::whiteboard_meta(),
+                Some(crate::pad::WHITEBOARD_DESCRIPTION.to_string()),
+            ),
+            AgentSurface::Annotate => (
+                crate::pad::annotate_meta(),
+                Some(crate::pad::ANNOTATE_DESCRIPTION.to_string()),
+            ),
+            AgentSurface::Problem { .. } => {
+                let dataset = dataset.expect("dataset resolved before blocking");
+                let meta = load_meta(&cfg, dataset, &task_id)?;
+                let description = description_for(&meta);
+                (meta, description)
+            }
         };
         let provider = make_provider_for_mode(&cfg, "review")?;
         events.stage("ask", "answering from the problem statement and your code");

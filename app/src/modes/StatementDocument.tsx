@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { normalizeStatementForMarkdown } from "../util/statementMarkdown";
-import { renderMarkdown } from "./MdInkDocument";
+import { renderMarkdown } from "./AnnotateDocument";
 
 export interface StatementDocumentProps {
   title: string;

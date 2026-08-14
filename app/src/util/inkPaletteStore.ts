@@ -22,7 +22,7 @@ export type InkPaletteMode = "light" | "dark";
 /** Sparse: only the slots somebody has actually changed. */
 export type InkPaletteOverrides = Record<number, string>;
 
-const STORAGE_KEY = "lc.ink.palette.v1";
+const STORAGE_KEY = "whiteboard.ink.palette.v1";
 
 /** `#rgb` or `#rrggbb`, since a stored value can be anything a browser wrote. */
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;

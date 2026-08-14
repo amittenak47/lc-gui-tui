@@ -56,7 +56,7 @@ describe("setInkOverride", () => {
   });
 
   it("survives a corrupt stored palette", () => {
-    localStorage.setItem("lc.ink.palette.v1", '{"light":{"0":42,"9":"#fff"},"dark":null}');
+    localStorage.setItem("whiteboard.ink.palette.v1", '{"light":{"0":42,"9":"#fff"},"dark":null}');
     expect(loadInkOverrides("light")).toEqual({});
     expect(loadInkOverrides("dark")).toEqual({});
   });

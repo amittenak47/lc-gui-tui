@@ -10,7 +10,7 @@ import {
   STROKE_WIDTH_MIN,
 } from "../canvas/rasterInk";
 
-const KEY = "lc.inkToolPrefs.v1";
+const KEY = "whiteboard.inkToolPrefs.v1";
 
 export const INK_FULLNESS_DEFAULT = 1;
 

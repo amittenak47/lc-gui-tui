@@ -6,8 +6,8 @@ import {
   type InkSmoothingMode,
 } from "../canvas/inkSmoothing";
 
-const KEY = "lc.inkSmoothing";
-const MODE_KEY = "lc.inkSmoothingMode";
+const KEY = "whiteboard.inkSmoothing";
+const MODE_KEY = "whiteboard.inkSmoothingMode";
 
 export const INK_SMOOTHING_MIN = 0;
 export const INK_SMOOTHING_MAX = 1;

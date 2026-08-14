@@ -10,7 +10,7 @@
  * eraser means tracing the line; touching it anywhere ought to be enough.
  */
 
-const KEY = "lc.eraser.partial";
+const KEY = "whiteboard.eraser.partial";
 
 export const ERASER_PARTIAL_DEFAULT = true;
 

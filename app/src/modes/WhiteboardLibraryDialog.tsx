@@ -6,30 +6,30 @@ import { useEffect, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import {
-  deleteScratchNotebook,
-  listScratchNotebooks,
-  SCRATCHPAD_LIBRARY_LIMIT,
-  type ScratchNotebookMeta,
-} from "../util/scratchpadStore";
+  deleteWhiteboardNotebook,
+  listWhiteboardNotebooks,
+  WHITEBOARD_LIBRARY_LIMIT,
+  type WhiteboardNotebookMeta,
+} from "../util/whiteboardStore";
 
-export interface ScratchpadLibraryDialogProps {
+export interface WhiteboardLibraryDialogProps {
   phase?: "enter" | "open" | "exit";
   /** Called after a delete frees at least one slot (or Cancel). */
   onFreed: () => void;
   onCancel: () => void;
 }
 
-export function ScratchpadLibraryDialog({
+export function WhiteboardLibraryDialog({
   phase = "open",
   onFreed,
   onCancel,
-}: ScratchpadLibraryDialogProps) {
-  const [notebooks, setNotebooks] = useState<ScratchNotebookMeta[]>(() =>
-    listScratchNotebooks(),
+}: WhiteboardLibraryDialogProps) {
+  const [notebooks, setNotebooks] = useState<WhiteboardNotebookMeta[]>(() =>
+    listWhiteboardNotebooks(),
   );
 
   useEffect(() => {
-    setNotebooks(listScratchNotebooks());
+    setNotebooks(listWhiteboardNotebooks());
   }, []);
 
   useEffect(() => {
@@ -41,10 +41,10 @@ export function ScratchpadLibraryDialog({
   }, [onCancel]);
 
   const remove = (id: string) => {
-    void deleteScratchNotebook(id).catch(() => {});
-    const next = listScratchNotebooks();
+    void deleteWhiteboardNotebook(id).catch(() => {});
+    const next = listWhiteboardNotebooks();
     setNotebooks(next);
-    if (next.length < SCRATCHPAD_LIBRARY_LIMIT) onFreed();
+    if (next.length < WHITEBOARD_LIBRARY_LIMIT) onFreed();
   };
 
   return (
@@ -71,7 +71,7 @@ export function ScratchpadLibraryDialog({
         <div className="lc-settings-head">
           <h2>Whiteboard library full</h2>
           <p className="lc-muted">
-            At most {SCRATCHPAD_LIBRARY_LIMIT} notebooks. Hold to delete one.
+            At most {WHITEBOARD_LIBRARY_LIMIT} notebooks. Hold to delete one.
           </p>
         </div>
         <div className="lc-settings-body">

@@ -7,9 +7,9 @@
  * with an update and makes their existing notes look different.
  */
 
-const KEY = "lc.inkSpeed";
+const KEY = "whiteboard.inkSpeed";
 /** Soft rim + dwell growth feel (0 = hard expanding disc, 1 = soft rim / faster grow). */
-const BLOT_BLEND_KEY = "lc.inkSpeedBlotBlend";
+const BLOT_BLEND_KEY = "whiteboard.inkSpeedBlotBlend";
 
 export const INK_SPEED_MIN = 0;
 export const INK_SPEED_MAX = 1;
