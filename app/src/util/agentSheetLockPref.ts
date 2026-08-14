@@ -1,9 +1,10 @@
 /**
- * Device-local preference: lock the agent sheet against drag-to-open/close.
+ * Device-local preference: lock the agent sheet against drag-to-open.
  *
- * Off by default. Dragging the sheet handle is how most people open the agent on
- * mobile, but it also steals gestures from the board edge — pinning the sheet
- * stops accidental opens while annotating near the bottom.
+ * Off by default. Dragging the parked peek strip is how most people open the
+ * agent on mobile, but it also steals gestures from the board edge — pinning
+ * the sheet stops accidental opens while annotating near the bottom. Close
+ * (handle drag-down, header Agent toggle) stays live.
  */
 
 const KEY = "whiteboard.agent.sheetLock.v1";

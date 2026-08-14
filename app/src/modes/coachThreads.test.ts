@@ -37,6 +37,41 @@ describe("visibleThreadMessages", () => {
     const grouped = groupThreads(messages);
     expect(visibleThreadMessages(messages, "root", grouped)).toEqual([root, user, assistant]);
   });
+
+  it("shows the latest threaded Agent turn in the room, not only behind a chip", () => {
+    const asked = msg("user-1", { content: "Can you explain this" });
+    const pending = msg("asst-1", {
+      role: "assistant",
+      content: "",
+      pending: true,
+      replyTo: { id: "user-1", role: "user", excerpt: "Can you explain this" },
+    });
+    const hello = msg("user-2", { content: "Hello" });
+    const messages = [asked, pending, hello];
+    const grouped = groupThreads(messages);
+    expect(visibleThreadMessages(messages, null, grouped)).toEqual([
+      asked,
+      pending,
+      hello,
+    ]);
+  });
+
+  it("keeps older thread turns out of the room", () => {
+    const asked = msg("user-1", { content: "Explain" });
+    const first = msg("asst-1", {
+      role: "assistant",
+      content: "First",
+      replyTo: { id: "user-1", role: "user", excerpt: "Explain" },
+    });
+    const second = msg("asst-2", {
+      role: "assistant",
+      content: "Second",
+      replyTo: { id: "user-1", role: "user", excerpt: "Explain" },
+    });
+    const messages = [asked, first, second];
+    const grouped = groupThreads(messages);
+    expect(visibleThreadMessages(messages, null, grouped)).toEqual([asked, second]);
+  });
 });
 
 describe("groupThreads", () => {

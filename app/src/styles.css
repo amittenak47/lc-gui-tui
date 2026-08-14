@@ -40,6 +40,7 @@
   --lc-safe-right: env(safe-area-inset-right, 0px);
   --lc-safe-bottom: env(safe-area-inset-bottom, 0px);
   --lc-safe-left: env(safe-area-inset-left, 0px);
+  --lc-keyboard-inset: 0px;
   /* Colour wheel outer radius — dock clearance and JS clamp share this. */
   --lc-color-wheel-r: 78px;
 }
@@ -3096,6 +3097,15 @@ input[type="checkbox"] {
     filter 160ms ease;
 }
 
+/* The list is `pointer-events: none` while busy; the overlay itself must
+ * still eat the tap so it cannot fall through to a problem row. */
+.lc-overlay.lc-overlay-busy,
+.lc-overlay.lc-overlay-exit,
+.lc-overlay.lc-overlay-done {
+  pointer-events: auto;
+  touch-action: none;
+}
+
 .lc-overlay-exit .lc-overlay-content {
   pointer-events: none;
   filter: blur(5px);
@@ -4581,11 +4591,12 @@ input[type="checkbox"] {
   position: fixed;
   z-index: 221;
   display: flex;
-  gap: 2px;
-  padding: 4px;
+  flex-wrap: nowrap;
+  gap: 1px;
+  padding: 2px;
   background: var(--overlay-bg);
   border: 1px solid var(--chrome-edge);
-  border-radius: 12px;
+  border-radius: 10px;
   box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
   /* Bubble sits under the held message. */
   transform: translate(-50%, 0);
@@ -4604,17 +4615,18 @@ input[type="checkbox"] {
 }
 
 .lc-agent-message-menu button {
-  min-height: 36px;
-  min-width: 72px;
-  padding: 6px 14px;
+  min-height: 28px;
+  min-width: 0;
+  padding: 4px 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .lc-agent-message-menu button:hover:not(:disabled),
@@ -4919,6 +4931,18 @@ input[type="checkbox"] {
   flex-direction: column;
   gap: 8px;
   background: var(--panel);
+}
+
+.lc-agent-panel-error {
+  margin: 0 12px 8px;
+  flex-shrink: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--chrome-edge));
+  border-radius: 6px;
 }
 
 .lc-agent-composer textarea {
@@ -7561,7 +7585,7 @@ button.lc-row-selected:hover:not(:disabled) {
   top: auto;
   left: 0;
   right: 0;
-  bottom: 0;
+  bottom: var(--lc-keyboard-inset, 0px);
   width: auto;
   height: calc(var(--lc-agent-sheet) + var(--lc-agent-sheet-lift) + var(--lc-safe-bottom));
   max-height: none;
@@ -7581,6 +7605,11 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-side-sheet-parked {
   border-top-color: color-mix(in srgb, var(--chrome-edge) 70%, transparent);
   box-shadow: 0 -2px 10px rgb(0 0 0 / 10%);
+}
+
+/* Lock blocks peek-open; the strip must not eat board taps either. */
+.lc-mobile .lc-side-sheet-locked {
+  pointer-events: none;
 }
 
 .lc-mobile .lc-side-sheet-parked .lc-agent-chat {
@@ -9978,9 +10007,14 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-doc-sheet-actions-menu {
-  padding: 6px;
-  border-radius: 14px;
-  gap: 6px;
+  /* Hug the pills. `width: auto` on a fixed flex column stretched to
+   * `max-width` (78vw), so Copy / Quote / Annotate sat in a wide box with
+   * empty right pad — and wrapped once that box was clamped near an edge. */
+  width: max-content;
+  max-width: min(100%, calc(100vw - 16px));
+  padding: 3px;
+  border-radius: 10px;
+  gap: 3px;
 }
 
 /* Grows in place. See the note above on why nothing here may translate. */
@@ -10074,21 +10108,21 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-doc-sheet-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 3px;
   padding: 0;
 }
 
 .lc-doc-sheet-actions button,
 .lc-doc-sheet-action {
   flex: 0 0 auto;
-  min-height: 28px !important;
-  height: 28px;
-  padding: 0 10px 0 8px !important;
+  min-height: 22px !important;
+  height: 22px;
+  padding: 0 6px 0 5px !important;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
+  gap: 3px;
+  font-size: 10px;
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -11345,9 +11379,12 @@ button.lc-row-selected:hover:not(:disabled) {
   border: 1px solid var(--chrome-edge, var(--line));
   border-radius: 10px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
-  animation: lc-agent-menu-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  /* The shared pop keyframes translate on X; this menu is edge-anchored. */
-  transform: none;
+  /*
+   * Scale/opacity only. `lc-agent-menu-pop` ends on `translate(-50%, 0)` with
+   * `animation-fill-mode: both`, which beats `transform: none` and shoves an
+   * edge-anchored menu off the panel — same bug `.lc-doc-sheet` already left.
+   */
+  animation: lc-doc-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* The chooser hangs off the composer's edge, which the writing hand moves. */
@@ -11382,15 +11419,22 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-agent-mark-menu {
-  max-height: min(40vh, 280px);
+  /* Portaled to body — `.lc-side { overflow: hidden }` plus the sheet
+   * translate would clip a tall list. */
+  position: fixed;
+  z-index: 240;
+  left: 0;
+  right: auto;
+  bottom: auto;
+  max-height: min(32vh, 220px);
   overflow-y: auto;
   min-width: 7rem;
   width: max-content;
-  max-width: min(240px, 70vw);
+  max-width: min(200px, calc(100vw - 24px));
   flex-direction: column;
   align-items: stretch;
-  gap: 4px;
-  padding: 6px;
+  gap: 3px;
+  padding: 4px;
 }
 
 .lc-agent-mark-menu .lc-footnote-chip {

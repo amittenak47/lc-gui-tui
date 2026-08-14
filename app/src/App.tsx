@@ -157,6 +157,7 @@ import {
   ANNOTATE_TASK_ID,
   LEGACY_MD_INK_TASK_ID,
 } from "./templates/annotate";
+import { BROWSE_PICK_QUIET_MS, browsePickBlocked } from "./util/browsePickGuard";
 import {
   buildAnnotateSidecar,
   CODE_SOURCE_MAX_CHARS,
@@ -950,6 +951,25 @@ export function App() {
   const [boardPreparing, setBoardPreparing] = useState(false);
   /** Keep the problem browser overlay up while the first board fit settles. */
   const [holdBrowseOverlay, setHoldBrowseOverlay] = useState(false);
+  /**
+   * Pad menu / file picker vs the problem list under it.
+   *
+   * Closing the sheet unmounts it on the same tap; a tablet then delivers that
+   * click (or a delayed one after the system picker) onto a problem row.
+   * `padOpenLockRef` covers the in-flight open; the quiet window covers the
+   * leftover click after it finishes.
+   */
+  const padOpenLockRef = useRef(0);
+  const browsePickQuietUntilRef = useRef(0);
+  const workspaceLoadGenRef = useRef(0);
+  const beginPadOpen = useCallback(() => {
+    padOpenLockRef.current += 1;
+    browsePickQuietUntilRef.current = Date.now() + BROWSE_PICK_QUIET_MS;
+  }, []);
+  const endPadOpen = useCallback(() => {
+    padOpenLockRef.current = Math.max(0, padOpenLockRef.current - 1);
+    browsePickQuietUntilRef.current = Date.now() + BROWSE_PICK_QUIET_MS;
+  }, []);
 
   /** Browser overlay: idle / enter / busy (spin) / exit (slide+spin) / done (check). */
   const [browseMotion, setBrowseMotion] = useState<"enter" | "idle" | "busy" | "exit" | "done">("idle");
@@ -1610,6 +1630,12 @@ export function App() {
 
   const pickProblem = useCallback(
     async (taskId: string, bank?: SearchOptions, opts?: { keepSessionNav?: boolean }) => {
+      if (
+        browsePickBlocked(padOpenLockRef.current > 0, browsePickQuietUntilRef.current)
+      ) {
+        return;
+      }
+      const loadGen = ++workspaceLoadGenRef.current;
       const offline = serverLinkRef.current !== "online";
       const datasetId = bank?.dataset ?? DEFAULT_DATASET;
       const fromBrowse = !problem;
@@ -1662,6 +1688,7 @@ export function App() {
           }
           const source = ensureCodingRoom(detail.starter_code ?? "");
 
+          if (workspaceLoadGenRef.current !== loadGen) return;
           setPseudocode(source);
           loadedSourceRef.current = source;
           setBoardPreparing(true);
@@ -1704,8 +1731,10 @@ export function App() {
         // statement for the board template. `resume` is whatever the last
         // visit chose to keep — the daemon already cleared what it did not.
         const loaded = await client.loadProblem(taskId, datasetId);
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setAttemptState(loaded.resume.attempt);
         const detail = await client.getProblem(taskId, datasetId);
+        if (workspaceLoadGenRef.current !== loadGen) return;
         const fresh = ensureCodingRoom(detail.starter_code ?? "");
         let source = fresh;
         try {
@@ -1732,6 +1761,7 @@ export function App() {
         loadedSourceRef.current = source;
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the viewport does not jump.
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setBoardPreparing(true);
         setProblem(detail);
         await refreshSession();
@@ -1845,7 +1875,7 @@ export function App() {
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
-        setBusy(null);
+        if (workspaceLoadGenRef.current === loadGen) setBusy(null);
       }
     },
     [
@@ -1862,7 +1892,10 @@ export function App() {
   const openWhiteboard = useCallback(
     async (opts?: { notebookId?: string | null; fresh?: boolean }) => {
       if (busy !== null) return;
+      beginPadOpen();
+      const loadGen = ++workspaceLoadGenRef.current;
       if (opts?.fresh && !opts.notebookId && whiteboardLibraryCount() >= WHITEBOARD_LIBRARY_LIMIT) {
+        endPadOpen();
         whiteboardLibResumeRef.current = () => {
           void openWhiteboard({ fresh: true });
         };
@@ -1903,6 +1936,7 @@ export function App() {
         await migrateLegacyWhiteboard(countWhiteboardPages);
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the coach sheet never paints mid-open.
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setBoardPreparing(true);
         setProblem(WHITEBOARD_PROBLEM);
         setPseudocode("");
@@ -2013,10 +2047,11 @@ export function App() {
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
-        setBusy(null);
+        endPadOpen();
+        if (workspaceLoadGenRef.current === loadGen) setBusy(null);
       }
     },
-    [busy, finishLoadingTransition, problem, themeId],
+    [beginPadOpen, busy, endPadOpen, finishLoadingTransition, problem, themeId],
   );
 
   /**
@@ -2041,6 +2076,8 @@ export function App() {
       docId?: string | null;
     }) => {
       if (busy !== null) return;
+      beginPadOpen();
+      const loadGen = ++workspaceLoadGenRef.current;
       /*
        * Same loading transition as pickProblem — do not invent a parallel path.
        * fromBrowse: browser overlay spinner → slide → checkmark → board under
@@ -2115,6 +2152,7 @@ export function App() {
 
         // Mount the board under the overlay / blur, but keep it invisible until
         // the document is laid out and refreshed — then crossfade.
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setBoardPreparing(true);
         setProblem(ANNOTATE_PROBLEM);
         setPseudocode("");
@@ -2250,10 +2288,11 @@ export function App() {
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
-        setBusy(null);
+        endPadOpen();
+        if (workspaceLoadGenRef.current === loadGen) setBusy(null);
       }
     },
-    [busy, finishLoadingTransition, problem, themeId],
+    [beginPadOpen, busy, endPadOpen, finishLoadingTransition, problem, themeId],
   );
 
   /**
@@ -2398,9 +2437,18 @@ export function App() {
   /** Pick a document from disk and open it on the pad. */
   const pickAndOpenAnnotate = useCallback(async () => {
     if (busy !== null) return;
+    beginPadOpen();
+    const fromBrowse = !problem;
+    if (fromBrowse) {
+      setHoldBrowseOverlay(true);
+      setBrowseMotion("busy");
+      setBoardPreparing(true);
+    }
+    let handedOff = false;
     try {
       const picked = await pickDocumentFile();
       if (!picked) return;
+      handedOff = true;
       await openAnnotate({
         name: picked.name,
         docType: picked.docType,
@@ -2409,8 +2457,14 @@ export function App() {
       });
     } catch (cause) {
       setError(messageOf(cause));
+    } finally {
+      endPadOpen();
+      if (!handedOff && fromBrowse) {
+        setBrowseMotion("idle");
+        setBoardPreparing(false);
+      }
     }
-  }, [busy, openAnnotate]);
+  }, [beginPadOpen, busy, endPadOpen, openAnnotate, problem]);
 
   /** Session queue after Start / Random; otherwise the filtered problem bank. */
   const stepProblem = useCallback(
@@ -2785,6 +2839,7 @@ export function App() {
 
     const turnId = beginCoachTurn(threadAnchor ?? undefined, pendingAck);
     let finished = false;
+    let failText: string | null = null;
     try {
       await syncSolution();
       const askedNote = note
@@ -2816,7 +2871,8 @@ export function App() {
           snapshot.board.recognized_text.trim().length > 0 || pseudocodeRef.current.trim().length > 0;
         const pictured = snapshot.hasHandwriting && Boolean(snapshot.board.png);
         if (!legible && !drawn && !pictured) {
-          setError("nothing on the board yet — sketch or type an approach, then ask the agent");
+          failText = "nothing on the board yet — sketch or type an approach, then ask the agent";
+          setError(failText);
           return;
         }
         if (!legible && !pictured && recognizerRef.current.name === "none") {
@@ -2828,7 +2884,8 @@ export function App() {
         capturedIds = snapshot.ids;
       } else {
         if (!note) {
-          setError("type a question, or turn on Review");
+          failText = "type a question, or turn on Review";
+          setError(failText);
           return;
         }
         payload = {
@@ -2895,7 +2952,8 @@ export function App() {
         lastSkeletonHashRef.current = await sha256Hex(skeletonOf(pseudocodeRef.current));
       }
     } catch (cause) {
-      if (coachRunGenRef.current === genAtStart) setError(messageOf(cause));
+      failText = messageOf(cause);
+      if (coachRunGenRef.current === genAtStart) setError(failText);
     } finally {
       if (coachRunGenRef.current !== genAtStart) {
         if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
@@ -2903,7 +2961,7 @@ export function App() {
       }
       // Every early return above — an empty board, a missing question — lands
       // here too, and none of them should leave a turn waiting forever.
-      if (!finished) finishCoachTurn(turnId, null);
+      if (!finished) finishCoachTurn(turnId, coachFailureTurns(failText));
       for (const id of phaseTimers) window.clearTimeout(id);
       setCoachPhase(null);
       setBusy(null);
@@ -2993,6 +3051,7 @@ export function App() {
       photoCount: 0,
     });
     let finished = false;
+    let failText: string | null = null;
     try {
       await syncSolution();
       const contextualAsk = withConversationContext(ask, agentMessagesRef.current, {
@@ -3080,20 +3139,21 @@ export function App() {
           finished = true;
           finishCoachTurn(turnId, [{ content: envelope.message.trim() }]);
         } else {
-          setError(
+          failText =
             envelope.rejected?.[0] ??
-              "the agent didn't produce a diagram — its model may not support tool calling",
-          );
+            "the agent didn't produce a diagram — its model may not support tool calling";
+          setError(failText);
         }
       }
     } catch (cause) {
-      if (coachRunGenRef.current === genAtStart) setError(messageOf(cause));
+      failText = messageOf(cause);
+      if (coachRunGenRef.current === genAtStart) setError(failText);
     } finally {
       if (coachRunGenRef.current !== genAtStart) {
         if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
         return;
       }
-      if (!finished) finishCoachTurn(turnId, null);
+      if (!finished) finishCoachTurn(turnId, coachFailureTurns(failText));
       setBusy(null);
       if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
       if (coachSendDepthRef.current === 0) drainCoachSendQueueRef.current();
@@ -3165,6 +3225,7 @@ export function App() {
       setCoachPhase("Thinking…");
       const turnId = beginCoachTurn(threadAnchor ?? undefined, pendingAck);
       let finished = false;
+      let failText: string | null = null;
       try {
         await syncSolution();
         /*
@@ -3219,16 +3280,22 @@ export function App() {
         );
         if (coachRunGenRef.current !== genAtStart) return;
         finished = true;
-        finishCoachTurn(turnId, [{ content: result.reply }]);
+        const reply = (result.reply ?? "").trim();
+        finishCoachTurn(turnId, [
+          { content: reply || "The model returned an empty reply." },
+        ]);
       } catch (cause) {
-        if (coachRunGenRef.current === genAtStart) setError(messageOf(cause));
+        failText = messageOf(cause);
+        if (coachRunGenRef.current === genAtStart) setError(failText);
       } finally {
         if (coachRunGenRef.current !== genAtStart) {
           if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
           suppressCoachPanelOpenRef.current = false;
           return;
         }
-        if (!finished) finishCoachTurn(turnId, null);
+        if (!finished) {
+          finishCoachTurn(turnId, coachFailureTurns(failText));
+        }
         setCoachPhase(null);
         setBusy(null);
         if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
@@ -5397,7 +5464,12 @@ export function App() {
                 <ProblemBrowser
                   client={client}
                   onPick={pickProblem}
-                  busy={busy !== null || boardPreparing}
+                  busy={
+                    busy !== null ||
+                    boardPreparing ||
+                    annotateEntryOpen ||
+                    whiteboardEntryOpen
+                  }
                   session={session}
                   offline={serverLink !== "online"}
                   themeId={themeId}
@@ -5483,6 +5555,7 @@ export function App() {
             onOpenChange={setCoachOpen}
             sheetDragLocked={sheetDragLocked}
             busy={busy !== null}
+            error={error}
             thinking={busy !== null || thinking}
             thinkingPhase={coachPhase}
             messages={agentMessages}
@@ -5700,26 +5773,29 @@ export function App() {
       {annotateEntryOpen && (
         <AnnotateDialog
           mode="entry"
-          pending={busy !== null}
+          pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isAnnotate(problem))}
           snapshotKey={annotateSource?.hash ?? null}
           onChoose={(choice, docId) => {
-            setAnnotateEntryOpen(false);
             if (choice === "save") {
+              setAnnotateEntryOpen(false);
               void saveAnnotateSession().then((saved) => {
                 if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
               });
               return;
             }
             if (choice === "export") {
+              setAnnotateEntryOpen(false);
               exportAnnotateAnnotations();
               return;
             }
             if (choice === "import") {
+              setAnnotateEntryOpen(false);
               void importMdInkAnnotations();
               return;
             }
             if (choice === "snapshot" && docId) {
+              setAnnotateEntryOpen(false);
               const source = annotateSourceRef.current;
               if (source) {
                 void restorePadSnapshot("annotate", source.hash, docId as PadSnapshotTier);
@@ -5727,41 +5803,46 @@ export function App() {
               return;
             }
             if (choice === "recent" && docId) {
+              beginPadOpen();
               void (async () => {
-                const entry = await getAnnotateDoc(docId);
-                if (!entry) {
-                  setError("That document is no longer in the library.");
-                  return;
-                }
-                if (!isBinaryDocType(entry.docType)) {
+                try {
+                  const entry = await getAnnotateDoc(docId);
+                  if (!entry) {
+                    setError("That document is no longer in the library.");
+                    return;
+                  }
+                  if (!isBinaryDocType(entry.docType)) {
+                    await openAnnotate({
+                      name: entry.name,
+                      docType: entry.docType,
+                      text: entry.source,
+                      docId: entry.id,
+                    });
+                    return;
+                  }
+                  /*
+                   * A binary entry is only half of itself in the library JSON.
+                   *
+                   * Its bytes live in IndexedDB, and they can be missing —
+                   * cleared storage, a device that never had them. Say so rather
+                   * than opening an entry whose ink has nothing under it.
+                   */
+                  const bytes = await getDocBytes(entry.hash).catch(() => null);
+                  if (!bytes) {
+                    setError(
+                      `“${entry.name}” is in the library but its file is not on this device — open it again to restore the annotations.`,
+                    );
+                    return;
+                  }
                   await openAnnotate({
                     name: entry.name,
                     docType: entry.docType,
-                    text: entry.source,
+                    bytes,
                     docId: entry.id,
                   });
-                  return;
+                } finally {
+                  endPadOpen();
                 }
-                /*
-                 * A binary entry is only half of itself in the library JSON.
-                 *
-                 * Its bytes live in IndexedDB, and they can be missing —
-                 * cleared storage, a device that never had them. Say so rather
-                 * than opening an entry whose ink has nothing under it.
-                 */
-                const bytes = await getDocBytes(entry.hash).catch(() => null);
-                if (!bytes) {
-                  setError(
-                    `“${entry.name}” is in the library but its file is not on this device — open it again to restore the annotations.`,
-                  );
-                  return;
-                }
-                await openAnnotate({
-                  name: entry.name,
-                  docType: entry.docType,
-                  bytes,
-                  docId: entry.id,
-                });
               })();
               return;
             }
@@ -5790,12 +5871,12 @@ export function App() {
       {whiteboardEntryOpen && (
         <WhiteboardDialog
           mode="entry"
-          pending={busy !== null}
+          pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isWhiteboard(problem))}
           snapshotKey={whiteboardNotebookId}
           onChoose={(choice, notebookId) => {
-            setWhiteboardEntryOpen(false);
             if (choice === "save") {
+              setWhiteboardEntryOpen(false);
               void saveWhiteboardNow(() => setWhiteboardEntryOpen(true));
               return;
             }
@@ -5804,6 +5885,7 @@ export function App() {
               return;
             }
             if (choice === "snapshot" && notebookId && whiteboardNotebookId) {
+              setWhiteboardEntryOpen(false);
               void restorePadSnapshot(
                 "whiteboard",
                 whiteboardNotebookId,
@@ -6337,6 +6419,12 @@ function serverGateExitMs(): number {
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+function coachFailureTurns(
+  failText: string | null,
+): Array<{ content: string }> | null {
+  return failText ? [{ content: failText }] : null;
 }
 
 /**
