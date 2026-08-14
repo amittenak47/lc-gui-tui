@@ -31,6 +31,8 @@ export interface NumberWheelProps {
   allowFineScrub?: boolean;
   /** Step used while fine scrub is active (default 0.1). */
   fineStep?: number;
+  /** Off: display only. Used when ink fullness is locked at 100% without pressure. */
+  enabled?: boolean;
 }
 
 const ITEM_H = 22;
@@ -84,6 +86,7 @@ export function NumberWheel({
   format = defaultFormat,
   allowFineScrub = false,
   fineStep = FINE_STEP_DEFAULT,
+  enabled = true,
 }: NumberWheelProps) {
   const clamped = clamp(value, min, max);
   const [fineMode, setFineMode] = useState(false);
@@ -103,6 +106,8 @@ export function NumberWheel({
   fineModeRef.current = fineMode;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   const clampedRef = useRef(clamped);
   clampedRef.current = clamped;
 
@@ -248,6 +253,7 @@ export function NumberWheel({
   );
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (!enabledRef.current) return;
     event.preventDefault();
     event.stopPropagation();
     stopMomentum();
@@ -336,9 +342,15 @@ export function NumberWheel({
     <div className="lc-stroke-slider lc-number-wheel-wrap" role="group" aria-label={label}>
       <div
         ref={rootRef}
-        className={fineMode ? "lc-number-wheel lc-number-wheel-fine" : "lc-number-wheel"}
+        className={[
+          fineMode ? "lc-number-wheel lc-number-wheel-fine" : "lc-number-wheel",
+          enabled ? "" : "is-disabled",
+        ]
+          .filter(Boolean)
+          .join(" ")}
         role="slider"
-        tabIndex={0}
+        tabIndex={enabled ? 0 : -1}
+        aria-disabled={!enabled || undefined}
         aria-label={label}
         aria-valuemin={min}
         aria-valuemax={max}
@@ -349,6 +361,7 @@ export function NumberWheel({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onWheel={(event) => {
+          if (!enabledRef.current) return;
           event.preventDefault();
           event.stopPropagation();
           stopMomentum();
@@ -357,6 +370,7 @@ export function NumberWheel({
           commitIndex(clamp(selectedIndex - steps, 0, values.length - 1));
         }}
         onKeyDown={(event) => {
+          if (!enabledRef.current) return;
           const keyStep = fineMode ? fineStep : step;
           const bump = (dir: 1 | -1) => {
             if (fineMode) commitValue(clamped + dir * keyStep, keyStep);

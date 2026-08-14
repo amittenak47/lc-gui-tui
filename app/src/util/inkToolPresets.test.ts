@@ -13,7 +13,9 @@ import {
   wedgeAt,
   wheelAutoApply,
   wheelConfirmEnabled,
+  wheelHoldIsDrawingHop,
   wheelHoldOutcome,
+  wheelHoldTurn,
   type InkDrawSnapshot,
   type InkEraserSnapshot,
 } from "./inkToolPresets";
@@ -162,6 +164,14 @@ describe("wheel confirm / hold", () => {
     expect(wheelHoldOutcome(8, 280, 8, 1)).toBe("wheel");
     // Drifted zig-zag: net left the slop but folded back.
     expect(wheelHoldOutcome(8, 280, 20, 4)).toBe("wheel");
+    // Bullet spiral: tiny net, heading keeps turning.
+    expect(wheelHoldOutcome(2, 100, 16, 8, Math.PI)).toBe("ink");
+    expect(wheelHoldTurn(1, 0, 0, 1)).toBeCloseTo(Math.PI / 2, 5);
+    expect(wheelHoldTurn(1, 0, -1, 0)).toBe(0);
+    // Fine writing: tiny continuing hops. Jitter reversal is not.
+    expect(wheelHoldIsDrawingHop(1.2, 0, 1.1, 0.2)).toBe(true);
+    expect(wheelHoldIsDrawingHop(1, 0, -1, 0)).toBe(false);
+    expect(wheelHoldIsDrawingHop(0.3, 0, 0.3, 0)).toBe(false);
   });
 
   it("yields a post-arm marquee to a vertical reading pan", () => {

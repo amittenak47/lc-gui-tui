@@ -179,6 +179,19 @@ import {
   saveChromeMode,
   type ChromeMode,
 } from "../util/chromeVisibility";
+import {
+  CHROME_WAKE_EVENT,
+  loadChromeWakeMarker,
+  type ChromeWakeMarker,
+} from "../util/chromeWakePref";
+import {
+  linedPaperLabel,
+  linedPaperScreenPx,
+  loadLinedPaperMode,
+  nextLinedPaperMode,
+  saveLinedPaperMode,
+  type LinedPaperMode,
+} from "../util/linedPaperPref";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
@@ -1322,9 +1335,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => provideInkPaletteRetreat(null);
   }, [cycleInkPaletteBackward]);
   useEffect(() => resetInkPaletteBridge, []);
-  const [linedPaper, setLinedPaper] = useState(false);
-  const linedPaperRef = useRef(linedPaper);
-  linedPaperRef.current = linedPaper;
+  const [linedPaperMode, setLinedPaperMode] = useState<LinedPaperMode>(loadLinedPaperMode);
+  const linedPaperRef = useRef(linedPaperMode);
+  linedPaperRef.current = linedPaperMode;
   /**
    * Ruled lines belong on pages you draw on.
    *
@@ -1333,7 +1346,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * every third descender. The toggle is hidden on those pages and, because a
    * board can arrive with it already on, the state is gated here as well.
    */
-  const linedPaperOn = linedPaper && isDrawPageRegion(mobileRegion ?? null);
+  const linedPaperOn =
+    linedPaperMode !== "off" && isDrawPageRegion(mobileRegion ?? null);
   const linedPaperOnRef = useRef(linedPaperOn);
   linedPaperOnRef.current = linedPaperOn;
   /**
@@ -1377,6 +1391,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * again; it means nothing in `visible`, and is the whole of the other two.
    */
   const [chromeMode, setChromeMode] = useState<ChromeMode>(loadChromeMode);
+  const [chromeWakeMarker, setChromeWakeMarker] =
+    useState<ChromeWakeMarker>(loadChromeWakeMarker);
   const [chromeAwake, setChromeAwake] = useState(true);
   const chromeShown = chromeVisibility(chromeMode, {
     awake: chromeAwake,
@@ -2317,9 +2333,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // shrink statement-prose spacing into an unwritable grid. This path only
     // runs for draw pages (`linedPaperOn`); statement/code never get here.
     const zoomSafe = Math.max(0.05, zoom);
-    const DRAW_LINE_SCREEN_PX = 36;
-    const pitchScene = DRAW_LINE_SCREEN_PX / zoomSafe;
-    const gap = DRAW_LINE_SCREEN_PX;
+    const gap = linedPaperScreenPx(linedPaperRef.current);
+    if (gap <= 0) {
+      if (lastLinedSlotRef.current !== null) {
+        lastLinedSlotRef.current = null;
+        setLinedSlotOn(false);
+      }
+      return;
+    }
+    const pitchScene = gap / zoomSafe;
 
     let phase = 0;
     // Lock rules from the frame top — draw pages have no statement body grid.
@@ -2920,6 +2942,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onEraser = () => setEraserPartial(loadEraserPartial());
     window.addEventListener(ERASER_PARTIAL_EVENT, onEraser);
     return () => window.removeEventListener(ERASER_PARTIAL_EVENT, onEraser);
+  }, []);
+
+  useEffect(() => {
+    const onWake = () => setChromeWakeMarker(loadChromeWakeMarker());
+    window.addEventListener(CHROME_WAKE_EVENT, onWake);
+    return () => window.removeEventListener(CHROME_WAKE_EVENT, onWake);
   }, []);
 
   const deleteSelection = useCallback(() => {
@@ -5211,7 +5239,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   useEffect(() => {
     reportLinedSlot();
-  }, [linedPaperOn, reportLinedSlot]);
+  }, [linedPaperOn, linedPaperMode, reportLinedSlot]);
 
   // A document arriving (or the page frame growing under it) has to place the
   // content layer before the first frame it is visible in.
@@ -5246,58 +5274,62 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * content is taller than the viewport, so a frame left at its floor is a
    * document you cannot scroll past the first screen of. Growing the frame
    * without refreshing the bounds fixes nothing, which is why both happen here.
+   *
+   * Reset reseeds from `seedSkeletonsRef` (open-time height) and must call this
+   * too — the effect below does not re-run when those props are unchanged, and
+   * a short frame plus a kept `scrollY` clips new ink off-screen.
    */
-  useEffect(() => {
-    const api = apiRef.current;
-    if (!api || !pageContentHeight || pageContentHeight < 1) return;
-    const current = api.getSceneElements() as SceneElementLike[];
-    const page = mobileRegionRef.current;
-    const frame = current.find((el) => {
-      const meta = (el as { customData?: { lcMdInkFrame?: boolean; lcRegion?: string; lcRegionFrame?: boolean } })
-        .customData;
-      // HTML paper only (md-ink / statement). Code frame grows via
-      // `codeContentHeight` → `codeContentHeightRef` → `syncRegionLayout`.
-      return (
-        meta?.lcMdInkFrame ||
-        (Boolean(pageContentRef.current) &&
-          meta?.lcRegionFrame &&
-          meta.lcRegion === "constraints" &&
-          (page === "constraints" || page === null))
+  const applyDocumentFrameHeight = useCallback(
+    (heightArg?: number | null) => {
+      const api = apiRef.current;
+      const height =
+        heightArg != null && heightArg >= 1 ? heightArg : pageContentHeightRef.current;
+      if (!api || !height || height < 1) return;
+      const current = api.getSceneElements() as SceneElementLike[];
+      const page = mobileRegionRef.current;
+      const frame = current.find((el) => {
+        const meta = (el as { customData?: { lcMdInkFrame?: boolean; lcRegion?: string; lcRegionFrame?: boolean } })
+          .customData;
+        return (
+          meta?.lcMdInkFrame ||
+          (Boolean(pageContentRef.current) &&
+            meta?.lcRegionFrame &&
+            meta.lcRegion === "constraints" &&
+            (page === "constraints" || page === null))
+        );
+      }) as (SceneElementLike & { height?: number }) | undefined;
+      if (!frame) return;
+      if (typeof frame.height === "number" && Math.abs(frame.height - height) < 1) {
+        syncPageVisibility();
+        scheduleSlotReports();
+        return;
+      }
+      const isMdFrame = Boolean(
+        (frame as { customData?: { lcMdInkFrame?: boolean } }).customData?.lcMdInkFrame,
       );
-    }) as (SceneElementLike & { height?: number }) | undefined;
-    if (!frame) return;
-    if (typeof frame.height === "number" && Math.abs(frame.height - pageContentHeight) < 1) {
-      // Height already matches — still refresh pan bounds. Skipping this left
-      // md-ink with a tall frame and a stale null/short pageBoundsRef, so the
-      // clamp treated the page as one screen until annotate toggle re-armed.
+      const grown = current.map((el) =>
+        el === frame
+          ? ({
+              ...el,
+              height,
+              ...(isMdFrame ? { locked: true } : {}),
+              versionNonce: Math.random() * 2 ** 31,
+            } as LayoutElement)
+          : el,
+      ) as LayoutElement[];
+      api.updateScene({
+        elements: grown as unknown[],
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
       syncPageVisibility();
       scheduleSlotReports();
-      return;
-    }
-    const isMdFrame = Boolean(
-      (frame as { customData?: { lcMdInkFrame?: boolean } }).customData?.lcMdInkFrame,
-    );
-    const grown = current.map((el) =>
-      el === frame
-        ? ({
-            // Spread the element itself, not `object` — widening to `object`
-            // erases id/type/x/y and leaves nothing for `LayoutElement` to
-            // match against.
-            ...el,
-            height: pageContentHeight,
-            // Md frame must stay locked — see buildAnnotateTemplate.
-            ...(isMdFrame ? { locked: true } : {}),
-            versionNonce: Math.random() * 2 ** 31,
-          } as LayoutElement)
-        : el,
-    ) as LayoutElement[];
-    api.updateScene({
-      elements: grown as unknown[],
-      captureUpdate: CaptureUpdateAction.NEVER,
-    });
-    syncPageVisibility();
-    scheduleSlotReports();
-  }, [pageContent, pageContentHeight, scheduleSlotReports, syncPageVisibility]);
+    },
+    [scheduleSlotReports, syncPageVisibility],
+  );
+
+  useEffect(() => {
+    applyDocumentFrameHeight(pageContentHeight);
+  }, [pageContent, pageContentHeight, applyDocumentFrameHeight]);
 
   // A toggle mid-gesture must not leave a stale pin behind.
   useEffect(() => {
@@ -5809,13 +5841,35 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       },
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
-    // Reseeding undoes frame growth; without these the ink clip / pan bounds
-    // stay stale (short) until annotate toggle re-arms — invisible band below
-    // the new page edge.
+    // Reseeding undoes frame growth. Re-apply measured paper height before
+    // the clip/pan refresh — otherwise a kept scrollY maps the nib outside
+    // the short seed frame and new ink is invisible until a toggle re-grows it.
+    applyDocumentFrameHeight();
     maybeGrowDrawFrame();
     syncPageVisibility();
+    const cam = api?.getAppState() as
+      | { scrollX?: number; scrollY?: number; zoom?: { value?: number } }
+      | undefined;
+    if (api && cam) {
+      const zoom = cam.zoom?.value ?? 1;
+      const next = clampPanScroll(cam.scrollX ?? 0, cam.scrollY ?? 0, zoom);
+      if (next.scrollX !== (cam.scrollX ?? 0) || next.scrollY !== (cam.scrollY ?? 0)) {
+        api.updateScene({
+          appState: { scrollX: next.scrollX, scrollY: next.scrollY, zoom: cam.zoom },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+      }
+    }
     scheduleSlotReports();
-  }, [convert, maybeGrowDrawFrame, scheduleSlotReports, syncPageVisibility, themeId]);
+  }, [
+    applyDocumentFrameHeight,
+    clampPanScroll,
+    convert,
+    maybeGrowDrawFrame,
+    scheduleSlotReports,
+    syncPageVisibility,
+    themeId,
+  ]);
 
   const applyRegionLayout = useCallback(() => {
     const api = apiRef.current;
@@ -7180,18 +7234,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <button
                       type="button"
                       className={
-                        linedPaper
+                        linedPaperMode !== "off"
                           ? "lc-lined-toggle lc-tip-target is-active"
                           : "lc-lined-toggle lc-tip-target"
                       }
-                      aria-pressed={linedPaper}
-                      aria-label="Lined paper"
-                      data-tip="Lined paper"
+                      aria-pressed={linedPaperMode !== "off"}
+                      aria-label={linedPaperLabel(linedPaperMode)}
+                      data-tip={linedPaperLabel(linedPaperMode)}
                       data-tip-placement="bottom"
                       onClick={() => {
-                        const next = !linedPaperRef.current;
+                        const next = nextLinedPaperMode(linedPaperRef.current);
                         linedPaperRef.current = next;
-                        setLinedPaper(next);
+                        setLinedPaperMode(next);
+                        saveLinedPaperMode(next);
                         reflowReadingText();
                         requestAnimationFrame(reportLinedSlot);
                       }}
@@ -7258,9 +7313,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 {!chromeShown.eye && (
                   <button
                     type="button"
-                    className="lc-chrome-wake lc-tip-target"
+                    className={`lc-chrome-wake lc-tip-target is-${chromeWakeMarker}`}
                     aria-label="Show board controls"
-                    data-tip="Show controls"
+                    data-tip={
+                      chromeWakeMarker === "off" ? undefined : "Show controls"
+                    }
                     data-tip-placement="bottom"
                     onPointerDown={(event) => {
                       event.preventDefault();

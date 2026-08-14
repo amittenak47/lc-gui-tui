@@ -181,7 +181,10 @@ export function InkPresetEditor({
   return createPortal(
     <div className="lc-preset-sheet-layer" onPointerDown={close}>
       <div
-        className={closing ? "lc-preset-sheet is-closing" : "lc-preset-sheet is-open"}
+        className={[
+          closing ? "lc-preset-sheet is-closing" : "lc-preset-sheet is-open",
+          "lc-scroll-pane",
+        ].join(" ")}
         style={{
           ["--lc-morph-x" as string]: `${from.left + from.width / 2}px`,
           ["--lc-morph-y" as string]: `${from.top + from.height / 2}px`,
@@ -330,6 +333,7 @@ function DrawKnobs({
       <InkFullnessSlider
         value={snap.fullness}
         onChange={(fullness) => onChange({ ...snap, fullness })}
+        enabled={snap.pressureSensitive}
       />
       <PressureSensitiveToggle
         enabled={snap.pressureSensitive}

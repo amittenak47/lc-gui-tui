@@ -350,12 +350,35 @@ body {
   z-index: 1;
 }
 
-/* Offline / host:IP lives in the center row with Run tests — not an overlay. */
+/*
+ * Offline / host:IP — 50% of the header (the window), not the middle grid
+ * column. Do not move this into `.lc-header-center`: Run tests, unequal
+ * left/right chrome, and agent-open padding all pull that column off
+ * screen-center. This overlay is the lock.
+ */
+.lc-header-pairing-anchor {
+  position: absolute;
+  left: 50%;
+  /* Match .lc-header padding so align-items:center lands with the icon row. */
+  top: 5px;
+  bottom: 5px;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: min(70vw, 420px);
+  pointer-events: none;
+}
+
+.lc-header-pairing-anchor > * {
+  pointer-events: auto;
+}
 
 /*
  * Header spans the window; the coach column sits under the right end. Push
- * the icon row (and the screen-centered host:IP) into the board hole so a
- * resize with the panel open does not leave them parked over the chat.
+ * the icon row into the board hole so a resize with the panel open does not
+ * leave them parked over the chat. Pairing stays on the screen-center overlay.
  */
 .lc-app-agent-open:not(.lc-mobile) .lc-header {
   padding-right: calc(12px + var(--lc-agent-width, 520px));
@@ -1098,8 +1121,10 @@ input[type="checkbox"] {
   overflow: hidden;
 }
 
-.lc-number-wheel:focus-visible {
-  box-shadow: 0 0 0 2px var(--accent);
+.lc-number-wheel.is-disabled {
+  cursor: default;
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .lc-number-wheel-window {
@@ -2083,10 +2108,10 @@ input[type="checkbox"] {
 .lc-preset-sheet {
   position: fixed;
   left: 50%;
-  top: 10%;
+  top: 8%;
   z-index: 98;
-  width: min(384px, calc(100vw - 24px));
-  max-height: min(56vh, 420px);
+  width: min(640px, calc(100vw - 24px));
+  max-height: min(78vh, 720px);
   overflow: auto;
   transform: translateX(-50%);
   transform-origin: var(--lc-morph-x) var(--lc-morph-y);
@@ -2198,10 +2223,10 @@ input[type="checkbox"] {
 
 .lc-preset-sheet-cols {
   display: grid;
-  grid-template-columns: minmax(140px, 0.9fr) minmax(180px, 1.1fr);
+  grid-template-columns: minmax(200px, 0.85fr) minmax(280px, 1.15fr);
   align-items: start;
-  gap: 10px 14px;
-  padding: 6px 12px 12px;
+  gap: 12px 20px;
+  padding: 8px 16px 16px;
 }
 
 .lc-preset-sheet-cols.is-single {
@@ -2218,10 +2243,19 @@ input[type="checkbox"] {
 .lc-preset-sheet-draw {
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: center;
   gap: 8px;
+}
+
+.lc-preset-sheet-draw .lc-tool-mini {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 .lc-preset-sheet-color {
@@ -2257,6 +2291,14 @@ input[type="checkbox"] {
   margin: 0;
 }
 
+.lc-preset-sheet-physics .lc-settings-choice-compact .lc-settings-choice-option {
+  flex: 1 1 calc(25% - 6px);
+  min-width: 3.25rem;
+  max-width: calc(25% - 6px);
+  padding: 6px 4px;
+  box-sizing: border-box;
+}
+
 .lc-preset-sheet-toggles {
   display: flex;
   gap: 6px;
@@ -2264,7 +2306,7 @@ input[type="checkbox"] {
   margin: 4px 0 10px;
 }
 
-@media (max-width: 420px) {
+@media (max-width: 560px) {
   .lc-preset-sheet-cols {
     grid-template-columns: 1fr;
   }
@@ -3435,6 +3477,8 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 22px;
+  height: 22px;
   color: var(--ink);
   opacity: 0.22;
   filter: blur(2.2px);
@@ -3446,6 +3490,49 @@ input[type="checkbox"] {
 .lc-chrome-wake:focus-visible .lc-chrome-wake-ghost {
   opacity: 0.42;
   filter: blur(1.4px);
+}
+
+/*
+ * Checkerboard pulse — same crawl as `.lc-ink-wheel-hub.is-ready::after`.
+ * Replaces the smear so the wake target is findable without a grey blob.
+ * Fill lives on the ghost itself (not mix-blend overlay): there is no hub
+ * behind this mark, and overlay on empty pixels would vanish.
+ */
+.lc-chrome-wake.is-pulse .lc-chrome-wake-ghost {
+  opacity: 0.72;
+  filter: none;
+  overflow: hidden;
+  border-radius: 5px;
+  color: transparent;
+  background-image: repeating-conic-gradient(
+    rgb(255 255 255 / 42%) 0 90deg,
+    rgb(0 0 0 / 28%) 0 180deg
+  );
+  background-size: 6px 6px;
+  animation: lc-hub-pixel 420ms steps(4) infinite;
+}
+
+.lc-chrome-wake.is-pulse:hover .lc-chrome-wake-ghost,
+.lc-chrome-wake.is-pulse:focus-visible .lc-chrome-wake-ghost {
+  opacity: 0.9;
+  filter: none;
+}
+
+.lc-chrome-wake.is-off .lc-chrome-wake-ghost {
+  opacity: 0;
+  filter: none;
+}
+
+.lc-chrome-wake.is-off:hover .lc-chrome-wake-ghost,
+.lc-chrome-wake.is-off:focus-visible .lc-chrome-wake-ghost {
+  opacity: 0;
+  filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-chrome-wake.is-pulse .lc-chrome-wake-ghost {
+    animation: none;
+  }
 }
 
 /*
@@ -7482,6 +7569,12 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-header-center {
   justify-self: center;
+}
+
+.lc-mobile .lc-header-pairing-anchor {
+  /* Match .lc-mobile .lc-header vertical padding (safe-top + 2px / 3px). */
+  top: calc(2px + var(--lc-safe-top));
+  bottom: 3px;
 }
 
 .lc-mobile .lc-brand {

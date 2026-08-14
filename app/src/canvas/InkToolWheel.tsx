@@ -85,7 +85,7 @@ function specRows(
   if (isEraserWedge(snap)) return [{ label: "Name", value: snap.name }];
   return [
     { label: "Nib", value: String(snap.width) },
-    { label: "Ink fullness", value: `${Math.round(snap.fullness * 100)}%` },
+    { label: "Ink fullness", value: `${Math.round((snap.pressureSensitive ? snap.fullness : 1) * 100)}%` },
     { label: "Pressure", value: snap.pressureSensitive ? "On" : "Off" },
     { label: "Straight line", value: snap.straightInk ? "On" : "Off" },
     { label: "Speed ink", value: snap.speed === 0 ? "Off" : `${Math.round(snap.speed * 100)}%` },
