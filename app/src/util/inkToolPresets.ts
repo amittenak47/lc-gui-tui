@@ -18,7 +18,11 @@ import {
   loadEraserPartial,
   saveEraserPartial,
 } from "./eraserPartialPref";
-import { WHEEL_HOLD_SLOP_PX, WHEEL_OPEN_MS } from "./gesture";
+import {
+  WHEEL_HOLD_PATH_PX,
+  WHEEL_HOLD_SLOP_PX,
+  WHEEL_OPEN_MS,
+} from "./gesture";
 import {
   INK_BOLDNESS_DEFAULT,
   INK_BOLDNESS_EVENT,
@@ -418,16 +422,20 @@ export function wheelConfirmEnabled(args: {
   openWedge: number;
   selectedKind: InkPresetKind | null;
   selectedWedge: number | null;
+  /** User tapped an inner wedge this open. Current tool already counts as outer. */
+  innerChosen?: boolean;
 }): boolean {
   if (args.selectedKind == null || args.selectedWedge == null) return false;
+  if (args.innerChosen) return true;
   return args.selectedKind !== args.openKind || args.selectedWedge !== args.openWedge;
 }
 
 /**
- * Tap OK off: apply once outer is done and the inner wedge is a new pair.
+ * Tap OK off: apply once the inner wedge is a new pair.
  *
- * Current tool counts as outer. A tool-ring tap (including switching back)
- * is outer; it clears the wedge so inner must be picked again.
+ * Current tool is outer on open. Switching the tool ring pre-selects that
+ * tool's last wedge; an inner tap (including the already-highlighted one)
+ * is what commits when Tap OK is off.
  */
 export function wheelAutoApply(args: {
   tapOk: boolean;
@@ -436,8 +444,9 @@ export function wheelAutoApply(args: {
   openWedge: number;
   selectedKind: InkPresetKind | null;
   selectedWedge: number | null;
+  innerChosen?: boolean;
 }): boolean {
-  if (args.tapOk || !args.outerDone) return false;
+  if (args.tapOk || !args.outerDone || !args.innerChosen) return false;
   return wheelConfirmEnabled(args);
 }
 
@@ -454,10 +463,12 @@ export function specCardSide(
 export function wheelHoldOutcome(
   movedPx: number,
   elapsedMs: number,
+  pathPx = 0,
   slopPx = WHEEL_HOLD_SLOP_PX,
   holdMs = WHEEL_OPEN_MS,
+  pathSlopPx = WHEEL_HOLD_PATH_PX,
 ): "pending" | "ink" | "wheel" {
-  if (movedPx > slopPx) return "ink";
+  if (movedPx > slopPx || pathPx > pathSlopPx) return "ink";
   if (elapsedMs >= holdMs) return "wheel";
   return "pending";
 }

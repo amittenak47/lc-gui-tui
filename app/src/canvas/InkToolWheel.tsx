@@ -160,6 +160,7 @@ export function InkToolWheel({
   const [selectedKind, setSelectedKind] = useState<InkPresetKind | null>(liveKind);
   const [selectedWedge, setSelectedWedge] = useState<number | null>(store.lastWedge[liveKind]);
   const [outerDone, setOuterDone] = useState(true);
+  const [innerChosen, setInnerChosen] = useState(false);
   const [linger, setLinger] = useState<number | null>(null);
   const [armed, setArmed] = useState(false);
   const [hold, setHold] = useState<{ index: number; t: number } | null>(null);
@@ -244,10 +245,14 @@ export function InkToolWheel({
     setSelectedKind(liveKind);
     setSelectedWedge(store.lastWedge[liveKind]);
     setOuterDone(true);
+    setInnerChosen(false);
     setLinger(null);
     const id = window.setTimeout(() => setArmed(true), 80);
     return () => window.clearTimeout(id);
-  }, [open, liveKind, store.lastWedge, stopHold]);
+    // Only re-seed when the dial opens. lastWedge identity changes must not
+    // wipe a wedge tap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, stopHold]);
 
   const close = useCallback(() => {
     stopHold({ confirm: false });
@@ -309,6 +314,7 @@ export function InkToolWheel({
     openWedge: openWedgeRef.current,
     selectedKind,
     selectedWedge,
+    innerChosen,
   });
   const autoApply = wheelAutoApply({
     tapOk: store.tapOk,
@@ -317,6 +323,7 @@ export function InkToolWheel({
     openWedge: openWedgeRef.current,
     selectedKind,
     selectedWedge,
+    innerChosen,
   });
   const lingerSnap = linger != null ? wedgeAt(store, kind, linger) : null;
   const hubSnap =
@@ -388,9 +395,14 @@ export function InkToolWheel({
                   event.stopPropagation();
                   if (!armed) return;
                   stopHold({ confirm: false });
+                  if (sliceKind === kind) {
+                    setOuterDone(true);
+                    return;
+                  }
                   setSelectedKind(sliceKind);
-                  setSelectedWedge(null);
+                  setSelectedWedge(store.lastWedge[sliceKind]);
                   setOuterDone(true);
+                  setInnerChosen(false);
                   setLinger(null);
                 }}
               />
@@ -424,8 +436,9 @@ export function InkToolWheel({
                       /* already captured */
                     }
                     if (snap) {
-                      if (!outerDone) return;
+                      setSelectedKind(kind);
                       setSelectedWedge(index);
+                      setInnerChosen(true);
                     }
                     setLinger(index);
                     holdFromRef.current = event.currentTarget.getBoundingClientRect();
@@ -494,7 +507,7 @@ export function InkToolWheel({
             store.tapOk
               ? canConfirm
                 ? `Confirm ${kind}`
-                : `${kind} — pick a tool, then a wedge`
+                : `${kind} — pick a wedge`
               : `${kind} colour`
           }
           onAnimationEnd={(event) => {
