@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { CoachChatMessage } from "./AgentSidePanel";
+import type { AgentChatMessage } from "./AgentSidePanel";
 import {
   groupThreads,
   messageThreadRoot,
@@ -11,8 +11,8 @@ import {
 
 function msg(
   id: string,
-  overrides: Partial<CoachChatMessage> = {},
-): CoachChatMessage {
+  overrides: Partial<AgentChatMessage> = {},
+): AgentChatMessage {
   return {
     id,
     role: "user",

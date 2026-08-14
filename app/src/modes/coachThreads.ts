@@ -1,16 +1,16 @@
-import type { CoachChatMessage, CoachReplyRef } from "./AgentSidePanel";
+import type { AgentChatMessage, CoachReplyRef } from "./AgentSidePanel";
 import { replyExcerpt } from "./AgentSidePanel";
 
 export interface GroupedThreads {
-  threadReplies: Map<string, CoachChatMessage[]>;
-  rootMessages: CoachChatMessage[];
+  threadReplies: Map<string, AgentChatMessage[]>;
+  rootMessages: AgentChatMessage[];
 }
 
 /** The conversation, grouped into roots and the threads hanging off them. */
-export function groupThreads(messages: readonly CoachChatMessage[]): GroupedThreads {
+export function groupThreads(messages: readonly AgentChatMessage[]): GroupedThreads {
   const rootOf = new Map<string, string>();
-  const replies = new Map<string, CoachChatMessage[]>();
-  const roots: CoachChatMessage[] = [];
+  const replies = new Map<string, AgentChatMessage[]>();
+  const roots: AgentChatMessage[] = [];
   for (const message of messages) {
     const parent = message.replyTo?.id;
     if (!parent) {
@@ -28,10 +28,10 @@ export function groupThreads(messages: readonly CoachChatMessage[]): GroupedThre
 
 /** The message a thread hangs off — walking up through any chain of replies. */
 export function messageThreadRoot(
-  messages: readonly CoachChatMessage[],
-  message: CoachChatMessage,
+  messages: readonly AgentChatMessage[],
+  message: AgentChatMessage,
 ): string {
-  let current: CoachChatMessage | undefined = message;
+  let current: AgentChatMessage | undefined = message;
   const seen = new Set<string>();
   while (current?.replyTo && !seen.has(current.id)) {
     seen.add(current.id);
@@ -45,10 +45,10 @@ export function messageThreadRoot(
 
 /** What the transcript shows: the room, or one thread within it. */
 export function visibleThreadMessages(
-  messages: readonly CoachChatMessage[],
+  messages: readonly AgentChatMessage[],
   openThreadId: string | null,
   grouped: GroupedThreads,
-): CoachChatMessage[] {
+): AgentChatMessage[] {
   if (!openThreadId) return grouped.rootMessages;
   const root = messages.find((message) => message.id === openThreadId);
   const replies = grouped.threadReplies.get(openThreadId) ?? [];
@@ -62,7 +62,7 @@ export function visibleThreadMessages(
  * a fallback, `threadAnchorRef` used to return null and in-thread sends fell
  * out of the thread into the room root list.
  */
-export function messageReplyExcerpt(message: CoachChatMessage): string {
+export function messageReplyExcerpt(message: AgentChatMessage): string {
   const fromContent = replyExcerpt(message.content);
   if (fromContent) return fromContent;
   const review = message.review;
@@ -75,12 +75,12 @@ export function messageReplyExcerpt(message: CoachChatMessage): string {
   }
   if (message.drawing) return "Drawing";
   if (message.flags && message.flags.length > 0) return message.flags.join(" · ");
-  return message.role === "assistant" ? "Coach message" : "Message";
+  return message.role === "assistant" ? "Agent message" : "Message";
 }
 
 /** A reply anchor for the thread root, for sends that did not quote a message. */
 export function threadAnchorRef(
-  messages: readonly CoachChatMessage[],
+  messages: readonly AgentChatMessage[],
   id: string,
 ): CoachReplyRef | null {
   const message = messages.find((candidate) => candidate.id === id);
@@ -94,7 +94,7 @@ export function threadAnchorRef(
 
 /** Whether a reply stub should render above a turn. */
 export function showsReplyStub(
-  message: CoachChatMessage,
+  message: AgentChatMessage,
   openThreadId: string | null,
 ): boolean {
   if (!message.replyTo) return false;

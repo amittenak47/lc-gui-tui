@@ -15,7 +15,7 @@
  * worth revisiting if `/coach/ask` ever grows a `history` field.
  */
 
-import type { CoachChatMessage } from "./AgentSidePanel";
+import type { AgentChatMessage } from "./AgentSidePanel";
 
 /**
  * Characters of transcript to spend.
@@ -30,7 +30,7 @@ export const CONTEXT_BUDGET_CHARS = 6000;
 /** Longest any single turn may be before the middle is dropped. */
 const TURN_MAX_CHARS = 900;
 
-const SPEAKER: Record<CoachChatMessage["role"], string> = {
+const SPEAKER: Record<AgentChatMessage["role"], string> = {
   user: "Student",
   assistant: "You (coach)",
   system: "System",
@@ -67,11 +67,11 @@ export interface ConversationContextOptions {
 
 /** Turns that belong to a thread: its root, and everything replying into it. */
 export function threadTurns(
-  messages: readonly CoachChatMessage[],
+  messages: readonly AgentChatMessage[],
   rootId: string,
-): CoachChatMessage[] {
+): AgentChatMessage[] {
   const ids = new Set<string>([rootId]);
-  const out: CoachChatMessage[] = [];
+  const out: AgentChatMessage[] = [];
   for (const message of messages) {
     if (message.id === rootId || (message.replyTo && ids.has(message.replyTo.id))) {
       // Replies to replies stay in the same thread rather than starting a new
@@ -91,7 +91,7 @@ export function threadTurns(
  * be the least useful thing in the prompt anyway.
  */
 export function buildConversationContext(
-  messages: readonly CoachChatMessage[],
+  messages: readonly AgentChatMessage[],
   options: ConversationContextOptions = {},
 ): string {
   const budget = options.budget ?? CONTEXT_BUDGET_CHARS;
@@ -130,7 +130,7 @@ export function buildConversationContext(
  */
 export function withConversationContext(
   question: string,
-  messages: readonly CoachChatMessage[],
+  messages: readonly AgentChatMessage[],
   options: ConversationContextOptions = {},
 ): string {
   const context = buildConversationContext(messages, options);

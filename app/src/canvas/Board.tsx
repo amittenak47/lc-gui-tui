@@ -7217,7 +7217,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     }
                     data-tip={
                       sheetDragLocked
-                        ? "Coach sheet locked — tap to unlock"
+                        ? "Agent sheet locked — tap to unlock"
                         : "Lock coach sheet against drag"
                     }
                     data-tip-placement="bottom"

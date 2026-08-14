@@ -80,10 +80,10 @@ import {
   AgentSidePanel,
   AMBIENT_ENABLED,
   type CoachAttachment,
-  type CoachChatMessage,
+  type AgentChatMessage,
   type CoachPendingAck,
   type CoachReplyRef,
-  type CoachSendFlags,
+  type AgentSendFlags,
   replyExcerpt,
 } from "./modes/AgentSidePanel";
 import { assembleAskPrompt, PAD_ASK_CLIP_CHARS, PROBLEM_ASK_CLIP_CHARS } from "./modes/coachMarkContext";
@@ -91,12 +91,12 @@ import { AttemptDialog } from "./modes/AttemptDialog";
 import { WhiteboardDialog } from "./modes/WhiteboardDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { groupThreads, threadAnchorRef, visibleThreadMessages } from "./modes/coachThreads";
-import { loadForwardFailures, saveForwardFailures } from "./util/coachPrefs";
+import { loadForwardFailures, saveForwardFailures } from "./util/agentPrefs";
 import {
-  COACH_SHEET_LOCK_EVENT,
-  loadCoachSheetLock,
-  saveCoachSheetLock,
-} from "./util/coachSheetLockPref";
+  AGENT_SHEET_LOCK_EVENT,
+  loadAgentSheetLock,
+  saveAgentSheetLock,
+} from "./util/agentSheetLockPref";
 import { ensureTypingImports } from "./util/pythonImports";
 
 /** Room under the last line of code so a note fits below it. */
@@ -234,10 +234,10 @@ type Mode = "review" | "ambient";
 /** One coach composer send, prepared and waiting in the FIFO queue. */
 interface CoachSendQueueItem {
   text: string;
-  flags: CoachSendFlags;
+  flags: AgentSendFlags;
   userMessageId: string;
   prompt: string;
-  attachments?: CoachChatMessage["attachments"];
+  attachments?: AgentChatMessage["attachments"];
   threadAnchor: CoachReplyRef | null;
   photos: CoachAttachment[];
   quotedPassage?: string;
@@ -1113,16 +1113,16 @@ export function App() {
   const revealForMessageIdRef = useRef<string | null>(null);
 
   const [nudges, setNudges] = useState<AmbientEntry[]>([]);
-  const [coachMessages, setCoachMessages] = useState<CoachChatMessage[]>([]);
+  const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
   /**
    * The thread read from the hot paths.
    *
-   * `askCoach` is rebuilt whenever its deps change, and adding the whole
+   * `askAgent` is rebuilt whenever its deps change, and adding the whole
    * message list to them would rebuild it on every turn — including mid-send.
    * The ref is the transcript's stable door.
    */
-  const coachMessagesRef = useRef<CoachChatMessage[]>([]);
-  coachMessagesRef.current = coachMessages;
+  const agentMessagesRef = useRef<AgentChatMessage[]>([]);
+  agentMessagesRef.current = agentMessages;
   /** FIFO coach sends waiting while a turn is in flight. */
   const coachSendQueueRef = useRef<CoachSendQueueItem[]>([]);
   /** Bumped on interrupt/merge so late HTTP/WS results are ignored. */
@@ -1152,23 +1152,23 @@ export function App() {
       const next = (event as CustomEvent<boolean>).detail;
       setForwardFailures(typeof next === "boolean" ? next : loadForwardFailures());
     };
-    window.addEventListener("lc-coach-forward-failures", onChange);
-    return () => window.removeEventListener("lc-coach-forward-failures", onChange);
+    window.addEventListener("lc-agent-forward-failures", onChange);
+    return () => window.removeEventListener("lc-agent-forward-failures", onChange);
   }, []);
   /** Pin the mobile coach sheet — no drag-to-open/close from the handle. */
-  const [sheetDragLocked, setSheetDragLocked] = useState(() => loadCoachSheetLock());
+  const [sheetDragLocked, setSheetDragLocked] = useState(() => loadAgentSheetLock());
   useEffect(() => {
     const onChange = (event: Event) => {
       const next = (event as CustomEvent<boolean>).detail;
-      setSheetDragLocked(typeof next === "boolean" ? next : loadCoachSheetLock());
+      setSheetDragLocked(typeof next === "boolean" ? next : loadAgentSheetLock());
     };
-    window.addEventListener(COACH_SHEET_LOCK_EVENT, onChange);
-    return () => window.removeEventListener(COACH_SHEET_LOCK_EVENT, onChange);
+    window.addEventListener(AGENT_SHEET_LOCK_EVENT, onChange);
+    return () => window.removeEventListener(AGENT_SHEET_LOCK_EVENT, onChange);
   }, []);
   const onToggleSheetLock = useCallback(() => {
     setSheetDragLocked((current) => {
       const next = !current;
-      saveCoachSheetLock(next);
+      saveAgentSheetLock(next);
       return next;
     });
   }, []);
@@ -1279,7 +1279,7 @@ export function App() {
 
   /** Paint only expanded drawings onto the coach lane. */
   const syncDrawingsToBoard = useCallback(
-    (messages: CoachChatMessage[]) => {
+    (messages: AgentChatMessage[]) => {
       const board = boardRef.current;
       const api = sceneApi();
       if (!board || !api) return;
@@ -1474,7 +1474,7 @@ export function App() {
               docType: source.docType,
               board: liveBoard,
               footnotes: annotateFootnotesRef.current,
-              agent: persistableCoachMessages(coachMessages),
+              agent: persistableAgentMessages(agentMessages),
             });
             if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
             setNotice(`Saved “${saved.name}”.`);
@@ -1519,7 +1519,7 @@ export function App() {
             const saved = await saveWhiteboardNotebook({
               id: whiteboardNotebookId ?? undefined,
               board: liveBoard,
-              agent: persistableCoachMessages(coachMessages),
+              agent: persistableAgentMessages(agentMessages),
               pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
             });
             if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
@@ -1559,7 +1559,7 @@ export function App() {
     problem,
     whiteboardNotebookId,
     whiteboardPageCount,
-    coachMessages,
+    agentMessages,
     noteStorageFull,
   ]);
 
@@ -1620,7 +1620,7 @@ export function App() {
       setError(null);
       setTests(null);
       setNudges([]);
-      setCoachMessages([]);
+      setAgentMessages([]);
       setAnnotateFootnotes([]);
       annotateFootnotesRef.current = [];
       pendingQuoteRef.current = null;
@@ -1725,8 +1725,8 @@ export function App() {
           // Fresh load — starter_code is fine.
         }
         // A saved coach thread comes back with drawings attached to turns.
-        const resumedMessages = restoreCoachMessages(loaded.resume.agent_messages);
-        if (resumedMessages.length > 0) setCoachMessages(resumedMessages);
+        const resumedMessages = restoreAgentMessages(loaded.resume.agent_messages);
+        if (resumedMessages.length > 0) setAgentMessages(resumedMessages);
 
         setPseudocode(source);
         loadedSourceRef.current = source;
@@ -1884,7 +1884,7 @@ export function App() {
       setError(null);
       setTests(null);
       setNudges([]);
-      setCoachMessages([]);
+      setAgentMessages([]);
       setWhiteboardPageIndex(0);
       setWhiteboardEntryOpen(false);
       setCoachOpen(false);
@@ -1934,7 +1934,7 @@ export function App() {
             setWhiteboardPageCount(pages);
             setWhiteboardNotebookId(notebook.id);
             if (notebook.agent.length > 0) {
-              setCoachMessages(restoreCoachMessages(notebook.agent));
+              setAgentMessages(restoreAgentMessages(notebook.agent));
             }
             restored = true;
           }
@@ -2052,7 +2052,7 @@ export function App() {
       setError(null);
       setTests(null);
       setNudges([]);
-      setCoachMessages([]);
+      setAgentMessages([]);
       setAnnotateEntryOpen(false);
       boardSaveSuspendedRef.current = true;
       agentSaveSuspendedRef.current = true;
@@ -2162,8 +2162,8 @@ export function App() {
         setAnnotateFootnotes(existing?.footnotes ?? []);
         annotateFootnotesRef.current = existing?.footnotes ?? [];
         pendingQuoteRef.current = null;
-        const resumed = restoreCoachMessages(existing?.agent ?? []);
-        if (resumed.length > 0) setCoachMessages(resumed);
+        const resumed = restoreAgentMessages(existing?.agent ?? []);
+        if (resumed.length > 0) setAgentMessages(resumed);
 
         annotateBaselineRef.current = {
           id: existing?.id ?? null,
@@ -2202,7 +2202,7 @@ export function App() {
             ? padContentFingerprint(board.getElements(), board.getInkOpCount())
             : null;
           annotatePristineMarksRef.current = footnoteRevision(annotateFootnotesRef.current);
-          annotatePristineAgentRef.current = JSON.stringify(persistableCoachMessages(resumed));
+          annotatePristineAgentRef.current = JSON.stringify(persistableAgentMessages(resumed));
         }
 
         // Complete the loading transition (same beats and teardown as
@@ -2354,7 +2354,7 @@ export function App() {
           annotateFootnotesRef.current = snap.footnotes;
         }
         if (Array.isArray(snap.agent) && snap.agent.length > 0) {
-          setCoachMessages(restoreCoachMessages(snap.agent));
+          setAgentMessages(restoreAgentMessages(snap.agent));
         }
         board.restoreBoard(snap.board.elements, snap.board.appState, {
           skeletons: buildAnnotateTemplate(
@@ -2384,7 +2384,7 @@ export function App() {
         });
         setWhiteboardPageCount(pages);
         if (Array.isArray(snap.agent) && snap.agent.length > 0) {
-          setCoachMessages(restoreCoachMessages(snap.agent));
+          setAgentMessages(restoreAgentMessages(snap.agent));
         }
       }
       if (ink.length > 0) board.setInkOps(ink);
@@ -2539,7 +2539,7 @@ export function App() {
         case "nudge":
           setThinking(false);
           setNudges((current) => [{ ...frame, at: Date.now() }, ...current].slice(0, 12));
-          setCoachMessages((current) => [
+          setAgentMessages((current) => [
             ...current,
             {
               id: `nudge-${Date.now()}`,
@@ -2593,7 +2593,7 @@ export function App() {
     const id = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     activeCoachTurnIdRef.current = id;
     dirtyRef.current = true;
-    setCoachMessages((current) => [
+    setAgentMessages((current) => [
       ...current,
       {
         id,
@@ -2611,7 +2611,7 @@ export function App() {
   []);
 
   const appendProcessEvent = useCallback((messageId: string, event: CoachProcessEvent) => {
-    setCoachMessages((current) =>
+    setAgentMessages((current) =>
       current.map((message) =>
         message.id === messageId
           ? { ...message, processEvents: [...(message.processEvents ?? []), event] }
@@ -2631,16 +2631,16 @@ export function App() {
   const finishCoachTurn = useCallback(
     (
       messageId: string,
-      produced: Array<Partial<CoachChatMessage> & { content: string }> | null,
+      produced: Array<Partial<AgentChatMessage> & { content: string }> | null,
     ) => {
-      setCoachMessages((current) => {
+      setAgentMessages((current) => {
         const index = current.findIndex((message) => message.id === messageId);
         if (index < 0) return current;
         const placeholder = current[index];
         const rest = [...current.slice(0, index), ...current.slice(index + 1)];
         if (!produced || produced.length === 0) return rest;
 
-        const built: CoachChatMessage[] = produced.map((part, offset) => ({
+        const built: AgentChatMessage[] = produced.map((part, offset) => ({
           id: offset === 0 ? placeholder.id : `${placeholder.id}-${offset}`,
           role: "assistant",
           at: Date.now(),
@@ -2692,10 +2692,10 @@ export function App() {
 
   const pushCoachMessage = useCallback(
     (
-      role: CoachChatMessage["role"],
+      role: AgentChatMessage["role"],
       content: string,
       extra?: Pick<
-        CoachChatMessage,
+        AgentChatMessage,
         | "review"
         | "attachments"
         | "drawing"
@@ -2712,8 +2712,8 @@ export function App() {
       // hang things off the turn (a document footnote, for one), and an
       // updater can be re-run by React without meaning a second message.
       const id = `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      setCoachMessages((current) => {
-        let next: CoachChatMessage[] = [
+      setAgentMessages((current) => {
+        let next: AgentChatMessage[] = [
           ...current,
           {
             id,
@@ -2736,7 +2736,7 @@ export function App() {
   const submitForReview = useCallback(async (
     studentNote?: string,
     includeBoard = true,
-    attachments?: CoachChatMessage["attachments"],
+    attachments?: AgentChatMessage["attachments"],
     /** Lazy composer: review the board only — code dock is filled separately. */
     layoutOnly = false,
     threadAnchor?: CoachReplyRef | null,
@@ -2745,7 +2745,7 @@ export function App() {
     const board = boardRef.current;
     if (!board || !problem) return;
     const genAtStart = coachRunGenRef.current;
-    setBusy("asking the coach…");
+    setBusy("asking the agent…");
     setError(null);
     setNotice(null);
     if (!suppressCoachPanelOpenRef.current) setCoachOpen(true);
@@ -2788,7 +2788,7 @@ export function App() {
     try {
       await syncSolution();
       const askedNote = note
-        ? withConversationContext(note, coachMessagesRef.current, {
+        ? withConversationContext(note, agentMessagesRef.current, {
             threadRootId: threadAnchor?.id ?? null,
           })
         : note;
@@ -2816,12 +2816,12 @@ export function App() {
           snapshot.board.recognized_text.trim().length > 0 || pseudocodeRef.current.trim().length > 0;
         const pictured = snapshot.hasHandwriting && Boolean(snapshot.board.png);
         if (!legible && !drawn && !pictured) {
-          setError("nothing on the board yet — sketch or type an approach, then ask the coach");
+          setError("nothing on the board yet — sketch or type an approach, then ask the agent");
           return;
         }
         if (!legible && !pictured && recognizerRef.current.name === "none") {
           setNotice(
-            "handwriting isn't recognized in the browser build — sending the shapes and layout you drew; type with the text tool if the coach misreads you",
+            "handwriting isn't recognized in the browser build — sending the shapes and layout you drew; type with the text tool if the agent misreads you",
           );
         }
         payload = snapshot.board;
@@ -2871,8 +2871,8 @@ export function App() {
         result = await askForReview(withoutPng);
         setNotice(
           isLlmTimeoutError(cause)
-            ? "the board image timed out at the model — the coach reviewed your text and layout without it"
-            : "the board image was too large to send — the coach reviewed your text and layout without it",
+            ? "the board image timed out at the model — the agent reviewed your text and layout without it"
+            : "the board image was too large to send — the agent reviewed your text and layout without it",
         );
       }
       // One structured card in the thread — do not also push a prose duplicate.
@@ -2950,7 +2950,7 @@ export function App() {
           if (!fixed) continue;
           // The replacement keeps the program id, so it lands on top of the
           // diagram it is fixing rather than beside it.
-          setCoachMessages((current) => {
+          setAgentMessages((current) => {
             const next = current.map((message) =>
               message.drawing?.program.id === fixed.id
                 ? { ...message, drawing: { ...message.drawing, program: fixed, frameIndex: 0 } }
@@ -2995,7 +2995,7 @@ export function App() {
     let finished = false;
     try {
       await syncSolution();
-      const contextualAsk = withConversationContext(ask, coachMessagesRef.current, {
+      const contextualAsk = withConversationContext(ask, agentMessagesRef.current, {
         threadRootId: threadAnchor?.id ?? null,
       });
       const snapshot = await buildSnapshot(board, recognizerRef.current, {
@@ -3030,7 +3030,7 @@ export function App() {
             drawing: withNewDrawing(drawable),
           })),
         );
-        setCoachMessages((current) => {
+        setAgentMessages((current) => {
           queueMicrotask(() => syncDrawingsToBoard(current));
           return current;
         });
@@ -3082,7 +3082,7 @@ export function App() {
         } else {
           setError(
             envelope.rejected?.[0] ??
-              "the coach didn't produce a diagram — its model may not support tool calling",
+              "the agent didn't produce a diagram — its model may not support tool calling",
           );
         }
       }
@@ -3145,7 +3145,7 @@ export function App() {
     [client, problem, pushCoachMessage],
   );
 
-  const askCoach = useCallback(
+  const askAgent = useCallback(
     async (
       question: string,
       threadAnchor?: CoachReplyRef | null,
@@ -3177,7 +3177,7 @@ export function App() {
          * turns already on screen, and from inside a thread it is that thread's
          * turns rather than the whole room.
          */
-        const asked = withConversationContext(note, coachMessagesRef.current, {
+        const asked = withConversationContext(note, agentMessagesRef.current, {
           threadRootId: threadAnchor?.id ?? null,
           budget: Math.max(
             400,
@@ -3240,7 +3240,7 @@ export function App() {
   );
 
   /** `runTests` fires this and is defined above it — see the auto-forward. */
-  const askCoachRef = useRef<
+  const askAgentRef = useRef<
     | ((
         question: string,
         threadAnchor?: CoachReplyRef | null,
@@ -3248,10 +3248,10 @@ export function App() {
       ) => Promise<void>)
     | null
   >(null);
-  askCoachRef.current = askCoach;
+  askAgentRef.current = askAgent;
 
   const normalizeCoachFlags = useCallback(
-    (requestedFlags: CoachSendFlags): CoachSendFlags =>
+    (requestedFlags: AgentSendFlags): AgentSendFlags =>
       isLocalPad(problem)
         ? {
             ask: true,
@@ -3271,7 +3271,7 @@ export function App() {
     [problem],
   );
 
-  const flagBitsFor = (flags: CoachSendFlags): string[] =>
+  const flagBitsFor = (flags: AgentSendFlags): string[] =>
     [
       flags.ask ? "Ask" : null,
       flags.handwriting ? "Handwriting" : null,
@@ -3285,15 +3285,15 @@ export function App() {
     ].filter((bit): bit is string => Boolean(bit));
 
   const prepareCoachSend = useCallback(
-    async (text: string, flags: CoachSendFlags) => {
+    async (text: string, flags: AgentSendFlags) => {
       const anchorId = flags.threadRootId ?? flags.replyTo?.id ?? null;
       const threadAnchor = anchorId
-        ? threadAnchorRef(coachMessagesRef.current, anchorId) ?? flags.replyTo ?? null
+        ? threadAnchorRef(agentMessagesRef.current, anchorId) ?? flags.replyTo ?? null
         : null;
       const flagBits = flagBitsFor(flags);
       const photos = flags.photos ?? [];
       const quotedExcerpt = flags.pageQuote ? replyExcerpt(flags.pageQuote) : "";
-      let attachments: CoachChatMessage["attachments"] =
+      let attachments: AgentChatMessage["attachments"] =
         photos.length > 0 ? [...photos] : undefined;
 
       /*
@@ -3550,7 +3550,7 @@ export function App() {
           setNotice(`Only ${sent} of ${total} attached marks fit this Ask.`);
         }
 
-        setCoachMessages((current) =>
+        setAgentMessages((current) =>
           current.map((message) =>
             message.id === userMessageId ? { ...message, queued: undefined } : message,
           ),
@@ -3598,7 +3598,7 @@ export function App() {
             label: shot.label,
             png: shot.png,
           }));
-          await askCoach(
+          await askAgent(
             prompt,
             threadAnchor,
             [...photos, ...boardShots],
@@ -3645,7 +3645,7 @@ export function App() {
     },
     [
       submitForReview,
-      askCoach,
+      askAgent,
       askForDiagram,
       problem,
       client,
@@ -3687,7 +3687,7 @@ export function App() {
   );
 
   const enqueueCoachSend = useCallback(
-    async (text: string, flags: CoachSendFlags) => {
+    async (text: string, flags: AgentSendFlags) => {
       const prepared = await prepareCoachSend(text, flags);
       const userMessageId = pushCoachMessage("user", prepared.bubble, {
         ...(prepared.attachments ? { attachments: prepared.attachments } : {}),
@@ -3732,7 +3732,7 @@ export function App() {
   drainCoachSendQueueRef.current = drainCoachSendQueue;
 
   const sendCoachChat = useCallback(
-    (text: string, requestedFlags: CoachSendFlags, mode: "queue" | "merge" = "queue") => {
+    (text: string, requestedFlags: AgentSendFlags, mode: "queue" | "merge" = "queue") => {
       const flags = normalizeCoachFlags(requestedFlags);
 
       if (mode === "merge" && busyRef.current !== null) {
@@ -3751,7 +3751,7 @@ export function App() {
           coachSendQueueRef.current.map((item) => item.userMessageId),
         );
         coachSendQueueRef.current = [];
-        setCoachMessages((current) =>
+        setAgentMessages((current) =>
           current.map((message) =>
             message.queued || queuedIds.has(message.id)
               ? { ...message, queued: undefined }
@@ -3849,7 +3849,7 @@ export function App() {
       // or the card lists one conversation however many were started.
       footnoteCoachUpgradeRef.current = footnote.id;
       const replyTo = threadRootId
-        ? threadAnchorRef(coachMessagesRef.current, threadRootId) ?? undefined
+        ? threadAnchorRef(agentMessagesRef.current, threadRootId) ?? undefined
         : undefined;
       // Stay in the overview card — do not dock the side coach over the page.
       suppressCoachPanelOpenRef.current = true;
@@ -3864,7 +3864,7 @@ export function App() {
         ...(replyTo ? { replyTo } : {}),
         threadRootId,
       });
-      // Cleared when the send finishes — not in a microtask, or askCoach opens
+      // Cleared when the send finishes — not in a microtask, or askAgent opens
       // the side panel before suppress is still set.
       if (threadRootId) {
         setCoachFocusThread({ token: Date.now(), rootId: threadRootId });
@@ -3904,9 +3904,9 @@ export function App() {
         if (!result.all_passed && forwardFailuresRef.current) {
           const rootId = threadRootIdRef.current;
           const threadAnchor = rootId
-            ? threadAnchorRef(coachMessagesRef.current, rootId)
+            ? threadAnchorRef(agentMessagesRef.current, rootId)
             : null;
-          void askCoachRef.current?.(
+          void askAgentRef.current?.(
             describeRunFailure(report, pseudocodeRef.current),
             threadAnchor,
           );
@@ -4036,10 +4036,10 @@ export function App() {
    * marks). They must not hit `putAgentSession` — md-ink is not a corpus slug.
    */
   useEffect(() => {
-    if (!problem || coachMessages.length === 0) return;
+    if (!problem || agentMessages.length === 0) return;
     const timer = window.setTimeout(() => {
       if (agentSaveSuspendedRef.current) return;
-      const agent = persistableCoachMessages(coachMessages);
+      const agent = persistableAgentMessages(agentMessages);
       if (isAnnotate(problem)) {
         // Board autosave only writes when the scene + marks fingerprint moves,
         // so a chat-only exchange would otherwise be lost — same reason the
@@ -4106,7 +4106,7 @@ export function App() {
         });
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [client, problem, coachMessages, whiteboardNotebookId, whiteboardPageCount, noteStorageFull]);
+  }, [client, problem, agentMessages, whiteboardNotebookId, whiteboardPageCount, noteStorageFull]);
 
   const confirmReveal = useCallback(async (mode: "bridge" | "lazy" = "bridge") => {
     const board = boardRef.current;
@@ -4116,7 +4116,7 @@ export function App() {
     setRevealPending(false);
     setRevealError(null);
     dirtyRef.current = true;
-    setCoachMessages((current) => {
+    setAgentMessages((current) => {
       const attachTo =
         (targetId && current.find((message) => message.id === targetId)) ||
         [...current].reverse().find((message) => message.role === "assistant" && message.review);
@@ -4144,7 +4144,7 @@ export function App() {
           result.lazy_note ?? "Lazy fill applied from the hint.",
         );
       }
-      setCoachMessages((current) => {
+      setAgentMessages((current) => {
         const attachTo =
           (targetId && current.find((message) => message.id === targetId)) ||
           [...current].reverse().find(
@@ -4160,7 +4160,7 @@ export function App() {
       revealForMessageIdRef.current = null;
     } catch (cause) {
       const message = messageOf(cause);
-      setCoachMessages((current) => {
+      setAgentMessages((current) => {
         const attachTo =
           (targetId && current.find((entry) => entry.id === targetId)) ||
           [...current].reverse().find(
@@ -4183,7 +4183,7 @@ export function App() {
       if (!board || !api) return;
       dirtyRef.current = true;
       if (mobile) setActiveRegion("agent");
-      setCoachMessages((current) => {
+      setAgentMessages((current) => {
         const next = current.map((message) => {
           if (message.drawing?.program.id !== programId) return message;
           return {
@@ -4210,7 +4210,7 @@ export function App() {
     (messageId: string, expanded: boolean) => {
       dirtyRef.current = true;
       if (expanded && mobile) setActiveRegion("agent");
-      setCoachMessages((current) => {
+      setAgentMessages((current) => {
         const next = setDrawingExpanded(current, messageId, expanded);
         queueMicrotask(() => syncDrawingsToBoard(next));
         return next;
@@ -4223,7 +4223,7 @@ export function App() {
   const clearProblemState = useCallback(() => {
     setTests(null);
     setNudges([]);
-    setCoachMessages([]);
+    setAgentMessages([]);
     setAttemptState(null);
     revealForMessageIdRef.current = null;
     lastReviewIdsRef.current = new Set();
@@ -4313,7 +4313,7 @@ export function App() {
         const saved = await saveWhiteboardNotebook({
           id: whiteboardNotebookId ?? undefined,
           board: liveBoard,
-          agent: persistableCoachMessages(coachMessages),
+          agent: persistableAgentMessages(agentMessages),
           pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
         });
         setWhiteboardNotebookId(saved.id);
@@ -4338,7 +4338,7 @@ export function App() {
         setError(messageOf(cause));
       }
     },
-    [coachMessages, problem, rebaselineWhiteboardSession, whiteboardNotebookId, whiteboardPageCount],
+    [agentMessages, problem, rebaselineWhiteboardSession, whiteboardNotebookId, whiteboardPageCount],
   );
 
   const discardWhiteboardSession = useCallback(() => {
@@ -4374,7 +4374,7 @@ export function App() {
       return false;
     }
     if (
-      JSON.stringify(persistableCoachMessages(coachMessagesRef.current)) !==
+      JSON.stringify(persistableAgentMessages(agentMessagesRef.current)) !==
       annotatePristineAgentRef.current
     ) {
       return false;
@@ -4429,7 +4429,7 @@ export function App() {
         docType: source.docType,
         board: blob,
         footnotes: annotateFootnotes,
-        agent: persistableCoachMessages(coachMessages),
+        agent: persistableAgentMessages(agentMessages),
       });
       setAnnotateDocId(saved.id);
       annotateBaselineRef.current = { id: saved.id, entry: saved };
@@ -4438,7 +4438,7 @@ export function App() {
         board.getInkOpCount(),
       );
       annotatePristineMarksRef.current = footnoteRevision(annotateFootnotes);
-      annotatePristineAgentRef.current = JSON.stringify(persistableCoachMessages(coachMessages));
+      annotatePristineAgentRef.current = JSON.stringify(persistableAgentMessages(agentMessages));
       const snapBoard = await boardWithAssembledInk(board, blob);
       void recordRollingSnapshots({
         kind: "annotate",
@@ -4457,7 +4457,7 @@ export function App() {
       setError(messageOf(cause));
       return null;
     }
-  }, [annotateDocId, annotateFootnotes, annotateSource, coachMessages]);
+  }, [annotateDocId, annotateFootnotes, annotateSource, agentMessages]);
 
 
   /*
@@ -4675,7 +4675,7 @@ export function App() {
                 const saved = await saveWhiteboardNotebook({
                   id: whiteboardNotebookId ?? undefined,
                   board: blob,
-                  agent: persistableCoachMessages(coachMessages),
+                  agent: persistableAgentMessages(agentMessages),
                   pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(blob.elements)),
                 });
                 setWhiteboardNotebookId(saved.id);
@@ -4721,11 +4721,11 @@ export function App() {
         // archive of a solved attempt is complete. Dialog is already fading —
         // don't wait on the network to start dismissing.
         const saveWork = (async () => {
-          if (coachMessages.length > 0) {
+          if (agentMessages.length > 0) {
             await client
               .putAgentSession(
                 problem.task_id,
-                persistableCoachMessages(coachMessages),
+                persistableAgentMessages(agentMessages),
                 problem.dataset,
               )
               .catch(() => {
@@ -4766,7 +4766,7 @@ export function App() {
       problem,
       leaving,
       leavingPending,
-      coachMessages,
+      agentMessages,
       attemptState,
       tests,
       whiteboardNotebookId,
@@ -4801,7 +4801,7 @@ export function App() {
     browseMotion === "done" ||
     (holdBrowseOverlay && boardPreparing);
 
-  const groupedCoachThreads = useMemo(() => groupThreads(coachMessages), [coachMessages]);
+  const groupedCoachThreads = useMemo(() => groupThreads(agentMessages), [agentMessages]);
   const openFootnote = useMemo(
     () => annotateFootnotes.find((entry) => entry.id === openFootnoteId) ?? null,
     [annotateFootnotes, openFootnoteId],
@@ -4814,8 +4814,8 @@ export function App() {
    * list for whichever thread the mark happens to name first.
    */
   const footnoteThreadMessages = useCallback(
-    (rootId: string) => visibleThreadMessages(coachMessages, rootId, groupedCoachThreads),
-    [coachMessages, groupedCoachThreads],
+    (rootId: string) => visibleThreadMessages(agentMessages, rootId, groupedCoachThreads),
+    [agentMessages, groupedCoachThreads],
   );
   const footnoteNumbers = useMemo(() => numberFootnotes(annotateFootnotes), [annotateFootnotes]);
   const footnoteThreadRoots = useMemo(() => {
@@ -4852,7 +4852,7 @@ export function App() {
         mobile ? "lc-mobile" : "",
         problem ? "lc-app-problem" : "",
         problem && isLocalPad(problem) ? "lc-app-pad" : "",
-        coachOpen && problem ? "lc-app-coach-open" : "",
+        coachOpen && problem ? "lc-app-agent-open" : "",
         canvasLoading ? "lc-app-loading" : "",
       ]
         .filter(Boolean)
@@ -5166,27 +5166,27 @@ export function App() {
               type="button"
               className={[
                 coachOpen
-                  ? "lc-secondary lc-coach-toggle lc-coach-toggle-open lc-tip-target"
-                  : "lc-secondary lc-coach-toggle lc-tip-target",
-                llmLink === "online" && "lc-coach-toggle-llm-on",
-                llmLink === "offline" && "lc-coach-toggle-llm-off",
+                  ? "lc-secondary lc-agent-toggle lc-agent-toggle-open lc-tip-target"
+                  : "lc-secondary lc-agent-toggle lc-tip-target",
+                llmLink === "online" && "lc-agent-toggle-llm-on",
+                llmLink === "offline" && "lc-agent-toggle-llm-off",
               ]
                 .filter(Boolean)
                 .join(" ")}
               aria-expanded={coachOpen}
-              aria-controls="lc-coach-panel"
+              aria-controls="lc-agent-panel"
               data-tip={
                 llmLink === "online"
-                  ? "Coach — LLM online"
+                  ? "Agent — LLM online"
                   : llmLink === "offline"
-                    ? "Coach — LLM offline"
-                    : "Coach"
+                    ? "Agent — LLM offline"
+                    : "Agent"
               }
               data-tip-placement="bottom"
               onClick={() => setCoachOpen((current) => !current)}
             >
-              <span className="lc-coach-live-dot" aria-hidden />
-              Coach
+              <span className="lc-agent-live-dot" aria-hidden />
+              Agent
             </button>
           )}
         </div>
@@ -5484,7 +5484,7 @@ export function App() {
             busy={busy !== null}
             thinking={busy !== null || thinking}
             thinkingPhase={coachPhase}
-            messages={coachMessages}
+            messages={agentMessages}
             askOnly={isLocalPad(problem)}
             agentSurface={isLocalPad(problem) ? "pad" : "problem"}
             allowAnnotations={!isWhiteboard(problem)}
@@ -5893,7 +5893,7 @@ export function App() {
           }}
           onContinueWithout={() => {
             closeLlmGate();
-            setNotice("Coach off — Settings → Server when you want it back.");
+            setNotice("Agent off — Settings → Server when you want it back.");
           }}
         />
       )}
@@ -6468,7 +6468,8 @@ function isSocketRunUnavailable(cause: unknown): boolean {
     message.includes("no run frames") ||
     message.includes("connection closed") ||
     message.includes("connection failed") ||
-    message.includes("could not reach the coach")
+    message.includes("could not reach the coach") ||
+    message.includes("could not reach the agent")
   );
 }
 
@@ -6478,11 +6479,11 @@ function isSocketRunUnavailable(cause: unknown): boolean {
  * The daemon stores the transcript opaquely, so anything malformed is dropped
  * here rather than crashing the panel on a half-written file.
  */
-function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
+function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
   if (!Array.isArray(stored)) return [];
   return stored.flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];
-    const message = entry as Partial<CoachChatMessage> & { drawing?: unknown };
+    const message = entry as Partial<AgentChatMessage> & { drawing?: unknown };
     if (typeof message.id !== "string" || typeof message.role !== "string") return [];
     // Older builds could persist an in-flight placeholder. Drop it — a turn
     // stuck on "Working…" would wait for a socket that will never answer.
@@ -6504,7 +6505,7 @@ function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
       typeof raw.id === "string" &&
       typeof raw.role === "string" &&
       typeof raw.excerpt === "string"
-        ? { id: raw.id, role: raw.role as CoachChatMessage["role"], excerpt: raw.excerpt }
+        ? { id: raw.id, role: raw.role as AgentChatMessage["role"], excerpt: raw.excerpt }
         : undefined;
     // Empty assistant shells left after stripping `pending` are noise.
     if (
@@ -6521,7 +6522,7 @@ function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
     return [
       {
         id: message.id,
-        role: message.role as CoachChatMessage["role"],
+        role: message.role as AgentChatMessage["role"],
         content,
         at: typeof message.at === "number" ? message.at : Date.now(),
         review: message.review,
@@ -6547,7 +6548,7 @@ function restoreCoachMessages(stored: unknown[]): CoachChatMessage[] {
  * the entire localStorage budget, forever, to redisplay an image the bubble
  * draws at 320px anyway.
  */
-function persistableCoachMessages(messages: CoachChatMessage[]): CoachChatMessage[] {
+function persistableAgentMessages(messages: AgentChatMessage[]): AgentChatMessage[] {
   return messages
     .filter((message) => !message.pending)
     .map((message) => {

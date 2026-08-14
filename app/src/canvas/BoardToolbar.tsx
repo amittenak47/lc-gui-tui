@@ -55,7 +55,7 @@ function boardChromeBox(): { left: number; top: number; right: number; bottom: n
   if (
     app instanceof HTMLElement &&
     main instanceof HTMLElement &&
-    app.classList.contains("lc-app-coach-open") &&
+    app.classList.contains("lc-app-agent-open") &&
     !app.classList.contains("lc-mobile")
   ) {
     return main.getBoundingClientRect();

@@ -232,17 +232,17 @@ body {
   overflow: hidden;
 }
 
-.lc-app-coach-open .lc-main {
-  margin-right: var(--lc-coach-width, 520px);
+.lc-app-agent-open .lc-main {
+  margin-right: var(--lc-agent-width, 520px);
 }
 
 /* Coach closed: canvas owns the full content width under the header. */
-.lc-app:not(.lc-app-coach-open) .lc-main {
+.lc-app:not(.lc-app-agent-open) .lc-main {
   margin-right: 0;
   width: 100%;
 }
 
-.lc-app:not(.lc-app-coach-open) .lc-canvas-wrap {
+.lc-app:not(.lc-app-agent-open) .lc-canvas-wrap {
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
@@ -250,17 +250,17 @@ body {
 
 .lc-app-problem {
   --lc-header-height: 64px;
-  --lc-coach-width: 520px;
+  --lc-agent-width: 520px;
   --lc-board-chrome-left: 0px;
   --lc-board-chrome-right: 0px;
 }
 
-.lc-app-coach-open:not(.lc-mobile) {
-  --lc-board-chrome-right: var(--lc-coach-width, 520px);
+.lc-app-agent-open:not(.lc-mobile) {
+  --lc-board-chrome-right: var(--lc-agent-width, 520px);
 }
 
-[data-handedness="left"] .lc-app-coach-open:not(.lc-mobile) {
-  --lc-board-chrome-left: var(--lc-coach-width, 520px);
+[data-handedness="left"] .lc-app-agent-open:not(.lc-mobile) {
+  --lc-board-chrome-left: var(--lc-agent-width, 520px);
   --lc-board-chrome-right: 0px;
 }
 
@@ -305,7 +305,7 @@ body {
 
 .lc-header .lc-secondary,
 .lc-header .lc-icon,
-.lc-header .lc-coach-toggle {
+.lc-header .lc-agent-toggle {
   border-color: var(--chrome-edge);
 }
 
@@ -316,7 +316,7 @@ body {
   padding: 0;
 }
 
-.lc-header .lc-coach-toggle-open {
+.lc-header .lc-agent-toggle-open {
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
@@ -357,13 +357,13 @@ body {
  * the icon row (and the screen-centered host:IP) into the board hole so a
  * resize with the panel open does not leave them parked over the chat.
  */
-.lc-app-coach-open:not(.lc-mobile) .lc-header {
-  padding-right: calc(12px + var(--lc-coach-width, 520px));
+.lc-app-agent-open:not(.lc-mobile) .lc-header {
+  padding-right: calc(12px + var(--lc-agent-width, 520px));
 }
 
-[data-handedness="left"] .lc-app-coach-open:not(.lc-mobile) .lc-header {
+[data-handedness="left"] .lc-app-agent-open:not(.lc-mobile) .lc-header {
   padding-right: 12px;
-  padding-left: calc(12px + var(--lc-coach-width, 520px));
+  padding-left: calc(12px + var(--lc-agent-width, 520px));
 }
 
 /* Offline and IP share one header slot — never side by side. */
@@ -418,7 +418,7 @@ body {
   align-items: center;
 }
 
-.lc-coach-toggle {
+.lc-agent-toggle {
   flex-shrink: 0;
 }
 
@@ -1512,7 +1512,7 @@ input[type="checkbox"] {
 }
 
 /* Mid-drag the fade is the gesture, so it must not lag behind the finger. */
-.lc-coach-dragging .lc-toolbar {
+.lc-agent-dragging .lc-toolbar {
   transition: none;
 }
 
@@ -1588,12 +1588,12 @@ input[type="checkbox"] {
    * Gets out of the way as the coach sheet comes up.
    *
    * The sheet rises from the bottom, which is where this island lives, so an
-   * open coach used to bury a lit toolbar. `--lc-coach-open` is written by
+   * open coach used to bury a lit toolbar. `--lc-agent-open` is written by
    * `AgentSidePanel` every frame of the drag, so this tracks the gesture in
    * both directions rather than snapping at the end of it — and is absent on
    * desktop, where the coach is a side panel and covers nothing.
    */
-  opacity: calc(1 - var(--lc-coach-open, 0));
+  opacity: calc(1 - var(--lc-agent-open, 0));
   transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
   display: flex;
   flex-direction: column;
@@ -3163,7 +3163,7 @@ input[type="checkbox"] {
 }
 
 /*
- * Desktop coach already pushes `.lc-main` by `--lc-coach-width`. Map chrome
+ * Desktop coach already pushes `.lc-main` by `--lc-agent-width`. Map chrome
  * lives inside that hole, so a second 520px inset pulled the dock and the eye
  * stack off the remaining board. Overlay-era rule — leave the 10px gutter.
  */
@@ -3181,7 +3181,7 @@ input[type="checkbox"] {
   flex-direction: row;
   align-items: flex-end;
   gap: 6px;
-  opacity: calc(1 - var(--lc-coach-open, 0));
+  opacity: calc(1 - var(--lc-agent-open, 0));
   transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -3213,7 +3213,7 @@ input[type="checkbox"] {
   border-radius: 10px;
   background: color-mix(in srgb, var(--surface) 96%, transparent);
   box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
-  opacity: calc(1 - var(--lc-coach-open, 0));
+  opacity: calc(1 - var(--lc-agent-open, 0));
   transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -3809,7 +3809,7 @@ input[type="checkbox"] {
   opacity: 0.9;
 }
 
-.lc-coach-fold {
+.lc-agent-fold {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3820,7 +3820,7 @@ input[type="checkbox"] {
   touch-action: manipulation;
 }
 
-.lc-coach-fold-bar {
+.lc-agent-fold-bar {
   display: block;
   width: 44px;
   height: 5px;
@@ -3828,14 +3828,14 @@ input[type="checkbox"] {
   background: color-mix(in srgb, var(--ink) 28%, transparent);
 }
 
-.lc-coach-fold:hover .lc-coach-fold-bar,
-.lc-coach-fold:focus-visible .lc-coach-fold-bar,
-.lc-coach-sheet-handle:hover .lc-coach-fold-bar,
-.lc-coach-sheet-handle:focus-visible .lc-coach-fold-bar {
+.lc-agent-fold:hover .lc-agent-fold-bar,
+.lc-agent-fold:focus-visible .lc-agent-fold-bar,
+.lc-agent-sheet-handle:hover .lc-agent-fold-bar,
+.lc-agent-sheet-handle:focus-visible .lc-agent-fold-bar {
   background: color-mix(in srgb, var(--ink) 48%, transparent);
 }
 
-.lc-coach-sheet-handle {
+.lc-agent-sheet-handle {
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -3851,11 +3851,11 @@ input[type="checkbox"] {
   user-select: none;
 }
 
-.lc-coach-sheet-handle:active {
+.lc-agent-sheet-handle:active {
   cursor: grabbing;
 }
 
-.lc-coach-fold-open {
+.lc-agent-fold-open {
   position: absolute;
   top: 0;
   left: 50%;
@@ -3865,7 +3865,7 @@ input[type="checkbox"] {
   padding-bottom: 10px;
 }
 
-.lc-coach-fold-closed {
+.lc-agent-fold-closed {
   position: absolute;
   left: 50%;
   bottom: 0;
@@ -4060,7 +4060,7 @@ input[type="checkbox"] {
   z-index: 48;
 }
 
-.lc-coach-toggle-open {
+.lc-agent-toggle-open {
   position: relative;
   z-index: 46;
   border: 1px solid var(--accent);
@@ -4162,7 +4162,7 @@ input[type="checkbox"] {
   right: 0;
   bottom: 0;
   z-index: 40;
-  width: var(--lc-coach-width, 520px);
+  width: var(--lc-agent-width, 520px);
   border-left: 1px solid var(--chrome-edge);
   border-top: 1px solid var(--chrome-edge);
   padding: 0;
@@ -4174,11 +4174,11 @@ input[type="checkbox"] {
   box-shadow: -6px 0 18px rgb(0 0 0 / 18%);
 }
 
-.lc-app-coach-open .lc-side {
+.lc-app-agent-open .lc-side {
   box-shadow: -6px 8px 18px rgb(0 0 0 / 14%);
 }
 
-.lc-coach-chat {
+.lc-agent-chat {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -4187,7 +4187,7 @@ input[type="checkbox"] {
   flex: 1 1 auto;
 }
 
-.lc-coach-messages {
+.lc-agent-messages {
   flex: 1;
   min-height: 0;
   overflow-x: hidden;
@@ -4198,13 +4198,13 @@ input[type="checkbox"] {
   gap: 10px;
 }
 
-.lc-coach-empty {
+.lc-agent-empty {
   margin: 8px 0;
   font-size: 13px;
   line-height: 1.45;
 }
 
-.lc-coach-turn {
+.lc-agent-turn {
   border: 1px solid var(--chrome-edge);
   border-radius: 10px;
   padding: 8px 10px;
@@ -4214,14 +4214,14 @@ input[type="checkbox"] {
   box-sizing: border-box;
 }
 
-.lc-coach-turn-user {
+.lc-agent-turn-user {
   align-self: flex-end;
   max-width: 92%;
   background: color-mix(in srgb, var(--accent) 16%, var(--surface));
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
 }
 
-.lc-coach-queued {
+.lc-agent-queued {
   display: block;
   font-size: 0.7rem;
   font-weight: 600;
@@ -4231,9 +4231,9 @@ input[type="checkbox"] {
   margin-bottom: 2px;
 }
 
-.lc-coach-turn-assistant,
-.lc-coach-turn-system,
-.lc-coach-turn-app {
+.lc-agent-turn-assistant,
+.lc-agent-turn-system,
+.lc-agent-turn-app {
   align-self: stretch;
 }
 
@@ -4241,18 +4241,18 @@ input[type="checkbox"] {
  * Test results in the thread. Neither the student's voice nor the coach's, so
  * neither styling: a monospace, ruled block that reads as machine output.
  */
-.lc-coach-turn-app {
+.lc-agent-turn-app {
   background: color-mix(in srgb, var(--ink) 5%, var(--surface));
   border-color: color-mix(in srgb, var(--ink) 18%, var(--line));
   border-left: 3px solid color-mix(in srgb, var(--ink) 32%, transparent);
 }
 
-.lc-coach-turn-app .lc-coach-turn-body {
+.lc-agent-turn-app .lc-agent-turn-body {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 12px;
 }
 
-.lc-coach-turn-role {
+.lc-agent-turn-role {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -4261,14 +4261,14 @@ input[type="checkbox"] {
   margin-bottom: 4px;
 }
 
-.lc-coach-turn-body {
+.lc-agent-turn-body {
   font-size: 13px;
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.lc-coach-turn-footnotes {
+.lc-agent-turn-footnotes {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -4276,20 +4276,20 @@ input[type="checkbox"] {
   margin-top: 8px;
 }
 
-.lc-coach-turn-flag-rule {
+.lc-agent-turn-flag-rule {
   display: block;
   width: 28px;
   height: 0;
   border-top: 1px solid color-mix(in srgb, var(--ink) 22%, transparent);
 }
 
-.lc-coach-turn-flags {
+.lc-agent-turn-flags {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 8px;
 }
 
-.lc-coach-turn-flag {
+.lc-agent-turn-flag {
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -4298,11 +4298,11 @@ input[type="checkbox"] {
   line-height: 1.2;
 }
 
-.lc-coach-turn-user .lc-coach-turn-flag {
+.lc-agent-turn-user .lc-agent-turn-flag {
   color: color-mix(in srgb, var(--accent) 55%, var(--ink));
 }
 
-.lc-coach-turn-selectable {
+.lc-agent-turn-selectable {
   -webkit-touch-callout: none;
   touch-action: manipulation;
   -webkit-user-select: none;
@@ -4313,7 +4313,7 @@ input[type="checkbox"] {
     outline-color 160ms ease;
 }
 
-.lc-coach-turn-selected {
+.lc-agent-turn-selected {
   outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   outline-offset: 2px;
   transform: scale(1.03);
@@ -4326,14 +4326,14 @@ input[type="checkbox"] {
 }
 
 /* Tall turns already fill the chat — scale would swallow the thread. */
-.lc-coach-turn-selected-tall {
+.lc-agent-turn-selected-tall {
   transform: none;
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
     inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-.lc-coach-message-menu-backdrop {
+.lc-agent-message-menu-backdrop {
   position: fixed;
   inset: 0;
   z-index: 220;
@@ -4344,7 +4344,7 @@ input[type="checkbox"] {
   cursor: default;
 }
 
-.lc-coach-message-menu {
+.lc-agent-message-menu {
   position: fixed;
   z-index: 221;
   display: flex;
@@ -4356,10 +4356,10 @@ input[type="checkbox"] {
   box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
   /* Bubble sits under the held message. */
   transform: translate(-50%, 0);
-  animation: lc-coach-menu-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: lc-agent-menu-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-@keyframes lc-coach-menu-pop {
+@keyframes lc-agent-menu-pop {
   from {
     opacity: 0;
     transform: translate(-50%, -6px) scale(0.96);
@@ -4370,7 +4370,7 @@ input[type="checkbox"] {
   }
 }
 
-.lc-coach-message-menu button {
+.lc-agent-message-menu button {
   min-height: 36px;
   min-width: 72px;
   padding: 6px 14px;
@@ -4384,25 +4384,25 @@ input[type="checkbox"] {
   cursor: pointer;
 }
 
-.lc-coach-message-menu button:hover:not(:disabled),
-.lc-coach-message-menu button:focus-visible:not(:disabled) {
+.lc-agent-message-menu button:hover:not(:disabled),
+.lc-agent-message-menu button:focus-visible:not(:disabled) {
   background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
-.lc-coach-message-menu button:disabled {
+.lc-agent-message-menu button:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
 /* What the coach did on the way to an answer. Quiet by default — it is
    context for the answer, not the answer. */
-.lc-coach-process {
+.lc-agent-process {
   margin-bottom: 6px;
   min-width: 0;
   font-size: 12px;
 }
 
-.lc-coach-process-toggle {
+.lc-agent-process-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -4418,39 +4418,39 @@ input[type="checkbox"] {
   min-width: 0;
 }
 
-.lc-coach-process-label {
+.lc-agent-process-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
 }
 
-.lc-coach-process-steps {
+.lc-agent-process-steps {
   margin: 4px 0 0;
   padding-left: 18px;
   list-style: none;
   border-left: 1px solid var(--chrome-edge);
 }
 
-.lc-coach-process-step {
+.lc-agent-process-step {
   padding: 1px 0;
   opacity: 0.8;
 }
 
-.lc-coach-process-step-rejected {
+.lc-agent-process-step-rejected {
   opacity: 1;
   text-decoration: line-through;
   text-decoration-thickness: 1px;
 }
 
-.lc-coach-drawing {
+.lc-agent-drawing {
   margin-top: 8px;
   border-top: 1px solid var(--chrome-edge);
   padding-top: 6px;
   min-width: 0;
 }
 
-.lc-coach-drawing-toggle {
+.lc-agent-drawing-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -4465,7 +4465,7 @@ input[type="checkbox"] {
   min-width: 0;
 }
 
-.lc-coach-drawing-label {
+.lc-agent-drawing-label {
   font-weight: 600;
   font-size: 12px;
   text-transform: uppercase;
@@ -4473,19 +4473,19 @@ input[type="checkbox"] {
   flex-shrink: 0;
 }
 
-.lc-coach-drawing-title {
+.lc-agent-drawing-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
 }
 
-.lc-coach-drawing-body {
+.lc-agent-drawing-body {
   margin-top: 6px;
   min-width: 0;
 }
 
-.lc-coach-drawing-body .lc-timeline {
+.lc-agent-drawing-body .lc-timeline {
   border-style: dashed;
   padding: 8px;
 }
@@ -4516,21 +4516,21 @@ input[type="checkbox"] {
   font-size: 13px;
 }
 
-.lc-coach-thinking .lc-coach-turn-body {
+.lc-agent-thinking .lc-agent-turn-body {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--muted);
 }
 
-.lc-coach-attachments {
+.lc-agent-attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
 }
 
-.lc-coach-thumb {
+.lc-agent-thumb {
   margin: 0;
   width: 112px;
   border: 1px solid var(--line);
@@ -4539,7 +4539,7 @@ input[type="checkbox"] {
   background: var(--bg);
 }
 
-.lc-coach-thumb-btn {
+.lc-agent-thumb-btn {
   display: block;
   width: 100%;
   padding: 0;
@@ -4548,7 +4548,7 @@ input[type="checkbox"] {
   cursor: zoom-in;
 }
 
-.lc-coach-thumb img {
+.lc-agent-thumb img {
   display: block;
   width: 100%;
   height: 72px;
@@ -4556,7 +4556,7 @@ input[type="checkbox"] {
   background: #1a1a1a;
 }
 
-.lc-coach-thumb figcaption {
+.lc-agent-thumb figcaption {
   padding: 4px 6px;
   font-size: 10px;
   color: var(--muted);
@@ -4565,7 +4565,7 @@ input[type="checkbox"] {
   text-overflow: ellipsis;
 }
 
-.lc-coach-review-embed {
+.lc-agent-review-embed {
   margin-top: 8px;
 }
 
@@ -4668,7 +4668,7 @@ input[type="checkbox"] {
   }
 }
 
-.lc-coach-spinner {
+.lc-agent-spinner {
   width: 12px;
   height: 12px;
   border: 2px solid var(--line);
@@ -4678,7 +4678,7 @@ input[type="checkbox"] {
   flex-shrink: 0;
 }
 
-.lc-coach-composer {
+.lc-agent-composer {
   flex-shrink: 0;
   border-top: 1px solid var(--chrome-edge);
   padding: 10px 12px 12px;
@@ -4688,7 +4688,7 @@ input[type="checkbox"] {
   background: var(--panel);
 }
 
-.lc-coach-composer textarea {
+.lc-agent-composer textarea {
   width: 100%;
   min-height: 72px;
   resize: vertical;
@@ -4702,7 +4702,7 @@ input[type="checkbox"] {
   min-height: 72px;
 }
 
-.lc-coach-composer-bar {
+.lc-agent-composer-bar {
   display: flex;
   width: 100%;
   box-sizing: border-box;
@@ -4717,7 +4717,7 @@ input[type="checkbox"] {
 }
 
 /* Cadence (Failures / On ask / Every 2m) — hard left. */
-.lc-coach-composer-bar .lc-modes {
+.lc-agent-composer-bar .lc-modes {
   order: 1;
   flex: 0 0 auto;
   margin-right: 0;
@@ -4725,13 +4725,13 @@ input[type="checkbox"] {
   gap: 4px;
 }
 
-.lc-coach-composer-bar .lc-modes .lc-tip-target {
+.lc-agent-composer-bar .lc-modes .lc-tip-target {
   display: inline-flex;
 }
 
-.lc-coach-composer-bar .lc-mode,
-.lc-coach-composer-actions button,
-.lc-coach-composer-mid button {
+.lc-agent-composer-bar .lc-mode,
+.lc-agent-composer-actions button,
+.lc-agent-composer-mid button {
   min-height: 24px;
   height: 24px;
   padding: 0 6px;
@@ -4742,7 +4742,7 @@ input[type="checkbox"] {
 }
 
 /* Handwriting / Annotations — between cadence and the right cluster. */
-.lc-coach-composer-mid {
+.lc-agent-composer-mid {
   order: 2;
   display: flex;
   flex: 1 1 0;
@@ -4754,7 +4754,7 @@ input[type="checkbox"] {
 }
 
 /* Board menu + Photo + Send — hard right. */
-.lc-coach-composer-actions {
+.lc-agent-composer-actions {
   order: 3;
   display: flex;
   flex: 0 0 auto;
@@ -4766,16 +4766,16 @@ input[type="checkbox"] {
   min-width: 0;
 }
 
-.lc-coach-composer-actions .lc-tip-target {
+.lc-agent-composer-actions .lc-tip-target {
   display: inline-flex;
 }
 
-.lc-coach-composer-mid .lc-tip-target {
+.lc-agent-composer-mid .lc-tip-target {
   display: inline-flex;
 }
 
 /* Composer hugs the side-panel edge — open tooltips inward so overflow:hidden on .lc-side does not clip them */
-.lc-coach-composer-bar .lc-modes .lc-tip-target::after {
+.lc-agent-composer-bar .lc-modes .lc-tip-target::after {
   left: calc(100% + 5px);
   right: auto;
   top: 50%;
@@ -4783,7 +4783,7 @@ input[type="checkbox"] {
   transform: translateY(-50%);
 }
 
-.lc-coach-composer-actions .lc-tip-target::after {
+.lc-agent-composer-actions .lc-tip-target::after {
   right: calc(100% + 5px);
   left: auto;
   top: 50%;
@@ -5137,8 +5137,8 @@ input[type="checkbox"] {
 }
 
 /* When coach is open on desktop, keep the banner clear of the side panel. */
-.lc-app-coach-open:not(.lc-mobile) .lc-chrome-overlay-top {
-  right: var(--lc-coach-width, 520px);
+.lc-app-agent-open:not(.lc-mobile) .lc-chrome-overlay-top {
+  right: var(--lc-agent-width, 520px);
 }
 
 .lc-pass {
@@ -6655,7 +6655,7 @@ button.lc-row-selected:hover:not(:disabled) {
   pointer-events: none;
 }
 
-.lc-coach-live {
+.lc-agent-live {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -6664,7 +6664,7 @@ button.lc-row-selected:hover:not(:disabled) {
   font-weight: 600;
 }
 
-.lc-coach-live-dot {
+.lc-agent-live-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -6672,25 +6672,25 @@ button.lc-row-selected:hover:not(:disabled) {
   background: var(--muted);
 }
 
-.lc-coach-live[data-status="online"] .lc-coach-live-dot,
-.lc-coach-toggle-llm-on .lc-coach-live-dot {
+.lc-agent-live[data-status="online"] .lc-agent-live-dot,
+.lc-agent-toggle-llm-on .lc-agent-live-dot {
   background: #16a34a;
   box-shadow: none;
 }
 
-.lc-coach-live[data-status="offline"] .lc-coach-live-dot,
-.lc-coach-toggle-llm-off .lc-coach-live-dot {
+.lc-agent-live[data-status="offline"] .lc-agent-live-dot,
+.lc-agent-toggle-llm-off .lc-agent-live-dot {
   background: #dc2626;
   box-shadow: none;
 }
 
-.lc-coach-toggle {
+.lc-agent-toggle {
   display: inline-flex;
   align-items: center;
   gap: 7px;
 }
 
-.lc-coach-toggle .lc-coach-live-dot {
+.lc-agent-toggle .lc-agent-live-dot {
   width: 8px;
   height: 8px;
 }
@@ -7281,18 +7281,18 @@ button.lc-row-selected:hover:not(:disabled) {
  * ------------------------------------------------------------------------ */
 
 .lc-mobile {
-  --lc-coach-sheet: min(58vh, 520px);
+  --lc-agent-sheet: min(58vh, 520px);
   /* Lift the sheet clear of Android's home-swipe / gesture nav band. */
-  --lc-coach-sheet-lift: 32px;
+  --lc-agent-sheet-lift: 32px;
   /* Peek tall enough that the grab bar sits above that band when parked. */
-  --lc-coach-peek: 52px;
+  --lc-agent-peek: 52px;
   /* Gap between map chrome and the parked coach peek strip. */
   --lc-map-above-coach: 10px;
 }
 
 @media (pointer: coarse) and (min-width: 768px) {
   .lc-mobile {
-    --lc-coach-sheet: min(64vh, 600px);
+    --lc-agent-sheet: min(64vh, 600px);
   }
 }
 
@@ -7305,7 +7305,7 @@ button.lc-row-selected:hover:not(:disabled) {
   padding-right: var(--lc-safe-right);
 }
 
-.lc-mobile.lc-app-coach-open .lc-main {
+.lc-mobile.lc-app-agent-open .lc-main {
   margin-right: 0;
   /* Coach sheets over the board — do not shrink the template to make room. */
   margin-bottom: 0;
@@ -7318,7 +7318,7 @@ button.lc-row-selected:hover:not(:disabled) {
   right: 0;
   bottom: 0;
   width: auto;
-  height: calc(var(--lc-coach-sheet) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom));
+  height: calc(var(--lc-agent-sheet) + var(--lc-agent-sheet-lift) + var(--lc-safe-bottom));
   max-height: none;
   border-left: none;
   border-top: 1px solid var(--chrome-edge);
@@ -7328,8 +7328,8 @@ button.lc-row-selected:hover:not(:disabled) {
   z-index: 40;
 }
 
-.lc-mobile .lc-coach-chat {
-  padding-bottom: calc(var(--lc-safe-bottom) + var(--lc-coach-sheet-lift));
+.lc-mobile .lc-agent-chat {
+  padding-bottom: calc(var(--lc-safe-bottom) + var(--lc-agent-sheet-lift));
   box-sizing: border-box;
 }
 
@@ -7338,7 +7338,7 @@ button.lc-row-selected:hover:not(:disabled) {
   box-shadow: 0 -2px 10px rgb(0 0 0 / 10%);
 }
 
-.lc-mobile .lc-side-sheet-parked .lc-coach-chat {
+.lc-mobile .lc-side-sheet-parked .lc-agent-chat {
   pointer-events: none;
   opacity: 0;
 }
@@ -7355,7 +7355,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-map-controls {
   /* Room for the parked coach peek handle under the chrome. */
   bottom: calc(
-    4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom) +
+    4px + var(--lc-agent-peek) + var(--lc-agent-sheet-lift) + var(--lc-safe-bottom) +
       var(--lc-map-above-coach)
   );
   transition: bottom 240ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -7363,7 +7363,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /*
  * Map chrome stays anchored to the peek height when the coach opens — it fades
- * out via `--lc-coach-open` instead of riding the full sheet up.
+ * out via `--lc-agent-open` instead of riding the full sheet up.
  */
 
 @media (prefers-reduced-motion: reduce) {
@@ -7372,12 +7372,12 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 }
 
-.lc-mobile.lc-app-coach-open .lc-side {
+.lc-mobile.lc-app-agent-open .lc-side {
   border-top: 1px solid var(--chrome-edge);
   box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
 }
 
-.lc-mobile .lc-coach-toggle-open {
+.lc-mobile .lc-agent-toggle-open {
   border-radius: 6px;
   border-color: var(--accent);
   background: var(--accent);
@@ -7397,7 +7397,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /* The composer is the reason to open the sheet — keep it compact so the thread
    above it is still worth reading on a tablet. */
-.lc-mobile .lc-coach-composer textarea {
+.lc-mobile .lc-agent-composer textarea {
   min-height: 54px;
 }
 
@@ -7570,7 +7570,7 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 9px;
 }
 
-.lc-mobile .lc-coach-toggle {
+.lc-mobile .lc-agent-toggle {
   min-height: 24px;
   height: 24px;
   padding: 0 8px;
@@ -7662,7 +7662,7 @@ button.lc-row-selected:hover:not(:disabled) {
   left: 4px;
   right: 4px;
   bottom: calc(
-    4px + var(--lc-coach-peek) + var(--lc-coach-sheet-lift) + var(--lc-safe-bottom) +
+    4px + var(--lc-agent-peek) + var(--lc-agent-sheet-lift) + var(--lc-safe-bottom) +
       var(--lc-map-above-coach)
   );
   /*
@@ -7773,7 +7773,7 @@ button.lc-row-selected:hover:not(:disabled) {
     min-height: 26px;
   }
 
-  .lc-mobile .lc-coach-toggle {
+  .lc-mobile .lc-agent-toggle {
     min-height: 26px;
     height: 26px;
   }
@@ -8798,7 +8798,7 @@ button.lc-row-selected:hover:not(:disabled) {
  * same object — a role, a one-line trace, and a rule down the left edge — so
  * the thing you were answering looks the same before and after you answer it.
  */
-.lc-coach-reply-stub {
+.lc-agent-reply-stub {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -8818,11 +8818,11 @@ button.lc-row-selected:hover:not(:disabled) {
   cursor: pointer;
 }
 
-.lc-coach-reply-stub:hover {
+.lc-agent-reply-stub:hover {
   background: color-mix(in srgb, var(--ink) 11%, transparent);
 }
 
-.lc-coach-reply-stub-role {
+.lc-agent-reply-stub-role {
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -8830,7 +8830,7 @@ button.lc-row-selected:hover:not(:disabled) {
   color: color-mix(in srgb, var(--accent) 78%, var(--ink));
 }
 
-.lc-coach-reply-stub-text {
+.lc-agent-reply-stub-text {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
@@ -8842,11 +8842,11 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /* The original, once a stub has scrolled you back to it. */
-.lc-coach-turn.is-flashed {
-  animation: lc-coach-flash 1.4s ease-out;
+.lc-agent-turn.is-flashed {
+  animation: lc-agent-flash 1.4s ease-out;
 }
 
-@keyframes lc-coach-flash {
+@keyframes lc-agent-flash {
   0%,
   55% {
     background: color-mix(in srgb, var(--accent) 20%, transparent);
@@ -8857,12 +8857,12 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lc-coach-turn.is-flashed {
+  .lc-agent-turn.is-flashed {
     animation-duration: 0.01s;
   }
 }
 
-.lc-coach-reply-chip {
+.lc-agent-reply-chip {
   display: flex;
   align-items: stretch;
   gap: 8px;
@@ -8879,18 +8879,18 @@ button.lc-row-selected:hover:not(:disabled) {
  * once — quoting a paragraph while answering something the coach said — and
  * two identical chips stacked would read as one repeated.
  */
-.lc-coach-quote-chip .lc-coach-reply-chip-mark {
+.lc-agent-quote-chip .lc-agent-reply-chip-mark {
   background: color-mix(in srgb, var(--ok) 75%, transparent);
 }
 
-.lc-coach-reply-chip-mark {
+.lc-agent-reply-chip-mark {
   flex: 0 0 auto;
   width: 2px;
   border-radius: 2px;
   background: color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
-.lc-coach-reply-chip-text {
+.lc-agent-reply-chip-text {
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -8898,7 +8898,7 @@ button.lc-row-selected:hover:not(:disabled) {
   flex: 1 1 auto;
 }
 
-.lc-coach-reply-chip-clear {
+.lc-agent-reply-chip-clear {
   flex: 0 0 auto;
   align-self: center;
   width: 24px;
@@ -8913,13 +8913,13 @@ button.lc-row-selected:hover:not(:disabled) {
   cursor: pointer;
 }
 
-.lc-coach-reply-chip-clear:hover {
+.lc-agent-reply-chip-clear:hover {
   background: color-mix(in srgb, var(--ink) 10%, transparent);
   color: var(--ink);
 }
 
 /* A question to a coach is usually a paragraph, not a search box. */
-.lc-coach-composer textarea {
+.lc-agent-composer textarea {
   min-height: 8.5rem;
   resize: vertical;
 }
@@ -8933,7 +8933,7 @@ button.lc-row-selected:hover:not(:disabled) {
  * because a subconversation shown beside the conversation it came from is the
  * interleaving threads exist to remove.
  */
-.lc-coach-thread-open {
+.lc-agent-thread-open {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -8950,18 +8950,18 @@ button.lc-row-selected:hover:not(:disabled) {
   transition: background-color 120ms ease-out;
 }
 
-.lc-coach-thread-open:hover {
+.lc-agent-thread-open:hover {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-.lc-coach-thread-open-count {
+.lc-agent-thread-open-count {
   flex: 0 0 auto;
   font-size: 11.5px;
   font-weight: 650;
   color: color-mix(in srgb, var(--accent) 85%, var(--ink));
 }
 
-.lc-coach-thread-open-peek {
+.lc-agent-thread-open-peek {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -8971,14 +8971,14 @@ button.lc-row-selected:hover:not(:disabled) {
   color: color-mix(in srgb, var(--ink) 62%, transparent);
 }
 
-.lc-coach-thread-open-chevron {
+.lc-agent-thread-open-chevron {
   flex: 0 0 auto;
   font-size: 15px;
   line-height: 1;
   color: color-mix(in srgb, var(--accent) 80%, var(--ink));
 }
 
-.lc-coach-thread-bar {
+.lc-agent-thread-bar {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -8987,7 +8987,7 @@ button.lc-row-selected:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
-.lc-coach-thread-back {
+.lc-agent-thread-back {
   padding: 3px 8px;
   border: none;
   border-radius: 6px;
@@ -8999,11 +8999,11 @@ button.lc-row-selected:hover:not(:disabled) {
   cursor: pointer;
 }
 
-.lc-coach-thread-back:hover {
+.lc-agent-thread-back:hover {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-.lc-coach-thread-title {
+.lc-agent-thread-title {
   font-size: 12px;
   color: color-mix(in srgb, var(--ink) 62%, transparent);
 }
@@ -9017,28 +9017,28 @@ button.lc-row-selected:hover:not(:disabled) {
  * that is where it was waiting. A crossfade would say the two views are
  * alternatives rather than one inside the other.
  */
-.lc-coach-chat {
+.lc-agent-chat {
   /* The pushed views translate past the panel edge — never a scrollbar. */
   overflow-x: clip;
 }
 
-.lc-thread-motion-enter .lc-coach-messages {
+.lc-thread-motion-enter .lc-agent-messages {
   animation: lc-thread-push-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.lc-thread-motion-enter .lc-coach-thread-bar {
+.lc-thread-motion-enter .lc-agent-thread-bar {
   animation: lc-thread-bar-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.lc-thread-motion-exit .lc-coach-messages {
+.lc-thread-motion-exit .lc-agent-messages {
   animation: lc-thread-push-out 170ms ease-in both;
 }
 
-.lc-thread-motion-exit .lc-coach-thread-bar {
+.lc-thread-motion-exit .lc-agent-thread-bar {
   animation: lc-thread-bar-out 170ms ease-in both;
 }
 
-.lc-thread-motion-back .lc-coach-messages {
+.lc-thread-motion-back .lc-agent-messages {
   animation: lc-thread-pop-back 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -9073,11 +9073,11 @@ button.lc-row-selected:hover:not(:disabled) {
  * that event — a thread would open and never close again.
  */
 @media (prefers-reduced-motion: reduce) {
-  .lc-thread-motion-enter .lc-coach-messages,
-  .lc-thread-motion-exit .lc-coach-messages,
-  .lc-thread-motion-back .lc-coach-messages,
-  .lc-thread-motion-enter .lc-coach-thread-bar,
-  .lc-thread-motion-exit .lc-coach-thread-bar {
+  .lc-thread-motion-enter .lc-agent-messages,
+  .lc-thread-motion-exit .lc-agent-messages,
+  .lc-thread-motion-back .lc-agent-messages,
+  .lc-thread-motion-enter .lc-agent-thread-bar,
+  .lc-thread-motion-exit .lc-agent-thread-bar {
     animation-duration: 0.01s;
   }
 }
@@ -9127,11 +9127,11 @@ button.lc-row-selected:hover:not(:disabled) {
  * unreliable in a scroll container. Hold is the only entrance now — the handle
  * is gone; see beginLongPress (pointer capture after stillness).
  */
-.lc-coach-turn {
+.lc-agent-turn {
   position: relative;
 }
 
-.lc-coach-turn-actions {
+.lc-agent-turn-actions {
   display: none;
 }
 
@@ -9177,14 +9177,14 @@ button.lc-row-selected:hover:not(:disabled) {
  * would sit under the panel with dead space beside it. Same for the status
  * strip that is inset away from the panel.
  */
-[data-handedness="left"] .lc-app-coach-open .lc-main {
+[data-handedness="left"] .lc-app-agent-open .lc-main {
   margin-right: 0;
-  margin-left: var(--lc-coach-width, 520px);
+  margin-left: var(--lc-agent-width, 520px);
 }
 
-[data-handedness="left"] .lc-app-coach-open:not(.lc-mobile) .lc-chrome-overlay-top {
+[data-handedness="left"] .lc-app-agent-open:not(.lc-mobile) .lc-chrome-overlay-top {
   right: 0;
-  left: var(--lc-coach-width, 520px);
+  left: var(--lc-agent-width, 520px);
 }
 
 /*
@@ -9192,26 +9192,26 @@ button.lc-row-selected:hover:not(:disabled) {
  * a later handedness rule must not re-introduce a 520px margin and crush the
  * page into a thin strip when the sheet swipes up.
  *
- * Desktop pads use the same push as problems (`.lc-app-coach-open .lc-main`)
+ * Desktop pads use the same push as problems (`.lc-app-agent-open .lc-main`)
  * so the panel does not cover footnote chips; the camera refits, the markdown
  * column does not reflow.
  */
-.lc-mobile.lc-app-coach-open .lc-main {
+.lc-mobile.lc-app-agent-open .lc-main {
   margin-right: 0;
   margin-left: 0;
 }
 
-.lc-mobile.lc-app-coach-open .lc-chrome-overlay-top {
+.lc-mobile.lc-app-agent-open .lc-chrome-overlay-top {
   right: 0;
   left: 0;
 }
 
-[data-handedness="left"] .lc-mobile.lc-app-coach-open .lc-main {
+[data-handedness="left"] .lc-mobile.lc-app-agent-open .lc-main {
   margin-right: 0;
   margin-left: 0;
 }
 
-[data-handedness="left"] .lc-mobile.lc-app-coach-open .lc-chrome-overlay-top {
+[data-handedness="left"] .lc-mobile.lc-app-agent-open .lc-chrome-overlay-top {
   right: 0;
   left: 0;
 }
@@ -9225,7 +9225,7 @@ button.lc-row-selected:hover:not(:disabled) {
   box-shadow: 6px 0 18px rgb(0 0 0 / 18%);
 }
 
-[data-handedness="left"] .lc-app-coach-open .lc-side {
+[data-handedness="left"] .lc-app-agent-open .lc-side {
   box-shadow: 6px 8px 18px rgb(0 0 0 / 14%);
 }
 
@@ -9249,16 +9249,16 @@ button.lc-row-selected:hover:not(:disabled) {
  * writing-hand edge of that cluster) and moves the whole panel, but it must
  * not swap the two clusters — that is the layout the writer asked for.
  */
-[data-handedness="left"] .lc-coach-composer-bar {
+[data-handedness="left"] .lc-agent-composer-bar {
   flex-direction: row;
 }
 
-[data-handedness="left"] .lc-coach-composer-bar .lc-modes {
+[data-handedness="left"] .lc-agent-composer-bar .lc-modes {
   margin-right: 0;
   margin-left: 0;
 }
 
-[data-handedness="left"] .lc-coach-composer-actions {
+[data-handedness="left"] .lc-agent-composer-actions {
   flex-direction: row-reverse;
   justify-content: flex-end;
   margin-left: auto;
@@ -9266,12 +9266,12 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /* Tooltips open away from the panel's edge, which has just changed sides. */
-[data-handedness="left"] .lc-coach-composer-bar .lc-modes .lc-tip-target::after {
+[data-handedness="left"] .lc-agent-composer-bar .lc-modes .lc-tip-target::after {
   left: auto;
   right: calc(100% + 5px);
 }
 
-[data-handedness="left"] .lc-coach-composer-actions .lc-tip-target::after {
+[data-handedness="left"] .lc-agent-composer-actions .lc-tip-target::after {
   right: auto;
   left: calc(100% + 5px);
 }
@@ -9327,7 +9327,7 @@ button.lc-row-selected:hover:not(:disabled) {
  * rather than wrap: the composer must not grow a second row and push the
  * thread off screen on a phone.
  */
-.lc-coach-photo-tray {
+.lc-agent-photo-tray {
   display: flex;
   gap: 6px;
   padding: 0 0 6px;
@@ -9336,7 +9336,7 @@ button.lc-row-selected:hover:not(:disabled) {
   scrollbar-width: thin;
 }
 
-.lc-coach-photo-chip {
+.lc-agent-photo-chip {
   position: relative;
   flex: 0 0 auto;
   width: 56px;
@@ -9347,14 +9347,14 @@ button.lc-row-selected:hover:not(:disabled) {
   background: color-mix(in srgb, var(--ink) 5%, var(--panel));
 }
 
-.lc-coach-photo-chip img {
+.lc-agent-photo-chip img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
 
-.lc-coach-photo-chip-clear {
+.lc-agent-photo-chip-clear {
   position: absolute;
   top: 2px;
   right: 2px;
@@ -9372,7 +9372,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /* + Photo is a labeled entrance, not a square plus. */
-.lc-coach-attach {
+.lc-agent-attach {
   min-width: 0;
   padding: 0 8px;
   font-size: 11px;
@@ -9696,7 +9696,7 @@ button.lc-row-selected:hover:not(:disabled) {
   /*
    * Its own keyframes, and the reason is not decoration.
    *
-   * `lc-coach-menu-pop` ends on `translate(-50%, 0)` and runs with
+   * `lc-agent-menu-pop` ends on `translate(-50%, 0)` and runs with
    * `animation-fill-mode: both`, so that translate *persists*: whatever
    * `placeSheet` measured and clamped, the box then moved half its own width to
    * the left and sat there. A sheet clamped to the left margin ended up off the
@@ -10030,7 +10030,7 @@ button.lc-row-selected:hover:not(:disabled) {
   height: 16px;
 }
 
-.lc-coach-mark-chips {
+.lc-agent-mark-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -10038,7 +10038,7 @@ button.lc-row-selected:hover:not(:disabled) {
   align-items: center;
 }
 
-.lc-coach-mark-chips .lc-footnote-chip {
+.lc-agent-mark-chips .lc-footnote-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -10052,19 +10052,19 @@ button.lc-row-selected:hover:not(:disabled) {
   color: inherit;
 }
 
-.lc-coach-mark-chips .lc-footnote-chip[style*="--lc-fn-color"],
-.lc-coach-mark-menu .lc-footnote-chip[style*="--lc-fn-color"] {
+.lc-agent-mark-chips .lc-footnote-chip[style*="--lc-fn-color"],
+.lc-agent-mark-menu .lc-footnote-chip[style*="--lc-fn-color"] {
   border-color: var(--lc-fn-color);
   background: color-mix(in srgb, var(--lc-fn-color) 22%, var(--lc-fn-light, #fff));
   color: var(--lc-fn-ink, var(--lc-fn-deep, inherit));
 }
 
-.lc-coach-mark-chips .lc-footnote-chip.is-overflow {
+.lc-agent-mark-chips .lc-footnote-chip.is-overflow {
   opacity: 0.42;
   filter: grayscale(0.35);
 }
 
-.lc-coach-mark-fit {
+.lc-agent-mark-fit {
   margin: 0 10px 8px;
   font-size: 11px;
   line-height: 1.35;
@@ -10146,7 +10146,7 @@ button.lc-row-selected:hover:not(:disabled) {
   min-height: 0;
 }
 
-.lc-footnote-overview-section-head .lc-coach-turn-role {
+.lc-footnote-overview-section-head .lc-agent-turn-role {
   margin: 0;
   line-height: 1.2;
 }
@@ -10226,11 +10226,11 @@ button.lc-row-selected:hover:not(:disabled) {
   text-align: left;
 }
 
-.lc-footnote-section-toggle .lc-coach-turn-role {
+.lc-footnote-section-toggle .lc-agent-turn-role {
   margin: 0;
 }
 
-.lc-footnote-block-toggle .lc-coach-turn-role {
+.lc-footnote-block-toggle .lc-agent-turn-role {
   margin: 0;
 }
 
@@ -10255,7 +10255,7 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 0.85em;
 }
 
-.lc-footnote-overview .lc-coach-turn-role {
+.lc-footnote-overview .lc-agent-turn-role {
   font-size: 9px;
   letter-spacing: 0.05em;
 }
@@ -10294,8 +10294,8 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow-y: scroll;
 }
 
-.lc-doc-sheet-marks .lc-coach-scope-option,
-.lc-footnote-overview-link-list .lc-coach-scope-option {
+.lc-doc-sheet-marks .lc-agent-scope-option,
+.lc-footnote-overview-link-list .lc-agent-scope-option {
   position: static;
   width: 100%;
   text-align: left;
@@ -10355,14 +10355,14 @@ button.lc-row-selected:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-.lc-doc-sheet-marks .lc-coach-scope-option strong,
-.lc-footnote-overview-link-list .lc-coach-scope-option strong {
+.lc-doc-sheet-marks .lc-agent-scope-option strong,
+.lc-footnote-overview-link-list .lc-agent-scope-option strong {
   font-size: 11px;
   font-weight: 600;
 }
 
-.lc-doc-sheet-marks .lc-coach-scope-option .lc-muted,
-.lc-footnote-overview-link-list .lc-coach-scope-option .lc-muted {
+.lc-doc-sheet-marks .lc-agent-scope-option .lc-muted,
+.lc-footnote-overview-link-list .lc-agent-scope-option .lc-muted {
   font-size: 9px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -10376,11 +10376,11 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 3px;
 }
 
-.lc-footnote-overview-link-list[aria-label="Sub-marks"] .lc-footnote-overview-link-row:hover .lc-coach-scope-option {
+.lc-footnote-overview-link-list[aria-label="Sub-marks"] .lc-footnote-overview-link-row:hover .lc-agent-scope-option {
   background: color-mix(in srgb, var(--lc-fn-color, var(--accent, #0d9488)) 16%, var(--panel));
 }
 
-.lc-footnote-overview-link-row .lc-coach-scope-option {
+.lc-footnote-overview-link-row .lc-agent-scope-option {
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -10553,7 +10553,7 @@ button.lc-row-selected:hover:not(:disabled) {
   color: var(--lc-fn-ink, var(--lc-fn-deep, var(--ink)));
 }
 
-.lc-footnote-overview[style*="--lc-fn-color"] .lc-coach-turn-role,
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-agent-turn-role,
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-task-title,
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-title-display,
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-entry-text,
@@ -10581,7 +10581,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-add,
-.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-section-head .lc-coach-turn-role {
+.lc-footnote-overview[style*="--lc-fn-color"] .lc-footnote-overview-section-head .lc-agent-turn-role {
   color: var(--lc-fn-ink, var(--lc-fn-deep, var(--ink))) !important;
 }
 
@@ -10618,7 +10618,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /* The row whose bubble is open, marked the way the ink swatch marks its own. */
-.lc-footnote-overview-link-list .lc-coach-scope-option.is-open {
+.lc-footnote-overview-link-list .lc-agent-scope-option.is-open {
   border-color: var(--accent, var(--ink));
 }
 
@@ -10641,7 +10641,7 @@ button.lc-row-selected:hover:not(:disabled) {
   padding: 8px;
 }
 
-.lc-footnote-bubble .lc-coach-turn-role {
+.lc-footnote-bubble .lc-agent-turn-role {
   font-size: 9px;
   letter-spacing: 0.05em;
 }
@@ -10706,23 +10706,23 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 10px;
 }
 
-.lc-footnote-overview-thread .lc-coach-turn {
+.lc-footnote-overview-thread .lc-agent-turn {
   padding: 5px 7px;
   border-radius: 6px;
   gap: 2px;
   max-width: 100%;
 }
 
-.lc-footnote-overview-thread .lc-coach-turn-user {
+.lc-footnote-overview-thread .lc-agent-turn-user {
   max-width: 92%;
 }
 
-.lc-footnote-overview-thread .lc-coach-turn-role {
+.lc-footnote-overview-thread .lc-agent-turn-role {
   font-size: 8px;
   margin-bottom: 1px;
 }
 
-.lc-footnote-overview-thread .lc-coach-turn-body {
+.lc-footnote-overview-thread .lc-agent-turn-body {
   font-size: 11px;
   line-height: 1.3;
 }
@@ -10743,11 +10743,11 @@ button.lc-row-selected:hover:not(:disabled) {
   line-height: 1.3;
 }
 
-.lc-footnote-overview-composer .lc-coach-composer-bar {
+.lc-footnote-overview-composer .lc-agent-composer-bar {
   gap: 4px;
 }
 
-.lc-footnote-overview-composer .lc-coach-composer-actions button {
+.lc-footnote-overview-composer .lc-agent-composer-actions button {
   min-height: 22px;
   height: 22px;
   padding: 0 8px;
@@ -11027,17 +11027,17 @@ button.lc-row-selected:hover:not(:disabled) {
  * Annotate is a hold button now: tap toggles it, hold picks how much board
  * goes up. The wrapper is the anchor the chooser hangs from.
  */
-.lc-coach-annotate-wrap {
+.lc-agent-annotate-wrap {
   position: relative;
   display: inline-flex;
 }
 
-.lc-coach-pipeline-wrap {
+.lc-agent-pipeline-wrap {
   position: relative;
   display: inline-flex;
 }
 
-.lc-coach-composer-actions .lc-coach-pipeline-menu .lc-flag {
+.lc-agent-composer-actions .lc-agent-pipeline-menu .lc-flag {
   width: 100%;
   justify-content: flex-start;
   min-height: 28px;
@@ -11053,7 +11053,7 @@ button.lc-row-selected:hover:not(:disabled) {
  * `.lc-flag`, so the flag row's own look has to be restated at a specificity
  * that beats it rather than merely repeated.
  */
-.lc-hold-reveal.lc-coach-annotate {
+.lc-hold-reveal.lc-agent-annotate {
   min-width: 0;
   min-height: 24px;
   height: 24px;
@@ -11070,20 +11070,20 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /* Active reads the same as every other flag — the hold gesture is what is
    different about this control, not what "on" looks like. */
-.lc-hold-reveal.lc-coach-annotate.lc-flag-active {
+.lc-hold-reveal.lc-agent-annotate.lc-flag-active {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 22%, var(--panel));
   color: var(--accent);
 }
 
-.lc-hold-reveal.lc-coach-annotate:disabled {
+.lc-hold-reveal.lc-agent-annotate:disabled {
   opacity: 0.4;
   cursor: not-allowed;
   background: color-mix(in srgb, var(--ink) 6%, var(--panel));
   color: color-mix(in srgb, var(--ink) 45%, transparent);
 }
 
-.lc-coach-scope-menu {
+.lc-agent-scope-menu {
   position: absolute;
   bottom: calc(100% + 6px);
   right: 0;
@@ -11098,18 +11098,18 @@ button.lc-row-selected:hover:not(:disabled) {
   border: 1px solid var(--chrome-edge, var(--line));
   border-radius: 10px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
-  animation: lc-coach-menu-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: lc-agent-menu-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
   /* The shared pop keyframes translate on X; this menu is edge-anchored. */
   transform: none;
 }
 
 /* The chooser hangs off the composer's edge, which the writing hand moves. */
-[data-handedness="left"] .lc-coach-scope-menu {
+[data-handedness="left"] .lc-agent-scope-menu {
   right: auto;
   left: 0;
 }
 
-.lc-coach-scope-option {
+.lc-agent-scope-option {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -11125,16 +11125,16 @@ button.lc-row-selected:hover:not(:disabled) {
   line-height: 1.3;
 }
 
-.lc-coach-scope-option .lc-muted {
+.lc-agent-scope-option .lc-muted {
   font-size: 11px;
 }
 
-.lc-coach-scope-option.is-active {
+.lc-agent-scope-option.is-active {
   border-color: color-mix(in srgb, var(--accent, #6366f1) 55%, var(--line));
   background: color-mix(in srgb, var(--accent, #6366f1) 12%, transparent);
 }
 
-.lc-coach-mark-menu {
+.lc-agent-mark-menu {
   max-height: min(40vh, 280px);
   overflow-y: auto;
   min-width: 7rem;
@@ -11146,7 +11146,7 @@ button.lc-row-selected:hover:not(:disabled) {
   padding: 6px;
 }
 
-.lc-coach-mark-menu .lc-footnote-chip {
+.lc-agent-mark-menu .lc-footnote-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -11162,7 +11162,7 @@ button.lc-row-selected:hover:not(:disabled) {
   text-align: left;
 }
 
-.lc-coach-mark-menu .lc-footnote-chip.is-picked {
+.lc-agent-mark-menu .lc-footnote-chip.is-picked {
   border-color: var(--lc-fn-color, var(--accent));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--lc-fn-color, var(--accent)) 45%, transparent);
 }

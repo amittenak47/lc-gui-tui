@@ -204,7 +204,7 @@ describe("AmbientCoach", () => {
     );
     coach.start("two-sum", probe, capture, 1_000_000);
     socket.onmessage?.({ data: "not json" });
-    expect(errors).toEqual(["unreadable frame from the coach"]);
+    expect(errors).toEqual(["unreadable frame from the agent"]);
     coach.stop();
   });
 
@@ -457,7 +457,7 @@ describe("AmbientCoach.run — a run always settles", () => {
     };
 
     await expect(coach.run("ask", { question: "hi" })).rejects.toThrow(/too large/i);
-    expect(errors).toContain("could not reach the coach");
+    expect(errors).toContain("could not reach the agent");
     expect(coach.busy).toBe(false);
     coach.stop();
   });

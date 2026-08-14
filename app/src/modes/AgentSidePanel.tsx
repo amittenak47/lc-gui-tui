@@ -49,14 +49,14 @@ export type CoachMode = "review" | "ambient";
  */
 export const AMBIENT_ENABLED = false;
 
-const ROLE_LABEL: Record<CoachChatMessage["role"], string> = {
+const ROLE_LABEL: Record<AgentChatMessage["role"], string> = {
   user: "You",
-  assistant: "Coach",
+  assistant: "Agent",
   system: "System",
   app: "Tests",
 };
 
-function turnKind(role: CoachChatMessage["role"]): string {
+function turnKind(role: AgentChatMessage["role"]): string {
   return role === "user" || role === "system" || role === "app" ? role : "assistant";
 }
 
@@ -69,7 +69,7 @@ function isLongPressBlocked(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(
     target.closest(
-      "a, input, textarea, select, .lc-coach-thread-open, .lc-coach-reply-stub",
+      "a, input, textarea, select, .lc-agent-thread-open, .lc-agent-reply-stub",
     ),
   );
 }
@@ -98,7 +98,7 @@ export function replyExcerpt(content: string): string {
     : flat;
 }
 
-function replyRefFor(message: CoachChatMessage): CoachReplyRef {
+function replyRefFor(message: AgentChatMessage): CoachReplyRef {
   return {
     id: message.id,
     role: message.role,
@@ -110,7 +110,7 @@ function replyRefFor(message: CoachChatMessage): CoachReplyRef {
  * Scroll when the thread grows or a turn's content changes — not when the
  * student only scrubs a drawing's frameIndex (Prev / Play / Next).
  */
-function coachScrollSignature(messages: CoachChatMessage[]): string {
+function coachScrollSignature(messages: AgentChatMessage[]): string {
   return messages
     .map((message) =>
       [
@@ -201,11 +201,11 @@ interface MessageMenuState {
  */
 export interface CoachReplyRef {
   id: string;
-  role: CoachChatMessage["role"];
+  role: AgentChatMessage["role"];
   excerpt: string;
 }
 
-export interface CoachSendFlags {
+export interface AgentSendFlags {
   /** Ask the coach a question without the staged review pipeline. */
   ask: boolean;
   /** Ask the coach to draw on the board. */
@@ -279,7 +279,7 @@ export interface CoachAttachment {
   thumb?: string;
 }
 
-export interface CoachChatMessage {
+export interface AgentChatMessage {
   id: string;
   /**
    * `app` is the harness talking, not the student and not the coach — test
@@ -340,7 +340,7 @@ export interface AgentSidePanelProps {
   thinking?: boolean;
   /** Phased status while the local model works (replaces a bare "Thinking…"). */
   thinkingPhase?: string | null;
-  messages: CoachChatMessage[];
+  messages: AgentChatMessage[];
   /**
    * Scratchpad: no solution.py, no review pipeline, no board regions to draw
    * into. Ask is pinned on and the other flags are disabled.
@@ -395,7 +395,7 @@ export interface AgentSidePanelProps {
     palette?: string[];
   }>;
   onToggleAttached?: (id: string) => void;
-  onSend: (text: string, flags: CoachSendFlags, mode?: "queue" | "merge") => void;
+  onSend: (text: string, flags: AgentSendFlags, mode?: "queue" | "merge") => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
   /** Forward a failed test run to the coach without being asked. */
@@ -660,36 +660,36 @@ export function AgentSidePanel({
    *
    * A custom property rather than a prop: this changes every frame of a drag,
    * and threading it through App into Board would re-render the whole board
-   * for something only the compositor needs. `--lc-coach-open` is 0..1, and
+   * for something only the compositor needs. `--lc-agent-open` is 0..1, and
    * absent means desktop, where the coach is a side panel and covers nothing.
    */
   useEffect(() => {
     const root = document.documentElement;
     if (!mobile) {
-      root.style.removeProperty("--lc-coach-open");
-      root.classList.remove("lc-coach-dragging");
+      root.style.removeProperty("--lc-agent-open");
+      root.classList.remove("lc-agent-dragging");
       return;
     }
     if (sheetOffset === null) {
-      root.style.removeProperty("--lc-coach-open");
-      root.classList.toggle("lc-coach-dragging", sheetDragging);
+      root.style.removeProperty("--lc-agent-open");
+      root.classList.toggle("lc-agent-dragging", sheetDragging);
       return () => {
-        root.style.removeProperty("--lc-coach-open");
-        root.classList.remove("lc-coach-dragging");
+        root.style.removeProperty("--lc-agent-open");
+        root.classList.remove("lc-agent-dragging");
       };
     }
     const closed = closedOffset();
     const parked = !open && closed > 0 && sheetOffset >= closed - 0.5;
     if (parked) {
-      root.style.removeProperty("--lc-coach-open");
+      root.style.removeProperty("--lc-agent-open");
     } else {
       const shut = closed > 0 ? Math.min(1, Math.max(0, sheetOffset / closed)) : open ? 0 : 1;
-      root.style.setProperty("--lc-coach-open", (1 - shut).toFixed(3));
+      root.style.setProperty("--lc-agent-open", (1 - shut).toFixed(3));
     }
-    root.classList.toggle("lc-coach-dragging", sheetDragging);
+    root.classList.toggle("lc-agent-dragging", sheetDragging);
     return () => {
-      root.style.removeProperty("--lc-coach-open");
-      root.classList.remove("lc-coach-dragging");
+      root.style.removeProperty("--lc-agent-open");
+      root.classList.remove("lc-agent-dragging");
     };
   }, [mobile, open, sheetOffset, sheetDragging]);
 
@@ -1040,7 +1040,7 @@ export function AgentSidePanel({
   }, [openThreadId, jumpToMessage]);
 
   const quoteMessage = useCallback(
-    (message: CoachChatMessage) => {
+    (message: AgentChatMessage) => {
       const ref = replyRefFor(message);
       setReplyTo(ref);
       const root = messageThreadRoot(messages, message);
@@ -1067,7 +1067,7 @@ export function AgentSidePanel({
   );
 
   const copyMessage = useCallback(
-    async (message: CoachChatMessage) => {
+    async (message: AgentChatMessage) => {
       const ok = await copyToClipboard(message.content);
       if (!ok) return;
       setCopyFlash(true);
@@ -1230,16 +1230,16 @@ export function AgentSidePanel({
       ]
         .filter(Boolean)
         .join(" ")}
-      id="lc-coach-panel"
-      aria-label="Coach"
+      id="lc-agent-panel"
+      aria-label="Agent"
       style={sheetStyle}
     >
       <div
-        className="lc-coach-sheet-handle"
+        className="lc-agent-sheet-handle"
         role="button"
         tabIndex={0}
         aria-expanded={open}
-        aria-label={open ? "Drag down to close coach" : "Drag up to open coach"}
+        aria-label={open ? "Drag down to close agent" : "Drag up to open agent"}
         title={open ? "Drag down to close" : "Drag up to open"}
         onPointerDown={mobile ? onSheetHandlePointerDown : undefined}
         onPointerMove={mobile ? onSheetHandlePointerMove : undefined}
@@ -1248,11 +1248,11 @@ export function AgentSidePanel({
         onKeyDown={onSheetHandleKeyDown}
         onClick={mobile ? undefined : () => setOpen(false)}
       >
-        <span className="lc-coach-fold-bar" aria-hidden />
+        <span className="lc-agent-fold-bar" aria-hidden />
       </div>
       <div
         className={[
-          "lc-coach-chat",
+          "lc-agent-chat",
           openThreadId ? "is-threaded" : "",
           threadMotion === "idle" ? "" : `lc-thread-motion-${threadMotion}`,
         ]
@@ -1260,22 +1260,22 @@ export function AgentSidePanel({
           .join(" ")}
       >
         {openThreadId && (
-          <div className="lc-coach-thread-bar">
+          <div className="lc-agent-thread-bar">
             <button
               type="button"
-              className="lc-coach-thread-back"
+              className="lc-agent-thread-back"
               onClick={leaveThread}
             >
               ← Conversation
             </button>
-            <span className="lc-coach-thread-title">
+            <span className="lc-agent-thread-title">
               Thread · {threadReplies.get(openThreadId)?.length ?? 0}{" "}
               {(threadReplies.get(openThreadId)?.length ?? 0) === 1 ? "reply" : "replies"}
             </span>
           </div>
         )}
         <div
-          className="lc-coach-messages lc-scroll-pane"
+          className="lc-agent-messages lc-scroll-pane"
           ref={listRef}
           key={openThreadId ?? "__room__"}
           aria-live="polite"
@@ -1285,7 +1285,7 @@ export function AgentSidePanel({
           }}
         >
           {messages.length === 0 && !children && !thinking && (
-            <p className="lc-muted lc-coach-empty">
+            <p className="lc-muted lc-agent-empty">
               {padSurface && !allowAnnotations ? (
                 <>
                   Ask about the board. Flag <strong>Handwriting</strong> to send
@@ -1311,11 +1311,11 @@ export function AgentSidePanel({
             <div
               key={message.id}
               data-coach-message={message.id}
-              className={`lc-coach-turn lc-coach-turn-selectable lc-coach-turn-${turnKind(message.role)}${
+              className={`lc-agent-turn lc-agent-turn-selectable lc-agent-turn-${turnKind(message.role)}${
                 messageMenu?.messageId === message.id
                   ? messageMenu.tall
-                    ? " lc-coach-turn-selected lc-coach-turn-selected-tall"
-                    : " lc-coach-turn-selected"
+                    ? " lc-agent-turn-selected lc-agent-turn-selected-tall"
+                    : " lc-agent-turn-selected"
                   : ""
               }`}
               onContextMenu={(event) => {
@@ -1347,8 +1347,8 @@ export function AgentSidePanel({
               <div
                 className={
                   message.role === "assistant" && message.review?.provider
-                    ? "lc-coach-turn-role lc-tip-target"
-                    : "lc-coach-turn-role"
+                    ? "lc-agent-turn-role lc-tip-target"
+                    : "lc-agent-turn-role"
                 }
                 data-tip={
                   message.role === "assistant" && message.review?.provider
@@ -1360,7 +1360,7 @@ export function AgentSidePanel({
                 {ROLE_LABEL[message.role]}
               </div>
               {message.queued && (
-                <span className="lc-coach-queued" aria-label="Queued message">Queued</span>
+                <span className="lc-agent-queued" aria-label="Queued message">Queued</span>
               )}
               {message.processEvents && message.processEvents.length > 0 && (
                 <ProcessBlock events={message.processEvents} running={Boolean(message.pending)} />
@@ -1376,21 +1376,21 @@ export function AgentSidePanel({
                  */
                 <button
                   type="button"
-                  className="lc-coach-reply-stub"
+                  className="lc-agent-reply-stub"
                   title={`Go to ${ROLE_LABEL[replyStub!.role]}'s message`}
                   onClick={(event) => {
                     event.stopPropagation();
                     jumpToMessage(replyStub!.id);
                   }}
                 >
-                  <span className="lc-coach-reply-stub-role">
+                  <span className="lc-agent-reply-stub-role">
                     {ROLE_LABEL[replyStub!.role]}
                   </span>
-                  <span className="lc-coach-reply-stub-text">{replyStub!.excerpt}</span>
+                  <span className="lc-agent-reply-stub-text">{replyStub!.excerpt}</span>
                 </button>
               )}
               {message.content ? (
-                <div className="lc-coach-turn-body">{message.content}</div>
+                <div className="lc-agent-turn-body">{message.content}</div>
               ) : null}
               {!openThreadId && (threadReplies.get(message.id)?.length ?? 0) > 0 && (
                 /*
@@ -1404,7 +1404,7 @@ export function AgentSidePanel({
                  */
                 <button
                   type="button"
-                  className="lc-coach-thread-open"
+                  className="lc-agent-thread-open"
                   onClick={(event) => {
                     event.stopPropagation();
                     if (footnoteThreadRoots?.has(message.id) && onOpenFootnoteThread) {
@@ -1414,24 +1414,24 @@ export function AgentSidePanel({
                     enterThread(message.id);
                   }}
                 >
-                  <span className="lc-coach-thread-open-count">
+                  <span className="lc-agent-thread-open-count">
                     {threadReplies.get(message.id)!.length}{" "}
                     {threadReplies.get(message.id)!.length === 1 ? "reply" : "replies"}
                   </span>
-                  <span className="lc-coach-thread-open-peek">
+                  <span className="lc-agent-thread-open-peek">
                     {threadReplies.get(message.id)!.at(-1)?.content.slice(0, 60)}
                   </span>
-                  <span className="lc-coach-thread-open-chevron" aria-hidden>
+                  <span className="lc-agent-thread-open-chevron" aria-hidden>
                     ›
                   </span>
                 </button>
               )}
               {message.flags && message.flags.length > 0 && (
-                <div className="lc-coach-turn-footnotes">
-                  <span className="lc-coach-turn-flag-rule" aria-hidden />
-                  <div className="lc-coach-turn-flags" aria-label="Send flags">
+                <div className="lc-agent-turn-footnotes">
+                  <span className="lc-agent-turn-flag-rule" aria-hidden />
+                  <div className="lc-agent-turn-flags" aria-label="Send flags">
                     {message.flags.map((flag) => (
-                      <span key={flag} className="lc-coach-turn-flag">
+                      <span key={flag} className="lc-agent-turn-flag">
                         {flag}
                       </span>
                     ))}
@@ -1439,18 +1439,18 @@ export function AgentSidePanel({
                 </div>
               )}
               {message.pending && !message.processEvents?.length && (
-                <div className="lc-coach-turn-body">
-                  <span className="lc-coach-spinner" aria-hidden />
+                <div className="lc-agent-turn-body">
+                  <span className="lc-agent-spinner" aria-hidden />
                   {pendingAckLine(message)}
                 </div>
               )}
               {message.attachments && message.attachments.length > 0 && (
-                <div className="lc-coach-attachments" aria-label="Attached layouts">
+                <div className="lc-agent-attachments" aria-label="Attached layouts">
                   {message.attachments.map((att) => (
-                    <figure key={att.label} className="lc-coach-thumb">
+                    <figure key={att.label} className="lc-agent-thumb">
                       <button
                         type="button"
-                        className="lc-coach-thumb-btn"
+                        className="lc-agent-thumb-btn"
                         onClick={() => {
                           setLightboxClosing(false);
                           setLightbox(att);
@@ -1469,7 +1469,7 @@ export function AgentSidePanel({
                 </div>
               )}
               {message.review && (
-                <div className="lc-coach-review-embed">
+                <div className="lc-agent-review-embed">
                   <ReviewPanel
                     review={message.review}
                     onRequestBridge={() => onRequestBridge?.(message.id)}
@@ -1510,20 +1510,20 @@ export function AgentSidePanel({
           })}
           {children}
           {thinking && !messages.some((message) => message.pending) && (
-            <div className="lc-coach-turn lc-coach-turn-assistant lc-coach-thinking" role="status">
-              <div className="lc-coach-turn-role">Coach</div>
-              <div className="lc-coach-turn-body">
-                <span className="lc-coach-spinner" aria-hidden />
+            <div className="lc-agent-turn lc-agent-turn-assistant lc-agent-thinking" role="status">
+              <div className="lc-agent-turn-role">Agent</div>
+              <div className="lc-agent-turn-body">
+                <span className="lc-agent-spinner" aria-hidden />
                 {thinkingPhase?.trim() || "Thinking…"}
               </div>
             </div>
           )}
         </div>
 
-        <form className="lc-coach-composer" onSubmit={(event) => submit("queue", event)}>
+        <form className="lc-agent-composer" onSubmit={(event) => submit("queue", event)}>
           {allowAnnotations && attachedMarks.length > 0 && (
             <>
-            <div className="lc-coach-mark-chips" aria-label="Attached annotations">
+            <div className="lc-agent-mark-chips" aria-label="Attached annotations">
               {attachedMarks.map((mark) => {
                 const overflow = Boolean(askPackPreview?.omittedMarkIds.includes(mark.id));
                 return (
@@ -1549,7 +1549,7 @@ export function AgentSidePanel({
                   {onRemoveAttached && (
                     <button
                       type="button"
-                      className="lc-coach-reply-chip-clear"
+                      className="lc-agent-reply-chip-clear"
                       aria-label="Remove annotation"
                       onClick={() => onRemoveAttached(mark.id)}
                     >
@@ -1562,7 +1562,7 @@ export function AgentSidePanel({
             </div>
             {askPackPreview &&
               (askPackPreview.omittedMarkIds.length > 0 || askPackPreview.questionTruncated) && (
-                <p className="lc-coach-mark-fit">
+                <p className="lc-agent-mark-fit">
                   {askPackPreview.questionTruncated
                     ? "The question will be truncated for the model."
                     : null}
@@ -1577,15 +1577,15 @@ export function AgentSidePanel({
             </>
           )}
           {pageQuote && (
-            <div className="lc-coach-reply-chip lc-coach-quote-chip">
-              <span className="lc-coach-reply-chip-mark" aria-hidden />
-              <div className="lc-coach-reply-chip-text">
-                <span className="lc-coach-reply-stub-role">Quoting the page</span>
-                <span className="lc-coach-reply-stub-text">{pageQuote.excerpt}</span>
+            <div className="lc-agent-reply-chip lc-agent-quote-chip">
+              <span className="lc-agent-reply-chip-mark" aria-hidden />
+              <div className="lc-agent-reply-chip-text">
+                <span className="lc-agent-reply-stub-role">Quoting the page</span>
+                <span className="lc-agent-reply-stub-text">{pageQuote.excerpt}</span>
               </div>
               <button
                 type="button"
-                className="lc-coach-reply-chip-clear"
+                className="lc-agent-reply-chip-clear"
                 aria-label="Drop the quote"
                 title="Drop the quote"
                 onClick={() => setPageQuote(null)}
@@ -1595,17 +1595,17 @@ export function AgentSidePanel({
             </div>
           )}
           {replyTo && (
-            <div className="lc-coach-reply-chip">
-              <span className="lc-coach-reply-chip-mark" aria-hidden />
-              <div className="lc-coach-reply-chip-text">
-                <span className="lc-coach-reply-stub-role">
+            <div className="lc-agent-reply-chip">
+              <span className="lc-agent-reply-chip-mark" aria-hidden />
+              <div className="lc-agent-reply-chip-text">
+                <span className="lc-agent-reply-stub-role">
                   Replying to {ROLE_LABEL[replyTo.role]}
                 </span>
-                <span className="lc-coach-reply-stub-text">{replyTo.excerpt}</span>
+                <span className="lc-agent-reply-stub-text">{replyTo.excerpt}</span>
               </div>
               <button
                 type="button"
-                className="lc-coach-reply-chip-clear"
+                className="lc-agent-reply-chip-clear"
                 aria-label="Cancel reply"
                 title="Cancel reply"
                 onClick={() => setReplyTo(null)}
@@ -1620,16 +1620,16 @@ export function AgentSidePanel({
             attachment you forget you made. Each is removable until it is sent.
           */}
           {photos.length > 0 && (
-            <div className="lc-coach-photo-tray" aria-label="Attached photos">
+            <div className="lc-agent-photo-tray" aria-label="Attached photos">
               {photos.map((photo, index) => (
-                <div className="lc-coach-photo-chip" key={`${photo.label}-${index}`}>
+                <div className="lc-agent-photo-chip" key={`${photo.label}-${index}`}>
                   <img
                     src={`data:image/png;base64,${photo.thumb ?? photo.png}`}
                     alt={photo.label}
                   />
                   <button
                     type="button"
-                    className="lc-coach-photo-chip-clear"
+                    className="lc-agent-photo-chip-clear"
                     aria-label={`Remove ${photo.label}`}
                     onClick={() =>
                       setPhotos((current) => current.filter((_, at) => at !== index))
@@ -1646,7 +1646,7 @@ export function AgentSidePanel({
             ref={composerRef}
             value={draft}
             rows={6}
-            placeholder="Ask the coach about your board or code…"
+            placeholder="Ask the agent about your board or code…"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key !== "Enter") return;
@@ -1656,13 +1656,13 @@ export function AgentSidePanel({
               else submit("queue");
             }}
           />
-          <div className="lc-coach-composer-bar">
+          <div className="lc-agent-composer-bar">
             {/* Ambient stays greyed until AMBIENT_ENABLED is flipped. The
                 socket + 120s loop are already wired in App / coachSocket. */}
             {!padSurface && (
-            <div className="lc-modes" role="group" aria-label="Coach mode">
+            <div className="lc-modes" role="group" aria-label="Agent mode">
               {onForwardFailuresChange && (
-                <Tip tip="Send failed test runs to the coach automatically" placement="right">
+                <Tip tip="Send failed test runs to the agent automatically" placement="right">
                   <button
                     type="button"
                     className={forwardFailures ? "lc-mode lc-mode-active" : "lc-mode"}
@@ -1689,7 +1689,7 @@ export function AgentSidePanel({
                 tip={
                   AMBIENT_ENABLED
                     ? "Nudge every ~2 minutes when the board changes"
-                    : "Ambient is off — coach answers when you ask"
+                    : "Ambient is off — agent answers when you ask"
                 }
                 placement="right"
               >
@@ -1710,7 +1710,7 @@ export function AgentSidePanel({
               </Tip>
             </div>
             )}
-            <div className="lc-coach-composer-mid">
+            <div className="lc-agent-composer-mid">
               {/*
                 Handwriting survives on a pad where the pipeline flags do not: a
                 reading pad has exactly the thing this attaches — a board with
@@ -1727,7 +1727,7 @@ export function AgentSidePanel({
               >
                 <button
                   type="button"
-                  className={`lc-flag lc-coach-annotate${
+                  className={`lc-flag lc-agent-annotate${
                     handwriting ? " lc-flag-active" : ""
                   }${annotateUnavailable ? " lc-flag-unavailable" : ""}`}
                   aria-pressed={handwriting}
@@ -1743,10 +1743,10 @@ export function AgentSidePanel({
                 the chips above the composer and this flag say the same thing.
               */}
               {allowAnnotations && (
-              <span className="lc-coach-annotate-wrap" ref={pickMarksWrapRef}>
+              <span className="lc-agent-annotate-wrap" ref={pickMarksWrapRef}>
                   <HoldButton
                     label="Annotations"
-                    className={`lc-flag lc-coach-annotate${
+                    className={`lc-flag lc-agent-annotate${
                       annotations ? " lc-flag-active" : ""
                     }${annotationsUnavailable ? " lc-flag-unavailable" : ""}`}
                     pressed={annotations}
@@ -1771,7 +1771,7 @@ export function AgentSidePanel({
                     Annotations
                   </HoldButton>
                   {pickMarksOpen && canPickMarks && (
-                    <div className="lc-coach-scope-menu lc-coach-mark-menu" role="menu">
+                    <div className="lc-agent-scope-menu lc-agent-mark-menu" role="menu">
                       {annotationChoices
                         .slice()
                         .sort((a, b) => (a.number ?? 0) - (b.number ?? 0))
@@ -1806,12 +1806,12 @@ export function AgentSidePanel({
                 </span>
               )}
             </div>
-            <div className="lc-coach-composer-actions">
+            <div className="lc-agent-composer-actions">
               {!padSurface && (
-                <span className="lc-coach-pipeline-wrap" ref={pipelineWrapRef}>
+                <span className="lc-agent-pipeline-wrap" ref={pipelineWrapRef}>
                   <button
                     type="button"
-                    className={`lc-flag lc-coach-pipeline${
+                    className={`lc-flag lc-agent-pipeline${
                       draw || reviewBoard || lazy ? " lc-flag-active" : ""
                     }${flagUnavailable}`}
                     aria-pressed={draw || reviewBoard || lazy}
@@ -1827,7 +1827,7 @@ export function AgentSidePanel({
                     Board
                   </button>
                   {pipelineOpen && (
-                    <div className="lc-coach-scope-menu lc-coach-pipeline-menu" role="menu">
+                    <div className="lc-agent-scope-menu lc-agent-pipeline-menu" role="menu">
                       <button
                         type="button"
                         role="menuitemcheckbox"
@@ -1877,7 +1877,7 @@ export function AgentSidePanel({
               >
                 <button
                   type="button"
-                  className="lc-flag lc-coach-attach"
+                  className="lc-flag lc-agent-attach"
                   aria-label="Add Photo"
                   disabled={
                     busy || picking || reviewBoard || photos.length >= PHOTO_ATTACH_LIMIT
@@ -1924,12 +1924,12 @@ export function AgentSidePanel({
           <>
             <button
               type="button"
-              className="lc-coach-message-menu-backdrop"
+              className="lc-agent-message-menu-backdrop"
               aria-label="Dismiss message actions"
               onClick={closeMessageMenu}
             />
             <div
-              className="lc-coach-message-menu"
+              className="lc-agent-message-menu"
               role="menu"
               style={{ top: messageMenu.top, left: messageMenu.left }}
               onClick={(event) => event.stopPropagation()}
@@ -2007,28 +2007,28 @@ function ProcessBlock({
   if (shown.length === 0) return null;
 
   return (
-    <div className={running ? "lc-coach-process lc-coach-process-running" : "lc-coach-process"}>
+    <div className={running ? "lc-agent-process lc-agent-process-running" : "lc-agent-process"}>
       <button
         type="button"
-        className="lc-coach-process-toggle"
+        className="lc-agent-process-toggle"
         aria-expanded={expanded}
         onClick={() => setOpen((current) => !current)}
       >
-        {running && <span className="lc-coach-spinner" aria-hidden />}
+        {running && <span className="lc-agent-spinner" aria-hidden />}
         <span aria-hidden>{expanded ? "▾" : "▸"}</span>
-        <span className="lc-coach-process-label">
+        <span className="lc-agent-process-label">
           {running ? processLine(latest) : `${shown.length} step${shown.length === 1 ? "" : "s"}`}
         </span>
       </button>
       {expanded && (
-        <ol className="lc-coach-process-steps">
+        <ol className="lc-agent-process-steps">
           {shown.map((event, index) => (
             <li
               key={`${event.ts}-${index}`}
               className={
                 event.status === "rejected"
-                  ? "lc-coach-process-step lc-coach-process-step-rejected"
-                  : "lc-coach-process-step"
+                  ? "lc-agent-process-step lc-agent-process-step-rejected"
+                  : "lc-agent-process-step"
               }
             >
               {processLine(event)}
@@ -2041,7 +2041,7 @@ function ProcessBlock({
 }
 
 /** Local ack while waiting for the daemon's `received` stage or the answer. */
-export function pendingAckLine(message: CoachChatMessage): string {
+export function pendingAckLine(message: AgentChatMessage): string {
   const ack = message.pendingAck;
   if (!ack) return "Working…";
   const inputs: string[] = [];
@@ -2084,22 +2084,22 @@ function DrawingSection({
   const expanded = drawing.expanded && !drawing.redacted;
 
   return (
-    <div className="lc-coach-drawing">
+    <div className="lc-agent-drawing">
       <button
         type="button"
-        className="lc-coach-drawing-toggle"
+        className="lc-agent-drawing-toggle"
         aria-expanded={expanded}
         onClick={() => onToggle(!drawing.expanded || Boolean(drawing.redacted))}
       >
         <span aria-hidden>{expanded ? "▾" : "▸"}</span>
-        <span className="lc-coach-drawing-label">
+        <span className="lc-agent-drawing-label">
           {drawing.redacted && !drawing.expanded ? "[redacted] " : ""}
           Drawing
         </span>
-        <span className="lc-muted lc-coach-drawing-title">{title}</span>
+        <span className="lc-muted lc-agent-drawing-title">{title}</span>
       </button>
       {expanded && (
-        <div className="lc-coach-drawing-body">
+        <div className="lc-agent-drawing-body">
           <Timeline
             program={drawing.program}
             initialFrame={drawing.frameIndex ?? 0}
