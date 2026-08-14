@@ -7525,12 +7525,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       .join(" ")}
                     aria-pressed={sheetDragLocked}
                     aria-label={
-                      sheetDragLocked ? "Unlock coach sheet" : "Lock coach sheet"
+                      sheetDragLocked
+                        ? "Unlock agent sheet drag-open"
+                        : "Lock agent sheet against drag-open from the bottom"
                     }
                     data-tip={
                       sheetDragLocked
-                        ? "Agent sheet locked — tap to unlock"
-                        : "Lock coach sheet against drag"
+                        ? "Agent lock on — blocks drag-open from the bottom"
+                        : "Lock agent sheet against drag-open from the bottom"
                     }
                     data-tip-placement="bottom"
                     onClick={onToggleSheetLock}

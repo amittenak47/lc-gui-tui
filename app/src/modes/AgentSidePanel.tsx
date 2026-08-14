@@ -38,6 +38,39 @@ const COACH_SHEET_PEEK_PX = 52;
 const COACH_SHEET_SNAP = 0.28;
 const COACH_SHEET_FLING_VX = 0.55;
 
+function clampMarkMenuBox(
+  anchor: DOMRect,
+  size: { width: number; height: number },
+): { top: number; left: number; maxHeight: number } {
+  const view = typeof window !== "undefined" ? window.visualViewport : null;
+  const viewLeft = view?.offsetLeft ?? 0;
+  const viewTop = view?.offsetTop ?? 0;
+  const viewWidth = view?.width ?? (typeof window !== "undefined" ? window.innerWidth : 400);
+  const viewHeight = view?.height ?? (typeof window !== "undefined" ? window.innerHeight : 800);
+  const margin = 8;
+  const minLeft = viewLeft + margin;
+  const maxRight = viewLeft + viewWidth - margin;
+  const minTop = viewTop + margin;
+  const maxBottom = viewTop + viewHeight - margin;
+  const width = Math.min(Math.max(size.width, 112), Math.max(margin, maxRight - minLeft));
+  const spaceAbove = Math.max(0, anchor.top - minTop - 6);
+  const spaceBelow = Math.max(0, maxBottom - anchor.bottom - 6);
+  const maxHeight = Math.max(
+    72,
+    Math.min(220, Math.floor(viewHeight * 0.32), Math.max(spaceAbove, spaceBelow) || 72),
+  );
+  const usedHeight = Math.min(Math.max(size.height, 1), maxHeight);
+  let left = anchor.left;
+  if (left + width > maxRight) left = maxRight - width;
+  if (left < minLeft) left = minLeft;
+  let top = anchor.top - usedHeight - 6;
+  if (top < minTop) {
+    top = anchor.bottom + 6;
+    if (top + usedHeight > maxBottom) top = Math.max(minTop, maxBottom - usedHeight);
+  }
+  return { top: Math.round(top), left: Math.round(left), maxHeight: Math.round(maxHeight) };
+}
+
 export type CoachMode = "review" | "ambient";
 
 /**
@@ -337,6 +370,8 @@ export interface AgentSidePanelProps {
   /** @deprecated Prefer onOpenChange — kept for call sites that only close. */
   onClose?: () => void;
   busy: boolean;
+  /** Board/App error string — durable in the panel; the 5s board banner still exists. */
+  error?: string | null;
   thinking?: boolean;
   /** Phased status while the local model works (replaces a bare "Thinking…"). */
   thinkingPhase?: string | null;
@@ -409,7 +444,7 @@ export interface AgentSidePanelProps {
   onDrawingFrame?: (programId: string, frameIndex: number) => void;
   /** Structured cards (tests, ambient, …) rendered in the thread. */
   children?: ReactNode;
-  /** When true, the mobile sheet handle ignores drag (header toggle still works). */
+  /** When true, parked sheet ignores drag-open from the bottom. Close still works. */
   sheetDragLocked?: boolean;
 }
 
@@ -420,6 +455,7 @@ export function AgentSidePanel({
   onOpenChange,
   onClose,
   busy,
+  error = null,
   thinking = false,
   thinkingPhase = null,
   messages,
@@ -471,6 +507,12 @@ export function AgentSidePanel({
   const [annotations, setAnnotations] = useState(false);
   const [pickMarksOpen, setPickMarksOpen] = useState(false);
   const pickMarksWrapRef = useRef<HTMLSpanElement | null>(null);
+  const pickMarksMenuRef = useRef<HTMLDivElement | null>(null);
+  const [markMenuBox, setMarkMenuBox] = useState<{
+    top: number;
+    left: number;
+    maxHeight: number;
+  } | null>(null);
   const [pipelineOpen, setPipelineOpen] = useState(false);
   const pipelineWrapRef = useRef<HTMLSpanElement | null>(null);
   const attachedCount = attachedMarks?.length ?? 0;
@@ -792,6 +834,7 @@ export function AgentSidePanel({
       const node = event.target;
       if (!(node instanceof Node)) return;
       if (pickMarksWrapRef.current?.contains(node)) return;
+      if (pickMarksMenuRef.current?.contains(node)) return;
       if (pipelineWrapRef.current?.contains(node)) return;
       setPickMarksOpen(false);
       setPipelineOpen(false);
@@ -799,6 +842,35 @@ export function AgentSidePanel({
     document.addEventListener("pointerdown", close, true);
     return () => document.removeEventListener("pointerdown", close, true);
   }, [pickMarksOpen, pipelineOpen]);
+
+  useLayoutEffect(() => {
+    if (!pickMarksOpen || !canPickMarks) {
+      setMarkMenuBox(null);
+      return;
+    }
+    const place = () => {
+      const anchor = pickMarksWrapRef.current?.getBoundingClientRect();
+      if (!anchor) return;
+      const menu = pickMarksMenuRef.current;
+      setMarkMenuBox(
+        clampMarkMenuBox(anchor, {
+          width: menu?.offsetWidth ?? 200,
+          height: menu?.offsetHeight ?? 120,
+        }),
+      );
+    };
+    place();
+    const frame = requestAnimationFrame(place);
+    window.addEventListener("resize", place);
+    window.visualViewport?.addEventListener("resize", place);
+    window.visualViewport?.addEventListener("scroll", place);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", place);
+      window.visualViewport?.removeEventListener("resize", place);
+      window.visualViewport?.removeEventListener("scroll", place);
+    };
+  }, [pickMarksOpen, canPickMarks, annotationChoices.length, attachedCount]);
 
   const endSheetDrag = useCallback(
     (event: PointerEvent<HTMLElement>) => {
@@ -840,7 +912,8 @@ export function AgentSidePanel({
 
   const onSheetHandlePointerDown = useCallback(
     (event: PointerEvent<HTMLElement>) => {
-      if (!mobile || sheetDragLocked) return;
+      // Lock blocks peek-up open, not drag-down close.
+      if (!mobile || (sheetDragLocked && !open)) return;
       if (event.button !== 0) return;
       event.preventDefault();
       const startOffset = open ? 0 : closedOffset();
@@ -881,7 +954,7 @@ export function AgentSidePanel({
 
   const onSheetHandleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
-      if (sheetDragLocked) return;
+      if (sheetDragLocked && !open) return;
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       setOpen(!open);
@@ -932,8 +1005,8 @@ export function AgentSidePanel({
       const rect = anchor.getBoundingClientRect();
       const panel = panelRef.current?.getBoundingClientRect();
       const chat = listRef.current?.getBoundingClientRect();
-      const menuWidth = 168;
-      const menuHeight = 44;
+      const menuWidth = 120;
+      const menuHeight = 36;
       const pad = 8;
       const leftBound = (panel?.left ?? 0) + pad;
       const rightBound = (panel?.right ?? window.innerWidth) - pad;
@@ -1227,6 +1300,7 @@ export function AgentSidePanel({
         mobile ? "lc-side-sheet" : "",
         mobile && !open && !sheetDragging ? "lc-side-sheet-parked" : "",
         mobile && sheetDragging ? "lc-side-sheet-dragging" : "",
+        mobile && sheetDragLocked && !open ? "lc-side-sheet-locked" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -1239,8 +1313,20 @@ export function AgentSidePanel({
         role="button"
         tabIndex={0}
         aria-expanded={open}
-        aria-label={open ? "Drag down to close agent" : "Drag up to open agent"}
-        title={open ? "Drag down to close" : "Drag up to open"}
+        aria-label={
+          open
+            ? "Drag down to close agent"
+            : sheetDragLocked
+              ? "Agent sheet locked — open from the header"
+              : "Drag up to open agent"
+        }
+        title={
+          open
+            ? "Drag down to close"
+            : sheetDragLocked
+              ? "Locked — open from the header"
+              : "Drag up to open"
+        }
         onPointerDown={mobile ? onSheetHandlePointerDown : undefined}
         onPointerMove={mobile ? onSheetHandlePointerMove : undefined}
         onPointerUp={mobile ? endSheetDrag : undefined}
@@ -1392,7 +1478,7 @@ export function AgentSidePanel({
               {message.content ? (
                 <div className="lc-agent-turn-body">{message.content}</div>
               ) : null}
-              {!openThreadId && (threadReplies.get(message.id)?.length ?? 0) > 0 && (
+              {!openThreadId && (threadReplies.get(message.id)?.length ?? 0) > 1 && (
                 /*
                  * The thread, collapsed to one line.
                  *
@@ -1419,7 +1505,10 @@ export function AgentSidePanel({
                     {threadReplies.get(message.id)!.length === 1 ? "reply" : "replies"}
                   </span>
                   <span className="lc-agent-thread-open-peek">
-                    {threadReplies.get(message.id)!.at(-1)?.content.slice(0, 60)}
+                    {threadReplies.get(message.id)!.at(-1)?.content.slice(0, 60) ||
+                      (threadReplies.get(message.id)!.at(-1)?.pending
+                        ? "Working…"
+                        : "")}
                   </span>
                   <span className="lc-agent-thread-open-chevron" aria-hidden>
                     ›
@@ -1509,7 +1598,7 @@ export function AgentSidePanel({
             );
           })}
           {children}
-          {thinking && !messages.some((message) => message.pending) && (
+          {thinking && !visibleMessages.some((message) => message.pending) && (
             <div className="lc-agent-turn lc-agent-turn-assistant lc-agent-thinking" role="status">
               <div className="lc-agent-turn-role">Agent</div>
               <div className="lc-agent-turn-body">
@@ -1519,6 +1608,12 @@ export function AgentSidePanel({
             </div>
           )}
         </div>
+
+        {error?.trim() ? (
+          <p className="lc-agent-panel-error" role="alert">
+            {error.trim()}
+          </p>
+        ) : null}
 
         <form className="lc-agent-composer" onSubmit={(event) => submit("queue", event)}>
           {allowAnnotations && attachedMarks.length > 0 && (
@@ -1770,39 +1865,6 @@ export function AgentSidePanel({
                   >
                     Annotations
                   </HoldButton>
-                  {pickMarksOpen && canPickMarks && (
-                    <div className="lc-agent-scope-menu lc-agent-mark-menu" role="menu">
-                      {annotationChoices
-                        .slice()
-                        .sort((a, b) => (a.number ?? 0) - (b.number ?? 0))
-                        .map((choice) => {
-                        const attached = attachedMarks.some((mark) => mark.id === choice.id);
-                        const title = choice.title?.trim() ?? "";
-                        return (
-                          <button
-                            type="button"
-                            role="menuitemcheckbox"
-                            aria-checked={attached}
-                            aria-label={footnoteChipLabel(choice.number, choice.title)}
-                            key={choice.id}
-                            className={`lc-footnote-chip${attached ? " is-picked" : ""}`}
-                            style={footnoteThemeVars(choice.color, choice.palette ?? [])}
-                            onClick={() => {
-                              onToggleAttached?.(choice.id);
-                              if (!attached) setAnnotations(true);
-                            }}
-                          >
-                            <span className="lc-fn-badge">
-                              {choice.number ?? ""}
-                            </span>
-                            {title ? (
-                              <span className="lc-footnote-chip-label">{title}</span>
-                            ) : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
                 </span>
               )}
             </div>
@@ -1917,6 +1979,53 @@ export function AgentSidePanel({
           </div>
         </form>
       </div>
+
+      {pickMarksOpen &&
+        canPickMarks &&
+        createPortal(
+          <div
+            ref={pickMarksMenuRef}
+            className="lc-agent-scope-menu lc-agent-mark-menu"
+            role="menu"
+            style={
+              markMenuBox
+                ? {
+                    top: markMenuBox.top,
+                    left: markMenuBox.left,
+                    maxHeight: markMenuBox.maxHeight,
+                    visibility: "visible",
+                  }
+                : { top: 0, left: 0, visibility: "hidden" }
+            }
+          >
+            {annotationChoices
+              .slice()
+              .sort((a, b) => (a.number ?? 0) - (b.number ?? 0))
+              .map((choice) => {
+                const attached = attachedMarks.some((mark) => mark.id === choice.id);
+                const title = choice.title?.trim() ?? "";
+                return (
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={attached}
+                    aria-label={footnoteChipLabel(choice.number, choice.title)}
+                    key={choice.id}
+                    className={`lc-footnote-chip${attached ? " is-picked" : ""}`}
+                    style={footnoteThemeVars(choice.color, choice.palette ?? [])}
+                    onClick={() => {
+                      onToggleAttached?.(choice.id);
+                      if (!attached) setAnnotations(true);
+                    }}
+                  >
+                    <span className="lc-fn-badge">{choice.number ?? ""}</span>
+                    {title ? <span className="lc-footnote-chip-label">{title}</span> : null}
+                  </button>
+                );
+              })}
+          </div>,
+          document.body,
+        )}
 
       {messageMenu &&
         menuMessage &&

@@ -4,9 +4,29 @@
  * Top inset often comes from `env(safe-area-inset-*)`. Bottom is frequently 0 in
  * Android WebView even when the gesture bar covers the app — we measure the
  * visualViewport gap and pad `.lc-app` once at the shell level.
+ *
+ * Keyboard height must not share `--lc-safe-bottom`. The coach sheet used to
+ * grow and pad by that gap while Android also panned the visual viewport, which
+ * parked the sheet mid-screen. Nav stays on `--lc-safe-bottom`; keyboard is
+ * `--lc-keyboard-inset` and only shifts `bottom`.
  */
 
 import { isMobileViewport } from "./mobile";
+
+/** Gaps at or below this are home-indicator / nav; larger is the soft keyboard. */
+export const NAV_GAP_CAP_PX = 80;
+
+export function splitBottomInsets(
+  envBottom: number,
+  visualGap: number,
+): { safeBottom: number; keyboardInset: number } {
+  const env = Math.max(0, envBottom);
+  const gap = Math.max(0, visualGap);
+  if (gap > NAV_GAP_CAP_PX) {
+    return { safeBottom: env, keyboardInset: gap };
+  }
+  return { safeBottom: Math.max(env, gap), keyboardInset: 0 };
+}
 
 function readEnvInset(edge: "top" | "bottom" | "left" | "right"): number {
   if (typeof document === "undefined") return 0;
@@ -32,12 +52,16 @@ function publishInsets(): void {
   const top = Math.max(readEnvInset("top"), 0);
   const left = Math.max(readEnvInset("left"), 0);
   const right = Math.max(readEnvInset("right"), 0);
-  const bottom = Math.max(readEnvInset("bottom"), visualViewportBottomGap(), 0);
+  const { safeBottom, keyboardInset } = splitBottomInsets(
+    readEnvInset("bottom"),
+    visualViewportBottomGap(),
+  );
 
   root.style.setProperty("--lc-safe-top", `${top}px`);
   root.style.setProperty("--lc-safe-left", `${left}px`);
   root.style.setProperty("--lc-safe-right", `${right}px`);
-  root.style.setProperty("--lc-safe-bottom", `${bottom}px`);
+  root.style.setProperty("--lc-safe-bottom", `${safeBottom}px`);
+  root.style.setProperty("--lc-keyboard-inset", `${keyboardInset}px`);
 }
 
 /** Keep `--lc-safe-*` in sync with rotation, keyboard, and Android nav bar changes. */
@@ -67,5 +91,6 @@ export function installSafeAreaInsets(): () => void {
     root.style.removeProperty("--lc-safe-left");
     root.style.removeProperty("--lc-safe-right");
     root.style.removeProperty("--lc-safe-bottom");
+    root.style.removeProperty("--lc-keyboard-inset");
   };
 }

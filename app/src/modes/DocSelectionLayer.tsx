@@ -2124,7 +2124,7 @@ function footnoteTitle(footnote: DocFootnote, number: number): string {
 
 function CopyActionIcon() {
   return (
-    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden>
       <rect x="5.5" y="5.5" width="7" height="8" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
       <path
         d="M3.5 10.5V3.8A1.3 1.3 0 0 1 4.8 2.5h5.7"
@@ -2139,7 +2139,7 @@ function CopyActionIcon() {
 
 function SearchActionIcon() {
   return (
-    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden>
       <circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
       <path d="m10.2 10.2 3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
@@ -2148,7 +2148,7 @@ function SearchActionIcon() {
 
 function AnnotateActionIcon() {
   return (
-    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden>
       <path
         d="M4 12.5 11.2 5.3a1.4 1.4 0 0 1 2 2L6 14.5H4z"
         fill="none"
@@ -2163,7 +2163,7 @@ function AnnotateActionIcon() {
 
 function MarkActionIcon() {
   return (
-    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden>
       <path
         d="M4 2.5h5.5L12 5v8.5H4z"
         fill="none"
