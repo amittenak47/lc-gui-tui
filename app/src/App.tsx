@@ -152,7 +152,7 @@ import {
   buildAnnotateTemplate,
   annotateFrameWidthFromElements,
   annotatePageHeight,
-  annotatePageWidthForViewport,
+  annotatePageWidthForOpen,
   ANNOTATE_DATASET,
   ANNOTATE_PAGE_W,
   ANNOTATE_REGION,
@@ -2184,8 +2184,18 @@ export function App() {
 
         const dark = isDarkTheme(themeId);
         const savedInk = existing ? inkOpsFrom(existing.board) : [];
-        const pageWidth = annotatePageWidthForViewport(
+        const savedElements = existing
+          ? (existing.board.elements as {
+              width?: number;
+              customData?: { lcMdInkFrame?: boolean } | null;
+            }[])
+          : null;
+        const savedWidth = savedElements
+          ? annotateFrameWidthFromElements(savedElements)
+          : null;
+        const pageWidth = annotatePageWidthForOpen(
           typeof window !== "undefined" ? window.innerWidth : ANNOTATE_PAGE_W,
+          savedElements ? { elements: savedElements } : null,
         );
         setAnnotatePageWidth(pageWidth);
         const skeletons = buildAnnotateTemplate(annotatePageHeight(null), dark, pageWidth);
@@ -2205,7 +2215,9 @@ export function App() {
               if (!meta?.lcMdInkFrame) return el;
               return {
                 ...(el as object),
-                width: pageWidth,
+                // Keep the saved column when marks/ink already live on it.
+                // Fresh or unstamped frames still take the viewport width.
+                ...(savedWidth == null ? { width: pageWidth } : {}),
                 locked: true,
                 versionNonce: Math.random() * 2 ** 31,
               };

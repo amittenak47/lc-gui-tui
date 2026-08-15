@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAnnotateTemplate,
   annotatePageHeight,
+  annotatePageWidthForOpen,
   annotatePageWidthForViewport,
   MD_INK_MIN_PAGE_H,
   ANNOTATE_PAGE_W,
@@ -38,6 +39,34 @@ describe("annotatePageWidthForViewport", () => {
     const width = annotatePageWidthForViewport(390);
     expect(width).toBeGreaterThanOrEqual(ANNOTATE_PAGE_W_MIN);
     expect(width).toBeLessThan(500);
+  });
+});
+
+describe("annotatePageWidthForOpen", () => {
+  it("keeps a saved frame when the viewport is wider", () => {
+    expect(
+      annotatePageWidthForOpen(1024, {
+        elements: [{ width: 704, customData: { lcMdInkFrame: true } }],
+      }),
+    ).toBe(704);
+  });
+
+  it("uses stored frameWidth when the board has no md-ink frame", () => {
+    expect(annotatePageWidthForOpen(1024, { elements: [], frameWidth: 704 })).toBe(704);
+  });
+
+  it("sizes a fresh open to the viewport, capped", () => {
+    expect(annotatePageWidthForOpen(1024)).toBe(ANNOTATE_PAGE_W);
+    expect(annotatePageWidthForOpen(1024, null)).toBe(ANNOTATE_PAGE_W);
+  });
+
+  it("prefers the saved frame over a sidecar width", () => {
+    expect(
+      annotatePageWidthForOpen(1024, {
+        elements: [{ width: 704, customData: { lcMdInkFrame: true } }],
+        frameWidth: 760,
+      }),
+    ).toBe(704);
   });
 });
 
