@@ -25,6 +25,8 @@ use crate::llm::coach::{
     LAZY_HINT_SYSTEM_PROMPT, PLANNER_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
 };
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
+use crate::llm::docs::{preset_system, run_document_ask, AskContext};
+use crate::llm::helpers::clip;
 use crate::pad::AgentSurface;
 use crate::reveal::{SolutionReveal, UserConsent};
 use crate::runner;
@@ -595,6 +597,25 @@ pub struct AskRequest {
     /// images and falls back to the plain one when no vision model is set.
     #[serde(default)]
     pub images: Vec<String>,
+    /// Content hash of the open document. Present on annotate Asks that should
+    /// prefetch RAG chunks and offer document tools.
+    #[serde(default)]
+    pub document_hash: Option<String>,
+    /// 1-based page the reader is on.
+    #[serde(default)]
+    pub page: Option<u32>,
+    /// Exact highlighted string, if any.
+    #[serde(default)]
+    pub highlight: String,
+    /// Text of the current page, already clipped by the client.
+    #[serde(default)]
+    pub page_text: String,
+    /// Packed mark prose for `list_document_marks`.
+    #[serde(default)]
+    pub marks_prose: String,
+    /// Slash preset: `de_jargon` | `explain_math` | `analyze_methodology` | `reverse_engineer`.
+    #[serde(default)]
+    pub preset: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -602,6 +623,8 @@ pub struct AskEnvelope {
     pub task_id: String,
     pub provider: String,
     pub reply: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proposed_annotations: Vec<crate::llm::docs::ProposedAnnotation>,
 }
 
 pub async fn ask(
@@ -629,6 +652,18 @@ pub async fn run_ask(
         dataset_slug.as_deref(),
         &task_id,
     );
+    let document_hash = request
+        .document_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let document_ask = matches!(surface, AgentSurface::Annotate) && document_hash.is_some();
+    let page = request.page;
+    let highlight = request.highlight.clone();
+    let page_text = request.page_text.clone();
+    let marks_prose = request.marks_prose.clone();
+    let preset = request.preset.clone();
     let local_pad = surface.is_pad();
     let dataset = if local_pad {
         None
@@ -672,7 +707,66 @@ pub async fn run_ask(
         };
         let provider = make_provider_for_mode(&cfg, "review")?;
         events.stage("ask", "answering from the problem statement and your code");
-        let prompt = build_ask_prompt(&meta, description.as_deref(), &question, &ctx);
+        let mut prompt = build_ask_prompt(&meta, description.as_deref(), &question, &ctx);
+        if document_ask {
+            let hash = document_hash.as_deref().expect("document_ask implies hash");
+            let query = if highlight.trim().is_empty() {
+                question.as_str()
+            } else {
+                highlight.as_str()
+            };
+            let retrieved = match crate::docs_index::db_path()
+                .and_then(|path| crate::docs_index::open(&path))
+                .and_then(|conn| {
+                    crate::docs_index::retrieve(
+                        &conn,
+                        hash,
+                        query,
+                        crate::docs_index::prefetch_k(),
+                        &cfg,
+                    )
+                }) {
+                Ok(chunks) => crate::docs_index::format_retrieval(&chunks),
+                Err(_) => String::new(),
+            };
+            if !retrieved.is_empty() {
+                prompt.push('\n');
+                prompt.push_str(&retrieved);
+            }
+            if !highlight.trim().is_empty() {
+                prompt.push_str("\n## Highlighted passage\n\n");
+                prompt.push_str(&clip(highlight.trim(), 2000));
+                prompt.push('\n');
+            }
+            if !page_text.trim().is_empty() {
+                prompt.push_str("\n## Current page\n\n");
+                prompt.push_str(&clip(page_text.trim(), 2000));
+                prompt.push('\n');
+            }
+            let ask_ctx = AskContext {
+                document_hash: document_hash.clone(),
+                page,
+                highlight,
+                page_text,
+                marks_prose,
+                retrieved,
+            };
+            let (reply, proposed) = run_document_ask(
+                provider.as_ref(),
+                &cfg,
+                preset_system(preset.as_deref()),
+                prompt,
+                images,
+                &ask_ctx,
+            )?;
+            events.stage("done", "");
+            return Ok(AskEnvelope {
+                task_id: meta.task_id,
+                provider: provider.label(),
+                reply,
+                proposed_annotations: proposed,
+            });
+        }
         let reply = provider.chat_ex(&ChatRequest::new(vec![
             ChatMessage::system(ASK_SYSTEM_PROMPT),
             ChatMessage::user(prompt).with_images(images),
@@ -682,6 +776,7 @@ pub async fn run_ask(
             task_id: meta.task_id,
             provider: provider.label(),
             reply: reply.content.trim().to_string(),
+            proposed_annotations: Vec::new(),
         })
     })
     .await?;

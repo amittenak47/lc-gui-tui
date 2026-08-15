@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { shouldDismissBackdrop } from "./backdropDismiss";
 
-const backdrop = { id: "backdrop" };
-const panel = { id: "panel" };
+const backdrop = new EventTarget();
+const panel = new EventTarget();
 
 describe("shouldDismissBackdrop", () => {
   it("dismisses a press that started and ended on the backdrop", () => {

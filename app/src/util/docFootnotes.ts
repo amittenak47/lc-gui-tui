@@ -25,12 +25,13 @@ import {
 import type { LocalRect } from "./docMarquee";
 import { normalizePalette } from "./inkPaletteHistory";
 
-export type DocFootnoteKind = "coach" | "search" | "note";
+export type DocFootnoteKind = "coach" | "search" | "note" | "ai";
 
 const FOOTNOTE_KINDS: ReadonlySet<DocFootnoteKind> = new Set([
   "coach",
   "search",
   "note",
+  "ai",
 ]);
 
 export interface DocFootnoteUserLink {

@@ -1,5 +1,6 @@
 pub mod ask;
 pub mod coach;
+pub mod docs;
 pub mod helpers;
 pub mod lifecycle;
 pub mod providers;

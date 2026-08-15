@@ -37,6 +37,7 @@ import {
   type DocFootnoteSubMark,
   type DocFootnoteSubMarkKind,
 } from "../util/docFootnotes";
+import { AI_TAB_HEIGHT, AI_TAB_WIDTH, aiBookTabLeft, stackAiTabTops } from "../util/aiBookTabs";
 import { HoldButton } from "../components/HoldButton";
 import {
   HOLD_SENSITIVE_MS,
@@ -1687,6 +1688,22 @@ export function DocSelectionLayer({
     ? footnoteThemeVars(subMarkParent.color ?? inkPalette[0], inkPalette)
     : undefined;
 
+  const aiTabTops = useMemo(
+    () =>
+      stackAiTabTops(
+        ribbons
+          .filter((entry) => entry.footnote.kind === "ai")
+          .map((entry) => ({
+            id: entry.footnote.id,
+            y:
+              (entry.useBands && entry.bands[0]
+                ? entry.bands[0].top
+                : entry.at?.top) ?? 0,
+          })),
+      ),
+    [ribbons],
+  );
+
   return (
     <div className="lc-doc-selectable" ref={hostRef}>
       <div className="lc-doc-selectable-body" ref={bodyRef}>
@@ -1744,8 +1761,9 @@ export function DocSelectionLayer({
             /*
              * Tap opens the mark; hold fills left→right and deletes.
              *
-             * Number chip sits inset in the top-right of the topmost band (or
-             * union box) — inside the wash, not hanging off the edge.
+             * User marks: number chip inset in the top-right of the topmost
+             * band. AI marks: a book tab on the page's right edge, half on
+             * the paper and half hanging off.
              */
             const tint = footnoteThemeVars(
               footnote.color ?? inkPalette[0],
@@ -1763,13 +1781,20 @@ export function DocSelectionLayer({
                   )
                 : at;
             const host = topBand ?? at;
+            const isAiTab = footnote.kind === "ai";
             const chipPad = 3;
-            const chipW = 16;
-            const chipLeft = host.left + Math.max(chipPad, host.width - chipW - chipPad);
-            const chipTop = host.top + chipPad;
+            const chipW = isAiTab ? AI_TAB_WIDTH : 16;
+            const pageWidth = bodyRef.current?.offsetWidth ?? 0;
+            const chipLeft = isAiTab
+              ? aiBookTabLeft(pageWidth)
+              : host.left + Math.max(chipPad, host.width - chipW - chipPad);
+            const chipTop = isAiTab
+              ? (aiTabTops.get(footnote.id) ?? host.top)
+              : host.top + chipPad;
             const chipStyle = {
               left: chipLeft,
               top: chipTop,
+              ...(isAiTab ? { width: AI_TAB_WIDTH, height: AI_TAB_HEIGHT } : {}),
               ...tint,
             };
             const caption = footnote.title?.replace(/\s+/g, " ").trim() ?? "";
@@ -1798,7 +1823,9 @@ export function DocSelectionLayer({
                 ) : null}
                 <HoldButton
                   label={String(number)}
-                  className={`lc-doc-footnote lc-doc-footnote-bookmark lc-doc-footnote-${footnote.kind}`}
+                  className={`lc-doc-footnote lc-doc-footnote-bookmark lc-doc-footnote-${footnote.kind}${
+                    isAiTab ? " lc-doc-footnote-tab" : ""
+                  }`}
                   style={chipStyle}
                   ariaLabel={`${footnoteTitle(footnote, number)} — tap to open, hold to delete`}
                   onTap={() => {
@@ -2117,6 +2144,8 @@ function footnoteTitle(footnote: DocFootnote, number: number): string {
       return `${head} Search — ${footnote.query ?? what}`;
     case "note":
       return `${head} Highlight — ${what}`;
+    case "ai":
+      return `${head} AI tab — ${what}`;
     default:
       return `${head} Agent — ${what}`;
   }

@@ -9,6 +9,7 @@
 mod attempt;
 mod config;
 mod corpus;
+mod docs;
 mod practice;
 mod workspace;
 
@@ -23,6 +24,7 @@ pub use config::{
     get_config, llm_start, llm_status, llm_stop, put_config, ConfigDto, ModesConfigDto,
     ProviderConfigDto,
 };
+pub use docs::{get_index as get_docs_index, put_index as put_docs_index};
 pub use corpus::{
     adjacent_problem, get_problem, list_datasets, list_problems, list_tags, offline_pack,
     offline_pack_chunk, offline_pack_dataset_keys, offline_pack_manifest, random_problem,
