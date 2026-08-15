@@ -216,6 +216,7 @@ export function FootnoteOverview({
   const notes = footnote.notes ?? [];
   const threads = footnote.threads ?? [];
   const subMarks = footnote.subMarks ?? [];
+  const isAiTab = footnote.kind === "ai";
   const searchLink =
     footnote.kind === "search" && footnote.url
       ? { title: footnote.query || "Search", url: footnote.url }
@@ -705,6 +706,21 @@ export function FootnoteOverview({
                   </ul>
                 )}
               </HubSection>
+              {isAiTab ? (
+                notes.length > 0 ? (
+                  <HubSection title="Notes">
+                    <ul className="lc-footnote-overview-link-list lc-footnote-overview-scroll-list lc-scroll-pane">
+                      {notes.map((note) => (
+                        <li key={note.id}>
+                          <span className="lc-agent-scope-option">
+                            <strong className="lc-footnote-overview-entry-text">{note.text}</strong>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </HubSection>
+                ) : null
+              ) : (
               <HubSection title="Notes" onAdd={() => openTask({ kind: "note", id: null })}>
                 {notes.length > 0 && (
                   <ul className="lc-footnote-overview-link-list lc-footnote-overview-scroll-list lc-scroll-pane">
@@ -728,6 +744,7 @@ export function FootnoteOverview({
                   </ul>
                 )}
               </HubSection>
+              )}
               <HubSection title="Threads">
                 {threads.length > 0 && (
                   <ul className="lc-footnote-overview-link-list lc-footnote-overview-scroll-list lc-scroll-pane">

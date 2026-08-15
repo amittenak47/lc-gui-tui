@@ -92,9 +92,12 @@ describe("sanitizeFootnotes", () => {
     expect(kept.map((entry) => entry.id)).toEqual(["fn-1"]);
   });
 
-  it("returns an empty list for a corrupt blob", () => {
-    expect(sanitizeFootnotes(undefined)).toEqual([]);
-    expect(sanitizeFootnotes({ nope: true })).toEqual([]);
+  it("keeps AI book-tab footnotes", () => {
+    const [kept] = sanitizeFootnotes([
+      footnote({ id: "tab", kind: "ai", excerpt: "SGD" }),
+    ]);
+    expect(kept.kind).toBe("ai");
+    expect(kept.excerpt).toBe("SGD");
   });
 
   it("round-trips optional bands and drops corrupt ones", () => {

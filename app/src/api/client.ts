@@ -29,6 +29,22 @@ import type {
   WorkspaceMeta,
 } from "./types";
 
+export interface ProposedAnnotation {
+  excerpt: string;
+  note: string;
+  tags?: string[];
+  page?: number;
+  links?: string[];
+}
+
+export interface DocIndexStatus {
+  hash: string;
+  indexed: boolean;
+  page_count: number;
+  chunk_count: number;
+  embedded: boolean;
+}
+
 export class LcApiError extends Error {
   constructor(
     message: string,
@@ -532,8 +548,19 @@ export class LcClient {
       dataset?: string;
       images?: string[];
       timeoutMs?: number;
+      document_hash?: string;
+      page?: number;
+      highlight?: string;
+      page_text?: string;
+      marks_prose?: string;
+      preset?: string;
     },
-  ): Promise<{ task_id: string; provider: string; reply: string }> {
+  ): Promise<{
+    task_id: string;
+    provider: string;
+    reply: string;
+    proposed_annotations?: ProposedAnnotation[];
+  }> {
     const { surface, task_id, dataset, images, timeoutMs } = opts;
     const body: Record<string, unknown> = {
       surface,
@@ -544,6 +571,12 @@ export class LcClient {
     if (surface === "problem") {
       body.dataset = dataset;
     }
+    if (opts.document_hash) body.document_hash = opts.document_hash;
+    if (opts.page != null) body.page = opts.page;
+    if (opts.highlight) body.highlight = opts.highlight;
+    if (opts.page_text) body.page_text = opts.page_text;
+    if (opts.marks_prose) body.marks_prose = opts.marks_prose;
+    if (opts.preset) body.preset = opts.preset;
     try {
       return await this.request(
         "POST",
@@ -560,6 +593,29 @@ export class LcClient {
       }
       throw cause;
     }
+  }
+
+  async getDocIndex(hash: string): Promise<DocIndexStatus> {
+    return this.request("GET", `/docs/${encodeURIComponent(hash)}/index`);
+  }
+
+  async putDocIndex(
+    hash: string,
+    body: {
+      name: string;
+      doc_type: string;
+      pages: Array<{ page: number; text: string; heading?: string }>;
+    },
+  ): Promise<{ indexed: boolean; wrote: boolean }> {
+    const result = await this.request<{
+      hash?: string;
+      indexed?: boolean;
+      wrote?: boolean;
+    } | null>("PUT", `/docs/${encodeURIComponent(hash)}/index`, body, {
+      timeoutMs: 180_000,
+    });
+    if (!result) return { indexed: true, wrote: false };
+    return { indexed: result.indexed !== false, wrote: Boolean(result.wrote) };
   }
 
   private async request<T>(

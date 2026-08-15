@@ -427,6 +427,22 @@ body {
   color: var(--muted);
 }
 
+.lc-doc-index-chip {
+  margin-left: 8px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--hint);
+  font-weight: 500;
+}
+
+.lc-doc-index-chip.is-ok {
+  color: var(--ok);
+}
+
+.lc-doc-index-chip.is-bad {
+  color: var(--bad);
+}
+
 .lc-modes,
 .lc-actions,
 .lc-action-group,
@@ -4990,6 +5006,12 @@ input[type="checkbox"] {
   flex-direction: column;
   gap: 8px;
   background: var(--panel);
+}
+
+.lc-agent-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .lc-agent-panel-error {
@@ -9807,6 +9829,7 @@ button.lc-row-selected:hover:not(:disabled) {
   inset: 0;
   pointer-events: none;
   z-index: 2;
+  overflow: visible;
 }
 
 .lc-doc-select-rect {
@@ -9879,9 +9902,26 @@ button.lc-row-selected:hover:not(:disabled) {
   animation: lc-doc-footnote-pop 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* Speech-bubble / bookmark-tab silhouettes retired — inset chip only. */
+/* Speech-bubble / bookmark-tab silhouettes retired — inset chip only.
+ * AI marks (`.lc-doc-footnote-tab`) bring a right-edge book tab back. */
 .lc-doc-footnote::after {
   content: none;
+}
+
+.lc-doc-footnote-tab {
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 18px !important;
+  min-height: 18px !important;
+  border-radius: 0 7px 7px 0;
+  overflow: visible;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 22%);
+}
+
+.lc-doc-footnote-ai {
+  --lc-fn-fill: #fde68a;
+  --lc-fn-edge: #d97706;
+  --lc-fn-text: #7c2d12;
 }
 
 @keyframes lc-doc-footnote-pop {
@@ -11744,6 +11784,7 @@ button.lc-row-selected:hover:not(:disabled) {
   transform-origin: 0 0;
   will-change: transform;
   pointer-events: none;
+  overflow: visible;
 }
 
 
@@ -11854,6 +11895,7 @@ button.lc-row-selected:hover:not(:disabled) {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  overflow: visible;
 }
 
 .lc-doc-footnote-pack > .lc-doc-footnote {

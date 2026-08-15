@@ -216,6 +216,15 @@ const REVIEW_DROPS_PHOTOS = "Review sends the board, not attachments";
  */
 export type AgentSurface = "problem" | "pad";
 
+export const ASK_PRESETS = [
+  { id: "de_jargon", label: "De-jargon" },
+  { id: "explain_math", label: "Explain math" },
+  { id: "analyze_methodology", label: "Methodology" },
+  { id: "reverse_engineer", label: "Reverse-engineer" },
+] as const;
+
+export type AskPresetId = (typeof ASK_PRESETS)[number]["id"];
+
 interface MessageMenuState {
   messageId: string;
   top: number;
@@ -287,6 +296,8 @@ export interface AgentSendFlags {
   replyTo?: CoachReplyRef;
   /** The thread this send belongs to, or null when it is addressed to the room. */
   threadRootId?: string | null;
+  /** Document Ask slash preset — swaps the daemon system prompt. */
+  askPreset?: AskPresetId | null;
 }
 
 /** Mirrored on a pending assistant turn — flags + what the user sent. */
@@ -391,6 +402,8 @@ export interface AgentSidePanelProps {
    * is false there; document pads and problems keep it.
    */
   allowAnnotations?: boolean;
+  /** Slash presets for document Ask (annotate pad only). */
+  documentPresets?: boolean;
   /**
    * A quote pushed in from outside the panel — the document pad's "Coach" on a
    * text selection.
@@ -462,6 +475,7 @@ export function AgentSidePanel({
   askOnly = false,
   agentSurface = "problem",
   allowAnnotations = true,
+  documentPresets = false,
   quoteSeed = null,
   focusThread = null,
   footnoteThreadRoots,
@@ -505,6 +519,7 @@ export function AgentSidePanel({
   const [lazy, setLazy] = useState(false);
   const [handwriting, setHandwriting] = useState(false);
   const [annotations, setAnnotations] = useState(false);
+  const [askPreset, setAskPreset] = useState<AskPresetId | null>(null);
   const [pickMarksOpen, setPickMarksOpen] = useState(false);
   const pickMarksWrapRef = useRef<HTMLSpanElement | null>(null);
   const pickMarksMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1250,6 +1265,7 @@ export function AgentSidePanel({
         ...(pageQuote ? { pageQuote: pageQuote.text } : {}),
         threadRootId: openThreadId,
         ...(replyTo ? { replyTo } : {}),
+        ...(documentPresets && askPreset ? { askPreset } : {}),
       },
       mode,
     );
@@ -1261,6 +1277,7 @@ export function AgentSidePanel({
     setLazy(false);
     setHandwriting(false);
     setAnnotations(false);
+    setAskPreset(null);
     setPickMarksOpen(false);
     setPhotos([]);
     setPhotoError(null);
@@ -1617,6 +1634,24 @@ export function AgentSidePanel({
         ) : null}
 
         <form className="lc-agent-composer" onSubmit={(event) => submit("queue", event)}>
+          {documentPresets && (
+            <div className="lc-agent-presets" role="group" aria-label="Ask presets">
+              {ASK_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={`lc-flag${askPreset === preset.id ? " lc-flag-active" : ""}`}
+                  aria-pressed={askPreset === preset.id}
+                  disabled={busy}
+                  onClick={() =>
+                    setAskPreset((current) => (current === preset.id ? null : preset.id))
+                  }
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          )}
           {allowAnnotations && attachedMarks.length > 0 && (
             <>
             <div className="lc-agent-mark-chips" aria-label="Attached annotations">

@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { LcApiError, LcClient, type SearchOptions } from "./api/client";
+import { LcApiError, LcClient, type ProposedAnnotation, type SearchOptions } from "./api/client";
 import { AmbientCoach, type AmbientProbe } from "./api/coachSocket";
 import {
   DEFAULT_PORT,
@@ -86,7 +86,7 @@ import {
   type AgentSendFlags,
   replyExcerpt,
 } from "./modes/AgentSidePanel";
-import { assembleAskPrompt, PAD_ASK_CLIP_CHARS, PROBLEM_ASK_CLIP_CHARS } from "./modes/coachMarkContext";
+import { assembleAskPrompt, packFootnoteContext, PAD_ASK_CLIP_CHARS, PROBLEM_ASK_CLIP_CHARS } from "./modes/coachMarkContext";
 import { AttemptDialog } from "./modes/AttemptDialog";
 import { WhiteboardDialog } from "./modes/WhiteboardDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
@@ -123,6 +123,7 @@ import {
   addFootnote,
   footnoteRevision,
   freshFootnoteId,
+  freshNoteId,
   freshSubMarkId,
   googleSearchUrl,
   numberFootnotes,
@@ -135,6 +136,13 @@ import {
 } from "./util/docFootnotes";
 import { footnoteThemeSeed } from "./util/inkPaletteHistory";
 import { getDocBytes, hashBytes, putDocBytes } from "./util/docBytes";
+import {
+  extractDocumentPages,
+  extractedPagesFor,
+  pageTextForAsk,
+  rememberExtractedPages,
+} from "./util/docExtract";
+import type { DocAnchor } from "./util/docAnchors";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { openExternalUrl } from "./util/openExternal";
 import { installSafeAreaInsets } from "./util/safeArea";
@@ -498,6 +506,10 @@ export function App() {
   /** Highlighter mode, owned by the board toolbar and read by the doc layer. */
   const [highlighting, setHighlighting] = useState(false);
   const [annotateEntryOpen, setAnnotateEntryOpen] = useState(false);
+  const [docIndexStatus, setDocIndexStatus] = useState<
+    "idle" | "indexing" | "indexed" | "error"
+  >("idle");
+  const [docIndexError, setDocIndexError] = useState<string | null>(null);
   // Read from the autosave interval, which must not be torn down and rebuilt
   // every time one of these changes — a restarted timer is a skipped save.
   const annotateSourceRef = useRef<{
@@ -518,6 +530,8 @@ export function App() {
   const annotateHeightRef = useRef<number | null>(null);
   annotateHeightRef.current = annotateHeight;
   const [pdfNav, setPdfNav] = useState<PdfNav | null>(null);
+  const pdfNavRef = useRef<PdfNav | null>(null);
+  pdfNavRef.current = pdfNav;
   const pdfThumbRef = useRef<PdfThumbRenderer | null>(null);
   const [pdfThumbReady, setPdfThumbReady] = useState(false);
   const [pdfFilmOpen, setPdfFilmOpen] = useState(loadPdfFilmPref);
@@ -2107,6 +2121,8 @@ export function App() {
       const switching = Boolean(problem);
       setBusy("opening document…");
       setError(null);
+      setDocIndexStatus("idle");
+      setDocIndexError(null);
       setTests(null);
       setNudges([]);
       setAgentMessages([]);
@@ -2315,6 +2331,40 @@ export function App() {
               `The old one is still under Recent.`,
           );
         }
+
+        setDocIndexStatus("indexing");
+        setDocIndexError(null);
+        const indexHash = hash;
+        const indexName = input.name;
+        const indexType = docType;
+        const indexText = text;
+        const indexBytes = bytes;
+        void (async () => {
+          try {
+            const pages = await extractDocumentPages({
+              docType: indexType,
+              name: indexName,
+              text: indexText,
+              bytes: indexBytes,
+            });
+            rememberExtractedPages(indexHash, pages);
+            if (pages.length === 0) {
+              if (workspaceLoadGenRef.current === loadGen) setDocIndexStatus("idle");
+              return;
+            }
+            const result = await client.putDocIndex(indexHash, {
+              name: indexName,
+              doc_type: indexType,
+              pages,
+            });
+            if (workspaceLoadGenRef.current !== loadGen) return;
+            setDocIndexStatus(result.indexed ? "indexed" : "error");
+          } catch (cause) {
+            if (workspaceLoadGenRef.current !== loadGen) return;
+            setDocIndexStatus("error");
+            setDocIndexError(messageOf(cause));
+          }
+        })();
       } catch (cause) {
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
@@ -2328,7 +2378,7 @@ export function App() {
         if (workspaceLoadGenRef.current === loadGen) setBusy(null);
       }
     },
-    [beginPadOpen, busy, endPadOpen, finishLoadingTransition, problem, themeId],
+    [beginPadOpen, busy, client, endPadOpen, finishLoadingTransition, problem, themeId],
   );
 
   /**
@@ -3241,12 +3291,75 @@ export function App() {
     [client, problem, pushCoachMessage],
   );
 
+  const applyProposedAnnotations = useCallback((proposed: ProposedAnnotation[]) => {
+    if (proposed.length === 0) return;
+    const source = annotateSourceRef.current;
+    const hash = source?.hash ?? "";
+    setAnnotateFootnotes((current) => {
+      let next = current;
+      for (const ann of proposed) {
+        const excerpt = (ann.excerpt ?? "").trim();
+        const note = (ann.note ?? "").trim();
+        if (!excerpt && !note) continue;
+        const page = ann.page ?? pdfNavRef.current?.current ?? 1;
+        const pages = hash ? extractedPagesFor(hash) : null;
+        const pageEntry = pages?.find((entry) => entry.page === page) ?? pages?.[0];
+        const pageText = pageEntry?.text ?? "";
+        const needle = excerpt.slice(0, 80);
+        const idx = needle && pageText ? pageText.indexOf(needle) : -1;
+        const scope = pageEntry?.scope;
+        const anchor: DocAnchor =
+          idx >= 0
+            ? {
+                kind: "text",
+                start: idx,
+                end: idx + needle.length,
+                ...(scope ? { scope } : {}),
+              }
+            : {
+                kind: "region",
+                x: 8,
+                y: 8,
+                w: 36,
+                h: 20,
+                ...(scope ? { scope } : {}),
+              };
+        const links = (ann.links ?? [])
+          .map((url) => url.trim())
+          .filter(Boolean)
+          .map((url) => ({ url }));
+        const notes = note
+          ? [
+              {
+                id: freshNoteId(next.flatMap((entry) => entry.notes ?? [])),
+                text: note,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+            ]
+          : undefined;
+        next = addFootnote(next, {
+          id: freshFootnoteId(next),
+          kind: "ai",
+          anchor,
+          excerpt: excerpt || note.slice(0, 80),
+          createdAt: Date.now(),
+          ...(notes ? { notes } : {}),
+          ...(links.length > 0 ? { userLinks: links } : {}),
+          ...footnoteThemeSeed(next.length),
+        });
+      }
+      return next;
+    });
+  }, []);
+
   const askAgent = useCallback(
     async (
       question: string,
       threadAnchor?: CoachReplyRef | null,
       photos?: CoachAttachment[],
       pendingAck?: CoachPendingAck,
+      docAsk?: { preset?: string | null; highlight?: string },
     ) => {
       const note = question.trim();
       if (!problem || !note) {
@@ -3287,6 +3400,23 @@ export function App() {
         // run frame and POST /coach/ask deserialize the one AskRequest.
         const images = (photos ?? []).map((photo) => photo.png);
         const surface = askSurface(problem);
+        const source = annotateSourceRef.current;
+        const docExtras =
+          surface === "annotate" && source
+            ? {
+                document_hash: source.hash,
+                page: pdfNavRef.current?.current ?? 1,
+                ...(docAsk?.highlight ? { highlight: docAsk.highlight } : {}),
+                page_text: pageTextForAsk(source.hash, pdfNavRef.current?.current ?? 1),
+                marks_prose: packFootnoteContext(
+                  attachedFootnoteIdsRef.current.flatMap((id) => {
+                    const mark = annotateFootnotesRef.current.find((entry) => entry.id === id);
+                    return mark ? [mark] : [];
+                  }),
+                ),
+                ...(docAsk?.preset ? { preset: docAsk.preset } : {}),
+              }
+            : {};
         const askPayload =
           surface === "problem"
             ? {
@@ -3301,8 +3431,12 @@ export function App() {
                 task_id: problem.task_id,
                 question: asked,
                 ...(images.length > 0 ? { images } : {}),
+                ...docExtras,
               };
-        const result = await runCoachJob<{ reply: string }>(
+        const result = await runCoachJob<{
+          reply: string;
+          proposed_annotations?: ProposedAnnotation[];
+        }>(
           "ask",
           askPayload,
           turnId,
@@ -3312,6 +3446,7 @@ export function App() {
               task_id: problem.task_id,
               ...(surface === "problem" ? { dataset: problem.dataset } : {}),
               ...(images.length > 0 ? { images } : {}),
+              ...docExtras,
             }),
         );
         if (coachRunGenRef.current !== genAtStart) return;
@@ -3320,6 +3455,7 @@ export function App() {
         finishCoachTurn(turnId, [
           { content: reply || "The model returned an empty reply." },
         ]);
+        applyProposedAnnotations(result.proposed_annotations ?? []);
       } catch (cause) {
         failText = messageOf(cause);
         if (coachRunGenRef.current === genAtStart) setError(failText);
@@ -3339,7 +3475,7 @@ export function App() {
         if (coachSendDepthRef.current === 0) drainCoachSendQueueRef.current();
       }
     },
-    [client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob],
+    [applyProposedAnnotations, client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob],
   );
 
   /** `runTests` fires this and is defined above it — see the auto-forward. */
@@ -3369,6 +3505,7 @@ export function App() {
             ...(requestedFlags.threadRootId != null
               ? { threadRootId: requestedFlags.threadRootId }
               : {}),
+            ...(requestedFlags.askPreset ? { askPreset: requestedFlags.askPreset } : {}),
           }
         : requestedFlags,
     [problem],
@@ -3706,6 +3843,10 @@ export function App() {
             threadAnchor,
             [...photos, ...boardShots],
             pendingAck,
+            {
+              preset: flags.askPreset,
+              highlight: quotedPassage,
+            },
           );
         }
         if (flags.draw) {
@@ -5020,6 +5161,15 @@ export function App() {
                 // slot the problem's name would have had.
                 <span className="lc-current" title={annotateSource?.name ?? "Document"}>
                   {annotateSource?.name ?? "Document"}
+                  {docIndexStatus === "indexing" ? (
+                    <span className="lc-doc-index-chip">indexing…</span>
+                  ) : docIndexStatus === "indexed" ? (
+                    <span className="lc-doc-index-chip is-ok">indexed</span>
+                  ) : docIndexStatus === "error" ? (
+                    <span className="lc-doc-index-chip is-bad" title={docIndexError ?? "index error"}>
+                      index error
+                    </span>
+                  ) : null}
                 </span>
               ) : (
                 <span className="lc-current" title="Whiteboard">
@@ -5615,6 +5765,7 @@ export function App() {
             askOnly={isLocalPad(problem)}
             agentSurface={isLocalPad(problem) ? "pad" : "problem"}
             allowAnnotations={!isWhiteboard(problem)}
+            documentPresets={isAnnotate(problem)}
             quoteSeed={coachQuoteSeed}
             focusThread={coachFocusThread}
             attachedMarks={attachedFootnoteIds.flatMap((id) => {

@@ -302,6 +302,10 @@ pub struct ServeConfig {
     /// Pairing token required by `--lan`. Generated on first `--lan` start and
     /// shown as a QR code for the tablet to scan.
     pub token: Option<String>,
+    /// Optional SearXNG JSON endpoint for the document Ask `search_web` tool.
+    /// Empty = the tool is not offered.
+    #[serde(default)]
+    pub searxng_url: String,
 }
 
 impl Default for ServeConfig {
@@ -309,6 +313,7 @@ impl Default for ServeConfig {
         Self {
             port: 7878,
             token: None,
+            searxng_url: String::new(),
         }
     }
 }
@@ -325,6 +330,12 @@ pub struct LocalLlmConfig {
     /// Whether the model accepts images. `None` → infer from the model name.
     #[serde(default)]
     pub vision: Option<bool>,
+    /// Small embedding model. Empty → hashed bag-of-words fallback (no extra VRAM).
+    #[serde(default)]
+    pub embed_model: String,
+    /// OpenAI-compatible `/embeddings` base. Empty → reuse [`Self::base_url`].
+    #[serde(default)]
+    pub embed_base_url: String,
 }
 
 impl Default for LocalLlmConfig {
@@ -334,6 +345,8 @@ impl Default for LocalLlmConfig {
             model: "qwen2.5-coder:7b".into(),
             vision_model: String::new(),
             vision: None,
+            embed_model: String::new(),
+            embed_base_url: String::new(),
         }
     }
 }
@@ -534,6 +547,8 @@ impl Config {
             "llm.local.base_url" => self.llm.local.base_url = value.to_string(),
             "llm.local.model" => self.llm.local.model = value.to_string(),
             "llm.local.vision_model" => self.llm.local.vision_model = value.to_string(),
+            "llm.local.embed_model" => self.llm.local.embed_model = value.to_string(),
+            "llm.local.embed_base_url" => self.llm.local.embed_base_url = value.to_string(),
             "llm.ollama.base_url" => self.llm.ollama.base_url = value.to_string(),
             "llm.ollama.model" => self.llm.ollama.model = value.to_string(),
             "llm.ollama.vision_model" => self.llm.ollama.vision_model = value.to_string(),
@@ -555,16 +570,17 @@ impl Config {
                     Some(value.to_string())
                 }
             }
+            "serve.searxng_url" => self.serve.searxng_url = value.to_string(),
             _ if key.starts_with("llm.modes.") => {
                 self.llm.modes.set(&key["llm.modes.".len()..], value)?
             }
             other => bail!(
                 "unknown config key {other:?}; known keys: data-dir, workspace, python, \
                  data.datasets.<{}>, tests.stop_on_first_failure, \
-                 llm.provider, llm.local.{{base_url,model,vision_model}}, \
+                 llm.provider, llm.local.{{base_url,model,vision_model,embed_model,embed_base_url}}, \
                  llm.ollama.{{base_url,model,vision_model}}, \
                  llm.openai.{{base_url,model,vision_model}}, \
-                 llm.groq.{{base_url,model,vision_model}}, llm.modes.<{}>, serve.port, serve.token, \
+                 llm.groq.{{base_url,model,vision_model}}, llm.modes.<{}>, serve.port, serve.token, serve.searxng_url, \
                  coach.{{ws_runs,process_events_ui,planner_enabled,draw_review_enabled,approach_commitment}}",
                 crate::dataset::DATASETS
                     .iter()
@@ -597,6 +613,8 @@ impl Config {
             "llm.local.base_url" => self.llm.local.base_url.clone(),
             "llm.local.model" => self.llm.local.model.clone(),
             "llm.local.vision_model" => self.llm.local.vision_model.clone(),
+            "llm.local.embed_model" => self.llm.local.embed_model.clone(),
+            "llm.local.embed_base_url" => self.llm.local.embed_base_url.clone(),
             "llm.ollama.base_url" => self.llm.ollama.base_url.clone(),
             "llm.ollama.model" => self.llm.ollama.model.clone(),
             "llm.ollama.vision_model" => self.llm.ollama.vision_model.clone(),
@@ -608,6 +626,7 @@ impl Config {
             "llm.groq.vision_model" => self.llm.groq.vision_model.clone(),
             "serve.port" => self.serve.port.to_string(),
             "serve.token" => self.serve.token.clone().unwrap_or_default(),
+            "serve.searxng_url" => self.serve.searxng_url.clone(),
             _ if key.starts_with("llm.modes.") => {
                 self.llm.modes.get(&key["llm.modes.".len()..])?.to_string()
             }
@@ -624,6 +643,34 @@ impl Config {
 
     pub fn workspace_dir(&self) -> PathBuf {
         expand_tilde(&self.workspace.dir)
+    }
+
+    /// Embedding model name. Empty means hashed lexical vectors (no extra GPU).
+    pub fn embed_model(&self) -> Option<&str> {
+        let m = self.llm.local.embed_model.trim();
+        if m.is_empty() {
+            None
+        } else {
+            Some(m)
+        }
+    }
+
+    pub fn embed_base_url(&self) -> &str {
+        let extra = self.llm.local.embed_base_url.trim();
+        if extra.is_empty() {
+            self.llm.local.base_url.as_str()
+        } else {
+            extra
+        }
+    }
+
+    pub fn searxng_url(&self) -> Option<&str> {
+        let u = self.serve.searxng_url.trim();
+        if u.is_empty() {
+            None
+        } else {
+            Some(u)
+        }
     }
 
     /// Explicit corpus folder for one dataset, if the user set one.

@@ -112,6 +112,7 @@ import {
   viewportBand,
   type PageableElement,
 } from "./pageView";
+import { documentCameraAfterViewportChange } from "./documentRotateCamera";
 import { encodeInkOps } from "./inkCodec";
 import { fallbackPageFrames, pageFramesFromPdfSlot, pageIdFromCamera } from "./inkPageIndex";
 import { eraserScreenRadius } from "./rasterInk";
@@ -5000,7 +5001,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
   }, [clampPanScroll, interactive, mobile, pulseCameraMotion, reportCodeSlot]);
 
-  type FitMode = "frame" | "camera" | "both";
+  type FitMode = "frame" | "camera" | "both" | "keepY";
 
   const runFit = useCallback(
     (regionId?: string | null, mode: FitMode = "both") => {
@@ -5090,7 +5091,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       const isScratchPage = typeof page === "string" && page.startsWith("pad-");
 
-      if (mode === "frame" || mode === "both") {
+      if (mode === "frame" || mode === "both" || mode === "keepY") {
         /*
          * Grow/shrink the focus *frame* so width-fill zoom also fills height.
          * Zoom alone cannot do this when the authored aspect is wider than the hole.
@@ -5221,7 +5222,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
       }
 
-      if (mode === "camera" || mode === "both") {
+      if (mode === "camera" || mode === "both" || mode === "keepY") {
         let minX = Infinity;
         let minY = Infinity;
         let maxX = -Infinity;
@@ -5288,11 +5289,35 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           page === "code" ||
           page === "agent" ||
           isDrawPageRegion(page);
-        const zoom = clampZoom(
-          widthOnly
-            ? availWidth / boxWidth
-            : Math.min(availWidth / boxWidth, availHeight / boxHeight),
-        );
+        /*
+         * Rotate / window resize on a document: width-fit and center X, keep
+         * the scene line that was at the top of the hole. A full reset jumps
+         * to page 1; skipping the camera (the old userAdjusted path) leaves
+         * portrait scrollX in a landscape hole — the off-center page.
+         */
+        const prevCamera = api.getAppState() as {
+          scrollY?: number;
+          zoom?: { value?: number };
+        };
+        const keepDocumentY = mode === "keepY" && widthOnly;
+        const rotated = keepDocumentY
+          ? documentCameraAfterViewportChange({
+              box: { minX, minY, maxX, maxY },
+              inset,
+              viewWidth,
+              prevZoom: prevCamera.zoom?.value ?? 1,
+              prevScrollY: prevCamera.scrollY ?? 0,
+              zoomMin: ZOOM_MIN,
+              zoomMax: ZOOM_MAX,
+            })
+          : null;
+        const zoom =
+          rotated?.zoom ??
+          clampZoom(
+            widthOnly
+              ? availWidth / boxWidth
+              : Math.min(availWidth / boxWidth, availHeight / boxHeight),
+          );
         fitZoomMinRef.current = zoom;
         // Tablet locks zoom-out at page fit; desktop (coach on the right) stays free.
         setZoomFloorPct(
@@ -5306,8 +5331,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             ? 0
             : Math.max(0, availHeight - boxHeight * zoom);
         fittingCameraRef.current = true;
-        const nextScrollX = (inset.left + slackX / 2) / zoom - minX;
-        const nextScrollY = (inset.top + slackY / 2) / zoom - minY;
+        let nextScrollX =
+          rotated?.scrollX ?? (inset.left + slackX / 2) / zoom - minX;
+        let nextScrollY =
+          rotated?.scrollY ?? (inset.top + slackY / 2) / zoom - minY;
+        if (rotated) {
+          const clamped = clampScrollToBounds(
+            nextScrollX,
+            nextScrollY,
+            zoom,
+            viewWidth,
+            viewHeight,
+            { minX, minY, maxX, maxY },
+            inset,
+          );
+          nextScrollX = clamped.scrollX;
+          nextScrollY = clamped.scrollY;
+        }
         if (scrollModeRef.current) lockedScrollXRef.current = nextScrollX;
         api.updateScene({
           appState: {
@@ -5544,7 +5584,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const board = boardRef.current;
     if (!board || typeof ResizeObserver === "undefined") return;
     let timer: number | null = null;
+    let late: number | null = null;
     const run = () => {
+      // Documents: recenter X and width-fit, keep the reading line. Skipping
+      // the camera after any pan (the old path) left portrait scrollX in a
+      // landscape hole. A full refitToViewport would jump back to page 1.
+      if (pageContentRef.current) {
+        runFit(null, "keepY");
+        return;
+      }
       // Once the user has zoomed or panned, the camera is theirs: resize the
       // page frame to the new viewport, but leave zoom and scroll alone.
       // Desktop used to bail when `mobileRegion === null`, so opening a file
@@ -5555,22 +5603,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       refitToViewport();
     };
-    const observer = new ResizeObserver(() => {
-      if (timer != null) window.clearTimeout(timer);
-      timer = window.setTimeout(run, 60);
-    });
-    observer.observe(board);
-    const onWindowResize = () => {
+    const schedule = () => {
       if (timer != null) window.clearTimeout(timer);
       timer = window.setTimeout(run, 60);
     };
-    window.addEventListener("resize", onWindowResize);
+    const observer = new ResizeObserver(schedule);
+    observer.observe(board);
+    window.addEventListener("resize", schedule);
+    const onOrient = () => {
+      schedule();
+      if (late != null) window.clearTimeout(late);
+      late = window.setTimeout(run, 200);
+    };
+    window.addEventListener("orientationchange", onOrient);
     return () => {
       observer.disconnect();
-      window.removeEventListener("resize", onWindowResize);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("orientationchange", onOrient);
       if (timer != null) window.clearTimeout(timer);
+      if (late != null) window.clearTimeout(late);
     };
-  }, [interactive, fitFrame, refitToViewport]);
+  }, [interactive, fitFrame, refitToViewport, runFit]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
@@ -7353,7 +7406,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         <div
           ref={attachMarksSlot}
           className="lc-page-marks-slot"
-          style={{ width: contentSceneWidth }}
+          style={{ width: contentSceneWidth + 24 }}
         />
       )}
       {linedPaperOn && linedSlotOn && (

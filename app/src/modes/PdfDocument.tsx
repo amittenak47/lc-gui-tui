@@ -134,7 +134,7 @@ export type { PdfThumbRenderer } from "./pdfFilm";
 /** One worker for the app lifetime — a new `workerPort` per open hangs getDocument. */
 let pdfJsLoader: Promise<typeof import("pdfjs-dist")> | null = null;
 
-async function loadPdfJs() {
+export async function loadPdfJs() {
   if (pdfJsLoader) return pdfJsLoader;
   pdfJsLoader = (async () => {
     const [pdfjs, worker] = await Promise.all([
