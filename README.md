@@ -153,6 +153,96 @@ approach commitment model, and the socket frame contract live under
 `src/llm/coach/` (HTTP routes stay `/coach/*`).
 
 Browser-over-LAN, spacedesk, and Android build details → [`app/README.md`](app/README.md).
+Android pairing and Tailscale → [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md).
+
+---
+
+## Where the work lives
+
+Three layers. They move independently. **This branch keeps LeetCode tests on the home PC.** The tablet is a client; it never ran Python.
+
+| Layer | What | Where (this branch) | “Anywhere” means |
+| --- | --- | --- | --- |
+| **Pad UI** | Canvas, ink, footnotes | Device (`app/`) | Already on the device |
+| **Agent / LLM** | Chat HTTP | PC, via `lc serve` | The model URL must be reachable |
+| **Daemon extras** | Corpus, `solution.py`, tests, document index | PC | Same machine as Python |
+
+`lc serve` **is** the daemon. Putting “the server in the app” (the stripped branch below) compiles the **LLM client + prompts** into Tauri. It does not move Python onto Android.
+
+```mermaid
+flowchart LR
+  subgraph device [Tablet_or_desktop]
+    UI[Pad_UI]
+    IDB[IndexedDB_pads]
+    Pack[Offline_problem_pack]
+    UI --> IDB
+    UI --> Pack
+  end
+  subgraph pc [Home_PC]
+    Daemon[lc_serve]
+    Py[Python_runner]
+    Corpus[SQLite_corpus]
+    WS[lc_workspace]
+    LLM[llama_cpp_or_Groq]
+    Daemon --> Py
+    Daemon --> Corpus
+    Daemon --> WS
+    Daemon --> LLM
+  end
+  UI -->|"HTTP_WS token"| Daemon
+```
+
+### Problems vs pads vs offline pack
+
+```mermaid
+flowchart TD
+  subgraph pads [Pads_always_local]
+    WB[Whiteboard_IndexedDB]
+    AN[Annotate_IndexedDB]
+  end
+  subgraph problems [Problems]
+    Online[Online_loadProblem]
+    Offline[Offline_pack_IndexedDB]
+    Online --> Workspace[PC_lc-workspace]
+    Offline --> ReadOnly[Read_statement_and_draw]
+    Workspace --> Tests[Run_tests]
+  end
+```
+
+| Surface | Offline | Sync |
+| --- | --- | --- |
+| **Whiteboard / annotate** | Full. Notebooks and doc copies live in IndexedDB. | None across devices. Same browser profile, or export/import a sidecar. The PC may hold a **text** RAG index (`docs.db`); PDF bytes stay on the device. |
+| **Problems (online)** | — | Desktop app, browser, and Android that pair to the **same** `lc serve` share `~/lc-workspace` (`board.json`, `solution.py`, `.lc/agent.json`). That is the sync story — not a cloud account. |
+| **Problems (offline pack)** | Settings can download statements (~100–250 MB). Browse and open a local board. **No** tests, **no** coach. | Offline ink on a problem is **not** merged back onto the PC. Settings has a prefer-local / prefer-server pref; it is not a reconciler. |
+
+Tests always call `python run_tests.py` on the PC (`src/workspace/runner.rs`). Coach Review (perceive → claim → verdict) always runs inside `lc serve`.
+
+### Desktop, browser, Android
+
+Same React client. Pairing is `baseUrl` + token (`app/src/api/pairing.ts`). Desktop defaults to `http://127.0.0.1:7878`. LAN or Tailscale: `http://<pc>:7878` plus the 6-digit code.
+
+Android’s Tauri crate is a cleartext HTTP proxy, not an agent. The APK on this branch does not embed `lc serve`.
+
+Cafe / campus: install Tailscale, pair to the PC’s `100.x` IP, port 7878. Encrypted mesh, no port-forward. Still tethered to the home Python and corpus — you are just off home Wi‑Fi.
+
+### Fully untethered LeetCode (not this branch)
+
+You can move one layer without the others. Doing **all** of them is a different product.
+
+1. **LLM only** — Groq/OpenAI, or Tailscale to home llama.cpp. Main still needs `lc serve` for tests and the corpus.
+2. **On-device Python** — Termux / a sidecar, not a typical Play-store APK. Fragile.
+3. **Remote runner** — a VPS or microVM runs `run_tests.py`. That costs money. The free judge is the home PC.
+4. **True offline LeetCode** — bundle the corpus and skip tests, or ship a runtime.
+
+### Stripped branch (whiteboard + documents)
+
+[`claude/strip-harness-ask-tauri-jeebbu`](https://github.com/amittenak47/lc-gui-tui/tree/claude/strip-harness-ask-tauri-jeebbu) is a **sibling product**, not a merge. No corpus, no Python runner, no problem browser.
+
+Tauri depends on the crate with `default-features = false`: **agent in the APK**, no axum. Ask talks to `llm.local.base_url` from the device (Tailscale llama.cpp, or Groq). Browser builds still have no Tauri, so they still need a small daemon for Ask.
+
+**Staged Review is gone there.** Ask is one model call. Draw/Viz still has a tool loop (diagrams), which is not perceive → claim → verdict.
+
+Do not merge the two products. Main stays the harness.
 
 ---
 
@@ -199,12 +289,7 @@ Adapters: [`src/datasets/`](src/datasets/). After adapter changes: `whiteboard i
 
 - Desktop scrolling page indicator
 - Chat improvements
-- Untether from LAN-only: today the app is semi-tethered to a local network where the runtime and LLM share the same LAN. Plan combinations of on-device-only (LLM maybe), remote, and local configs.
-- Optional bundling of dataset + index with the app on device
-- Optional hosting of the dataset in a remote location
-- On-device Python interpreter when possible (for on-device testing)
-- Optional remote runtime via microVM
-- After the above: optionally enable the server on device
+- Optional corpus bundle / hosted dataset (see [Where the work lives](#where-the-work-lives) — LeetCode tests stay on the home PC on this branch)
 
 ---
 

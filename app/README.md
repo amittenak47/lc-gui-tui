@@ -18,6 +18,8 @@ runner stay on the PC, behind `lc serve`.
         the same binary also builds as a desktop window → localhost
 ```
 
+How the three layers split (pad UI vs `lc serve` vs Python/LLM), what works offline, Tailscale vs a fully untethered LeetCode, and the stripped Ask-only APK: [Where the work lives](../README.md#where-the-work-lives) in the repo README.
+
 The Magic Note Pad is a standalone Android tablet, not a pen display — Drawing
 Display Mode needs DP-IN and only exists on the Magic *Drawing* Pad. Hence
 client/server rather than screen mirroring.
