@@ -69,6 +69,35 @@ export function annotateFrameWidthFromElements(
   return null;
 }
 
+/**
+ * Column width for an annotate open.
+ *
+ * Fresh files follow the viewport so type stays readable. A restore keeps
+ * the width the marks and ink were drawn at — rotate only changes zoom, and
+ * landscape-open used to overwrite that width so region boxes sat off the
+ * words. Prefer the saved frame, then a stored sidecar width, then the screen.
+ */
+export function annotatePageWidthForOpen(
+  viewportCssWidth: number,
+  saved?: {
+    elements?: readonly {
+      width?: number;
+      customData?: { lcMdInkFrame?: boolean } | null;
+    }[] | null;
+    frameWidth?: number | null;
+  } | null,
+): number {
+  const fromElements = saved?.elements
+    ? annotateFrameWidthFromElements(saved.elements)
+    : null;
+  if (fromElements != null) return fromElements;
+  const stored = saved?.frameWidth;
+  if (typeof stored === "number" && Number.isFinite(stored) && stored > 0) {
+    return Math.round(stored);
+  }
+  return annotatePageWidthForViewport(viewportCssWidth);
+}
+
 /** Height before the document has been measured, and the floor afterwards. */
 export const MD_INK_MIN_PAGE_H = 1100;
 
