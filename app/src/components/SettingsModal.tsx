@@ -3,12 +3,13 @@
  * Backdrop blurs the board the same way problem-load transitions do.
  */
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import type { LcClient } from "../api/client";
 import type { CoachFlags, DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
 import { DEFAULT_COACH_FLAGS } from "../api/types";
+import { shouldDismissBackdrop } from "../util/backdropDismiss";
 import { HoldButton } from "./HoldButton";
 import { MorphBar } from "./MorphBar";
 import { loadForwardFailures, saveForwardFailures } from "../util/agentPrefs";
@@ -384,6 +385,7 @@ export function SettingsModal({
   coachDetail = null,
 }: SettingsModalProps) {
   const mobile = useIsMobile();
+  const backdropDown = useRef(false);
   const [tab, setTab] = useState<TabId>(initialTab ?? "personalise");
   const [page, setPage] = useState("root");
   const [subHost, setSubHost] = useState<HTMLDivElement | null>(null);
@@ -764,8 +766,13 @@ export function SettingsModal({
     <div
       className="lc-settings-backdrop"
       role="presentation"
+      onPointerDown={(e) => {
+        backdropDown.current = e.target === e.currentTarget;
+      }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) cancel();
+        const startedOnBackdrop = backdropDown.current;
+        backdropDown.current = false;
+        if (shouldDismissBackdrop(startedOnBackdrop, e.target, e.currentTarget)) cancel();
       }}
     >
       <div className="lc-settings-modal" role="dialog" aria-modal="true" aria-label="Settings">

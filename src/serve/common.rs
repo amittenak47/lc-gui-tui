@@ -47,6 +47,9 @@ pub(crate) fn read_board_blob(dir: &Path) -> Result<Option<serde_json::Value>> {
 }
 
 pub(crate) fn load_meta(cfg: &Config, dataset: &'static Dataset, id: &str) -> Result<WorkspaceMeta> {
+    if let Some(meta) = crate::pad::pad_meta_for(Some(dataset.id), id) {
+        return Ok(meta);
+    }
     let dir = runner::locate_workspace_in(cfg, dataset, Some(id))?;
     runner::read_meta(&dir)
 }
@@ -54,6 +57,12 @@ pub(crate) fn load_meta(cfg: &Config, dataset: &'static Dataset, id: &str) -> Re
 /// The problem statement for a workspace, or `None` if the corpus file moved
 /// since `lc load` — the same tolerance `lc ask` has.
 pub(crate) fn description_for(meta: &WorkspaceMeta) -> Option<String> {
+    if crate::pad::is_whiteboard_meta(meta) {
+        return Some(crate::pad::WHITEBOARD_DESCRIPTION.to_string());
+    }
+    if crate::pad::is_annotate_meta(meta) {
+        return Some(crate::pad::ANNOTATE_DESCRIPTION.to_string());
+    }
     problem::load_task_for(meta.dataset(), Path::new(&meta.json_path), &meta.task_id)
         .ok()
         .and_then(|p| p.problem_description)

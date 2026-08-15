@@ -30,6 +30,7 @@ import {
   stepFallbackPalette,
 } from "../util/inkPaletteHistory";
 import { footnoteThemeVars } from "../util/footnoteTheme";
+import { fitTextareaHeight } from "../util/fitTextareaHeight";
 import { normalizeExternalUrl } from "../util/openExternal";
 import { HOLD_SENSITIVE_MS } from "../util/gesture";
 export interface FootnoteOverviewProps {
@@ -204,6 +205,7 @@ export function FootnoteOverview({
 }: FootnoteOverviewProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const replyRef = useRef<HTMLTextAreaElement | null>(null);
   const [task, setTask] = useState<Task | null>(null);
   const [draft, setDraft] = useState("");
   const palette =
@@ -230,6 +232,13 @@ export function FootnoteOverview({
     const next = stepFallbackPalette(palette, delta);
     persistMarkPalette(next, remapColorToPalette(markColor, palette, next));
   };
+
+  useLayoutEffect(() => {
+    if (task?.kind !== "thread") return;
+    const node = replyRef.current;
+    if (!node) return;
+    fitTextareaHeight(node);
+  }, [draft, task]);
 
   useEffect(() => {
     if (!openThreadRootId) return;
@@ -533,8 +542,9 @@ export function FootnoteOverview({
                 }}
               >
                 <textarea
+                  ref={replyRef}
                   value={draft}
-                  rows={1}
+                  rows={3}
                   placeholder="Reply…"
                   onChange={(event) => setDraft(event.target.value)}
                   onKeyDown={(event) => {

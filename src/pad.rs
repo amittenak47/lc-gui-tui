@@ -59,7 +59,12 @@ pub fn session_key(surface: &AgentSurface, task_id: &str) -> String {
 
 /// Resolve Ask / Viz `surface` plus the legacy `dataset` / `task_id` map.
 ///
-/// Prefer `surface` when it is present. Otherwise:
+/// Pad task ids (`__whiteboard__`, `__annotate__`, and the pre-rename slugs)
+/// always win — even when a client sends `surface: "problem"` or
+/// `dataset: "leetcode"`. Those ids are never in a SQLite corpus; treating
+/// `surface` as gospel used to look them up as LeetCode problems.
+///
+/// Otherwise prefer `surface` when it is present:
 /// - `scratchpad` / `whiteboard` / `__scratchpad__` / `__whiteboard__` → whiteboard
 /// - `md-ink` / `__md_ink__` / `__annotate__` → annotate
 /// - anything else → problem with that dataset slug (default corpus if omitted)
@@ -72,6 +77,13 @@ pub fn parse_surface(
     let dataset = dataset.map(str::trim).filter(|s| !s.is_empty());
     let task_id = task_id.trim();
 
+    if is_whiteboard_slug(dataset, task_id) {
+        return AgentSurface::Whiteboard;
+    }
+    if is_annotate_slug(dataset, task_id) {
+        return AgentSurface::Annotate;
+    }
+
     if let Some(kind) = surface {
         return match kind {
             SURFACE_WHITEBOARD => AgentSurface::Whiteboard,
@@ -79,18 +91,25 @@ pub fn parse_surface(
             SURFACE_PROBLEM => AgentSurface::Problem {
                 dataset: dataset.unwrap_or("leetcode").to_string(),
             },
-            _ => parse_surface(None, dataset, task_id),
+            _ => AgentSurface::Problem {
+                dataset: dataset.unwrap_or("leetcode").to_string(),
+            },
         };
     }
 
-    if is_whiteboard_slug(dataset, task_id) {
-        return AgentSurface::Whiteboard;
-    }
-    if is_annotate_slug(dataset, task_id) {
-        return AgentSurface::Annotate;
-    }
     AgentSurface::Problem {
         dataset: dataset.unwrap_or("leetcode").to_string(),
+    }
+}
+
+/// Synthetic workspace meta when `task_id` / dataset names a pad, not a corpus.
+pub fn pad_meta_for(dataset: Option<&str>, task_id: &str) -> Option<WorkspaceMeta> {
+    if is_whiteboard_slug(dataset, task_id) {
+        Some(whiteboard_meta())
+    } else if is_annotate_slug(dataset, task_id) {
+        Some(annotate_meta())
+    } else {
+        None
     }
 }
 
@@ -245,5 +264,33 @@ mod tests {
                 dataset: "leetcode".into()
             }
         );
+    }
+
+    #[test]
+    fn pad_task_ids_win_over_problem_surface() {
+        assert_eq!(
+            parse_surface(Some("problem"), Some("leetcode"), WHITEBOARD_TASK_ID),
+            AgentSurface::Whiteboard
+        );
+        assert_eq!(
+            parse_surface(Some("problem"), Some("leetcode"), ANNOTATE_TASK_ID),
+            AgentSurface::Annotate
+        );
+        assert_eq!(
+            parse_surface(Some("problem"), None, ANNOTATE_TASK_ID),
+            AgentSurface::Annotate
+        );
+        assert_eq!(
+            parse_surface(Some("problem"), Some("leetcode"), LEGACY_MD_INK_TASK_ID),
+            AgentSurface::Annotate
+        );
+    }
+
+    #[test]
+    fn pad_meta_for_skips_corpus_lookup() {
+        let meta = pad_meta_for(Some("leetcode"), ANNOTATE_TASK_ID).expect("annotate pad");
+        assert_eq!(meta.task_id, ANNOTATE_TASK_ID);
+        assert_eq!(meta.dataset, SURFACE_ANNOTATE);
+        assert!(pad_meta_for(Some("leetcode"), "two-sum").is_none());
     }
 }

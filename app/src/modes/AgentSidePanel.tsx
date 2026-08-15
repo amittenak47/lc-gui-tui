@@ -1393,6 +1393,7 @@ export function AgentSidePanel({
           )}
           {visibleMessages.map((message) => {
             const replyStub = message.replyTo;
+            const replyCount = threadReplies.get(message.id)?.length ?? 0;
             return (
             <div
               key={message.id}
@@ -1478,7 +1479,7 @@ export function AgentSidePanel({
               {message.content ? (
                 <div className="lc-agent-turn-body">{message.content}</div>
               ) : null}
-              {!openThreadId && (threadReplies.get(message.id)?.length ?? 0) > 1 && (
+              {!openThreadId && replyCount > 0 && (
                 /*
                  * The thread, collapsed to one line.
                  *
@@ -1486,7 +1487,8 @@ export function AgentSidePanel({
                  * message with three answers put three of them between you and
                  * whatever was said next, each carrying its own stub of the
                  * same quote. One bubble instead, and the back-and-forth lives
-                 * behind it.
+                 * behind it — including a single Agent answer hung off a mark
+                 * Ask (`replyTo`), which must not also render as a room turn.
                  */
                 <button
                   type="button"
@@ -1501,8 +1503,7 @@ export function AgentSidePanel({
                   }}
                 >
                   <span className="lc-agent-thread-open-count">
-                    {threadReplies.get(message.id)!.length}{" "}
-                    {threadReplies.get(message.id)!.length === 1 ? "reply" : "replies"}
+                    {replyCount} {replyCount === 1 ? "reply" : "replies"}
                   </span>
                   <span className="lc-agent-thread-open-peek">
                     {threadReplies.get(message.id)!.at(-1)?.content.slice(0, 60) ||

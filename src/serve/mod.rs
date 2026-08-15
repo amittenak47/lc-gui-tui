@@ -27,6 +27,7 @@ pub mod ws;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use axum::extract::{DefaultBodyLimit, Request, State};
@@ -115,6 +116,10 @@ pub fn run(mut cfg: Config, port: Option<u16>, lan: bool) -> Result<()> {
 
 async fn serve(state: Shared, addr: SocketAddr, lan: bool) -> Result<()> {
     let app = router(state.clone());
+    // `--lan` binds 0.0.0.0 and the default binds 127.0.0.1. On Windows those
+    // are different sockets, so a leftover loopback daemon and a new `--lan`
+    // both "succeed" — then 127.0.0.1 traffic keeps hitting the old process.
+    refuse_if_loopback_taken(addr.port())?;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("cannot bind {addr} — is another lc serve already running?"))?;
@@ -122,12 +127,80 @@ async fn serve(state: Shared, addr: SocketAddr, lan: bool) -> Result<()> {
     print_banner(&state, addr, lan);
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            eprintln!("\nshutting down");
-        })
+        .with_graceful_shutdown(wait_for_shutdown())
         .await
         .context("the daemon stopped unexpectedly")
+}
+
+/// True when something already accepts connections on `127.0.0.1:port`.
+fn loopback_port_open(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        Duration::from_millis(200),
+    )
+    .is_ok()
+}
+
+fn refuse_if_loopback_taken(port: u16) -> Result<()> {
+    if !loopback_port_open(port) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "port {port} is already answering on 127.0.0.1 — another `lc serve` is still running. \
+         Ctrl+C that terminal (or end the old `lc.exe` in Task Manager). \
+         On Windows, loopback `lc serve` and `lc serve --lan` can both bind this port, \
+         and the old process keeps the local UI."
+    ))
+}
+
+/// Ctrl+C, and the signals a closed terminal / taskkill actually send.
+async fn wait_for_shutdown() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = signal(SignalKind::terminate()).ok();
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = async {
+                if let Some(handle) = term.as_mut() {
+                    handle.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+        }
+    }
+    #[cfg(windows)]
+    {
+        let mut close = tokio::signal::windows::ctrl_close().ok();
+        let mut brk = tokio::signal::windows::ctrl_break().ok();
+        let mut shutdown = tokio::signal::windows::ctrl_shutdown().ok();
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = async {
+                if let Some(handle) = close.as_mut() {
+                    handle.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+            _ = async {
+                if let Some(handle) = brk.as_mut() {
+                    handle.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+            _ = async {
+                if let Some(handle) = shutdown.as_mut() {
+                    handle.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+        }
+    }
+    eprintln!("\nshutting down");
 }
 
 pub fn router(state: Shared) -> Router {
@@ -488,5 +561,13 @@ mod tests {
         let qr = qr_ascii("http://192.168.1.20:7878?token=abc").unwrap();
         assert!(qr.lines().count() > 8);
         assert!(qr.contains('█') || qr.contains('▀'));
+    }
+
+    #[test]
+    fn loopback_port_open_sees_an_existing_listener() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(loopback_port_open(port));
+        assert!(refuse_if_loopback_taken(port).is_err());
     }
 }
