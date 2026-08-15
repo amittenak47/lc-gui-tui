@@ -34,7 +34,7 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use colored::Colorize;
 use rand::Rng;
@@ -236,6 +236,37 @@ pub fn router(state: Shared) -> Router {
             "/docs/:hash/index",
             get(routes::get_docs_index).put(routes::put_docs_index),
         )
+        .route(
+            "/docs/:hash/bytes",
+            get(routes::get_doc_bytes).put(routes::put_doc_bytes),
+        )
+        .route("/pads/whiteboard", get(routes::list_whiteboard))
+        .route("/pads/whiteboard/archive", get(routes::archive_whiteboard))
+        .route("/pads/whiteboard/:id", put(routes::put_whiteboard))
+        .route(
+            "/pads/whiteboard/:id/tombstone",
+            post(routes::tombstone_whiteboard),
+        )
+        .route(
+            "/pads/whiteboard/:id/restore",
+            post(routes::restore_whiteboard),
+        )
+        .route("/pads/annotate", get(routes::list_annotate))
+        .route("/pads/annotate/archive", get(routes::archive_annotate))
+        .route("/pads/annotate/:id", put(routes::put_annotate))
+        .route(
+            "/pads/annotate/:id/tombstone",
+            post(routes::tombstone_annotate),
+        )
+        .route("/pads/annotate/:id/restore", post(routes::restore_annotate))
+        .route("/pads/snapshots", put(routes::put_snapshot))
+        .route("/pads/snapshots/:kind/:key", get(routes::get_snapshots))
+        .route("/devices", get(routes::list_devices))
+        .route(
+            "/devices/:id/prefs",
+            get(routes::get_device_prefs).put(routes::put_device_prefs),
+        )
+        .route("/devices/:id/clone", post(routes::clone_device_prefs))
         .route("/coach/viz", post(viz::viz))
         .route("/coach/draw_review", post(viz::draw_review))
         .route("/coach/reveal", post(coach::reveal))

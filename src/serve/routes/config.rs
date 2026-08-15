@@ -202,3 +202,24 @@ pub async fn llm_stop(State(state): State<Shared>) -> Result<Json<crate::llm::li
         blocking(move || crate::llm::lifecycle::stop_local_llm(&cfg)).await?,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[test]
+    fn apply_config_dto_does_not_wipe_embed_or_searxng() {
+        let mut cfg = Config::default();
+        cfg.llm.local.embed_model = "nomic".into();
+        cfg.llm.local.embed_base_url = "http://127.0.0.1:8081/v1".into();
+        cfg.serve.searxng_url = "http://127.0.0.1:8888".into();
+        let mut dto = config_dto(&cfg);
+        dto.local.model = "other-chat".into();
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.llm.local.model, "other-chat");
+        assert_eq!(cfg.llm.local.embed_model, "nomic");
+        assert_eq!(cfg.llm.local.embed_base_url, "http://127.0.0.1:8081/v1");
+        assert_eq!(cfg.serve.searxng_url, "http://127.0.0.1:8888");
+    }
+}

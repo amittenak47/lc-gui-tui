@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use base64::Engine;
 
 /// One proxied request. `path` is daemon-relative, e.g. `/coach/review`.
 #[derive(Debug, Deserialize)]
@@ -26,6 +27,9 @@ pub struct LcRequest {
     pub token: Option<String>,
     #[serde(default)]
     pub body: Option<serde_json::Value>,
+    /// Raw body as base64, used for `/docs/:hash/bytes` (not JSON).
+    #[serde(default)]
+    pub raw_base64: Option<String>,
 }
 
 fn default_method() -> String {
@@ -70,7 +74,14 @@ pub async fn lc_request(request: LcRequest) -> Result<LcResponse, String> {
     if let Some(token) = &request.token {
         builder = builder.header("X-LC-Token", token);
     }
-    if let Some(body) = &request.body {
+    if let Some(raw) = &request.raw_base64 {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(raw.trim())
+            .map_err(|err| format!("invalid raw_base64: {err}"))?;
+        builder = builder
+            .header("Content-Type", "application/octet-stream")
+            .body(bytes);
+    } else if let Some(body) = &request.body {
         builder = builder.json(body);
     }
 
@@ -83,16 +94,27 @@ pub async fn lc_request(request: LcRequest) -> Result<LcResponse, String> {
     })?;
 
     let status = response.status().as_u16();
-    let text = response
-        .text()
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = response
+        .bytes()
         .await
         .map_err(|err| format!("cannot read the response from {url}: {err}"))?;
-    let body = if text.trim().is_empty() {
-        serde_json::Value::Null
+    let body = if content_type.contains("octet-stream") {
+        serde_json::json!({
+            "$bytes": base64::engine::general_purpose::STANDARD.encode(&bytes)
+        })
     } else {
-        // Pass non-JSON through as a string rather than failing: the caller
-        // shows the daemon's message either way.
-        serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text))
+        let text = String::from_utf8_lossy(&bytes);
+        if text.trim().is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text.into_owned()))
+        }
     };
 
     Ok(LcResponse { status, body })

@@ -2,12 +2,14 @@
  * Compact filter control for the problem browser.
  *
  * Native `<select>` sizes its closed width to the longest `<option>` — a long
- * tag list blows the filter row. This button + scroll-pane menu keeps a fixed
- * trigger width and uses the same scrollbar chrome as Settings.
+ * tag list blows the filter row. This button + MorphBar menu keeps a fixed
+ * trigger width and grows the list the same way Settings flyouts do.
  */
 
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+
+import { MorphBar } from "./MorphBar";
 
 export interface BrowserFilterOption {
   value: string;
@@ -24,6 +26,8 @@ export interface BrowserFilterSelectProps {
   onChange: (value: string) => void;
 }
 
+const MENU_CLOSE_MS = 300;
+
 export function BrowserFilterSelect({
   className,
   value,
@@ -36,6 +40,7 @@ export function BrowserFilterSelect({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
+  const [painted, setPainted] = useState(false);
   const [menuBox, setMenuBox] = useState<{
     left: number;
     top: number;
@@ -47,7 +52,17 @@ export function BrowserFilterSelect({
   const triggerLabel = selected?.label || placeholder;
 
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      setPainted(true);
+      return;
+    }
+    if (!painted) return;
+    const timer = window.setTimeout(() => setPainted(false), MENU_CLOSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [open, painted]);
+
+  useEffect(() => {
+    if (!open && !painted) {
       setMenuBox(null);
       return;
     }
@@ -64,7 +79,7 @@ export function BrowserFilterSelect({
         maxHeight,
       });
     };
-    place();
+    if (open) place();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
@@ -85,7 +100,7 @@ export function BrowserFilterSelect({
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [open]);
+  }, [open, painted]);
 
   useEffect(() => {
     if (!open || !menuRef.current) return;
@@ -109,49 +124,63 @@ export function BrowserFilterSelect({
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-controls={open ? listId : undefined}
+        aria-controls={open || painted ? listId : undefined}
         onClick={() => setOpen((current) => !current)}
       >
         <span className="lc-filter-select-label">{triggerLabel}</span>
       </button>
-      {open &&
+      {painted &&
         menuBox &&
         createPortal(
           <div
             ref={menuRef}
-            id={listId}
-            className="lc-filter-select-menu lc-scroll-pane"
-            role="listbox"
-            aria-label={ariaLabel}
+            className="lc-filter-select-portal"
             style={{
               left: menuBox.left,
               top: menuBox.top,
               width: menuBox.width,
-              maxHeight: menuBox.maxHeight,
             }}
           >
-            {options.map((option) => {
-              const active = option.value === value;
-              return (
-                <button
-                  key={option.value || "__any__"}
-                  type="button"
-                  role="option"
-                  aria-selected={active}
-                  className={
-                    active
-                      ? "lc-filter-select-option is-active"
-                      : "lc-filter-select-option"
-                  }
-                  onClick={() => {
-                    onChange(option.value);
-                    setOpen(false);
-                  }}
+            <MorphBar
+              active={open ? "menu" : "closed"}
+              axis="height"
+              className="lc-filter-select-morph"
+              aria-hidden={!open}
+            >
+              <div data-morph-id="closed" />
+              <div data-morph-id="menu">
+                <div
+                  id={listId}
+                  className="lc-filter-select-menu lc-scroll-pane"
+                  role="listbox"
+                  aria-label={ariaLabel}
+                  style={{ maxHeight: menuBox.maxHeight }}
                 >
-                  {option.label}
-                </button>
-              );
-            })}
+                  {options.map((option) => {
+                    const active = option.value === value;
+                    return (
+                      <button
+                        key={option.value || "__any__"}
+                        type="button"
+                        role="option"
+                        aria-selected={active}
+                        className={
+                          active
+                            ? "lc-filter-select-option is-active"
+                            : "lc-filter-select-option"
+                        }
+                        onClick={() => {
+                          onChange(option.value);
+                          setOpen(false);
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </MorphBar>
           </div>,
           document.body,
         )}

@@ -27,6 +27,7 @@ pub mod llm;
 pub mod practice;
 pub mod pad;
 pub mod docs_index;
+pub mod pads;
 pub mod serve;
 pub mod tui;
 pub mod workspace;

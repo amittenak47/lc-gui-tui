@@ -11,12 +11,12 @@ import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerE
 import { createPortal } from "react-dom";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
-import { STAGE_LABELS } from "../api/types";
 import { HoldButton } from "../components/HoldButton";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
 import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
+import { ProcessBlock } from "./ProcessBlock";
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { useIsMobile } from "../util/mobile";
 import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
@@ -2130,65 +2130,6 @@ export function AgentSidePanel({
   );
 }
 
-/**
- * What the coach did, one line per stage or tool call.
- *
- * Collapsed once the answer lands: the answer is what the student came for,
- * and a finished process log they did not ask to see is noise. While the run
- * is working it stays open, because then it *is* the content.
- */
-function ProcessBlock({
-  events,
-  running,
-}: {
-  events: CoachProcessEvent[];
-  running: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const expanded = running || open;
-  // "done" closes the block rather than adding a line to it.
-  const shown = events.filter((event) => event.label !== "done");
-  const latest = shown[shown.length - 1];
-  if (shown.length === 0) return null;
-
-  return (
-    <div className={running ? "lc-agent-process lc-agent-process-running" : "lc-agent-process"}>
-      <button
-        type="button"
-        className="lc-agent-process-toggle"
-        aria-expanded={expanded}
-        onClick={() => setOpen((current) => !current)}
-      >
-        {running && <span className="lc-agent-spinner" aria-hidden />}
-        <span className="lc-agent-process-chevron" aria-hidden />
-        <span className="lc-agent-process-label">
-          {running
-            ? processLine(latest)
-            : `Thought · ${shown.length} step${shown.length === 1 ? "" : "s"}`}
-        </span>
-      </button>
-      {expanded && (
-        <ol className="lc-agent-process-steps">
-          {shown.map((event, index) => (
-            <li
-              key={`${event.ts}-${index}`}
-              className={[
-                "lc-agent-process-step",
-                event.status === "rejected" ? "lc-agent-process-step-rejected" : "",
-                running && index === shown.length - 1 ? "lc-agent-process-step-current" : "",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-            >
-              {processLine(event)}
-            </li>
-          ))}
-        </ol>
-      )}
-    </div>
-  );
-}
-
 /** Local ack while waiting for the daemon's `received` stage or the answer. */
 export function pendingAckLine(message: AgentChatMessage): string {
   const ack = message.pendingAck;
@@ -2203,21 +2144,6 @@ export function pendingAckLine(message: AgentChatMessage): string {
     inputs.length > 0 ? `got ${inputs.join(" + ")}` : "got your message";
   if (ack.flags.length > 0) return `${ack.flags.join(", ")} — ${inputPart}`;
   return inputPart;
-}
-
-/** One process line. Unknown stage names fall back to the daemon's own text. */
-function processLine(event: CoachProcessEvent | undefined): string {
-  if (!event) return "Working…";
-  if (event.kind === "tool") {
-    const verb =
-      event.status === "rejected"
-        ? "dropped"
-        : event.status === "accepted"
-          ? "drew"
-          : "asked for";
-    return [`${verb} ${event.label}`, event.detail].filter(Boolean).join(" — ");
-  }
-  return STAGE_LABELS[event.label] ?? event.detail ?? event.label;
 }
 
 function DrawingSection({

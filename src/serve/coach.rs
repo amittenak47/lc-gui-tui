@@ -618,6 +618,51 @@ pub struct AskRequest {
     pub preset: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessEventDto {
+    pub kind: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub ts: u64,
+}
+
+impl From<&crate::llm::coach::CoachEvent> for ProcessEventDto {
+    fn from(event: &crate::llm::coach::CoachEvent) -> Self {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        match event {
+            crate::llm::coach::CoachEvent::Stage { stage, detail } => Self {
+                kind: "stage".into(),
+                label: stage.clone(),
+                detail: if detail.is_empty() {
+                    None
+                } else {
+                    Some(detail.clone())
+                },
+                status: None,
+                ts,
+            },
+            crate::llm::coach::CoachEvent::Tool {
+                name,
+                status,
+                summary,
+                ..
+            } => Self {
+                kind: "tool".into(),
+                label: name.clone(),
+                detail: Some(summary.clone()),
+                status: Some(status.as_str().to_string()),
+                ts,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct AskEnvelope {
     pub task_id: String,
@@ -625,13 +670,26 @@ pub struct AskEnvelope {
     pub reply: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proposed_annotations: Vec<crate::llm::docs::ProposedAnnotation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub process_events: Vec<ProcessEventDto>,
 }
 
 pub async fn ask(
     State(state): State<Shared>,
     Json(request): Json<AskRequest>,
 ) -> Result<Json<AskEnvelope>, AppError> {
-    Ok(Json(run_ask(&state, request, EventSink::none()).await?))
+    let bag = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let events = EventSink::new({
+        let bag = bag.clone();
+        move |ev| {
+            if let Ok(mut lock) = bag.lock() {
+                lock.push(ProcessEventDto::from(&ev));
+            }
+        }
+    });
+    let mut envelope = run_ask(&state, request, events).await?;
+    envelope.process_events = bag.lock().map(|g| g.clone()).unwrap_or_default();
+    Ok(Json(envelope))
 }
 
 /// Ask without the HTTP wrapper — see [`run_review`] for why.
@@ -706,7 +764,14 @@ pub async fn run_ask(
             }
         };
         let provider = make_provider_for_mode(&cfg, "review")?;
-        events.stage("ask", "answering from the problem statement and your code");
+        events.stage(
+            "ask",
+            if document_ask {
+                "answering from the document"
+            } else {
+                "answering from the problem statement and your code"
+            },
+        );
         let mut prompt = build_ask_prompt(&meta, description.as_deref(), &question, &ctx);
         if document_ask {
             let hash = document_hash.as_deref().expect("document_ask implies hash");
@@ -715,6 +780,7 @@ pub async fn run_ask(
             } else {
                 highlight.as_str()
             };
+            events.stage("prefetch", "looking up earlier pages");
             let retrieved = match crate::docs_index::db_path()
                 .and_then(|path| crate::docs_index::open(&path))
                 .and_then(|conn| {
@@ -758,6 +824,7 @@ pub async fn run_ask(
                 prompt,
                 images,
                 &ask_ctx,
+                &events,
             )?;
             events.stage("done", "");
             return Ok(AskEnvelope {
@@ -765,18 +832,23 @@ pub async fn run_ask(
                 provider: provider.label(),
                 reply,
                 proposed_annotations: proposed,
+                process_events: Vec::new(),
             });
         }
         let reply = provider.chat_ex(&ChatRequest::new(vec![
             ChatMessage::system(ASK_SYSTEM_PROMPT),
             ChatMessage::user(prompt).with_images(images),
         ]))?;
+        for step in crate::llm::reasoning::split_steps(&reply.reasoning) {
+            events.stage("reason", step);
+        }
         events.stage("done", "");
         Ok(AskEnvelope {
             task_id: meta.task_id,
             provider: provider.label(),
             reply: reply.content.trim().to_string(),
             proposed_annotations: Vec::new(),
+            process_events: Vec::new(),
         })
     })
     .await?;
@@ -856,6 +928,7 @@ mod tests {
             Ok(ChatReply {
                 content: reply,
                 tool_calls: Vec::new(),
+                reasoning: String::new(),
             })
         }
     }

@@ -193,4 +193,8 @@ pub fn is_tool_calling_unsupported(err: &anyhow::Error) -> bool {
 pub struct ChatReply {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
+    /// Model thinking, never shown as the answer. Empty when the server
+    /// did not emit any.
+    #[serde(default)]
+    pub reasoning: String,
 }

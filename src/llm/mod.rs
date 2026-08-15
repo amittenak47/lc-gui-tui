@@ -4,6 +4,7 @@ pub mod docs;
 pub mod helpers;
 pub mod lifecycle;
 pub mod providers;
+pub mod reasoning;
 pub mod viz;
 
 /// Deprecated alias — prefer [`viz`]. Kept so `crate::llm::tools` imports keep working.

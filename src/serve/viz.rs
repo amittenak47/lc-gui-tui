@@ -400,6 +400,7 @@ fn draw_without_tool_calls(
                     // The JSON envelope is the answer, not prose to show.
                     content: String::new(),
                     tool_calls: calls,
+                    reasoning: String::new(),
                 });
             }
             // Nothing usable either way: prefer the first attempt's outcome,

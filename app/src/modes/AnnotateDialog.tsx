@@ -11,7 +11,9 @@
 import { useEffect, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { deleteAnnotateDoc, listAnnotateDocs, type AnnotateDocMeta } from "../util/annotateStore";
+import { TOMBSTONE_COPY } from "../util/padSync";
 import {
   listPadSnapshots,
   PAD_SNAPSHOT_TIERS,
@@ -36,6 +38,7 @@ interface LeaveProps {
   error: string | null;
   onChoose: (choice: MdInkLeaveChoice) => void;
   onCancel: () => void;
+  onDelete?: (id: string) => void | Promise<void>;
 }
 
 interface EntryProps {
@@ -49,6 +52,9 @@ interface EntryProps {
   snapshotKey?: string | null;
   onChoose: (choice: MdInkEntryChoice, docId?: string) => void;
   onCancel: () => void;
+  onDelete?: (id: string) => void | Promise<void>;
+  archived?: AnnotateDocMeta[];
+  onRestoreArchive?: (id: string) => void | Promise<void>;
 }
 
 export type AnnotateDialogProps = LeaveProps | EntryProps;
@@ -58,6 +64,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const [pickingRecent, setPickingRecent] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
+  const [pendingId, setPendingId] = useState<string | null>(null);
 
   useEffect(() => {
     setDocs(listAnnotateDocs());
@@ -95,13 +102,20 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const allowSave = Boolean(entry?.allowSave);
   const locked = pending || exiting;
 
-  const removeDoc = (id: string) => {
-    // The index write is synchronous, so the list below is already correct;
-    // dropping the content is the async half and nothing on screen waits for
-    // it. A failure there strands a payload, not an entry.
-    void deleteAnnotateDoc(id).catch(() => {});
+  const removeDoc = (id: string) => setPendingId(id);
+
+  const confirmRemove = async (id: string) => {
+    try {
+      if (props.onDelete) await props.onDelete(id);
+      else await deleteAnnotateDoc(id);
+    } catch {
+      /* ignore */
+    }
+    setPendingId(null);
     setDocs(listAnnotateDocs());
   };
+
+  const archived = props.mode === "entry" ? props.archived ?? [] : [];
 
   return (
     <div
@@ -206,6 +220,26 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                   </HoldButton>
                 </div>
               ))}
+              {archived.length > 0 && (
+                <>
+                  <p className="lc-muted">Archived on the PC — restore to the live library.</p>
+                  {archived.map((doc) => (
+                    <HoldButton
+                      key={`arch-${doc.id}`}
+                      label={`Restore ${doc.name}`}
+                      className="lc-hold-choice"
+                      disabled={locked}
+                      onConfirm={() => {
+                        if (props.mode === "entry") void props.onRestoreArchive?.(doc.id);
+                      }}
+                      resetKey={error}
+                    >
+                      <strong>Restore · {doc.name}</strong>
+                      <span className="lc-muted">{new Date(doc.updatedAt).toLocaleString()}</span>
+                    </HoldButton>
+                  ))}
+                </>
+              )}
             </div>
           ) : (
             <div className="lc-settings-choice">
@@ -336,6 +370,16 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
           </button>
         </div>
       </div>
+      {pendingId && (
+        <ConfirmDialog
+          title="Remove this document?"
+          message="It leaves the library on every device that talks to this PC."
+          detail={TOMBSTONE_COPY}
+          confirmLabel="Delete"
+          onConfirm={() => void confirmRemove(pendingId)}
+          onCancel={() => setPendingId(null)}
+        />
+      )}
     </div>
   );
 }

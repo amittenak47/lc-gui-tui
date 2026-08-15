@@ -54,6 +54,7 @@ pub(super) fn viz_json_fallback(
                 Ok(ChatReply {
                     content: String::new(),
                     tool_calls: calls,
+                    reasoning: String::new(),
                 })
             } else {
                 first.map(|original| {

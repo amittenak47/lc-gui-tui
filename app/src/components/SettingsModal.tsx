@@ -92,6 +92,13 @@ import { offlinePackMeta } from "../util/offlineCorpus";
 import { offlinePackDownloader } from "../util/offlinePackDownload";
 import { useIsMobile } from "../util/mobile";
 import { estimateStorage, formatBytes, type StorageUsage } from "../util/storageQuota";
+import {
+  deviceRole,
+  ensureDevicePrefs,
+  loadDeviceId,
+  saveThisDevicePrefs,
+} from "../util/devicePrefs";
+import type { DevicePrefsDto } from "../api/client";
 
 type TabId = "workspace" | "personalise" | "ai" | "server";
 
@@ -412,6 +419,7 @@ export function SettingsModal({
    * "am I near the wall?".
    */
   const [storage, setStorage] = useState<(StorageUsage & { persisted: boolean }) | null>(null);
+  const [siblingDevices, setSiblingDevices] = useState<DevicePrefsDto[]>([]);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [colorWheelOnToolbar, setColorWheelOnToolbar] = useState(
     () => loadInkToolPresets().colorWheelOnToolbar,
@@ -599,6 +607,13 @@ export function SettingsModal({
           // An older daemon has no /pair/code — the Serve tab just says so.
           if (!cancelled) setPairInfo(null);
         }
+        try {
+          await ensureDevicePrefs(client);
+          const devices = await client.listDevices();
+          if (!cancelled) setSiblingDevices(devices);
+        } catch {
+          if (!cancelled) setSiblingDevices([]);
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
@@ -699,6 +714,7 @@ export function SettingsModal({
         saveChromeWakeMarker(chromeWake);
         saveChromeWakeTint(chromeWakeTint);
         setBaselinePrefs(draftPrefs);
+        void saveThisDevicePrefs(client).catch(() => {});
         window.dispatchEvent(
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
         );
@@ -1374,8 +1390,26 @@ export function SettingsModal({
                 How often the board writes itself down, so a crash or a closed lid
                 costs nothing. This is not the same as saving: Discard still rolls
                 back to where the session started, whatever the autosave has
-                written since. Saved on this device only.
+                written since. Saved on this device; a copy also goes to `lc serve`.
               </p>
+              {siblingDevices.length > 0 && (
+                <>
+                  <div className="lc-settings-subhead">Devices</div>
+                  <p className="lc-settings-hint">
+                    Personalise is per device. This one is {deviceRole()} ({loadDeviceId().slice(0, 8)}…).
+                    Others are listed, not merged.
+                  </p>
+                  <ul className="lc-settings-hint">
+                    {siblingDevices.map((dev) => (
+                      <li key={dev.id}>
+                        {dev.role} · {dev.id.slice(0, 8)}… ·{" "}
+                        {new Date(dev.updated_at).toLocaleString()}
+                        {dev.id === loadDeviceId() ? " · this device" : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
               <div
                 className="lc-settings-choice lc-settings-choice-compact"
                 role="radiogroup"

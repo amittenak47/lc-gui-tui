@@ -45,7 +45,30 @@ function bodyJson(init?: RequestInit): unknown {
     if (init.body.length === 0) return undefined;
     return JSON.parse(init.body) as unknown;
   }
-  throw new Error("lcFetch only supports string JSON bodies");
+  return undefined;
+}
+
+function rawBase64(init?: RequestInit): string | undefined {
+  const body = init?.body;
+  if (body instanceof ArrayBuffer) return bytesToB64(new Uint8Array(body));
+  if (ArrayBuffer.isView(body)) {
+    const view = body as ArrayBufferView;
+    return bytesToB64(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+  }
+  return undefined;
+}
+
+function bytesToB64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]!);
+  return btoa(bin);
+}
+
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 function bodyText(body: unknown): string {
@@ -69,8 +92,17 @@ export async function lcFetch(input: RequestInfo | URL, init?: RequestInit): Pro
             method: init?.method ?? "GET",
             token: headers.get("X-LC-Token") ?? undefined,
             body: bodyJson(init),
+            raw_base64: rawBase64(init),
           },
         });
+
+        const packed = result.body as { $bytes?: string } | null;
+        if (packed && typeof packed === "object" && typeof packed.$bytes === "string") {
+          return new Response(new Blob([new Uint8Array(b64ToBytes(packed.$bytes))]), {
+            status: result.status,
+            headers: { "Content-Type": "application/octet-stream" },
+          });
+        }
 
         return new Response(bodyText(result.body), {
           status: result.status,
