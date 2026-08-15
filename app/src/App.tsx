@@ -168,6 +168,7 @@ import {
   LEGACY_MD_INK_TASK_ID,
 } from "./templates/annotate";
 import { BROWSE_PICK_QUIET_MS, browsePickBlocked } from "./util/browsePickGuard";
+import { workspaceLoadHomeLabel } from "./util/workspaceLoad";
 import {
   buildAnnotateSidecar,
   CODE_SOURCE_MAX_CHARS,
@@ -191,6 +192,7 @@ import {
   saveAnnotateDoc,
   type DocType,
   type AnnotateDoc,
+  type AnnotateDocMeta,
 } from "./util/annotateStore";
 import {
   deleteWhiteboardNotebook,
@@ -204,6 +206,24 @@ import {
   WHITEBOARD_LIBRARY_LIMIT,
   type WhiteboardNotebook,
 } from "./util/whiteboardStore";
+import {
+  deletePadEverywhere,
+  pullPads,
+  flushPadSyncQueue,
+  pushAnnotatePad,
+  pushDocBytes,
+  pushRecentSnapshots,
+  pushWhiteboardPad,
+  restoreArchivedPad,
+} from "./util/padSync";
+import {
+  chooseOfflineMerge,
+  deleteOfflineBoard,
+  listOfflineBoards,
+  putOfflineBoard,
+} from "./util/offlineBoardStore";
+import { loadOfflineMergePolicy } from "./util/offlineMerge";
+import { ensureDevicePrefs } from "./util/devicePrefs";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
 import {
   getInkPages,
@@ -419,6 +439,16 @@ export function App() {
    */
   const [codeContentHeight, setCodeContentHeight] = useState<number | null>(null);
   const [whiteboardLibOpen, setWhiteboardLibOpen] = useState(false);
+  const [wbArchive, setWbArchive] = useState<
+    Array<{ id: string; title: string; updatedAt: number; pageCount: number }>
+  >([]);
+  const [anArchive, setAnArchive] = useState<AnnotateDocMeta[]>([]);
+  const [offlineMergeAsk, setOfflineMergeAsk] = useState<{
+    dataset: string;
+    taskId: string;
+    board: import("./canvas/BoardHandle").BoardBlob;
+    updatedAt: number;
+  } | null>(null);
   const whiteboardLibResumeRef = useRef<(() => void) | null>(null);
   /**
    * What the library held for this notebook when the session opened.
@@ -806,6 +836,85 @@ export function App() {
     };
   }, [serverLink, pingServer, openGate]);
 
+  useEffect(() => {
+    if (serverLink !== "online") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        await flushPadSyncQueue(client);
+        if (cancelled) return;
+        await pullPads(client);
+        if (cancelled) return;
+        void ensureDevicePrefs(client).catch(() => {});
+        const pending = await listOfflineBoards();
+        const policy = loadOfflineMergePolicy();
+        for (const row of pending) {
+          if (cancelled) return;
+          let serverUpdated: number | null = null;
+          try {
+            const remote = await client.getBoard(row.taskId, row.dataset);
+            serverUpdated = remote.board ? 0 : null;
+          } catch {
+            serverUpdated = null;
+          }
+          const choice = chooseOfflineMerge(policy, row.updatedAt, serverUpdated);
+          const useLocal = async () => {
+            await client.putBoard(row.taskId, row.board, row.dataset);
+            await deleteOfflineBoard(row.dataset, row.taskId);
+          };
+          if (choice === "local") {
+            await useLocal().catch(() => {});
+          } else if (choice === "server") {
+            await deleteOfflineBoard(row.dataset, row.taskId);
+          } else {
+            setOfflineMergeAsk(row);
+            return;
+          }
+        }
+      } catch {
+        /* daemon missing the new routes — keep the local cache */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [serverLink, client]);
+
+  useEffect(() => {
+    if (serverLink !== "online") return;
+    if (whiteboardEntryOpen) {
+      void client
+        .listWhiteboardArchive()
+        .then((rows) =>
+          setWbArchive(
+            rows.map((row) => ({
+              id: row.id,
+              title: row.title,
+              updatedAt: row.updated_at,
+              pageCount: row.page_count,
+            })),
+          ),
+        )
+        .catch(() => setWbArchive([]));
+    }
+    if (annotateEntryOpen) {
+      void client
+        .listAnnotateArchive()
+        .then((rows) =>
+          setAnArchive(
+            rows.map((row) => ({
+              id: row.id,
+              name: row.name,
+              hash: row.hash,
+              docType: (row.doc_type as AnnotateDocMeta["docType"]) || "markdown",
+              updatedAt: row.updated_at,
+            })),
+          ),
+        )
+        .catch(() => setAnArchive([]));
+    }
+  }, [serverLink, client, whiteboardEntryOpen, annotateEntryOpen]);
+
   /** Coach LLM reachability — separate from lc serve itself. */
   const [llmLink, setLlmLink] = useState<"unknown" | "online" | "offline">("unknown");
   const [llmDetail, setLlmDetail] = useState<string | null>(null);
@@ -996,6 +1105,8 @@ export function App() {
   const padOpenLockRef = useRef(0);
   const browsePickQuietUntilRef = useRef(0);
   const workspaceLoadGenRef = useRef(0);
+  /** True while pickProblem / openWhiteboard / openAnnotate is in flight. */
+  const [workspaceLoadActive, setWorkspaceLoadActive] = useState(false);
   const beginPadOpen = useCallback(() => {
     padOpenLockRef.current += 1;
     browsePickQuietUntilRef.current = Date.now() + BROWSE_PICK_QUIET_MS;
@@ -1026,7 +1137,8 @@ export function App() {
    * spinner simply vanished.
    */
   const finishLoadingTransition = useCallback(
-    async (fromBrowse: boolean, switching: boolean) => {
+    async (fromBrowse: boolean, switching: boolean, loadGen: number) => {
+      if (workspaceLoadGenRef.current !== loadGen) return;
       // Board is fitted — stop preparing so the checkmark gate can open.
       setBoardPreparing(false);
       // Let React commit preparing=false while we are still on busy/exit
@@ -1034,11 +1146,13 @@ export function App() {
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       );
+      if (workspaceLoadGenRef.current !== loadGen) return;
 
       if (fromBrowse) {
         // Ready: keep the spinner, slide the browser away under the blur.
         setBrowseMotion("exit");
         await waitMs(slideDurationMs());
+        if (workspaceLoadGenRef.current !== loadGen) return;
         // Spinner → checkmark, then a short beat before the board.
         setBrowseMotion("done");
         await waitMs(doneHoldMs());
@@ -1532,6 +1646,7 @@ export function App() {
             });
             if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
             setNotice(`Saved “${saved.name}”.`);
+            void pushAnnotatePad(client, saved);
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void recordRollingSnapshots({
               kind: "annotate",
@@ -1540,7 +1655,7 @@ export function App() {
               board: snapBoard,
               footnotes: saved.footnotes,
               agent: saved.agent,
-            });
+            }).then(() => void pushRecentSnapshots(client, "annotate", saved.hash));
           } catch (cause: unknown) {
             noteStorageFull(cause);
           }
@@ -1579,6 +1694,7 @@ export function App() {
             if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
             await flushDirtyInk(board, whiteboardDocKey(saved.id));
             setNotice(`Saved “${saved.title}”.`);
+            void pushWhiteboardPad(client, saved);
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void recordRollingSnapshots({
               kind: "whiteboard",
@@ -1587,7 +1703,7 @@ export function App() {
               board: snapBoard,
               agent: saved.agent,
               pageCount: saved.pageCount,
-            });
+            }).then(() => void pushRecentSnapshots(client, "whiteboard", saved.id));
           } catch (cause: unknown) {
             if (cause instanceof WhiteboardLibraryFullError) {
               whiteboardLibResumeRef.current = null;
@@ -1600,10 +1716,26 @@ export function App() {
         return;
       }
       const blob = board.saveBoard();
+      if (serverLinkRef.current !== "online") {
+        void putOfflineBoard({
+          dataset: problem.dataset,
+          taskId: problem.task_id,
+          board: blob,
+          updatedAt: Date.now(),
+        }).then(() => {
+          lastSavedHashRef.current = hash;
+        }).catch(() => {});
+        return;
+      }
       void client.putBoard(problem.task_id, blob, problem.dataset).then(() => {
         lastSavedHashRef.current = hash;
       }).catch(() => {
-        /* best-effort */
+        void putOfflineBoard({
+          dataset: problem.dataset,
+          taskId: problem.task_id,
+          board: blob,
+          updatedAt: Date.now(),
+        }).catch(() => {});
       });
     }, autosaveMs);
     return () => window.clearInterval(timer);
@@ -1674,6 +1806,7 @@ export function App() {
       const datasetId = bank?.dataset ?? DEFAULT_DATASET;
       const fromBrowse = !problem;
       const switching = Boolean(problem);
+      setWorkspaceLoadActive(true);
       setActiveRegion("constraints");
       setStatementHeight(null);
       setBusy(offline ? "opening offline…" : "loading the workspace…");
@@ -1747,7 +1880,8 @@ export function App() {
           await boardRef.current?.waitForTemplate();
           await boardRef.current?.settleFitView();
 
-          await finishLoadingTransition(fromBrowse, switching);
+          await finishLoadingTransition(fromBrowse, switching, loadGen);
+          if (workspaceLoadGenRef.current !== loadGen) return;
 
           setBrowseMotion("idle");
           setSwitchMotion("idle");
@@ -1755,6 +1889,7 @@ export function App() {
           setBoardPreparing(false);
           boardSaveSuspendedRef.current = false;
           agentSaveSuspendedRef.current = false;
+          setWorkspaceLoadActive(false);
           setEntering(true);
           window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
           setCoachOpen(false);
@@ -1887,7 +2022,8 @@ export function App() {
         }
         await boardRef.current?.settleFitView();
 
-        await finishLoadingTransition(fromBrowse, switching);
+        await finishLoadingTransition(fromBrowse, switching, loadGen);
+        if (workspaceLoadGenRef.current !== loadGen) return;
 
         setBrowseMotion("idle");
         setSwitchMotion("idle");
@@ -1896,20 +2032,26 @@ export function App() {
         // The new board is mounted and fitted; autosave may write again.
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
+        setWorkspaceLoadActive(false);
         setEntering(true);
         window.setTimeout(() => {
           setEntering(false);
         }, boardFadeMs() || 1);
       } catch (cause) {
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
         setHoldBrowseOverlay(false);
         setBoardPreparing(false);
+        setWorkspaceLoadActive(false);
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
-        if (workspaceLoadGenRef.current === loadGen) setBusy(null);
+        if (workspaceLoadGenRef.current === loadGen) {
+          setBusy(null);
+          setWorkspaceLoadActive(false);
+        }
       }
     },
     [
@@ -1947,6 +2089,7 @@ export function App() {
        */
       const fromBrowse = !problem;
       const switching = Boolean(problem);
+      setWorkspaceLoadActive(true);
       setBusy("opening whiteboard…");
       setError(null);
       setTests(null);
@@ -2055,7 +2198,8 @@ export function App() {
 
         // Complete the loading transition (same beats and teardown as
         // pickProblem / openAnnotate). Coach stays closed through the reveal.
-        await finishLoadingTransition(fromBrowse, switching);
+        await finishLoadingTransition(fromBrowse, switching, loadGen);
+        if (workspaceLoadGenRef.current !== loadGen) return;
 
         setBrowseMotion("idle");
         setSwitchMotion("idle");
@@ -2063,6 +2207,7 @@ export function App() {
         setBoardPreparing(false);
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
+        setWorkspaceLoadActive(false);
         setCoachOpen(false);
         setEntering(true);
         const fadeMs = boardFadeMs() || 1;
@@ -2073,16 +2218,21 @@ export function App() {
           );
         }, fadeMs);
       } catch (cause) {
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
         setHoldBrowseOverlay(false);
         setBoardPreparing(false);
+        setWorkspaceLoadActive(false);
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
         endPadOpen();
-        if (workspaceLoadGenRef.current === loadGen) setBusy(null);
+        if (workspaceLoadGenRef.current === loadGen) {
+          setBusy(null);
+          setWorkspaceLoadActive(false);
+        }
       }
     },
     [beginPadOpen, busy, endPadOpen, finishLoadingTransition, problem, themeId],
@@ -2119,6 +2269,7 @@ export function App() {
        */
       const fromBrowse = !problem;
       const switching = Boolean(problem);
+      setWorkspaceLoadActive(true);
       setBusy("opening document…");
       setError(null);
       setDocIndexStatus("idle");
@@ -2173,6 +2324,7 @@ export function App() {
          */
         if (bytes) {
           await putDocBytes(hash, bytes);
+          void pushDocBytes(client, hash, bytes);
         }
 
         /*
@@ -2297,7 +2449,8 @@ export function App() {
 
         // Complete the loading transition (same beats and teardown as
         // pickProblem). Do NOT arm scroll here — interactive is still false.
-        await finishLoadingTransition(fromBrowse, switching);
+        await finishLoadingTransition(fromBrowse, switching, loadGen);
+        if (workspaceLoadGenRef.current !== loadGen) return;
 
         setBrowseMotion("idle");
         setSwitchMotion("idle");
@@ -2305,6 +2458,7 @@ export function App() {
         setBoardPreparing(false);
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
+        setWorkspaceLoadActive(false);
         setEntering(true);
         window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
         setCoachOpen(false);
@@ -2316,12 +2470,16 @@ export function App() {
         await new Promise<void>((resolve) =>
           requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
         );
+        if (workspaceLoadGenRef.current !== loadGen) return;
         boardRef.current?.armReadingScroll();
         await waitMs(50);
+        if (workspaceLoadGenRef.current !== loadGen) return;
         boardRef.current?.armReadingScroll();
         await waitMs(200);
+        if (workspaceLoadGenRef.current !== loadGen) return;
         boardRef.current?.armReadingScroll();
         await waitMs(500);
+        if (workspaceLoadGenRef.current !== loadGen) return;
         boardRef.current?.armReadingScroll();
 
         if (stale) {
@@ -2366,16 +2524,21 @@ export function App() {
           }
         })();
       } catch (cause) {
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
         setHoldBrowseOverlay(false);
         setBoardPreparing(false);
+        setWorkspaceLoadActive(false);
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
         endPadOpen();
-        if (workspaceLoadGenRef.current === loadGen) setBusy(null);
+        if (workspaceLoadGenRef.current === loadGen) {
+          setBusy(null);
+          setWorkspaceLoadActive(false);
+        }
       }
     },
     [beginPadOpen, busy, client, endPadOpen, finishLoadingTransition, problem, themeId],
@@ -3436,6 +3599,13 @@ export function App() {
         const result = await runCoachJob<{
           reply: string;
           proposed_annotations?: ProposedAnnotation[];
+          process_events?: Array<{
+            kind: string;
+            label: string;
+            detail?: string;
+            status?: string;
+            ts: number;
+          }>;
         }>(
           "ask",
           askPayload,
@@ -3452,6 +3622,19 @@ export function App() {
         if (coachRunGenRef.current !== genAtStart) return;
         finished = true;
         const reply = (result.reply ?? "").trim();
+        for (const ev of result.process_events ?? []) {
+          const status =
+            ev.status === "proposed" || ev.status === "accepted" || ev.status === "rejected"
+              ? ev.status
+              : undefined;
+          appendProcessEvent(turnId, {
+            kind: ev.kind === "tool" ? "tool" : "stage",
+            label: ev.label,
+            detail: ev.detail,
+            status,
+            ts: ev.ts,
+          });
+        }
         finishCoachTurn(turnId, [
           { content: reply || "The model returned an empty reply." },
         ]);
@@ -3475,7 +3658,7 @@ export function App() {
         if (coachSendDepthRef.current === 0) drainCoachSendQueueRef.current();
       }
     },
-    [applyProposedAnnotations, client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob],
+    [applyProposedAnnotations, client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob, appendProcessEvent],
   );
 
   /** `runTests` fires this and is defined above it — see the auto-forward. */
@@ -4307,6 +4490,7 @@ export function App() {
               agent,
             });
             if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
+            void pushAnnotatePad(client, saved);
           } catch (cause: unknown) {
             if (cause instanceof AnnotateLibraryFullError) {
               setError(cause.message);
@@ -4332,6 +4516,7 @@ export function App() {
         })
           .then((saved) => {
             if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
+            void pushWhiteboardPad(client, saved);
           })
           .catch((cause: unknown) => {
             if (cause instanceof WhiteboardLibraryFullError) {
@@ -4477,6 +4662,28 @@ export function App() {
   }, []);
 
   /**
+   * Abort an in-flight problem / pad open. Header ← is the cancel control.
+   * Lands back on the browse overlay — same place ← goes when a board is open.
+   */
+  const cancelWorkspaceLoad = useCallback(() => {
+    if (!workspaceLoadActive) return;
+    workspaceLoadGenRef.current += 1;
+    setWorkspaceLoadActive(false);
+    setBusy(null);
+    setError(null);
+    setBoardPreparing(false);
+    setHoldBrowseOverlay(false);
+    setBrowseMotion("idle");
+    setSwitchMotion("idle");
+    boardSaveSuspendedRef.current = false;
+    agentSaveSuspendedRef.current = false;
+    setEntering(false);
+    setCoachOpen(false);
+    clearProblemState();
+    setProblem(null);
+  }, [clearProblemState, workspaceLoadActive]);
+
+  /**
    * Ask about saving before leaving, then do `next`.
    *
    * Only asked when there is something to keep: an untouched workspace has no
@@ -4564,6 +4771,7 @@ export function App() {
         await flushDirtyInk(board, whiteboardDocKey(saved.id));
         await rebaselineWhiteboardSession(saved.id);
         setNotice(`Saved “${saved.title}”.`);
+        void pushWhiteboardPad(client, saved);
         const snapBoard = await boardWithAssembledInk(board, liveBoard);
         void recordRollingSnapshots({
           kind: "whiteboard",
@@ -4572,7 +4780,7 @@ export function App() {
           board: snapBoard,
           agent: saved.agent,
           pageCount: saved.pageCount,
-        });
+        }).then(() => void pushRecentSnapshots(client, "whiteboard", saved.id));
       } catch (cause) {
         if (cause instanceof WhiteboardLibraryFullError) {
           whiteboardLibResumeRef.current = onFull ?? null;
@@ -4582,7 +4790,7 @@ export function App() {
         setError(messageOf(cause));
       }
     },
-    [agentMessages, problem, rebaselineWhiteboardSession, whiteboardNotebookId, whiteboardPageCount],
+    [agentMessages, problem, rebaselineWhiteboardSession, whiteboardNotebookId, whiteboardPageCount, client],
   );
 
   const discardWhiteboardSession = useCallback(() => {
@@ -4683,6 +4891,7 @@ export function App() {
       );
       annotatePristineMarksRef.current = footnoteRevision(annotateFootnotes);
       annotatePristineAgentRef.current = JSON.stringify(persistableAgentMessages(agentMessages));
+      void pushAnnotatePad(client, saved);
       const snapBoard = await boardWithAssembledInk(board, blob);
       void recordRollingSnapshots({
         kind: "annotate",
@@ -4691,7 +4900,7 @@ export function App() {
         board: snapBoard,
         footnotes: saved.footnotes,
         agent: saved.agent,
-      });
+      }).then(() => void pushRecentSnapshots(client, "annotate", saved.hash));
       return saved;
     } catch (cause) {
       if (cause instanceof AnnotateLibraryFullError) {
@@ -4701,7 +4910,7 @@ export function App() {
       setError(messageOf(cause));
       return null;
     }
-  }, [annotateDocId, annotateFootnotes, annotateSource, agentMessages]);
+  }, [annotateDocId, annotateFootnotes, annotateSource, agentMessages, client]);
 
 
   /*
@@ -4925,6 +5134,7 @@ export function App() {
                 setWhiteboardNotebookId(saved.id);
                 await flushDirtyInk(handle, whiteboardDocKey(saved.id));
                 await rebaselineWhiteboardSession(saved.id);
+                void pushWhiteboardPad(client, saved);
                 const snapBoard = await boardWithAssembledInk(handle, blob);
                 void recordRollingSnapshots({
                   kind: "whiteboard",
@@ -4933,7 +5143,7 @@ export function App() {
                   board: snapBoard,
                   agent: saved.agent,
                   pageCount: saved.pageCount,
-                });
+                }).then(() => void pushRecentSnapshots(client, "whiteboard", saved.id));
               } catch (cause) {
                 if (cause instanceof WhiteboardLibraryFullError) {
                   await dismissDialog();
@@ -5107,22 +5317,33 @@ export function App() {
           <Tip tip="lc whiteboard — your coding workspace">
             <span className="lc-brand">lc <strong>whiteboard</strong></span>
           </Tip>
-          {problem ? (
+          {problem || workspaceLoadActive ? (
             <>
               <button
                 type="button"
                 className="lc-secondary lc-home lc-tip-target"
-                data-tip="Return to the problem list"
+                data-tip={
+                  workspaceLoadActive ? "Cancel loading" : "Return to the problem list"
+                }
                 data-tip-placement="bottom"
-                disabled={busy !== null}
-                onClick={() => leaveProblem(() => void returnToBrowse())}
+                disabled={busy !== null && !workspaceLoadActive}
+                onClick={() => {
+                  if (workspaceLoadActive) cancelWorkspaceLoad();
+                  else leaveProblem(() => void returnToBrowse());
+                }}
               >
                 <span className="lc-label-long">
-                  {isLocalPad(problem) ? "← Home" : "← Problems"}
+                  {problem
+                    ? isLocalPad(problem)
+                      ? "← Home"
+                      : "← Problems"
+                    : workspaceLoadHomeLabel(busy)
+                      ? "← Home"
+                      : "← Problems"}
                 </span>
                 <span className="lc-label-short">←</span>
               </button>
-              {!isLocalPad(problem) ? (
+              {problem && !isLocalPad(problem) ? (
               <div className="lc-problem-nav" role="group" aria-label="Problem">
                 <button
                   type="button"
@@ -5156,7 +5377,7 @@ export function App() {
                   ›
                 </button>
               </div>
-              ) : isAnnotate(problem) ? (
+              ) : problem && isAnnotate(problem) ? (
                 // The document is the thing being worked on, so it gets the
                 // slot the problem's name would have had.
                 <span className="lc-current" title={annotateSource?.name ?? "Document"}>
@@ -5171,11 +5392,11 @@ export function App() {
                     </span>
                   ) : null}
                 </span>
-              ) : (
+              ) : problem ? (
                 <span className="lc-current" title="Whiteboard">
                   Whiteboard
                 </span>
-              )}
+              ) : null}
             </>
           ) : (
             <span className="lc-muted lc-browse-hint">
@@ -5877,6 +6098,29 @@ export function App() {
           />
         )}
 
+      {offlineMergeAsk && (
+        <ConfirmDialog
+          title="Keep the tablet board or the PC board?"
+          message="This problem was edited while offline. Both copies exist."
+          detail="Hold Keep tablet to upload this device's ink. Cancel keeps the PC copy."
+          confirmLabel="Keep tablet"
+          cancelLabel="Keep PC"
+          onConfirm={() => {
+            const row = offlineMergeAsk;
+            setOfflineMergeAsk(null);
+            void client
+              .putBoard(row.taskId, row.board, row.dataset)
+              .then(() => deleteOfflineBoard(row.dataset, row.taskId))
+              .catch(() => {});
+          }}
+          onCancel={() => {
+            const row = offlineMergeAsk;
+            setOfflineMergeAsk(null);
+            if (row) void deleteOfflineBoard(row.dataset, row.taskId).catch(() => {});
+          }}
+        />
+      )}
+
       {resetOpen && (
         <ConfirmDialog
           title="Reset the practice session?"
@@ -5940,6 +6184,9 @@ export function App() {
           pending={leavingPending}
           exiting={leavingPhase === "exit"}
           error={leavingError}
+          onDelete={(id) =>
+            deletePadEverywhere(client, "whiteboard", id, () => deleteWhiteboardNotebook(id))
+          }
           onChoose={(choice, notebookId) => {
             if (choice === "load" && notebookId) {
               setLeaving(null);
@@ -5965,6 +6212,9 @@ export function App() {
           pending={leavingPending}
           exiting={leavingPhase === "exit"}
           error={leavingError}
+          onDelete={(id) =>
+            deletePadEverywhere(client, "annotate", id, () => deleteAnnotateDoc(id))
+          }
           onChoose={(choice) => void resolveLeave(choice === "save")}
           onCancel={() => {
             if (leavingPending || leavingPhase === "exit") return;
@@ -5980,6 +6230,11 @@ export function App() {
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isAnnotate(problem))}
           snapshotKey={annotateSource?.hash ?? null}
+          archived={anArchive}
+          onRestoreArchive={(id) => restoreArchivedPad(client, "annotate", id)}
+          onDelete={(id) =>
+            deletePadEverywhere(client, "annotate", id, () => deleteAnnotateDoc(id))
+          }
           onChoose={(choice, docId) => {
             if (choice === "save") {
               setAnnotateEntryOpen(false);
@@ -6078,6 +6333,11 @@ export function App() {
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isWhiteboard(problem))}
           snapshotKey={whiteboardNotebookId}
+          archived={wbArchive}
+          onRestoreArchive={(id) => restoreArchivedPad(client, "whiteboard", id)}
+          onDelete={(id) =>
+            deletePadEverywhere(client, "whiteboard", id, () => deleteWhiteboardNotebook(id))
+          }
           onChoose={(choice, notebookId) => {
             if (choice === "save") {
               setWhiteboardEntryOpen(false);
@@ -6105,6 +6365,9 @@ export function App() {
 
       {whiteboardLibOpen && (
         <WhiteboardLibraryDialog
+          onDelete={(id) =>
+            deletePadEverywhere(client, "whiteboard", id, () => deleteWhiteboardNotebook(id))
+          }
           onFreed={() => {
             setWhiteboardLibOpen(false);
             const resume = whiteboardLibResumeRef.current;

@@ -49,6 +49,7 @@ export class LcApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly bodyText?: string,
   ) {
     super(message);
     this.name = "LcApiError";
@@ -108,6 +109,44 @@ function concatBytes(chunks: Uint8Array[]): Uint8Array {
 
 /** Align with the daemon provider ceiling (`llm/providers/http.rs`). */
 const COACH_HTTP_TIMEOUT_MS = 180_000;
+
+export interface WhiteboardPadDto {
+  id: string;
+  title: string;
+  updated_at: number;
+  page_count: number;
+  deleted_at?: number | null;
+  board: unknown;
+  agent: unknown;
+}
+
+export interface AnnotatePadDto {
+  id: string;
+  name: string;
+  hash: string;
+  doc_type: string;
+  updated_at: number;
+  deleted_at?: number | null;
+  source: string;
+  footnotes: unknown;
+  board: unknown;
+  agent: unknown;
+}
+
+export interface PadSnapshotDto {
+  kind: string;
+  key: string;
+  tier: string;
+  written_at: number;
+  payload: unknown;
+}
+
+export interface DevicePrefsDto {
+  id: string;
+  role: string;
+  prefs: unknown;
+  updated_at: number;
+}
 
 export class LcClient {
   constructor(
@@ -560,6 +599,13 @@ export class LcClient {
     provider: string;
     reply: string;
     proposed_annotations?: ProposedAnnotation[];
+    process_events?: Array<{
+      kind: string;
+      label: string;
+      detail?: string;
+      status?: string;
+      ts: number;
+    }>;
   }> {
     const { surface, task_id, dataset, images, timeoutMs } = opts;
     const body: Record<string, unknown> = {
@@ -618,6 +664,116 @@ export class LcClient {
     return { indexed: result.indexed !== false, wrote: Boolean(result.wrote) };
   }
 
+  async putDocBytes(hash: string, bytes: ArrayBuffer): Promise<void> {
+    await this.requestBytes("PUT", `/docs/${encodeURIComponent(hash)}/bytes`, bytes);
+  }
+
+  async getDocBytes(hash: string): Promise<ArrayBuffer | null> {
+    try {
+      return await this.requestBytes("GET", `/docs/${encodeURIComponent(hash)}/bytes`);
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 404) return null;
+      throw cause;
+    }
+  }
+
+  async listWhiteboardPads(): Promise<WhiteboardPadDto[]> {
+    return this.request("GET", "/pads/whiteboard");
+  }
+
+  async listWhiteboardArchive(): Promise<WhiteboardPadDto[]> {
+    return this.request("GET", "/pads/whiteboard/archive");
+  }
+
+  async putWhiteboardPad(id: string, body: WhiteboardPadDto): Promise<WhiteboardPadDto> {
+    return this.request("PUT", `/pads/whiteboard/${encodeURIComponent(id)}`, body);
+  }
+
+  async tombstoneWhiteboardPad(id: string): Promise<void> {
+    await this.request("POST", `/pads/whiteboard/${encodeURIComponent(id)}/tombstone`);
+  }
+
+  async restoreWhiteboardPad(id: string): Promise<void> {
+    await this.request("POST", `/pads/whiteboard/${encodeURIComponent(id)}/restore`);
+  }
+
+  async listAnnotatePads(): Promise<AnnotatePadDto[]> {
+    return this.request("GET", "/pads/annotate");
+  }
+
+  async listAnnotateArchive(): Promise<AnnotatePadDto[]> {
+    return this.request("GET", "/pads/annotate/archive");
+  }
+
+  async putAnnotatePad(id: string, body: AnnotatePadDto): Promise<AnnotatePadDto> {
+    return this.request("PUT", `/pads/annotate/${encodeURIComponent(id)}`, body);
+  }
+
+  async tombstoneAnnotatePad(id: string): Promise<void> {
+    await this.request("POST", `/pads/annotate/${encodeURIComponent(id)}/tombstone`);
+  }
+
+  async restoreAnnotatePad(id: string): Promise<void> {
+    await this.request("POST", `/pads/annotate/${encodeURIComponent(id)}/restore`);
+  }
+
+  async putPadSnapshot(body: PadSnapshotDto): Promise<void> {
+    await this.request("PUT", "/pads/snapshots", body);
+  }
+
+  async getPadSnapshots(kind: string, key: string): Promise<PadSnapshotDto[]> {
+    return this.request(
+      "GET",
+      `/pads/snapshots/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`,
+    );
+  }
+
+  async listDevices(): Promise<DevicePrefsDto[]> {
+    return this.request("GET", "/devices");
+  }
+
+  async getDevicePrefs(id: string): Promise<DevicePrefsDto | null> {
+    try {
+      return await this.request("GET", `/devices/${encodeURIComponent(id)}/prefs`);
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 404) return null;
+      throw cause;
+    }
+  }
+
+  async putDevicePrefs(id: string, body: DevicePrefsDto): Promise<DevicePrefsDto> {
+    return this.request("PUT", `/devices/${encodeURIComponent(id)}/prefs`, body);
+  }
+
+  async cloneDevicePrefs(id: string, role: string): Promise<DevicePrefsDto | null> {
+    const result = await this.request<DevicePrefsDto | null>(
+      "POST",
+      `/devices/${encodeURIComponent(id)}/clone`,
+      { role },
+    );
+    return result;
+  }
+
+  private async requestBytes(
+    method: string,
+    path: string,
+    body?: ArrayBuffer,
+  ): Promise<ArrayBuffer> {
+    const headers: Record<string, string> = {};
+    if (this.pairing.token) headers["X-LC-Token"] = this.pairing.token;
+    if (body) headers["Content-Type"] = "application/octet-stream";
+    const response = await this.fetchImpl(`${this.pairing.baseUrl}${path}`, {
+      method,
+      headers,
+      body: body ?? undefined,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new LcApiError(errorMessage(text, response.status), response.status, text);
+    }
+    return response.arrayBuffer();
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -662,7 +818,7 @@ export class LcClient {
 
     const text = await response.text();
     if (!response.ok) {
-      throw new LcApiError(errorMessage(text, response.status), response.status);
+      throw new LcApiError(errorMessage(text, response.status), response.status, text);
     }
     return (text ? JSON.parse(text) : null) as T;
   }

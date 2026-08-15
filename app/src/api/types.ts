@@ -441,6 +441,8 @@ export const STAGE_LABELS: Record<string, string> = {
   code: "Reading solution.py",
   retrace: "Re-tracing the cited case",
   ask: "Thinking…",
+  prefetch: "Looking up earlier pages",
+  reason: "Thought",
   lazy: "Writing the earned code",
   draw_tools: "Choosing what to draw",
   validate: "Checking the diagram schema",

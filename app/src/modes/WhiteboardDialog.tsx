@@ -5,11 +5,13 @@
 import { useEffect, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   deleteWhiteboardNotebook,
   listWhiteboardNotebooks,
   type WhiteboardNotebookMeta,
 } from "../util/whiteboardStore";
+import { TOMBSTONE_COPY } from "../util/padSync";
 import {
   listPadSnapshots,
   PAD_SNAPSHOT_TIERS,
@@ -32,6 +34,7 @@ interface LeaveProps {
   error: string | null;
   onChoose: (choice: ScratchLeaveChoice, notebookId?: string) => void;
   onCancel: () => void;
+  onDelete?: (id: string) => void | Promise<void>;
 }
 
 interface EntryProps {
@@ -45,6 +48,9 @@ interface EntryProps {
   snapshotKey?: string | null;
   onChoose: (choice: ScratchEntryChoice, notebookId?: string) => void;
   onCancel: () => void;
+  onDelete?: (id: string) => void | Promise<void>;
+  archived?: WhiteboardNotebookMeta[];
+  onRestoreArchive?: (id: string) => void | Promise<void>;
 }
 
 export type WhiteboardDialogProps = LeaveProps | EntryProps;
@@ -56,6 +62,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const [pickingLoad, setPickingLoad] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
+  const [pendingId, setPendingId] = useState<string | null>(null);
 
   useEffect(() => {
     setNotebooks(listWhiteboardNotebooks());
@@ -92,10 +99,21 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   };
 
   const removeNotebook = (id: string) => {
-    // See AnnotateDialog: the index drops synchronously, the payload drops after.
-    void deleteWhiteboardNotebook(id).catch(() => {});
+    setPendingId(id);
+  };
+
+  const confirmRemove = async (id: string) => {
+    try {
+      if (props.onDelete) await props.onDelete(id);
+      else await deleteWhiteboardNotebook(id);
+    } catch {
+      /* ignore */
+    }
+    setPendingId(null);
     refreshList();
   };
+
+  const archived = props.mode === "entry" ? props.archived ?? [] : [];
 
   return (
     <div
@@ -224,6 +242,28 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                   </HoldButton>
                 </div>
               ))}
+              {archived.length > 0 && (
+                <>
+                  <p className="lc-muted">Archived on the PC — restore to the live library.</p>
+                  {archived.map((entry) => (
+                    <HoldButton
+                      key={`arch-${entry.id}`}
+                      label={`Restore ${entry.title}`}
+                      className="lc-hold-choice"
+                      disabled={locked || !props.mode || props.mode !== "entry"}
+                      onConfirm={() => {
+                        if (props.mode === "entry") void props.onRestoreArchive?.(entry.id);
+                      }}
+                      resetKey={error}
+                    >
+                      <strong>Restore · {entry.title}</strong>
+                      <span className="lc-muted">
+                        {new Date(entry.updatedAt).toLocaleString()}
+                      </span>
+                    </HoldButton>
+                  ))}
+                </>
+              )}
             </div>
           ) : (
             <div className="lc-settings-choice">
@@ -338,6 +378,16 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
           </button>
         </div>
       </div>
+      {pendingId && (
+        <ConfirmDialog
+          title="Remove this notebook?"
+          message="It leaves the library on every device that talks to this PC."
+          detail={TOMBSTONE_COPY}
+          confirmLabel="Delete"
+          onConfirm={() => void confirmRemove(pendingId)}
+          onCancel={() => setPendingId(null)}
+        />
+      )}
     </div>
   );
 }

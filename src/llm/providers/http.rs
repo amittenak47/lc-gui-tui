@@ -72,12 +72,17 @@ pub(crate) fn chat_completions_ex(
         .pointer("/choices/0/message")
         .with_context(|| format!("unexpected response shape from {url}"))?;
 
-    let content = message
+    let raw_content = message
         .get("content")
         .and_then(|c| c.as_str())
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+        .unwrap_or_default();
+    let reasoning_field = message
+        .get("reasoning_content")
+        .or_else(|| message.get("reasoning"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    let split = crate::llm::reasoning::split_think(raw_content, reasoning_field);
+    let content = split.content;
 
     let mut tool_calls = Vec::new();
     if let Some(calls) = message.get("tool_calls").and_then(|c| c.as_array()) {
@@ -105,6 +110,7 @@ pub(crate) fn chat_completions_ex(
     Ok(ChatReply {
         content,
         tool_calls,
+        reasoning: split.reasoning,
     })
 }
 

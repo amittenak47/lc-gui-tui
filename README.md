@@ -211,11 +211,21 @@ flowchart TD
 
 | Surface | Offline | Sync |
 | --- | --- | --- |
-| **Whiteboard / annotate** | Full. Notebooks and doc copies live in IndexedDB. | None across devices. Same browser profile, or export/import a sidecar. The PC may hold a **text** RAG index (`docs.db`); PDF bytes stay on the device. |
-| **Problems (online)** | — | Desktop app, browser, and Android that pair to the **same** `lc serve` share `~/lc-workspace` (`board.json`, `solution.py`, `.lc/agent.json`). That is the sync story — not a cloud account. |
-| **Problems (offline pack)** | Settings can download statements (~100–250 MB). Browse and open a local board. **No** tests, **no** coach. | Offline ink on a problem is **not** merged back onto the PC. Settings has a prefer-local / prefer-server pref; it is not a reconciler. |
+| **Whiteboard / annotate** | Full. Working copy is IndexedDB on the device. | Dual-write to `lc serve` (`pads.db` + `pad-blobs/`). Tombstone hides a pad on every paired device; snapshots and PDF bytes stay on the PC. Pairing tokens stay per device. Sidecar `.lc-ink.json` is backup, not the sync path. |
+| **Problems (online)** | Autosave parks the board in IndexedDB when the daemon is down. | Desktop, browser, and Android that pair to the **same** `lc serve` share `~/lc-workspace`. On reconnect, Personalise `offlineMerge` (ask / prefer-local / prefer-server) decides which board wins. |
+| **Problems (offline pack)** | Settings can download statements (~100–250 MB). Browse and open a local board. **No** tests, **no** coach until `lc serve` is back. | Same merge pref as above once the daemon is reachable. |
 
 Tests always call `python run_tests.py` on the PC (`src/workspace/runner.rs`). Coach Review (perceive → claim → verdict) always runs inside `lc serve`.
+
+### Pad library vs pairing vs sidecar
+
+The tablet IndexedDB is the working copy. `lc serve` is a redundant historical copy: a missing or corrupt local row must not delete the PC copy. Delete is hold-to-confirm and only tombstones the live list; restore from archive or from the 2h / 24h / 7d snapshots.
+
+Personalise (handedness, theme, capture folder, …) is a **per-device** blob on the daemon. The first desktop session with no record clones the tablet (or any existing) blob once, then each device writes its own.
+
+Pairing (`localStorage` `whiteboard.pairing`) is how *this* device authenticates. Do not copy tokens between devices.
+
+Tailscale steps stay in [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md) — install on PC and tablet, pair to the `100.x` IP, port 7878. No installer ships in this repo.
 
 ### Desktop, browser, Android
 

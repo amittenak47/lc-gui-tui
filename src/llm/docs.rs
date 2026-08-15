@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::docs_index;
+use crate::llm::coach::{EventSink, ToolStatus};
 use crate::llm::viz::parse_tool_calls;
 use crate::llm::{is_tool_calling_unsupported, ChatMessage, ChatRequest, LlmProvider};
 
@@ -175,6 +176,7 @@ pub fn run_document_ask(
     user: String,
     images: Vec<String>,
     ctx: &AskContext,
+    events: &EventSink,
 ) -> Result<(String, Vec<ProposedAnnotation>)> {
     let tools = document_tools(cfg);
     let mut messages = vec![
@@ -194,6 +196,7 @@ pub fn run_document_ask(
             if parsed.tool_calls.is_empty() {
                 parsed.tool_calls = parse_tool_calls(&parsed.content);
             }
+            emit_reasoning(events, &parsed.reasoning);
             if parsed.tool_calls.is_empty() {
                 return Ok((parsed.content.trim().to_string(), proposed));
             }
@@ -202,6 +205,7 @@ pub fn run_document_ask(
         }
         Err(err) => return Err(err),
     };
+    emit_reasoning(events, &reply.reasoning);
 
     for _ in 0..MAX_TOOL_ITERS {
         if reply.tool_calls.is_empty() {
@@ -209,7 +213,14 @@ pub fn run_document_ask(
         }
         let mut results = Vec::new();
         for call in &reply.tool_calls {
+            events.tool(call.name.as_str(), ToolStatus::Proposed, tool_summary(&call.name), None);
             let (text, maybe_ann) = dispatch_tool(cfg, ctx, call.name.as_str(), &call.arguments)?;
+            events.tool(
+                call.name.as_str(),
+                ToolStatus::Accepted,
+                clip_tool_detail(&text),
+                None,
+            );
             if let Some(ann) = maybe_ann {
                 proposed.push(ann);
             }
@@ -233,6 +244,7 @@ pub fn run_document_ask(
             results.join("\n")
         )));
         reply = provider.chat_ex(&ChatRequest::new(messages.clone()).with_tools(tools.clone()))?;
+        emit_reasoning(events, &reply.reasoning);
         if reply.tool_calls.is_empty() {
             reply.tool_calls = parse_tool_calls(&reply.content);
         }
@@ -242,8 +254,38 @@ pub fn run_document_ask(
             "Answer the question now in plain text. Do not call tools.",
         ));
         reply = provider.chat_ex(&ChatRequest::new(messages))?;
+        emit_reasoning(events, &reply.reasoning);
     }
     Ok((reply.content.trim().to_string(), proposed))
+}
+
+fn emit_reasoning(events: &EventSink, reasoning: &str) {
+    for step in crate::llm::reasoning::split_steps(reasoning) {
+        events.stage("reason", step);
+    }
+}
+
+fn tool_summary(name: &str) -> &'static str {
+    match name {
+        "query_document_vectors" => "searching the book",
+        "get_document_section" => "opening a section",
+        "lookup_reference" => "checking a citation",
+        "get_current_page" => "reading this page",
+        "get_highlight" => "re-reading the highlight",
+        "list_document_marks" => "listing marks",
+        "save_annotation" => "pinning a tab",
+        "search_web" => "searching the web",
+        _ => "calling a tool",
+    }
+}
+
+fn clip_tool_detail(text: &str) -> String {
+    let t = text.trim();
+    let mut out: String = t.chars().take(280).collect();
+    if t.chars().count() > 280 {
+        out.push('…');
+    }
+    out
 }
 
 fn dispatch_tool(
@@ -409,6 +451,7 @@ mod tests {
 
     use anyhow::anyhow;
 
+    use crate::llm::coach::{CoachEvent, EventSink};
     use crate::llm::{ChatReply, ToolCall};
 
     #[test]
@@ -438,6 +481,7 @@ mod tests {
         calls: Cell<usize>,
         fail_tools: bool,
         always_tool: bool,
+        reasoning: &'static str,
     }
 
     impl LlmProvider for Scripted {
@@ -461,11 +505,13 @@ mod tests {
                         name: "get_highlight".into(),
                         arguments: serde_json::json!({}),
                     }],
+                    reasoning: self.reasoning.to_string(),
                 });
             }
             Ok(ChatReply {
                 content: "SGD is a minibatch gradient estimate.".into(),
                 tool_calls: vec![],
+                reasoning: self.reasoning.to_string(),
             })
         }
     }
@@ -487,6 +533,7 @@ mod tests {
             calls: Cell::new(0),
             fail_tools: true,
             always_tool: false,
+            reasoning: "",
         };
         let (reply, proposed) = run_document_ask(
             &provider,
@@ -495,6 +542,7 @@ mod tests {
             "what is SGD".into(),
             vec![],
             &ctx(),
+            &EventSink::none(),
         )
         .unwrap();
         assert!(reply.contains("SGD"));
@@ -508,6 +556,7 @@ mod tests {
             calls: Cell::new(0),
             fail_tools: false,
             always_tool: true,
+            reasoning: "",
         };
         let (reply, _) = run_document_ask(
             &provider,
@@ -516,10 +565,100 @@ mod tests {
             "what is SGD".into(),
             vec![],
             &ctx(),
+            &EventSink::none(),
         )
         .unwrap();
         assert!(reply.contains("SGD"));
         // initial + 3 tool rounds + 1 forced plain-text close
         assert_eq!(provider.calls.get(), 1 + MAX_TOOL_ITERS + 1);
+    }
+
+    #[test]
+    fn save_annotation_returns_a_proposal_and_does_not_need_a_store() {
+        let (text, proposed) = dispatch_tool(
+            &Config::default(),
+            &ctx(),
+            "save_annotation",
+            &serde_json::json!({
+                "excerpt": "SGD",
+                "note": "minibatch gradient",
+                "page": 2,
+                "tags": ["def"],
+                "links": []
+            }),
+        )
+        .unwrap();
+        assert!(text.contains("book-tab"));
+        let ann = proposed.expect("proposal");
+        assert_eq!(ann.excerpt, "SGD");
+        assert_eq!(ann.note, "minibatch gradient");
+        assert_eq!(ann.page, Some(2));
+    }
+
+    #[test]
+    fn problem_ask_prompt_does_not_name_document_tools() {
+        let names: Vec<String> = document_tools(&Config::default())
+            .into_iter()
+            .filter_map(|t| {
+                t.pointer("/function/name")
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        assert!(names.contains(&"query_document_vectors".into()));
+        let ask = crate::llm::coach::ASK_SYSTEM_PROMPT;
+        for name in &names {
+            assert!(
+                !ask.contains(name),
+                "problem Ask system prompt must not mention {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_loop_emits_tool_events_and_reasoning_steps() {
+        use std::sync::{Arc, Mutex};
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let events = EventSink::new({
+            let log = log.clone();
+            move |ev| match ev {
+                CoachEvent::Tool { name, status, .. } => {
+                    log.lock().unwrap().push(format!("tool:{name}:{}", status.as_str()));
+                }
+                CoachEvent::Stage { stage, detail } => {
+                    log.lock().unwrap().push(format!("stage:{stage}:{detail}"));
+                }
+            }
+        });
+        let provider = Scripted {
+            calls: Cell::new(0),
+            fail_tools: false,
+            always_tool: true,
+            reasoning: "First I look at the highlight.\n\nThen I name SGD.",
+        };
+        let _ = run_document_ask(
+            &provider,
+            &Config::default(),
+            DOCUMENT_ASK_SYSTEM,
+            "what is SGD".into(),
+            vec![],
+            &ctx(),
+            &events,
+        )
+        .unwrap();
+        let lines = log.lock().unwrap().clone();
+        assert!(
+            lines.iter().any(|l| l.starts_with("tool:get_highlight:proposed")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("tool:get_highlight:accepted")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("stage:reason:")),
+            "{lines:?}"
+        );
     }
 }

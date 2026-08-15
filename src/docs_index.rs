@@ -510,6 +510,97 @@ mod tests {
         let hits = retrieve(&conn, "book", "what is SGD", 2, &cfg()).unwrap();
         assert!(!hits.is_empty());
         assert_eq!(hits[0].page, 2);
+        let query_vec = hashed_embedding("what is SGD");
+        let chunk_vec = hashed_embedding(
+            "We define SGD as stochastic gradient descent: a minibatch estimate of the full gradient.",
+        );
+        assert_eq!(query_vec.len(), HASH_DIM);
+        assert!(cosine(&query_vec, &chunk_vec) > 0.0);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn hashed_embedding_is_64dim_l2_and_stable() {
+        let a = hashed_embedding("stochastic gradient descent");
+        let b = hashed_embedding("stochastic gradient descent");
+        assert_eq!(a.len(), HASH_DIM);
+        assert_eq!(a, b);
+        let norm: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-5);
+        let blob = encode_f32(&a);
+        assert_eq!(decode_f32(&blob), a);
+    }
+
+    #[test]
+    fn empty_embed_model_stores_hashed_vectors_and_is_not_http_embedded() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.pdf".into(),
+            doc_type: "pdf".into(),
+            pages: vec![IndexPage {
+                page: 1,
+                text: "alpha beta gamma delta epsilon".into(),
+                heading: None,
+            }],
+        };
+        let status = upsert(&mut conn, "h1", &body, &cfg()).unwrap();
+        assert!(status.indexed);
+        assert!(!status.embedded);
+        let blob: Vec<u8> = conn
+            .query_row(
+                "SELECT embedding FROM chunks WHERE hash = ?1",
+                rusqlite::params!["h1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(decode_f32(&blob).len(), HASH_DIM);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn http_embed_failure_falls_back_to_hashed() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let mut cfg = Config::default();
+        cfg.llm.local.embed_model = "tiny-embed".into();
+        cfg.llm.local.embed_base_url = "http://127.0.0.1:1".into();
+        let body = IndexBody {
+            name: "n.pdf".into(),
+            doc_type: "pdf".into(),
+            pages: vec![IndexPage {
+                page: 1,
+                text: "fallback still indexes when the embed server is down".into(),
+                heading: None,
+            }],
+        };
+        let status = upsert(&mut conn, "h2", &body, &cfg).unwrap();
+        assert!(status.indexed);
+        assert!(status.embedded);
+        let blob: Vec<u8> = conn
+            .query_row(
+                "SELECT embedding FROM chunks WHERE hash = ?1",
+                rusqlite::params!["h2"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(decode_f32(&blob).len(), HASH_DIM);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn prefetch_k_is_four_and_retrieval_stays_under_char_cap() {
+        assert_eq!(prefetch_k(), 4);
+        let chunks: Vec<RetrievedChunk> = (0..20)
+            .map(|i| RetrievedChunk {
+                page: i,
+                heading: Some("H".into()),
+                text: "x".repeat(500),
+                score: 1.0,
+            })
+            .collect();
+        let formatted = format_retrieval(&chunks);
+        assert!(formatted.len() <= RETRIEVAL_CHAR_CAP + 80);
+        assert!(formatted.starts_with("## Retrieved from this document"));
     }
 }

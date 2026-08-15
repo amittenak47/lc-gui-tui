@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { HoldButton } from "../components/HoldButton";
 import {
   deleteWhiteboardNotebook,
@@ -11,22 +12,27 @@ import {
   WHITEBOARD_LIBRARY_LIMIT,
   type WhiteboardNotebookMeta,
 } from "../util/whiteboardStore";
+import { TOMBSTONE_COPY } from "../util/padSync";
 
 export interface WhiteboardLibraryDialogProps {
   phase?: "enter" | "open" | "exit";
   /** Called after a delete frees at least one slot (or Cancel). */
   onFreed: () => void;
   onCancel: () => void;
+  /** Hold-confirm delete. Defaults to a local-only drop. */
+  onDelete?: (id: string) => void | Promise<void>;
 }
 
 export function WhiteboardLibraryDialog({
   phase = "open",
   onFreed,
   onCancel,
+  onDelete,
 }: WhiteboardLibraryDialogProps) {
   const [notebooks, setNotebooks] = useState<WhiteboardNotebookMeta[]>(() =>
     listWhiteboardNotebooks(),
   );
+  const [pendingId, setPendingId] = useState<string | null>(null);
 
   useEffect(() => {
     setNotebooks(listWhiteboardNotebooks());
@@ -40,10 +46,16 @@ export function WhiteboardLibraryDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  const remove = (id: string) => {
-    void deleteWhiteboardNotebook(id).catch(() => {});
+  const remove = async (id: string) => {
+    try {
+      if (onDelete) await onDelete(id);
+      else await deleteWhiteboardNotebook(id);
+    } catch {
+      /* ignore */
+    }
     const next = listWhiteboardNotebooks();
     setNotebooks(next);
+    setPendingId(null);
     if (next.length < WHITEBOARD_LIBRARY_LIMIT) onFreed();
   };
 
@@ -71,7 +83,8 @@ export function WhiteboardLibraryDialog({
         <div className="lc-settings-head">
           <h2>Whiteboard library full</h2>
           <p className="lc-muted">
-            At most {WHITEBOARD_LIBRARY_LIMIT} notebooks. Hold to delete one.
+            At most {WHITEBOARD_LIBRARY_LIMIT} notebooks. Hold to delete one. A
+            copy stays on the PC.
           </p>
         </div>
         <div className="lc-settings-body">
@@ -81,7 +94,7 @@ export function WhiteboardLibraryDialog({
                 key={entry.id}
                 label={`Delete ${entry.title}`}
                 className="lc-hold-choice lc-hold-danger"
-                onConfirm={() => remove(entry.id)}
+                onConfirm={() => setPendingId(entry.id)}
               >
                 <strong>Delete · {entry.title}</strong>
                 <span className="lc-muted">
@@ -98,6 +111,16 @@ export function WhiteboardLibraryDialog({
           </button>
         </div>
       </div>
+      {pendingId && (
+        <ConfirmDialog
+          title="Remove this notebook?"
+          message="It leaves the library on every device that talks to this PC."
+          detail={TOMBSTONE_COPY}
+          confirmLabel="Delete"
+          onConfirm={() => void remove(pendingId)}
+          onCancel={() => setPendingId(null)}
+        />
+      )}
     </div>
   );
 }

@@ -3,9 +3,9 @@
  *
  * Same table (q#, slug, difficulty, tags, cases), same 15-per-page paging, same
  * filters, and the same keys — `W`/`S` to move, `A`/`D` to page, `/` to search,
- * `T` tag, `E` difficulty, `O` sort, `G` dataset, `R` randomize session,
- * `M` select mode, `Space` add to session picks, `X` reset session, `Enter` to
- * open.
+ * `T` tag, `E` difficulty, `O` sort (column headers), `G` dataset, `R` randomize
+ * session, `M` select mode, `Space` add to session picks, `X` reset session,
+ * `Enter` to open.
  *
  * The tab strip above the table switches problem sets. Everything below it —
  * filters, paging, session controls — works the same whichever tab is active;
@@ -13,7 +13,7 @@
  * on a tab change, because a KodCode tag means nothing in the LeetCode tables.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import type { LcClient, SearchOptions } from "../api/client";
 import type { DatasetInfo, ProblemSummary, SessionSnapshot } from "../api/types";
@@ -29,6 +29,7 @@ import {
 import { BackgroundPalette } from "../components/BackgroundPalette";
 import { BrowserFilterSelect } from "../components/BrowserFilterSelect";
 import { HoldButton } from "../components/HoldButton";
+import { MorphBar } from "../components/MorphBar";
 import { titleFromSlug } from "../util/text";
 import { loadBrowsePosition, saveBrowsePosition } from "../util/browsePosition";
 
@@ -38,12 +39,12 @@ const MOBILE_PAGE_SIZE_MIN = 6;
 
 const DIFFICULTIES = ["", "Easy", "Medium", "Hard"] as const;
 const SORTS = ["task_id", "question", "difficulty", "cases", "tags"] as const;
-const SORT_LABEL: Record<string, string> = {
-  task_id: "name",
-  question: "q#",
+export const COLUMN_SORT: Record<string, (typeof SORTS)[number]> = {
+  question: "question",
+  task_id: "task_id",
   difficulty: "difficulty",
-  cases: "cases",
   tags: "tags",
+  cases: "cases",
 };
 
 export interface ProblemBrowserProps {
@@ -114,6 +115,15 @@ export function ProblemBrowser({
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [offlinePack, setOfflinePack] = useState<OfflinePack | null>(null);
   const [startMode, setStartMode] = useState<"begin" | "random">("begin");
+  const [tableFace, setTableFace] = useState<"a" | "b">("a");
+  const [tableA, setTableA] = useState<{ key: string; rows: ProblemSummary[] } | null>(
+    null,
+  );
+  const [tableB, setTableB] = useState<{ key: string; rows: ProblemSummary[] } | null>(
+    null,
+  );
+  const tableFaceRef = useRef<"a" | "b">("a");
+  const tableKeyRef = useRef("");
 
   const searchRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -311,6 +321,32 @@ export function ProblemBrowser({
     if (tableReady) onReady?.();
   }, [tableReady, onReady]);
 
+  useEffect(() => {
+    if (loading) return;
+    const key = [dataset, String(page), sort, difficulty, tag, query].join("\0");
+    const snap = { key, rows };
+    if (tableKeyRef.current === "") {
+      tableKeyRef.current = key;
+      setTableA(snap);
+      return;
+    }
+    if (tableKeyRef.current === key) {
+      if (tableFaceRef.current === "a") setTableA(snap);
+      else setTableB(snap);
+      return;
+    }
+    tableKeyRef.current = key;
+    if (tableFaceRef.current === "a") {
+      setTableB(snap);
+      tableFaceRef.current = "b";
+      setTableFace("b");
+    } else {
+      setTableA(snap);
+      tableFaceRef.current = "a";
+      setTableFace("a");
+    }
+  }, [loading, rows, dataset, page, sort, difficulty, tag, query]);
+
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
   const move = useCallback(
@@ -496,6 +532,7 @@ export function ProblemBrowser({
     datasets,
     dataset,
     switchDataset,
+    sort,
   ]);
 
   // Keep the highlighted row visible when moving with the keyboard (desktop only).
@@ -544,34 +581,23 @@ export function ProblemBrowser({
                 className="lc-filter-diff"
                 value={difficulty}
                 aria-label="Difficulty"
-                placeholder={mobile ? "diff" : "difficulty"}
+                placeholder="Any Difficulty"
                 options={DIFFICULTIES.map((value) => ({
                   value,
-                  label: value || "Any",
+                  label: value || "Any Difficulty",
                 }))}
                 onChange={setDifficulty}
               />
               <BrowserFilterSelect
                 className="lc-filter-tag"
                 value={tag}
-                aria-label="Tag"
-                placeholder="tag"
+                aria-label="Category"
+                placeholder="Any Category"
                 options={[
-                  { value: "", label: "Any" },
+                  { value: "", label: "Any Category" },
                   ...tags.map((value) => ({ value, label: value })),
                 ]}
                 onChange={setTag}
-              />
-              <BrowserFilterSelect
-                className="lc-filter-sort"
-                value={sort}
-                aria-label="Sort"
-                placeholder="sort"
-                options={SORTS.map((value) => ({
-                  value,
-                  label: SORT_LABEL[value],
-                }))}
-                onChange={setSort}
               />
             </div>
 
@@ -585,75 +611,84 @@ export function ProblemBrowser({
             )}
 
             <div className={loading ? "lc-browser-results lc-browser-results-pending" : "lc-browser-results"}>
-              <div className="lc-table-head" aria-hidden="true">
-                <span className="lc-col-q">q#</span>
-                <span className="lc-col-name">name</span>
-                <span className="lc-col-diff">difficulty</span>
-                <span className="lc-col-tags">tags</span>
-                <span className="lc-col-cases">cases</span>
+              <div className="lc-table-head" role="row">
+                <SortHead
+                  className="lc-col-q"
+                  sortKey="question"
+                  label="q#"
+                  sort={sort}
+                  onSort={setSort}
+                />
+                <SortHead
+                  className="lc-col-name"
+                  sortKey="task_id"
+                  label="name"
+                  sort={sort}
+                  onSort={setSort}
+                />
+                <SortHead
+                  className="lc-col-diff"
+                  sortKey="difficulty"
+                  label="difficulty"
+                  sort={sort}
+                  onSort={setSort}
+                />
+                <SortHead
+                  className="lc-col-tags"
+                  sortKey="tags"
+                  label="tags"
+                  sort={sort}
+                  onSort={setSort}
+                />
+                <SortHead
+                  className="lc-col-cases"
+                  sortKey="cases"
+                  label="cases"
+                  sort={sort}
+                  onSort={setSort}
+                />
               </div>
 
-              <div
-                className={selectMode ? "lc-table lc-table-selecting" : "lc-table"}
-                ref={listRef}
-                role="listbox"
-                aria-label="Problems"
-                aria-multiselectable={selectMode}
-                tabIndex={-1}
+              <MorphBar
+                active={tableFace}
+                axis="height"
+                className="lc-browser-table-morph"
               >
-                {rows.map((problem, index) => {
-                  const isPicked = picked.has(problem.task_id);
-                  const rowClass = [
-                    "lc-row",
-                    index === selected ? "lc-row-selected" : "",
-                    isPicked ? "lc-row-picked" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ");
-                  return (
-                    <button
-                      key={problem.task_id}
-                      type="button"
-                      role="option"
-                      data-row={index}
-                      aria-selected={selectMode ? isPicked : index === selected}
-                      className={rowClass}
-                      disabled={busy || loading}
-                      onMouseEnter={() => setSelected(index)}
-                      onClick={() => activateRow(problem.task_id)}
-                    >
-                      <span className="lc-col-q">{problem.question_id ?? ""}</span>
-                      <span className="lc-col-name" title={problem.task_id}>
-                        {selectMode && (
-                          <span className={isPicked ? "lc-pick-mark is-on" : "lc-pick-mark"} aria-hidden="true">
-                            {isPicked ? "✓" : "○"}
-                          </span>
-                        )}
-                        {titleFromSlug(problem.task_id, problem.question_id)}
-                        {/* Keyed on `dataset/task_id`, so a fail earned in one
-                            problem set never badges the same slug in another. */}
-                        {session?.problems[problem.key] && (
-                          <span
-                            className={`lc-session-badge is-${session.problems[problem.key].state}`}
-                          >
-                            {session.problems[problem.key].state === "passed"
-                              ? "pass"
-                              : session.problems[problem.key].state === "failed"
-                                ? "fail"
-                                : "ld"}
-                          </span>
-                        )}
-                      </span>
-                      <span className={`lc-col-diff lc-diff-${(problem.difficulty ?? "").toLowerCase()}`}>
-                        {problem.difficulty ?? ""}
-                      </span>
-                      <span className="lc-col-tags">{problem.tags.join(", ")}</span>
-                      <span className="lc-col-cases">{problem.test_count}</span>
-                    </button>
-                  );
-                })}
-                {!loading && rows.length === 0 && <EmptyTable dataset={dataset} datasets={datasets} />}
-              </div>
+                <div data-morph-id="a">
+                  <ProblemTablePanel
+                    rows={tableA?.rows ?? rows}
+                    selected={selected}
+                    selectMode={selectMode}
+                    picked={picked}
+                    session={session}
+                    dataset={dataset}
+                    datasets={datasets}
+                    busy={busy}
+                    loading={loading}
+                    listRef={tableFace === "a" ? listRef : undefined}
+                    showEmpty={!loading && (tableA?.rows ?? rows).length === 0}
+                    onSelect={setSelected}
+                    onActivate={activateRow}
+                  />
+                </div>
+                <div data-morph-id="b">
+                  <ProblemTablePanel
+                    rows={tableB?.rows ?? []}
+                    selected={selected}
+                    selectMode={selectMode}
+                    picked={picked}
+                    session={session}
+                    dataset={dataset}
+                    datasets={datasets}
+                    busy={busy}
+                    loading={loading}
+                    listRef={tableFace === "b" ? listRef : undefined}
+                    showEmpty={!loading && (tableB?.rows.length ?? 0) === 0 && tableB !== null}
+                    onSelect={setSelected}
+                    onActivate={activateRow}
+                  />
+                </div>
+              </MorphBar>
 
               <div className="lc-browser-foot">
                 {/*
@@ -673,44 +708,53 @@ export function ProblemBrowser({
                     <span className="lc-label-short">‹</span>
                   </button>
                   <div className="lc-browser-foot-center">
-                    <div className="lc-browser-foot-actions">
-                      <button
-                        type="button"
-                        className={selectMode ? "lc-secondary is-active" : "lc-secondary"}
-                        disabled={busy}
-                        aria-pressed={selectMode}
-                        onClick={() => setSelectMode((on) => !on)}
-                      >
-                        Select{picked.size > 0 ? ` (${picked.size})` : ""}
-                      </button>
-                      <HoldButton
-                        label={startMode === "begin" ? "Begin!" : "Random"}
-                        className="lc-secondary lc-browser-start-hold"
-                        disabled={
-                          busy ||
-                          (startMode === "begin" ? !onStartSession : !onRandomSession)
-                        }
-                        ariaLabel={
-                          startMode === "begin"
-                            ? "Begin session: tap for Random, hold to start"
-                            : "Random session: tap for Begin, hold to randomize"
-                        }
-                        onTap={() =>
-                          setStartMode((mode) => (mode === "begin" ? "random" : "begin"))
-                        }
-                        onConfirm={() =>
-                          startMode === "begin" ? commitStart() : randomizeSession()
-                        }
-                      />
-                      <button
-                        type="button"
-                        className="lc-secondary"
-                        disabled={busy || !onResetSession}
-                        onClick={commitReset}
-                      >
-                        Reset
-                      </button>
-                    </div>
+                    <MorphBar
+                      active={startMode}
+                      axis="width"
+                      className="lc-browser-foot-morph"
+                    >
+                      <div data-morph-id="begin">
+                        <div className="lc-browser-foot-actions">
+                          <button
+                            type="button"
+                            className={selectMode ? "lc-secondary is-active" : "lc-secondary"}
+                            disabled={busy}
+                            aria-pressed={selectMode}
+                            onClick={() => setSelectMode((on) => !on)}
+                          >
+                            Select{picked.size > 0 ? ` (${picked.size})` : ""}
+                          </button>
+                          <HoldButton
+                            label="Begin!"
+                            className="lc-secondary lc-browser-start-hold"
+                            disabled={busy || !onStartSession}
+                            ariaLabel="Begin session: tap for Random, hold to start"
+                            onTap={() => setStartMode("random")}
+                            onConfirm={commitStart}
+                          />
+                          <button
+                            type="button"
+                            className="lc-secondary"
+                            disabled={busy || !onResetSession}
+                            onClick={commitReset}
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      </div>
+                      <div data-morph-id="random">
+                        <div className="lc-browser-foot-actions">
+                          <HoldButton
+                            label="Random"
+                            className="lc-secondary lc-browser-start-hold"
+                            disabled={busy || !onRandomSession}
+                            ariaLabel="Random session: tap for Begin, hold to randomize"
+                            onTap={() => setStartMode("begin")}
+                            onConfirm={randomizeSession}
+                          />
+                        </div>
+                      </div>
+                    </MorphBar>
                     <span className="lc-browser-foot-stats lc-muted">
                       {picked.size > 0
                         ? `${picked.size} selected`
@@ -735,8 +779,8 @@ export function ProblemBrowser({
                 </div>
                 <div className="lc-browser-foot-keys lc-desktop-only">
                   <span className="lc-keys lc-muted">
-                    W/S move · A/D page · / search · T tag · E diff · O sort · G dataset · R
-                    random · M select · Space add · X reset · Enter open
+                    W/S move · A/D page · / search · T tag · E diff · O / column sort · G
+                    dataset · R random · M select · Space add · X reset · Enter open
                   </span>
                 </div>
               </div>
@@ -748,6 +792,123 @@ export function ProblemBrowser({
   );
 }
 
+
+function SortHead({
+  sortKey,
+  label,
+  sort,
+  onSort,
+  className,
+}: {
+  sortKey: (typeof SORTS)[number];
+  label: string;
+  sort: string;
+  onSort: (next: string) => void;
+  className: string;
+}) {
+  const active = sort === sortKey;
+  return (
+    <button
+      type="button"
+      className={active ? `${className} lc-table-sort is-active` : `${className} lc-table-sort`}
+      aria-pressed={active}
+      aria-label={`Sort by ${label}`}
+      onClick={() => onSort(sortKey)}
+    >
+      {label}
+    </button>
+  );
+}
+
+function ProblemTablePanel({
+  rows,
+  selected,
+  selectMode,
+  picked,
+  session,
+  dataset,
+  datasets,
+  busy,
+  loading,
+  listRef,
+  showEmpty,
+  onSelect,
+  onActivate,
+}: {
+  rows: ProblemSummary[];
+  selected: number;
+  selectMode: boolean;
+  picked: Set<string>;
+  session: SessionSnapshot | null;
+  dataset: string;
+  datasets: DatasetInfo[];
+  busy: boolean;
+  loading: boolean;
+  listRef?: RefObject<HTMLDivElement | null>;
+  showEmpty: boolean;
+  onSelect: (index: number) => void;
+  onActivate: (taskId: string) => void;
+}) {
+  return (
+    <div
+      className={selectMode ? "lc-table lc-table-selecting" : "lc-table"}
+      ref={listRef}
+      role="listbox"
+      aria-label="Problems"
+      aria-multiselectable={selectMode}
+      tabIndex={-1}
+    >
+      {rows.map((problem, index) => {
+        const isPicked = picked.has(problem.task_id);
+        const rowClass = [
+          "lc-row",
+          index === selected ? "lc-row-selected" : "",
+          isPicked ? "lc-row-picked" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return (
+          <button
+            key={problem.task_id}
+            type="button"
+            role="option"
+            data-row={index}
+            aria-selected={selectMode ? isPicked : index === selected}
+            className={rowClass}
+            disabled={busy || loading}
+            onMouseEnter={() => onSelect(index)}
+            onClick={() => onActivate(problem.task_id)}
+          >
+            <span className="lc-col-q">{problem.question_id ?? ""}</span>
+            <span className="lc-col-name" title={problem.task_id}>
+              {selectMode && (
+                <span className={isPicked ? "lc-pick-mark is-on" : "lc-pick-mark"} aria-hidden="true">
+                  {isPicked ? "✓" : "○"}
+                </span>
+              )}
+              {titleFromSlug(problem.task_id, problem.question_id)}
+              {session?.problems[problem.key] && (
+                <span className={`lc-session-badge is-${session.problems[problem.key].state}`}>
+                  {session.problems[problem.key].state === "passed"
+                    ? "pass"
+                    : session.problems[problem.key].state === "failed"
+                      ? "fail"
+                      : "ld"}
+                </span>
+              )}
+            </span>
+            <span className={`lc-col-diff lc-diff-${(problem.difficulty ?? "").toLowerCase()}`}>
+              {problem.difficulty ?? ""}
+            </span>
+            <span className="lc-col-tags">{problem.tags.join(", ")}</span>
+            <span className="lc-col-cases">{problem.test_count}</span>
+          </button>
+        );
+      })}
+      {showEmpty && <EmptyTable dataset={dataset} datasets={datasets} />}
+    </div>
+  );
+}
 
 /**
  * The problem-set tab strip.
