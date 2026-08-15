@@ -55,19 +55,11 @@ export function visibleThreadMessages(
     return root ? [root, ...replies] : replies;
   }
   /*
-   * Room used to list roots only. A mark-attached Ask hangs the Agent turn on
-   * that user message (`replyTo`), so the answer — and the pending spinner —
-   * lived only behind a "1 reply" chip. Send Hello, stare at two YOU bubbles,
-   * never see the model. Surface the latest reply under each root; older
-   * turns stay in the thread.
+   * Room is roots only. Threaded Agent turns used to be copied under the root
+   * as well, so a "3 replies" chip sat next to the same latest answer in full.
+   * Peek lives on the chip; open the thread for the back-and-forth.
    */
-  const out: AgentChatMessage[] = [];
-  for (const root of grouped.rootMessages) {
-    out.push(root);
-    const last = grouped.threadReplies.get(root.id)?.at(-1);
-    if (last) out.push(last);
-  }
-  return out;
+  return grouped.rootMessages;
 }
 
 /**

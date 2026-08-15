@@ -38,7 +38,7 @@ describe("visibleThreadMessages", () => {
     expect(visibleThreadMessages(messages, "root", grouped)).toEqual([root, user, assistant]);
   });
 
-  it("shows the latest threaded Agent turn in the room, not only behind a chip", () => {
+  it("keeps threaded replies out of the room", () => {
     const asked = msg("user-1", { content: "Can you explain this" });
     const pending = msg("asst-1", {
       role: "assistant",
@@ -49,14 +49,10 @@ describe("visibleThreadMessages", () => {
     const hello = msg("user-2", { content: "Hello" });
     const messages = [asked, pending, hello];
     const grouped = groupThreads(messages);
-    expect(visibleThreadMessages(messages, null, grouped)).toEqual([
-      asked,
-      pending,
-      hello,
-    ]);
+    expect(visibleThreadMessages(messages, null, grouped)).toEqual([asked, hello]);
   });
 
-  it("keeps older thread turns out of the room", () => {
+  it("does not copy the latest thread turn into the room", () => {
     const asked = msg("user-1", { content: "Explain" });
     const first = msg("asst-1", {
       role: "assistant",
@@ -70,7 +66,7 @@ describe("visibleThreadMessages", () => {
     });
     const messages = [asked, first, second];
     const grouped = groupThreads(messages);
-    expect(visibleThreadMessages(messages, null, grouped)).toEqual([asked, second]);
+    expect(visibleThreadMessages(messages, null, grouped)).toEqual([asked]);
   });
 });
 
