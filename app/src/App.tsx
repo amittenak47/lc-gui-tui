@@ -15,10 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { LcApiError, LcClient, type DocIndexStatus, type ProposedAnnotation, type SearchOptions } from "./api/client";
 import { AmbientCoach, type AmbientProbe } from "./api/coachSocket";
-import {
-  DEFAULT_PAIRING,
-  type Pairing,
-} from "./api/pairing";
+import { DEFAULT_PAIRING } from "./api/pairing";
 import type {
   AttemptState,
   CoachFlags,
@@ -6056,9 +6053,11 @@ export function App() {
                   />
                 ) : !holdBrowseOverlay ? (
                   <HomeChooser
+                    busy={busy !== null || boardPreparing || workspaceLoadActive}
                     onPractice={() => setPracticeOpen(true)}
                     onWhiteboard={() => setWhiteboardEntryOpen(true)}
                     onAnnotate={() => setAnnotateEntryOpen(true)}
+                    onBrowse={() => void openWebPage(WEB_HOME)}
                   />
                 ) : null}
               </div>
