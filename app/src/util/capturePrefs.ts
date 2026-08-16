@@ -226,7 +226,7 @@ async function saveViaTauri(
  * The Android share sheet.
  *
  * `navigator.share` is not an option in this app: the WebView is served over
- * cleartext http for the LAN daemon, and the Web Share API is gated on a secure
+ * cleartext http (Annotate fetches), and the Web Share API is gated on a secure
  * context, so it is simply undefined. The native intent goes through the same
  * plugin that already writes to MediaStore.
  */

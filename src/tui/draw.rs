@@ -175,7 +175,7 @@ fn menu_items(app: &App) -> (&'static str, Vec<String>) {
             "settings",
             vec![
                 "Show config path".into(),
-                "Show paths (data / workspace / python)".into(),
+                "Show paths (data / workspace)".into(),
                 "Start local LLM".into(),
                 "Stop local LLM".into(),
                 "LLM status".into(),

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Phase 2c + Phase 3 endpoint smoke against live `lc serve`.
- * Usage: node scripts/endpoint-smoke.mjs
+ * Endpoint smoke against a bound HTTP router (legacy). The GUI no longer binds
+ * a port; prefer in-process `serve::dispatch` tests. Usage:
+ *   node scripts/endpoint-smoke.mjs
  */
 const BASE = process.env.LC_BASE_URL ?? "http://127.0.0.1:7878";
 const TASK_ID = process.env.LC_TASK_ID ?? "01-matrix";

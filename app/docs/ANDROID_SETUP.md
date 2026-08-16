@@ -1,6 +1,8 @@
 # Android tablet setup — Whiteboard
 
-Guide for installing the APK on an Android tablet (e.g. XPPen Magic Note Pad), fixing PATH on Windows, pairing with the PC daemon, and connecting when your home network uses a VPN router.
+Guide for installing the APK on an Android tablet (e.g. XPPen Magic Note Pad) and fixing PATH on Windows.
+
+The APK is **self-contained**: it runs the same in-process harness router as desktop (`lc_dispatch` / Tauri events). There is no Host/Port/Code pairing UI, no `POST /pair`, and no PC daemon on port 7878.
 
 ---
 
@@ -25,11 +27,13 @@ npm install
 npm run android:init
 ```
 
-`android:init` generates `src-tauri/gen/android/` and applies the cleartext-HTTP overlay (required for `lc serve` on LAN).
+`android:init` generates `src-tauri/gen/android/` and applies the cleartext-HTTP overlay (see below).
 
 ### What is `android-overlay.mjs`?
 
-`src-tauri/gen/android/` is **generated** by `tauri android init` and is not in git. Android 9+ blocks cleartext HTTP in WebViews by default, which breaks calls to `lc serve` on your LAN (`http://192.168.x.x:7878`).
+`src-tauri/gen/android/` is **generated** by `tauri android init` and is not in git. Android 9+ blocks cleartext HTTP in WebViews by default.
+
+The harness router is in-process (`lc_dispatch`) — the overlay is **not** for LAN daemon pairing. It allows the WebView to fetch cleartext `http://` pages in **Annotate** mode (external document URLs). Without it, those fetches fail even though coach and corpus traffic never leaves the app.
 
 `scripts/android-overlay.mjs` re-applies two edits after every init or regen:
 
@@ -111,6 +115,7 @@ Or with one tablet plugged in, no serial needed:
 cd <repo>\app
 npm run android:dev
 ```
+
 **Common error:** `Port 1420 is already in use` — a previous `android:dev` is still running. Ctrl+C it, or:
 
 ```cmd
@@ -119,12 +124,6 @@ taskkill /PID <pid> /F
 ```
 
 **Common error:** `Opening Android Studio` / file not found — often `adb` missing from PATH, or no device connected. Fix PATH, open a **new** cmd, `adb devices`, retry.
-**Common error:** `Port 1420 is already in use` — stop the previous `android:dev` (Ctrl+C) or:
-
-```cmd
-netstat -ano | findstr :1420
-taskkill /PID <pid> /F
-```
 
 ### Option B — APK file (simpler)
 
@@ -145,76 +144,27 @@ adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-u
 
 ---
 
-## 5. Start the backend and pair
+## 5. Running on the tablet
 
-On the PC (repo root, **not** WSL for LAN pairing):
+The APK bundles the full harness — corpus index, RustPython tests, pad library, and coach — inside the app process. Nothing on your PC needs to be running for the tablet to work.
 
-```cmd
-cd <repo>
-cargo run --release -- serve --lan
-```
-
-The banner prints **Host**, **Port**, and a **6-digit Code**.
-
-### Pair on the tablet (important)
-
-Tap the **host name** in the app header (shows `127.0.0.1:7878` until paired). Enter **three** fields:
-
-| Field | Example | Notes |
-| --- | --- | --- |
-| **Host** | `192.168.132.135` | IP only — not `/health`, not `http://` |
-| **Port** | `7878` | |
-| **Code** | `482917` | 6 digits from the `serve --lan` banner |
-
-Tap the arrow to pair. The app calls `POST /pair` and stores the long token.
-
-**Browser `/health` working does not mean pairing succeeded.** `/health` needs no token; the app must complete pairing with the code.
-
-### Architecture (what talks to what)
+### Architecture
 
 ```
-Tablet app  ──HTTP──►  lc serve on PC (:7878)  ──►  Ollama / OpenAI / Groq on PC (127.0.0.1)
+Tablet APK  ──in-process──►  axum router (lc_dispatch)  ──►  LLM URL from Settings → LLM
 ```
 
-- The tablet **never** calls Ollama directly.
-- Settings → **LLM** shows the PC's `config.toml` (`localhost:11434` for Ollama is correct — that is on the desktop).
-- Settings → **Serve** shows the pairing code for tablets (read-only on tablet; edit config on PC).
-- You do **not** configure a separate "app URL" for the LLM.
+- Coach answers stream over Tauri events (`lc-coach-frame`), not a session WebSocket to a PC.
+- Configure the model under **Settings → LLM** on the device (`localhost` there means the tablet).
+- For a local model, run Ollama or llama.cpp on the tablet itself, or point at a URL the tablet can reach (Tailscale, LAN IP, Groq, OpenAI, etc.).
 
-### "Cannot reach lc serve" but browser works
+### Tablet as a second display (optional)
 
-The Android WebView blocks cleartext HTTP unless the network overlay is applied. Rebuild the APK after pulling fixes:
-
-```cmd
-cd <repo>\app
-npm run android:overlay
-npm run android:apk
-adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
-```
-
-Sanity check in the tablet browser (optional):
-
-```
-http://<pc-ip>:7878/health
-```
+**spacedesk** mirrors the desktop window to the tablet (pixels only). No network pairing, no separate APK backend — useful when you want the desktop harness on a bigger screen with pen input on the tablet.
 
 ---
 
-## 6. Run desktop (optional, for mouse testing)
-
-```cmd
-cd <repo>
-cargo run --release -- serve --port 7878
-
-cd <repo>\app
-npm run tauri dev
-```
-
-Desktop defaults to `http://127.0.0.1:7878` — no pairing needed.
-
----
-
-## 7. Android bottom bar overlapping the app
+## 6. Android bottom bar overlapping the app
 
 The system navigation bar (gesture bar at the bottom) was overlapping the **Appearance / color palette**, pager, and zoom controls.
 
@@ -229,80 +179,20 @@ If it still feels tight on your device, the constant lives in `app/src/styles.cs
 
 ---
 
-## 8. VPN router (ExpressVPN Aircove) — can the tablet still reach the PC?
-
-### Short answer
-
-**Sometimes on plain LAN IP, often not reliably through a VPN router.** The app does not use a cloud URL by default — the tablet talks directly to `lc serve` on your PC.
-
-### What to try first (same home network)
-
-1. PC and tablet both on the **Aircove Wi‑Fi** (not guest network).
-2. On PC, find LAN IP: `ipconfig` → e.g. `192.168.1.20`.
-3. On tablet browser: `http://192.168.1.20:7878/health`
-4. If that works → pair in the app with that host + port + code from `serve --lan`.
-
-Aircove may still allow **local LAN** traffic while VPN is on (depends on Aircove / split-tunnel settings). If `/health` fails, LAN pairing will not work.
-
-### Recommended: Tailscale (works through VPN routers)
-
-Install **Tailscale** on PC and tablet (same tailnet). Then:
-
-```cmd
-cargo run --release -- serve --lan
-```
-
-In the app, pair to the PC’s **Tailscale IP** (e.g. `100.x.x.x`), port `7878`, plus the 6-digit code. Traffic stays on your private mesh; no port forwarding on the public internet.
-
-This is the most reliable option when a VPN router blocks or rewrites LAN traffic.
-
-### Other options
-
-| Option | Pros | Cons |
-| --- | --- | --- |
-| **Tailscale** | Stable IPs, encrypted, no router config | Extra install on both devices |
-| **Browser on LAN** | No APK rebuild | No ML Kit ink recognition; needs `npm run dev` on PC |
-| **spacedesk** | No network pairing; mirrors PC screen | Pen latency; no native ink |
-| **Port forward + public IP** | Works from anywhere | Security risk; dynamic IP; use token + firewall |
-| **Cloudflare Tunnel + Access** | HTTPS, email/device gate | Setup heavy; `lc serve` is HTTP-only today |
-| **VPS running `lc serve`** | Always-on remote host | Must sync data dir / corpora; not built-in |
-
-### “Whitelist only my tablet”
-
-`lc serve --lan` already requires a **pairing code** (6 digits, new each restart) and a **long token** after pair. There is no per-device MAC whitelist in the app today.
-
-Practical equivalents:
-
-1. **Tailscale ACLs** — only your tablet’s node can reach port 7878 on the PC.
-2. **Windows Firewall** — allow inbound TCP 7878 only from the tablet’s LAN or Tailscale IP.
-3. **Do not port-forward** to the public internet unless you accept the risk; the token is the only auth layer.
-
-The APK bundles the frontend — only the **API** (`lc serve`) must be reachable. You do **not** need to host the React app remotely for the APK; you only need the daemon.
-
-### Browser-only remote path (no APK)
-
-If you load the UI from a URL, you need **two** reachable endpoints:
-
-- Frontend: `http://<host>:1420` (`npm run dev` or `npm run preview -- --host`)
-- API: `http://<host>:7878` (pair + token)
-
-The daemon does **not** serve static files — `http://<host>:7878` alone will not show the app.
-
----
-
-## 9. Quick troubleshooting
+## 7. Quick troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
 | `'adb' is not recognized` | PATH missing platform-tools — fix via GUI (§3), **new cmd** |
 | `cargo` works, `adb` does not | Old cmd window — close all cmd, reopen |
 | Tauri opens Android Studio | No device/emulator seen — fix `adb` PATH, `adb devices` |
-| App can’t reach PC | Try `/health` in tablet browser; check overlay ran (`npm run android:overlay`) |
-| Palette under system bar | Reinstall APK after safe-area fix (§7) |
+| Coach offline / LLM unreachable | **Settings → LLM** on the tablet — check provider, API key env, and that the model URL is reachable **from the tablet** |
+| Annotate cannot load `http://` pages | Rebuild after overlay (`npm run android:overlay` then `android:apk`) |
+| Palette under system bar | Reinstall APK after safe-area fix (§6) |
 
 ---
 
-## 10. Useful paths
+## 8. Useful paths
 
 | Item | Path |
 | --- | --- |

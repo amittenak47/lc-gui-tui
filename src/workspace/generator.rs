@@ -86,7 +86,7 @@ pub fn generate(
         fs::write(&solution_path, solution)?;
     }
     // Existing solution.py stays. Never print here: `eprintln!` on a closed
-    // stderr pipe (Windows os error 232, common when `lc serve` is hosted
+    // stderr pipe (Windows os error 232, common when the harness is hosted
     // under Cursor) panics the spawn_blocking task, `/problems/:id/load`
     // returns 500, and reopening the same problem after returning to the
     // picker fails.
@@ -145,19 +145,120 @@ pub fn code_body(problem: &Problem) -> String {
     let prompt = problem.prompt.as_deref().unwrap_or("").trim_end();
     let starter = problem.starter_code.as_deref().unwrap_or("").trim();
     if starter.is_empty() {
-        return filter_unreferenced_helpers(prompt, "");
+        return strip_unused_imports(&filter_unreferenced_helpers(prompt, ""));
     }
     if prompt.is_empty() {
-        return starter.to_string();
+        return strip_unused_imports(starter);
     }
     if prompt.contains(starter) {
-        return filter_unreferenced_helpers(prompt, starter);
+        return strip_unused_imports(&filter_unreferenced_helpers(prompt, starter));
     }
     let helpers = filter_unreferenced_helpers(prompt, starter);
-    if helpers.is_empty() {
-        return starter.to_string();
+    let assembled = if helpers.is_empty() {
+        starter.to_string()
+    } else {
+        format!("{helpers}\n\n\n{starter}")
+    };
+    strip_unused_imports(&assembled)
+}
+
+/// Drop `import` / `from … import` lines whose bound names never appear again.
+///
+/// Kitchen-sink LeetCode prompts ship `from sortedcontainers import SortedList`
+/// on array problems that never mention it. Star imports stay — their names
+/// are not listed.
+fn strip_unused_imports(src: &str) -> String {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut keep = vec![true; lines.len()];
+    for (i, line) in lines.iter().enumerate() {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+        let Some(names) = import_bound_names(line) else {
+            continue;
+        };
+        if names.is_empty() {
+            continue;
+        }
+        let mut hay = String::new();
+        for (j, other) in lines.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            hay.push_str(other);
+            hay.push('\n');
+        }
+        if names.iter().all(|name| !name_referenced(name, &hay)) {
+            keep[i] = false;
+        }
     }
-    format!("{helpers}\n\n\n{starter}")
+    let mut out = String::new();
+    let mut blank = false;
+    for (line, &kept) in lines.iter().zip(keep.iter()) {
+        if !kept {
+            continue;
+        }
+        let is_blank = line.trim().is_empty();
+        if is_blank && (blank || out.is_empty()) {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+        blank = is_blank;
+    }
+    if !out.is_empty() && src.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Names an import line binds, or `None` if this is not a top-level import.
+/// Empty vec means `import *` — keep the line.
+fn import_bound_names(line: &str) -> Option<Vec<String>> {
+    let t = line.trim();
+    if t.starts_with('#') {
+        return None;
+    }
+    if let Some(rest) = t.strip_prefix("from ") {
+        let rest = rest.trim();
+        let (_, imported) = rest.split_once(" import ")?;
+        let imported = imported.trim();
+        if imported == "*" || imported.starts_with('(') {
+            return Some(Vec::new());
+        }
+        return Some(
+            imported
+                .split(',')
+                .filter_map(parse_imported_name)
+                .collect(),
+        );
+    }
+    if let Some(rest) = t.strip_prefix("import ") {
+        return Some(rest.split(',').filter_map(parse_imported_name).collect());
+    }
+    None
+}
+
+fn parse_imported_name(item: &str) -> Option<String> {
+    let item = item.trim();
+    if item.is_empty() {
+        return None;
+    }
+    let name = if let Some((_, alias)) = item.split_once(" as ") {
+        alias.trim()
+    } else {
+        item.split('.').next().unwrap_or(item).trim()
+    };
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 /// Drop top-level `class` / `def` blocks from a Python preamble unless `starter`
@@ -432,6 +533,37 @@ class TreeNode:\n\
         assert!(body.contains("class ListNode"));
         assert!(body.contains("reverseList"));
         assert!(!body.contains("class TreeNode"));
+    }
+
+    #[test]
+    fn drops_unused_sortedcontainers_import() {
+        let prompt = "\
+from typing import List
+from sortedcontainers import SortedList
+import heapq
+
+class ListNode:
+    def __init__(self, val=0, next=None):
+        self.val = val
+";
+        let starter =
+            "class Solution:\n    def twoSum(self, nums: List[int], target: int) -> List[int]:\n        pass\n";
+        let body = code_body(&problem(prompt, starter));
+        assert!(body.contains("from typing import List"), "{body}");
+        assert!(body.contains("class Solution"), "{body}");
+        assert!(!body.contains("sortedcontainers"), "{body}");
+        assert!(!body.contains("SortedList"), "{body}");
+        assert!(!body.contains("import heapq"), "{body}");
+        assert!(!body.contains("class ListNode"), "{body}");
+    }
+
+    #[test]
+    fn keeps_sortedlist_import_when_starter_uses_it() {
+        let prompt = "from sortedcontainers import SortedList\n";
+        let starter = "class Solution:\n    def containsNearbyAlmostDuplicate(self, nums, indexDiff, valueDiff):\n        window = SortedList()\n        pass\n";
+        let body = code_body(&problem(prompt, starter));
+        assert!(body.contains("from sortedcontainers import SortedList"), "{body}");
+        assert!(body.contains("SortedList()"), "{body}");
     }
 }
 

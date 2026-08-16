@@ -643,10 +643,9 @@ fn activate(app: &mut App, terminal: &mut TuiTerminal) -> Result<bool> {
             0 => app.status = format!("config: {}", crate::config::config_path()?.display()),
             1 => {
                 app.status = format!(
-                    "data={} · workspace={} · python={}",
+                    "data={} · workspace={}",
                     app.cfg.data.json_dir.as_deref().unwrap_or("(unset)"),
                     app.cfg.workspace.dir,
-                    app.cfg.python.executable
                 );
             }
             2 => {

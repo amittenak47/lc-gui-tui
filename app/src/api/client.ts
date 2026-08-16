@@ -1,8 +1,8 @@
 /**
- * HTTP client for the `lc serve` daemon.
+ * HTTP client for the embedded harness router.
  *
  * One class, one `request` funnel, so the pairing token is attached in exactly
- * one place and the daemon's `{"error": "..."}` bodies surface as real messages
+ * one place and the router's `{"error": "..."}` bodies surface as real messages
  * instead of "500".
  */
 
@@ -240,7 +240,7 @@ export class LcClient {
       });
     } catch (cause) {
       if (signal?.aborted) throw new LcApiError("Download cancelled", 0);
-      const message = `cannot reach lc serve at ${this.pairing.baseUrl} — is the daemon running, and are you on the same network?`;
+      const message = `cannot reach the workspace at ${this.pairing.baseUrl} — is the app running?`;
       announceUnreachable(message);
       throw new LcApiError(message, 0);
     }
@@ -308,14 +308,6 @@ export class LcClient {
     q?: string;
   } = {}): Promise<SessionSnapshot> {
     return this.request("POST", "/session/random", options);
-  }
-
-  /**
-   * What to type on a tablet to pair with this daemon. Authenticated, so the
-   * code is readable from the desktop app but not from the open LAN.
-   */
-  async pairCode(): Promise<{ code: string | null; host: string | null; port: number }> {
-    return this.request("GET", "/pair/code");
   }
 
   async getConfig(): Promise<LcConfig> {
@@ -564,7 +556,7 @@ export class LcClient {
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 404) {
         throw new LcApiError(
-          "Lazy fill needs a daemon that serves POST /coach/lazy — rebuild and restart `lc serve` (cargo install --path . if you use an installed binary)",
+          "Lazy fill needs POST /coach/lazy — rebuild and restart the app",
           404,
         );
       }
@@ -633,7 +625,7 @@ export class LcClient {
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 404) {
         throw new LcApiError(
-          "Ask needs a daemon that serves POST /coach/ask — rebuild and restart `whiteboard serve`",
+          "Ask needs a harness that serves POST /coach/ask — rebuild and restart the app",
           404,
         );
       }
@@ -806,11 +798,11 @@ export class LcClient {
       if (timer != null) window.clearTimeout(timer);
       if (cause instanceof DOMException && cause.name === "AbortError") {
         throw new LcApiError(
-          `lc serve did not answer ${method} ${path} within ${Math.round((timeoutMs ?? 0) / 1000)}s`,
+          `the workspace did not answer ${method} ${path} within ${Math.round((timeoutMs ?? 0) / 1000)}s`,
           0,
         );
       }
-      const message = `cannot reach lc serve at ${this.pairing.baseUrl} — is the daemon running, and are you on the same network?`;
+      const message = `cannot reach the workspace at ${this.pairing.baseUrl} — is the app running?`;
       announceUnreachable(message);
       throw new LcApiError(message, 0);
     }

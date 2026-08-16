@@ -72,14 +72,29 @@ def clean_entry_point(raw):
     return s
 
 
+def instantiate(cls):
+    """`KthLargest(k, nums)` needs constructor args; sample cases still call `add`."""
+    try:
+        return cls()
+    except TypeError:
+        return cls.__new__(cls)
+
+
 def resolve_candidate(mod, entry_point):
     entry_point = clean_entry_point(entry_point)
     if entry_point:
         sol_cls = getattr(mod, "Solution", None)
         if sol_cls is not None and hasattr(sol_cls, entry_point):
-            return getattr(sol_cls(), entry_point)
+            return getattr(instantiate(sol_cls), entry_point)
         if hasattr(mod, entry_point):
             return getattr(mod, entry_point)
+        for name, obj in vars(mod).items():
+            if (
+                isinstance(obj, type)
+                and not name.startswith("_")
+                and hasattr(obj, entry_point)
+            ):
+                return getattr(instantiate(obj), entry_point)
         raise AttributeError(
             "cannot find entry point %r as a Solution method or module-level function"
             % entry_point
@@ -88,7 +103,7 @@ def resolve_candidate(mod, entry_point):
     if sol_cls is not None:
         methods = [m for m in vars(sol_cls) if not m.startswith("_")]
         if len(methods) == 1:
-            return getattr(sol_cls(), methods[0])
+            return getattr(instantiate(sol_cls), methods[0])
     raise AttributeError("no entry point recorded, and none could be guessed")
 
 

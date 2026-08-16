@@ -61,6 +61,7 @@ pub fn normalize(dataset: &Dataset, raw: &Value) -> Option<Problem> {
         Shape::LeetCodeWithTests => leetcode_with_tests::normalize(raw)?,
     };
     finalize_problem_description(&mut problem);
+    sanitize_io_cases(&mut problem);
     Some(problem)
 }
 
@@ -95,6 +96,7 @@ pub(crate) fn finalize_description(text: &str) -> String {
 pub(crate) fn finish_canonical(problem: &mut Problem) {
     sanitize_entry_point(problem);
     finalize_problem_description(problem);
+    sanitize_io_cases(problem);
 }
 
 /// Clean a problem's statement in place, on the way out of a load.
@@ -371,6 +373,83 @@ pub(crate) fn io_cases(raw: &Value, keys: &[&str]) -> Vec<IoCase> {
         }
     }
     Vec::new()
+}
+
+/// Drop corpus junk that cannot be fed to `run_tests.py`.
+///
+/// The LeetCode dump mixes real keyword cases with leaked parser fragments
+/// (`s`, `]`, truncated quotes) whose stored output is `Error: …`. One of
+/// those would otherwise fail `ast.literal_eval` and look like the whole
+/// problem is unrunnable.
+pub(crate) fn sanitize_io_cases(problem: &mut Problem) {
+    problem
+        .input_output
+        .retain(|case| io_case_is_runnable(&case.input, &case.output));
+}
+
+fn io_case_is_runnable(input: &str, output: &str) -> bool {
+    let output = output.trim();
+    if output.starts_with("Error:") || output.starts_with("error:") {
+        return false;
+    }
+    let input = input.trim();
+    if input.is_empty() {
+        return false;
+    }
+    if looks_like_junk_token(input) {
+        return false;
+    }
+    quotes_and_brackets_ok(input)
+}
+
+/// Bare names (`s`) and stray punctuation (`]`, `,`, `=`) that `literal_eval` rejects.
+fn looks_like_junk_token(input: &str) -> bool {
+    let s = input.trim();
+    if matches!(s, "True" | "False" | "None") {
+        return false;
+    }
+    if s.chars().all(|c| c.is_ascii_alphabetic() || c == '_') {
+        return true;
+    }
+    s.len() == 1 && !s.chars().next().is_some_and(|c| c.is_ascii_digit())
+}
+
+fn quotes_and_brackets_ok(s: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+    let mut paren = 0i32;
+    let mut brack = 0i32;
+    let mut brace = 0i32;
+    for c in s.chars() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if let Some(q) = quote {
+            if c == '\\' {
+                escape = true;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => quote = Some(c),
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '[' => brack += 1,
+            ']' => brack -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            _ => {}
+        }
+        if paren < 0 || brack < 0 || brace < 0 {
+            return false;
+        }
+    }
+    quote.is_none() && paren == 0 && brack == 0 && brace == 0
 }
 
 /// How many sample cases one corpus row is allowed to contribute.
@@ -682,14 +761,37 @@ pub(crate) fn with_imports_and_solution(starter: &str) -> (Option<String>, Strin
     if trimmed.is_empty() {
         return (None, String::new());
     }
-    let imports = typing_imports_for(trimmed);
-    let body = if trimmed.starts_with("def ") {
-        wrap_def_as_solution_method(trimmed).unwrap_or_else(|| ensure_pass_bodies(trimmed))
+    let (preamble, code) = split_import_preamble(trimmed);
+    let body = if code.starts_with("def ") {
+        wrap_def_as_solution_method(code).unwrap_or_else(|| ensure_pass_bodies(code))
     } else {
-        ensure_pass_bodies(trimmed)
+        ensure_pass_bodies(code)
     };
-    let prompt = imports.filter(|imp| !body.contains(imp.as_str()));
+    let typing = typing_imports_for(&body).filter(|imp| {
+        !body.contains(imp.as_str()) && !preamble.contains(imp.as_str())
+    });
+    let prompt = match (preamble.is_empty(), typing) {
+        (true, typing) => typing,
+        (false, None) => Some(preamble.to_string()),
+        (false, Some(typing)) => Some(format!("{preamble}\n{typing}")),
+    };
     (prompt, body)
+}
+
+/// Split `from collections import Counter\\ndef foo` so the `def` can wrap as Solution.
+fn split_import_preamble(src: &str) -> (&str, &str) {
+    if src.starts_with("def ") || src.starts_with("class ") {
+        return ("", src);
+    }
+    let def_at = src.find("\ndef ");
+    let class_at = src.find("\nclass ");
+    let at = match (def_at, class_at) {
+        (None, None) => return ("", src),
+        (Some(d), None) => d + 1,
+        (None, Some(c)) => c + 1,
+        (Some(d), Some(c)) => d.min(c) + 1,
+    };
+    (src[..at].trim_end(), src[at..].trim())
 }
 
 fn wrap_def_as_solution_method(declaration: &str) -> Option<String> {
@@ -895,6 +997,7 @@ pub(crate) fn clean_entry_point(raw: &str) -> String {
 mod tests {
     use super::*;
     use crate::dataset::DATASETS;
+    use crate::problem::{IoCase, Problem};
 
     #[test]
     fn slugs_are_url_shaped_and_collapse_punctuation() {
@@ -1013,6 +1116,54 @@ mod tests {
         assert_eq!(clean_entry_point("sol.isValid()"), "isValid");
         assert_eq!(clean_entry_point("isValid()"), "isValid");
         assert_eq!(clean_entry_point("twoSum"), "twoSum");
+    }
+
+    #[test]
+    fn junk_io_cases_are_dropped() {
+        let mut problem = Problem {
+            task_id: "demo".into(),
+            question_id: None,
+            difficulty: None,
+            tags: vec![],
+            problem_description: None,
+            prompt: None,
+            starter_code: None,
+            entry_point: None,
+            test: None,
+            input_output: vec![
+                IoCase {
+                    input: "nums = [1, 2]".into(),
+                    output: "[1, 2, 1, 2]".into(),
+                },
+                IoCase {
+                    input: "s".into(),
+                    output: "Error: Solution.foo() missing 1 required positional argument: 'nums'"
+                        .into(),
+                },
+                IoCase {
+                    input: "]".into(),
+                    output: "[]".into(),
+                },
+                IoCase {
+                    input: "accounts = [[\"Sam\"".into(),
+                    output: "[]".into(),
+                },
+            ],
+            estimated_date: None,
+        };
+        sanitize_io_cases(&mut problem);
+        assert_eq!(problem.input_output.len(), 1);
+        assert_eq!(problem.input_output[0].input, "nums = [1, 2]");
+    }
+
+    #[test]
+    fn imports_before_a_def_still_wrap_as_solution() {
+        let (prompt, body) = with_imports_and_solution(
+            "from collections import OrderedDict\n\ndef sortString(s: str) -> str:",
+        );
+        assert!(prompt.unwrap().contains("OrderedDict"), "preamble kept");
+        assert!(body.contains("class Solution:"), "{body}");
+        assert!(body.contains("def sortString"), "{body}");
     }
 
     /// The invariant an adapter could break by hand, since it constructs

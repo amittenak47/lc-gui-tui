@@ -1,38 +1,53 @@
 /**
- * Chat behaviour the student chooses, kept next to the chat rather than in
- * Settings — the Settings modal is the daemon's configuration, and whether the
- * agent gets told about a failed test run is a property of this conversation.
+ * Whether a failed test run should call the agent, and how.
+ *
+ * The Tests card always lands in chat. This only gates `askAgent`.
  */
 
+const FORWARD_MODE_KEY = "whiteboard.agent.testForward.v1";
 const FORWARD_FAILURES_KEY = "whiteboard.agent.forwardFailures.v1";
 const LEGACY_FORWARD_FAILURES_KEYS = ["whiteboard.coach.forwardFailures.v1"];
 
+export type TestForwardMode = "wait" | "whole-run" | "per-case";
+
 /**
- * Off by default.
- *
- * Forwarding spends a model call the moment a run goes red, and a red run is
- * often something the student already knows how to fix — a typo they are
- * halfway through correcting. Opting in means the people who want a second pair
- * of eyes on every failure get it, and nobody else pays for it by surprise.
+ * Default Wait: a red run is often a typo already being fixed.
  */
-export function loadForwardFailures(): boolean {
+export function loadTestForwardMode(): TestForwardMode {
   try {
-    const current = localStorage.getItem(FORWARD_FAILURES_KEY);
-    if (current != null) return current === "1";
+    const current = localStorage.getItem(FORWARD_MODE_KEY);
+    if (current === "wait" || current === "whole-run" || current === "per-case") {
+      return current;
+    }
+    const legacy = localStorage.getItem(FORWARD_FAILURES_KEY);
+    if (legacy === "1") return "whole-run";
+    if (legacy === "0") return "wait";
     for (const old of LEGACY_FORWARD_FAILURES_KEYS) {
       const value = localStorage.getItem(old);
-      if (value != null) return value === "1";
+      if (value === "1") return "whole-run";
+      if (value === "0") return "wait";
     }
   } catch {
-    return false;
+    return "wait";
   }
-  return false;
+  return "wait";
 }
 
-export function saveForwardFailures(on: boolean): void {
+export function saveTestForwardMode(mode: TestForwardMode): void {
   try {
-    localStorage.setItem(FORWARD_FAILURES_KEY, on ? "1" : "0");
+    localStorage.setItem(FORWARD_MODE_KEY, mode);
+    localStorage.setItem(FORWARD_FAILURES_KEY, mode === "wait" ? "0" : "1");
   } catch {
     /* private browsing */
   }
+}
+
+/** @deprecated use loadTestForwardMode */
+export function loadForwardFailures(): boolean {
+  return loadTestForwardMode() !== "wait";
+}
+
+/** @deprecated use saveTestForwardMode */
+export function saveForwardFailures(on: boolean): void {
+  saveTestForwardMode(on ? "whole-run" : "wait");
 }

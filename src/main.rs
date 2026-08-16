@@ -4,14 +4,14 @@ use colored::Colorize;
 use comfy_table::Table;
 use std::path::{Path, PathBuf};
 
-// The CLI and `lc serve` are both shells over the same library crate.
+// The CLI is a shell over the same library crate the Tauri GUI embeds.
 use whiteboard::{
-    config, dataset, datasets, generator, index, lists, llm, loader, problem, runner, serve, session, stats,
+    config, dataset, datasets, generator, index, lists, llm, loader, problem, runner, session, stats,
     tui,
 };
 
 use config::Config;
-use index::{ProblemRow, SearchSort};
+use index::{ProblemRow, SearchOrder, SearchSort};
 use runner::CaseResult;
 use session::Session;
 
@@ -140,16 +140,6 @@ enum Cmd {
         /// Copy the redacted prompt to the clipboard instead of calling an API
         #[arg(long)]
         clipboard: bool,
-    },
-    /// Run the daemon the whiteboard coach client talks to
-    Serve {
-        /// Port to listen on (defaults to the `serve.port` config value)
-        #[arg(long)]
-        port: Option<u16>,
-        /// Bind all interfaces so a tablet on the LAN can connect. Requires a
-        /// pairing token, printed as a QR code on first use.
-        #[arg(long)]
-        lan: bool,
     },
     /// Manage named problem lists
     #[command(subcommand)]
@@ -365,10 +355,6 @@ fn run_cmd(cmd: Cmd) -> Result<()> {
             let cfg = Config::load()?;
             cmd_ask(&cfg, id.as_deref(), case, provider.as_deref(), clipboard)
         }
-        Cmd::Serve { port, lan } => {
-            let cfg = Config::load()?;
-            serve::run(cfg, port, lan)
-        }
         Cmd::List(cmd) => cmd_list(cmd),
         Cmd::Submit => {
             println!(
@@ -413,8 +399,8 @@ fn cmd_list(cmd: ListCmd) -> Result<()> {
     }
 }
 
-fn parse_sort(raw: &str) -> Result<SearchSort> {
-    SearchSort::parse(raw).ok_or_else(|| {
+fn parse_sort(raw: &str) -> Result<SearchOrder> {
+    SearchOrder::parse(raw).ok_or_else(|| {
         anyhow::anyhow!(
             "unknown sort {raw:?} — expected task_id, question, difficulty, cases, or tags"
         )

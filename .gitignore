@@ -71,6 +71,7 @@ desktop.ini
 coverage/
 htmlcov/
 .coverage
+audit-*.jsonl
 
 # --- Misc tooling ---
 .mimicflow/

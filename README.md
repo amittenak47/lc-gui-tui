@@ -19,7 +19,7 @@ There is a second path: sketch the approach by hand on a tablet or desktop canva
 | **CLI** | Index corpora, search, load workspaces, run tests, ask the tutor |
 | **TUI** | Full-screen practice UI in the terminal (`lc` / `lc tui`) |
 | **IDE** | Edit `solution.py` in Cursor or VS Code; optional LLM Autocorrect |
-| **GUI** | Whiteboard app (`app/`). Desktop Tauri embeds the daemon on `127.0.0.1:7878` |
+| **GUI** | Whiteboard app (`app/`). Desktop and APK run an in-process axum router — no TCP bind, no `127.0.0.1:7878` daemon |
 
 ```
 JSON corpora ─whiteboard index──▶ SQLite (problems.db)
@@ -117,7 +117,7 @@ Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorre
 
 ## 4. GUI usage
 
-The canvas lives in [`app/`](app/). The desktop window **is** the daemon: Tauri starts axum on `http://127.0.0.1:7878` (no token) and runs tests in-process with RustPython. A leftover `lc serve` on that port is reused; you do not start one for desktop.
+The canvas lives in [`app/`](app/). The desktop window **is** the router: Tauri holds axum in-process (no TCP bind) and runs tests with RustPython. There is no separate `lc serve` step.
 
 Landing is a home chooser: **Practice** (corpus + tests), **Whiteboard**, **Annotate**. Back from a session returns home, not the problem table. Hide Practice with `VITE_FEATURE_LEETCODE=0` (frontend) and a pads-only Tauri build (`--no-default-features`, omits the `leetcode` Cargo feature / RustPython).
 
@@ -126,9 +126,7 @@ cd app && npm install && npm run tauri dev
 # Android APK: cd app && npm run android:apk
 ```
 
-Vite-only (`npm run dev`) still needs something on 7878 — either the Tauri window, or `lc serve` on loopback. The GUI no longer has a pairing header or a Settings **Server** tab; LLM config is **Settings → LLM**. `localhost` there is this machine.
-
-`lc serve --lan` remains for the CLI/TUI. This GUI does not type Host / Port / Code.
+Use the Tauri app (`npm run tauri dev`) or the Android APK — Vite-only (`npm run dev`) in a browser is not a supported path. LLM config is **Settings → LLM**. `localhost` there is this machine.
 
 **Review** — draw, tap **Submit**. Verdict, ratings, strengths, gaps, a Socratic question, and — when wrong — a counterexample citing a real sample case.
 
@@ -138,7 +136,7 @@ Vite-only (`npm run dev`) still needs something on 7878 — either the Tauri win
 
 **Lazy** — turns a justified board into `solution.py` (earned steps implemented, the rest stubbed).
 
-The agent answers over the session WebSocket, so each stage of a review — reading
+The agent answers over Tauri events (`lc-coach-frame`), so each stage of a review — reading
 the board, naming your approach, checking it against the cases — shows up in the
 chat as it happens rather than after. It also sticks to **one approach per
 board**: several approaches are usually valid, and an agent that quietly switches
@@ -152,11 +150,11 @@ families a problem admits before the local agent reads your board, and a
 if the picture does not show what it claims.
 
 How the agent works: redaction, diagrams as programs rather than pictures, the
-approach commitment model, and the socket frame contract live under
-`src/llm/coach/` (HTTP routes stay `/coach/*`).
+approach commitment model, and the coach frame contract live under
+`src/llm/coach/` (HTTP routes stay `/coach/*`; the GUI delivers frames via Tauri events).
 
 spacedesk and Android build details → [`app/README.md`](app/README.md).
-Older LAN/Tailscale pairing notes (CLI `lc serve --lan`, not this GUI) → [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md).
+Older Android notes → [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md).
 
 ---
 
@@ -168,7 +166,7 @@ Three layers. They move independently.
 | --- | --- | --- | --- |
 | **Pad UI** | Canvas, ink, footnotes | Device (`app/`) | Already on the device |
 | **Agent / LLM** | Chat HTTP | Same process as the GUI daemon, then out to the model URL | The model URL must be reachable from this machine |
-| **Daemon extras** | Corpus, `solution.py`, RustPython tests, document index | Inside the GUI process (loopback axum). `lc serve` still exists for CLI/TUI | Workspaces + `problems.db` on this machine |
+| **Daemon extras** | Corpus, `solution.py`, RustPython tests, document index | Inside the GUI process (in-process axum) | Workspaces + `problems.db` on this machine |
 
 The desktop GUI embeds the daemon. Tests are RustPython in-process, not a `python` executable. The stripped sibling branch below is a different product (Ask-only, no corpus).
 
@@ -219,13 +217,11 @@ The device IndexedDB is the working copy. The daemon’s `pads.db` is a redundan
 
 Personalise (handedness, theme, capture folder, …) is a **per-device** blob on the daemon.
 
-The GUI freezes pairing to `http://127.0.0.1:7878` with no token. It ignores leftover `localStorage` LAN pairs.
-
 ### Desktop, browser, Android
 
-Same React client. Desktop Tauri embeds the daemon on loopback. The APK starts that same loopback daemon; APK size / NDK packaging is a later pass. Vite-in-the-browser is not Tauri, so it still needs a process on 7878.
+Same React client. Desktop Tauri and the APK both start the harness router in-process — no separate daemon process and no LAN pairing. Vite-in-Chrome (`npm run dev` in a browser) is not supported.
 
-To drive the *desktop* window from a tablet without pairing, use **spacedesk** (pixels only). LAN pairing UI was removed from this GUI.
+To drive the *desktop* window from a tablet, use **spacedesk** (pixels only).
 
 ### Fully untethered LeetCode (remaining gaps)
 
@@ -258,7 +254,6 @@ Do not merge the two products. Main stays the harness.
 | `whiteboard load <id> [--open] [--force]` | Generate a workspace; id = slug, question #, or prefix |
 | `whiteboard test [id] [--case N] [--full] [-v]` | Run tests via RustPython — exits `0` when every case passes |
 | `whiteboard ask [id] [--case N] [--provider local\|groq]` | LLM debugging help |
-| `lc serve [--port N] [--lan]` | Standalone daemon (CLI/TUI; GUI embeds its own on loopback) |
 | `whiteboard stats` · `whiteboard session reset` · `whiteboard list …` | Progress, session, named lists |
 | `whiteboard config set/get/show/path` | Manage `config.toml` |
 

@@ -1,13 +1,11 @@
 /**
- * HTTP to `lc serve` — `fetch` on desktop/browser, Rust `reqwest` on Tauri.
- *
- * Android WebView blocks cleartext HTTP to LAN IPs even when Chrome on the same
- * tablet can open `/health`. Proxying through {@link lc_request} sidesteps that.
+ * HTTP to the embedded harness router — `fetch` in the browser, in-process
+ * dispatch on Tauri (no loopback TCP).
  */
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
-function isTauriRuntime(): boolean {
+export function isTauriRuntime(): boolean {
   if (typeof window === "undefined") return false;
   return "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 }
@@ -33,10 +31,6 @@ function urlOf(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   if (input instanceof URL) return input.href;
   return input.url;
-}
-
-function headersOf(init?: RequestInit): Headers {
-  return new Headers(init?.headers);
 }
 
 function bodyJson(init?: RequestInit): unknown {
@@ -84,13 +78,10 @@ export async function lcFetch(input: RequestInfo | URL, init?: RequestInit): Pro
     if (invoke) {
       try {
         const parsed = new URL(urlOf(input));
-        const headers = headersOf(init);
-        const result = await invoke<LcProxyResponse>("lc_request", {
+        const result = await invoke<LcProxyResponse>("lc_dispatch", {
           request: {
-            base_url: `${parsed.protocol}//${parsed.host}`,
             path: `${parsed.pathname}${parsed.search}`,
             method: init?.method ?? "GET",
-            token: headers.get("X-LC-Token") ?? undefined,
             body: bodyJson(init),
             raw_base64: rawBase64(init),
           },
@@ -108,8 +99,9 @@ export async function lcFetch(input: RequestInfo | URL, init?: RequestInit): Pro
           status: result.status,
           headers: { "Content-Type": "application/json" },
         });
-      } catch {
-        // Tauri shell without lc_request — fall back to WebView fetch.
+      } catch (err) {
+        if (err instanceof Error) throw err;
+        throw new Error(String(err));
       }
     }
   }

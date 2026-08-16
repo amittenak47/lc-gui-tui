@@ -150,7 +150,7 @@ fn resolve_save_dir(app: &AppHandle, dest: CaptureDest) -> Result<PathBuf, Strin
 /// Hand a PNG to the platform's share sheet.
 ///
 /// Android only. The frontend cannot use `navigator.share`: the WebView is
-/// served over cleartext http so the LAN daemon stays reachable, and the Web
+/// served over cleartext http (Annotate fetches), and the Web Share API is
 /// Share API is gated on a secure context, so it is undefined there. Desktop
 /// has no equivalent worth faking — the error is the frontend's cue to save a
 /// file and say where it went instead.

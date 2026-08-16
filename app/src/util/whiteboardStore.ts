@@ -1,5 +1,5 @@
 /**
- * Local multipage scratchpad notebooks — independent of lc serve.
+ * Local multipage scratchpad notebooks — independent of the harness router.
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";

@@ -2,10 +2,11 @@
  * Device-local offline problem pack (all datasets except KodCode).
  *
  * Downloaded from `GET /offline/pack` while online, stored in IndexedDB, and
- * used by the browser / pickProblem when `lc serve` is unreachable.
+ * used by the browser / pickProblem when the harness is unreachable.
  */
 
 import type { DatasetInfo, ProblemDetail, ProblemPage, ProblemSummary } from "../api/types";
+import { parseSort } from "./browseSort";
 
 const DB_NAME = "lc.offline.corpus.v1";
 /** v2: same store; download checkpoints live under key `download`. */
@@ -132,22 +133,34 @@ export function offlineSearch(
     });
   }
 
-  const sort = opts.sort ?? "task_id";
+  const parsed = parseSort(opts.sort);
+  const dir = parsed.desc ? -1 : 1;
   items = [...items].sort((a, b) => {
-    switch (sort) {
+    let cmp = 0;
+    switch (parsed.key) {
       case "question":
-        return String(a.question_id ?? "").localeCompare(String(b.question_id ?? ""), undefined, {
+        cmp = String(a.question_id ?? "").localeCompare(String(b.question_id ?? ""), undefined, {
           numeric: true,
         });
-      case "difficulty":
-        return String(a.difficulty ?? "").localeCompare(String(b.difficulty ?? ""));
+        break;
+      case "difficulty": {
+        const rank = (value: string | null | undefined) =>
+          value === "Easy" ? 1 : value === "Medium" ? 2 : value === "Hard" ? 3 : 4;
+        cmp = rank(a.difficulty) - rank(b.difficulty);
+        break;
+      }
       case "cases":
-        return a.cases.length - b.cases.length;
+        cmp = a.cases.length - b.cases.length;
+        break;
       case "tags":
-        return a.tags.join(",").localeCompare(b.tags.join(","));
+        cmp = a.tags.join(",").localeCompare(b.tags.join(","));
+        break;
       default:
-        return a.task_id.localeCompare(b.task_id);
+        cmp = a.task_id.localeCompare(b.task_id);
+        break;
     }
+    if (cmp === 0) cmp = a.task_id.localeCompare(b.task_id);
+    return cmp * dir;
   });
 
   const total = items.length;
