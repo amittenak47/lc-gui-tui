@@ -7,7 +7,7 @@
 
 import { useEffect, useRef } from "react";
 
-import { promoteLazyImages } from "../util/webPage";
+import { promoteLazyImages, type WebHtmlSource } from "../util/webPage";
 
 export interface WebDocumentProps {
   html: string;
@@ -16,6 +16,8 @@ export interface WebDocumentProps {
   selectable?: boolean;
   /** Reading-mode taps on links fetch a new snapshot instead of leaving the app. */
   onNavigate?: (url: string) => void;
+  /** Vite / fetch_html GET — page JS never ran. */
+  source?: WebHtmlSource;
 }
 
 export function WebDocument({
@@ -24,6 +26,7 @@ export function WebDocument({
   onMeasure,
   selectable = false,
   onNavigate,
+  source,
 }: WebDocumentProps) {
   const nodeRef = useRef<HTMLDivElement | null>(null);
   const onMeasureRef = useRef(onMeasure);
@@ -64,13 +67,20 @@ export function WebDocument({
   }, [html]);
 
   return (
-    <div
-      ref={nodeRef}
-      className="lc-web-doc lc-md-ink-paper lc-md-ink-doc"
-      data-doc-scope={url}
-      aria-hidden={selectable ? undefined : true}
-      // eslint-disable-next-line react/no-danger -- sanitised in fetchWebPage
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className="lc-web-doc-wrap">
+      {source === "fetch" ? (
+        <p className="lc-web-shell-note">
+          This preview cannot run page JS. Use the desktop app, or Open in browser.
+        </p>
+      ) : null}
+      <div
+        ref={nodeRef}
+        className="lc-web-doc"
+        data-doc-scope={url}
+        aria-hidden={selectable ? undefined : true}
+        // eslint-disable-next-line react/no-danger -- sanitised in fetchWebPage
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
   );
 }

@@ -167,9 +167,11 @@ export function prefixSelectors(raw: string, scope = WEB_DOC_SCOPE): string {
       let s = part.trim();
       if (!s) return part;
       if (s.includes(scope)) return part;
-      s = s.replace(/^:root\b/, scope);
-      s = s.replace(/^html\b(\s+body\b)?/, scope);
-      if (!s.startsWith(scope)) s = s.replace(/^body\b/, scope);
+      // Drop html/body classes and ids — those live on the captured document,
+      // not on `.lc-web-doc`. Keeping `body.hp` as `.lc-web-doc.hp` matches nothing.
+      s = s.replace(/^:root\b(?:[.#:][^\s]*)*/, scope);
+      s = s.replace(/^html(?:[.#[][^\s]*)*(?:\s+body(?:[.#[][^\s]*)*)?/, scope);
+      if (!s.startsWith(scope)) s = s.replace(/^body(?:[.#[][^\s]*)*/, scope);
       if (s.startsWith(scope)) return `${lead}${s}${trail}`;
       return `${lead}${scope} ${s}${trail}`;
     })
@@ -178,6 +180,6 @@ export function prefixSelectors(raw: string, scope = WEB_DOC_SCOPE): string {
 
 function rewriteDecls(body: string): string {
   return body
-    .replace(/position\s*:\s*(fixed|sticky)/gi, "position:static")
+    .replace(/position\s*:\s*(fixed|sticky)/gi, "position:absolute")
     .replace(/\b100vw\b/g, "100%");
 }

@@ -57,6 +57,7 @@ const MARQUEE_DESCEND = new Set([
 export const MARQUEE_HIT_SELECTOR = [
   MARQUEE_BLOCK,
   ".lc-md-ink-doc > *",
+  ".lc-web-doc > *",
 ].join(", ");
 
 /** Content blocks plus leaf chrome; skip page-sized generic wrappers. */

@@ -341,13 +341,83 @@ body {
 
 .lc-web-omnibox {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   flex-shrink: 0;
   padding: 6px 12px;
   border-bottom: 1px solid var(--chrome-edge);
   background: var(--panel);
   z-index: 54;
+}
+
+.lc-web-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lc-web-tab {
+  display: flex;
+  align-items: center;
+  max-width: 12rem;
+  min-width: 0;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.lc-web-tab.is-active {
+  border-color: var(--accent);
+}
+
+.lc-web-tab-hit,
+.lc-web-tab-new {
+  min-width: 0;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.lc-web-tab-hit {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-web-tab-close {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lc-web-tab-new {
+  width: 28px;
+  padding: 4px 0;
+  border: 1px dashed var(--chrome-edge);
+  border-radius: 6px;
+}
+
+.lc-web-omnibox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .lc-web-omnibox input {
@@ -381,15 +451,38 @@ body {
   visibility: visible;
 }
 
+/*
+ * Not `.lc-md-ink-doc`: that set 17px type, 36px padding, and underlined links
+ * on Google's 13px header/footer and squeezed a 1280 capture into a reading column.
+ */
 .lc-web-doc {
-  max-width: 72rem;
-  margin-left: auto;
-  margin-right: auto;
+  position: relative;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
   overflow-x: hidden;
+  box-sizing: border-box;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] .lc-web-doc {
+  color-scheme: dark;
+}
+
+.lc-web-shell-note {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .lc-web-doc > * {
-  max-width: 100%;
+  max-width: none;
 }
 
 .lc-board-reading .lc-page-content-slot .lc-web-doc a {
@@ -486,10 +579,14 @@ body {
 
 .lc-doc-index-chip {
   margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   font-family: inherit;
   font-size: 11px;
   color: var(--hint);
   font-weight: 500;
+  cursor: pointer;
 }
 
 .lc-doc-index-chip.is-ok {
@@ -498,6 +595,58 @@ body {
 
 .lc-doc-index-chip.is-bad {
   color: var(--bad);
+  cursor: default;
+}
+
+.lc-doc-index-pop {
+  position: fixed;
+  z-index: 80;
+  width: 280px;
+  pointer-events: none;
+}
+
+.lc-doc-index-pop.is-open {
+  pointer-events: auto;
+}
+
+.lc-doc-index-morph {
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.lc-doc-index-card {
+  padding: 12px 14px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 16%);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lc-doc-index-lead {
+  margin: 0 0 10px;
+}
+
+.lc-doc-index-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.lc-doc-index-grid dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lc-doc-index-grid dd {
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .lc-modes,
@@ -558,10 +707,11 @@ body {
 }
 
 .lc-pairing-form {
+  position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 4px;
+  gap: 0;
   animation: lc-pairing-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -625,9 +775,22 @@ body {
   border-left: 1px solid var(--line);
 }
 
+/*
+ * Caption used to sit under the 28px field (column + 4px gap ≈ 49px). The
+ * pairing slot is the header chrome row (~29px between padding). Centering
+ * that column clipped the inputs above the bar and hung the hint on the
+ * board. Hint lives on `title` / this clipped node; layout is the field only.
+ */
 .lc-pairing-hint {
-  font-size: 11px;
-  text-align: center;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .lc-mobile .lc-pairing-field {
@@ -706,8 +869,16 @@ body {
 }
 
 .lc-pairing-form .lc-warning {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 4px);
+  transform: translateX(-50%);
   text-align: center;
   font-size: 11px;
+  white-space: nowrap;
+  max-width: 70vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 @keyframes lc-pairing-in {
@@ -2591,7 +2762,13 @@ input[type="checkbox"] {
   position: absolute;
   top: 0;
   left: 0;
-  visibility: hidden;
+  /* Stay paintable so opacity/transform can cross-fade. `visibility: hidden`
+   * snapped the outgoing cluster off before the width morph ran. */
+}
+
+.lc-morph-bar[data-axis="width"] .lc-morph-panel.is-active {
+  display: inline-flex;
+  width: max-content;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -6108,8 +6285,12 @@ button.lc-table-sort {
   color: inherit;
   text-align: left;
   padding: 0;
+  min-width: 0;
   min-height: 0;
   height: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
   opacity: 0.85;
 }
@@ -6123,12 +6304,53 @@ button.lc-table-sort.is-active {
   opacity: 1;
 }
 
+button.lc-table-sort.is-active::after {
+  content: " ▲";
+  font-size: 0.85em;
+  letter-spacing: 0;
+}
+
+button.lc-table-sort.is-active[aria-sort="descending"]::after {
+  content: " ▼";
+}
+
+.lc-row > span,
+.lc-row > .lc-col-q,
+.lc-row > .lc-col-name,
+.lc-row > .lc-col-diff,
+.lc-row > .lc-col-tags,
+.lc-row > .lc-col-cases {
+  min-width: 0;
+}
+
 .lc-browser-table-morph {
   width: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+.lc-browser-table-morph .lc-morph-panel {
+  /* MorphBar default is translateY(4px) scale(0.98) + blur — scale-from-center
+   * is the diagonal smear on page swap. Y + opacity only. */
+  filter: none;
+  transform: none;
 }
 
 .lc-browser-table-morph .lc-morph-panel.is-active {
   width: 100%;
+  transform: none;
+}
+
+.lc-browser-table-morph.lc-morph-bar[data-axis="height"] .lc-morph-panel:not(.is-active) {
+  visibility: visible;
+}
+
+.lc-browser-table-morph .lc-morph-panel:nth-child(1):not(.is-active) {
+  transform: translateY(-24px);
+}
+
+.lc-browser-table-morph .lc-morph-panel:nth-child(2):not(.is-active) {
+  transform: translateY(24px);
 }
 
 .lc-table {
@@ -6283,15 +6505,60 @@ button.lc-row-selected:hover:not(:disabled) {
   justify-content: center;
   gap: 6px;
   flex-wrap: nowrap;
-  min-width: 0;
+  width: max-content;
+}
+
+.lc-browser-foot-actions > * {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .lc-browser-foot-morph {
   max-width: 100%;
+  /* Let the outgoing cluster fly past the 32px chrome — overflow-x clip
+   * would also kill overflow-y (CSS: mixed visible/hidden computes to auto). */
+  overflow: visible;
+}
+
+.lc-browser-foot-morph .lc-morph-panel {
+  /* Kill MorphBar's default scale(0.98) — scale toward center is a diagonal. */
+  filter: none;
+}
+
+.lc-browser-foot-morph .lc-morph-panel.is-active {
+  display: flex;
+  justify-content: center;
+  /* Fill the shrinking/growing shell so Random stays on the same X as Begin. */
+  width: 100%;
+  transform: none;
 }
 
 .lc-browser-foot-morph .lc-morph-panel.is-active .lc-browser-foot-actions {
   display: flex;
+}
+
+/*
+ * Width morph used to left-align Random in a still-wide centered shell, so
+ * the pill rode X while translateY ran — a diagonal. Keep both panels on
+ * the shell's midline (`translate` X, not `transform`) and move only on Y.
+ * Begin cluster (three buttons) leaves/enters upward; Random (one button)
+ * leaves/enters downward.
+ */
+.lc-browser-foot-morph.lc-morph-bar[data-axis="width"] .lc-morph-panel:not(.is-active) {
+  left: 50%;
+  right: auto;
+  width: max-content;
+  translate: -50% 0;
+  display: flex;
+  justify-content: center;
+}
+
+.lc-browser-foot-morph .lc-morph-panel:not(.is-active):has(.lc-browser-foot-actions > :nth-child(3)) {
+  transform: translateY(-18px);
+}
+
+.lc-browser-foot-morph .lc-morph-panel:not(.is-active):has(.lc-browser-foot-actions > :only-child) {
+  transform: translateY(18px);
 }
 
 .lc-browser-foot-stats {
@@ -6340,7 +6607,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-browser-foot .lc-hold-reveal.lc-browser-start-hold {
-  min-width: 0;
+  min-width: fit-content;
   min-height: 32px;
   height: 32px;
   padding: 0 10px;
@@ -6354,6 +6621,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-browser-foot .lc-browser-start-hold .lc-hold-reveal-label {
   display: inline;
+  white-space: nowrap;
 }
 
 .lc-browser-foot .lc-browser-start-hold .lc-hold-reveal-fill {
@@ -8347,14 +8615,15 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-browser-center {
   flex: 1;
   min-height: 0;
-  justify-content: flex-start;
+  justify-content: center;
 }
 
 .lc-mobile .lc-browser-body {
   gap: 6px;
   padding: 8px;
   border-radius: 10px;
-  flex: 1;
+  flex: 0 1 auto;
+  max-height: 100%;
   min-height: 0;
   overflow: hidden;
   display: flex;
@@ -8452,11 +8721,24 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-browser-results {
   gap: 4px;
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.lc-mobile .lc-browser-table-morph {
+  flex: 0 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.lc-mobile .lc-browser-table-morph .lc-morph-panel.is-active,
+.lc-mobile .lc-browser-table-morph .lc-morph-panel:not(.is-active) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 /* Phone: keep q# / name / difficulty; drop tags + cases so rows aren't clipped. */
@@ -8480,17 +8762,16 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-table {
   padding: 4px;
-  flex: 1 1 0;
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
-  gap: 0;
+  overflow-y: auto;
+  gap: 2px;
 }
 
 .lc-mobile .lc-row {
-  flex: 1 1 0;
-  min-height: 0;
-  max-height: none;
-  padding: 2px 8px;
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 6px 8px;
   font-size: 12px;
   border-radius: 4px;
 }
@@ -8604,19 +8885,6 @@ button.lc-row-selected:hover:not(:disabled) {
     max-width: 8.75rem;
   }
 
-  .lc-mobile .lc-table-head,
-  .lc-mobile .lc-row {
-    grid-template-columns: 52px minmax(0, 1.2fr) 72px minmax(0, 1fr) 48px;
-    gap: 8px;
-  }
-
-  .lc-mobile .lc-col-tags,
-  .lc-mobile .lc-col-cases,
-  .lc-mobile .lc-table-head .lc-col-tags,
-  .lc-mobile .lc-table-head .lc-col-cases {
-    display: unset;
-  }
-
   .lc-mobile .lc-browser-foot button,
   .lc-mobile .lc-browser-foot .lc-hold-reveal.lc-browser-start-hold {
     min-height: 28px;
@@ -8638,7 +8906,21 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 }
 
-/* Very narrow (iPhone SE / Galaxy portrait): tighter still. */
+/* Coarse-pointer tablets 900–1280: room for tags + cases. Phone stays 3-col. */
+@media (min-width: 900px) {
+  .lc-mobile .lc-table-head,
+  .lc-mobile .lc-row {
+    grid-template-columns: 52px minmax(0, 1.2fr) 72px minmax(0, 1fr) 48px;
+    gap: 8px;
+  }
+
+  .lc-mobile .lc-col-tags,
+  .lc-mobile .lc-col-cases,
+  .lc-mobile .lc-table-head .lc-col-tags,
+  .lc-mobile .lc-table-head .lc-col-cases {
+    display: unset;
+  }
+}
 @media (max-width: 400px) {
   .lc-mobile .lc-browser-filters .lc-filter-select {
     flex: 1 1 0;
@@ -8981,6 +9263,30 @@ button.lc-row-selected:hover:not(:disabled) {
   display: none;
   width: 0;
   height: 0;
+}
+
+@media (max-width: 630px) {
+  .lc-dataset-tabs-row {
+    min-width: 0;
+    flex-wrap: nowrap;
+  }
+
+  .lc-dataset-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .lc-dataset-tabs::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
 }
 
 .lc-dataset-tab {

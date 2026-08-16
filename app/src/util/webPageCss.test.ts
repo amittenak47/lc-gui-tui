@@ -16,10 +16,10 @@ describe("scopeCss", () => {
     expect(out).not.toMatch(/(^|})\s*:root\s*\{/);
   });
 
-  it("prefixes descendants and pins fixed chrome", () => {
+  it("prefixes descendants and pins fixed chrome inside the paper", () => {
     const out = scopeCss(".share { position:fixed; width:100vw } .article p { color:red }");
     expect(out).toMatch(/\.lc-web-doc \.share\s*\{/);
-    expect(out).toMatch(/position:static/);
+    expect(out).toMatch(/position:absolute/);
     expect(out).not.toMatch(/position:\s*fixed/i);
     expect(out).toMatch(/width:100%/);
     expect(out).toMatch(/\.lc-web-doc \.article p\s*\{/);
@@ -42,7 +42,8 @@ describe("scopeCss", () => {
 describe("prefixSelectors", () => {
   it("maps html body onto the scope", () => {
     expect(prefixSelectors("html body .nav").trim()).toBe(".lc-web-doc .nav");
-    expect(prefixSelectors("body.home .x").trim()).toBe(".lc-web-doc.home .x");
+    expect(prefixSelectors("body.home .x").trim()).toBe(".lc-web-doc .x");
+    expect(prefixSelectors("html.a body.b .nav").trim()).toBe(".lc-web-doc .nav");
   });
 });
 

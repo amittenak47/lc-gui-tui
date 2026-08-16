@@ -25,7 +25,7 @@ import { scenePointFromCanvasPixel } from "./rasterInk";
 const OVERFLOW_SLACK_PX = 1;
 
 /** Roots that contain horizontally scrollable content inside a document page. */
-export const DOC_PAGE_SELECTOR = ".lc-md-ink-doc, .lc-code-doc, .lc-epub-doc";
+export const DOC_PAGE_SELECTOR = ".lc-md-ink-doc, .lc-code-doc, .lc-epub-doc, .lc-web-doc";
 
 /**
  * Whether `node` is a horizontally scrollable box.

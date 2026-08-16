@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { LcApiError, LcClient, type ProposedAnnotation, type SearchOptions } from "./api/client";
+import { LcApiError, LcClient, type DocIndexStatus, type ProposedAnnotation, type SearchOptions } from "./api/client";
 import { AmbientCoach, type AmbientProbe } from "./api/coachSocket";
 import {
   DEFAULT_PORT,
@@ -41,6 +41,7 @@ import type {
 } from "./api/types";
 import { DEFAULT_COACH_FLAGS, DEFAULT_DATASET } from "./api/types";
 import { Tip } from "./components/Tip";
+import { DocIndexChip } from "./components/DocIndexChip";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { HoldButton } from "./components/HoldButton";
 import { LoadingDoodle } from "./components/LoadingDoodle";
@@ -145,13 +146,21 @@ import {
 import type { DocAnchor } from "./util/docAnchors";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { openExternalUrl, normalizeExternalUrl } from "./util/openExternal";
-import { WEB_HOME, fetchWebPage, hostLabelFromUrl } from "./util/webPage";
+import { WEB_HOME, fetchWebPage, hostLabelFromUrl, titleFromHtml, webPageWidthForViewport, type WebHtmlSource } from "./util/webPage";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { CodeDocument } from "./modes/CodeDocument";
 import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelectionLayer";
 import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
 import { WebDocument } from "./modes/WebDocument";
+import {
+  canStepWeb,
+  closeWebTab as removeWebTab,
+  commitWebPush,
+  currentEntry,
+  stepWeb,
+  type WebPadTab,
+} from "./util/webPadSession";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
 import { loadPdfFilmPref, savePdfFilmPref } from "./modes/pdfFilm";
@@ -496,6 +505,13 @@ export function App() {
   } | null>(null);
   /** Address bar for a web snapshot — kept outside the camera-scaled page. */
   const [webUrl, setWebUrl] = useState(WEB_HOME);
+  const [webHtmlSource, setWebHtmlSource] = useState<WebHtmlSource | null>(null);
+  const [webTabs, setWebTabs] = useState<WebPadTab[]>([]);
+  const [webTabId, setWebTabId] = useState<string | null>(null);
+  const webTabIdRef = useRef<string | null>(null);
+  const webTabsRef = useRef<WebPadTab[]>([]);
+  webTabIdRef.current = webTabId;
+  webTabsRef.current = webTabs;
   /** Library entry this session is writing to, once it has one. */
   const [annotateDocId, setAnnotateDocId] = useState<string | null>(null);
   /**
@@ -544,6 +560,7 @@ export function App() {
     "idle" | "indexing" | "indexed" | "error"
   >("idle");
   const [docIndexError, setDocIndexError] = useState<string | null>(null);
+  const [docIndexMeta, setDocIndexMeta] = useState<DocIndexStatus | null>(null);
   // Read from the autosave interval, which must not be torn down and rebuilt
   // every time one of these changes — a restarted timer is a skipped save.
   const annotateSourceRef = useRef<{
@@ -612,6 +629,18 @@ export function App() {
   const annotatePristineAgentRef = useRef("");
   annotateSourceRef.current = annotateSource;
   annotateDocIdRef.current = annotateDocId;
+
+  useEffect(() => {
+    if (annotateSource?.docType !== "web") return;
+    if (webTabsRef.current.length > 0) return;
+    const next = commitWebPush([], null, {
+      url: annotateSource.name,
+      title: titleFromHtml(annotateSource.text) || hostLabelFromUrl(annotateSource.name),
+      html: annotateSource.text,
+    });
+    setWebTabs(next.tabs);
+    setWebTabId(next.tabId);
+  }, [annotateSource]);
 
   const [pairing, setPairing] = useState<Pairing>(() => loadPairing());
   const [pairingEditing, setPairingEditing] = useState(false);
@@ -2308,6 +2337,7 @@ export function App() {
       setError(null);
       setDocIndexStatus("idle");
       setDocIndexError(null);
+      setDocIndexMeta(null);
       setTests(null);
       setNudges([]);
       setAgentMessages([]);
@@ -2382,6 +2412,10 @@ export function App() {
         lastSavedHashRef.current = null;
         setAnnotateSource({ name: input.name, text, hash, docType, bytes });
         if (docType === "web") setWebUrl(input.name);
+        else {
+          setWebTabs([]);
+          setWebTabId(null);
+        }
         setAnnotateHeight(null);
         annotateHeightRef.current = null;
 
@@ -2396,10 +2430,15 @@ export function App() {
         const savedWidth = savedElements
           ? annotateFrameWidthFromElements(savedElements)
           : null;
-        const pageWidth = annotatePageWidthForOpen(
-          typeof window !== "undefined" ? window.innerWidth : ANNOTATE_PAGE_W,
-          savedElements ? { elements: savedElements } : null,
-        );
+        const pageWidth =
+          docType === "web"
+            ? webPageWidthForViewport(
+                typeof window !== "undefined" ? window.innerWidth : 1280,
+              )
+            : annotatePageWidthForOpen(
+                typeof window !== "undefined" ? window.innerWidth : ANNOTATE_PAGE_W,
+                savedElements ? { elements: savedElements } : null,
+              );
         setAnnotatePageWidth(pageWidth);
         const skeletons = buildAnnotateTemplate(annotatePageHeight(null), dark, pageWidth);
 
@@ -2420,7 +2459,7 @@ export function App() {
                 ...(el as object),
                 // Keep the saved column when marks/ink already live on it.
                 // Fresh or unstamped frames still take the viewport width.
-                ...(savedWidth == null ? { width: pageWidth } : {}),
+                ...(savedWidth == null || docType === "web" ? { width: pageWidth } : {}),
                 locked: true,
                 versionNonce: Math.random() * 2 ** 31,
               };
@@ -2551,7 +2590,16 @@ export function App() {
               pages,
             });
             if (workspaceLoadGenRef.current !== loadGen) return;
-            setDocIndexStatus(result.indexed ? "indexed" : "error");
+            if (!result.indexed) {
+              setDocIndexStatus("error");
+              return;
+            }
+            try {
+              setDocIndexMeta(await client.getDocIndex(indexHash));
+            } catch {
+              setDocIndexMeta(null);
+            }
+            setDocIndexStatus("indexed");
           } catch (cause) {
             if (workspaceLoadGenRef.current !== loadGen) return;
             setDocIndexStatus("error");
@@ -2758,7 +2806,7 @@ export function App() {
    * is the same transition as a file pick.
    */
   const openWebPage = useCallback(
-    async (raw: string) => {
+    async (raw: string, opts?: { newTab?: boolean }) => {
       if (busy !== null) return;
       beginPadOpen();
       const fromBrowse = !problem;
@@ -2772,6 +2820,20 @@ export function App() {
       let handedOff = false;
       try {
         const page = await fetchWebPage(raw);
+        setWebHtmlSource(page.source);
+        const entry = {
+          url: page.url,
+          title: page.title || hostLabelFromUrl(page.url),
+          html: page.html,
+        };
+        const next = commitWebPush(
+          webTabsRef.current,
+          webTabIdRef.current,
+          entry,
+          opts?.newTab === true,
+        );
+        setWebTabs(next.tabs);
+        setWebTabId(next.tabId);
         setBusy(null);
         handedOff = true;
         await openAnnotate({
@@ -2794,6 +2856,57 @@ export function App() {
       }
     },
     [beginPadOpen, busy, endPadOpen, openAnnotate, problem],
+  );
+
+  const showWebEntry = useCallback(
+    async (entry: { url: string; html: string }) => {
+      if (busy !== null) return;
+      await openAnnotate({
+        name: entry.url,
+        docType: "web",
+        text: entry.html,
+      });
+    },
+    [busy, openAnnotate],
+  );
+
+  const stepWebTab = useCallback(
+    (delta: number) => {
+      const tab = webTabs.find((item) => item.id === webTabId);
+      if (!tab || !canStepWeb(tab, delta) || busy !== null) return;
+      const next = stepWeb(tab, delta);
+      const entry = currentEntry(next);
+      if (!entry) return;
+      setWebTabs((tabs) => tabs.map((item) => (item.id === next.id ? next : item)));
+      void showWebEntry(entry);
+    },
+    [busy, showWebEntry, webTabId, webTabs],
+  );
+
+  const switchWebTab = useCallback(
+    (id: string) => {
+      if (id === webTabId || busy !== null) return;
+      const tab = webTabs.find((item) => item.id === id);
+      const entry = tab ? currentEntry(tab) : undefined;
+      if (!entry) return;
+      setWebTabId(id);
+      void showWebEntry(entry);
+    },
+    [busy, showWebEntry, webTabId, webTabs],
+  );
+
+  const closeWebPadTab = useCallback(
+    (id: string) => {
+      if (busy !== null) return;
+      const next = removeWebTab(webTabs, id);
+      setWebTabs(next.tabs);
+      setWebTabId(next.tabId);
+      if (!next.tabId) return;
+      const tab = next.tabs.find((item) => item.id === next.tabId);
+      const entry = tab ? currentEntry(tab) : undefined;
+      if (entry) void showWebEntry(entry);
+    },
+    [busy, showWebEntry, webTabs],
   );
 
   /** Session queue after Start / Random; otherwise the filtered problem bank. */
@@ -5319,6 +5432,9 @@ export function App() {
     clearProblemState();
     setError(null);
     setCodeSlot(null);
+    setWebTabs([]);
+    setWebTabId(null);
+    setWebHtmlSource(null);
 
     const ready = new Promise<void>((resolve) => {
       browseReadyWaitRef.current = resolve;
@@ -5327,6 +5443,8 @@ export function App() {
     await ready;
     await finishBrowseReady();
   }, [clearProblemState, finishBrowseReady]);
+
+  const activeWebTab = webTabs.find((tab) => tab.id === webTabId);
 
   const canvasLoading =
     boardPreparing ||
@@ -5465,15 +5583,11 @@ export function App() {
                   {annotateSource?.docType === "web" && annotateSource.name
                     ? hostLabelFromUrl(annotateSource.name)
                     : (annotateSource?.name ?? "Document")}
-                  {docIndexStatus === "indexing" ? (
-                    <span className="lc-doc-index-chip">indexing…</span>
-                  ) : docIndexStatus === "indexed" ? (
-                    <span className="lc-doc-index-chip is-ok">indexed</span>
-                  ) : docIndexStatus === "error" ? (
-                    <span className="lc-doc-index-chip is-bad" title={docIndexError ?? "index error"}>
-                      index error
-                    </span>
-                  ) : null}
+                  <DocIndexChip
+                    status={docIndexStatus}
+                    meta={docIndexMeta}
+                    error={docIndexError}
+                  />
                 </span>
               ) : problem ? (
                 <span className="lc-current" title="Whiteboard">
@@ -5824,36 +5938,99 @@ export function App() {
             void openWebPage(webUrl);
           }}
         >
-          <input
-            type="text"
-            inputMode="url"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            value={webUrl}
-            aria-label="Page address"
-            onChange={(event) => setWebUrl(event.target.value)}
-          />
-          <button type="submit" className="lc-secondary" disabled={busy !== null}>
-            Go
-          </button>
-          <button
-            type="button"
-            className="lc-secondary"
-            disabled={busy !== null}
-            onClick={() => {
-              const url = normalizeExternalUrl(webUrl);
-              if (!url) {
-                setError("that does not look like an http(s) address");
-                return;
-              }
-              void openExternalUrl(url).catch(() => {
-                setError("could not hand the page to a browser on this device");
-              });
-            }}
-          >
-            Open in browser
-          </button>
+          <div className="lc-web-tabs" role="tablist" aria-label="Open pages">
+            {webTabs.map((tab) => {
+              const entry = currentEntry(tab);
+              const selected = tab.id === webTabId;
+              return (
+                <div
+                  key={tab.id}
+                  role="tab"
+                  aria-selected={selected}
+                  className={selected ? "lc-web-tab is-active" : "lc-web-tab"}
+                >
+                  <button
+                    type="button"
+                    className="lc-web-tab-hit"
+                    disabled={busy !== null}
+                    onClick={() => switchWebTab(tab.id)}
+                  >
+                    {entry ? hostLabelFromUrl(entry.url) : "Page"}
+                  </button>
+                  {webTabs.length > 1 ? (
+                    <button
+                      type="button"
+                      className="lc-web-tab-close"
+                      aria-label="Close tab"
+                      disabled={busy !== null}
+                      onClick={() => closeWebPadTab(tab.id)}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              className="lc-web-tab lc-web-tab-new"
+              aria-label="New tab"
+              disabled={busy !== null}
+              onClick={() => void openWebPage(WEB_HOME, { newTab: true })}
+            >
+              +
+            </button>
+          </div>
+          <div className="lc-web-omnibox-row">
+            <button
+              type="button"
+              className="lc-icon"
+              aria-label="Back"
+              disabled={busy !== null || !activeWebTab || !canStepWeb(activeWebTab, -1)}
+              onClick={() => stepWebTab(-1)}
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              className="lc-icon"
+              aria-label="Forward"
+              disabled={busy !== null || !activeWebTab || !canStepWeb(activeWebTab, 1)}
+              onClick={() => stepWebTab(1)}
+            >
+              ›
+            </button>
+            <input
+              type="text"
+              inputMode="url"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={webUrl}
+              aria-label="Page address"
+              onChange={(event) => setWebUrl(event.target.value)}
+            />
+            <button type="submit" className="lc-secondary" disabled={busy !== null}>
+              Go
+            </button>
+            <button
+              type="button"
+              className="lc-secondary"
+              disabled={busy !== null}
+              onClick={() => {
+                const url = normalizeExternalUrl(webUrl);
+                if (!url) {
+                  setError("that does not look like an http(s) address");
+                  return;
+                }
+                void openExternalUrl(url).catch(() => {
+                  setError("could not hand the page to a browser on this device");
+                });
+              }}
+            >
+              Open in browser
+            </button>
+          </div>
         </form>
       )}
 
@@ -6005,6 +6182,7 @@ export function App() {
                     <WebDocument
                       html={annotateSource.text}
                       url={annotateSource.name}
+                      source={webHtmlSource ?? undefined}
                       onMeasure={onMdInkMeasure}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                       onNavigate={(href) => void openWebPage(href)}
