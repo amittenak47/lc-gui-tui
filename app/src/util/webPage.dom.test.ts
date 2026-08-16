@@ -1,7 +1,14 @@
 /** @vitest-environment jsdom */
 import { describe, expect, it } from "vitest";
 
-import { flattenWebSnapshot, isolateWebCss, promoteLazyImages, sanitizeWebHtml } from "./webPage";
+import {
+  FETCH_STYLE_CAP,
+  flattenWebSnapshot,
+  isolateWebCss,
+  promoteLazyImages,
+  sanitizeWebHtml,
+  styleTagStats,
+} from "./webPage";
 
 describe("flattenWebSnapshot", () => {
   it("unwraps a single generic shell so blocks sit on the paper", () => {
@@ -93,7 +100,7 @@ describe("isolateWebCss", () => {
     expect(html).toMatch(/<p/);
   });
 
-  it("scopes small inline CSS and drops huge sheets", async () => {
+  it("scopes small inline CSS; fetch drops huge sheets, capture keeps them", async () => {
     const small = await isolateWebCss(
       `<style>body { background:#fff } header { color:#111 }</style><p>hi</p>`,
       "https://example.com/",
@@ -101,10 +108,28 @@ describe("isolateWebCss", () => {
     expect(small).toMatch(/\.lc-web-doc\s*\{[^}]*background:#fff/);
     expect(small).toMatch(/\.lc-web-doc header/);
 
-    const huge = "body{color:red}".repeat(20_000);
-    const dropped = await isolateWebCss(`<style>${huge}</style><p>hi</p>`, "https://example.com/");
+    const huge = "body{color:red}".repeat(6_000);
+    expect(huge.length).toBeGreaterThan(FETCH_STYLE_CAP);
+    const before = styleTagStats(`<style>${huge}</style><p>hi</p>`);
+    expect(before.max).toBeGreaterThan(FETCH_STYLE_CAP);
+
+    const dropped = await isolateWebCss(
+      `<style>${huge}</style><p>hi</p>`,
+      "https://example.com/",
+      "fetch",
+    );
+    expect(styleTagStats(dropped).max).toBe(0);
     expect(dropped).not.toMatch(/color:red/);
     expect(dropped).toMatch(/<p/);
+
+    const kept = await isolateWebCss(
+      `<style>${huge}</style><p>hi</p>`,
+      "https://example.com/",
+      "capture",
+    );
+    expect(styleTagStats(kept).max).toBeGreaterThan(FETCH_STYLE_CAP);
+    expect(kept).toMatch(/color:red/);
+    expect(kept).toMatch(/\.lc-web-doc/);
   });
 });
 

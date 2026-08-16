@@ -16,6 +16,23 @@ export const PAGE_MAX_BYTES = 8_000_000;
 
 export const WEB_HOME = "https://www.google.com/";
 
+/** Fetch/Vite path only. Capture-inlined CSS is the payload and must survive. */
+export const FETCH_STYLE_CAP = 80_000;
+
+export type WebHtmlSource = "capture" | "fetch";
+
+export function styleTagStats(html: string): { count: number; max: number; total: number } {
+  const tags = html.match(/<style\b[^>]*>[\s\S]*?<\/style>/gi) ?? [];
+  let max = 0;
+  let total = 0;
+  for (const tag of tags) {
+    const inner = tag.replace(/^<style\b[^>]*>/i, "").replace(/<\/style>$/i, "");
+    total += inner.length;
+    if (inner.length > max) max = inner.length;
+  }
+  return { count: tags.length, max, total };
+}
+
 /** Header label: host only. Full URL lives in the omnibox. */
 export function hostLabelFromUrl(raw: string): string {
   try {
@@ -69,7 +86,11 @@ export function absolutizeUrl(base: string, href: string): string {
  * Executable bits out. Styles stay so a snapshot can lay out; a wrapper-only
  * DOM is flattened so marquee hits real blocks, not one 17k-px shell.
  */
-export function sanitizeWebHtml(html: string, baseUrl: string): string {
+export function sanitizeWebHtml(
+  html: string,
+  baseUrl: string,
+  source: WebHtmlSource = "fetch",
+): string {
   const cleaned = DOMPurify.sanitize(html, {
     WHOLE_DOCUMENT: true,
     FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "input", "button", "textarea"],
@@ -109,7 +130,7 @@ export function sanitizeWebHtml(html: string, baseUrl: string): string {
   flattenWebSnapshot(holder);
   for (const style of Array.from(holder.querySelectorAll("style"))) {
     const raw = style.textContent || "";
-    if (raw.length > INLINE_STYLE_CAP) {
+    if (source === "fetch" && raw.length > FETCH_STYLE_CAP) {
       style.remove();
       continue;
     }
@@ -194,14 +215,17 @@ function absolutizeSrcset(srcset: string, baseUrl: string): string {
     .join(", ");
 }
 
-/** Skip walking sheets bigger than this — Google/NVIDIA CSS froze the UI thread. */
-const INLINE_STYLE_CAP = 80_000;
-
 /**
- * Drop `<link rel=stylesheet>` (they style the whole app). Scope small inline
- * `<style>` only. Never fetch remote CSS here.
+ * Drop `<link rel=stylesheet>` (they style the whole app).
+ *
+ * Capture: `<style>` is the inlined payload — keep and scope it, no size cap.
+ * Fetch: drop huge inline sheets so GET HTML cannot freeze the UI thread.
  */
-export async function isolateWebCss(html: string, baseUrl: string): Promise<string> {
+export async function isolateWebCss(
+  html: string,
+  baseUrl: string,
+  source: WebHtmlSource = "fetch",
+): Promise<string> {
   if (typeof document === "undefined") return html;
   const holder = document.createElement("div");
   if (typeof DOMParser !== "undefined") {
@@ -221,7 +245,7 @@ export async function isolateWebCss(html: string, baseUrl: string): Promise<stri
   for (const link of Array.from(holder.querySelectorAll("link"))) link.remove();
   for (const style of Array.from(holder.querySelectorAll("style"))) {
     const raw = style.textContent || "";
-    if (raw.length > INLINE_STYLE_CAP) {
+    if (source === "fetch" && raw.length > FETCH_STYLE_CAP) {
       style.remove();
       continue;
     }
@@ -261,10 +285,12 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
   }
 
   let fetched: { url: string; html: string };
+  let source: WebHtmlSource = "fetch";
   if (isTauriRuntime()) {
     try {
       const { captureRenderedPage } = await import("./webPageCapture");
       fetched = await captureRenderedPage(url);
+      source = "capture";
     } catch {
       const invoke = await loadInvoke();
       if (invoke) {
@@ -281,7 +307,18 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
     throw new Error("this page is too large to annotate here");
   }
 
-  const html = await isolateWebCss(sanitizeWebHtml(fetched.html, fetched.url), fetched.url);
+  const before = styleTagStats(fetched.html);
+  const html = await isolateWebCss(
+    sanitizeWebHtml(fetched.html, fetched.url, source),
+    fetched.url,
+    source,
+  );
+  const after = styleTagStats(html);
+  console.debug("[lc-web]", source, {
+    htmlBytes: fetched.html.length,
+    styleBefore: before,
+    styleAfter: after,
+  });
   const title = titleFromHtml(fetched.html) || fetched.url;
   return { url: fetched.url, title, html };
 }

@@ -56,4 +56,26 @@ describe("serializeCurrentDocument", () => {
     expect(out.html).toMatch(/src="data:image\/gif;base64,/);
     expect(out.html).not.toMatch(/href="\/x\.css"/);
   });
+
+  it("prefers CSSOM text over re-fetching stylesheets", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(".css")) {
+        throw new Error("stylesheet fetch should not run when cssRules is readable");
+      }
+      return new Response("missing", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    document.documentElement.innerHTML = `
+      <head><style>p{color:blue}</style></head>
+      <body><p>hi</p></body>
+    `;
+
+    const out = await serializeCurrentDocument();
+    expect(out.html).toMatch(/p\s*\{[^}]*color:\s*blue/);
+    expect(
+      fetchMock.mock.calls.filter((call) => String(call[0]).includes(".css")),
+    ).toHaveLength(0);
+  });
 });
