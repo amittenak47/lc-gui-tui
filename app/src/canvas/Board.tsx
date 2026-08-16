@@ -8043,11 +8043,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 clampingScrollRef.current = false;
               });
             }) ?? null;
-          apiRef.current.setActiveTool({ type: "hand" });
-          if (!annotateCodeRef.current) {
-            ensureReadingHand();
-          }
-          reportCodeSlot();
+          // Excalidraw fires this during _App's first render. setActiveTool
+          // now is setState on an unmounted class component.
+          const handed = apiRef.current;
+          queueMicrotask(() => {
+            if (apiRef.current !== handed) return;
+            handed.setActiveTool({ type: "hand" });
+            if (!annotateCodeRef.current) {
+              ensureReadingHand();
+            }
+            reportCodeSlot();
+          });
         }}
         onChange={handleSceneChange}
         initialData={initialData}

@@ -36,6 +36,7 @@ describe("serializeCurrentDocument", () => {
       <head>
         <link rel="stylesheet" href="/x.css" />
         <link rel="preload" href="/skip.js" as="script" />
+        <link rel="modulepreload" href="/interactivity/index.min.js" />
         <script>window.__evil = 1</script>
       </head>
       <body>
@@ -50,6 +51,8 @@ describe("serializeCurrentDocument", () => {
     expect(out.html).not.toMatch(/<script/i);
     expect(out.html).not.toMatch(/<iframe/i);
     expect(out.html).not.toMatch(/rel="preload"/i);
+    expect(out.html).not.toMatch(/modulepreload/i);
+    expect(out.html).not.toMatch(/index\.min\.js/);
     expect(out.html).toMatch(/src="data:image\/gif;base64,/);
     expect(out.html).not.toMatch(/href="\/x\.css"/);
   });

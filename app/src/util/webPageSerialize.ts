@@ -15,7 +15,9 @@ export async function serializeCurrentDocument(): Promise<SerializedPage> {
   const doc = document;
   const base = location.href;
 
-  const drop = doc.querySelectorAll("script, iframe, object, embed, link[rel=preload]");
+  const drop = doc.querySelectorAll(
+    "script, iframe, object, embed, link[rel=preload], link[rel=modulepreload], link[rel=prefetch]",
+  );
   for (const node of Array.from(drop)) node.remove();
 
   const links = Array.from(doc.querySelectorAll('link[rel="stylesheet"][href]'));
