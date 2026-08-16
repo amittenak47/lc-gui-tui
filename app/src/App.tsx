@@ -359,11 +359,8 @@ const SHOW_BUSY_BANNER = false;
  * — and the recovery paths that matter are untouched. A failed API call still
  * raises `lc-server-unreachable` the moment it happens, and focus and
  * visibility changes still probe immediately, so waking the app is as prompt as
- * it ever was. Waiting on a daemon that is coming up is the one place a shorter
- * interval buys something, and it keeps one.
+ * it ever was.
  */
-const BOOT_HEALTH_RETRIES = 5;
-const BOOT_HEALTH_DELAY_MS = 400;
 const LLM_ONLINE_POLL_MS = 20_000;
 const LLM_OFFLINE_POLL_MS = 60_000;
 const LLM_OFFLINE_POLL_MAX_MS = 120_000;
@@ -699,76 +696,30 @@ export function App() {
     };
   }, []);
 
-  /** Reachability of the in-process daemon — offline skips problem/tests that need it. */
-  const [serverLink, setServerLink] = useState<"checking" | "online" | "offline">("checking");
+  /** In-process daemon is assumed up; this flag still gates pad sync / tests. */
+  const [serverLink] = useState<"checking" | "online" | "offline">("online");
   const [bootPhase, setBootPhase] = useState<"enter" | "show" | "done" | "exit" | "gone">("enter");
   /** Something the student should know, but which did not stop the request. */
   const [notice, setNotice] = useState<string | null>(null);
   const serverLinkRef = useRef(serverLink);
   serverLinkRef.current = serverLink;
-  const bootGenRef = useRef(0);
   /** Boot overlay still waiting for LLM probe → checkmark before dismiss. */
   const bootOverlayPendingRef = useRef(true);
 
   const boardRef = useRef<BoardHandle | null>(null);
   const [recognizer, setRecognizer] = useState<InkRecognizer>(() => new NoopRecognizer());
 
-  const pingTarget = useCallback(async (target: Pairing): Promise<boolean> => {
-    const probe = new LcClient(target);
-    let timer = 0;
-    try {
-      const health = await Promise.race([
-        probe.health(),
-        new Promise<never>((_, reject) => {
-          timer = window.setTimeout(
-            () =>
-              reject(
-                new Error(
-                  `Local server at ${target.baseUrl} did not answer in time — is it running?`,
-                ),
-              ),
-            4000,
-          );
-        }),
-      ]);
-      if (health && health.ok === false) return false;
-      return true;
-    } catch {
-      return false;
-    } finally {
-      if (timer) window.clearTimeout(timer);
-    }
-  }, []);
-
-  const pingServer = useCallback(() => pingTarget(pairing), [pairing, pingTarget]);
-
-  // Boot: retry health a few times (daemon may bind after WebView), then treat as online.
-  // Completion (checkmark + LLM probe) lives in the effect below `openLlmGate`.
+  // Overlay: spinner until the first LLM probe, then checkmark. No /health wait —
+  // the daemon is in-process. Missing model still opens Continue without LLM.
   useEffect(() => {
     let cancelled = false;
-    const generation = ++bootGenRef.current;
-    setServerLink("checking");
-    setBootPhase("enter");
-    bootOverlayPendingRef.current = true;
     window.requestAnimationFrame(() => {
-      if (!cancelled && bootGenRef.current === generation) setBootPhase("show");
+      if (!cancelled) setBootPhase((phase) => (phase === "enter" ? "show" : phase));
     });
-    void (async () => {
-      let ok = false;
-      for (let attempt = 0; attempt < BOOT_HEALTH_RETRIES; attempt++) {
-        ok = await pingServer();
-        if (cancelled || bootGenRef.current !== generation) return;
-        if (ok) break;
-        if (attempt < BOOT_HEALTH_RETRIES - 1) await waitMs(BOOT_HEALTH_DELAY_MS);
-      }
-      // Online-enough for pads even if health is still settling.
-      setServerLink("online");
-    })();
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pairing.baseUrl, pairing.token]);
+  }, []);
 
   useEffect(() => {
     if (serverLink !== "online") return;
@@ -909,9 +860,9 @@ export function App() {
     window.setTimeout(() => setLlmGateOpen(false), serverGateExitMs());
   }, []);
 
-  // After lc serve is up, check whether a model is actually available for Coach.
+  // Check whether a model is actually available for Coach.
   // While the boot overlay is still up, finish with the same spinner → check
-  // beat used when opening a problem — no tap required when both are healthy.
+  // beat used when opening a problem — no tap required when the LLM is healthy.
   //
   // Poll backs off hard while the LLM is offline so we do not hammer
   // `/config` + `/llm/status` (and re-render) when the daemon has no model.
