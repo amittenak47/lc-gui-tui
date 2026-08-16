@@ -31,26 +31,52 @@ export const MIN_BAND_PX = 14;
 /**
  * Block-ish nodes a marquee can "hit" for outline chrome.
  *
- * Not persisted as CSS selectors — only painted while the gesture is live.
- * Persistence is always the region (and optional harvested text).
+ * Direct children of `.lc-md-ink-doc` used to all count, so a web snapshot
+ * whose HTML is one wrapper `<div>` became a single hit the size of the page.
+ * Generic shells are walked; real blocks (`p`, headings, figure) stop the walk
+ * so inner `img` / `tr` stay nested under the outer block.
  */
+const MARQUEE_BLOCK =
+  "p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, figure, img, table, tr";
+
+const MARQUEE_DESCEND = new Set([
+  "DIV",
+  "SPAN",
+  "SECTION",
+  "NAV",
+  "HEADER",
+  "FOOTER",
+  "MAIN",
+  "ARTICLE",
+  "ASIDE",
+  "CENTER",
+  "UL",
+  "OL",
+]);
+
 export const MARQUEE_HIT_SELECTOR = [
-  "p",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "li",
-  "blockquote",
-  "pre",
-  "figure",
-  "img",
-  "table",
-  "tr",
+  MARQUEE_BLOCK,
   ".lc-md-ink-doc > *",
-].join(",");
+].join(", ");
+
+/** Content blocks plus leaf chrome; skip page-sized generic wrappers. */
+export function marqueeHitNodes(searchRoot: HTMLElement): HTMLElement[] {
+  const hits: HTMLElement[] = [];
+  const walk = (node: Element) => {
+    if (!(node instanceof HTMLElement)) return;
+    if (node.matches(MARQUEE_BLOCK)) {
+      hits.push(node);
+      return;
+    }
+    if (MARQUEE_DESCEND.has(node.tagName) && node.children.length > 0) {
+      for (const child of node.children) walk(child);
+      return;
+    }
+    hits.push(node);
+  };
+  for (const child of searchRoot.children) walk(child);
+  return hits;
+}
 
 export function scaleOf(node: HTMLElement): number {
   const width = node.offsetWidth;
@@ -220,17 +246,23 @@ export function hitRectsUnder(
   const bottom = top + rect.height * scale;
   // Prefer the scope root (one PDF page / chapter) when the body contains it.
   const searchRoot = body.contains(root) ? root : body;
-  const nodes = searchRoot.querySelectorAll(MARQUEE_HIT_SELECTOR);
+  const nodes = marqueeHitNodes(searchRoot);
+  const accepted = new Set(nodes);
   const out: LocalRect[] = [];
   const seen = new Set<Element>();
   for (const node of nodes) {
-    if (!(node instanceof HTMLElement)) continue;
     if (seen.has(node)) continue;
     // Prefer the outermost interesting block: skip if a parent is also a hit target.
-    const parentHit = node.parentElement?.closest(MARQUEE_HIT_SELECTOR);
-    if (parentHit && parentHit !== node && searchRoot.contains(parentHit)) {
-      continue;
+    let ancestor = node.parentElement;
+    let nested = false;
+    while (ancestor && searchRoot.contains(ancestor)) {
+      if (accepted.has(ancestor)) {
+        nested = true;
+        break;
+      }
+      ancestor = ancestor.parentElement;
     }
+    if (nested) continue;
     seen.add(node);
     const box = node.getBoundingClientRect();
     if (box.width < 2 || box.height < 2) continue;

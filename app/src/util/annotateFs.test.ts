@@ -83,11 +83,12 @@ describe("DOCUMENT_ACCEPT", () => {
 });
 
 describe("isTextDocType", () => {
-  it("is true for markdown and code only", () => {
+  it("is true for markdown, code, and captured web pages", () => {
     expect(isTextDocType("markdown")).toBe(true);
     expect(isTextDocType("code")).toBe(true);
     expect(isTextDocType("pdf")).toBe(false);
     expect(isTextDocType("epub")).toBe(false);
+    expect(isTextDocType("web")).toBe(true);
   });
 });
 

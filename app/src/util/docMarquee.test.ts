@@ -195,4 +195,123 @@ describe("docMarquee", () => {
     const hits = hitRectsUnder(body, body, { left: 0, top: 0, width: 120, height: 100 });
     expect(hits).toHaveLength(1);
   });
+
+  it("hitRectsUnder prefers inner paragraphs over a web snapshot wrapper", () => {
+    const body = document.createElement("div");
+    body.className = "lc-md-ink-doc";
+    Object.defineProperty(body, "offsetWidth", { value: 400 });
+    body.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 600,
+        right: 400,
+        bottom: 600,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    const wrap = document.createElement("div");
+    wrap.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 200,
+        right: 400,
+        bottom: 200,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    const p = document.createElement("p");
+    p.textContent = "quote";
+    p.getBoundingClientRect = () =>
+      ({
+        left: 10,
+        top: 20,
+        width: 200,
+        height: 24,
+        right: 210,
+        bottom: 44,
+        x: 10,
+        y: 20,
+        toJSON() {},
+      }) as DOMRect;
+    wrap.append(p);
+    body.append(wrap);
+    document.body.append(body);
+
+    const hits = hitRectsUnder(body, body, { left: 0, top: 0, width: 400, height: 80 });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toEqual({ left: 10, top: 20, width: 200, height: 24 });
+  });
+
+  it("hitRectsUnder walks nested chrome divs to links when there are no article tags", () => {
+    const body = document.createElement("div");
+    body.className = "lc-md-ink-doc";
+    Object.defineProperty(body, "offsetWidth", { value: 400 });
+    body.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 800,
+        right: 400,
+        bottom: 800,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    const outer = document.createElement("div");
+    outer.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 800,
+        right: 400,
+        bottom: 800,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    const gmail = document.createElement("a");
+    gmail.textContent = "Gmail";
+    gmail.getBoundingClientRect = () =>
+      ({
+        left: 10,
+        top: 10,
+        width: 60,
+        height: 20,
+        right: 70,
+        bottom: 30,
+        x: 10,
+        y: 10,
+        toJSON() {},
+      }) as DOMRect;
+    const images = document.createElement("a");
+    images.textContent = "Images";
+    images.getBoundingClientRect = () =>
+      ({
+        left: 10,
+        top: 40,
+        width: 70,
+        height: 20,
+        right: 80,
+        bottom: 60,
+        x: 10,
+        y: 40,
+        toJSON() {},
+      }) as DOMRect;
+    outer.append(gmail, images);
+    body.append(outer);
+    document.body.append(body);
+
+    const hits = hitRectsUnder(body, body, { left: 0, top: 0, width: 400, height: 80 });
+    expect(hits).toHaveLength(2);
+    expect(hits[0]).toEqual({ left: 10, top: 10, width: 60, height: 20 });
+    expect(hits[1]).toEqual({ left: 10, top: 40, width: 70, height: 20 });
+  });
 });

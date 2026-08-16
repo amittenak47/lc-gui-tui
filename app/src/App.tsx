@@ -144,12 +144,14 @@ import {
 } from "./util/docExtract";
 import type { DocAnchor } from "./util/docAnchors";
 import { installHandednessAttr } from "./util/inkHandedness";
-import { openExternalUrl } from "./util/openExternal";
+import { openExternalUrl, normalizeExternalUrl } from "./util/openExternal";
+import { WEB_HOME, fetchWebPage } from "./util/webPage";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { CodeDocument } from "./modes/CodeDocument";
 import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelectionLayer";
 import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
+import { WebDocument } from "./modes/WebDocument";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
 import { loadPdfFilmPref, savePdfFilmPref } from "./modes/pdfFilm";
@@ -478,7 +480,7 @@ export function App() {
   /** The document being annotated: its text, its name, and its content hash. */
   const [annotateSource, setAnnotateSource] = useState<{
     name: string;
-    /** Markdown/code text; empty for PDF and EPUB. */
+    /** Markdown/code text, or captured HTML for web; empty for PDF and EPUB. */
     text: string;
     hash: string;
     docType: DocType;
@@ -492,6 +494,8 @@ export function App() {
      */
     bytes?: ArrayBuffer | null;
   } | null>(null);
+  /** Address bar for a web snapshot — kept outside the camera-scaled page. */
+  const [webUrl, setWebUrl] = useState(WEB_HOME);
   /** Library entry this session is writing to, once it has one. */
   const [annotateDocId, setAnnotateDocId] = useState<string | null>(null);
   /**
@@ -694,17 +698,18 @@ export function App() {
   const boardRef = useRef<BoardHandle | null>(null);
   const [recognizer, setRecognizer] = useState<InkRecognizer>(() => new NoopRecognizer());
 
-  const pingServer = useCallback(async (): Promise<boolean> => {
+  const pingTarget = useCallback(async (target: Pairing): Promise<boolean> => {
+    const probe = new LcClient(target);
     let timer = 0;
     try {
       const health = await Promise.race([
-        client.health(),
+        probe.health(),
         new Promise<never>((_, reject) => {
           timer = window.setTimeout(
             () =>
               reject(
                 new Error(
-                  `Local server at ${pairing.baseUrl} did not answer in time — is it running?`,
+                  `Local server at ${target.baseUrl} did not answer in time — is it running?`,
                 ),
               ),
             4000,
@@ -718,7 +723,9 @@ export function App() {
     } finally {
       if (timer) window.clearTimeout(timer);
     }
-  }, [client, pairing.baseUrl]);
+  }, []);
+
+  const pingServer = useCallback(() => pingTarget(pairing), [pairing, pingTarget]);
 
   const closeGate = useCallback((next: "online" | "offline", noticeText?: string | null) => {
     setGateWaiting(false);
@@ -741,6 +748,32 @@ export function App() {
       window.requestAnimationFrame(() => setGatePhase("open"));
     });
   }, []);
+
+  /**
+   * Pairing form commit. Boot ping keys on baseUrl+token, so Enter with empty
+   * code (same 127.0.0.1:7878, same token) used to save and close without a
+   * re-probe — refresh then looked "fixed". Always ping the committed target.
+   */
+  const pairProbeGenRef = useRef(0);
+  const applyPairing = useCallback(
+    (next: Pairing) => {
+      setPairing(next);
+      const generation = ++pairProbeGenRef.current;
+      void (async () => {
+        setServerLink("checking");
+        const ok = await pingTarget(next);
+        if (generation !== pairProbeGenRef.current) return;
+        if (ok) {
+          if (gateOpenRef.current) closeGate("online", null);
+          else setServerLink("online");
+        } else {
+          setServerLink("offline");
+          if (!gateOpenRef.current) openGate("startup");
+        }
+      })();
+    },
+    [closeGate, openGate, pingTarget],
+  );
 
   // First contact with the daemon — boot spinner (doodle-able), then dialog or continue.
   // Generation counter so a remount does not leave us cancelled mid-hang forever.
@@ -2239,21 +2272,22 @@ export function App() {
   );
 
   /**
-   * Open a document to annotate — markdown, PDF or EPUB.
+   * Open a document to annotate — markdown, code, PDF, EPUB or a web snapshot.
    *
-   * Either a file the writer just picked, or a library entry being reopened.
-   * The three types differ only in what "the document" is made of: markdown
-   * arrives as text and is stored with its entry, PDF and EPUB arrive as bytes
-   * and are stored in IndexedDB under the same content hash. Everything past
-   * that — the hash lookup, the restored ink, the stale-file warning, the
-   * loading transition — is deliberately one path, because a reader switching
-   * between a note and a textbook should not be switching between two apps.
+   * Either a file the writer just picked, a captured page, or a library entry
+   * being reopened. The types differ only in what "the document" is made of:
+   * markdown, code and web HTML arrive as text and are stored with the entry;
+   * PDF and EPUB arrive as bytes and are stored in IndexedDB under the same
+   * content hash. Everything past that — the hash lookup, the restored ink,
+   * the stale-file warning, the loading transition — is deliberately one path,
+   * because a reader switching between a note and a textbook should not be
+   * switching between two apps.
    */
   const openAnnotate = useCallback(
     async (input: {
       name: string;
       docType?: DocType;
-      /** Markdown only. */
+      /** Markdown, code, or captured web HTML. */
       text?: string;
       /** PDF and EPUB only. */
       bytes?: ArrayBuffer;
@@ -2300,7 +2334,7 @@ export function App() {
          * quota — refuse early with a clear message rather than a blank pad.
          */
         if (
-          (docType === "code" || docType === "markdown") &&
+          (docType === "code" || docType === "markdown" || docType === "web") &&
           text.length > CODE_SOURCE_MAX_CHARS
         ) {
           throw new Error(
@@ -2347,6 +2381,7 @@ export function App() {
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
         setAnnotateSource({ name: input.name, text, hash, docType, bytes });
+        if (docType === "web") setWebUrl(input.name);
         setAnnotateHeight(null);
         annotateHeightRef.current = null;
 
@@ -2714,6 +2749,52 @@ export function App() {
       }
     }
   }, [beginPadOpen, busy, endPadOpen, openAnnotate, problem]);
+
+  /**
+   * Fetch a page, sanitise it, then open it on the same pad as markdown.
+   *
+   * `busy` must be cleared before {@link openAnnotate} — that path bails when
+   * another load is already marked in flight. The fetch is the wait; opening
+   * is the same transition as a file pick.
+   */
+  const openWebPage = useCallback(
+    async (raw: string) => {
+      if (busy !== null) return;
+      beginPadOpen();
+      const fromBrowse = !problem;
+      if (fromBrowse) {
+        setHoldBrowseOverlay(true);
+        setBrowseMotion("busy");
+        setBoardPreparing(true);
+      }
+      setBusy("loading page…");
+      setError(null);
+      let handedOff = false;
+      try {
+        const page = await fetchWebPage(raw);
+        setBusy(null);
+        handedOff = true;
+        await openAnnotate({
+          name: page.url,
+          docType: "web",
+          text: page.html,
+        });
+      } catch (cause) {
+        setError(messageOf(cause));
+      } finally {
+        endPadOpen();
+        if (!handedOff) {
+          setBusy(null);
+          if (fromBrowse) {
+            setHoldBrowseOverlay(false);
+            setBrowseMotion("idle");
+            setBoardPreparing(false);
+          }
+        }
+      }
+    },
+    [beginPadOpen, busy, endPadOpen, openAnnotate, problem],
+  );
 
   /** Session queue after Start / Random; otherwise the filtered problem bank. */
   const stepProblem = useCallback(
@@ -5418,7 +5499,7 @@ export function App() {
             pairing={pairing}
             pairingEditing={pairingEditing}
             gateOpen={gateOpen}
-            onPair={setPairing}
+            onPair={applyPairing}
             onEditingChange={setPairingEditing}
             onRetryOffline={() => {
               openGate("startup");
@@ -5472,9 +5553,41 @@ export function App() {
 
         <div className="lc-header-right">
           {/*
-            Document icon, immediately left of the scratchpad's paper: tap picks
-            a file to annotate, hold opens the library. Same split as its
-            neighbour, since it is the same kind of thing.
+            Globe, then the file icon, then paper. Tap opens google.com as a
+            snapshot pad; hold is the same annotate library.
+          */}
+          {!problem && (
+            <HoldButton
+              label="Web"
+              ariaLabel="Web pad: tap to open Google, hold for recent documents"
+              className="lc-icon lc-tip-target lc-hold-icon"
+              dataTip="Web — tap to open google.com, hold for recent"
+              dataTipPlacement="bottom"
+              disabled={busy !== null}
+              onTap={() => void openWebPage(WEB_HOME)}
+              onConfirm={() => setAnnotateEntryOpen(true)}
+            >
+              <svg
+                className="lc-icon-svg"
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <path d="M2 12h20" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+            </HoldButton>
+          )}
+          {/*
+            Document icon, left of the scratchpad's paper: tap picks a file to
+            annotate, hold opens the library. Same split as its neighbour.
           */}
           {!problem && (
             <HoldButton
@@ -5507,7 +5620,41 @@ export function App() {
               </svg>
             </HoldButton>
           )}
-          {problem && isAnnotate(problem) && (
+          {problem && isAnnotate(problem) && annotateSource?.docType === "web" && (
+            <HoldButton
+              label="Web"
+              ariaLabel="Web documents: tap to save now, hold for save / open menu"
+              className="lc-icon lc-hold-icon lc-tip-target is-active"
+              dataTip="Web — tap to save, hold for menu"
+              dataTipPlacement="bottom"
+              pressed
+              disabled={busy !== null}
+              onTap={() => {
+                void saveAnnotateSession().then((saved) => {
+                  if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+                });
+              }}
+              onConfirm={() => setAnnotateEntryOpen(true)}
+            >
+              <svg
+                className="lc-icon-svg"
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <path d="M2 12h20" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+            </HoldButton>
+          )}
+          {problem && isAnnotate(problem) && annotateSource?.docType !== "web" && (
             /* Tap to save now, hold for the sheet. */
             <HoldButton
               label="Markdown"
@@ -5667,6 +5814,47 @@ export function App() {
         </div>
       </header>
 
+      {problem && isAnnotate(problem) && annotateSource?.docType === "web" && (
+        <form
+          className="lc-web-omnibox"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void openWebPage(webUrl);
+          }}
+        >
+          <input
+            type="text"
+            inputMode="url"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            value={webUrl}
+            aria-label="Page address"
+            onChange={(event) => setWebUrl(event.target.value)}
+          />
+          <button type="submit" className="lc-secondary" disabled={busy !== null}>
+            Go
+          </button>
+          <button
+            type="button"
+            className="lc-secondary"
+            disabled={busy !== null}
+            onClick={() => {
+              const url = normalizeExternalUrl(webUrl);
+              if (!url) {
+                setError("that does not look like an http(s) address");
+                return;
+              }
+              void openExternalUrl(url).catch(() => {
+                setError("could not hand the page to a browser on this device");
+              });
+            }}
+          >
+            Open in browser
+          </button>
+        </form>
+      )}
+
       <main className="lc-main">
         <div className="lc-chrome-overlay-top" aria-live="polite">
           {SHOW_BUSY_BANNER && busy && problem && switchMotion === "idle" && (
@@ -5810,6 +5998,14 @@ export function App() {
                       language={languageForName(annotateSource.name)}
                       onMeasure={onMdInkMeasure}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
+                    />
+                  ) : annotateSource.docType === "web" ? (
+                    <WebDocument
+                      html={annotateSource.text}
+                      url={annotateSource.name}
+                      onMeasure={onMdInkMeasure}
+                      selectable={!annotateCode || Boolean(openFootnote) || highlighting}
+                      onNavigate={(href) => void openWebPage(href)}
                     />
                   ) : (
                     <AnnotateDocument
@@ -6712,6 +6908,11 @@ function PairingBadge({
     <form
       ref={formRef}
       className="lc-pairing-form"
+      title={
+        problem ??
+        (pending ? "pairing…" : "Host, Port and the 6-digit Code from `lc serve --lan`")
+      }
+      aria-describedby={problem ? undefined : "lc-pairing-hint"}
       onSubmit={(event) => {
         event.preventDefault();
         void commit();
@@ -6767,9 +6968,11 @@ function PairingBadge({
         </button>
       </div>
       {problem ? (
-        <span className="lc-warning">{problem}</span>
+        <span className="lc-warning" role="alert">
+          {problem}
+        </span>
       ) : (
-        <span className="lc-muted lc-pairing-hint">
+        <span id="lc-pairing-hint" className="lc-muted lc-pairing-hint">
           {pending ? "pairing…" : "Host, Port and the 6-digit Code from `lc serve --lan`"}
         </span>
       )}
