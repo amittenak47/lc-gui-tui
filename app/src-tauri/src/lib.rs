@@ -4,6 +4,7 @@
 pub mod capture_save;
 pub mod colorhunt;
 pub mod lc_client;
+pub mod web_capture;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -16,6 +17,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
         lc_client::lc_request,
+        lc_client::fetch_html,
+        web_capture::webview_eval_json,
         colorhunt::colorhunt_random,
         capture_save::save_png_bytes,
         capture_save::share_png_bytes,
@@ -43,6 +46,11 @@ fn ink_available() -> bool {
     cfg!(target_os = "android")
 }
 
+#[cfg(target_os = "android")]
+use tauri_plugin_gestureguard::ExclusionRect;
+#[cfg(not(target_os = "android"))]
+type ExclusionRect = serde_json::Value;
+
 /// Ask Android to stop treating these rectangles as back-gesture strips.
 ///
 /// A no-op everywhere else, and deliberately not an error there: the caller is
@@ -52,7 +60,7 @@ fn ink_available() -> bool {
 #[tauri::command]
 fn set_gesture_exclusions(
     #[allow(unused_variables)] app: tauri::AppHandle,
-    #[allow(unused_variables)] rects: Vec<tauri_plugin_gestureguard::ExclusionRect>,
+    #[allow(unused_variables)] rects: Vec<ExclusionRect>,
     #[allow(unused_variables)] density: f64,
 ) -> std::result::Result<u32, String> {
     #[cfg(target_os = "android")]

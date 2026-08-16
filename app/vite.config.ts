@@ -1,4 +1,5 @@
 import { createReadStream, cpSync, existsSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,10 +49,91 @@ function pdfjsAssets(): Plugin {
   };
 }
 
+const PAGE_MAX_BYTES = 1_500_000;
+const WEB_FETCH_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+
+/**
+ * Browser-preview path for the annotate web pad.
+ *
+ * Tauri uses the Rust `fetch_html` command (no CORS). Vite preview cannot, so
+ * this middleware GETs the URL server-side and returns the HTML. Same 1.5 MB
+ * cap and user-agent as the Rust command.
+ */
+function webFetchProxy(): Plugin {
+  const handle = (
+    req: IncomingMessage,
+    res: ServerResponse,
+    next: () => void,
+  ): void => {
+    const rawUrl = req.url ?? "";
+    if (!rawUrl.startsWith("/__lc-web-fetch")) {
+      next();
+      return;
+    }
+    let target = "";
+    try {
+      target = new URL(rawUrl, "http://vite.local").searchParams.get("url") ?? "";
+    } catch {
+      target = "";
+    }
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(target);
+    } catch {
+      parsed = null;
+    }
+    if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+      res.statusCode = 400;
+      res.end("that does not look like an http(s) address");
+      return;
+    }
+    void (async () => {
+      try {
+        const response = await fetch(parsed.href, {
+          headers: {
+            accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            "user-agent": WEB_FETCH_UA,
+          },
+          redirect: "follow",
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!response.ok) {
+          res.statusCode = 502;
+          res.end(`the page returned HTTP ${response.status}`);
+          return;
+        }
+        const buf = Buffer.from(await response.arrayBuffer());
+        if (buf.length > PAGE_MAX_BYTES) {
+          res.statusCode = 413;
+          res.end("this page is too large to annotate here");
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("x-lc-final-url", response.url);
+        res.end(buf.toString("utf8"));
+      } catch (err) {
+        res.statusCode = 502;
+        res.end(err instanceof Error ? err.message : String(err));
+      }
+    })();
+  };
+  return {
+    name: "lc-web-fetch",
+    configureServer(server) {
+      server.middlewares.use(handle);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(handle);
+    },
+  };
+}
+
 // Tauri serves the built assets from a fixed port in dev and expects a
 // relative base so the same bundle works from a file:// origin on Android.
 export default defineConfig({
-  plugins: [react(), pdfjsAssets()],
+  plugins: [react(), pdfjsAssets(), webFetchProxy()],
   base: "./",
   clearScreen: false,
   server: {

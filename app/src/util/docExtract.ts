@@ -51,6 +51,18 @@ export async function extractDocumentPages(input: {
     if (!input.bytes) return [];
     return extractEpubPages(input.bytes);
   }
+  if (input.docType === "web") {
+    const text = htmlToText(input.text).trim();
+    if (!text) return [];
+    return [
+      {
+        page: 1,
+        text,
+        heading: headingFrom(text) ?? input.name,
+        scope: input.name,
+      },
+    ];
+  }
   const text = input.text.trim();
   if (!text) return [];
   return [

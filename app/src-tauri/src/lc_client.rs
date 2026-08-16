@@ -120,6 +120,59 @@ pub async fn lc_request(request: LcRequest) -> Result<LcResponse, String> {
     Ok(LcResponse { status, body })
 }
 
+const PAGE_TIMEOUT: Duration = Duration::from_secs(20);
+const PAGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+const PAGE_MAX_BYTES: usize = 8_000_000;
+
+#[derive(Debug, Serialize)]
+pub struct FetchedPage {
+    pub url: String,
+    pub html: String,
+}
+
+/// GET an http(s) page for the annotate web pad. Same-origin overlay needs
+/// the HTML as text; the WebView cannot fetch google.com (CORS / X-Frame).
+#[tauri::command]
+pub async fn fetch_html(url: String) -> Result<FetchedPage, String> {
+    let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "that does not look like a URL".to_string())?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("only http and https pages can be opened".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(PAGE_TIMEOUT)
+        .connect_timeout(PAGE_CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        )
+        .build()
+        .map_err(|err| format!("cannot build an HTTP client: {err}"))?;
+
+    let response = client
+        .get(parsed.clone())
+        .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
+        .send()
+        .await
+        .map_err(|err| format!("cannot reach {parsed}: {err}"))?;
+    let final_url = response.url().to_string();
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("the page returned HTTP {status}"));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| format!("cannot read {final_url}: {err}"))?;
+    if bytes.len() > PAGE_MAX_BYTES {
+        return Err("this page is too large to annotate here".into());
+    }
+    let html = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(FetchedPage {
+        url: final_url,
+        html,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

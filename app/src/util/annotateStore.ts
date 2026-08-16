@@ -34,15 +34,16 @@ export const ANNOTATE_LIBRARY_LIMIT = 30;
  *
  * Markdown and code carry their source in the entry; PDF and EPUB keep their
  * bytes in IndexedDB under the same content hash (see `docBytes`), because a
- * textbook does not fit in a synchronous string store. Everything else about
+ * textbook does not fit in a synchronous string store. A captured web page is
+ * HTML text in the entry, hashed like markdown. Everything else about
  * an entry — the board, the footnotes, the hash it is keyed by — is identical
- * across the four, which is the point: one library, one save/discard contract,
- * one pad.
+ * across those types, which is the point: one library, one save/discard
+ * contract, one pad.
  *
  * Absent on entries written before PDF and EPUB existed, and those are all
  * markdown, so a missing value reads as `"markdown"` rather than as corrupt.
  */
-export type DocType = "markdown" | "pdf" | "epub" | "code";
+export type DocType = "markdown" | "pdf" | "epub" | "code" | "web";
 
 export function isBinaryDocType(docType: DocType): boolean {
   return docType === "pdf" || docType === "epub";
@@ -60,7 +61,7 @@ export interface AnnotateDocMeta {
   id: string;
   /** File name as opened, for display. */
   name: string;
-  /** Hash of the document this was drawn over — text for markdown, bytes otherwise. */
+  /** Hash of the document this was drawn over — text for markdown/code/web, bytes otherwise. */
   hash: string;
   docType: DocType;
   updatedAt: number;
@@ -78,6 +79,7 @@ export interface AnnotateDoc extends AnnotateDocMeta {
    *
    * Empty for PDF and EPUB: their bytes are in IndexedDB under {@link hash},
    * because a textbook is orders of magnitude past what this store can hold.
+   * Web snapshots store sanitised HTML here, hashed like markdown.
    */
   source: string;
   board: BoardBlob;
@@ -122,7 +124,7 @@ interface AnnotateContent {
 }
 
 /**
- * FNV-1a over the markdown source.
+ * FNV-1a over the text source (markdown, code, or captured HTML).
  *
  * Not a security hash and does not need to be: it answers "is this the same
  * text I annotated last time", where the alternative to a cheap wrong answer is

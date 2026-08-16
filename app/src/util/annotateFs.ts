@@ -86,7 +86,7 @@ export function docTypeForName(name: string): DocType {
 
 /** True when the pad stores this type as a string in the library entry. */
 export function isTextDocType(docType: DocType): boolean {
-  return docType === "markdown" || docType === "code";
+  return docType === "markdown" || docType === "code" || docType === "web";
 }
 
 /**

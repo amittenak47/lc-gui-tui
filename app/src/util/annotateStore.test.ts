@@ -115,6 +115,22 @@ describe("saveAnnotateDoc", () => {
     expect(loaded?.source).toContain("def f()");
     expect((await findAnnotateDocByHash(hash))?.id).toBe(saved.id);
   });
+
+  it("stores web snapshots with docType web and their HTML", async () => {
+    const html = "<p>hi</p>";
+    const hash = hashMarkdown(html);
+    const saved = await saveAnnotateDoc({
+      name: "https://www.google.com/",
+      hash,
+      docType: "web",
+      source: html,
+      board: board("ink"),
+    });
+    const loaded = await getAnnotateDoc(saved.id);
+    expect(loaded?.docType).toBe("web");
+    expect(loaded?.source).toBe(html);
+    expect((await findAnnotateDocByHash(hash))?.id).toBe(saved.id);
+  });
 });
 
 describe("restoreAnnotateDoc", () => {
