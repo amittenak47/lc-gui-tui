@@ -1,5 +1,13 @@
 /// <reference types="vite/client" />
 
+interface ImportMetaEnv {
+  readonly VITE_FEATURE_LEETCODE?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
 /**
  * Vite's `?worker` suffix imports, which TypeScript doesn't know about on its
  * own. Monaco needs one for its editor worker; without it the editor falls back

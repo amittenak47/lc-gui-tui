@@ -4,47 +4,45 @@ Practice LeetCode by *whiteboarding*: sketch an approach by hand while an agent
 watches, grills you, and points at the specific test case your approach breaks
 on.
 
-The canvas runs on the tablet. The corpus, the workspaces, and the Python test
-runner stay on the PC, behind `lc serve`.
+The desktop Tauri window embeds `lc serve` on loopback and the RustPython
+judge. `lc serve` as a separate process remains for the CLI/TUI. This GUI does
+not pair to a remote daemon (no header Host/Port/Code, no Settings Server tab).
 
 ```
-┌─ XPPen Magic Note Pad (Android 14) ─┐        ┌─ PC / Mac ────────────────────┐
-│  Tauri v2 app (this directory)       │        │  lc serve (axum)              │
-│   • Excalidraw canvas                │  HTTP  │   • index.rs   (SQLite corpus)│
-│   • ML Kit ink→text (Kotlin plugin)  │◄──────►│   • generator.rs (workspaces) │
-│   • viz renderer + frame scrubber    │   WS   │   • runner.rs  (python tests) │
-│   • Review / Ambient modes           │        │   • llm/       (Ollama/Groq)  │
-└──────────────────────────────────────┘        └───────────────────────────────┘
-        the same binary also builds as a desktop window → localhost
+┌─ Desktop Tauri (this directory) ─────────────────────────┐
+│  React canvas  ──HTTP/WS──►  in-process axum :7878        │
+│                              • corpus / workspaces        │
+│                              • runner.rs (RustPython)     │
+│                              • llm/ (Ollama / Groq / …)   │
+└───────────────────────────────────────────────────────────┘
+  same binary also builds as an Android APK (loopback daemon;
+  APK size is a later pass). Tablet-as-display: spacedesk.
 ```
 
-How the three layers split (pad UI vs `lc serve` vs Python/LLM), what works offline, Tailscale vs a fully untethered LeetCode, and the stripped Ask-only APK: [Where the work lives](../README.md#where-the-work-lives) in the repo README.
+How the layers split (pad UI vs in-process daemon vs LLM), flags, and the
+stripped Ask-only sibling: [Where the work lives](../README.md#where-the-work-lives)
+in the repo README.
 
 The Magic Note Pad is a standalone Android tablet, not a pen display — Drawing
 Display Mode needs DP-IN and only exists on the Magic *Drawing* Pad. Hence
-client/server rather than screen mirroring.
+spacedesk (mirror the desktop window) rather than screen-mirroring a separate
+PC daemon.
 
 ## Getting started
 
-Start the daemon on the PC:
-
-```bash
-cargo run -- serve --port 7878
-```
-
-Then, in this directory:
+The desktop GUI starts the loopback daemon itself. `lc serve` is optional
+(CLI/TUI, or a leftover process the GUI will reuse on port 7878). Vite-only
+preview still needs a process on 7878.
 
 ```bash
 npm install
-```
-
-Validate the whole loop with a mouse before touching Android:
-
-```bash
 npm run tauri dev
 ```
 
-The app defaults to `http://127.0.0.1:7878`, so nothing needs pairing on desktop.
+Opens on a **home chooser**: Practice, Whiteboard, or Annotate. Back from a
+session returns there. Hide Practice with `VITE_FEATURE_LEETCODE=0` in `app/.env`.
+LLM config is **Settings → LLM** (`localhost` is this machine). Tests: **Settings
+→ Workspace → Test Cases** (hidden when Practice is off).
 
 ## Modes
 
@@ -69,8 +67,8 @@ your approach to a working one. It is never a solution dump, and it is logged so
 
 ## Problem sets
 
-A tab strip above the problem table switches between the five corpora
-`whiteboard` indexes. Everything under it — search, filters, paging, session
+Landing is the home chooser; **Practice** opens the problem table. A tab strip
+above that table switches between the five corpora `whiteboard` indexes. Everything under it — search, filters, paging, session
 Start / Reset / Select / Random — works the same on any tab: the dataset is one
 more parameter on the same queries. Filters do reset on a switch, since a tag
 from one corpus matches nothing in another's tables.
@@ -90,7 +88,7 @@ along with your next question on its own channel, so the agent can answer *"why
 did case 3 fail?"* without you pasting anything. Closing the modal loses
 nothing.
 
-Settings → **Tests** picks between running every case and stopping at the first
+Settings → Workspace → **Test Cases** picks between running every case and stopping at the first
 failure. Running every case is the default: it is what lets the agent choose a
 real counterexample.
 
@@ -112,62 +110,35 @@ starts from a fresh board and a fresh session — re-solving while looking at th
 answer you already drew is not practice. The daemon owns the rules
 (`src/attempt.rs`); the dialog only asks.
 
-## Connecting the tablet
+## Connecting a tablet
 
-```bash
-cargo run -- serve --lan
-```
+This GUI talks only to `http://127.0.0.1:7878`. There is no header pairing form
+and no Settings **Serve** page.
 
-That binds all interfaces and prints the three things to type into the app's
-header — **Host**, **Port** and a **6-digit Code**:
+- **Desktop window on a tablet screen:** spacedesk (below). Daemon stays loopback.
+- **APK:** same Tauri binary starts its own loopback daemon. Corpus and LLM still
+  have to exist on that device; packaging/size is later.
+- **`lc serve --lan`:** still in the CLI for TUI and leftover scripts. This app
+  will not consume Host / Port / Code.
 
-```
-  Pair the tablet — type these into the app's header:
-    Host: 192.168.1.20
-    Port: 7878
-    Code: 482917
-```
+Older pairing walkthrough: [`docs/ANDROID_SETUP.md`](docs/ANDROID_SETUP.md).
 
-Tap the host name in the header, type them, and the app trades the code for the
-daemon's long token (`POST /pair`) and stores it. Pairing is a once-ever step per
-device: the code rotates on every `serve --lan` start, but a device that already
-holds the token keeps working. Settings → Serve shows the current code without
-going back to the terminal.
+## The no-APK path (browser, or spacedesk)
 
-The QR and the full `http://host:port?token=…` URL still print underneath, and
-pasting that URL into the Host field still works — a tablet with only a
-front-facing camera cannot scan its own PC, which is why the code is the path.
+Two ways to use a tablet without building an APK. Neither uses GUI pairing —
+that UI is gone.
 
-`--lan` means anyone on your network who has the token can drive your
-workspaces. Prefer loopback when you're at the desk.
+### Browser on the PC
 
-## The no-APK path (browser over the LAN, or spacedesk)
+`npm run dev` / `npm run preview` is not Tauri, so it does not start the
+daemon. Run the desktop app (`npm run tauri dev`) or `lc serve` on loopback,
+then open the Vite URL **on the same machine**. A tablet browser cannot reach
+`127.0.0.1` on the PC.
 
-Two ways to use a tablet without building an APK.
+> The daemon serves the API only. `http://127.0.0.1:7878` in a browser will not
+> give you the app.
 
-### Browser over the LAN
-
-Vite already binds every interface on port 1420, and the daemon answers
-cross-origin requests, so the tablet's browser can load the app off the PC and
-talk to the daemon directly. Two terminals:
-
-```bash
-cargo run -- serve --lan    # API on 7878, prints the pairing code
-cd app && npm run dev       # app on 1420, bound to 0.0.0.0
-```
-
-Open `http://<pc-ip>:1420` on the tablet, then enter Host / Port / **Code** in
-the header exactly as the APK build does — the app reaches the daemon on 7878,
-which is a different port from the one you loaded the page from.
-
-For the production bundle instead of the dev server: `npm run build && npm run
-preview -- --host` (preview does not bind externally on its own, and it picks
-its own port — read the one it prints).
-
-> The daemon serves the API only. It has no static file handler, so
-> `http://<pc-ip>:7878` in a browser will not give you the app.
-
-What you give up is the part that needs native code: **ML Kit handwriting
+What you give up without the APK is native code: **ML Kit handwriting
 recognition is Android-only**, so pen strokes reach the agent as the board
 picture rather than as text. Pick a vision-capable review model and the agent
 still reads handwriting — see *Modes* above. If your review model has no vision,
@@ -183,8 +154,8 @@ window onto it.
 
 That means:
 
-- No pairing, no `--lan`, no token — the daemon stays on loopback, because
-  nothing crosses the network but pixels.
+- No pairing, no `--lan`, no token — the desktop GUI’s daemon stays on loopback,
+  because nothing crosses the network but pixels.
 - Full desktop behaviour, including whatever the PC's browser or Tauri build can
   do. Still no ML Kit: recognition runs on Android, and here Android is only a
   screen.
@@ -193,10 +164,9 @@ That means:
   risk `RasterInkLayer` exists to keep small — try a page of handwriting before
   committing to this path.
 
-Rough guide: **spacedesk** to try the thing today without a build, **browser +
-pairing** for a standalone tablet that keeps working when the PC screen is off,
-and the **APK** when you want the pen to feel native and handwriting to be
-transcribed on-device.
+Rough guide: **spacedesk** to try the thing today without a build, **Tauri
+desktop** for the in-process daemon + RustPython, and the **APK** when you want
+the pen to feel native and handwriting to be transcribed on-device.
 
 ## Android — sideloading the APK (no Play Store)
 
@@ -233,9 +203,8 @@ needs are scripted rather than hand-applied — `npm run android:overlay` (which
 every android script runs first) copies
 `src-tauri/android-overlay/network_security_config.xml` into the project's
 `res/xml/` and points the manifest's `<application>` at it. Android 9+ blocks
-cleartext HTTP and `lc serve` speaks plain HTTP on the LAN; without this the app
-looks like it simply cannot see the PC. The script is idempotent, so re-run it
-after any `init`/regeneration.
+cleartext HTTP; the overlay remains for any leftover LAN fetch. The script is
+idempotent, so re-run it after any `init`/regeneration.
 
 Nothing to do for ML Kit — the plugin in `src-tauri/plugins/inkrecognition/`
 downloads its recognition model on first launch (a few MB) and is offline after
@@ -270,20 +239,14 @@ No cable? Copy the APK to the tablet and open it from Files:
 If the installer says *App not installed*, an older build with a different
 signing key is still there: `adb uninstall dev.lc.whiteboard` first.
 
-### 4. Point it at the PC
+### 4. Loopback daemon
 
-```bash
-cargo run -- serve --lan     # on the PC itself, not inside WSL
-```
-
-Then pair from the app's header with the **Host**, **Port** and **6-digit code**
-the daemon prints (see *Connecting the tablet* above). Check the daemon is
-reachable at all with `http://<pc-ip>:7878/health` in the tablet's browser; if
-that works but the app cannot connect, the overlay step did not apply.
+The APK starts the same in-process daemon as desktop (`127.0.0.1:7878`, no
+token). There is nothing to type into a header. Corpus, workspaces, and LLM
+URL are whatever exists on that device; APK size is a later pass.
 
 The mobile layout — one template region per page, compact toolbar, no stock
-Excalidraw chrome — is the same in the WebView as in the browser, so anything
-you validate at `http://<pc-ip>:1420` carries over.
+Excalidraw chrome — is the same in the WebView as in the browser.
 
 Measure ink latency on a scene of ~200 elements early. If it's intolerable, the
 fallback is a raw-canvas ink layer under Excalidraw — `Board.tsx` sits behind
@@ -299,13 +262,13 @@ them into the PNG when the selected model has vision. Neither Excalidraw's
 
 | Path | What |
 |---|---|
-| `src/api/` | Daemon client, pairing, and the ambient WebSocket loop |
+| `src/api/` | Daemon client (frozen loopback URL) and the ambient WebSocket loop |
 | `src/canvas/` | Excalidraw wrapper, capture extractors, ink recognizers |
 | `src/templates/` | Board regions and the pre-seeded problem layout |
 | `src/viz/` | Viz schema, the nine renderers, applier, frame scrubber |
-| `src/modes/` | Review, reveal, test results, attempt dialog, problem picker |
+| `src/modes/` | Home chooser, Review, reveal, test results, attempt dialog, problem picker |
 | `src/util/datasetKey.ts` | `dataset/task_id` keys — how per-problem state is addressed |
-| `src-tauri/` | Tauri shell, HTTP proxy, ML Kit plugin |
+| `src-tauri/` | Tauri shell, embedded harness daemon, HTTP proxy, ML Kit plugin |
 
 ## Tests
 
@@ -313,9 +276,8 @@ them into the PNG when the selected model has vision. Neither Excalidraw's
 npm test
 ```
 
-Covers what the plan asks for: every renderer against golden output, frame
-stepping replacing element ids in place rather than accumulating, the
-skip-if-unchanged cost control, and pairing-URL parsing.
+Covers renderer golden output, frame stepping, skip-if-unchanged cost control,
+and pairing-URL helpers (still parsed; the GUI no longer stores a LAN pair).
 
 Type-check and bundle:
 

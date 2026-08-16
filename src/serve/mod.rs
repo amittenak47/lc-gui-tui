@@ -1,6 +1,6 @@
 //! `lc serve` — a thin HTTP/WebSocket shell over the modules the CLI already
-//! uses, so the whiteboard client can run on a tablet while the corpus, the
-//! workspaces, and the Python test runner stay on this machine.
+//! uses. The Tauri GUI embeds this on loopback; `lc serve` still works as a
+//! standalone process for the TUI/CLI and LAN pairing.
 //!
 //! Almost no business logic lives here: routes call `index`, `loader`,
 //! `problem`, `generator`, and `runner` and serialize the results.
@@ -112,6 +112,35 @@ pub fn run(mut cfg: Config, port: Option<u16>, lan: bool) -> Result<()> {
         .build()
         .context("cannot start the tokio runtime")?;
     runtime.block_on(serve(state, SocketAddr::new(host, port), lan))
+}
+
+/// In-process loopback daemon for the Tauri GUI. No pairing token.
+///
+/// If `127.0.0.1:port` already answers (a leftover `lc serve` during
+/// development), this returns Ok and the GUI talks to that process.
+pub async fn run_loopback(cfg: Config) -> Result<()> {
+    let port = cfg.serve.port;
+    if loopback_port_open(port) {
+        return Ok(());
+    }
+    let state = Arc::new(AppState {
+        cfg: RwLock::new(cfg),
+        token: None,
+        pair_code: None,
+        pair_failures: AtomicU32::new(0),
+        port,
+        sessions: tokio::sync::Mutex::new(SessionStore::default()),
+        board_sessions: tokio::sync::Mutex::new(board_session::BoardSessionStore::default()),
+        test_lock: tokio::sync::Mutex::new(()),
+    });
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let app = router(state);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("cannot bind {addr}"))?;
+    axum::serve(listener, app)
+        .await
+        .context("the embedded daemon stopped unexpectedly")
 }
 
 async fn serve(state: Shared, addr: SocketAddr, lan: bool) -> Result<()> {

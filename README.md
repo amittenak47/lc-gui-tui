@@ -19,7 +19,7 @@ There is a second path: sketch the approach by hand on a tablet or desktop canva
 | **CLI** | Index corpora, search, load workspaces, run tests, ask the tutor |
 | **TUI** | Full-screen practice UI in the terminal (`lc` / `lc tui`) |
 | **IDE** | Edit `solution.py` in Cursor or VS Code; optional LLM Autocorrect |
-| **GUI** | Whiteboard app (`app/`) talking to `lc serve` over HTTP/WS |
+| **GUI** | Whiteboard app (`app/`). Desktop Tauri embeds the daemon on `127.0.0.1:7878` |
 
 ```
 JSON corpora ─whiteboard index──▶ SQLite (problems.db)
@@ -32,7 +32,7 @@ JSON corpora ─whiteboard index──▶ SQLite (problems.db)
         ├── run_tests.py
         └── .lc/meta.json       ← cases / entry point (no reference solution)
                               │
-                        whiteboard test · whiteboard ask · lc serve → app/
+                        whiteboard test · whiteboard ask · GUI (in-process daemon)
 ```
 
 The crate stays `whiteboard`; the CLI binary is `lc`. Config still lives under the OS project dir named `lc` (`lc config path`). Workspace and data defaults (`~/lc-workspace`, `~/lc-data`) and env vars (`GROQ_API_KEY`, `LC_LOCAL_API_KEY`, `OPENAI_API_KEY`) are unchanged.
@@ -41,7 +41,7 @@ The crate stays `whiteboard`; the CLI binary is `lc`. Config still lives under t
 
 ## 1. Installation, dataset downloads, model config, and setup
 
-**Needs:** Rust 1.75+, Python 3.10+, and for the whiteboard client Node 20+.
+**Needs:** Rust 1.93+, and for the whiteboard client Node 20+. Tests run in-process via RustPython (no CPython). Dataset fetch scripts still use Python.
 
 ```bash
 cargo install --path .
@@ -117,15 +117,18 @@ Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorre
 
 ## 4. GUI usage
 
-The canvas lives in [`app/`](app/). The corpus, workspaces, and Python runner stay on the PC behind `lc serve`.
+The canvas lives in [`app/`](app/). The desktop window **is** the daemon: Tauri starts axum on `http://127.0.0.1:7878` (no token) and runs tests in-process with RustPython. A leftover `lc serve` on that port is reused; you do not start one for desktop.
+
+Landing is a home chooser: **Practice** (corpus + tests), **Whiteboard**, **Annotate**. Back from a session returns home, not the problem table. Hide Practice with `VITE_FEATURE_LEETCODE=0` (frontend) and a pads-only Tauri build (`--no-default-features`, omits the `leetcode` Cargo feature / RustPython).
 
 ```bash
-lc serve --lan          # daemon (prints Host / Port / 6-digit Code)
 cd app && npm install && npm run tauri dev
 # Android APK: cd app && npm run android:apk
 ```
 
-On desktop the app defaults to `http://127.0.0.1:7878` (no pairing). On a tablet, start with `--lan`, then enter **Host**, **Port**, and **Code** in the header.
+Vite-only (`npm run dev`) still needs something on 7878 — either the Tauri window, or `lc serve` on loopback. The GUI no longer has a pairing header or a Settings **Server** tab; LLM config is **Settings → LLM**. `localhost` there is this machine.
+
+`lc serve --lan` remains for the CLI/TUI. This GUI does not type Host / Port / Code.
 
 **Review** — draw, tap **Submit**. Verdict, ratings, strengths, gaps, a Socratic question, and — when wrong — a counterexample citing a real sample case.
 
@@ -142,7 +145,7 @@ board**: several approaches are usually valid, and an agent that quietly switche
 between them contradicts its own advice. A change of board that changes the
 answer is announced, with a reason.
 
-Two extras are off until you turn them on in **Settings → Agent**: a **planner**
+Two extras are off until you turn them on in **Settings → AI Behavior**: a **planner**
 (`llm.modes.planner`, point it at a frontier model) that catalogs the approach
 families a problem admits before the local agent reads your board, and a
 **drawn-diagram check** that looks at each rendered diagram and redraws it once
@@ -152,44 +155,37 @@ How the agent works: redaction, diagrams as programs rather than pictures, the
 approach commitment model, and the socket frame contract live under
 `src/llm/coach/` (HTTP routes stay `/coach/*`).
 
-Browser-over-LAN, spacedesk, and Android build details → [`app/README.md`](app/README.md).
-Android pairing and Tailscale → [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md).
+spacedesk and Android build details → [`app/README.md`](app/README.md).
+Older LAN/Tailscale pairing notes (CLI `lc serve --lan`, not this GUI) → [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md).
 
 ---
 
 ## Where the work lives
 
-Three layers. They move independently. **This branch keeps LeetCode tests on the home PC.** The tablet is a client; it never ran Python.
+Three layers. They move independently.
 
 | Layer | What | Where (this branch) | “Anywhere” means |
 | --- | --- | --- | --- |
 | **Pad UI** | Canvas, ink, footnotes | Device (`app/`) | Already on the device |
-| **Agent / LLM** | Chat HTTP | PC, via `lc serve` | The model URL must be reachable |
-| **Daemon extras** | Corpus, `solution.py`, tests, document index | PC | Same machine as Python |
+| **Agent / LLM** | Chat HTTP | Same process as the GUI daemon, then out to the model URL | The model URL must be reachable from this machine |
+| **Daemon extras** | Corpus, `solution.py`, RustPython tests, document index | Inside the GUI process (loopback axum). `lc serve` still exists for CLI/TUI | Workspaces + `problems.db` on this machine |
 
-`lc serve` **is** the daemon. Putting “the server in the app” (the stripped branch below) compiles the **LLM client + prompts** into Tauri. It does not move Python onto Android.
+The desktop GUI embeds the daemon. Tests are RustPython in-process, not a `python` executable. The stripped sibling branch below is a different product (Ask-only, no corpus).
 
 ```mermaid
 flowchart LR
-  subgraph device [Tablet_or_desktop]
+  subgraph gui [Desktop_GUI]
     UI[Pad_UI]
-    IDB[IndexedDB_pads]
-    Pack[Offline_problem_pack]
-    UI --> IDB
-    UI --> Pack
-  end
-  subgraph pc [Home_PC]
-    Daemon[lc_serve]
-    Py[Python_runner]
+    Axum[in_process_axum]
+    RP[RustPython]
     Corpus[SQLite_corpus]
     WS[lc_workspace]
-    LLM[llama_cpp_or_Groq]
-    Daemon --> Py
-    Daemon --> Corpus
-    Daemon --> WS
-    Daemon --> LLM
+    UI -->|"HTTP_WS loopback"| Axum
+    Axum --> RP
+    Axum --> Corpus
+    Axum --> WS
+    Axum -->|"chat completions"| LLM[Ollama_Groq_OpenAI]
   end
-  UI -->|"HTTP_WS token"| Daemon
 ```
 
 ### Problems vs pads vs offline pack
@@ -203,7 +199,7 @@ flowchart TD
   subgraph problems [Problems]
     Online[Online_loadProblem]
     Offline[Offline_pack_IndexedDB]
-    Online --> Workspace[PC_lc-workspace]
+    Online --> Workspace[lc-workspace]
     Offline --> ReadOnly[Read_statement_and_draw]
     Workspace --> Tests[Run_tests]
   end
@@ -211,42 +207,37 @@ flowchart TD
 
 | Surface | Offline | Sync |
 | --- | --- | --- |
-| **Whiteboard / annotate** | Full. Working copy is IndexedDB on the device. | Dual-write to `lc serve` (`pads.db` + `pad-blobs/`). Tombstone hides a pad on every paired device; snapshots and PDF bytes stay on the PC. Pairing tokens stay per device. Sidecar `.lc-ink.json` is backup, not the sync path. |
-| **Problems (online)** | Autosave parks the board in IndexedDB when the daemon is down. | Desktop, browser, and Android that pair to the **same** `lc serve` share `~/lc-workspace`. On reconnect, Personalise `offlineMerge` (ask / prefer-local / prefer-server) decides which board wins. |
-| **Problems (offline pack)** | Settings can download statements (~100–250 MB). Browse and open a local board. **No** tests, **no** coach until `lc serve` is back. | Same merge pref as above once the daemon is reachable. |
+| **Whiteboard / annotate** | Full. Working copy is IndexedDB on the device. | Dual-write to the daemon (`pads.db` + `pad-blobs/`). Tombstone hides a pad on every device that shares that daemon; snapshots and PDF bytes stay with it. Sidecar `.lc-ink.json` is backup, not the sync path. |
+| **Problems (online)** | Autosave parks the board in IndexedDB when the daemon is down. | Same machine as the GUI daemon shares `~/lc-workspace`. On reconnect, Personalise `offlineMerge` (ask / prefer-local / prefer-server) decides which board wins. |
+| **Problems (offline pack)** | Settings can download statements (~100–250 MB). Browse and open a local board. Tests and coach need the in-process daemon (and a configured LLM for coach). | Same merge pref as above once the daemon is up. |
 
-Tests always call `python run_tests.py` on the PC (`src/workspace/runner.rs`). Coach Review (perceive → claim → verdict) always runs inside `lc serve`.
+Tests run in-process via RustPython (`src/workspace/runner.rs`). Coach Review (perceive → claim → verdict) always runs inside the daemon.
 
-### Pad library vs pairing vs sidecar
+### Pad library vs sidecar
 
-The tablet IndexedDB is the working copy. `lc serve` is a redundant historical copy: a missing or corrupt local row must not delete the PC copy. Delete is hold-to-confirm and only tombstones the live list; restore from archive or from the 2h / 24h / 7d snapshots.
+The device IndexedDB is the working copy. The daemon’s `pads.db` is a redundant historical copy: a missing or corrupt local row must not delete the on-disk copy. Delete is hold-to-confirm and only tombstones the live list; restore from archive or from the 2h / 24h / 7d snapshots.
 
-Personalise (handedness, theme, capture folder, …) is a **per-device** blob on the daemon. The first desktop session with no record clones the tablet (or any existing) blob once, then each device writes its own.
+Personalise (handedness, theme, capture folder, …) is a **per-device** blob on the daemon.
 
-Pairing (`localStorage` `whiteboard.pairing`) is how *this* device authenticates. Do not copy tokens between devices.
-
-Tailscale steps stay in [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md) — install on PC and tablet, pair to the `100.x` IP, port 7878. No installer ships in this repo.
+The GUI freezes pairing to `http://127.0.0.1:7878` with no token. It ignores leftover `localStorage` LAN pairs.
 
 ### Desktop, browser, Android
 
-Same React client. Pairing is `baseUrl` + token (`app/src/api/pairing.ts`). Desktop defaults to `http://127.0.0.1:7878`. LAN or Tailscale: `http://<pc>:7878` plus the 6-digit code.
+Same React client. Desktop Tauri embeds the daemon on loopback. The APK starts that same loopback daemon; APK size / NDK packaging is a later pass. Vite-in-the-browser is not Tauri, so it still needs a process on 7878.
 
-Android’s Tauri crate is a cleartext HTTP proxy, not an agent. The APK on this branch does not embed `lc serve`.
+To drive the *desktop* window from a tablet without pairing, use **spacedesk** (pixels only). LAN pairing UI was removed from this GUI.
 
-Cafe / campus: install Tailscale, pair to the PC’s `100.x` IP, port 7878. Encrypted mesh, no port-forward. Still tethered to the home Python and corpus — you are just off home Wi‑Fi.
+### Fully untethered LeetCode (remaining gaps)
 
-### Fully untethered LeetCode (not this branch)
+The judge is already in the binary (RustPython). What is not done:
 
-You can move one layer without the others. Doing **all** of them is a different product.
-
-1. **LLM only** — Groq/OpenAI, or Tailscale to home llama.cpp. Main still needs `lc serve` for tests and the corpus.
-2. **On-device Python** — Termux / a sidecar, not a typical Play-store APK. Fragile.
-3. **Remote runner** — a VPS or microVM runs `run_tests.py`. That costs money. The free judge is the home PC.
-4. **True offline LeetCode** — bundle the corpus and skip tests, or ship a runtime.
+1. **LLM** — Groq/OpenAI, or a local llama.cpp URL this machine can reach.
+2. **Corpus on device** — index + workspaces are still files on this machine; the offline pack is statements only.
+3. **APK size** — embedding the daemon + VM is a later packaging pass.
 
 ### Stripped branch (whiteboard + documents)
 
-[`claude/strip-harness-ask-tauri-jeebbu`](https://github.com/amittenak47/lc-gui-tui/tree/claude/strip-harness-ask-tauri-jeebbu) is a **sibling product**, not a merge. No corpus, no Python runner, no problem browser.
+[`claude/strip-harness-ask-tauri-jeebbu`](https://github.com/amittenak47/lc-gui-tui/tree/claude/strip-harness-ask-tauri-jeebbu) is a **sibling product**, not a merge. No corpus, no RustPython runner, no problem browser. This tree gates Practice with `VITE_FEATURE_LEETCODE` + Cargo `leetcode` instead of forking.
 
 Tauri depends on the crate with `default-features = false`: **agent in the APK**, no axum. Ask talks to `llm.local.base_url` from the device (Tailscale llama.cpp, or Groq). Browser builds still have no Tauri, so they still need a small daemon for Ask.
 
@@ -265,9 +256,9 @@ Do not merge the two products. Main stays the harness.
 | `whiteboard datasets [--inspect]` | Problem sets and indexed counts; `--inspect` reports corpus columns |
 | `whiteboard search` / `whiteboard random` | Filter or pick (`--dataset`, `--difficulty`, `--tag`, `-q`, `--sort`) |
 | `whiteboard load <id> [--open] [--force]` | Generate a workspace; id = slug, question #, or prefix |
-| `whiteboard test [id] [--case N] [--full] [-v]` | Run Python tests — exits `0` when every case passes |
+| `whiteboard test [id] [--case N] [--full] [-v]` | Run tests via RustPython — exits `0` when every case passes |
 | `whiteboard ask [id] [--case N] [--provider local\|groq]` | LLM debugging help |
-| `lc serve [--port N] [--lan]` | Daemon for the whiteboard client |
+| `lc serve [--port N] [--lan]` | Standalone daemon (CLI/TUI; GUI embeds its own on loopback) |
 | `whiteboard stats` · `whiteboard session reset` · `whiteboard list …` | Progress, session, named lists |
 | `whiteboard config set/get/show/path` | Manage `config.toml` |
 
@@ -299,7 +290,7 @@ Adapters: [`src/datasets/`](src/datasets/). After adapter changes: `whiteboard i
 
 - Desktop scrolling page indicator
 - Chat improvements
-- Optional corpus bundle / hosted dataset (see [Where the work lives](#where-the-work-lives) — LeetCode tests stay on the home PC on this branch)
+- Optional corpus bundle / hosted dataset (see [Where the work lives](#where-the-work-lives))
 
 ---
 

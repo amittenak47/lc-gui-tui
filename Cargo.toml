@@ -2,12 +2,19 @@
 name = "whiteboard"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.93"
 description = "LeetCode practice harness: index a local JSON corpus, materialize Python workspaces, run tests, ask an LLM tutor"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [[bin]]
 name = "lc"
 path = "src/main.rs"
+
+[features]
+default = ["leetcode"]
+# Practice corpus, RustPython judge, /workspace/:id/test. Pads-only Tauri
+# builds omit this so the APK does not link the VM.
+leetcode = ["dep:rustpython", "dep:malachite-bigint"]
 
 [dependencies]
 anyhow = "1"
@@ -32,7 +39,14 @@ tower-http = { version = "0.5", features = ["cors"] }
 futures-util = "0.3"
 base64 = "0.22"
 qrcode = { version = "0.14", default-features = false }
+# rustpython-stdlib 0.5 pins malachite-bigint ^0.9; pymath 0.2 pulls ^0 which
+# otherwise resolves to 0.10 and the stdlib crate will not compile.
+malachite-bigint = { version = "=0.9.2", optional = true }
+rustpython = { version = "0.5.0", optional = true, default-features = false, features = ["stdlib", "freeze-stdlib", "importlib", "stdio", "host_env", "threading"] }
 
 [profile.release]
 lto = true
 strip = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

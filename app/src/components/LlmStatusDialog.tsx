@@ -1,5 +1,5 @@
 /**
- * LLM unreachable while the local server is up — Settings → Server, or continue
+ * LLM unreachable while the in-process daemon is up — Settings → LLM, or continue
  * without coach.
  */
 
@@ -56,7 +56,7 @@ export function LlmStatusDialog({
             className="lc-hold-choice"
             onConfirm={onOpenSettings}
           >
-            Settings → Server
+            Settings → LLM
           </HoldButton>
           <HoldButton
             label="Continue without LLM"

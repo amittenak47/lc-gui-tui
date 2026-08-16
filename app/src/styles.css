@@ -3398,6 +3398,85 @@ input[type="checkbox"] {
   touch-action: none;
 }
 
+.lc-home-chooser {
+  width: min(720px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 28px;
+  padding: 8px 0 24px;
+}
+
+.lc-home-chooser-head {
+  text-align: center;
+}
+
+.lc-home-chooser-title {
+  margin: 0 0 8px;
+  font-size: clamp(1.5rem, 4vw, 2rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.lc-home-chooser-lead {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.lc-home-chooser-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.lc-home-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 148px;
+  padding: 20px 22px;
+  border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--paper) 92%, var(--ink) 8%);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.lc-home-card:active {
+  transform: scale(0.985);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--paper) 86%, var(--accent) 14%);
+}
+
+.lc-home-card-kicker {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ink) 55%, transparent);
+}
+
+.lc-home-card-title {
+  font-size: 1.35rem;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.lc-home-card-blurb {
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--ink) 68%, transparent);
+}
+
 .lc-spinner {
   width: 32px;
   height: 32px;

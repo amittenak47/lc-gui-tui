@@ -137,7 +137,6 @@ export interface LcConfig {
   /** Per-dataset corpus folder overrides, keyed by dataset slug. */
   dataset_dirs: Record<string, string>;
   workspace_dir: string;
-  python_executable: string;
   /** Settings → Tests: stop at the first failing case instead of running all. */
   stop_on_first_failure: boolean;
   default_provider: string;
