@@ -294,13 +294,14 @@ impl LlmConfig {
     }
 }
 
-/// Settings for `lc serve`, the daemon the whiteboard client talks to.
+/// Harness HTTP settings (port/token retained for a possible future `lc sync` hub).
+/// The old `lc serve --lan` pairing daemon is gone — desktop and APK embed the router.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServeConfig {
     pub port: u16,
-    /// Pairing token required by `--lan`. Generated on first `--lan` start and
-    /// shown as a QR code for the tablet to scan.
+    /// Pairing token for a future LAN sync hub. Unused by the in-process GUI.
+    /// Generated on first use and shown as a QR code when that mode ships.
     pub token: Option<String>,
     /// Optional SearXNG JSON endpoint for the document Ask `search_web` tool.
     /// Empty = the tool is not offered.
@@ -683,8 +684,8 @@ impl Config {
             .filter(|dir| !dir.is_empty())
     }
 
-    /// Pairing token for `lc serve --lan`, generated and persisted on first use
-    /// so the tablet only ever has to scan one QR code.
+    /// Pairing token for a future LAN sync hub, generated and persisted on first use
+    /// so a tablet only ever has to scan one QR code when that mode ships.
     pub fn ensure_serve_token(&mut self) -> Result<String> {
         if let Some(token) = self.serve.token.as_deref().filter(|t| !t.trim().is_empty()) {
             return Ok(token.to_string());

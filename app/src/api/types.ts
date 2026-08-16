@@ -1,5 +1,5 @@
 /**
- * Wire types for the `lc serve` daemon.
+ * Wire types for the in-process harness router.
  *
  * These mirror the DTOs in `src/serve/routes.rs` and the coach types in
  * `src/llm/coach.rs`. When one side changes, change both — the daemon is the

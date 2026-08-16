@@ -1,30 +1,23 @@
-//! Rust-side client for the `lc serve` daemon.
+//! In-process API for the embedded harness router and coach event bridge.
 //!
-//! The WebView normally reaches the daemon with plain `fetch`, and on desktop
-//! that is all that is needed. This module exists for the Android case: an
-//! Android 14 WebView refuses cleartext HTTP unless the app ships a
-//! `network_security_config.xml` permitting the LAN subnet. Proxying through
-//! Rust sidesteps that entirely — `reqwest` is not subject to the WebView's
-//! policy — so if the tablet blocks the direct call, the front end can route
-//! the same requests through {@link lc_request} without any other change.
-//!
-//! It is a transparent proxy on purpose: no request shaping, no caching, and no
-//! knowledge of the coach protocol. The daemon stays the only place that
-//! understands `lc`.
+//! HTTP routes are dispatched through axum without binding a port. The ambient
+//! coach uses Tauri events instead of a loopback WebSocket.
 
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::sync::Mutex;
+
 use base64::Engine;
+use harness::serve::{self, Shared};
+use harness::serve::ws;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, State};
+use tokio::sync::mpsc;
 
-/// One proxied request. `path` is daemon-relative, e.g. `/coach/review`.
+/// One in-process HTTP request. `path` is router-relative, e.g. `/coach/review`.
 #[derive(Debug, Deserialize)]
-pub struct LcRequest {
-    pub base_url: String,
+pub struct LcDispatchRequest {
     pub path: String,
     #[serde(default = "default_method")]
     pub method: String,
-    #[serde(default)]
-    pub token: Option<String>,
     #[serde(default)]
     pub body: Option<serde_json::Value>,
     /// Raw body as base64, used for `/docs/:hash/bytes` (not JSON).
@@ -39,89 +32,142 @@ fn default_method() -> String {
 #[derive(Debug, Serialize)]
 pub struct LcResponse {
     pub status: u16,
-    /// Parsed JSON when the daemon returned any, otherwise null.
+    /// Parsed JSON when the handler returned any, otherwise null.
     pub body: serde_json::Value,
 }
 
-/// The coach's review call can take a while on a local model; the daemon's own
-/// LLM timeout is 180s, so stay above it rather than cutting it short here.
-const TIMEOUT: Duration = Duration::from_secs(200);
-/// Fail fast when the host is down / blackholed — do not wait for the full
-/// request timeout just to discover TCP will never connect.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-
 #[tauri::command]
-pub async fn lc_request(request: LcRequest) -> Result<LcResponse, String> {
-    let client = reqwest::Client::builder()
-        .timeout(TIMEOUT)
-        .connect_timeout(CONNECT_TIMEOUT)
-        .build()
-        .map_err(|err| format!("cannot build an HTTP client: {err}"))?;
+pub async fn lc_dispatch(
+    state: State<'_, Shared>,
+    request: LcDispatchRequest,
+) -> Result<LcResponse, String> {
+    let path = if request.path.starts_with('/') {
+        request.path
+    } else {
+        format!("/{}", request.path)
+    };
 
-    let url = format!(
-        "{}{}",
-        request.base_url.trim_end_matches('/'),
-        if request.path.starts_with('/') {
-            request.path.clone()
-        } else {
-            format!("/{}", request.path)
-        }
-    );
-    let method = reqwest::Method::from_bytes(request.method.as_bytes())
-        .map_err(|_| format!("unsupported HTTP method {:?}", request.method))?;
-
-    let mut builder = client.request(method, &url);
-    if let Some(token) = &request.token {
-        builder = builder.header("X-LC-Token", token);
-    }
-    if let Some(raw) = &request.raw_base64 {
+    let (body_bytes, content_type) = if let Some(raw) = &request.raw_base64 {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(raw.trim())
             .map_err(|err| format!("invalid raw_base64: {err}"))?;
-        builder = builder
-            .header("Content-Type", "application/octet-stream")
-            .body(bytes);
+        (bytes, Some("application/octet-stream".to_string()))
     } else if let Some(body) = &request.body {
-        builder = builder.json(body);
-    }
-
-    let response = builder.send().await.map_err(|err| {
-        if err.is_connect() || err.is_timeout() {
-            format!("cannot reach lc serve at {url} — is the daemon running, and are you on the same network?")
-        } else {
-            format!("request to {url} failed: {err}")
-        }
-    })?;
-
-    let status = response.status().as_u16();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|err| format!("cannot read the response from {url}: {err}"))?;
-    let body = if content_type.contains("octet-stream") {
-        serde_json::json!({
-            "$bytes": base64::engine::general_purpose::STANDARD.encode(&bytes)
-        })
+        (
+            serde_json::to_vec(body).map_err(|err| format!("cannot encode JSON body: {err}"))?,
+            Some("application/json".to_string()),
+        )
     } else {
-        let text = String::from_utf8_lossy(&bytes);
-        if text.trim().is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text.into_owned()))
-        }
+        (Vec::new(), None)
     };
 
+    let (status, bytes, response_ct) = serve::dispatch(
+        state.inner().clone(),
+        &request.method,
+        &path,
+        body_bytes,
+        content_type.as_deref(),
+    )
+    .await
+    .map_err(|err| format!("in-process dispatch failed: {err:#}"))?;
+
+    let body = response_body(bytes, &response_ct);
     Ok(LcResponse { status, body })
 }
 
-const PAGE_TIMEOUT: Duration = Duration::from_secs(20);
-const PAGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+fn response_body(bytes: Vec<u8>, content_type: &str) -> serde_json::Value {
+    if content_type.contains("octet-stream") {
+        return serde_json::json!({
+            "$bytes": base64::engine::general_purpose::STANDARD.encode(&bytes)
+        });
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    if text.trim().is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text.into_owned()))
+    }
+}
+
+struct CoachSession {
+    incoming: mpsc::UnboundedSender<String>,
+    tasks: Vec<tauri::async_runtime::JoinHandle<()>>,
+}
+
+pub struct CoachHub {
+    inner: Mutex<Option<CoachSession>>,
+}
+
+impl CoachHub {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(None),
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn lc_coach_connect(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    hub: State<'_, CoachHub>,
+) -> Result<(), String> {
+    lc_coach_disconnect_inner(&hub)?;
+
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+
+    let app_emit = app.clone();
+    let emit_task = tauri::async_runtime::spawn(async move {
+        while let Some(frame) = outgoing_rx.recv().await {
+            if let Ok(json) = serde_json::to_string(&frame) {
+                let _ = app_emit.emit("lc-coach-frame", json);
+            }
+        }
+    });
+
+    let serve_state = state.inner().clone();
+    let drive_task = tauri::async_runtime::spawn(async move {
+        ws::drive_channels(serve_state, incoming_rx, outgoing_tx).await;
+    });
+
+    *hub.inner.lock().map_err(|_| "coach hub lock poisoned")? = Some(CoachSession {
+        incoming: incoming_tx,
+        tasks: vec![emit_task, drive_task],
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn lc_coach_send(hub: State<'_, CoachHub>, frame: String) -> Result<(), String> {
+    let guard = hub.inner.lock().map_err(|_| "coach hub lock poisoned")?;
+    let Some(session) = guard.as_ref() else {
+        return Err("coach is not connected".into());
+    };
+    session
+        .incoming
+        .send(frame)
+        .map_err(|_| "coach disconnected".into())
+}
+
+#[tauri::command]
+pub async fn lc_coach_disconnect(hub: State<'_, CoachHub>) -> Result<(), String> {
+    lc_coach_disconnect_inner(&hub)
+}
+
+fn lc_coach_disconnect_inner(hub: &CoachHub) -> Result<(), String> {
+    let mut guard = hub.inner.lock().map_err(|_| "coach hub lock poisoned")?;
+    if let Some(session) = guard.take() {
+        drop(session.incoming);
+        for task in session.tasks {
+            task.abort();
+        }
+    }
+    Ok(())
+}
+
+const PAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+const PAGE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 const PAGE_MAX_BYTES: usize = 8_000_000;
 
 #[derive(Debug, Serialize)]
@@ -179,27 +225,19 @@ mod tests {
 
     #[test]
     fn method_defaults_to_get_and_paths_are_normalized() {
-        let request: LcRequest = serde_json::from_str(
-            r#"{"base_url": "http://host:7878/", "path": "problems"}"#,
-        )
-        .unwrap();
+        let request: LcDispatchRequest = serde_json::from_str(r#"{"path": "problems"}"#).unwrap();
         assert_eq!(request.method, "GET");
-        assert!(request.token.is_none());
-        assert_eq!(
-            format!("{}/{}", request.base_url.trim_end_matches('/'), request.path),
-            "http://host:7878/problems"
-        );
+        assert_eq!(request.path, "problems");
     }
 
     #[test]
-    fn a_body_and_token_round_trip() {
-        let request: LcRequest = serde_json::from_str(
-            r#"{"base_url": "http://h", "path": "/coach/review", "method": "POST",
-                "token": "t", "body": {"task_id": "two-sum"}}"#,
+    fn a_body_round_trips() {
+        let request: LcDispatchRequest = serde_json::from_str(
+            r#"{"path": "/coach/review", "method": "POST",
+                "body": {"task_id": "two-sum"}}"#,
         )
         .unwrap();
         assert_eq!(request.method, "POST");
-        assert_eq!(request.token.as_deref(), Some("t"));
         assert_eq!(request.body.unwrap()["task_id"], "two-sum");
     }
 }

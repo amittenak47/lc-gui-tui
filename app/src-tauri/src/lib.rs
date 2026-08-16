@@ -1,10 +1,12 @@
 //! The Tauri shell. One binary builds as a desktop window and as the Android
-//! app; the plan's "desktop first" step is the same code pointed at localhost.
+//! app; the harness router runs in-process — no loopback TCP server.
 
 pub mod capture_save;
 pub mod colorhunt;
 pub mod lc_client;
 pub mod web_capture;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -15,23 +17,24 @@ pub fn run() {
         // their logins, and would put the search result inside the annotation
         // surface it is supposed to be a detour from.
         .plugin(tauri_plugin_opener::init())
-        .setup(|_app| {
-            tauri::async_runtime::spawn(async {
-                match harness::config::Config::load() {
-                    Ok(cfg) => {
-                        if let Err(err) = harness::serve::run_loopback(cfg).await {
-                            eprintln!("embedded lc serve failed: {err:#}");
-                        }
-                    }
-                    Err(err) => {
-                        eprintln!("cannot load config for embedded lc serve: {err:#}");
-                    }
+        .setup(|app| {
+            match harness::config::Config::load() {
+                Ok(cfg) => {
+                    let state = harness::serve::new_state(cfg);
+                    app.manage(state);
+                    app.manage(lc_client::CoachHub::new());
                 }
-            });
+                Err(err) => {
+                    eprintln!("cannot load config for embedded router: {err:#}");
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-        lc_client::lc_request,
+        lc_client::lc_dispatch,
+        lc_client::lc_coach_connect,
+        lc_client::lc_coach_send,
+        lc_client::lc_coach_disconnect,
         lc_client::fetch_html,
         web_capture::webview_eval_json,
         colorhunt::colorhunt_random,

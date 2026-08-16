@@ -446,9 +446,6 @@ export interface AgentSidePanelProps {
   onSend: (text: string, flags: AgentSendFlags, mode?: "queue" | "merge") => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
-  /** Forward a failed test run to the coach without being asked. */
-  forwardFailures?: boolean;
-  onForwardFailuresChange?: (on: boolean) => void;
   /** Opens the hold-to-reveal dialog for the review on this message. */
   onRequestBridge?: (messageId: string) => void;
   /** Expand/collapse a message's drawing section (and sync the board). */
@@ -488,8 +485,6 @@ export function AgentSidePanel({
   onToggleAttached,
   onSend,
   onThreadChange,
-  forwardFailures = false,
-  onForwardFailuresChange,
   onRequestBridge,
   onToggleDrawing,
   onDrawingFrame,
@@ -517,6 +512,20 @@ export function AgentSidePanel({
   const [draw, setDraw] = useState(false);
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
+  const cycleBoard = useCallback(() => {
+    if (draw) {
+      setDraw(false);
+      setReviewBoard(true);
+    } else if (reviewBoard) {
+      setReviewBoard(false);
+      setLazy(true);
+    } else if (lazy) {
+      setLazy(false);
+    } else {
+      setDraw(true);
+    }
+  }, [draw, reviewBoard, lazy]);
+  const boardLabel = draw ? "Draw" : reviewBoard ? "Review" : lazy ? "Lazy" : "Board";
   const [handwriting, setHandwriting] = useState(false);
   const [annotations, setAnnotations] = useState(false);
   const [askPreset, setAskPreset] = useState<AskPresetId | null>(null);
@@ -528,8 +537,6 @@ export function AgentSidePanel({
     left: number;
     maxHeight: number;
   } | null>(null);
-  const [pipelineOpen, setPipelineOpen] = useState(false);
-  const pipelineWrapRef = useRef<HTMLSpanElement | null>(null);
   const attachedCount = attachedMarks?.length ?? 0;
   const canPickMarks = annotationChoices.length > 0;
   /**
@@ -823,7 +830,6 @@ export function AgentSidePanel({
     setDraw(false);
     setReviewBoard(false);
     setLazy(false);
-    setPipelineOpen(false);
     if (!padSurface) setHandwriting(false);
   }, [askOnly, padSurface]);
 
@@ -844,19 +850,17 @@ export function AgentSidePanel({
   }, [allowAnnotations, attachedCount]);
 
   useEffect(() => {
-    if (!pickMarksOpen && !pipelineOpen) return;
+    if (!pickMarksOpen) return;
     const close = (event: globalThis.PointerEvent) => {
       const node = event.target;
       if (!(node instanceof Node)) return;
       if (pickMarksWrapRef.current?.contains(node)) return;
       if (pickMarksMenuRef.current?.contains(node)) return;
-      if (pipelineWrapRef.current?.contains(node)) return;
       setPickMarksOpen(false);
-      setPipelineOpen(false);
     };
     document.addEventListener("pointerdown", close, true);
     return () => document.removeEventListener("pointerdown", close, true);
-  }, [pickMarksOpen, pipelineOpen]);
+  }, [pickMarksOpen]);
 
   useLayoutEffect(() => {
     if (!pickMarksOpen || !canPickMarks) {
@@ -1792,19 +1796,6 @@ export function AgentSidePanel({
                 socket + 120s loop are already wired in App / coachSocket. */}
             {!padSurface && (
             <div className="lc-modes" role="group" aria-label="Agent mode">
-              {onForwardFailuresChange && (
-                <Tip tip="Send failed test runs to the agent automatically" placement="right">
-                  <button
-                    type="button"
-                    className={forwardFailures ? "lc-mode lc-mode-active" : "lc-mode"}
-                    aria-pressed={forwardFailures}
-                    disabled={busy}
-                    onClick={() => onForwardFailuresChange(!forwardFailures)}
-                  >
-                    Failures
-                  </button>
-                </Tip>
-              )}
               <Tip tip="Analyze on send" placement="right">
                 <button
                   type="button"
@@ -1842,12 +1833,6 @@ export function AgentSidePanel({
             </div>
             )}
             <div className="lc-agent-composer-mid">
-              {/*
-                Handwriting survives on a pad where the pipeline flags do not: a
-                reading pad has exactly the thing this attaches — a board with
-                the writer's marks on the page. It is the natural partner to Ask
-                there, so it stays live rather than inheriting askOnly's grey.
-              */}
               <Tip
                 tip={
                   annotateUnavailable
@@ -1865,14 +1850,9 @@ export function AgentSidePanel({
                   disabled={busy || annotateUnavailable}
                   onClick={() => setHandwriting((current) => !current)}
                 >
-                  Handwriting
+                  Whiteboard
                 </button>
               </Tip>
-              {/*
-                Annotations is the narrow one: the marks attached to this
-                message, or the region in front of you. Armed by attaching, so
-                the chips above the composer and this flag say the same thing.
-              */}
               {allowAnnotations && (
               <span className="lc-agent-annotate-wrap" ref={pickMarksWrapRef}>
                   <HoldButton
@@ -1883,20 +1863,17 @@ export function AgentSidePanel({
                     pressed={annotations}
                     disabled={busy || annotationsUnavailable}
                     resetKey={pickMarksOpen}
-                    onTap={() => {
-                      setPickMarksOpen(false);
-                      setPipelineOpen(false);
-                      setAnnotations((current) => !current);
-                    }}
                     onConfirm={() => {
-                      if (!canPickMarks) return;
-                      setPipelineOpen(false);
+                      if (!canPickMarks) {
+                        setAnnotations((current) => !current);
+                        return;
+                      }
                       setPickMarksOpen(true);
                     }}
                     ariaLabel={
                       canPickMarks
-                        ? "Annotations: tap to toggle, hold to pick a mark"
-                        : "Annotations"
+                        ? "Annotations: hold to pick a mark"
+                        : "Annotations: hold to attach"
                     }
                   >
                     Annotations
@@ -1906,62 +1883,18 @@ export function AgentSidePanel({
             </div>
             <div className="lc-agent-composer-actions">
               {!padSurface && (
-                <span className="lc-agent-pipeline-wrap" ref={pipelineWrapRef}>
-                  <button
-                    type="button"
-                    className={`lc-flag lc-agent-pipeline${
-                      draw || reviewBoard || lazy ? " lc-flag-active" : ""
-                    }${flagUnavailable}`}
-                    aria-pressed={draw || reviewBoard || lazy}
-                    aria-expanded={pipelineOpen}
-                    aria-haspopup="menu"
-                    aria-label="Draw, Review, and Lazy"
-                    disabled={busy || askOnly}
-                    onClick={() => {
-                      setPickMarksOpen(false);
-                      setPipelineOpen((open) => !open);
-                    }}
-                  >
-                    Board
-                  </button>
-                  {pipelineOpen && (
-                    <div className="lc-agent-scope-menu lc-agent-pipeline-menu" role="menu">
-                      <button
-                        type="button"
-                        role="menuitemcheckbox"
-                        aria-checked={draw}
-                        className={`lc-flag${draw ? " lc-flag-active" : ""}${flagUnavailable}`}
-                        disabled={busy || askOnly}
-                        onClick={() => setDraw((current) => !current)}
-                      >
-                        Draw
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitemcheckbox"
-                        aria-checked={reviewBoard}
-                        className={`lc-flag${reviewBoard ? " lc-flag-active" : ""}${flagUnavailable}`}
-                        disabled={busy || askOnly || photos.length > 0}
-                        title={
-                          photos.length > 0 ? REVIEW_DROPS_PHOTOS : undefined
-                        }
-                        onClick={() => setReviewBoard((current) => !current)}
-                      >
-                        Review
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitemcheckbox"
-                        aria-checked={lazy}
-                        className={`lc-flag${lazy ? " lc-flag-active" : ""}${flagUnavailable}`}
-                        disabled={busy || askOnly}
-                        onClick={() => setLazy((current) => !current)}
-                      >
-                        Lazy
-                      </button>
-                    </div>
-                  )}
-                </span>
+                <HoldButton
+                  label={boardLabel}
+                  className={`lc-flag lc-agent-pipeline${
+                    draw || reviewBoard || lazy ? " lc-flag-active" : ""
+                  }${flagUnavailable}`}
+                  pressed={draw || reviewBoard || lazy}
+                  disabled={busy || askOnly}
+                  onConfirm={cycleBoard}
+                  ariaLabel="Board: hold to cycle Draw, Review, Lazy"
+                >
+                  {boardLabel}
+                </HoldButton>
               )}
               <Tip
                 tip={
@@ -2005,7 +1938,7 @@ export function AgentSidePanel({
                       .finally(() => setPicking(false));
                   }}
                 >
-                  + Photo
+                  +
                 </button>
               </Tip>
               <button type="submit" disabled={!canSend}>

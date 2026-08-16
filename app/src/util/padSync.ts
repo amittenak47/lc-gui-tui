@@ -1,6 +1,6 @@
 /**
- * Dual-write pads to `lc serve`. IndexedDB stays the working copy; the daemon
- * is a historical copy. A pull never deletes local snapshots or bytes just
+ * Dual-write pads to the harness. IndexedDB stays the working copy; the server
+ * copy is historical. A pull never deletes local snapshots or bytes just
  * because the server omitted a row.
  */
 

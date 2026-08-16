@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Android 9+ blocks cleartext HTTP by default, and `lc serve` in LAN mode speaks plain
-  HTTP on the local network.
+  Android 9+ blocks cleartext HTTP by default.
+
+  The harness router is in-process (lc_dispatch) — this overlay is not for LAN
+  daemon pairing. It allows the WebView to fetch cleartext http:// pages in
+  Annotate mode (external document URLs).
 
   NOTE: <domain> entries only match hostnames — CIDR strings like 192.168.0.0/16 are
-  silently ignored. That is why Chrome on the tablet could open /health while the
-  WebView fetch for /pair failed until this was fixed.
+  silently ignored.
 
-  The APK also proxies HTTP through Rust (lc_request) as a second line of defence.
+  The APK also fetches http(s) pages from Rust (`fetch_html`) for Annotate.
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true" />

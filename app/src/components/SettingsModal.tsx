@@ -1,5 +1,5 @@
 /**
- * Settings modal — edits the shared `config.toml` via `lc serve`.
+ * Settings modal — edits the shared `config.toml` via the in-process router.
  * Backdrop blurs the board the same way problem-load transitions do.
  */
 
@@ -12,7 +12,7 @@ import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { shouldDismissBackdrop } from "../util/backdropDismiss";
 import { HoldButton } from "./HoldButton";
 import { MorphBar } from "./MorphBar";
-import { loadForwardFailures, saveForwardFailures } from "../util/agentPrefs";
+import { loadTestForwardMode, saveTestForwardMode, type TestForwardMode } from "../util/agentPrefs";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkToolPresets, saveInkToolPresets } from "../util/inkToolPresets";
 import {
@@ -285,7 +285,7 @@ interface DevicePrefs {
    * test run minutes later, and it does not apply to the reading pads at all.
    * It belongs with the rest of the failure decision, under When a case fails.
    */
-  forwardFailures: boolean;
+  testForward: TestForwardMode;
   captureMode: CaptureMode;
   captureDestination: CaptureDestination;
   captureFolder: string;
@@ -318,7 +318,7 @@ interface DevicePrefs {
 function loadDevicePrefs(): DevicePrefs {
   return {
     handedness: loadInkHandedness(),
-    forwardFailures: loadForwardFailures(),
+    testForward: loadTestForwardMode(),
     captureMode: loadCaptureMode(),
     captureDestination: loadCaptureDestination(),
     captureFolder: loadCaptureFolder(),
@@ -343,7 +343,7 @@ function loadDevicePrefs(): DevicePrefs {
 function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
   return (
     a.handedness === b.handedness &&
-    a.forwardFailures === b.forwardFailures &&
+    a.testForward === b.testForward &&
     a.captureMode === b.captureMode &&
     a.captureDestination === b.captureDestination &&
     a.captureFolder === b.captureFolder &&
@@ -424,8 +424,8 @@ export function SettingsModal({
   const [chromeWakeTint, setChromeWakeTint] = useState<ChromeWakeTint>(() =>
     loadChromeWakeTint(),
   );
-  const [forwardFailures, setForwardFailures] = useState<boolean>(() =>
-    loadForwardFailures(),
+  const [testForward, setTestForward] = useState<TestForwardMode>(() =>
+    loadTestForwardMode(),
   );
   const [captureMode, setCaptureMode] = useState<CaptureMode>(() => loadCaptureMode());
   const [captureDestination, setCaptureDestination] = useState<CaptureDestination>(() =>
@@ -550,7 +550,7 @@ export function SettingsModal({
     setBusy("loading…");
     const prefs = loadDevicePrefs();
     setHandedness(prefs.handedness);
-    setForwardFailures(prefs.forwardFailures);
+    setTestForward(prefs.testForward);
     setCaptureMode(prefs.captureMode);
     setCaptureDestination(prefs.captureDestination);
     setCaptureFolder(prefs.captureFolder);
@@ -628,7 +628,7 @@ export function SettingsModal({
 
   const draftPrefs: DevicePrefs = {
     handedness,
-    forwardFailures,
+    testForward,
     captureMode,
     captureDestination,
     captureFolder,
@@ -677,7 +677,7 @@ export function SettingsModal({
       // Device prefs never need the daemon — persist them even if PUT /config fails.
       if (prefsDirty) {
         saveInkHandedness(handedness);
-        saveForwardFailures(forwardFailures);
+        saveTestForwardMode(testForward);
         saveCaptureMode(captureMode);
         saveCaptureDestination(captureDestination);
         saveCaptureFolder(captureFolder);
@@ -705,8 +705,8 @@ export function SettingsModal({
           new CustomEvent<InkHandedness>("lc-ink-handedness", { detail: handedness }),
         );
         window.dispatchEvent(
-          new CustomEvent<boolean>("lc-agent-forward-failures", {
-            detail: forwardFailures,
+          new CustomEvent<TestForwardMode>("lc-agent-test-forward", {
+            detail: testForward,
           }),
         );
         window.dispatchEvent(new CustomEvent("lc-ink-pressure-clip"));
@@ -832,7 +832,7 @@ export function SettingsModal({
             <div className="lc-settings-fields">
               <SettingsFold id="paths" title="Paths">
               <label>
-                <span>Problems folder</span>
+                <span>Problem set</span>
                 <input
                   value={draft.data_json_dir ?? ""}
                   onChange={(e) =>
@@ -844,17 +844,17 @@ export function SettingsModal({
                   placeholder="path to JSON corpus"
                 />
                 <p className="lc-settings-hint">
-                  Folder of problem JSON files — the same corpus the TUI indexes.
+                  JSON corpus this machine indexes. Local files, not a sync hub.
                 </p>
               </label>
               <label>
-                <span>Workspace dir</span>
+                <span>IDE workspace</span>
                 <input
                   value={draft.workspace_dir}
                   onChange={(e) => setDraft((prev) => ({ ...prev, workspace_dir: e.target.value }))}
                 />
                 <p className="lc-settings-hint">
-                  Where generated solve folders go (~/lc-workspace/&lt;task&gt;).
+                  Working copy on this machine: <code>solution.py</code>, Open in IDE, board.json.
                 </p>
               </label>
               </SettingsFold>
@@ -911,7 +911,7 @@ export function SettingsModal({
               </p>
               {datasets.length === 0 && (
                 <p className="lc-muted">
-                  This daemon does not report datasets — update <code>lc serve</code>.
+                  This build does not report datasets — rebuild with the leetcode feature.
                 </p>
               )}
               {datasets.map((entry) => (
@@ -1361,31 +1361,31 @@ export function SettingsModal({
               </SettingsFold>
 
               <SettingsFold id="storage" title="Storage Settings">
+              <div className="lc-settings-subhead">Devices</div>
+              <p className="lc-settings-hint">
+                Personalise is per device. This one is {deviceRole()} ({loadDeviceId().slice(0, 8)}…).
+                Others are listed, not merged.
+              </p>
+              <ul className="lc-settings-hint">
+                <li>
+                  {deviceRole()} · {loadDeviceId().slice(0, 8)}… · this device
+                </li>
+                {siblingDevices
+                  .filter((dev) => dev.id !== loadDeviceId())
+                  .map((dev) => (
+                    <li key={dev.id}>
+                      {dev.role} · {dev.id.slice(0, 8)}… ·{" "}
+                      {new Date(dev.updated_at).toLocaleString()}
+                    </li>
+                  ))}
+              </ul>
               <div className="lc-settings-subhead">Autosave</div>
               <p className="lc-settings-hint">
                 How often the board writes itself down, so a crash or a closed lid
                 costs nothing. This is not the same as saving: Discard still rolls
                 back to where the session started, whatever the autosave has
-                written since. Saved on this device; a copy also goes to `lc serve`.
+                written since. Saved on this device.
               </p>
-              {siblingDevices.length > 0 && (
-                <>
-                  <div className="lc-settings-subhead">Devices</div>
-                  <p className="lc-settings-hint">
-                    Personalise is per device. This one is {deviceRole()} ({loadDeviceId().slice(0, 8)}…).
-                    Others are listed, not merged.
-                  </p>
-                  <ul className="lc-settings-hint">
-                    {siblingDevices.map((dev) => (
-                      <li key={dev.id}>
-                        {dev.role} · {dev.id.slice(0, 8)}… ·{" "}
-                        {new Date(dev.updated_at).toLocaleString()}
-                        {dev.id === loadDeviceId() ? " · this device" : ""}
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
               <div
                 className="lc-settings-choice lc-settings-choice-compact"
                 role="radiogroup"
@@ -1522,44 +1522,60 @@ export function SettingsModal({
               <div
                 className="lc-settings-choice"
                 role="radiogroup"
-                aria-label="Forward failed runs to the agent"
+                aria-label="When a failed run should call the agent"
               >
                 <button
                   type="button"
                   role="radio"
-                  aria-checked={!forwardFailures}
+                  aria-checked={testForward === "wait"}
                   className={
-                    forwardFailures
-                      ? "lc-settings-choice-option"
-                      : "lc-settings-choice-option is-active"
+                    testForward === "wait"
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
                   }
-                  onClick={() => setForwardFailures(false)}
+                  onClick={() => setTestForward("wait")}
                 >
-                  <strong>Wait to be asked</strong>
+                  <strong>Wait</strong>
                   <span className="lc-muted">
-                    A red run is often a typo you are already halfway through fixing.
+                    Tests card in chat. Agent stays quiet until you ask.
                   </span>
                 </button>
                 <button
                   type="button"
                   role="radio"
-                  aria-checked={forwardFailures}
+                  aria-checked={testForward === "whole-run"}
                   className={
-                    forwardFailures
+                    testForward === "whole-run"
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => setForwardFailures(true)}
+                  onClick={() => setTestForward("whole-run")}
                 >
-                  <strong>Send failures to the agent</strong>
+                  <strong>One request for the whole run</strong>
                   <span className="lc-muted">
-                    Hand every failed run over the moment it goes red — one model call each.
+                    One model call covering every failed case.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={testForward === "per-case"}
+                  className={
+                    testForward === "per-case"
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setTestForward("per-case")}
+                >
+                  <strong>One request per failing case</strong>
+                  <span className="lc-muted">
+                    Separate model call for each red case.
                   </span>
                 </button>
               </div>
               <p className="lc-settings-hint">
-                Saved on this device only. Problems only — the whiteboard and document pads
-                have no test run to forward.
+                Saved on this device only. The Tests card always posts. Problems only —
+                pads have no test run to forward.
               </p>
               </SettingsFold>
               )}

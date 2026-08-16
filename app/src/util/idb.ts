@@ -41,7 +41,7 @@ export const STORE_CONTENT = "content";
 export const STORE_SNAPSHOTS = "snapshots";
 /** Per-page encoded ink WAL / archive. Keyed by `docKey\\x1fpageId`. */
 export const STORE_INK_PAGES = "ink_pages";
-/** Quiet dual-write jobs that could not reach `lc serve`. */
+/** Quiet dual-write jobs that could not reach the harness. */
 export const STORE_SYNC_QUEUE = "pad_sync_queue";
 /** Offline coding-problem boards waiting to merge on reconnect. */
 export const STORE_OFFLINE_BOARDS = "offline_boards";

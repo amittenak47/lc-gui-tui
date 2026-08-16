@@ -1,6 +1,6 @@
 //! `whiteboard` as a library.
 //!
-//! The CLI (`src/main.rs`) and the LAN daemon ([`serve`]) are both thin shells
+//! The CLI (`src/main.rs`) and the in-process harness ([`serve`]) are both thin shells
 //! over the same modules. Package layout groups harness concerns (`corpus`,
 //! `workspace`, `practice`, `gate`, `design`); [`lib`] re-exports the historical
 //! `crate::dataset`, `crate::generator`, … paths so callers stay stable.

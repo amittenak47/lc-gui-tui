@@ -5,7 +5,7 @@
  * Ink is already covered by `textbookInk.local.test.mjs`. This file extracts
  * real page text, plants several footnote panels (notes, links, thread
  * pointers), measures how that JSON and packed coach context scale, then —
- * when `lc serve` and the LLM are up — sends a quoted ask the same way the
+ * when the harness and the LLM are up — sends a quoted ask the same way the
  * document pad does.
  *
  * PDFs stay in Downloads. Missing files, a down daemon, or an unreachable LLM

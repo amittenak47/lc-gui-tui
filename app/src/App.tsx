@@ -5,7 +5,7 @@
  * counterexample. (The ambient every-2m WebSocket mode is wired but off —
  * see `AMBIENT_ENABLED`.)
  *
- * Everything talks to the in-process daemon on `127.0.0.1`. Nothing about the
+ * Everything talks to the in-process harness router. Nothing about the
  * corpus, the workspaces, or the RustPython judge lives in the WebView —
  * including which problem set is open: a problem carries its `dataset` slug,
  * and every request that names a task id names the dataset too.
@@ -14,10 +14,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { LcApiError, LcClient, type DocIndexStatus, type ProposedAnnotation, type SearchOptions } from "./api/client";
-import { AmbientCoach, type AmbientProbe } from "./api/coachSocket";
+import { AmbientCoach, defaultCoachSocketFactory, type AmbientProbe } from "./api/coachSocket";
 import {
   DEFAULT_PAIRING,
-  type Pairing,
 } from "./api/pairing";
 import type {
   AttemptState,
@@ -84,7 +83,7 @@ import { AttemptDialog } from "./modes/AttemptDialog";
 import { WhiteboardDialog } from "./modes/WhiteboardDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { groupThreads, threadAnchorRef, visibleThreadMessages } from "./modes/coachThreads";
-import { loadForwardFailures, saveForwardFailures } from "./util/agentPrefs";
+import { loadTestForwardMode, type TestForwardMode } from "./util/agentPrefs";
 import {
   AGENT_SHEET_LOCK_EVENT,
   loadAgentSheetLock,
@@ -800,7 +799,7 @@ export function App() {
     }
   }, [serverLink, client, whiteboardEntryOpen, annotateEntryOpen]);
 
-  /** Coach LLM reachability — separate from lc serve itself. */
+  /** Coach LLM reachability — separate from the harness router itself. */
   const [llmLink, setLlmLink] = useState<"unknown" | "online" | "offline">("unknown");
   const [llmDetail, setLlmDetail] = useState<string | null>(null);
   const [llmGateOpen, setLlmGateOpen] = useState(false);
@@ -820,7 +819,7 @@ export function App() {
       ]);
       const provider = cfg.default_provider;
       if (provider === "openai" || provider === "groq") {
-        const detail = `${provider} via lc serve`;
+        const detail = `${provider} (cloud)`;
         setLlmDetail((prev) => (prev === detail ? prev : detail));
         setLlmLink((prev) => (prev === "online" ? prev : "online"));
         return true;
@@ -1066,7 +1065,7 @@ export function App() {
   }, []);
   /** Active problem-bank filter — header prev/next walk this when there's no session queue. */
   const [bankFilters, setBankFilters] = useState<SearchOptions>({});
-  /** Disk practice session from `lc serve` (queue + progress). */
+  /** Disk practice session from the harness (queue + progress). */
   const [session, setSession] = useState<SessionSnapshot | null>(null);
   /**
    * Header ‹ › walks the session queue only after Start / Random. A plain table
@@ -1178,17 +1177,21 @@ export function App() {
    * meant to avoid.
    */
   const suppressCoachPanelOpenRef = useRef(false);
-  /** Hand a failed run to the coach without being asked. Off by default. */
-  const [forwardFailures, setForwardFailures] = useState(() => loadForwardFailures());
-  const forwardFailuresRef = useRef(forwardFailures);
-  forwardFailuresRef.current = forwardFailures;
+  /** How a red test run is handed to the coach. Default wait (card only). */
+  const [testForward, setTestForward] = useState<TestForwardMode>(() => loadTestForwardMode());
+  const testForwardRef = useRef(testForward);
+  testForwardRef.current = testForward;
   useEffect(() => {
     const onChange = (event: Event) => {
-      const next = (event as CustomEvent<boolean>).detail;
-      setForwardFailures(typeof next === "boolean" ? next : loadForwardFailures());
+      const next = (event as CustomEvent<TestForwardMode>).detail;
+      setTestForward(
+        next === "wait" || next === "whole-run" || next === "per-case"
+          ? next
+          : loadTestForwardMode(),
+      );
     };
-    window.addEventListener("lc-agent-forward-failures", onChange);
-    return () => window.removeEventListener("lc-agent-forward-failures", onChange);
+    window.addEventListener("lc-agent-test-forward", onChange);
+    return () => window.removeEventListener("lc-agent-test-forward", onChange);
   }, []);
   /** Pin the mobile coach sheet — no drag-to-open/close from the handle. */
   const [sheetDragLocked, setSheetDragLocked] = useState(() => loadAgentSheetLock());
@@ -1717,7 +1720,7 @@ export function App() {
           const detail = pack ? offlineGetProblem(pack, taskId, datasetId) : null;
           if (!detail) {
             throw new Error(
-              "Problem not in the offline pack — connect to download it (Settings → Server).",
+              "Problem not in the offline pack — connect to download it (Settings → Workspace).",
             );
           }
           const source = ensureCodingRoom(detail.starter_code ?? "");
@@ -2863,14 +2866,18 @@ export function App() {
       }
     };
 
-    const coach = new AmbientCoach(pairing, {
-      onFrame,
-      onCapturing: () => setThinking(true),
-      onOpen: () => setConnected(true),
-      onClose: () => setConnected(false),
-      onError: (message) => setError(message),
-      onSkip: (reason) => setLastSkip(reason),
-    });
+    const coach = new AmbientCoach(
+      pairing,
+      {
+        onFrame,
+        onCapturing: () => setThinking(true),
+        onOpen: () => setConnected(true),
+        onClose: () => setConnected(false),
+        onError: (message) => setError(message),
+        onSkip: (reason) => setLastSkip(reason),
+      },
+      defaultCoachSocketFactory,
+    );
     coachRef.current = coach;
     if (ambient) coach.start(problem.task_id, probe, capture);
     else coach.connect(problem.task_id);
@@ -4327,15 +4334,28 @@ export function App() {
          * rides along because a traceback without the source is a line number
          * with nothing at the end of it.
          */
-        if (!result.all_passed && forwardFailuresRef.current) {
+        if (!result.all_passed) {
+          const mode = testForwardRef.current;
           const rootId = threadRootIdRef.current;
           const threadAnchor = rootId
             ? threadAnchorRef(agentMessagesRef.current, rootId)
             : null;
-          void askAgentRef.current?.(
-            describeRunFailure(report, pseudocodeRef.current),
-            threadAnchor,
-          );
+          const code = pseudocodeRef.current;
+          if (mode === "whole-run") {
+            void askAgentRef.current?.(describeRunFailure(report, code), threadAnchor);
+          } else if (mode === "per-case") {
+            for (const failing of result.results.filter((entry) => !entry.pass)) {
+              const caseReport = [
+                `${failing.suite ? "suite" : `case ${failing.case}`}: ${failing.input}`,
+                `  expected: ${failing.expected}`,
+                failing.actual !== null ? `  got:      ${failing.actual}` : "",
+                failing.error ? `  error:    ${failing.error}` : "",
+              ]
+                .filter(Boolean)
+                .join("\n");
+              void askAgentRef.current?.(describeRunFailure(caseReport, code), threadAnchor);
+            }
+          }
         }
         if (result.all_passed) {
           setAttemptState((current) => ({
@@ -6183,11 +6203,6 @@ export function App() {
             onOpenFootnoteThread={openCoachFootnoteThread}
             onThreadChange={(rootId) => {
               threadRootIdRef.current = rootId;
-            }}
-            forwardFailures={forwardFailures}
-            onForwardFailuresChange={(on) => {
-              setForwardFailures(on);
-              saveForwardFailures(on);
             }}
             onSend={sendCoachChat}
             onRequestBridge={(messageId) => {

@@ -236,6 +236,22 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn design_class_keeps_its_name_and_fills_empty_methods() {
+        let problem = normalize(&serde_json::json!({
+            "content": "```python\nclass KthLargest:\n    def add(self, val):\n        return val\n```\n",
+            "level": "Easy",
+            "function": "class KthLargest:\n    def __init__(self, k: int, nums: List[int]) -> None:\n    def add(self, val: int) -> int:",
+            "valid_tests": ["assert add(3) == 4"]
+        }))
+        .expect("design class");
+        let starter = problem.starter_code.as_deref().unwrap();
+        assert!(starter.contains("class KthLargest:"), "{starter}");
+        assert!(starter.contains("def add"), "{starter}");
+        assert!(starter.contains("pass"), "{starter}");
+        assert_eq!(problem.entry_point.as_deref(), Some("add"));
+    }
+
+    #[test]
     fn a_row_with_no_signature_is_dropped() {
         assert!(normalize(&serde_json::json!({
             "content": "no fence here",

@@ -199,6 +199,41 @@ class Solution:
 }
 
 #[test]
+fn design_class_entry_is_callable_without_init_args() {
+    let dir = tempfile::tempdir().unwrap();
+    write_workspace(
+        dir.path(),
+        r#"
+class KthLargest:
+    def __init__(self, k, nums):
+        pass
+    def add(self, val):
+        pass
+"#,
+        r#"{
+  "task_id": "kth-largest",
+  "entry_point": "add",
+  "cases": [
+    {"input": "val = 3", "output": "4"}
+  ]
+}"#,
+    );
+    let out = run_runner(dir.path(), &[]);
+    assert!(
+        !out.lines.is_empty(),
+        "runner produced no JSONL\nstdout:\n{}\nstderr:\n{}",
+        out.stdout,
+        out.stderr
+    );
+    let err = out.lines[0].error.as_deref().unwrap_or("");
+    assert!(
+        !err.contains("entry point"),
+        "must find KthLargest.add, not missing-entry: {err}"
+    );
+    assert!(!out.lines[0].pass, "stub must fail the case: {:?}", out.lines);
+}
+
+#[test]
 fn two_sum_fixture_passes() {
     let dir = tempfile::tempdir().unwrap();
     write_workspace(

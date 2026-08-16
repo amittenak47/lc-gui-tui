@@ -3,7 +3,7 @@ use colored::Colorize;
 use comfy_table::Table;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "leetcode")]
 use rustpython::{InterpreterBuilder, InterpreterBuilderExt};
@@ -11,6 +11,10 @@ use rustpython::{InterpreterBuilder, InterpreterBuilderExt};
 /// Default Windows/debug stack overflows inside `Interpreter::build()`.
 #[cfg(feature = "leetcode")]
 const RUSTPYTHON_STACK: usize = 32 * 1024 * 1024;
+/// Give up waiting on the interpreter thread. The native thread cannot be
+/// killed; a stuck run is abandoned rather than blocking the GUI forever.
+#[cfg(feature = "leetcode")]
+const RUN_JOIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 use crate::config::Config;
 use crate::dataset::{self, Dataset};
@@ -245,11 +249,12 @@ open(os.path.join(HERE, "_rp_exit.txt"), "w", encoding="utf-8").write(str(code))
 fn execute_run_tests_vm(dir: &Path, extra_argv: &[&str]) -> Result<(Vec<CaseResult>, String, String)> {
     let driver = driver_source(dir, extra_argv);
     let dir = dir.to_path_buf();
-    let join = std::thread::Builder::new()
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
         .name("rustpython".into())
         .stack_size(RUSTPYTHON_STACK)
         .spawn(move || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
                 let interp = InterpreterBuilder::new().init_stdlib().build();
                 let fail = interp.enter(|vm| {
                     if let Err(exc) = vm.run_simple_string(&driver) {
@@ -264,15 +269,21 @@ fn execute_run_tests_vm(dir: &Path, extra_argv: &[&str]) -> Result<(Vec<CaseResu
                     bail!("RustPython failed before the runner finished:\n{buf}");
                 }
                 Ok(())
-            }))
+            }));
+            let _ = tx.send(caught);
         })
-        .context("cannot spawn rustpython thread")?
-        .join()
-        .map_err(|_| anyhow::anyhow!("rustpython thread panicked"))?;
+        .context("cannot spawn rustpython thread")?;
+    let join = match rx.recv_timeout(RUN_JOIN_TIMEOUT) {
+        Ok(caught) => caught,
+        Err(_) => bail!(
+            "RustPython timed out after {}s",
+            RUN_JOIN_TIMEOUT.as_secs()
+        ),
+    }
+    .map_err(|_| anyhow::anyhow!("rustpython thread panicked"))?;
     match join {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => return Err(err),
-        Err(_) => bail!("RustPython panicked (often a stack overflow in Interpreter::build)"),
+        Ok(()) => {}
+        Err(err) => return Err(err),
     }
 
     let stdout = std::fs::read_to_string(dir.join("_rp_stdout.txt")).unwrap_or_default();

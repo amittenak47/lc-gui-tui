@@ -16,6 +16,7 @@
  */
 
 import { coachSocketUrl, type Pairing } from "./pairing";
+import { isTauriRuntime } from "./nativeHttp";
 import type { BoardSnapshot, CoachProcessEvent, RunAction, ServerFrame } from "./types";
 
 /** Between ambient ticks. Long enough for a local model to answer. */
@@ -139,6 +140,97 @@ export interface WebSocketLike {
   onmessage: ((event: { data: string }) => void) | null;
 }
 
+type Unlisten = () => void;
+
+/**
+ * Coach transport for Tauri: invoke + `lc-coach-frame` events instead of
+ * `ws://127.0.0.1:7878/coach/session`.
+ */
+export function createTauriCoachSocket(_url: string): WebSocketLike {
+  let onopen: WebSocketLike["onopen"] = null;
+  let onclose: WebSocketLike["onclose"] = null;
+  let onerror: WebSocketLike["onerror"] = null;
+  let onmessage: WebSocketLike["onmessage"] = null;
+  let unlisten: Unlisten | null = null;
+  let closed = false;
+
+  const socket: WebSocketLike = {
+    send(data: string) {
+      void import("@tauri-apps/api/core")
+        .then(({ invoke }) => invoke("lc_coach_send", { frame: data }))
+        .catch(() => onerror?.(null));
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      unlisten?.();
+      unlisten = null;
+      void import("@tauri-apps/api/core")
+        .then(({ invoke }) => invoke("lc_coach_disconnect"))
+        .finally(() => onclose?.(null));
+    },
+    get onopen() {
+      return onopen;
+    },
+    set onopen(fn) {
+      onopen = fn;
+    },
+    get onclose() {
+      return onclose;
+    },
+    set onclose(fn) {
+      onclose = fn;
+    },
+    get onerror() {
+      return onerror;
+    },
+    set onerror(fn) {
+      onerror = fn;
+    },
+    get onmessage() {
+      return onmessage;
+    },
+    set onmessage(fn) {
+      onmessage = fn;
+    },
+  };
+
+  queueMicrotask(() => {
+    if (closed) return;
+    void Promise.all([
+      import("@tauri-apps/api/core"),
+      import("@tauri-apps/api/event"),
+    ])
+      .then(async ([{ invoke }, { listen }]) => {
+        if (closed) return;
+        unlisten = await listen<string>("lc-coach-frame", (event) => {
+          const data =
+            typeof event.payload === "string" ? event.payload : JSON.stringify(event.payload);
+          onmessage?.({ data });
+        });
+        if (closed) {
+          unlisten?.();
+          unlisten = null;
+          return;
+        }
+        await invoke("lc_coach_connect");
+        if (closed) return;
+        onopen?.(null);
+      })
+      .catch(() => onerror?.(null));
+  });
+
+  return socket;
+}
+
+/** Default socket factory: Tauri events in the app, WebSocket in tests/browser. */
+export function defaultCoachSocketFactory(url: string): WebSocketLike {
+  if (isTauriRuntime()) {
+    return createTauriCoachSocket(url);
+  }
+  return new WebSocket(url) as unknown as WebSocketLike;
+}
+
 export class AmbientCoach {
   private socket: WebSocketLike | null = null;
   private open = false;
@@ -161,8 +253,7 @@ export class AmbientCoach {
   constructor(
     private readonly pairing: Pairing,
     private readonly handlers: AmbientHandlers,
-    private readonly createSocket: SocketFactory = (url) =>
-      new WebSocket(url) as unknown as WebSocketLike,
+    private readonly createSocket: SocketFactory = defaultCoachSocketFactory,
     sessionId?: string,
   ) {
     this.sessionId = sessionId ?? `s-${Math.random().toString(36).slice(2, 10)}`;

@@ -187,32 +187,16 @@ impl InFlight {
     }
 }
 
-async fn drive(state: Shared, socket: WebSocket) {
-    let (mut sink, mut stream) = socket.split();
-    // Outgoing frames go through a channel so a run's stage events can be
-    // written while the read loop is still waiting for the next client frame.
-    let (outgoing, mut queued) = mpsc::unbounded_channel::<ServerFrame>();
-    let writer = tokio::spawn(async move {
-        while let Some(frame) = queued.recv().await {
-            if send(&mut sink, frame).await.is_err() {
-                break;
-            }
-        }
-    });
-
+/// Coach session loop without a WebSocket — used by the Tauri event bridge.
+pub async fn drive_channels(
+    state: Shared,
+    mut incoming: mpsc::UnboundedReceiver<String>,
+    outgoing: UnboundedSender<ServerFrame>,
+) {
     let mut in_flight: Option<InFlight> = None;
-    // The glance in progress, if any — see the `Snapshot` arm below.
     let mut ambient: Option<tokio::task::JoinHandle<()>> = None;
 
-    while let Some(Ok(message)) = stream.next().await {
-        let text = match message {
-            Message::Text(text) => text,
-            Message::Close(_) => break,
-            // Ping/Pong are handled by axum; binary frames aren't part of the
-            // protocol.
-            _ => continue,
-        };
-
+    while let Some(text) = incoming.recv().await {
         let frame: ClientFrame = match serde_json::from_str(&text) {
             Ok(frame) => frame,
             Err(err) => {
@@ -239,8 +223,6 @@ async fn drive(state: Shared, socket: WebSocket) {
                 action,
                 payload,
             } => {
-                // One composer, one placeholder turn: a second run while one is
-                // working is a mistake to report, not work to queue.
                 if in_flight.as_ref().is_some_and(|run| !run.task.is_finished()) {
                     let _ = outgoing.send(ServerFrame::Error {
                         request_id: Some(request_id),
@@ -257,25 +239,6 @@ async fn drive(state: Shared, socket: WebSocket) {
                 ));
             }
 
-            /*
-             * An ambient glance must not stop the socket being read.
-             *
-             * This used to be awaited inline, on the grounds that the
-             * escalation ladder is read and written per nudge and two at once
-             * would order it wrongly. That is true, and it is not what awaiting
-             * here bought: `ambient_nudge` calls a model, whose HTTP client
-             * allows three minutes, and for all of that the loop above is not
-             * reading. A `run` frame sent during a glance therefore sat unread
-             * in the socket buffer — no stage frames, no error, nothing to
-             * cancel — which is a chat turn stuck on "Working…" for as long as
-             * the glance takes. Annotate makes it likely rather than rare: the
-             * board export delays the send by seconds, straight into the
-             * window where a tick is already in flight.
-             *
-             * Still one at a time. A snapshot that lands while one is running
-             * is skipped, which is what the client's own gate already does and
-             * exactly what `Skipped` exists to say.
-             */
             frame @ ClientFrame::Snapshot { .. } => {
                 if ambient.as_ref().is_some_and(|task| !task.is_finished()) {
                     let _ = outgoing.send(ServerFrame::Skipped {
@@ -291,8 +254,6 @@ async fn drive(state: Shared, socket: WebSocket) {
                 }));
             }
 
-            // Hello and Reset answer from memory and a lock — cheap enough to
-            // stay on the loop, and Hello owes its `ready` before anything else.
             other => {
                 let reply = handle(&state, other).await;
                 if outgoing.send(reply).is_err() {
@@ -302,16 +263,46 @@ async fn drive(state: Shared, socket: WebSocket) {
         }
     }
 
-    // A dropped connection is an implicit cancel: no `result` frame is owed to
-    // a client that is no longer there, and a glance answering into a closed
-    // socket is a model call nobody will read.
     if let Some(running) = in_flight {
         running.cancel();
     }
     if let Some(glance) = ambient {
         glance.abort();
     }
-    drop(outgoing);
+}
+
+async fn drive(state: Shared, socket: WebSocket) {
+    let (mut sink, mut stream) = socket.split();
+    let (outgoing, mut queued) = mpsc::unbounded_channel::<ServerFrame>();
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel::<String>();
+
+    let writer = tokio::spawn(async move {
+        while let Some(frame) = queued.recv().await {
+            if send(&mut sink, frame).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let incoming_for_reader = incoming_tx.clone();
+    let reader = tokio::spawn(async move {
+        while let Some(Ok(message)) = stream.next().await {
+            match message {
+                Message::Text(text) => {
+                    if incoming_for_reader.send(text).is_err() {
+                        break;
+                    }
+                }
+                Message::Close(_) => break,
+                _ => continue,
+            }
+        }
+    });
+
+    drive_channels(state, incoming_rx, outgoing).await;
+
+    reader.abort();
+    drop(incoming_tx);
     let _ = writer.await;
 }
 
@@ -671,11 +662,7 @@ mod tests {
         let raw = r#"{"type": "snapshot", "session_id": "s1", "task_id": "two-sum",
                       "scene_hash": 99, "recognized_text": "two pointers"}"#;
         match serde_json::from_str::<ClientFrame>(raw).unwrap() {
-            ClientFrame::Run { .. } | ClientFrame::Cancel { .. } => {
-            unreachable!("interactive frames are dispatched in `drive`, not here")
-        }
-
-        ClientFrame::Snapshot {
+            ClientFrame::Snapshot {
                 scene_hash, board, ..
             } => {
                 assert_eq!(scene_hash, 99);

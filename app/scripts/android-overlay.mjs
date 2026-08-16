@@ -10,8 +10,8 @@
  *      `res/xml/`, and
  *   2. point the manifest's `<application>` at it.
  *
- * Without them Android 9+ blocks the WebView's cleartext HTTP calls to
- * `lc serve` on the LAN and the app looks like it simply cannot reach the PC.
+ * Without them Android 9+ blocks the WebView's cleartext HTTP fetches to
+ * external http:// pages (Annotate mode). The harness router itself is in-process.
  *
  * Idempotent: running it twice is a no-op, so it is safe to chain in front of
  * `tauri android dev` / `build`.

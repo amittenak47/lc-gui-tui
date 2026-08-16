@@ -9,7 +9,7 @@
  *
  * This assembles the missing half client-side and prepends it to the question,
  * which is deliberate: conversation state lives here, not in the daemon, and
- * carrying it in the prompt works against the `lc serve` people already have
+ * carrying it in the prompt works against the harness people already have
  * rather than against one they would have to rebuild first. The cost is that
  * history arrives as prose inside a user turn instead of as real chat turns —
  * worth revisiting if `/coach/ask` ever grows a `history` field.

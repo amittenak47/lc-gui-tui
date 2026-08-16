@@ -1,6 +1,6 @@
 //! Start / stop the local OpenAI-compatible LLM process (typically `ollama serve`).
 //!
-//! Shared by `lc serve` HTTP handlers and the TUI Settings menu so both UIs drive
+//! Shared by the harness HTTP handlers and the TUI Settings menu so both UIs drive
 //! the same child process bookkeeping.
 
 use std::process::{Child, Command, Stdio};

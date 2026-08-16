@@ -407,25 +407,11 @@ impl App {
                 self.status = format!("opened in IDE · {}", dir.display());
             }
             "canvas" => {
-                let port = self.cfg.serve.port;
-                let url = format!(
-                    "http://127.0.0.1:{port}/?task={}&dataset={}",
-                    row.task_id, self.dataset.id
-                );
                 self.status = format!(
-                    "canvas: open whiteboard at {url} (run `lc serve` if needed) · {}",
+                    "open the Whiteboard app for {} · {}",
+                    row.task_id,
                     dir.display()
                 );
-                #[cfg(windows)]
-                {
-                    let _ = std::process::Command::new("cmd")
-                        .args(["/C", "start", "", &url])
-                        .spawn();
-                }
-                #[cfg(not(windows))]
-                {
-                    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-                }
             }
             _ => {
                 self.status = format!("workspace ready (TUI) · {}", dir.display());

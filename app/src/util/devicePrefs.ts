@@ -1,9 +1,9 @@
 /**
- * Stable per-device id and the Personalise blob that rides on `lc serve`.
+ * Stable per-device id and the Personalise blob stored on the harness.
  */
 
 import type { DevicePrefsDto, LcClient } from "../api/client";
-import { loadForwardFailures, saveForwardFailures } from "./agentPrefs";
+import { loadTestForwardMode, saveTestForwardMode } from "./agentPrefs";
 import { loadAutosaveInterval, saveAutosaveInterval } from "./autosavePref";
 import {
   loadCaptureCountdown,
@@ -81,7 +81,7 @@ export function collectDevicePrefsBlob(): Record<string, unknown> {
   const tools = loadInkToolPresets();
   return {
     handedness: loadInkHandedness(),
-    forwardFailures: loadForwardFailures(),
+    testForward: loadTestForwardMode(),
     captureMode: loadCaptureMode(),
     captureDestination: loadCaptureDestination(),
     captureFolder: loadCaptureFolder(),
@@ -106,7 +106,11 @@ export function collectDevicePrefsBlob(): Record<string, unknown> {
 
 export function applyDevicePrefsBlob(prefs: Record<string, unknown>): void {
   if (typeof prefs.handedness === "string") saveInkHandedness(prefs.handedness as InkHandedness);
-  if (typeof prefs.forwardFailures === "boolean") saveForwardFailures(prefs.forwardFailures);
+  if (prefs.testForward === "wait" || prefs.testForward === "whole-run" || prefs.testForward === "per-case") {
+    saveTestForwardMode(prefs.testForward);
+  } else if (typeof prefs.forwardFailures === "boolean") {
+    saveTestForwardMode(prefs.forwardFailures ? "whole-run" : "wait");
+  }
   if (typeof prefs.captureMode === "string") saveCaptureMode(prefs.captureMode as never);
   if (typeof prefs.captureDestination === "string") {
     saveCaptureDestination(prefs.captureDestination as never);
