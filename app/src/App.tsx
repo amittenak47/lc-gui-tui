@@ -5,10 +5,10 @@
  * counterexample. (The ambient every-2m WebSocket mode is wired but off —
  * see `AMBIENT_ENABLED`.)
  *
- * Everything talks to `lc serve`. Nothing about the corpus, the workspaces, or
- * the Python runner lives on this device — including which problem set is
- * open: a problem carries its `dataset` slug, and every request that names a
- * task id names the dataset too.
+ * Everything talks to the in-process daemon on `127.0.0.1`. Nothing about the
+ * corpus, the workspaces, or the RustPython judge lives in the WebView —
+ * including which problem set is open: a problem carries its `dataset` slug,
+ * and every request that names a task id names the dataset too.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,13 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LcApiError, LcClient, type DocIndexStatus, type ProposedAnnotation, type SearchOptions } from "./api/client";
 import { AmbientCoach, type AmbientProbe } from "./api/coachSocket";
 import {
-  DEFAULT_PORT,
-  loadPairing,
-  normalizePairCode,
-  pairWithCode,
-  pairingBaseUrl,
-  parsePairingUrl,
-  savePairing,
+  DEFAULT_PAIRING,
   type Pairing,
 } from "./api/pairing";
 import type {
@@ -46,7 +40,6 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { HoldButton } from "./components/HoldButton";
 import { LoadingDoodle } from "./components/LoadingDoodle";
 import { LlmStatusDialog } from "./components/LlmStatusDialog";
-import { ServerStatusDialog, type ServerGateKind } from "./components/ServerStatusDialog";
 import { SettingsModal } from "./components/SettingsModal";
 import { offlinePackDownloader } from "./util/offlinePackDownload";
 import {
@@ -74,7 +67,6 @@ import { hasCodeAnnotations, renderAnnotatedCode } from "./canvas/codeAnnotation
 import { BOARD_THEMES } from "./templates/skeleton";
 import { statementLinePitch } from "./modes/codeFontSize";
 import { sha256Hex } from "./util/codeHash";
-import { HOLD_SENSITIVE_MS } from "./util/gesture";
 import { copyTextToClipboard } from "./util/clipboard";
 import { skeletonOf } from "./util/solutionSplit";
 import {
@@ -106,6 +98,8 @@ import { WhiteboardLibraryDialog } from "./modes/WhiteboardLibraryDialog";
 import { formatTestReport, TestResultsModal } from "./modes/TestResultsModal";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
+import { HomeChooser } from "./modes/HomeChooser";
+import { FEATURE_LEETCODE } from "./featureFlags";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { RevealDialog } from "./modes/RevealDialog";
 import { buildProblemTemplate } from "./templates/problemBoard";
@@ -179,7 +173,6 @@ import {
   LEGACY_MD_INK_TASK_ID,
 } from "./templates/annotate";
 import { BROWSE_PICK_QUIET_MS, browsePickBlocked } from "./util/browsePickGuard";
-import { workspaceLoadHomeLabel } from "./util/workspaceLoad";
 import {
   buildAnnotateSidecar,
   CODE_SOURCE_MAX_CHARS,
@@ -369,8 +362,8 @@ const SHOW_BUSY_BANNER = false;
  * it ever was. Waiting on a daemon that is coming up is the one place a shorter
  * interval buys something, and it keeps one.
  */
-const SERVER_WAIT_POLL_MS = 10_000;
-const SERVER_LIVE_POLL_MS = 20_000;
+const BOOT_HEALTH_RETRIES = 5;
+const BOOT_HEALTH_DELAY_MS = 400;
 const LLM_ONLINE_POLL_MS = 20_000;
 const LLM_OFFLINE_POLL_MS = 60_000;
 const LLM_OFFLINE_POLL_MAX_MS = 120_000;
@@ -642,8 +635,7 @@ export function App() {
     setWebTabId(next.tabId);
   }, [annotateSource]);
 
-  const [pairing, setPairing] = useState<Pairing>(() => loadPairing());
-  const [pairingEditing, setPairingEditing] = useState(false);
+  const pairing = DEFAULT_PAIRING;
   const client = useMemo(() => new LcClient(pairing), [pairing]);
 
   /**
@@ -707,19 +699,13 @@ export function App() {
     };
   }, []);
 
-  /** Reachability of `lc serve` — offline skips problem/tests/coach that need it. */
+  /** Reachability of the in-process daemon — offline skips problem/tests that need it. */
   const [serverLink, setServerLink] = useState<"checking" | "online" | "offline">("checking");
   const [bootPhase, setBootPhase] = useState<"enter" | "show" | "done" | "exit" | "gone">("enter");
-  const [gateOpen, setGateOpen] = useState(false);
-  const [gateKind, setGateKind] = useState<ServerGateKind>("startup");
-  const [gatePhase, setGatePhase] = useState<"enter" | "open" | "exit">("enter");
-  const [gateWaiting, setGateWaiting] = useState(false);
   /** Something the student should know, but which did not stop the request. */
   const [notice, setNotice] = useState<string | null>(null);
   const serverLinkRef = useRef(serverLink);
   serverLinkRef.current = serverLink;
-  const gateOpenRef = useRef(gateOpen);
-  gateOpenRef.current = gateOpen;
   const bootGenRef = useRef(0);
   /** Boot overlay still waiting for LLM probe → checkmark before dismiss. */
   const bootOverlayPendingRef = useRef(true);
@@ -756,147 +742,33 @@ export function App() {
 
   const pingServer = useCallback(() => pingTarget(pairing), [pairing, pingTarget]);
 
-  const closeGate = useCallback((next: "online" | "offline", noticeText?: string | null) => {
-    setGateWaiting(false);
-    setGatePhase("exit");
-    window.setTimeout(() => {
-      setGateOpen(false);
-      setServerLink(next);
-      if (noticeText) setNotice(noticeText);
-    }, serverGateExitMs());
-  }, []);
-
-  const openGate = useCallback((kind: ServerGateKind) => {
-    bootOverlayPendingRef.current = false;
-    setBootPhase("gone");
-    setGateKind(kind);
-    setGateWaiting(false);
-    setGatePhase("enter");
-    setGateOpen(true);
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => setGatePhase("open"));
-    });
-  }, []);
-
-  /**
-   * Pairing form commit. Boot ping keys on baseUrl+token, so Enter with empty
-   * code (same 127.0.0.1:7878, same token) used to save and close without a
-   * re-probe — refresh then looked "fixed". Always ping the committed target.
-   */
-  const pairProbeGenRef = useRef(0);
-  const applyPairing = useCallback(
-    (next: Pairing) => {
-      setPairing(next);
-      const generation = ++pairProbeGenRef.current;
-      void (async () => {
-        setServerLink("checking");
-        const ok = await pingTarget(next);
-        if (generation !== pairProbeGenRef.current) return;
-        if (ok) {
-          if (gateOpenRef.current) closeGate("online", null);
-          else setServerLink("online");
-        } else {
-          setServerLink("offline");
-          if (!gateOpenRef.current) openGate("startup");
-        }
-      })();
-    },
-    [closeGate, openGate, pingTarget],
-  );
-
-  // First contact with the daemon — boot spinner (doodle-able), then dialog or continue.
-  // Generation counter so a remount does not leave us cancelled mid-hang forever.
+  // Boot: retry health a few times (daemon may bind after WebView), then treat as online.
   // Completion (checkmark + LLM probe) lives in the effect below `openLlmGate`.
   useEffect(() => {
     let cancelled = false;
     const generation = ++bootGenRef.current;
     setServerLink("checking");
     setBootPhase("enter");
-    setGateOpen(false);
-    setGateWaiting(false);
     bootOverlayPendingRef.current = true;
     window.requestAnimationFrame(() => {
       if (!cancelled && bootGenRef.current === generation) setBootPhase("show");
     });
     void (async () => {
-      const ok = await pingServer();
-      if (cancelled || bootGenRef.current !== generation) return;
-      if (ok) {
-        // Leave the spinner up — the LLM probe effect finishes with a check.
-        setServerLink("online");
-      } else {
-        // Drop the spinner immediately and show the wait/offline dialog.
-        bootOverlayPendingRef.current = false;
-        setBootPhase("gone");
-        openGate("startup");
+      let ok = false;
+      for (let attempt = 0; attempt < BOOT_HEALTH_RETRIES; attempt++) {
+        ok = await pingServer();
+        if (cancelled || bootGenRef.current !== generation) return;
+        if (ok) break;
+        if (attempt < BOOT_HEALTH_RETRIES - 1) await waitMs(BOOT_HEALTH_DELAY_MS);
       }
+      // Online-enough for pads even if health is still settling.
+      setServerLink("online");
     })();
     return () => {
       cancelled = true;
     };
-    // pairing identity is enough — avoid openGate/ping churn cancelling a live probe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pairing.baseUrl, pairing.token]);
-
-  // Wait mode: keep pinging until the daemon answers.
-  useEffect(() => {
-    if (!gateOpen || !gateWaiting) return;
-    let cancelled = false;
-    const tick = async () => {
-      const ok = await pingServer();
-      if (cancelled || !ok) return;
-      closeGate(
-        "online",
-        gateKind === "dropped" ? "Back online — local server is reachable again." : null,
-      );
-    };
-    void tick();
-    const timer = window.setInterval(() => void tick(), SERVER_WAIT_POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [gateOpen, gateWaiting, pingServer, closeGate, gateKind]);
-
-  // While online, notice a drop promptly (interval + focus / visibility).
-  // `lc-server-unreachable` can fire on every failed API call — debounce so a
-  // burst of timeouts does not reopen the gate / thrash React.
-  useEffect(() => {
-    if (serverLink !== "online") return;
-    let cancelled = false;
-    let lastUnreachableAt = 0;
-    const UNREACHABLE_COOLDOWN_MS = 8_000;
-    const tick = async () => {
-      if (cancelled || gateOpenRef.current) return;
-      const ok = await pingServer();
-      if (cancelled || ok || gateOpenRef.current) return;
-      if (serverLinkRef.current !== "online") return;
-      openGate("dropped");
-    };
-    const onUnreachable = () => {
-      if (cancelled || gateOpenRef.current) return;
-      if (serverLinkRef.current !== "online") return;
-      const now = Date.now();
-      if (now - lastUnreachableAt < UNREACHABLE_COOLDOWN_MS) return;
-      lastUnreachableAt = now;
-      openGate("dropped");
-    };
-    const timer = window.setInterval(() => void tick(), SERVER_LIVE_POLL_MS);
-    const onFocus = () => void tick();
-    const onVis = () => {
-      if (document.visibilityState === "visible") void tick();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("lc-server-unreachable", onUnreachable);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener("lc-server-unreachable", onUnreachable);
-    };
-  }, [serverLink, pingServer, openGate]);
 
   useEffect(() => {
     if (serverLink !== "online") return;
@@ -983,7 +855,7 @@ export function App() {
   const [llmGateOpen, setLlmGateOpen] = useState(false);
   const [llmGatePhase, setLlmGatePhase] = useState<"enter" | "open" | "exit">("enter");
   const [settingsTab, setSettingsTab] = useState<
-    "workspace" | "personalise" | "ai" | "server" | undefined
+    "workspace" | "personalise" | "ai" | "llm" | undefined
   >(undefined);
   const llmPromptedRef = useRef(false);
 
@@ -1132,6 +1004,8 @@ export function App() {
     };
   }, [serverLink, probeLlm, openLlmGate]);
 
+  /** Home chooser vs today's problem browser when no board is open. */
+  const [practiceOpen, setPracticeOpen] = useState(false);
   const [problem, setProblem] = useState<ProblemDetail | null>(null);
   const [mode, setMode] = useState<Mode>("review");
   const [busy, setBusy] = useState<string | null>(null);
@@ -1226,27 +1100,7 @@ export function App() {
     [],
   );
 
-  /**
-   * Closing beats when returning to the problem browser — spinner until the
-   * list is ready, then checkmark, then idle. Mirrors the forward path's gate
-   * without sliding the browser away (we are revealing it, not hiding it).
-   */
-  const finishBrowseReady = useCallback(async () => {
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-    );
-    setBrowseMotion("done");
-    await waitMs(doneHoldMs());
-    setBrowseMotion("idle");
-    setHoldBrowseOverlay(false);
-  }, []);
-
-  const browseReadyWaitRef = useRef<(() => void) | null>(null);
-
-  const onBrowseTableReady = useCallback(() => {
-    browseReadyWaitRef.current?.();
-    browseReadyWaitRef.current = null;
-  }, []);
+  const onBrowseTableReady = useCallback(() => {}, []);
 
   /**
    * The board's content width in CSS pixels, for sizing the statement column.
@@ -4857,7 +4711,7 @@ export function App() {
 
   /**
    * Abort an in-flight problem / pad open. Header ← is the cancel control.
-   * Lands back on the browse overlay — same place ← goes when a board is open.
+   * Lands back on the home chooser — same place ← goes when a board is open.
    */
   const cancelWorkspaceLoad = useCallback(() => {
     if (!workspaceLoadActive) return;
@@ -4869,6 +4723,7 @@ export function App() {
     setHoldBrowseOverlay(false);
     setBrowseMotion("idle");
     setSwitchMotion("idle");
+    setPracticeOpen(false);
     boardSaveSuspendedRef.current = false;
     agentSaveSuspendedRef.current = false;
     setEntering(false);
@@ -5422,10 +5277,9 @@ export function App() {
     ],
   );
 
-  const returnToBrowse = useCallback(async () => {
+  const returnToHome = useCallback(() => {
     setSwitchMotion("idle");
-    setBrowseMotion("busy");
-    setHoldBrowseOverlay(true);
+    setPracticeOpen(false);
     setActiveRegion("constraints");
     setBoardPreparing(false);
     setEntering(false);
@@ -5435,14 +5289,10 @@ export function App() {
     setWebTabs([]);
     setWebTabId(null);
     setWebHtmlSource(null);
-
-    const ready = new Promise<void>((resolve) => {
-      browseReadyWaitRef.current = resolve;
-    });
+    setHoldBrowseOverlay(false);
+    setBrowseMotion("idle");
     setProblem(null);
-    await ready;
-    await finishBrowseReady();
-  }, [clearProblemState, finishBrowseReady]);
+  }, [clearProblemState]);
 
   const activeWebTab = webTabs.find((tab) => tab.id === webTabId);
 
@@ -5516,30 +5366,22 @@ export function App() {
           <Tip tip="lc whiteboard — your coding workspace">
             <span className="lc-brand">lc <strong>whiteboard</strong></span>
           </Tip>
-          {problem || workspaceLoadActive ? (
+          {problem || workspaceLoadActive || practiceOpen ? (
             <>
               <button
                 type="button"
                 className="lc-secondary lc-home lc-tip-target"
                 data-tip={
-                  workspaceLoadActive ? "Cancel loading" : "Return to the problem list"
+                  workspaceLoadActive ? "Cancel loading" : "Return home"
                 }
                 data-tip-placement="bottom"
                 disabled={busy !== null && !workspaceLoadActive}
                 onClick={() => {
                   if (workspaceLoadActive) cancelWorkspaceLoad();
-                  else leaveProblem(() => void returnToBrowse());
+                  else leaveProblem(() => returnToHome());
                 }}
               >
-                <span className="lc-label-long">
-                  {problem
-                    ? isLocalPad(problem)
-                      ? "← Home"
-                      : "← Problems"
-                    : workspaceLoadHomeLabel(busy)
-                      ? "← Home"
-                      : "← Problems"}
-                </span>
+                <span className="lc-label-long">← Home</span>
                 <span className="lc-label-short">←</span>
               </button>
               {problem && !isLocalPad(problem) ? (
@@ -5597,32 +5439,10 @@ export function App() {
             </>
           ) : (
             <span className="lc-muted lc-browse-hint">
-              <span className="lc-label-long">pick a problem to start</span>
-              <span className="lc-label-short">Problems</span>
+              <span className="lc-label-long">choose a mode to start</span>
+              <span className="lc-label-short">Home</span>
             </span>
           )}
-        </div>
-
-        {/*
-          Screen-centered on the header (50% of the window), not the middle
-          grid column. Left/right chrome are unequal, Run tests share that
-          column, and the agent-open padding shifts the grid into the board
-          hole — none of that should move Offline / host:IP.
-        */}
-        <div className="lc-header-pairing-anchor">
-          <HeaderPairingSlot
-            serverLink={serverLink}
-            pairing={pairing}
-            pairingEditing={pairingEditing}
-            gateOpen={gateOpen}
-            onPair={applyPairing}
-            onEditingChange={setPairingEditing}
-            onRetryOffline={() => {
-              openGate("startup");
-              setGateWaiting(true);
-            }}
-            onTapOffline={() => setPairingEditing(true)}
-          />
         </div>
 
         <div className="lc-header-center">
@@ -6245,7 +6065,7 @@ export function App() {
               onJump={(page) => boardRef.current?.scrollToPdfPage(page)}
             />
           )}
-          {(!problem || holdBrowseOverlay) && (
+          {!problem && (
             <div
               className={[
                 "lc-overlay",
@@ -6261,27 +6081,35 @@ export function App() {
                 .join(" ")}
             >
               <div className="lc-overlay-content">
-                <ProblemBrowser
-                  client={client}
-                  onPick={pickProblem}
-                  busy={
-                    busy !== null ||
-                    boardPreparing ||
-                    annotateEntryOpen ||
-                    whiteboardEntryOpen
-                  }
-                  session={session}
-                  offline={serverLink !== "online"}
-                  themeId={themeId}
-                  onThemePick={setThemeId}
-                  onReady={onBrowseTableReady}
-                  onStartSession={(ids, bank) => void startFreshSession(ids, bank)}
-                  onResetSession={() => {
-                    setResetError(null);
-                    setResetOpen(true);
-                  }}
-                  onRandomSession={(filters) => void startRandomSession(filters)}
-                />
+                {practiceOpen && FEATURE_LEETCODE ? (
+                  <ProblemBrowser
+                    client={client}
+                    onPick={pickProblem}
+                    busy={
+                      busy !== null ||
+                      boardPreparing ||
+                      annotateEntryOpen ||
+                      whiteboardEntryOpen
+                    }
+                    session={session}
+                    offline={false}
+                    themeId={themeId}
+                    onThemePick={setThemeId}
+                    onReady={onBrowseTableReady}
+                    onStartSession={(ids, bank) => void startFreshSession(ids, bank)}
+                    onResetSession={() => {
+                      setResetError(null);
+                      setResetOpen(true);
+                    }}
+                    onRandomSession={(filters) => void startRandomSession(filters)}
+                  />
+                ) : !holdBrowseOverlay ? (
+                  <HomeChooser
+                    onPractice={() => setPracticeOpen(true)}
+                    onWhiteboard={() => setWhiteboardEntryOpen(true)}
+                    onAnnotate={() => setAnnotateEntryOpen(true)}
+                  />
+                ) : null}
               </div>
               {(browseMotion === "busy" ||
                 browseMotion === "exit" ||
@@ -6548,7 +6376,7 @@ export function App() {
         }}
         onBrowse={() => {
           setTests(null);
-          leaveProblem(() => void returnToBrowse());
+          leaveProblem(() => returnToHome());
         }}
         canNext={canStepNext}
       />
@@ -6770,7 +6598,7 @@ export function App() {
             .join(" ")}
           role="status"
           aria-live="polite"
-          aria-label={bootPhase === "done" ? "Ready" : "Checking local server"}
+          aria-label={bootPhase === "done" ? "Ready" : "Starting up"}
         >
           <LoadingDoodle themeId={themeId} />
           {bootPhase === "done" ? (
@@ -6792,34 +6620,17 @@ export function App() {
         </div>
       )}
 
-      {gateOpen && (
-        <ServerStatusDialog
-          kind={gateKind}
-          phase={gatePhase}
-          waiting={gateWaiting}
-          hostLabel={hostOf(pairing.baseUrl)}
-          onWait={() => setGateWaiting(true)}
-          onResumeChoice={() => setGateWaiting(false)}
-          onOffline={() =>
-            closeGate(
-              "offline",
-              gateKind === "dropped" ? "Continuing offline." : "Offline — whiteboard still works.",
-            )
-          }
-        />
-      )}
-
       {llmGateOpen && (
         <LlmStatusDialog
           phase={llmGatePhase}
           onOpenSettings={() => {
             closeLlmGate();
-            setSettingsTab("server");
+            setSettingsTab("llm");
             setSettingsOpen(true);
           }}
           onContinueWithout={() => {
             closeLlmGate();
-            setNotice("Agent off — Settings → Server when you want it back.");
+            setNotice("Agent off — Settings → LLM when you want it back.");
           }}
         />
       )}
@@ -6844,62 +6655,6 @@ export function App() {
         }}
       />
       <SmartTips />
-    </div>
-  );
-}
-
-/**
- * Offline chip or host pairing — screen-centered overlay, not the Run tests row.
- */
-function HeaderPairingSlot({
-  serverLink,
-  pairing,
-  pairingEditing,
-  gateOpen,
-  onPair,
-  onEditingChange,
-  onRetryOffline,
-  onTapOffline,
-}: {
-  serverLink: "online" | "offline" | "checking";
-  pairing: Pairing;
-  pairingEditing: boolean;
-  gateOpen: boolean;
-  onPair: (next: Pairing) => void;
-  onEditingChange: (editing: boolean) => void;
-  onRetryOffline: () => void;
-  onTapOffline: () => void;
-}) {
-  return (
-    <div
-      className={[
-        "lc-header-pairing-slot",
-        serverLink === "offline" && !pairingEditing && "lc-offline-chip-enter",
-        pairingEditing && "lc-pairing-edit-enter",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    >
-      {serverLink === "offline" && !pairingEditing ? (
-        <HoldButton
-          label="Offline"
-          className="lc-offline-chip"
-          ariaLabel="Offline: tap to edit host, hold to retry"
-          holdMs={HOLD_SENSITIVE_MS}
-          resetKey={gateOpen}
-          onTap={onTapOffline}
-          onConfirm={onRetryOffline}
-        >
-          Offline
-        </HoldButton>
-      ) : (
-        <PairingBadge
-          pairing={pairing}
-          onPair={onPair}
-          editing={pairingEditing}
-          onEditingChange={onEditingChange}
-        />
-      )}
     </div>
   );
 }
@@ -6963,227 +6718,6 @@ function RegionPager({
       </button>
     </nav>
   );
-}
-
-/**
- * Pairing, as three short fields: Host, Port, Code.
- *
- * The tablet has no rear camera worth pointing at a PC and nobody should retype
- * a 32-character token, so the six digits from the `lc serve --lan` banner are
- * the path — they buy one `POST /pair` and the app stores the real token that
- * comes back. Pasting the full `http://host:port?token=…` URL into Host still
- * works for anyone who has it on the clipboard.
- */
-function PairingBadge({
-  pairing,
-  onPair,
-  editing,
-  onEditingChange,
-}: {
-  pairing: Pairing;
-  onPair: (pairing: Pairing) => void;
-  editing: boolean;
-  onEditingChange: (editing: boolean) => void;
-}) {
-  const [host, setHost] = useState(() => hostnameOf(pairing.baseUrl));
-  const [port, setPort] = useState(() => portOf(pairing.baseUrl));
-  const [code, setCode] = useState("");
-  const [problem, setProblem] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const formRef = useRef<HTMLFormElement | null>(null);
-  const fields = useRef({ host, port, code, pending });
-  fields.current = { host, port, code, pending };
-
-  const beginEdit = useCallback(() => {
-    setHost(hostnameOf(pairing.baseUrl));
-    setPort(portOf(pairing.baseUrl));
-    setCode("");
-    setProblem(null);
-    onEditingChange(true);
-  }, [onEditingChange, pairing.baseUrl]);
-
-  const dismiss = useCallback(() => {
-    onEditingChange(false);
-    setHost(hostnameOf(pairing.baseUrl));
-    setPort(portOf(pairing.baseUrl));
-    setCode("");
-    setProblem(null);
-  }, [onEditingChange, pairing.baseUrl]);
-
-  const commit = useCallback(async () => {
-    const current = fields.current;
-    if (current.pending) return;
-    setProblem(null);
-
-    // Power-user path: the whole URL from the banner, token and all.
-    const pasted = parsePairingUrl(current.host.trim());
-    if (pasted?.token) {
-      savePairing(pasted);
-      onPair(pasted);
-      onEditingChange(false);
-      return;
-    }
-
-    // No code typed: they are just moving the daemon's address, so keep the
-    // token we already hold rather than forcing a re-pair.
-    if (normalizePairCode(current.code).length === 0) {
-      const baseUrl = pairingBaseUrl(current.host, current.port);
-      if (!baseUrl) {
-        setProblem("that host doesn't look right — try the Host line from the PC");
-        return;
-      }
-      const next: Pairing = { baseUrl, token: pairing.token };
-      savePairing(next);
-      onPair(next);
-      onEditingChange(false);
-      return;
-    }
-
-    setPending(true);
-    try {
-      const paired = await pairWithCode(current.host, current.port, current.code);
-      savePairing(paired);
-      onPair(paired);
-      setCode("");
-      onEditingChange(false);
-    } catch (cause) {
-      setProblem(messageOf(cause));
-    } finally {
-      setPending(false);
-    }
-  }, [onEditingChange, onPair, pairing.token]);
-
-  useEffect(() => {
-    if (!editing) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (formRef.current?.contains(event.target as Node)) return;
-      // Tablet: tap away = Enter / pair.
-      void commit();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") dismiss();
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [commit, dismiss, editing]);
-
-  if (!editing) {
-    return (
-      <button
-        type="button"
-        className="lc-link lc-pairing"
-        title={pairing.token ? "paired — tap to change" : "loopback — tap to pair a daemon"}
-        onClick={() => beginEdit()}
-      >
-        {hostOf(pairing.baseUrl)}
-      </button>
-    );
-  }
-
-  return (
-    <form
-      ref={formRef}
-      className="lc-pairing-form"
-      title={
-        problem ??
-        (pending ? "pairing…" : "Host, Port and the 6-digit Code from `lc serve --lan`")
-      }
-      aria-describedby={problem ? undefined : "lc-pairing-hint"}
-      onSubmit={(event) => {
-        event.preventDefault();
-        void commit();
-      }}
-    >
-      <div className="lc-pairing-field">
-        <input
-          className="lc-pair-host"
-          value={host}
-          aria-label="Host"
-          placeholder="192.168.1.20"
-          autoFocus
-          inputMode="decimal"
-          disabled={pending}
-          onChange={(event) => setHost(event.target.value)}
-        />
-        <input
-          className="lc-pair-port"
-          value={port}
-          aria-label="Port"
-          placeholder="7878"
-          inputMode="numeric"
-          disabled={pending}
-          onChange={(event) => setPort(event.target.value)}
-        />
-        <input
-          className="lc-pair-code-input"
-          value={code}
-          aria-label="Pairing code"
-          placeholder="code"
-          inputMode="numeric"
-          maxLength={7}
-          disabled={pending}
-          onChange={(event) => setCode(event.target.value)}
-        />
-        <button
-          type="submit"
-          className="lc-pairing-return"
-          aria-label="Pair"
-          title="Pair"
-          disabled={pending}
-        >
-          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-            <path
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M19 7v6a4 4 0 0 1-4 4H6m0 0 3.5-3.5M6 17l3.5 3.5"
-            />
-          </svg>
-        </button>
-      </div>
-      {problem ? (
-        <span className="lc-warning" role="alert">
-          {problem}
-        </span>
-      ) : (
-        <span id="lc-pairing-hint" className="lc-muted lc-pairing-hint">
-          {pending ? "pairing…" : "Host, Port and the 6-digit Code from `lc serve --lan`"}
-        </span>
-      )}
-    </form>
-  );
-}
-
-/** `host:port`, for the badge — what you'd tell someone the app is talking to. */
-function hostOf(baseUrl: string): string {
-  try {
-    return new URL(baseUrl).host;
-  } catch {
-    return baseUrl;
-  }
-}
-
-/** Just the host, for the Host field. */
-function hostnameOf(baseUrl: string): string {
-  try {
-    return new URL(baseUrl).hostname;
-  } catch {
-    return baseUrl;
-  }
-}
-
-function portOf(baseUrl: string): string {
-  try {
-    return new URL(baseUrl).port || String(DEFAULT_PORT);
-  } catch {
-    return String(DEFAULT_PORT);
-  }
 }
 
 /** Tauri's `invoke`, or null on plain web / `vite dev`. */

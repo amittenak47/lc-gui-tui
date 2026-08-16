@@ -99,14 +99,15 @@ import {
   saveThisDevicePrefs,
 } from "../util/devicePrefs";
 import type { DevicePrefsDto } from "../api/client";
+import { FEATURE_LEETCODE } from "../featureFlags";
 
-type TabId = "workspace" | "personalise" | "ai" | "server";
+type TabId = "workspace" | "personalise" | "ai" | "llm";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "personalise", label: "Personalise" },
   { id: "ai", label: "AI Behavior" },
-  { id: "workspace", label: "Workspace" },
-  { id: "server", label: "Server" },
+  ...(FEATURE_LEETCODE ? [{ id: "workspace" as const, label: "Workspace" }] : []),
+  { id: "llm", label: "LLM" },
 ];
 
 const SETTINGS_PAGE_TITLES: Record<string, string> = {
@@ -116,7 +117,6 @@ const SETTINGS_PAGE_TITLES: Record<string, string> = {
   storage: "Storage Settings",
   tests: "Test Cases",
   llm: "LLM",
-  serve: "Serve",
 };
 
 const SettingsPageCtx = createContext<{
@@ -184,7 +184,7 @@ const COACH_FLAG_GROUPS: Array<{
       [
         "planner_enabled",
         "Plan the approaches first",
-        "One call per problem, to the planner provider on the Server tab, cataloging the approach families the problem admits — so a small local model is asked the narrow questions it is good at and a bigger one answers the broad one. Built from the statement and the sample cases only: it cannot reach a solution, and a test keeps it that way.",
+        "One call per problem, to the planner provider on the LLM tab, cataloging the approach families the problem admits — so a small local model is asked the narrow questions it is good at and a bigger one answers the broad one. Built from the statement and the sample cases only: it cannot reach a solution, and a test keeps it that way.",
       ],
       [
         "draw_review_enabled",
@@ -238,11 +238,11 @@ function llmServerHint(provider: "local" | "ollama" | "openai" | "groq"): string
   switch (provider) {
     case "local":
     case "ollama":
-      return "Usually http://localhost:11434/v1 when Ollama runs on the same machine as lc serve.";
+      return "Usually http://localhost:11434/v1 when Ollama runs on this machine.";
     case "openai":
-      return "OpenAI's cloud API. Requests still leave from the PC running lc serve; the API key lives there too.";
+      return "OpenAI's cloud API. Requests leave from this app; the API key lives here too.";
     case "groq":
-      return "Groq's cloud API. Requests still leave from the PC running lc serve; the API key lives there too.";
+      return "Groq's cloud API. Requests leave from this app; the API key lives here too.";
   }
 }
 
@@ -255,7 +255,6 @@ function emptyConfig(): LcConfig {
     data_json_dir: null,
     dataset_dirs: {},
     workspace_dir: "~/lc-workspace",
-    python_executable: "python",
     stop_on_first_failure: false,
     default_provider: "local",
     local: emptyProvider(),
@@ -375,9 +374,9 @@ export interface SettingsModalProps {
   client: LcClient;
   onClose: () => void;
   onSaved?: () => void;
-  /** Open on a specific tab (e.g. Server from the LLM gate). */
+  /** Open on a specific tab (e.g. LLM from the LLM gate). */
   initialTab?: TabId;
-  /** Live coach / LLM reachability for the Server tab badge. */
+  /** Live coach / LLM reachability for the LLM tab badge. */
   coachStatus?: "unknown" | "online" | "offline";
   coachDetail?: string | null;
 }
@@ -404,12 +403,6 @@ export function SettingsModal({
   const [error, setError] = useState<string | null>(null);
   const [providerFocus, setProviderFocus] = useState<"local" | "ollama" | "openai">("local");
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
-  /** Host / port / six-digit code to type on a tablet — null until loaded. */
-  const [pairInfo, setPairInfo] = useState<{
-    code: string | null;
-    host: string | null;
-    port: number;
-  } | null>(null);
   /**
    * What this origin is using, read once when Personalise opens.
    *
@@ -599,13 +592,6 @@ export function SettingsModal({
         } catch {
           // An older daemon has no /datasets — the tab just says so.
           if (!cancelled) setDatasets([]);
-        }
-        try {
-          const pair = await client.pairCode();
-          if (!cancelled) setPairInfo(pair);
-        } catch {
-          // An older daemon has no /pair/code — the Serve tab just says so.
-          if (!cancelled) setPairInfo(null);
         }
         try {
           await ensureDevicePrefs(client);
@@ -871,16 +857,6 @@ export function SettingsModal({
                   Where generated solve folders go (~/lc-workspace/&lt;task&gt;).
                 </p>
               </label>
-              <label>
-                <span>Python executable</span>
-                <input
-                  value={draft.python_executable}
-                  onChange={(e) =>
-                    setDraft((prev) => ({ ...prev, python_executable: e.target.value }))
-                  }
-                />
-                <p className="lc-settings-hint">Python used to run tests.</p>
-              </label>
               </SettingsFold>
 
               <SettingsFold id="datasets" title="Datasets">
@@ -892,7 +868,7 @@ export function SettingsModal({
               <div className="lc-settings-subhead">Offline dataset download</div>
               <p className="lc-settings-hint">
                 Download every indexed dataset except KodCode onto this device (~100–250&nbsp;MB).
-                Browse and open statements offline; tests need the server.
+                Browse and open statements offline; tests run in this app.
               </p>
               {packMeta && (
                 <p className="lc-muted">
@@ -1499,6 +1475,7 @@ export function SettingsModal({
 
           {tab === "ai" && (
             <div className="lc-settings-fields">
+              {FEATURE_LEETCODE && (
               <SettingsFold id="tests" title="Test Cases">
               <div className="lc-settings-subhead">When a case fails</div>
               <div className="lc-settings-choice" role="radiogroup" aria-label="Test run mode">
@@ -1585,6 +1562,7 @@ export function SettingsModal({
                 have no test run to forward.
               </p>
               </SettingsFold>
+              )}
 
               {COACH_FLAG_GROUPS.map((group) => (
                 <SettingsFold key={group.id} id={group.id} title={group.title}>
@@ -1627,19 +1605,15 @@ export function SettingsModal({
             </div>
           )}
 
-          {tab === "server" && (
+          {tab === "llm" && (
             <div className="lc-settings-fields">
               <div className="lc-settings-callout" role="note">
-                <strong>localhost means the server, not this app</strong>
+                <strong>localhost means this machine</strong>
                 <p>
-                  {mobile ? "This tablet" : "The whiteboard"} talks to <code>lc serve</code> over
-                  the network. The daemon on your PC then calls the LLM URL below.
-                </p>
-                <p>
+                  The in-process daemon calls the LLM URL below.{" "}
                   <code>localhost</code> / <code>127.0.0.1</code> always mean{" "}
-                  <strong>the machine running lc serve</strong>
-                  {mobile ? ", not the tablet" : ""}. You do not point the tablet at Ollama
-                  directly.
+                  <strong>this app&apos;s machine</strong>
+                  {mobile ? ", not a remote tablet" : ""}.
                 </p>
               </div>
 
@@ -1694,7 +1668,7 @@ export function SettingsModal({
               </div>
 
               <label>
-                <span>LLM server URL (on the lc serve machine)</span>
+                <span>LLM server URL</span>
                 <input
                   value={provider.base_url}
                   onChange={(e) => patchProvider(providerFocus, { base_url: e.target.value })}
@@ -1754,10 +1728,9 @@ export function SettingsModal({
                 </label>
               ))}
 
-              <div className="lc-settings-subhead">Local LLM process (on the PC)</div>
+              <div className="lc-settings-subhead">Local LLM process</div>
               <p className="lc-settings-hint">
-                Starts or stops the bundled local model on the machine running{" "}
-                <code>lc serve</code> — not on {mobile ? "the tablet" : "a remote client"}.
+                Starts or stops the bundled local model on this machine.
               </p>
               <p className="lc-muted">
                 {llmStatus?.detail ?? "Status unknown"}
@@ -1774,55 +1747,6 @@ export function SettingsModal({
                   Refresh
                 </button>
               </div>
-              </SettingsFold>
-
-              <SettingsFold id="serve" title="Serve">
-              <label>
-                <span>Port</span>
-                <input
-                  type="number"
-                  value={draft.serve_port}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      serve_port: Number(e.target.value) || prev.serve_port,
-                    }))
-                  }
-                />
-              </label>
-              <p className="lc-muted">
-                Pairing token:{" "}
-                {draft.token_set ? "set (use lc serve --lan to rotate)" : "not set (loopback only)"}
-              </p>
-
-              <div className="lc-settings-subhead">Pair a tablet</div>
-              {pairInfo?.code ? (
-                <>
-                  <dl className="lc-pair-readout">
-                    <div>
-                      <dt>Host</dt>
-                      <dd>{pairInfo.host ?? "this machine's LAN address"}</dd>
-                    </div>
-                    <div>
-                      <dt>Port</dt>
-                      <dd>{pairInfo.port}</dd>
-                    </div>
-                    <div>
-                      <dt>Code</dt>
-                      <dd className="lc-pair-code">{pairInfo.code}</dd>
-                    </div>
-                  </dl>
-                  <p className="lc-muted">
-                    Type these three into the tablet's header. The code changes every time{" "}
-                    <code>lc serve --lan</code> restarts; devices already paired keep working.
-                  </p>
-                </>
-              ) : (
-                <p className="lc-muted">
-                  No pairing code — this daemon is loopback-only. Restart it with{" "}
-                  <code>lc serve --lan</code> to pair a tablet.
-                </p>
-              )}
               </SettingsFold>
             </div>
           )}

@@ -15,6 +15,21 @@ pub fn run() {
         // their logins, and would put the search result inside the annotation
         // surface it is supposed to be a detour from.
         .plugin(tauri_plugin_opener::init())
+        .setup(|_app| {
+            tauri::async_runtime::spawn(async {
+                match harness::config::Config::load() {
+                    Ok(cfg) => {
+                        if let Err(err) = harness::serve::run_loopback(cfg).await {
+                            eprintln!("embedded lc serve failed: {err:#}");
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("cannot load config for embedded lc serve: {err:#}");
+                    }
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
         lc_client::lc_request,
         lc_client::fetch_html,

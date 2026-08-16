@@ -3,8 +3,14 @@ use colored::Colorize;
 use comfy_table::Table;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(feature = "leetcode")]
+use rustpython::{InterpreterBuilder, InterpreterBuilderExt};
+
+/// Default Windows/debug stack overflows inside `Interpreter::build()`.
+#[cfg(feature = "leetcode")]
+const RUSTPYTHON_STACK: usize = 32 * 1024 * 1024;
 
 use crate::config::Config;
 use crate::dataset::{self, Dataset};
@@ -185,6 +191,105 @@ pub fn locate_workspace_in(
     }
 }
 
+/// Run `run_tests.py` in-process via RustPython and parse JSONL stdout.
+///
+/// Isolated per call: new interpreter on a 32MB stack thread so student code
+/// cannot poison the next run, and Windows debug does not overflow in
+/// `Interpreter::build()`.
+pub fn execute_run_tests(dir: &Path, extra_argv: &[&str]) -> Result<(Vec<CaseResult>, String, String)> {
+    #[cfg(not(feature = "leetcode"))]
+    {
+        let _ = (dir, extra_argv);
+        bail!("this build was compiled without the leetcode feature — no test runner")
+    }
+    #[cfg(feature = "leetcode")]
+    {
+        execute_run_tests_vm(dir, extra_argv)
+    }
+}
+
+#[cfg(feature = "leetcode")]
+fn driver_source(workdir: &Path, extra_argv: &[&str]) -> String {
+    let here = workdir.to_string_lossy().replace('\\', "/");
+    let extras = extra_argv
+        .iter()
+        .map(|s| format!(", {s:?}"))
+        .collect::<String>();
+    format!(
+        r#"
+import io, os, runpy, sys, traceback
+HERE = r"{here}"
+os.chdir(HERE)
+sys.argv = ["run_tests.py"{extras}]
+out, err = io.StringIO(), io.StringIO()
+sys.stdout, sys.stderr = out, err
+code = 0
+try:
+    runpy.run_path(os.path.join(HERE, "run_tests.py"), run_name="__main__")
+except SystemExit as e:
+    if isinstance(e.code, int):
+        code = e.code
+    elif e.code:
+        code = 1
+except Exception:
+    err.write(traceback.format_exc())
+    code = 1
+open(os.path.join(HERE, "_rp_stdout.txt"), "w", encoding="utf-8").write(out.getvalue())
+open(os.path.join(HERE, "_rp_stderr.txt"), "w", encoding="utf-8").write(err.getvalue())
+open(os.path.join(HERE, "_rp_exit.txt"), "w", encoding="utf-8").write(str(code))
+"#
+    )
+}
+
+#[cfg(feature = "leetcode")]
+fn execute_run_tests_vm(dir: &Path, extra_argv: &[&str]) -> Result<(Vec<CaseResult>, String, String)> {
+    let driver = driver_source(dir, extra_argv);
+    let dir = dir.to_path_buf();
+    let join = std::thread::Builder::new()
+        .name("rustpython".into())
+        .stack_size(RUSTPYTHON_STACK)
+        .spawn(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
+                let interp = InterpreterBuilder::new().init_stdlib().build();
+                let fail = interp.enter(|vm| {
+                    if let Err(exc) = vm.run_simple_string(&driver) {
+                        let mut buf = String::new();
+                        let _ = vm.write_exception_inner(&mut buf, &exc);
+                        Some(buf)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(buf) = fail {
+                    bail!("RustPython failed before the runner finished:\n{buf}");
+                }
+                Ok(())
+            }))
+        })
+        .context("cannot spawn rustpython thread")?
+        .join()
+        .map_err(|_| anyhow::anyhow!("rustpython thread panicked"))?;
+    match join {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => return Err(err),
+        Err(_) => bail!("RustPython panicked (often a stack overflow in Interpreter::build)"),
+    }
+
+    let stdout = std::fs::read_to_string(dir.join("_rp_stdout.txt")).unwrap_or_default();
+    let stderr = std::fs::read_to_string(dir.join("_rp_stderr.txt")).unwrap_or_default();
+    let mut results: Vec<CaseResult> = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(result) = serde_json::from_str::<CaseResult>(line) {
+            results.push(result);
+        }
+    }
+    Ok((results, stdout, stderr))
+}
+
 /// Run the workspace's tests. Returns true when every case passed.
 pub fn cmd_test(
     cfg: &Config,
@@ -242,40 +347,22 @@ fn cmd_test_inner(
     refresh_runner_script(&dir)?;
     sanitize_workspace_meta(&dir, &mut meta)?;
 
-    let mut cmd = Command::new(&cfg.python.executable);
-    cmd.arg("run_tests.py").current_dir(&dir);
+    let mut extra: Vec<String> = Vec::new();
     if let Some(n) = case {
-        cmd.args(["--case", &n.to_string()]);
+        extra.push("--case".into());
+        extra.push(n.to_string());
     }
     if full {
-        cmd.arg("--full");
+        extra.push("--full".into());
     }
     // Settings → Tests. Off by default, so the results panel and the coach's
     // counterexample picking both see every case.
     if cfg.tests.stop_on_first_failure {
-        cmd.arg("--stop-on-first-failure");
+        extra.push("--stop-on-first-failure".into());
     }
-    let output = cmd.output().with_context(|| {
-        format!(
-            "failed to launch {:?} — if Python lives elsewhere, run \
-             `lc config set python <path-to-python>`",
-            cfg.python.executable
-        )
-    })?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut results: Vec<CaseResult> = Vec::new();
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Ok(result) = serde_json::from_str::<CaseResult>(line) {
-            results.push(result);
-        }
-    }
+    let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
+    let (results, stdout, stderr) = execute_run_tests(&dir, &extra_refs)?;
     if results.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         bail!("the test runner produced no results\nstdout:\n{stdout}\nstderr:\n{stderr}");
     }
 

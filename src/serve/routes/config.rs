@@ -50,7 +50,6 @@ pub struct ConfigDto {
     #[serde(default)]
     pub dataset_dirs: std::collections::BTreeMap<String, String>,
     pub workspace_dir: String,
-    pub python_executable: String,
     /// Settings → Tests: stop at the first failing case instead of running
     /// every case.
     #[serde(default)]
@@ -74,7 +73,6 @@ fn config_dto(cfg: &Config) -> ConfigDto {
         data_json_dir: cfg.data.json_dir.clone(),
         dataset_dirs: cfg.data.datasets.clone(),
         workspace_dir: cfg.workspace.dir.clone(),
-        python_executable: cfg.python.executable.clone(),
         stop_on_first_failure: cfg.tests.stop_on_first_failure,
         default_provider: cfg.llm.default_provider.clone(),
         local: ProviderConfigDto {
@@ -133,7 +131,6 @@ fn apply_config_dto(cfg: &mut Config, dto: &ConfigDto) -> anyhow::Result<()> {
         .map(|(slug, dir)| (slug.clone(), dir.trim().to_string()))
         .collect();
     cfg.workspace.dir = dto.workspace_dir.clone();
-    cfg.python.executable = dto.python_executable.clone();
     cfg.tests.stop_on_first_failure = dto.stop_on_first_failure;
     cfg.set("llm.default_provider", &dto.default_provider)?;
     cfg.llm.local.base_url = dto.local.base_url.clone();

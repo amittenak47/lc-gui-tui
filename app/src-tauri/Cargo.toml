@@ -1,5 +1,5 @@
 [package]
-name = "whiteboard"
+name = "whiteboard-gui"
 version = "0.1.0"
 edition = "2021"
 description = "Handwriting whiteboard for the practice harness"
@@ -10,6 +10,10 @@ license = "PolyForm-Noncommercial-1.0.0"
 [lib]
 name = "whiteboard_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["leetcode"]
+leetcode = ["harness/leetcode", "dep:malachite-bigint"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -22,6 +26,10 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio = { version = "1", features = ["rt-multi-thread"] }
 tauri-plugin-opener = "2.5.4"
 base64 = "0.22"
+harness = { path = "../..", package = "whiteboard", default-features = false }
+# rustpython-stdlib 0.5 wants malachite-bigint 0.9; pymath pulls ^0 (0.10).
+# Pin here so this crate's lockfile unifies the same way the harness does.
+malachite-bigint = { version = "=0.9.2", optional = true }
 
 # ML Kit exists only on Android; the desktop build never compiles it and falls
 # back to typed text or a PNG sent to a vision model.

@@ -54,10 +54,10 @@ describe("parsePairingUrl", () => {
 });
 
 describe("pairing storage", () => {
-  it("round-trips", () => {
+  it("ignores stored LAN pairing — the GUI daemon is always loopback", () => {
     const storage = memoryStorage();
     savePairing({ baseUrl: "http://host:7878", token: "tok" }, storage);
-    expect(loadPairing(storage)).toEqual({ baseUrl: "http://host:7878", token: "tok" });
+    expect(loadPairing(storage)).toEqual(DEFAULT_PAIRING);
   });
 
   it("falls back to loopback when nothing is stored", () => {
