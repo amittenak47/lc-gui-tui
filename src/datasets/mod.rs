@@ -27,6 +27,7 @@ pub mod ms_python_q;
 pub mod statement_markdown;
 
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
 use crate::dataset::{Dataset, Shape};
 use crate::problem::{IoCase, Problem};
@@ -399,7 +400,119 @@ fn io_case_is_runnable(input: &str, output: &str) -> bool {
     if looks_like_junk_token(input) {
         return false;
     }
+    if assigns_to_literal(input) || has_leading_zero_int(input) || has_duplicate_keyword(input) {
+        return false;
+    }
     quotes_and_brackets_ok(input)
+}
+
+/// `True = …` / `1 = …` — Python `SyntaxError: invalid assignment target`.
+fn assigns_to_literal(input: &str) -> bool {
+    for part in input.split(',') {
+        let Some((left, _)) = part.split_once('=') else {
+            continue;
+        };
+        let left = left.trim();
+        if matches!(left, "True" | "False" | "None") {
+            return true;
+        }
+        if !left.is_empty() && left.chars().all(|c| c.is_ascii_digit() || c == '-' || c == '.') {
+            return true;
+        }
+    }
+    false
+}
+
+/// Python 3 rejects `07`; `ast.parse("__lc__(07)")` is SyntaxError.
+fn has_leading_zero_int(input: &str) -> bool {
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if escape {
+            escape = false;
+            i += 1;
+            continue;
+        }
+        if let Some(q) = quote {
+            if c == '\\' {
+                escape = true;
+            } else if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            quote = Some(c);
+            i += 1;
+            continue;
+        }
+        if c == '0' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+            let prev = i.checked_sub(1).map(|j| chars[j]);
+            let glued = prev.is_some_and(|p| p.is_ascii_alphanumeric() || p == '_' || p == '.');
+            if !glued {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// `foo=1, foo=2` — `ast.parse("__lc__(…)")` raises duplicate keyword argument.
+fn has_duplicate_keyword(input: &str) -> bool {
+    let mut seen = HashSet::new();
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
+        if escape {
+            escape = false;
+            i += 1;
+            continue;
+        }
+        if let Some(q) = quote {
+            if c == '\\' {
+                escape = true;
+            } else if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            quote = Some(c);
+            i += 1;
+            continue;
+        }
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            i += 1;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let mut j = i;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j < chars.len() && chars[j] == '=' && (j + 1 >= chars.len() || chars[j + 1] != '=') {
+                let name: String = chars[start..i].iter().collect();
+                if !seen.insert(name) {
+                    return true;
+                }
+                i = j + 1;
+                continue;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Bare names (`s`) and stray punctuation (`]`, `,`, `=`) that `literal_eval` rejects.
@@ -761,11 +874,14 @@ pub(crate) fn with_imports_and_solution(starter: &str) -> (Option<String>, Strin
     if trimmed.is_empty() {
         return (None, String::new());
     }
-    let (preamble, code) = split_import_preamble(trimmed);
-    let body = if code.starts_with("def ") {
-        wrap_def_as_solution_method(code).unwrap_or_else(|| ensure_pass_bodies(code))
+    let exploded = explode_jammed_defs(trimmed);
+    let exploded = collapse_chained_type_assigns(&exploded);
+    let (preamble, code) = split_import_preamble(&exploded);
+    let code = close_open_def_signatures(code);
+    let body = if code.trim_start().starts_with("def ") && !code.contains("\nclass ") {
+        wrap_all_module_defs(&code).unwrap_or_else(|| ensure_pass_bodies(&code))
     } else {
-        ensure_pass_bodies(code)
+        ensure_pass_bodies(&code)
     };
     let typing = typing_imports_for(&body).filter(|imp| {
         !body.contains(imp.as_str()) && !preamble.contains(imp.as_str())
@@ -776,6 +892,49 @@ pub(crate) fn with_imports_and_solution(starter: &str) -> (Option<String>, Strin
         (false, Some(typing)) => Some(format!("{preamble}\n{typing}")),
     };
     (prompt, body)
+}
+
+/// Corpus writes `self.left = TreeNode | None = None` — assignment to a type.
+fn collapse_chained_type_assigns(src: &str) -> String {
+    let mut out = String::new();
+    for line in src.lines() {
+        if let Some(fixed) = collapse_one_typed_none_assign(line) {
+            out.push_str(&fixed);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    if !src.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+fn collapse_one_typed_none_assign(line: &str) -> Option<String> {
+    let Some((left, rest)) = line.split_once('=') else {
+        return None;
+    };
+    let rhs = rest.trim();
+    if !rhs.contains('=') {
+        return None;
+    }
+    let looks_like_type = rhs.contains('|') || (rhs.contains('[') && rhs.contains(']'));
+    let ends_none = rhs.ends_with("= None") || rhs.ends_with("=None");
+    if looks_like_type && ends_none {
+        return Some(format!("{left}= None"));
+    }
+    None
+}
+
+/// Whether the stub exposes `def {name}(`.
+pub(crate) fn stub_defines(code: &str, name: &str) -> bool {
+    let needle = format!("def {name}(");
+    let needle_sp = format!("def {name} (");
+    code.lines().any(|line| {
+        let t = line.trim_start();
+        t.starts_with(&needle) || t.starts_with(&needle_sp)
+    })
 }
 
 /// Split `from collections import Counter\\ndef foo` so the `def` can wrap as Solution.
@@ -792,6 +951,166 @@ fn split_import_preamble(src: &str) -> (&str, &str) {
         (Some(d), Some(c)) => d.min(c) + 1,
     };
     (src[..at].trim_end(), src[at..].trim())
+}
+
+/// LC+Tests dumps two signatures as `def a(...) -> T, def b(...)` or `; def`.
+fn explode_jammed_defs(src: &str) -> String {
+    src.replace("; def ", "\ndef ").replace(", def ", "\ndef ")
+}
+
+/// Corpus class stubs often omit the trailing `:` on `def foo(...) -> int`.
+fn close_open_def_signatures(src: &str) -> String {
+    let mut out = String::new();
+    for line in src.lines() {
+        let trimmed_end = line.trim_end();
+        let trimmed = trimmed_end.trim_start();
+        if trimmed.starts_with("def ") && !trimmed_end.ends_with(':') && def_parens_closed(trimmed) {
+            out.push_str(trimmed_end);
+            out.push(':');
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    if !src.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+fn def_parens_closed(def_line: &str) -> bool {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for ch in def_line.chars() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            continue;
+        }
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth == 0 && def_line.contains('(') && def_line.contains(')')
+}
+
+fn wrap_all_module_defs(code: &str) -> Option<String> {
+    let chunks = split_top_level_defs(code);
+    if chunks.is_empty() {
+        return None;
+    }
+    let mut methods = String::from("class Solution:\n");
+    for chunk in chunks {
+        let wrapped = wrap_def_as_solution_method(chunk.trim())?;
+        for line in wrapped.lines().skip(1) {
+            methods.push_str(line);
+            methods.push('\n');
+        }
+    }
+    Some(methods)
+}
+
+fn split_top_level_defs(code: &str) -> Vec<&str> {
+    let mut starts = Vec::new();
+    let mut search = 0usize;
+    if code.starts_with("def ") {
+        starts.push(0);
+        search = 1;
+    }
+    while let Some(rel) = code[search..].find("\ndef ") {
+        let at = search + rel + 1;
+        starts.push(at);
+        search = at + 1;
+    }
+    if starts.is_empty() {
+        return Vec::new();
+    }
+    let mut chunks = Vec::new();
+    for i in 0..starts.len() {
+        let end = starts.get(i + 1).copied().unwrap_or(code.len());
+        chunks.push(code[starts[i]..end].trim_end());
+    }
+    chunks
+}
+
+/// Most common `assert name(` callee — helpers listed first in `function` are
+/// not the entry the tests actually call.
+pub(crate) fn entry_point_from_asserts(suite: &str) -> Option<String> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for line in suite.lines() {
+        let Some(rest) = line.trim().strip_prefix("assert ") else {
+            continue;
+        };
+        let call = rest.split_once("==").map(|(c, _)| c).unwrap_or(rest);
+        let Some(open) = call.find('(') else {
+            continue;
+        };
+        let name = call[..open].trim();
+        let called = name.rsplit('.').next().unwrap_or(name).trim();
+        if called.is_empty() || called == "candidate" || is_assert_noise(called) {
+            continue;
+        }
+        if !called.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        *counts.entry(called.to_string()).or_default() += 1;
+    }
+    counts.into_iter().max_by_key(|(_, n)| *n).map(|(k, _)| k)
+}
+
+fn is_assert_noise(name: &str) -> bool {
+    matches!(
+        name,
+        "isinstance"
+            | "issubclass"
+            | "len"
+            | "sorted"
+            | "set"
+            | "list"
+            | "dict"
+            | "tuple"
+            | "all"
+            | "any"
+            | "min"
+            | "max"
+            | "sum"
+            | "type"
+            | "int"
+            | "str"
+            | "bool"
+            | "range"
+            | "enumerate"
+            | "zip"
+            | "map"
+            | "filter"
+            | "print"
+            | "abs"
+            | "reversed"
+            | "iter"
+            | "hasattr"
+            | "getattr"
+            | "setattr"
+            | "callable"
+            | "id"
+            | "vars"
+            | "dir"
+            | "open"
+            | "format"
+            | "round"
+            | "repr"
+            | "hash"
+            | "super"
+            | "object"
+            | "bytes"
+            | "frozenset"
+    )
 }
 
 fn wrap_def_as_solution_method(declaration: &str) -> Option<String> {
@@ -893,6 +1212,28 @@ pub(crate) fn ensure_pass_bodies(source: &str) -> String {
     out
 }
 
+/// Replace `foo(` with `candidate(` unless it is `obj.foo(` / `otherfoo(`.
+fn replace_bare_call(src: &str, entry: &str) -> String {
+    let needle = format!("{entry}(");
+    let mut out = String::new();
+    let mut rest = src;
+    while let Some(at) = rest.find(&needle) {
+        let before = &rest[..at];
+        let glued = before.chars().last().is_some_and(|c| {
+            c.is_ascii_alphanumeric() || c == '_' || c == '.'
+        });
+        out.push_str(before);
+        if glued {
+            out.push_str(&needle);
+        } else {
+            out.push_str("candidate(");
+        }
+        rest = &rest[at + needle.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Rewrite `assert foo(...)` lines into a `check(candidate)` suite.
 pub(crate) fn asserts_as_check_suite(suite: &str, entry_point: &str) -> String {
     let mut body = String::from("def check(candidate):\n");
@@ -903,18 +1244,19 @@ pub(crate) fn asserts_as_check_suite(suite: &str, entry_point: &str) -> String {
             continue;
         }
         let mut rewritten = trimmed.to_string();
-        for prefix in [
-            format!("{entry_point}("),
-            format!("Solution().{entry_point}("),
-            format!("sol.{entry_point}("),
-        ] {
-            if let Some(rest) = rewritten.strip_prefix(&format!("assert {prefix}")) {
-                rewritten = format!("assert candidate({rest}");
-                break;
-            }
-            if rewritten.contains(&prefix) {
-                rewritten = rewritten.replace(&prefix, "candidate(");
-            }
+        let assert_bare = format!("assert {entry_point}(");
+        let assert_sol = format!("assert Solution().{entry_point}(");
+        let assert_sol_var = format!("assert sol.{entry_point}(");
+        if let Some(rest) = rewritten.strip_prefix(&assert_bare) {
+            rewritten = format!("assert candidate({rest}");
+        } else if let Some(rest) = rewritten.strip_prefix(&assert_sol) {
+            rewritten = format!("assert candidate({rest}");
+        } else if let Some(rest) = rewritten.strip_prefix(&assert_sol_var) {
+            rewritten = format!("assert candidate({rest}");
+        } else {
+            rewritten = rewritten.replace(&format!("Solution().{entry_point}("), "candidate(");
+            rewritten = rewritten.replace(&format!("sol.{entry_point}("), "candidate(");
+            rewritten = replace_bare_call(&rewritten, entry_point);
         }
         if !rewritten.starts_with("assert ") {
             continue;
@@ -1100,6 +1442,30 @@ mod tests {
     }
 
     #[test]
+    fn design_class_method_calls_are_not_rewritten_to_candidate() {
+        let suite = asserts_as_check_suite(
+            "assert RLEIterator([3, 8]).next(2) == 8\nassert next(3) == 8\n",
+            "next",
+        );
+        assert!(
+            suite.contains("RLEIterator([3, 8]).next(2)"),
+            "{suite}"
+        );
+        assert!(!suite.contains(".candidate("), "{suite}");
+        assert!(suite.contains("assert candidate(3) == 8"), "{suite}");
+    }
+
+    #[test]
+    fn chained_type_none_assigns_collapse_to_plain_none() {
+        let (_, body) = with_imports_and_solution(
+            "class TreeNode:\n    def __init__(self, x: int) -> None:\n        self.left = TreeNode | None = None\n        self.right = TreeNode | None = None\n",
+        );
+        assert!(body.contains("self.left = None"), "{body}");
+        assert!(body.contains("self.right = None"), "{body}");
+        assert!(!body.contains("| None = None"), "{body}");
+    }
+
+    #[test]
     fn wrapping_a_def_that_already_has_pass_does_not_corrupt_the_signature() {
         let (_, body) = with_imports_and_solution(
             "def max_beauty(items: List[Tuple[int, int]], queries: List[int]) -> List[int]:\n    pass\n",
@@ -1107,6 +1473,70 @@ mod tests {
         assert!(body.contains("def max_beauty(self, items: List[Tuple[int, int]], queries: List[int]) -> List[int]:"));
         assert!(!body.contains("pass:"));
         assert_eq!(body.matches("pass").count(), 1);
+    }
+
+    #[test]
+    fn jammed_and_uncoloned_stubs_become_parseable_python() {
+        let (_, parse) = with_imports_and_solution(
+            "def parse(formula: str, i: list[int]) -> Counter, def countOfAtoms(formula: str) -> str",
+        );
+        assert!(parse.contains("class Solution:"), "{parse}");
+        assert!(parse.contains("def parse(self,"), "{parse}");
+        assert!(parse.contains("def countOfAtoms(self,"), "{parse}");
+        assert!(parse.contains("-> Counter:"), "{parse}");
+        assert!(parse.contains("-> str:"), "{parse}");
+
+        let (_, klass) = with_imports_and_solution(
+            "class Solution:\n    def findKthLargest(self, nums: List[int], k: int) -> int",
+        );
+        assert!(
+            klass.contains("def findKthLargest(self, nums: List[int], k: int) -> int:"),
+            "{klass}"
+        );
+        assert!(klass.contains("pass"), "{klass}");
+
+        let (_, semi) = with_imports_and_solution(
+            "def sign_func(x: int | float) -> int; def array_sign(nums: list[int | float]) -> int",
+        );
+        assert!(semi.contains("def array_sign(self,"), "{semi}");
+        assert_eq!(entry_point_from_asserts("assert array_sign([1, 2, 3]) == 1"), Some("array_sign".into()));
+    }
+
+    #[test]
+    fn leading_zero_and_true_assignment_cases_are_dropped() {
+        let mut problem = Problem {
+            task_id: "demo".into(),
+            question_id: None,
+            difficulty: None,
+            tags: vec![],
+            problem_description: None,
+            prompt: None,
+            starter_code: None,
+            entry_point: None,
+            test: None,
+            input_output: vec![
+                IoCase {
+                    input: "nums = [1, 2]".into(),
+                    output: "[1, 2]".into(),
+                },
+                IoCase {
+                    input: "07".into(),
+                    output: "7".into(),
+                },
+                IoCase {
+                    input: "True = False".into(),
+                    output: "True".into(),
+                },
+                IoCase {
+                    input: "s1 = \"ab\", s2 = \"ba\", s2 = \"xx\"".into(),
+                    output: "True".into(),
+                },
+            ],
+            estimated_date: None,
+        };
+        sanitize_io_cases(&mut problem);
+        assert_eq!(problem.input_output.len(), 1);
+        assert_eq!(problem.input_output[0].input, "nums = [1, 2]");
     }
 
     #[test]

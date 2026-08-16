@@ -298,7 +298,12 @@ fn audit_problem(
     }
 
     let (results, err, timed_out) = run_with_timeout(&dir, &[]);
-    let kind = classify(&results, err.as_deref(), timed_out);
+    let kind = classify(
+        &results,
+        err.as_deref(),
+        timed_out,
+        problem.entry_point.as_deref(),
+    );
     if let Some(kind) = kind {
         let _ = fs::remove_dir_all(&dir);
         return Some(issue(
@@ -311,7 +316,12 @@ fn audit_problem(
 
     if run_full && !no_suite {
         let (results, err, timed_out) = run_with_timeout(&dir, &["--full"]);
-        let kind = classify(&results, err.as_deref(), timed_out);
+        let kind = classify(
+            &results,
+            err.as_deref(),
+            timed_out,
+            problem.entry_point.as_deref(),
+        );
         let _ = fs::remove_dir_all(&dir);
         return kind.map(|kind| {
             issue(
@@ -391,7 +401,12 @@ fn run_with_timeout(dir: &Path, extra: &[&str]) -> (Vec<CaseResult>, Option<Stri
     }
 }
 
-fn classify(results: &[CaseResult], exec_err: Option<&str>, timed_out: bool) -> Option<IssueKind> {
+fn classify(
+    results: &[CaseResult],
+    exec_err: Option<&str>,
+    timed_out: bool,
+    entry_point: Option<&str>,
+) -> Option<IssueKind> {
     if timed_out {
         return Some(IssueKind::Crash);
     }
@@ -407,7 +422,7 @@ fn classify(results: &[CaseResult], exec_err: Option<&str>, timed_out: bool) -> 
         }
         parts.join("\n")
     };
-    if let Some(kind) = kind_from_text(&blob) {
+    if let Some(kind) = kind_from_text(&blob, entry_point) {
         return Some(kind);
     }
     if results.is_empty() {
@@ -417,7 +432,7 @@ fn classify(results: &[CaseResult], exec_err: Option<&str>, timed_out: bool) -> 
     None
 }
 
-fn kind_from_text(blob: &str) -> Option<IssueKind> {
+fn kind_from_text(blob: &str, _entry_point: Option<&str>) -> Option<IssueKind> {
     if blob.is_empty() {
         return None;
     }
@@ -432,12 +447,12 @@ fn kind_from_text(blob: &str) -> Option<IssueKind> {
         return Some(IssueKind::MissingModule);
     }
     if (blob.contains("is not defined") && blob.contains("Solution"))
-        || blob.contains("has no attribute")
-        || blob.contains("entry point")
+        || blob.contains("cannot find entry point")
         || blob.contains("could not find")
     {
         return Some(IssueKind::MissingEntry);
     }
+    // Stub internals (`obj.history`, `self.x`) are red cases, not missing entry.
     if blob.contains("panicked") || blob.contains("stack overflow") || blob.contains("no JSONL") {
         return Some(IssueKind::Crash);
     }
@@ -478,13 +493,36 @@ fn issue(dataset: &Dataset, row: &ProblemRow, kind: IssueKind, detail: impl Into
     }
 }
 
+fn opens_python_suite(line: &str) -> bool {
+    let s = line.trim_start();
+    if s.is_empty() || s.starts_with('#') {
+        return false;
+    }
+    s.starts_with("def ")
+        || s.starts_with("async def ")
+        || s.starts_with("class ")
+        || s.starts_with("if ")
+        || s.starts_with("elif ")
+        || s.starts_with("else:")
+        || s.starts_with("for ")
+        || s.starts_with("async for ")
+        || s.starts_with("while ")
+        || s.starts_with("try:")
+        || s.starts_with("except")
+        || s.starts_with("finally:")
+        || s.starts_with("with ")
+        || s.starts_with("async with ")
+        || s.starts_with("match ")
+        || s.starts_with("case ")
+}
+
 fn fill_empty_blocks(src: &str) -> String {
     let lines: Vec<&str> = src.lines().collect();
     let mut out: Vec<String> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         out.push((*line).to_string());
         let trimmed = line.trim_end();
-        if !trimmed.ends_with(':') {
+        if !trimmed.ends_with(':') || !opens_python_suite(trimmed) {
             continue;
         }
         let indent = line.len() - line.trim_start().len();
@@ -544,3 +582,33 @@ fn print_summary(issues: &[Issue]) {
     }
     eprintln!("  total issues {}", issues.len());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commented_api_stubs_do_not_get_a_pass_body() {
+        let src = "\
+# def isBadVersion(version: int) -> bool:
+
+class Solution:
+    def firstBadVersion(self, n: int) -> int:
+";
+        let filled = fill_empty_blocks(src);
+        assert!(!filled.contains("    pass\n\nclass"), "{filled}");
+        assert!(filled.contains("def firstBadVersion"), "{filled}");
+        assert!(filled.contains("        pass"), "{filled}");
+    }
+
+    #[test]
+    fn missing_internal_attr_is_not_missing_entry() {
+        let blob = "AttributeError: 'BrowserHistory' object has no attribute 'history'";
+        assert_eq!(kind_from_text(blob, Some("visit")), None);
+        let missing = "AttributeError: cannot find entry point 'visit' as a Solution method or module-level function";
+        assert_eq!(kind_from_text(missing, Some("visit")), Some(IssueKind::MissingEntry));
+        let internal = "AttributeError: 'H2O' object has no attribute 'hydrogenSemaphore'";
+        assert_eq!(kind_from_text(internal, Some("hydrogen")), None);
+    }
+}
+

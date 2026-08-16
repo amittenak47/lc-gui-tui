@@ -59,19 +59,6 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
             )
         })?;
 
-    let entry_point = text(raw, &["entry_point", "func_name", "function_name"])
-        .map(|e| clean_entry_point(&e))
-        .or_else(|| entry_point_from_code(&declaration))
-        .or_else(|| fence_code.as_deref().and_then(entry_point_from_code))?;
-
-    let name = text(raw, &["task_id", "title_slug", "titleSlug", "slug"])
-        .or_else(|| text(raw, &["title", "name", "question_title", "problem_name"]))
-        .unwrap_or_else(|| entry_point.clone());
-    let task_id = slugify(&name);
-    if task_id.is_empty() {
-        return None;
-    }
-
     let skeleton = if declaration.trim_start().starts_with("class ") {
         let mut s = declaration.trim().to_string();
         if !s.contains("pass") {
@@ -83,19 +70,6 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         declaration.trim().to_string()
     };
     let (prompt, starter_code) = with_imports_and_solution(&skeleton);
-
-    let description = {
-        let prose = as_markdown(&after_fence);
-        if prose.is_empty() {
-            format!(
-                "Implement `{entry_point}`.\n\n*(This corpus row has no separate problem statement — only a signature and tests.)*"
-            )
-        } else {
-            // The prose after the fence is usually a solution walkthrough, not
-            // a LeetCode statement. Still better than naming every row "Python".
-            prose
-        }
-    };
 
     let assert_src = match raw.get("valid_tests") {
         Some(Value::Array(items)) => {
@@ -116,6 +90,38 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
             Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
             _ => None,
         }),
+    };
+
+    let from_code = text(raw, &["entry_point", "func_name", "function_name"])
+        .map(|e| clean_entry_point(&e))
+        .or_else(|| entry_point_from_code(&declaration))
+        .or_else(|| fence_code.as_deref().and_then(entry_point_from_code))?;
+    // Tests may call a later helper; that must not rename the indexed slug.
+    let entry_point = assert_src
+        .as_deref()
+        .and_then(super::entry_point_from_asserts)
+        .filter(|e| super::stub_defines(&starter_code, e))
+        .unwrap_or_else(|| from_code.clone());
+
+    let name = text(raw, &["task_id", "title_slug", "titleSlug", "slug"])
+        .or_else(|| text(raw, &["title", "name", "question_title", "problem_name"]))
+        .unwrap_or_else(|| from_code.clone());
+    let task_id = slugify(&name);
+    if task_id.is_empty() {
+        return None;
+    }
+
+    let description = {
+        let prose = as_markdown(&after_fence);
+        if prose.is_empty() {
+            format!(
+                "Implement `{entry_point}`.\n\n*(This corpus row has no separate problem statement — only a signature and tests.)*"
+            )
+        } else {
+            // The prose after the fence is usually a solution walkthrough, not
+            // a LeetCode statement. Still better than naming every row "Python".
+            prose
+        }
     };
 
     let mut input_output = super::io_cases(raw, &["input_output", "test_cases", "tests", "examples"]);
@@ -249,6 +255,28 @@ pub(super) mod tests {
         assert!(starter.contains("def add"), "{starter}");
         assert!(starter.contains("pass"), "{starter}");
         assert_eq!(problem.entry_point.as_deref(), Some("add"));
+    }
+
+    #[test]
+    fn assert_callee_does_not_rename_the_indexed_slug() {
+        let problem = normalize(&serde_json::json!({
+            "function": "def find(n):\n    pass\ndef minimumCost(n):\n    pass",
+            "valid_tests": ["assert minimumCost(1) == 1"]
+        }))
+        .expect("imports");
+        assert_eq!(problem.task_id, "find");
+        assert_eq!(problem.entry_point.as_deref(), Some("minimumCost"));
+    }
+
+    #[test]
+    fn sorted_wrapper_asserts_keep_the_stub_function() {
+        let problem = normalize(&serde_json::json!({
+            "function": "def permute(nums: List[int]) -> List[List[int]]:",
+            "valid_tests": ["assert sorted(permute([1, 2])) == sorted([[1, 2], [2, 1]])"]
+        }))
+        .expect("imports");
+        assert_eq!(problem.entry_point.as_deref(), Some("permute"));
+        assert!(problem.starter_code.as_deref().unwrap().contains("def permute"), "{:?}", problem.starter_code);
     }
 
     #[test]
