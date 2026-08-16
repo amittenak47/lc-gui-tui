@@ -339,6 +339,63 @@ body {
   justify-self: end;
 }
 
+.lc-web-omnibox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--chrome-edge);
+  background: var(--panel);
+  z-index: 54;
+}
+
+.lc-web-omnibox input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.lc-web-omnibox input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.lc-web-doc img,
+.lc-web-doc svg,
+.lc-web-doc video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Lazysizes hides these until JS swaps src. We swap ourselves; keep them visible. */
+.lc-web-doc img.lazyload,
+.lc-web-doc img.lazyloading {
+  opacity: 1;
+  visibility: visible;
+}
+
+.lc-web-doc {
+  max-width: 72rem;
+  margin-left: auto;
+  margin-right: auto;
+  overflow-x: hidden;
+}
+
+.lc-web-doc > * {
+  max-width: 100%;
+}
+
+.lc-board-reading .lc-page-content-slot .lc-web-doc a {
+  pointer-events: auto;
+}
+
 .lc-header-center {
   justify-self: center;
   display: flex;
@@ -7939,6 +7996,10 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-header-right {
   justify-self: end;
+}
+
+.lc-mobile .lc-web-omnibox {
+  padding: 4px calc(4px + var(--lc-safe-right)) 4px calc(4px + var(--lc-safe-left));
 }
 
 .lc-mobile .lc-header-center {

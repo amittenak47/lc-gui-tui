@@ -145,7 +145,7 @@ import {
 import type { DocAnchor } from "./util/docAnchors";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { openExternalUrl, normalizeExternalUrl } from "./util/openExternal";
-import { WEB_HOME, fetchWebPage } from "./util/webPage";
+import { WEB_HOME, fetchWebPage, hostLabelFromUrl } from "./util/webPage";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { CodeDocument } from "./modes/CodeDocument";
 import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelectionLayer";
@@ -5462,7 +5462,9 @@ export function App() {
                 // The document is the thing being worked on, so it gets the
                 // slot the problem's name would have had.
                 <span className="lc-current" title={annotateSource?.name ?? "Document"}>
-                  {annotateSource?.name ?? "Document"}
+                  {annotateSource?.docType === "web" && annotateSource.name
+                    ? hostLabelFromUrl(annotateSource.name)
+                    : (annotateSource?.name ?? "Document")}
                   {docIndexStatus === "indexing" ? (
                     <span className="lc-doc-index-chip">indexing…</span>
                   ) : docIndexStatus === "indexed" ? (

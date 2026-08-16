@@ -49,7 +49,7 @@ function pdfjsAssets(): Plugin {
   };
 }
 
-const PAGE_MAX_BYTES = 1_500_000;
+const PAGE_MAX_BYTES = 8_000_000;
 const WEB_FETCH_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -57,8 +57,9 @@ const WEB_FETCH_UA =
  * Browser-preview path for the annotate web pad.
  *
  * Tauri uses the Rust `fetch_html` command (no CORS). Vite preview cannot, so
- * this middleware GETs the URL server-side and returns the HTML. Same 1.5 MB
- * cap and user-agent as the Rust command.
+ * this middleware GETs the URL server-side and returns the bytes. Same 8 MB
+ * cap and user-agent as the Rust command. Content-Type follows the origin so
+ * HTML, CSS, and images can share the proxy.
  */
 function webFetchProxy(): Plugin {
   const handle = (
@@ -92,7 +93,7 @@ function webFetchProxy(): Plugin {
       try {
         const response = await fetch(parsed.href, {
           headers: {
-            accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            accept: req.headers.accept || "*/*",
             "user-agent": WEB_FETCH_UA,
           },
           redirect: "follow",
@@ -109,10 +110,12 @@ function webFetchProxy(): Plugin {
           res.end("this page is too large to annotate here");
           return;
         }
+        const contentType =
+          response.headers.get("content-type") || "application/octet-stream";
         res.statusCode = 200;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Content-Type", contentType);
         res.setHeader("x-lc-final-url", response.url);
-        res.end(buf.toString("utf8"));
+        res.end(buf);
       } catch (err) {
         res.statusCode = 502;
         res.end(err instanceof Error ? err.message : String(err));

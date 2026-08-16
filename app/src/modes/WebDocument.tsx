@@ -7,6 +7,8 @@
 
 import { useEffect, useRef } from "react";
 
+import { promoteLazyImages } from "../util/webPage";
+
 export interface WebDocumentProps {
   html: string;
   url: string;
@@ -32,6 +34,7 @@ export function WebDocument({
   useEffect(() => {
     const node = nodeRef.current;
     if (!node) return;
+    promoteLazyImages(node);
     const report = () => {
       const height = node.scrollHeight;
       if (height > 0) onMeasureRef.current?.(height);
