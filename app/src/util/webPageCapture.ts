@@ -8,6 +8,7 @@
 import { Webview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { WEB_PAGE_W } from "./webPage";
 import {
   READY_STATE_SCRIPT,
   SERIALIZE_PAGE_SCRIPT,
@@ -15,7 +16,7 @@ import {
 } from "./webPageSerialize";
 
 export const CAPTURE_WEBVIEW_LABEL = "lc-web-capture";
-const CAPTURE_WIDTH = 1280;
+const CAPTURE_WIDTH = WEB_PAGE_W;
 const CAPTURE_HEIGHT = 800;
 const LOAD_TIMEOUT_MS = 20_000;
 const SETTLE_MS = 1_500;
@@ -71,15 +72,20 @@ async function closeCapture(): Promise<void> {
   if (existing) await existing.close();
 }
 
-export async function captureRenderedPage(url: string): Promise<{ url: string; html: string }> {
+export async function captureRenderedPage(
+  url: string,
+  size?: { width?: number; height?: number },
+): Promise<{ url: string; html: string }> {
   await closeCapture();
   const host = getCurrentWindow();
+  const width = size?.width && size.width > 0 ? Math.round(size.width) : CAPTURE_WIDTH;
+  const height = size?.height && size.height > 0 ? Math.round(size.height) : CAPTURE_HEIGHT;
   const webview = new Webview(host, CAPTURE_WEBVIEW_LABEL, {
     url,
     x: 0,
     y: 10_000,
-    width: CAPTURE_WIDTH,
-    height: CAPTURE_HEIGHT,
+    width,
+    height,
     focus: false,
     userAgent: CHROME_UA,
     incognito: true,

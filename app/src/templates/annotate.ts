@@ -136,7 +136,9 @@ export function buildAnnotateTemplate(
 ): Skeleton[] {
   const pageW = Math.round(
     Number.isFinite(width) && width > 0
-      ? Math.min(ANNOTATE_PAGE_W, Math.max(ANNOTATE_PAGE_W_MIN, width))
+      ? // Markdown callers pass the 760 reading cap. Web passes the window so
+        // Google's flex header has a desktop-width box. Do not re-clamp to 760.
+        Math.max(ANNOTATE_PAGE_W_MIN, Math.min(width, 4096))
       : ANNOTATE_PAGE_W,
   );
   return [

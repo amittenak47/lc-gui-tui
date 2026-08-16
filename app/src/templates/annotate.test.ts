@@ -81,8 +81,8 @@ describe("buildAnnotateTemplate", () => {
     expect(skeletons[0].width).toBe(ANNOTATE_PAGE_W);
   });
 
-  it("accepts a viewport-sized width", () => {
-    expect(buildAnnotateTemplate(1000, false, 360)[0].width).toBe(360);
+  it("keeps a wide web frame instead of the markdown reading cap", () => {
+    expect(buildAnnotateTemplate(1000, false, 1600)[0].width).toBe(1600);
   });
 
   it("draws no background of its own, so the document shows through", () => {

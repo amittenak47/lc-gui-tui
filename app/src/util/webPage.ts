@@ -16,6 +16,17 @@ export const PAGE_MAX_BYTES = 8_000_000;
 
 export const WEB_HOME = "https://www.google.com/";
 
+/** Match the hidden capture webview so Google's desktop CSS lays out in-box. */
+export const WEB_PAGE_W = 1280;
+export const WEB_PAGE_W_MAX = 2400;
+
+/** Pad and capture share this width so @media and flex see the same box. */
+export function webPageWidthForViewport(cssWidth: number): number {
+  if (!Number.isFinite(cssWidth) || cssWidth < 1) return WEB_PAGE_W;
+  const inset = cssWidth < 720 ? 24 : 80;
+  return Math.round(Math.max(360, Math.min(WEB_PAGE_W_MAX, cssWidth - inset)));
+}
+
 /** Fetch/Vite path only. Capture-inlined CSS is the payload and must survive. */
 export const FETCH_STYLE_CAP = 80_000;
 
@@ -47,6 +58,7 @@ export interface FetchedWebPage {
   url: string;
   title: string;
   html: string;
+  source: WebHtmlSource;
 }
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -289,9 +301,16 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
   if (isTauriRuntime()) {
     try {
       const { captureRenderedPage } = await import("./webPageCapture");
-      fetched = await captureRenderedPage(url);
+      const width = webPageWidthForViewport(
+        typeof window !== "undefined" ? window.innerWidth : WEB_PAGE_W,
+      );
+      fetched = await captureRenderedPage(url, {
+        width,
+        height: Math.max(800, Math.round(width * 0.7)),
+      });
       source = "capture";
-    } catch {
+    } catch (cause) {
+      console.warn("[lc-web] capture failed, falling back", cause);
       const invoke = await loadInvoke();
       if (invoke) {
         fetched = await invoke<{ url: string; html: string }>("fetch_html", { url });
@@ -320,5 +339,5 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
     styleAfter: after,
   });
   const title = titleFromHtml(fetched.html) || fetched.url;
-  return { url: fetched.url, title, html };
+  return { url: fetched.url, title, html, source };
 }

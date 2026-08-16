@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-fetch-html"
+description = "GET a page when capture is unavailable"
+commands.allow = ["fetch_html"]
+
+[[permission]]
+identifier = "allow-webview-eval-json"
+description = "Eval the serializer inside the hidden capture webview"
+commands.allow = ["webview_eval_json"]
