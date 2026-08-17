@@ -17,6 +17,7 @@
     "opener:allow-open-url",
     "opener:allow-default-urls",
     "allow-fetch-html",
+    "allow-lc-harness",
     "allow-webview-eval-json",
     "allow-set-gesture-exclusions",
     "allow-set-drawing-immersive"

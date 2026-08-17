@@ -36,23 +36,25 @@ pub struct LcResponse {
     pub body: serde_json::Value,
 }
 
-#[tauri::command]
-pub async fn lc_dispatch(
-    state: State<'_, Shared>,
-    request: LcDispatchRequest,
+pub(crate) async fn call_router(
+    state: Shared,
+    method: &str,
+    path: String,
+    body: Option<serde_json::Value>,
+    raw_base64: Option<String>,
 ) -> Result<LcResponse, String> {
-    let path = if request.path.starts_with('/') {
-        request.path
+    let path = if path.starts_with('/') {
+        path
     } else {
-        format!("/{}", request.path)
+        format!("/{path}")
     };
 
-    let (body_bytes, content_type) = if let Some(raw) = &request.raw_base64 {
+    let (body_bytes, content_type) = if let Some(raw) = &raw_base64 {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(raw.trim())
             .map_err(|err| format!("invalid raw_base64: {err}"))?;
         (bytes, Some("application/octet-stream".to_string()))
-    } else if let Some(body) = &request.body {
+    } else if let Some(body) = &body {
         (
             serde_json::to_vec(body).map_err(|err| format!("cannot encode JSON body: {err}"))?,
             Some("application/json".to_string()),
@@ -62,8 +64,8 @@ pub async fn lc_dispatch(
     };
 
     let (status, bytes, response_ct) = serve::dispatch(
-        state.inner().clone(),
-        &request.method,
+        state.clone(),
+        method,
         &path,
         body_bytes,
         content_type.as_deref(),
@@ -71,8 +73,25 @@ pub async fn lc_dispatch(
     .await
     .map_err(|err| format!("in-process dispatch failed: {err:#}"))?;
 
-    let body = response_body(bytes, &response_ct);
-    Ok(LcResponse { status, body })
+    Ok(LcResponse {
+        status,
+        body: response_body(bytes, &response_ct),
+    })
+}
+
+#[tauri::command]
+pub async fn lc_dispatch(
+    state: State<'_, Shared>,
+    request: LcDispatchRequest,
+) -> Result<LcResponse, String> {
+    call_router(
+        state.inner().clone(),
+        &request.method,
+        request.path,
+        request.body,
+        request.raw_base64,
+    )
+    .await
 }
 
 fn response_body(bytes: Vec<u8>, content_type: &str) -> serde_json::Value {

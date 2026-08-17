@@ -632,7 +632,7 @@ export function App() {
   }, [annotateSource]);
 
   const pairing = DEFAULT_PAIRING;
-  const client = useMemo(() => new LcClient(pairing), [pairing]);
+  const client = useMemo(() => new LcClient(), []);
 
   /**
    * Ask once for storage the browser will not evict under pressure.
@@ -1632,7 +1632,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [client, pairing]);
+  }, [client]);
 
   const refreshCoachFlags = useCallback(async () => {
     try {
@@ -4469,7 +4469,7 @@ export function App() {
 
   useEffect(() => {
     void refreshSession();
-  }, [refreshSession, pairing]);
+  }, [refreshSession]);
 
   /**
    * Persist the coach thread beside the workspace, debounced.
