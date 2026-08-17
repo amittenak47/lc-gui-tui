@@ -145,7 +145,7 @@ there is no Host/Port/Code pairing UI.
 
 | Path | What |
 |---|---|
-| `src/api/` | Router client (`lc_dispatch`) and coach event transport |
+| `src/api/` | Named Tauri invoke client (`lc_run_tests`, …) and coach event transport |
 | `src/canvas/` | Excalidraw wrapper, capture extractors, ink recognizers |
 | `src/templates/` | Board regions and the pre-seeded problem layout |
 | `src/viz/` | Viz schema, the nine renderers, applier, frame scrubber |

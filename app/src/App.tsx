@@ -1708,55 +1708,7 @@ export function App() {
       }
       try {
         if (offline) {
-          const { loadOfflinePack, offlineGetProblem } = await import("./util/offlineCorpus");
-          const pack = await loadOfflinePack();
-          const detail = pack ? offlineGetProblem(pack, taskId, datasetId) : null;
-          if (!detail) {
-            throw new Error(
-              "Problem not in the offline pack — connect to download it (Settings → Workspace).",
-            );
-          }
-          const source = ensureCodingRoom(detail.starter_code ?? "");
-
-          if (workspaceLoadGenRef.current !== loadGen) return;
-          setPseudocode(source);
-          loadedSourceRef.current = source;
-          setBoardPreparing(true);
-          setProblem(detail);
-
-          const skeletons = buildProblemTemplate({
-            taskId: detail.task_id,
-            title: titleFromSlug(detail.task_id, detail.question_id),
-            difficulty: detail.difficulty,
-            tags: detail.tags,
-            description: detail.problem_description,
-            caseCount: detail.cases.length,
-            dark: isDarkTheme(themeId),
-            viewportWidth: boardCssWidth(),
-          });
-          lastSavedHashRef.current = null;
-          boardRef.current?.seedTemplate(skeletons);
-          boardRef.current?.applyThemeInk(themeId);
-          boardRef.current?.stripCoachViz();
-          boardRef.current?.fitCodeToSource(source);
-          lastIdsRef.current = new Set();
-          await boardRef.current?.waitForTemplate();
-          await boardRef.current?.settleFitView();
-
-          await finishLoadingTransition(fromBrowse, switching, loadGen);
-          if (workspaceLoadGenRef.current !== loadGen) return;
-
-          setBrowseMotion("idle");
-          setSwitchMotion("idle");
-          setHoldBrowseOverlay(false);
-          setBoardPreparing(false);
-          boardSaveSuspendedRef.current = false;
-          agentSaveSuspendedRef.current = false;
-          setWorkspaceLoadActive(false);
-          setEntering(true);
-          window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
-          setCoachOpen(false);
-          return;
+          throw new Error("Practice needs the in-process harness — rebuild the Tauri app.");
         }
 
         // Materialize the workspace on the PC, then read back the redacted
@@ -2728,21 +2680,6 @@ export function App() {
         return;
       }
       try {
-        if (serverLinkRef.current !== "online") {
-          const { loadOfflinePack, offlineAdjacent } = await import("./util/offlineCorpus");
-          const pack = await loadOfflinePack();
-          if (!pack) return;
-          const adjacent = offlineAdjacent(pack, problem.task_id, {
-            dataset: problem.dataset,
-            q: bankFilters.q,
-            difficulty: bankFilters.difficulty,
-            tag: bankFilters.tag,
-            sort: bankFilters.sort,
-          });
-          const next = delta < 0 ? adjacent.prev : adjacent.next;
-          if (next) void pickProblem(next, { ...bankFilters, dataset: problem.dataset });
-          return;
-        }
         const adjacent = await client.adjacentProblems(problem.task_id, {
           ...bankFilters,
           dataset: problem.dataset,
@@ -2774,27 +2711,6 @@ export function App() {
         return;
       }
       try {
-        if (serverLinkRef.current !== "online") {
-          const { loadOfflinePack, offlineAdjacent } = await import("./util/offlineCorpus");
-          const pack = await loadOfflinePack();
-          if (!cancelled) {
-            if (!pack) {
-              setCanStepPrev(false);
-              setCanStepNext(false);
-            } else {
-              const adjacent = offlineAdjacent(pack, problem.task_id, {
-                dataset: problem.dataset,
-                q: bankFilters.q,
-                difficulty: bankFilters.difficulty,
-                tag: bankFilters.tag,
-                sort: bankFilters.sort,
-              });
-              setCanStepPrev(Boolean(adjacent.prev));
-              setCanStepNext(Boolean(adjacent.next));
-            }
-          }
-          return;
-        }
         const adjacent = await client.adjacentProblems(problem.task_id, {
           ...bankFilters,
           dataset: problem.dataset,

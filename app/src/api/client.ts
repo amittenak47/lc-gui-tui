@@ -78,12 +78,6 @@ export interface SearchOptions {
   sort?: string;
 }
 
-export interface OfflinePackOptions {
-  /** `0..1`; `-1` while indeterminate. */
-  onProgress?: (ratio: number) => void;
-  signal?: AbortSignal;
-}
-
 /** Align with the daemon provider ceiling (`llm/providers/http.rs`). */
 const COACH_HTTP_TIMEOUT_MS = 180_000;
 
@@ -178,36 +172,6 @@ export class LcClient {
 
   async dlcRemove(slug: string): Promise<DlcStatus> {
     return this.cmd("lc_dataset_dlc_remove", { slug });
-  }
-
-  async offlinePackManifest(): Promise<import("../util/offlinePackDownload").OfflinePackManifest> {
-    return this.cmd("lc_offline_pack_manifest");
-  }
-
-  async offlinePackChunk(options: {
-    dataset: string;
-    offset: number;
-    limit?: number;
-    since?: number;
-  }): Promise<import("../util/offlinePackDownload").OfflinePackChunk> {
-    return this.cmd("lc_offline_pack_chunk", options);
-  }
-
-  async offlinePackDatasetKeys(options: {
-    dataset: string;
-    offset: number;
-    limit?: number;
-  }): Promise<import("../util/offlinePackDownload").OfflineDatasetKeys> {
-    return this.cmd("lc_offline_pack_keys", options);
-  }
-
-  async offlinePack(options: OfflinePackOptions = {}): Promise<import("../util/offlineCorpus").OfflinePack> {
-    const { onProgress, signal } = options;
-    onProgress?.(-1);
-    if (signal?.aborted) throw new LcApiError("Download cancelled", 0);
-    const pack = await this.cmd<import("../util/offlineCorpus").OfflinePack>("lc_offline_pack");
-    onProgress?.(1);
-    return pack;
   }
 
   async randomProblem(options: SearchOptions = {}): Promise<ProblemSummary | null> {

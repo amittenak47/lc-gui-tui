@@ -1,6 +1,6 @@
 /**
  * Problem-browser sort keys and direction, shared by the table headers,
- * offline pack search, and the `sort=` query the daemon already understands.
+ * Column-header sort for the problem browser. Same `sort=` query the daemon understands.
  *
  * Bare `question` is ascending. Bare `cases` stays descending (the SQL default).
  * Explicit `:asc` / `:desc` / a leading `-` override that.
