@@ -70,6 +70,9 @@ commands.allow = [
   "lc_offline_pack_chunk",
   "lc_offline_pack_keys",
   "lc_offline_pack",
+  "lc_dataset_dlc_status",
+  "lc_dataset_dlc_install",
+  "lc_dataset_dlc_remove",
 ]
 
 [[permission]]

@@ -3,6 +3,7 @@
 
 pub mod capture_save;
 pub mod colorhunt;
+pub mod dlc;
 pub mod lc_client;
 pub mod lc_routes;
 pub mod web_capture;
@@ -30,6 +31,7 @@ pub fn run() {
                     let state = harness::serve::new_state(cfg);
                     app.manage(state);
                     app.manage(lc_client::CoachHub::new());
+                    app.manage(dlc::DlcHub::new());
                     #[cfg(feature = "leetcode")]
                     seed::spawn(app);
                 }
@@ -104,6 +106,9 @@ pub fn run() {
         lc_routes::lc_offline_pack_chunk,
         lc_routes::lc_offline_pack_keys,
         lc_routes::lc_offline_pack,
+        dlc::lc_dataset_dlc_status,
+        dlc::lc_dataset_dlc_install,
+        dlc::lc_dataset_dlc_remove,
         web_capture::webview_eval_json,
         colorhunt::colorhunt_random,
         capture_save::save_png_bytes,
