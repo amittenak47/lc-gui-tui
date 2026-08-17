@@ -123,7 +123,8 @@ Landing is a home chooser: **Practice** (corpus + tests), **Whiteboard**, **Anno
 
 ```bash
 cd app && npm install && npm run tauri dev
-# Android APK: cd app && npm run android:apk
+# APK + adb install (first run generates src-tauri/gen/android — not in git):
+app\scripts\android-install.cmd
 ```
 
 Use the Tauri app (`npm run tauri dev`) or the Android APK — Vite-only (`npm run dev`) in a browser is not a supported path. LLM config is **Settings → LLM**. `localhost` there is this machine.
@@ -178,7 +179,7 @@ flowchart LR
     RP[RustPython]
     Corpus[SQLite_corpus]
     WS[lc_workspace]
-    UI -->|"HTTP_WS loopback"| Axum
+    UI -->|"lc_dispatch"| Axum
     Axum --> RP
     Axum --> Corpus
     Axum --> WS

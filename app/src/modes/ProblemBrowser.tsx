@@ -13,7 +13,7 @@
  * on a tab change, because a KodCode tag means nothing in the LeetCode tables.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type WheelEvent } from "react";
 
 import type { LcClient, SearchOptions } from "../api/client";
 import type { DatasetInfo, ProblemSummary, SessionSnapshot } from "../api/types";
@@ -32,20 +32,19 @@ import { HoldButton } from "../components/HoldButton";
 import { MorphBar } from "../components/MorphBar";
 import { titleFromSlug } from "../util/text";
 import { loadBrowsePosition, saveBrowsePosition } from "../util/browsePosition";
+import {
+  cycleSortKey,
+  parseSort,
+  toggleColumnSort,
+  type SortKey,
+} from "../util/browseSort";
 
 export const PAGE_SIZE = 15;
 /** Smallest page the phone browser will request — still usable on iPhone SE. */
 const MOBILE_PAGE_SIZE_MIN = 6;
 
 const DIFFICULTIES = ["", "Easy", "Medium", "Hard"] as const;
-const SORTS = ["task_id", "question", "difficulty", "cases", "tags"] as const;
-export const COLUMN_SORT: Record<string, (typeof SORTS)[number]> = {
-  question: "question",
-  task_id: "task_id",
-  difficulty: "difficulty",
-  tags: "tags",
-  cases: "cases",
-};
+export { COLUMN_SORT, SORTS } from "../util/browseSort";
 
 export interface ProblemBrowserProps {
   client: LcClient;
@@ -53,7 +52,7 @@ export interface ProblemBrowserProps {
   onPick: (taskId: string, bank?: SearchOptions) => void;
   busy: boolean;
   session?: SessionSnapshot | null;
-  /** When lc serve is unreachable — skip fetches and show a calm empty state. */
+  /** When the harness is unreachable — skip fetches and show a calm empty state. */
   offline?: boolean;
   /**
    * Start a session with the given picks (empty = fresh empty queue).
@@ -456,7 +455,15 @@ export function ProblemBrowser({
       }
       if (typing) {
         if (event.key === "Escape") (target as HTMLInputElement).blur();
-        if (event.key === "Enter" && rows[selected]) pick(rows[selected].task_id);
+        // Search box only — other INPUTs in the header must not steal Enter.
+        if (
+          event.key === "Enter" &&
+          target === searchRef.current &&
+          rows[selected]
+        ) {
+          event.preventDefault();
+          pick(rows[selected].task_id);
+        }
         return;
       }
 
@@ -484,7 +491,7 @@ export function ProblemBrowser({
           setDifficulty((current) => cycle(DIFFICULTIES as readonly string[], current));
           break;
         case "o":
-          setSort((current) => cycle(SORTS as readonly string[], current));
+          setSort((current) => cycleSortKey(current));
           break;
         case "g": {
           event.preventDefault();
@@ -606,7 +613,7 @@ export function ProblemBrowser({
               <p className="lc-muted">
                 {offlinePack
                   ? `Offline pack · ${offlinePack.problems.length.toLocaleString()} problems (no KodCode).`
-                  : "Offline — download a problem pack while online (Settings → Server), or open a whiteboard."}
+                  : "Offline — download a problem pack while online (Settings → Workspace), or open a whiteboard."}
               </p>
             )}
 
@@ -728,9 +735,9 @@ export function ProblemBrowser({
                             label="Begin!"
                             className="lc-secondary lc-browser-start-hold"
                             disabled={busy || !onStartSession}
-                            ariaLabel="Begin session: tap for Random, hold to start"
-                            onTap={() => setStartMode("random")}
-                            onConfirm={commitStart}
+                            ariaLabel="Begin session: tap to start, hold for Random"
+                            onTap={commitStart}
+                            onConfirm={() => setStartMode("random")}
                           />
                           <button
                             type="button"
@@ -748,9 +755,9 @@ export function ProblemBrowser({
                             label="Random"
                             className="lc-secondary lc-browser-start-hold"
                             disabled={busy || !onRandomSession}
-                            ariaLabel="Random session: tap for Begin, hold to randomize"
-                            onTap={() => setStartMode("begin")}
-                            onConfirm={randomizeSession}
+                            ariaLabel="Random session: tap to randomize, hold for Begin"
+                            onTap={randomizeSession}
+                            onConfirm={() => setStartMode("begin")}
                           />
                         </div>
                       </div>
@@ -800,20 +807,27 @@ function SortHead({
   onSort,
   className,
 }: {
-  sortKey: (typeof SORTS)[number];
+  sortKey: SortKey;
   label: string;
   sort: string;
   onSort: (next: string) => void;
   className: string;
 }) {
-  const active = sort === sortKey;
+  const parsed = parseSort(sort);
+  const active = parsed.key === sortKey;
+  const ariaSort = active ? (parsed.desc ? "descending" : "ascending") : "none";
   return (
     <button
       type="button"
       className={active ? `${className} lc-table-sort is-active` : `${className} lc-table-sort`}
       aria-pressed={active}
-      aria-label={`Sort by ${label}`}
-      onClick={() => onSort(sortKey)}
+      aria-sort={ariaSort}
+      aria-label={
+        active
+          ? `Sort by ${label}, ${parsed.desc ? "descending" : "ascending"} — click to reverse`
+          : `Sort by ${label}`
+      }
+      onClick={() => onSort(toggleColumnSort(sort, sortKey))}
     >
       {label}
     </button>
@@ -911,6 +925,18 @@ function ProblemTablePanel({
 }
 
 /**
+ * Mouse wheel is vertical; the strip only scrolls on X. Map leftover deltaY
+ * onto scrollLeft when the tabs actually overflow.
+ */
+function onDatasetTabsWheel(event: WheelEvent<HTMLDivElement>) {
+  const node = event.currentTarget;
+  if (node.scrollWidth <= node.clientWidth + 1) return;
+  if (event.deltaX !== 0) return;
+  event.preventDefault();
+  node.scrollLeft += event.deltaY;
+}
+
+/**
  * The problem-set tab strip.
  *
  * Every dataset is shown even when its corpus has not been downloaded, with a
@@ -935,7 +961,12 @@ function DatasetTabs({
   return (
     <div className="lc-dataset-tabs-row">
       {datasets.length > 1 ? (
-        <div className="lc-dataset-tabs" role="tablist" aria-label="Problem set">
+        <div
+          className="lc-dataset-tabs"
+          role="tablist"
+          aria-label="Problem set"
+          onWheel={onDatasetTabsWheel}
+        >
           {datasets.map((entry) => (
             <button
               key={entry.id}

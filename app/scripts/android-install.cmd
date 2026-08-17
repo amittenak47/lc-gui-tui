@@ -1,10 +1,14 @@
 @echo off
-REM Build debug APK and adb install -r. Optional serial:
-REM   android-install.cmd
-REM   android-install.cmd <your-device-serial>
-REM   android-install.cmd -- <your-device-serial>
+REM Build debug APK and adb install -r. From repo root or app\:
+REM   app\scripts\android-install.cmd
+REM   app\scripts\android-install.cmd <your-device-serial>
+REM First run generates src-tauri\gen\android (not in git) if missing.
 setlocal
 cd /d "%~dp0\.."
+
+if not defined ANDROID_HOME set "ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk"
+if not defined ANDROID_SDK_ROOT set "ANDROID_SDK_ROOT=%ANDROID_HOME%"
+set "PATH=%PATH%;%ANDROID_HOME%\platform-tools;%ANDROID_HOME%\emulator"
 
 set "SERIAL="
 if "%~1"=="--" (
@@ -19,7 +23,8 @@ if errorlevel 1 exit /b 1
 set "APK=src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk"
 if not exist "%APK%" (
   echo APK not found: %APK%
-  echo Run npm run android:init once if gen\android is missing.
+  echo Build failed, or gen\android was not generated. From app/: npm run android:init
+  echo Needs Android SDK, NDK, and JDK 17+.
   exit /b 1
 )
 

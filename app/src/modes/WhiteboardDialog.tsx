@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useLibraryDeleteArm } from "../util/armedDelete";
 import {
   deleteWhiteboardNotebook,
   listWhiteboardNotebooks,
@@ -63,6 +64,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const { tapArmed, arm } = useLibraryDeleteArm();
 
   useEffect(() => {
     setNotebooks(listWhiteboardNotebooks());
@@ -106,6 +108,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
     try {
       if (props.onDelete) await props.onDelete(id);
       else await deleteWhiteboardNotebook(id);
+      arm();
     } catch {
       /* ignore */
     }
@@ -137,7 +140,9 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
             {pickingSnapshots
               ? "Hold a snapshot to roll this notebook back. Latest autosave is the live library entry."
               : pickingLoad
-              ? "Hold an entry to open it, or hold its bin to delete it."
+              ? tapArmed
+                ? "Hold an entry to open it. Tap a bin to delete."
+                : "Hold an entry to open it, or hold its bin to delete it."
               : isLeave
                 ? dirty
                   ? "Discard undoes everything written since this notebook was opened. Hold to confirm."
@@ -207,20 +212,24 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                     </span>
                   </HoldButton>
                   {/*
-                    Hold to delete, the same as everything else that cannot be
-                    undone.
-
-                    The two controls on this row were the wrong way round:
-                    *opening* a notebook wanted a deliberate hold, and throwing
-                    one away was a single tap on a small target sitting right
-                    beside it. A slip on a list of notebooks is not a slip you
-                    can take back — the entry and its ink both go.
+                    First delete in a while: hold the bin, then hold Delete in
+                    the confirm dialog. After that, tap the bin for
+                    LIBRARY_DELETE_ARM_MS.
                   */}
                   <HoldButton
                     label={`Delete ${entry.title}`}
                     className="lc-scratch-load-trash"
                     disabled={locked}
-                    onConfirm={() => removeNotebook(entry.id)}
+                    ariaLabel={
+                      tapArmed
+                        ? `Delete ${entry.title} — tap to delete`
+                        : `Delete ${entry.title} — hold to delete`
+                    }
+                    onTap={tapArmed ? () => void confirmRemove(entry.id) : undefined}
+                    onConfirm={() => {
+                      if (tapArmed) void confirmRemove(entry.id);
+                      else removeNotebook(entry.id);
+                    }}
                     resetKey={error}
                   >
                     <svg

@@ -193,6 +193,12 @@ def run_full_suite(mod, meta):
         emit(result)
         return False
     namespace = {"__name__": "__lc_test__"}
+    # LC+Tests constructor-style asserts (`Solution(1, 1).flip()`) look up
+    # Solution / TreeNode in this namespace, not via `candidate`. Preamble
+    # does not import solution.py; copy public names so check() can see them.
+    for name, obj in vars(mod).items():
+        if not name.startswith("_"):
+            namespace.setdefault(name, obj)
     try:
         exec(compile(TEST_PREAMBLE + test_src, "<lc-test-suite>", "exec"), namespace)
         check = namespace.get("check")

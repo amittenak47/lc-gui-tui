@@ -112,10 +112,12 @@ answer you already drew is not practice. The router owns the rules
 ## Connecting a tablet
 
 - **Desktop window on a tablet screen:** spacedesk (below). Router stays in-process.
-- **APK:** same Tauri binary with the in-process router. Corpus and LLM still
-  have to exist on that device; packaging/size is later.
+- **APK:** same Tauri binary with the in-process router. From the repo root:
+  `app\scripts\android-install.cmd` (optional USB serial). First run generates
+  `src-tauri/gen/android/` if missing. Corpus and LLM still have to exist on
+  that device; packaging/size is later.
 
-Older LAN pairing notes (removed) → [`docs/ANDROID_SETUP.md`](docs/ANDROID_SETUP.md).
+APK build/install → [`docs/ANDROID_SETUP.md`](docs/ANDROID_SETUP.md).
 
 ## The no-APK path (spacedesk)
 

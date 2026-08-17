@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { HoldButton } from "../components/HoldButton";
+import { useLibraryDeleteArm } from "../util/armedDelete";
 import {
   deleteWhiteboardNotebook,
   listWhiteboardNotebooks,
@@ -33,6 +34,7 @@ export function WhiteboardLibraryDialog({
     listWhiteboardNotebooks(),
   );
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const { tapArmed, arm } = useLibraryDeleteArm();
 
   useEffect(() => {
     setNotebooks(listWhiteboardNotebooks());
@@ -50,6 +52,7 @@ export function WhiteboardLibraryDialog({
     try {
       if (onDelete) await onDelete(id);
       else await deleteWhiteboardNotebook(id);
+      arm();
     } catch {
       /* ignore */
     }
@@ -83,8 +86,11 @@ export function WhiteboardLibraryDialog({
         <div className="lc-settings-head">
           <h2>Whiteboard library full</h2>
           <p className="lc-muted">
-            At most {WHITEBOARD_LIBRARY_LIMIT} notebooks. Hold to delete one. A
-            copy stays on the PC.
+            At most {WHITEBOARD_LIBRARY_LIMIT} notebooks.{" "}
+            {tapArmed
+              ? "Tap a notebook to delete it."
+              : "Hold to delete one."}{" "}
+            A copy stays on the PC.
           </p>
         </div>
         <div className="lc-settings-body">
@@ -94,7 +100,16 @@ export function WhiteboardLibraryDialog({
                 key={entry.id}
                 label={`Delete ${entry.title}`}
                 className="lc-hold-choice lc-hold-danger"
-                onConfirm={() => setPendingId(entry.id)}
+                ariaLabel={
+                  tapArmed
+                    ? `Delete ${entry.title} — tap to delete`
+                    : `Delete ${entry.title} — hold to delete`
+                }
+                onTap={tapArmed ? () => void remove(entry.id) : undefined}
+                onConfirm={() => {
+                  if (tapArmed) void remove(entry.id);
+                  else setPendingId(entry.id);
+                }}
               >
                 <strong>Delete · {entry.title}</strong>
                 <span className="lc-muted">
