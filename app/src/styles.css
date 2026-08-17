@@ -9439,6 +9439,91 @@ button.lc-row-selected:hover:not(:disabled) {
   font-variant-numeric: tabular-nums;
 }
 
+.lc-settings-modal .lc-settings-dlc-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 9.5rem 4.75rem;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 4px;
+}
+
+.lc-settings-modal .lc-settings-dlc-name {
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-settings-modal .lc-settings-dlc-count {
+  text-align: right;
+  white-space: nowrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.lc-settings-modal button.lc-settings-dlc-action {
+  justify-self: center;
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+  width: 4.75rem;
+  max-width: 4.75rem;
+  min-width: 4.75rem;
+  min-height: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 26px;
+  text-align: center;
+}
+
+.lc-settings-modal button.lc-settings-dlc-action > span {
+  position: relative;
+  z-index: 1;
+}
+
+.lc-settings-modal button.lc-settings-dlc-action.is-busy {
+  color: #fff;
+  background: color-mix(in srgb, var(--accent) 28%, #1a1a1a);
+  border-color: var(--accent);
+}
+
+.lc-settings-modal button.lc-settings-dlc-action.is-busy::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--dlc-progress, 0%);
+  background: var(--accent);
+  z-index: 0;
+}
+
+.lc-settings-modal button.lc-settings-dlc-action.is-indeterminate::before {
+  width: 36%;
+  animation: lc-dlc-indeterminate 1.1s ease-in-out infinite;
+}
+
+@keyframes lc-dlc-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
+.lc-settings-modal button.lc-settings-dlc-action.is-remove {
+  background: color-mix(in srgb, var(--bad) 42%, transparent);
+  border-color: color-mix(in srgb, var(--bad) 35%, var(--line, transparent));
+}
+
+.lc-settings-dlc-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 
 /*
  * Reply threads in the coach panel.

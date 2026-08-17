@@ -3,7 +3,7 @@
  * Backdrop blurs the board the same way problem-load transitions do.
  */
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import type { DevicePrefsDto, DlcStatus, LcClient } from "../api/client";
@@ -240,6 +240,12 @@ function llmServerHint(provider: "local" | "ollama" | "openai" | "groq"): string
     case "groq":
       return "Groq's cloud API. Requests leave from this app; the API key lives here too.";
   }
+}
+
+function formatDlcBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function emptyProvider(): ProviderConfig {
@@ -487,9 +493,15 @@ export function SettingsModal({
 
   const refreshDlc = useCallback(async () => {
     try {
-      setDlcRows(await client.dlcStatus());
+      const rows = await client.dlcStatus();
+      setDlcRows(Array.isArray(rows) ? rows : []);
     } catch {
       setDlcRows([]);
+    }
+    try {
+      setDatasets(await client.datasets());
+    } catch {
+      /* older daemon has no /datasets */
     }
   }, [client]);
 
@@ -497,13 +509,25 @@ export function SettingsModal({
     if (!open || tab !== "workspace") return;
     void refreshDlc();
     let stop: (() => void) | undefined;
-    void import("@tauri-apps/api/event").then(({ listen }) => {
-      void listen<DlcStatus[]>("lc-dlc-status", (event) => {
-        if (Array.isArray(event.payload)) setDlcRows(event.payload);
-      }).then((unlisten) => {
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<DlcStatus[]>("lc-dlc-status", (event) => {
+          if (!Array.isArray(event.payload)) return;
+          setDlcRows(event.payload);
+          setDatasets((current) =>
+            current.map((entry) => {
+              const row = event.payload.find((item) => item.slug === entry.id);
+              return row ? { ...entry, count: row.count } : entry;
+            }),
+          );
+        }),
+      )
+      .then((unlisten) => {
         stop = unlisten;
+      })
+      .catch(() => {
+        /* browser preview has no Tauri event bus */
       });
-    });
     const timer = window.setInterval(() => void refreshDlc(), 1500);
     return () => {
       stop?.();
@@ -514,7 +538,12 @@ export function SettingsModal({
   const onDlcInstall = useCallback(
     (slug: string) => {
       void client.dlcInstall(slug).then((row) => {
-        setDlcRows((current) => current.map((entry) => (entry.slug === slug ? row : entry)));
+        if (!row?.slug) return;
+        setDlcRows((current) =>
+          (Array.isArray(current) ? current : []).map((entry) =>
+            entry.slug === slug ? row : entry,
+          ),
+        );
       }).catch((cause) => {
         setError(cause instanceof Error ? cause.message : String(cause));
       });
@@ -525,7 +554,12 @@ export function SettingsModal({
   const onDlcRemove = useCallback(
     (slug: string) => {
       void client.dlcRemove(slug).then((row) => {
-        setDlcRows((current) => current.map((entry) => (entry.slug === slug ? row : entry)));
+        if (!row?.slug) return;
+        setDlcRows((current) =>
+          (Array.isArray(current) ? current : []).map((entry) =>
+            entry.slug === slug ? row : entry,
+          ),
+        );
       }).catch((cause) => {
         setError(cause instanceof Error ? cause.message : String(cause));
       });
@@ -875,29 +909,39 @@ export function SettingsModal({
                 until you install. KodCode is large (~1 GB). Pass/fail badges stay
                 in <code>session.json</code> if you Remove and later reinstall.
               </p>
-              {dlcRows.map((row) => {
+              {(Array.isArray(dlcRows) ? dlcRows : []).map((row) => {
                 const working = ["downloading", "unpacking", "indexing"].includes(row.phase);
                 const pct = row.progress >= 0 ? Math.round(row.progress * 100) : null;
+                const downloaded = row.downloaded ?? 0;
+                const total = row.total ?? 0;
                 const label = working
                   ? row.phase === "downloading" && pct != null
-                    ? `Downloading… ${pct}%`
-                    : `${row.phase}…`
+                    ? `${pct}%`
+                    : "…"
                   : row.installed
                     ? "Remove"
                     : "Install";
+                const countLabel =
+                  row.phase === "downloading" && total > 0
+                    ? `${formatDlcBytes(downloaded)} / ${formatDlcBytes(total)}`
+                    : `${row.count.toLocaleString()} indexed`;
+                const fillPct =
+                  working && pct != null ? `${pct}%` : working ? "40%" : "0%";
                 return (
                   <div key={row.slug} className="lc-settings-dlc-row">
-                    <span>
-                      {row.label}
-                      <span className="lc-settings-badge">
-                        {row.count.toLocaleString()} indexed
-                      </span>
-                    </span>
+                    <span className="lc-settings-dlc-name">{row.label}</span>
+                    <span className="lc-settings-dlc-count">{countLabel}</span>
                     <button
                       type="button"
-                      className={
-                        row.installed && !working ? "lc-hold-danger" : "lc-primary"
-                      }
+                      className={[
+                        "lc-settings-dlc-action",
+                        row.installed && !working ? "is-remove" : "",
+                        working ? "is-busy" : "",
+                        working && pct == null ? "is-indeterminate" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      style={{ "--dlc-progress": fillPct } as CSSProperties}
                       disabled={Boolean(busy) || working}
                       onClick={() =>
                         row.installed && !working
@@ -905,9 +949,9 @@ export function SettingsModal({
                           : onDlcInstall(row.slug)
                       }
                     >
-                      {label}
+                      <span>{label}</span>
                     </button>
-                    {row.error && <p className="lc-warning">{row.error}</p>}
+                    {row.error && <p className="lc-warning lc-settings-dlc-error">{row.error}</p>}
                   </div>
                 );
               })}
@@ -925,11 +969,11 @@ export function SettingsModal({
                     </span>
                   </span>
                   <input
-                    value={draft.dataset_dirs[entry.id] ?? ""}
+                    value={draft.dataset_dirs?.[entry.id] ?? ""}
                     placeholder={entry.corpus_dir ?? `<problems folder>/${entry.id}`}
                     onChange={(e) =>
                       setDraft((prev) => {
-                        const dirs = { ...prev.dataset_dirs };
+                        const dirs = { ...(prev.dataset_dirs ?? {}) };
                         if (e.target.value.trim()) dirs[entry.id] = e.target.value;
                         else delete dirs[entry.id];
                         return { ...prev, dataset_dirs: dirs };

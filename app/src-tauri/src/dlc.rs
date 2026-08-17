@@ -17,6 +17,15 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use zip::ZipArchive;
 
+use super::lc_client::LcResponse;
+
+fn ok_json(value: impl Serialize) -> Result<LcResponse, String> {
+    Ok(LcResponse {
+        status: 200,
+        body: serde_json::to_value(value).map_err(|err| err.to_string())?,
+    })
+}
+
 const DLC_RELEASE: &str =
     "https://github.com/amittenak47/lc-gui-tui/releases/download/corpora-v1";
 
@@ -44,6 +53,8 @@ pub struct DlcStatus {
     pub count: u32,
     pub phase: String,
     pub progress: f32,
+    pub downloaded: u64,
+    pub total: u64,
     pub error: Option<String>,
 }
 
@@ -65,6 +76,8 @@ impl DlcHub {
                     count: 0,
                     phase: "idle".into(),
                     progress: 0.0,
+                    downloaded: 0,
+                    total: 0,
                     error: None,
                 },
             );
@@ -91,12 +104,38 @@ fn set_phase(hub: &DlcHub, slug: &str, phase: &str, progress: f32, error: Option
     }
 }
 
+fn set_index_count(hub: &DlcHub, slug: &str, count: u32) {
+    let mut map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(row) = map.get_mut(slug) {
+        row.phase = "indexing".into();
+        row.count = count;
+        row.error = None;
+    }
+}
+
+fn set_download(hub: &DlcHub, slug: &str, written: u64, total: Option<u64>) {
+    let progress = match total {
+        Some(t) if t > 0 => (written as f32 / t as f32).clamp(0.0, 1.0),
+        _ => -1.0,
+    };
+    let mut map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(row) = map.get_mut(slug) {
+        row.phase = "downloading".into();
+        row.progress = progress;
+        row.downloaded = written;
+        row.total = total.unwrap_or(0);
+        row.error = None;
+    }
+}
+
 fn refresh_installed(hub: &DlcHub, slug: &str, cfg: &harness::config::Config) {
     let Ok(dataset) = dataset::get(slug) else {
         return;
     };
     let dest = dataset.corpus_dir(cfg).ok();
-    let installed = dest.as_ref().is_some_and(|dir| has_corpus_files(dir));
+    let installed = dest
+        .as_ref()
+        .is_some_and(|dir| dataset::dir_has_own_corpus_files(dir, dataset));
     let count = dataset_row_count(dataset).unwrap_or(0) as u32;
     let mut map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(row) = map.get_mut(slug) {
@@ -122,26 +161,6 @@ fn dataset_row_count(dataset: &Dataset) -> Result<i64, String> {
     .map_err(|err| err.to_string())
 }
 
-fn has_corpus_files(dir: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if has_corpus_files(&path) {
-                return true;
-            }
-            continue;
-        }
-        match path.extension().and_then(|ext| ext.to_str()) {
-            Some("json" | "jsonl") => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
 fn emit(app: &AppHandle) {
     if let Some(hub) = app.try_state::<DlcHub>() {
         let _ = app.emit("lc-dlc-status", snapshot(&hub));
@@ -157,14 +176,14 @@ pub async fn lc_dataset_dlc_status(
     app: AppHandle,
     hub: State<'_, DlcHub>,
     state: State<'_, Shared>,
-) -> Result<Vec<DlcStatus>, String> {
+) -> Result<LcResponse, String> {
     let cfg = state.cfg_snapshot();
     for slug in dlc_slugs() {
         refresh_installed(&hub, slug, &cfg);
     }
     let rows = snapshot(&hub);
     let _ = app.emit("lc-dlc-status", &rows);
-    Ok(rows)
+    ok_json(rows)
 }
 
 #[tauri::command]
@@ -172,7 +191,7 @@ pub async fn lc_dataset_dlc_install(
     app: AppHandle,
     hub: State<'_, DlcHub>,
     slug: String,
-) -> Result<DlcStatus, String> {
+) -> Result<LcResponse, String> {
     if !is_dlc_slug(&slug) {
         return Err(format!(
             "unknown DLC {slug:?} — expected one of {}",
@@ -183,7 +202,7 @@ pub async fn lc_dataset_dlc_install(
         let map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(row) = map.get(&slug) {
             if matches!(row.phase.as_str(), "downloading" | "unpacking" | "indexing") {
-                return Ok(row.clone());
+                return ok_json(row.clone());
             }
         }
     }
@@ -200,7 +219,7 @@ pub async fn lc_dataset_dlc_install(
         }
     });
     let map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(map.get(&slug).cloned().expect("DLC row"))
+    ok_json(map.get(&slug).cloned().expect("DLC row"))
 }
 
 #[tauri::command]
@@ -209,22 +228,21 @@ pub async fn lc_dataset_dlc_remove(
     hub: State<'_, DlcHub>,
     state: State<'_, Shared>,
     slug: String,
-) -> Result<DlcStatus, String> {
+) -> Result<LcResponse, String> {
     if !is_dlc_slug(&slug) {
         return Err(format!("unknown DLC {slug:?}"));
     }
     let dataset = dataset::get(&slug).map_err(|err| err.to_string())?;
     let cfg = state.cfg_snapshot();
     let dest = dataset.corpus_dir(&cfg).map_err(|err| err.to_string())?;
-    if dest.exists() {
-        std::fs::remove_dir_all(&dest).map_err(|err| err.to_string())?;
-    }
+    let json_root = cfg.json_dir().map_err(|err| err.to_string())?;
+    dataset::remove_corpus_dir(&dataset, &dest, &json_root).map_err(|err| err.to_string())?;
     index::clear_dataset(dataset).map_err(|err| err.to_string())?;
     refresh_installed(&hub, &slug, &cfg);
     set_phase(&hub, &slug, "idle", 0.0, None);
     emit(&app);
     let map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(map.get(&slug).cloned().expect("DLC row"))
+    ok_json(map.get(&slug).cloned().expect("DLC row"))
 }
 
 async fn install_one(app: &AppHandle, slug: &str) -> Result<(), String> {
@@ -251,9 +269,21 @@ async fn install_one(app: &AppHandle, slug: &str) -> Result<(), String> {
     emit(app);
     let cfg = cfg.clone();
     let slug_owned = slug.to_string();
+    let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        index::cmd_index(&cfg, false, Some(dataset))
-            .map_err(|err| format!("index {slug_owned}: {err:#}"))
+        let mut last = std::time::Instant::now();
+        let slug_cb = slug_owned.clone();
+        index::cmd_index_on_progress(&cfg, false, Some(dataset), |n| {
+            if n > 1 && last.elapsed() < std::time::Duration::from_millis(80) {
+                return;
+            }
+            last = std::time::Instant::now();
+            if let Some(hub) = handle.try_state::<DlcHub>() {
+                set_index_count(&hub, &slug_cb, n);
+            }
+            emit(&handle);
+        })
+        .map_err(|err| format!("index {slug_owned}: {err:#}"))
     })
     .await
     .map_err(|err| err.to_string())??;
@@ -288,18 +318,16 @@ async fn download_zip(app: &AppHandle, slug: &str, dest: &Path) -> Result<(), St
     }
     let mut file = File::create(dest).map_err(|err| err.to_string())?;
     let mut written: u64 = 0;
+    let mut last_emit = std::time::Instant::now();
     while let Some(chunk) = response.chunk().await.map_err(|err| err.to_string())? {
         file.write_all(&chunk).map_err(|err| err.to_string())?;
         written += chunk.len() as u64;
         if let Some(hub) = app.try_state::<DlcHub>() {
-            let progress = match total {
-                Some(t) if t > 0 => (written as f32 / t as f32).clamp(0.0, 1.0),
-                _ => -1.0,
-            };
-            set_phase(&hub, slug, "downloading", progress, None);
+            set_download(&hub, slug, written, total);
         }
-        if written % (512 * 1024) < chunk.len() as u64 {
+        if last_emit.elapsed() >= std::time::Duration::from_millis(100) {
             emit(app);
+            last_emit = std::time::Instant::now();
         }
     }
     emit(app);

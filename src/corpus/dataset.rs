@@ -210,6 +210,76 @@ pub fn belongs_to_other_dataset(root: &Path, path: &Path, me: &Dataset) -> bool 
     DATASETS.iter().any(|d| d.id != me.id && d.id == name)
 }
 
+/// Delete one dataset's files on disk.
+///
+/// Nested corpora (`<data-dir>/kodcode/`) can go as a whole directory. The
+/// default LeetCode corpus may live *in* `<data-dir>` itself, next to those
+/// subfolders — `remove_dir_all` on that path would wipe every DLC at once.
+pub fn remove_corpus_dir(dataset: &Dataset, dest: &Path, json_root: &Path) -> Result<()> {
+    if !dest.exists() {
+        return Ok(());
+    }
+    if dest == json_root {
+        let entries = match std::fs::read_dir(dest) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err.into()),
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.is_dir() {
+                if belongs_to_other_dataset(dest, &path, dataset) {
+                    continue;
+                }
+                continue;
+            }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let is_zip_part = name.starts_with(&format!(".{}", dataset.id))
+                && name.ends_with(".zip.part");
+            let is_json = matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some("json" | "jsonl")
+            );
+            if is_json || is_zip_part {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        return Ok(());
+    }
+    std::fs::remove_dir_all(dest)?;
+    Ok(())
+}
+
+/// Whether this dataset has JSON/JSONL of its own under `dir`.
+///
+/// The default corpus lives in the data-dir root, so a naive recursive walk
+/// would treat KodCode's files as LeetCode still being installed.
+pub fn dir_has_own_corpus_files(dir: &Path, me: &Dataset) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if belongs_to_other_dataset(dir, &path, me) {
+                continue;
+            }
+            if dir_has_own_corpus_files(&path, me) {
+                return true;
+            }
+            continue;
+        }
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("json" | "jsonl") => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// What `GET /datasets` and `lc datasets` report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetInfo {
@@ -303,5 +373,50 @@ mod tests {
             Path::new("/corpus/kodcode/train.jsonl"),
             kodcode
         ));
+    }
+
+    #[test]
+    fn remove_shared_root_leaves_sibling_corpora() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("train.jsonl"), "{}").unwrap();
+        std::fs::write(root.join(".leetcode.zip.part"), "partial").unwrap();
+        std::fs::create_dir(root.join("kodcode")).unwrap();
+        std::fs::write(root.join("kodcode").join("k.jsonl"), "{}").unwrap();
+        let leetcode = get(DEFAULT_DATASET).unwrap();
+        remove_corpus_dir(leetcode, root, root).unwrap();
+        assert!(!root.join("train.jsonl").exists());
+        assert!(!root.join(".leetcode.zip.part").exists());
+        assert!(root.join("kodcode").join("k.jsonl").exists());
+        assert!(root.is_dir());
+    }
+
+    #[test]
+    fn remove_nested_corpus_deletes_that_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let kod = root.join("kodcode");
+        std::fs::create_dir(&kod).unwrap();
+        std::fs::write(kod.join("k.jsonl"), "{}").unwrap();
+        std::fs::write(root.join("train.jsonl"), "{}").unwrap();
+        let kodcode = get("kodcode").unwrap();
+        remove_corpus_dir(kodcode, &kod, root).unwrap();
+        assert!(!kod.exists());
+        assert!(root.join("train.jsonl").exists());
+    }
+
+    #[test]
+    fn own_corpus_files_ignore_sibling_dataset_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("kodcode")).unwrap();
+        std::fs::write(root.join("kodcode").join("k.jsonl"), "{}").unwrap();
+        let leetcode = get(DEFAULT_DATASET).unwrap();
+        assert!(
+            !dir_has_own_corpus_files(root, leetcode),
+            "kodcode jsonl must not count as LeetCode installed"
+        );
+        std::fs::write(root.join("train.jsonl"), "{}").unwrap();
+        assert!(dir_has_own_corpus_files(root, leetcode));
     }
 }

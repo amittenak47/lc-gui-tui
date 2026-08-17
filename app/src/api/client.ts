@@ -2,7 +2,7 @@
  * Client for the bundled harness. Named Tauri `invoke`s — no URL, no dummy host.
  */
 
-import { b64ToBytes, bytesToB64, loadInvoke, type LcInvokeResponse } from "./nativeHttp";
+import { b64ToBytes, bytesToB64, loadInvoke, readInvokeResult } from "./nativeHttp";
 import type {
   AdjacentProblems,
   AttemptOutcome,
@@ -127,6 +127,8 @@ export interface DlcStatus {
   count: number;
   phase: string;
   progress: number;
+  downloaded?: number;
+  total?: number;
   error: string | null;
 }
 
@@ -565,10 +567,10 @@ export class LcClient {
       throw new LcApiError(message, 0);
     }
 
-    const run = invoke<LcInvokeResponse>(command, args ?? {});
-    let result: LcInvokeResponse;
+    const run = invoke<unknown>(command, args ?? {});
+    let raw: unknown;
     try {
-      result =
+      raw =
         timeoutMs != null && timeoutMs > 0
           ? await Promise.race([
               run,
@@ -591,10 +593,11 @@ export class LcClient {
       throw new LcApiError(message, 0);
     }
 
+    const result = readInvokeResult<T>(raw);
     if (result.status >= 400) {
       const text = bodyText(result.body);
       throw new LcApiError(errorMessage(text, result.status), result.status, text);
     }
-    return result.body as T;
+    return result.body;
   }
 }

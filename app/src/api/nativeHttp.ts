@@ -26,6 +26,25 @@ export interface LcInvokeResponse {
   body: unknown;
 }
 
+/**
+ * Router commands return `{ status, body }`. A few named commands (DLC) used
+ * to return the payload itself. Arrays have no `.body`, so treating them as
+ * the envelope yields `undefined` and Settings → Workspace whitescreens.
+ */
+export function isLcInvokeResponse(result: unknown): result is LcInvokeResponse {
+  if (result === null || typeof result !== "object" || Array.isArray(result)) {
+    return false;
+  }
+  return typeof (result as { status?: unknown }).status === "number";
+}
+
+export function readInvokeResult<T>(result: unknown): { status: number; body: T } {
+  if (isLcInvokeResponse(result)) {
+    return { status: result.status, body: result.body as T };
+  }
+  return { status: 200, body: result as T };
+}
+
 export function bytesToB64(bytes: Uint8Array): string {
   let bin = "";
   for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]!);

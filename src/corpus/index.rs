@@ -257,6 +257,16 @@ pub fn clear_dataset_on(conn: &Connection, dataset: &Dataset) -> Result<()> {
 
 /// Index every dataset that has a corpus folder, or just `only` when given.
 pub fn cmd_index(cfg: &Config, rebuild: bool, only: Option<&'static Dataset>) -> Result<()> {
+    cmd_index_on_progress(cfg, rebuild, only, |_| {})
+}
+
+/// Same as [`cmd_index`], calling `on_progress(indexed_so_far)` as rows land.
+pub fn cmd_index_on_progress(
+    cfg: &Config,
+    rebuild: bool,
+    only: Option<&'static Dataset>,
+    mut on_progress: impl FnMut(u32),
+) -> Result<()> {
     let targets: Vec<&'static Dataset> = match only {
         Some(dataset) => vec![dataset],
         None => DATASETS.iter().collect(),
@@ -287,7 +297,7 @@ pub fn cmd_index(cfg: &Config, rebuild: bool, only: Option<&'static Dataset>) ->
             continue;
         }
         indexed_any = true;
-        let stats = index_dataset(&conn, dataset, &dir, rebuild)?;
+        let stats = index_dataset(&conn, dataset, &dir, rebuild, &mut on_progress)?;
         println!(
             "{}: {} added, {} updated, {} unchanged, {} failed  ({})",
             dataset.id,
@@ -333,6 +343,7 @@ fn index_dataset(
     dataset: &'static Dataset,
     dir: &std::path::Path,
     rebuild: bool,
+    on_progress: &mut dyn FnMut(u32),
 ) -> Result<IndexStats> {
     let tx = conn.unchecked_transaction()?;
     if rebuild {
@@ -418,6 +429,7 @@ fn index_dataset(
             } else {
                 stats.added += 1;
             }
+            on_progress(stats.added + stats.updated);
             Ok(())
         });
         if let Err(err) = walk {

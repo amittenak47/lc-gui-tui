@@ -28,8 +28,9 @@ tauri-plugin-opener = "2.5.4"
 base64 = "0.22"
 harness = { path = "../..", package = "whiteboard", default-features = false }
 zip = { version = "2", default-features = false, features = ["deflate"] }
-# rustpython-stdlib 0.5 wants malachite-bigint 0.9; pymath pulls ^0 (0.10).
-# Pin here so this crate's lockfile unifies the same way the harness does.
+# rustpython-stdlib 0.5 wants malachite-bigint 0.9; upstream pymath pulls
+# any 0.x (0.10). Pin + [patch] third_party/pymath so unlocked resolve
+# unifies on 0.9.2 the same way the harness does.
 malachite-bigint = { version = "=0.9.2", optional = true }
 
 # ML Kit exists only on Android; the desktop build never compiles it and falls
@@ -50,3 +51,4 @@ strip = true
 [patch.crates-io]
 libffi = { path = "../../third_party/libffi" }
 libffi-sys = { path = "../../third_party/libffi-sys" }
+pymath = { path = "../../third_party/pymath" }
