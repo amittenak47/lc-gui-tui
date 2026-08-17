@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { LcApiError, LcClient, type DocIndexStatus, type ProposedAnnotation, type SearchOptions } from "./api/client";
 import { AmbientCoach, defaultCoachSocketFactory, type AmbientProbe } from "./api/coachSocket";
+import { isTauriRuntime } from "./api/nativeHttp";
 import {
   DEFAULT_PAIRING,
 } from "./api/pairing";
@@ -633,6 +634,19 @@ export function App() {
 
   const pairing = DEFAULT_PAIRING;
   const client = useMemo(() => new LcClient(), []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let stop: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(({ listen }) => {
+      void listen("lc-seed-ready", () => {
+        window.dispatchEvent(new Event("lc-seed-ready"));
+      }).then((unlisten) => {
+        stop = unlisten;
+      });
+    });
+    return () => stop?.();
+  }, []);
 
   /**
    * Ask once for storage the browser will not evict under pressure.

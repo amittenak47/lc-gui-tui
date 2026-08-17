@@ -94,6 +94,7 @@ export function ProblemBrowser({
   const initial = useMemo(() => loadBrowsePosition(), []);
   const [dataset, setDataset] = useState<string>(initial.dataset);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
+  const [seedTick, setSeedTick] = useState(0);
   const [query, setQuery] = useState(initial.query);
   const [difficulty, setDifficulty] = useState<string>(initial.difficulty);
   const [tag, setTag] = useState<string>(initial.tag);
@@ -192,6 +193,12 @@ export function ProblemBrowser({
   }, [offline]);
 
   useEffect(() => {
+    const onReady = () => setSeedTick((n) => n + 1);
+    window.addEventListener("lc-seed-ready", onReady);
+    return () => window.removeEventListener("lc-seed-ready", onReady);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     if (offline) {
       if (offlinePack) {
@@ -210,7 +217,7 @@ export function ProblemBrowser({
     return () => {
       cancelled = true;
     };
-  }, [client, dataset, offline, offlinePack]);
+  }, [client, dataset, offline, offlinePack, seedTick]);
 
   useEffect(() => {
     if (offline) return;
@@ -225,7 +232,7 @@ export function ProblemBrowser({
     return () => {
       cancelled = true;
     };
-  }, [client, offline]);
+  }, [client, offline, seedTick]);
 
   // Any filter change resets to the first page — as in the TUI.
   // Skip the first run so a restored browse position keeps its page.
@@ -314,7 +321,7 @@ export function ProblemBrowser({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [client, dataset, query, difficulty, tag, sort, page, pageSize, offline, offlinePack]);
+  }, [client, dataset, query, difficulty, tag, sort, page, pageSize, offline, offlinePack, seedTick]);
 
   useEffect(() => {
     if (tableReady) onReady?.();

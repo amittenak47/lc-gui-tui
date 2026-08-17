@@ -17,6 +17,7 @@ vite.config.ts.timestamp-*
 
 # --- Local problem corpora (downloaded JSON/JSONL; not versioned) ---
 /data/
+/app/src-tauri/resources/corpora/*.zip
 
 # --- Generated practice workspaces ---
 # Default workspace is ~/lc-workspace; on Windows a mistaken path can create this folder:
