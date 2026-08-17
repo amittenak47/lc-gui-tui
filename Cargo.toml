@@ -26,16 +26,13 @@ clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 minijinja = "2"
 toml = "0.8"
 directories = "5"
 colored = "2"
 comfy-table = "7"
 rand = "0.8"
-arboard = "3"
-ratatui = "0.29"
-crossterm = "0.28"
 walkdir = "2"
 axum = { version = "0.7", features = ["ws", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
@@ -52,5 +49,19 @@ rustpython = { version = "0.5.0", optional = true, default-features = false, fea
 lto = true
 strip = true
 
+# TUI + clipboard are CLI/desktop only. The Android APK links this crate as a
+# lib (in-process harness) and those crates do not build for Android.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = "3"
+ratatui = "0.29"
+crossterm = "0.28"
+
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# rustpython-vm enables libffi `system` on Android. Upstream forwards that to
+# libffi-sys, which then links the NDK's missing -lffi. This patch no-ops
+# `system` so libffi-sys builds C libffi from source.
+[patch.crates-io]
+libffi = { path = "third_party/libffi" }
+libffi-sys = { path = "third_party/libffi-sys" }

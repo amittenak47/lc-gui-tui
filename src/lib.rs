@@ -29,6 +29,7 @@ pub mod pad;
 pub mod docs_index;
 pub mod pads;
 pub mod serve;
+#[cfg(not(target_os = "android"))]
 pub mod tui;
 pub mod workspace;
 

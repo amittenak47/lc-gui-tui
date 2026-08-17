@@ -1,0 +1,22 @@
+[package]
+name = "libffi"
+version = "5.2.0"
+edition = "2021"
+rust-version = "1.78"
+license = "MIT OR Apache-2.0"
+description = "Patched libffi 5.2.0: `system` does not forward to libffi-sys"
+publish = false
+repository = "https://github.com/libffi-rs/libffi-rs"
+
+[features]
+check_only = ["libffi-sys/check_only"]
+complex = ["libffi-sys/complex"]
+default = ["std"]
+std = ["libffi-sys/std"]
+# rustpython-vm enables `system` on Android. Keep the feature name so that
+# request succeeds, but do not enable libffi-sys/system (NDK has no libffi).
+system = []
+
+[dependencies]
+libc = "0.2.65"
+libffi-sys = { version = "^4.2", default-features = false }

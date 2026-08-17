@@ -45,3 +45,8 @@ base64 = "0.22"
 [profile.release]
 lto = true
 strip = true
+
+# Same patch as the repo-root Cargo.toml: bundled libffi-sys on Android.
+[patch.crates-io]
+libffi = { path = "../../third_party/libffi" }
+libffi-sys = { path = "../../third_party/libffi-sys" }
