@@ -64,6 +64,12 @@ describe("toolbarAxis", () => {
     expect(toolbarAxis("floating", 10, 48, 1280, true)).toBe("row");
   });
 
+  it("becomes a column when the board hole is too narrow for a row", () => {
+    expect(toolbarAxis("docked", 0, 400, 1280, false, "row", 400)).toBe("column");
+    expect(toolbarAxis("docked", 0, 400, 400, false)).toBe("column");
+    expect(toolbarAxis("floating", 200, 48, 400, true, "row", 400)).toBe("column");
+  });
+
   it("becomes a column in a left or right edge band", () => {
     expect(toolbarAxis("floating", 8, 48, 1280, false)).toBe("column");
     expect(toolbarAxis("floating", 1280 - 56, 48, 1280, false)).toBe("column");

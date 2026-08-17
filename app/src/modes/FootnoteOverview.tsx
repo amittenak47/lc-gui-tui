@@ -558,8 +558,11 @@ export function FootnoteOverview({
                 />
                 <div className="lc-agent-composer-bar">
                   <div className="lc-agent-composer-actions">
-                    <button type="submit" disabled={draft.trim().length === 0}>
-                      Send
+                    <button type="submit" disabled={draft.trim().length === 0} aria-label="Send">
+                      <span className="lc-label-long">Send</span>
+                      <span className="lc-label-short" aria-hidden>
+                        S
+                      </span>
                     </button>
                   </div>
                 </div>

@@ -38,39 +38,6 @@ const COACH_SHEET_PEEK_PX = 52;
 const COACH_SHEET_SNAP = 0.28;
 const COACH_SHEET_FLING_VX = 0.55;
 
-function clampMarkMenuBox(
-  anchor: DOMRect,
-  size: { width: number; height: number },
-): { top: number; left: number; maxHeight: number } {
-  const view = typeof window !== "undefined" ? window.visualViewport : null;
-  const viewLeft = view?.offsetLeft ?? 0;
-  const viewTop = view?.offsetTop ?? 0;
-  const viewWidth = view?.width ?? (typeof window !== "undefined" ? window.innerWidth : 400);
-  const viewHeight = view?.height ?? (typeof window !== "undefined" ? window.innerHeight : 800);
-  const margin = 8;
-  const minLeft = viewLeft + margin;
-  const maxRight = viewLeft + viewWidth - margin;
-  const minTop = viewTop + margin;
-  const maxBottom = viewTop + viewHeight - margin;
-  const width = Math.min(Math.max(size.width, 112), Math.max(margin, maxRight - minLeft));
-  const spaceAbove = Math.max(0, anchor.top - minTop - 6);
-  const spaceBelow = Math.max(0, maxBottom - anchor.bottom - 6);
-  const maxHeight = Math.max(
-    72,
-    Math.min(220, Math.floor(viewHeight * 0.32), Math.max(spaceAbove, spaceBelow) || 72),
-  );
-  const usedHeight = Math.min(Math.max(size.height, 1), maxHeight);
-  let left = anchor.left;
-  if (left + width > maxRight) left = maxRight - width;
-  if (left < minLeft) left = minLeft;
-  let top = anchor.top - usedHeight - 6;
-  if (top < minTop) {
-    top = anchor.bottom + 6;
-    if (top + usedHeight > maxBottom) top = Math.max(minTop, maxBottom - usedHeight);
-  }
-  return { top: Math.round(top), left: Math.round(left), maxHeight: Math.round(maxHeight) };
-}
-
 export type CoachMode = "review" | "ambient";
 
 /**
@@ -434,7 +401,7 @@ export interface AgentSidePanelProps {
   /** Daemon Ask clip for this workspace — pad vs problem. */
   askClipChars?: number;
   onRemoveAttached?: (id: string) => void;
-  /** Every mark on the open document — hold Annotations to pick from this list. */
+  /** Every mark on the open document — attach by tapping a mark on the page. */
   annotationChoices?: Array<{
     id: string;
     number?: number;
@@ -481,8 +448,6 @@ export function AgentSidePanel({
   attachedFootnotes = [],
   askClipChars = PROBLEM_ASK_CLIP_CHARS,
   onRemoveAttached,
-  annotationChoices = [],
-  onToggleAttached,
   onSend,
   onThreadChange,
   onRequestBridge,
@@ -526,25 +491,18 @@ export function AgentSidePanel({
     }
   }, [draw, reviewBoard, lazy]);
   const boardLabel = draw ? "Draw" : reviewBoard ? "Review" : lazy ? "Lazy" : "Board";
+  const boardTip = draw
+    ? "Draw — the agent sketches on the board. Hold to cycle."
+    : reviewBoard
+      ? "Review — send the board for a written review. Hold to cycle."
+      : lazy
+        ? "Lazy — fill the solution from the board. Hold to cycle."
+        : "Board modes off. Hold to cycle Draw, Review, Lazy.";
   const [handwriting, setHandwriting] = useState(false);
   const [annotations, setAnnotations] = useState(false);
   const [askPreset, setAskPreset] = useState<AskPresetId | null>(null);
-  const [pickMarksOpen, setPickMarksOpen] = useState(false);
-  const pickMarksWrapRef = useRef<HTMLSpanElement | null>(null);
-  const pickMarksMenuRef = useRef<HTMLDivElement | null>(null);
-  const [markMenuBox, setMarkMenuBox] = useState<{
-    top: number;
-    left: number;
-    maxHeight: number;
-  } | null>(null);
   const attachedCount = attachedMarks?.length ?? 0;
-  const canPickMarks = annotationChoices.length > 0;
-  /**
-   * Annotations has something to send when marks are attached, or when there is
-   * a board with a region in front of the writer. Hold-to-pick stays live as
-   * long as the document has marks at all.
-   */
-  const annotationsUnavailable = attachedCount === 0 && !canPickMarks && annotateUnavailable;
+  const annotationsUnavailable = annotateUnavailable;
   /** Photos staged by (+), sent with the next message and cleared after. */
   const [photos, setPhotos] = useState<CoachAttachment[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -843,53 +801,10 @@ export function AgentSidePanel({
   useEffect(() => {
     if (!allowAnnotations) {
       setAnnotations(false);
-      setPickMarksOpen(false);
       return;
     }
     setAnnotations(attachedCount > 0);
   }, [allowAnnotations, attachedCount]);
-
-  useEffect(() => {
-    if (!pickMarksOpen) return;
-    const close = (event: globalThis.PointerEvent) => {
-      const node = event.target;
-      if (!(node instanceof Node)) return;
-      if (pickMarksWrapRef.current?.contains(node)) return;
-      if (pickMarksMenuRef.current?.contains(node)) return;
-      setPickMarksOpen(false);
-    };
-    document.addEventListener("pointerdown", close, true);
-    return () => document.removeEventListener("pointerdown", close, true);
-  }, [pickMarksOpen]);
-
-  useLayoutEffect(() => {
-    if (!pickMarksOpen || !canPickMarks) {
-      setMarkMenuBox(null);
-      return;
-    }
-    const place = () => {
-      const anchor = pickMarksWrapRef.current?.getBoundingClientRect();
-      if (!anchor) return;
-      const menu = pickMarksMenuRef.current;
-      setMarkMenuBox(
-        clampMarkMenuBox(anchor, {
-          width: menu?.offsetWidth ?? 200,
-          height: menu?.offsetHeight ?? 120,
-        }),
-      );
-    };
-    place();
-    const frame = requestAnimationFrame(place);
-    window.addEventListener("resize", place);
-    window.visualViewport?.addEventListener("resize", place);
-    window.visualViewport?.addEventListener("scroll", place);
-    return () => {
-      cancelAnimationFrame(frame);
-      window.removeEventListener("resize", place);
-      window.visualViewport?.removeEventListener("resize", place);
-      window.visualViewport?.removeEventListener("scroll", place);
-    };
-  }, [pickMarksOpen, canPickMarks, annotationChoices.length, attachedCount]);
 
   const endSheetDrag = useCallback(
     (event: PointerEvent<HTMLElement>) => {
@@ -1282,7 +1197,6 @@ export function AgentSidePanel({
     setHandwriting(false);
     setAnnotations(false);
     setAskPreset(null);
-    setPickMarksOpen(false);
     setPhotos([]);
     setPhotoError(null);
     closeMessageMenu();
@@ -1796,15 +1710,19 @@ export function AgentSidePanel({
                 socket + 120s loop are already wired in App / coachSocket. */}
             {!padSurface && (
             <div className="lc-modes" role="group" aria-label="Agent mode">
-              <Tip tip="Analyze on send" placement="right">
+              <Tip tip="Analyze on send" placement="top" flip={["top", "right"]}>
                 <button
                   type="button"
                   className={mode === "review" ? "lc-mode lc-mode-active" : "lc-mode"}
                   aria-pressed={mode === "review"}
                   disabled={busy}
                   onClick={() => onModeChange("review")}
+                  aria-label="On ask"
                 >
-                  On ask
+                  <span className="lc-label-long">On ask</span>
+                  <span className="lc-label-short" aria-hidden>
+                    O
+                  </span>
                 </button>
               </Tip>
               <Tip
@@ -1826,8 +1744,12 @@ export function AgentSidePanel({
                   aria-disabled={!AMBIENT_ENABLED}
                   disabled={!AMBIENT_ENABLED || busy}
                   onClick={() => AMBIENT_ENABLED && onModeChange("ambient")}
+                  aria-label="Every 2m"
                 >
-                  Every 2m
+                  <span className="lc-label-long">Every 2m</span>
+                  <span className="lc-label-short" aria-hidden>
+                    E
+                  </span>
                 </button>
               </Tip>
             </div>
@@ -1849,40 +1771,44 @@ export function AgentSidePanel({
                   aria-pressed={handwriting}
                   disabled={busy || annotateUnavailable}
                   onClick={() => setHandwriting((current) => !current)}
+                  aria-label="Whiteboard"
                 >
-                  Whiteboard
+                  <span className="lc-label-long">Whiteboard</span>
+                  <span className="lc-label-short" aria-hidden>
+                    W
+                  </span>
                 </button>
               </Tip>
               {allowAnnotations && (
-              <span className="lc-agent-annotate-wrap" ref={pickMarksWrapRef}>
-                  <HoldButton
-                    label="Annotations"
+                <Tip
+                  tip={
+                    annotateUnavailable
+                      ? NOT_ON_SCRATCHPAD
+                      : "Send attached marks with this ask"
+                  }
+                  placement="top"
+                >
+                  <button
+                    type="button"
                     className={`lc-flag lc-agent-annotate${
                       annotations ? " lc-flag-active" : ""
                     }${annotationsUnavailable ? " lc-flag-unavailable" : ""}`}
-                    pressed={annotations}
+                    aria-pressed={annotations}
                     disabled={busy || annotationsUnavailable}
-                    resetKey={pickMarksOpen}
-                    onConfirm={() => {
-                      if (!canPickMarks) {
-                        setAnnotations((current) => !current);
-                        return;
-                      }
-                      setPickMarksOpen(true);
-                    }}
-                    ariaLabel={
-                      canPickMarks
-                        ? "Annotations: hold to pick a mark"
-                        : "Annotations: hold to attach"
-                    }
+                    onClick={() => setAnnotations((current) => !current)}
+                    aria-label="Annotations"
                   >
-                    Annotations
-                  </HoldButton>
-                </span>
+                    <span className="lc-label-long">Annotations</span>
+                    <span className="lc-label-short" aria-hidden>
+                      A
+                    </span>
+                  </button>
+                </Tip>
               )}
             </div>
             <div className="lc-agent-composer-actions">
               {!padSurface && (
+                <Tip tip={boardTip} placement="top">
                 <HoldButton
                   label={boardLabel}
                   className={`lc-flag lc-agent-pipeline${
@@ -1893,8 +1819,12 @@ export function AgentSidePanel({
                   onConfirm={cycleBoard}
                   ariaLabel="Board: hold to cycle Draw, Review, Lazy"
                 >
-                  {boardLabel}
+                  <span className="lc-label-long">{boardLabel}</span>
+                  <span className="lc-label-short" aria-hidden>
+                    {boardLabel.match(/[A-Z]/)?.[0] ?? boardLabel[0]}
+                  </span>
                 </HoldButton>
+                </Tip>
               )}
               <Tip
                 tip={
@@ -1941,60 +1871,16 @@ export function AgentSidePanel({
                   +
                 </button>
               </Tip>
-              <button type="submit" disabled={!canSend}>
-                Send
+              <button type="submit" disabled={!canSend} aria-label="Send">
+                <span className="lc-label-long">Send</span>
+                <span className="lc-label-short" aria-hidden>
+                  S
+                </span>
               </button>
             </div>
           </div>
         </form>
       </div>
-
-      {pickMarksOpen &&
-        canPickMarks &&
-        createPortal(
-          <div
-            ref={pickMarksMenuRef}
-            className="lc-agent-scope-menu lc-agent-mark-menu"
-            role="menu"
-            style={
-              markMenuBox
-                ? {
-                    top: markMenuBox.top,
-                    left: markMenuBox.left,
-                    maxHeight: markMenuBox.maxHeight,
-                    visibility: "visible",
-                  }
-                : { top: 0, left: 0, visibility: "hidden" }
-            }
-          >
-            {annotationChoices
-              .slice()
-              .sort((a, b) => (a.number ?? 0) - (b.number ?? 0))
-              .map((choice) => {
-                const attached = attachedMarks.some((mark) => mark.id === choice.id);
-                const title = choice.title?.trim() ?? "";
-                return (
-                  <button
-                    type="button"
-                    role="menuitemcheckbox"
-                    aria-checked={attached}
-                    aria-label={footnoteChipLabel(choice.number, choice.title)}
-                    key={choice.id}
-                    className={`lc-footnote-chip${attached ? " is-picked" : ""}`}
-                    style={footnoteThemeVars(choice.color, choice.palette ?? [])}
-                    onClick={() => {
-                      onToggleAttached?.(choice.id);
-                      if (!attached) setAnnotations(true);
-                    }}
-                  >
-                    <span className="lc-fn-badge">{choice.number ?? ""}</span>
-                    {title ? <span className="lc-footnote-chip-label">{title}</span> : null}
-                  </button>
-                );
-              })}
-          </div>,
-          document.body,
-        )}
 
       {messageMenu &&
         menuMessage &&

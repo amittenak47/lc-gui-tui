@@ -38,6 +38,7 @@ import {
   saveToolbarLayout,
   TOOLBAR_DOCK_SNAP_PX,
   TOOLBAR_LEFT_CHROME_INSET_PX,
+  TOOLBAR_NARROW_COLUMN_PX,
   toolbarAxis,
   type ToolbarLayout,
 } from "../util/toolbarLayout";
@@ -236,6 +237,9 @@ export function BoardToolbar({
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
 
   const [layout, setLayout] = useState<ToolbarLayout>(() => loadToolbarLayout());
+  const [boardNarrow, setBoardNarrow] = useState(
+    () => typeof window !== "undefined" && window.innerWidth <= TOOLBAR_NARROW_COLUMN_PX,
+  );
   const [dragging, setDragging] = useState(false);
   const [docking, setDocking] = useState(false);
   const [dockNear, setDockNear] = useState(false);
@@ -276,6 +280,7 @@ export function BoardToolbar({
     typeof window === "undefined" ? 1280 : window.innerWidth,
     dockNear,
     axisPrevRef.current,
+    boardNarrow ? TOOLBAR_NARROW_COLUMN_PX : Number.POSITIVE_INFINITY,
   );
   axisPrevRef.current = axis;
   const layoutRef = useRef(layout);
@@ -352,6 +357,20 @@ export function BoardToolbar({
       setShapePhase("list");
     }
   }, [shapesOpen]);
+
+  useLayoutEffect(() => {
+    const board =
+      toolbarRootRef.current?.closest(".lc-board") ?? document.querySelector(".lc-board");
+    if (!(board instanceof HTMLElement)) return;
+    const publish = () => {
+      const next = board.clientWidth <= TOOLBAR_NARROW_COLUMN_PX;
+      setBoardNarrow((was) => (was === next ? was : next));
+    };
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(board);
+    return () => observer.disconnect();
+  }, []);
 
   // Keep a restored floating position inside the board hole after rotate /
   // resize / coach open (App dispatches `resize` when the panel docks).
@@ -488,6 +507,7 @@ export function BoardToolbar({
       window.innerWidth,
       false,
       axisPrevRef.current,
+      boardNarrow ? TOOLBAR_NARROW_COLUMN_PX : Number.POSITIVE_INFINITY,
     );
     const extraLeft = nextAxis === "column" ? TOOLBAR_LEFT_CHROME_INSET_PX : 0;
     const next = clampFloatingPos(tentative.x, tentative.y, drag.width, drag.height, extraLeft);

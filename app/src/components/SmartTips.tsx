@@ -9,11 +9,18 @@ const PAD = 8;
 type TipState = {
   text: string;
   preferred: TipPlacement;
+  flip: TipPlacement[] | null;
   anchor: DOMRect;
 };
 
 function isPlacement(value: string | null): value is TipPlacement {
   return value === "top" || value === "bottom" || value === "left" || value === "right";
+}
+
+function parseFlipList(raw: string | null): TipPlacement[] | null {
+  if (!raw) return null;
+  const parts = raw.split(",").map((item) => item.trim()).filter(isPlacement);
+  return parts.length > 0 ? parts : null;
 }
 
 function place(
@@ -67,13 +74,30 @@ const FLIP: Record<TipPlacement, TipPlacement[]> = {
   right: ["right", "left", "top", "bottom"],
 };
 
+function flipOrder(preferred: TipPlacement, custom: TipPlacement[] | null): TipPlacement[] {
+  if (!custom || custom.length === 0) return FLIP[preferred];
+  const seen = new Set<TipPlacement>();
+  const order: TipPlacement[] = [];
+  for (const placement of custom) {
+    if (seen.has(placement)) continue;
+    seen.add(placement);
+    order.push(placement);
+  }
+  for (const placement of FLIP[preferred]) {
+    if (seen.has(placement)) continue;
+    order.push(placement);
+  }
+  return order;
+}
+
 function positionTip(
   anchor: DOMRect,
   width: number,
   height: number,
   preferred: TipPlacement,
+  custom: TipPlacement[] | null = null,
 ): { left: number; top: number } {
-  for (const placement of FLIP[preferred]) {
+  for (const placement of flipOrder(preferred, custom)) {
     const next = place(anchor, width, height, placement);
     if (fits(next.left, next.top, width, height)) return next;
   }
@@ -100,7 +124,12 @@ export function SmartTips() {
       if (!text) return null;
       const raw = el.getAttribute("data-tip-placement");
       const preferred = isPlacement(raw) ? raw : "bottom";
-      return { text, preferred, anchor: el.getBoundingClientRect() };
+      return {
+        text,
+        preferred,
+        flip: parseFlipList(el.getAttribute("data-tip-flip")),
+        anchor: el.getBoundingClientRect(),
+      };
     };
 
     const show = (el: HTMLElement) => {
@@ -181,7 +210,7 @@ export function SmartTips() {
   useLayoutEffect(() => {
     if (!tip || !nodeRef.current) return;
     const box = nodeRef.current.getBoundingClientRect();
-    setCoords(positionTip(tip.anchor, box.width, box.height, tip.preferred));
+    setCoords(positionTip(tip.anchor, box.width, box.height, tip.preferred, tip.flip));
   }, [tip]);
 
   if (!tip || typeof document === "undefined") return null;

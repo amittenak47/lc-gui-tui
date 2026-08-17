@@ -42,6 +42,12 @@ export const TOOLBAR_SIDE_BAND_PX = 96;
 export const TOOLBAR_SIDE_HYSTERESIS_PX = 28;
 /** Extra left inset so a vertical island does not cover the annotate toggle. */
 export const TOOLBAR_LEFT_CHROME_INSET_PX = 52;
+/**
+ * Board hole at or under this: docked island becomes a column so it does not
+ * sit on the Recentre / theme / eye stack. Side stacks are ~56px; the row
+ * island is ~280px of tools, so overlap starts well before this.
+ */
+export const TOOLBAR_NARROW_COLUMN_PX = 480;
 
 export function toolbarAxis(
   mode: "docked" | "floating",
@@ -50,7 +56,9 @@ export function toolbarAxis(
   viewWidth: number,
   dockNear: boolean,
   previous: "row" | "column" = "row",
+  boardWidth: number = viewWidth,
 ): "row" | "column" {
+  if (boardWidth <= TOOLBAR_NARROW_COLUMN_PX) return "column";
   if (mode === "docked" || dockNear) return "row";
   const cx = x + width / 2;
   const enter = TOOLBAR_SIDE_BAND_PX;

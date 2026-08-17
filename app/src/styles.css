@@ -505,18 +505,11 @@ html[data-theme="dark"] .lc-web-doc {
 }
 
 /*
- * Header spans the window; the coach column sits under the right end. Push
- * the icon row into the board hole so a resize with the panel open does not
- * leave them parked over the chat.
+ * Agent + the icons beside it stay on the window's trailing edge.
+ * The coach column starts *below* the header, so padding the header when the
+ * panel opens only slid this chrome into the board. Mobile/tablet use a
+ * sheet, not that column — same pin, no extra inset.
  */
-.lc-app-agent-open:not(.lc-mobile) .lc-header {
-  padding-right: calc(12px + var(--lc-agent-width, 520px));
-}
-
-[data-handedness="left"] .lc-app-agent-open:not(.lc-mobile) .lc-header {
-  padding-right: 12px;
-  padding-left: calc(12px + var(--lc-agent-width, 520px));
-}
 
 .lc-header-center .lc-actions {
   margin-left: 0;
@@ -537,6 +530,14 @@ html[data-theme="dark"] .lc-web-doc {
   letter-spacing: -0.01em;
   line-height: 1;
   white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .lc-brand,
+  .lc-browse-hint,
+  .lc-header-left .lc-current {
+    display: none;
+  }
 }
 
 .lc-current {
@@ -665,6 +666,10 @@ html[data-theme="dark"] .lc-web-doc {
 }
 
 /* --------------------------------------------------------------- controls --- */
+
+textarea {
+  resize: none;
+}
 
 button {
   min-height: var(--touch);
@@ -1876,6 +1881,58 @@ input[type="checkbox"] {
 .lc-toolbar.is-column .lc-hold-reveal.lc-preset-chip .lc-hold-reveal-label {
   flex-direction: column;
   padding: 0;
+}
+
+/*
+ * Skinny board hole: same column island as a docked `is-column`, plus a gutter
+ * so the pager/dock cannot sit under Recentre / theme / eye (~56px) or the
+ * annotate toggle (~56px). Matches TOOLBAR_NARROW_COLUMN_PX (480).
+ */
+@container lc-board (max-width: 480px) {
+  .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating) {
+    max-width: 56px;
+    overflow: visible;
+  }
+
+  .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating) .lc-toolbar-row {
+    flex-direction: column;
+    overflow-x: visible;
+    overflow-y: visible;
+    align-items: center;
+  }
+
+  .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating) .lc-tool-sep {
+    width: 28px;
+    height: 1px;
+    margin: 4px 0;
+  }
+
+  .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating) .lc-stroke-controls,
+  .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating) .lc-color-wrap {
+    flex-direction: column;
+  }
+
+  .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating) .lc-preset-chip,
+  .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating) .lc-hold-reveal.lc-preset-chip {
+    max-width: 48px;
+    min-width: 0;
+    height: auto;
+    min-height: 0 !important;
+    padding: 8px 4px;
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+  }
+
+  .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating)
+    .lc-hold-reveal.lc-preset-chip
+    .lc-hold-reveal-label {
+    flex-direction: column;
+    padding: 0;
+  }
+
+  .lc-map-controls-paged .lc-board-dock {
+    max-width: calc(100% - 112px);
+  }
 }
 
 
@@ -3170,46 +3227,49 @@ input[type="checkbox"] {
   touch-action: none;
 }
 
+/* ---------------------------------------------------------------------------
+ * Home chooser — the four mode cards.
+ *
+ * The chooser is its own query container, so the cards collapse on the width
+ * they actually get rather than the window's. Three tiers: full cards
+ * `--lc-home-cols` across, full cards `--lc-home-cols-mid` across (set to a
+ * clean half by `homeModeColumns`, or left alone for an odd count that would
+ * orphan a card), then a rail of icon tiles with the prose dropped.
+ *
+ * Card width is a fraction of the row and height follows the cell, so one
+ * grid scales from a phone to a desk monitor without a size per device.
+ * ------------------------------------------------------------------------- */
+
 .lc-home-chooser {
-  width: min(720px, 100%);
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 28px;
-  padding: 8px 0 24px;
-}
-
-.lc-home-chooser-head {
-  text-align: center;
-}
-
-.lc-home-chooser-title {
-  margin: 0 0 8px;
-  font-size: clamp(1.5rem, 4vw, 2rem);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.lc-home-chooser-lead {
-  margin: 0;
-  font-size: 1rem;
-  line-height: 1.45;
+  /* `margin: auto` inside the flex column centres it on both axes. */
+  width: min(1040px, 100%);
+  margin: auto;
+  padding: 8px 0 16px;
+  container-type: inline-size;
+  container-name: lc-home;
 }
 
 .lc-home-chooser-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(var(--lc-home-cols, 4), minmax(0, 1fr));
+  gap: clamp(10px, 1.6cqi, 18px);
+  align-items: stretch;
 }
 
 .lc-home-card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  min-height: 148px;
-  padding: 20px 22px;
+  gap: clamp(10px, 1.8cqi, 18px);
+  /*
+   * Height comes from the row, width from the column — every card fills its
+   * cell, so the block stays symmetric however many modes are compiled in. An
+   * aspect ratio was tried here and it is the wrong tool: capping the height
+   * of a square shrinks its width too, and the cards pull away from the
+   * right-hand edge of a grid that is supposed to be centred.
+   */
+  min-height: clamp(150px, 17cqi, 210px);
+  padding: clamp(14px, 2cqi, 22px);
   border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
   border-radius: 16px;
   background: color-mix(in srgb, var(--paper) 92%, var(--ink) 8%);
@@ -3220,17 +3280,67 @@ input[type="checkbox"] {
   transition:
     border-color 140ms ease,
     background 140ms ease,
+    box-shadow 140ms ease,
     transform 140ms ease;
 }
 
-.lc-home-card:active {
+.lc-home-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--paper) 88%, var(--accent) 12%);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 10%);
+  transform: translateY(-2px);
+}
+
+.lc-home-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lc-home-card:active:not(:disabled) {
   transform: scale(0.985);
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   background: color-mix(in srgb, var(--paper) 86%, var(--accent) 14%);
+  box-shadow: none;
+}
+
+.lc-home-card:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.lc-home-card-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: clamp(34px, 5.2cqi, 46px);
+  height: clamp(34px, 5.2cqi, 46px);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: color-mix(in srgb, var(--ink) 78%, transparent);
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.lc-home-card-icon svg {
+  width: 60%;
+  height: 60%;
+}
+
+.lc-home-card:hover:not(:disabled) .lc-home-card-icon {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--ink);
+}
+
+.lc-home-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .lc-home-card-kicker {
-  font-size: 0.75rem;
+  font-size: clamp(0.66rem, 1.1cqi, 0.75rem);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3238,15 +3348,79 @@ input[type="checkbox"] {
 }
 
 .lc-home-card-title {
-  font-size: 1.35rem;
+  font-size: clamp(1.05rem, 2.1cqi, 1.35rem);
   font-weight: 650;
   line-height: 1.15;
 }
 
 .lc-home-card-blurb {
-  font-size: 0.95rem;
+  font-size: clamp(0.82rem, 1.4cqi, 0.95rem);
   line-height: 1.4;
   color: color-mix(in srgb, var(--ink) 68%, transparent);
+}
+
+/* Middle tier: same cards, folded onto two rows so nothing sits alone. */
+@container lc-home (max-width: 780px) {
+  .lc-home-chooser-grid {
+    grid-template-columns: repeat(var(--lc-home-cols-mid, 2), minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .lc-home-card {
+    min-height: 118px;
+  }
+}
+
+/*
+ * Rail tier: labels go, icons stay. Every mode keeps a column so the row is
+ * still symmetric, and the accessible name is on the button, not the prose.
+ */
+@container lc-home (max-width: 440px) {
+  .lc-home-chooser-grid {
+    grid-template-columns: repeat(var(--lc-home-cols, 4), minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .lc-home-card {
+    align-items: center;
+    justify-content: center;
+    aspect-ratio: 1 / 1;
+    min-height: 0;
+    padding: 8px;
+    gap: 0;
+  }
+
+  .lc-home-card-icon {
+    width: min(44px, 62%);
+    height: min(44px, 62%);
+    background: none;
+  }
+
+  .lc-home-card-text {
+    display: none;
+  }
+}
+
+/* Not enough height for prose — keep the icon and the name, drop the rest. */
+@media (max-height: 560px) {
+  .lc-home-card {
+    min-height: 0;
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .lc-home-card-kicker,
+  .lc-home-card-blurb {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-home-card,
+  .lc-home-card:hover:not(:disabled) {
+    transition: none;
+    transform: none;
+  }
 }
 
 .lc-spinner {
@@ -5135,6 +5309,8 @@ input[type="checkbox"] {
   flex-direction: column;
   gap: 8px;
   background: var(--panel);
+  container-type: inline-size;
+  container-name: lc-composer;
 }
 
 .lc-agent-presets {
@@ -5158,7 +5334,7 @@ input[type="checkbox"] {
 .lc-agent-composer textarea {
   width: 100%;
   min-height: 72px;
-  resize: vertical;
+  resize: none;
   border-radius: 8px;
   border: 1px solid var(--chrome-edge);
   background: var(--bg);
@@ -6689,7 +6865,7 @@ button.lc-row-selected:hover:not(:disabled) {
   padding: 10px;
   font-family: ui-monospace, Consolas, monospace;
   font-size: 13px;
-  resize: vertical;
+  resize: none;
 }
 
 .lc-pseudo-note {
@@ -8083,6 +8259,39 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-label-short {
   display: inline;
+}
+
+/* Composer: full words when the panel has room; first capital when cramped.
+ * Container query so a resized desktop panel abbreviates even if the window
+ * is wide. Overrides `.lc-mobile .lc-label-*` so a wide tablet sheet keeps
+ * "Whiteboard" / "Send". */
+@container lc-composer (max-width: 420px) {
+  .lc-agent-composer-bar .lc-label-long {
+    display: none;
+  }
+
+  .lc-agent-composer-bar .lc-label-short {
+    display: inline;
+  }
+
+  .lc-agent-composer-bar .lc-mode,
+  .lc-agent-composer-actions button,
+  .lc-agent-composer-mid button {
+    min-height: 22px;
+    height: 22px;
+    padding: 0 5px;
+    min-width: 22px;
+  }
+}
+
+@container lc-composer (min-width: 421px) {
+  .lc-agent-composer-bar .lc-label-long {
+    display: inline;
+  }
+
+  .lc-agent-composer-bar .lc-label-short {
+    display: none;
+  }
 }
 
 .lc-mobile .lc-desktop-only {
@@ -9658,7 +9867,7 @@ button.lc-row-selected:hover:not(:disabled) {
 /* A question to a coach is usually a paragraph, not a search box. */
 .lc-agent-composer textarea {
   min-height: 8.5rem;
-  resize: vertical;
+  resize: none;
 }
 
 
@@ -10673,7 +10882,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-footnote-overview-task-field {
   width: 100%;
-  resize: vertical;
+  resize: none;
   min-height: 4.5rem;
   max-height: 10rem;
 }
@@ -10803,20 +11012,13 @@ button.lc-row-selected:hover:not(:disabled) {
   align-items: center;
   gap: 4px;
   max-width: 100%;
-  min-height: 22px;
-  height: 22px;
-  padding: 0 4px 0 3px;
-  border: 1px solid color-mix(in srgb, var(--chrome-edge, var(--line)) 55%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--panel, #fff) 70%, transparent);
-  color: inherit;
-}
-
-.lc-agent-mark-chips .lc-footnote-chip[style*="--lc-fn-color"],
-.lc-agent-mark-menu .lc-footnote-chip[style*="--lc-fn-color"] {
-  border-color: var(--lc-fn-color);
-  background: color-mix(in srgb, var(--lc-fn-color) 22%, var(--lc-fn-light, #fff));
-  color: var(--lc-fn-ink, var(--lc-fn-deep, inherit));
+  min-height: 24px;
+  height: 24px;
+  padding: 0 6px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
 }
 
 .lc-agent-mark-chips .lc-footnote-chip.is-overflow {
@@ -11982,8 +12184,9 @@ button.lc-row-selected:hover:not(:disabled) {
 /* --------------------------------------------------- annotate reach --- */
 
 /*
- * Annotate is a hold button now: tap toggles it, hold picks how much board
- * goes up. The wrapper is the anchor the chooser hangs from.
+ * Annotate is a tap-toggle like Whiteboard. The wrapper used to be the
+ * hold-picker anchor; keep it as an inline flex so the flag still sits in the
+ * composer row.
  */
 .lc-agent-annotate-wrap {
   position: relative;
@@ -12122,17 +12325,18 @@ button.lc-row-selected:hover:not(:disabled) {
   min-height: 0;
   height: auto;
   padding: 3px 5px 3px 3px;
-  border: 1px solid color-mix(in srgb, var(--chrome-edge, var(--line)) 55%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--panel, #fff) 70%, transparent);
-  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
   cursor: pointer;
   text-align: left;
 }
 
 .lc-agent-mark-menu .lc-footnote-chip.is-picked {
-  border-color: var(--lc-fn-color, var(--accent));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--lc-fn-color, var(--accent)) 45%, transparent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+  color: var(--accent);
 }
 
 
