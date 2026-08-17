@@ -7,7 +7,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { createPortal } from "react-dom";
 
 import type { DevicePrefsDto, DlcStatus, LcClient } from "../api/client";
-import type { CoachFlags, DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
+import type { CoachFlags, DatasetInfo, LcConfig, LcConfigPut, LlmStatus, ProviderConfig } from "../api/types";
 import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { shouldDismissBackdrop } from "../util/backdropDismiss";
 import { MorphBar } from "./MorphBar";
@@ -267,6 +267,8 @@ function emptyConfig(): LcConfig {
     serve_port: 7878,
     coach: { ...DEFAULT_COACH_FLAGS },
     token_set: false,
+    openai_key_set: false,
+    groq_key_set: false,
   };
 }
 
@@ -397,7 +399,11 @@ export function SettingsModal({
   /** Separate from `busy` so a slow/hung GET /config cannot leave Save stuck disabled. */
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [providerFocus, setProviderFocus] = useState<"local" | "ollama" | "openai">("local");
+  const [providerFocus, setProviderFocus] = useState<(typeof PROVIDERS)[number]>("local");
+  const [openaiKeyDraft, setOpenaiKeyDraft] = useState("");
+  const [groqKeyDraft, setGroqKeyDraft] = useState("");
+  const [clearOpenaiKey, setClearOpenaiKey] = useState(false);
+  const [clearGroqKey, setClearGroqKey] = useState(false);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   /**
    * What this origin is using, read once when Personalise opens.
@@ -562,6 +568,10 @@ export function SettingsModal({
         if (!cancelled) {
           setDraft(cfg);
           setBaselineConfig(cfg);
+          setOpenaiKeyDraft("");
+          setGroqKeyDraft("");
+          setClearOpenaiKey(false);
+          setClearGroqKey(false);
           setBusy(null);
         }
         await refreshLlm();
@@ -627,8 +637,13 @@ export function SettingsModal({
     chromeWake,
     chromeWakeTint,
   };
+  const keysDirty =
+    openaiKeyDraft.trim() !== "" ||
+    groqKeyDraft.trim() !== "" ||
+    clearOpenaiKey ||
+    clearGroqKey;
   const dirty =
-    !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs);
+    !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs) || keysDirty;
 
   const patchProvider = (key: "local" | "ollama" | "openai" | "groq", patch: Partial<ProviderConfig>) => {
     setDraft((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
@@ -651,7 +666,7 @@ export function SettingsModal({
     setSaving(true);
     setError(null);
     const prefsDirty = !prefsEqual(draftPrefs, baselinePrefs);
-    const configDirty = !configEqual(draft, baselineConfig);
+    const configDirty = !configEqual(draft, baselineConfig) || keysDirty;
     try {
       // Device prefs never need the daemon — persist them even if PUT /config fails.
       if (prefsDirty) {
@@ -698,9 +713,18 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent(CHROME_WAKE_EVENT));
       }
       if (configDirty) {
-        const saved = await client.putConfig(draft, { timeoutMs: CONFIG_SAVE_TIMEOUT_MS });
+        const payload: LcConfigPut = { ...draft };
+        if (openaiKeyDraft.trim()) payload.openai_api_key = openaiKeyDraft.trim();
+        else if (clearOpenaiKey) payload.openai_api_key = "";
+        if (groqKeyDraft.trim()) payload.groq_api_key = groqKeyDraft.trim();
+        else if (clearGroqKey) payload.groq_api_key = "";
+        const saved = await client.putConfig(payload, { timeoutMs: CONFIG_SAVE_TIMEOUT_MS });
         setDraft(saved);
         setBaselineConfig(saved);
+        setOpenaiKeyDraft("");
+        setGroqKeyDraft("");
+        setClearOpenaiKey(false);
+        setClearGroqKey(false);
       }
       onSaved?.();
       if (shouldClose) onClose();
@@ -1642,7 +1666,7 @@ export function SettingsModal({
               </label>
 
               <div className="lc-settings-provider-tabs" role="tablist">
-                {(["local", "ollama", "openai"] as const).map((p) => (
+                {PROVIDERS.map((p) => (
                   <button
                     key={p}
                     type="button"
@@ -1655,7 +1679,13 @@ export function SettingsModal({
                     }
                     onClick={() => setProviderFocus(p)}
                   >
-                    {p === "local" ? "Local" : p === "ollama" ? "Ollama" : "OpenAI"}
+                    {p === "local"
+                      ? "Local"
+                      : p === "ollama"
+                        ? "Ollama"
+                        : p === "openai"
+                          ? "OpenAI"
+                          : "Groq"}
                   </button>
                 ))}
               </div>
@@ -1668,7 +1698,9 @@ export function SettingsModal({
                   placeholder={
                     providerFocus === "openai"
                       ? "https://api.openai.com/v1"
-                      : "http://localhost:11434/v1"
+                      : providerFocus === "groq"
+                        ? "https://api.groq.com/openai/v1"
+                        : "http://localhost:11434/v1"
                   }
                 />
                 <p className="lc-settings-hint">{llmServerHint(providerFocus)}</p>
@@ -1694,8 +1726,56 @@ export function SettingsModal({
                 </p>
               </label>
 
-              {providerFocus === "openai" && (
-                <p className="lc-muted">API key from OPENAI_API_KEY env — not stored in config.toml.</p>
+              {(providerFocus === "openai" || providerFocus === "groq") && (
+                <label>
+                  <span>API key</span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={providerFocus === "openai" ? openaiKeyDraft : groqKeyDraft}
+                    onChange={(e) => {
+                      if (providerFocus === "openai") {
+                        setOpenaiKeyDraft(e.target.value);
+                        setClearOpenaiKey(false);
+                      } else {
+                        setGroqKeyDraft(e.target.value);
+                        setClearGroqKey(false);
+                      }
+                    }}
+                    placeholder={
+                      (providerFocus === "openai" ? draft.openai_key_set : draft.groq_key_set)
+                        ? "leave blank to keep the stored key"
+                        : providerFocus === "openai"
+                          ? "sk-…"
+                          : "gsk_…"
+                    }
+                  />
+                  <p className="lc-settings-hint">
+                    Stored in this device&apos;s config.toml. Env{" "}
+                    {providerFocus === "openai" ? "OPENAI_API_KEY" : "GROQ_API_KEY"} wins when
+                    set. GET never returns the secret.
+                  </p>
+                  {(providerFocus === "openai" ? draft.openai_key_set : draft.groq_key_set) && (
+                    <button
+                      type="button"
+                      className="lc-secondary"
+                      onClick={() => {
+                        if (providerFocus === "openai") {
+                          setOpenaiKeyDraft("");
+                          setClearOpenaiKey(true);
+                        } else {
+                          setGroqKeyDraft("");
+                          setClearGroqKey(true);
+                        }
+                      }}
+                    >
+                      Clear stored key
+                    </button>
+                  )}
+                  {(providerFocus === "openai" ? clearOpenaiKey : clearGroqKey) && (
+                    <p className="lc-muted">Stored key will be cleared on Save.</p>
+                  )}
+                </label>
               )}
 
               <div className="lc-settings-subhead">Agent mode providers</div>

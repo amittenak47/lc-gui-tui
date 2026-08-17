@@ -11,6 +11,7 @@ import type {
   CoachCapabilities,
   DatasetInfo,
   LcConfig,
+  LcConfigPut,
   LlmStatus,
   LoadResponse,
   ProblemDetail,
@@ -206,7 +207,7 @@ export class LcClient {
     return this.cmd("lc_get_config");
   }
 
-  async putConfig(config: LcConfig, opts?: { timeoutMs?: number }): Promise<LcConfig> {
+  async putConfig(config: LcConfigPut, opts?: { timeoutMs?: number }): Promise<LcConfig> {
     return this.cmd("lc_put_config", { config }, opts?.timeoutMs);
   }
 

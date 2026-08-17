@@ -190,7 +190,7 @@ Tablet APK  ──in-process──►  axum router (named invoke)  ──►  LL
 ```
 
 - Coach answers stream over Tauri events (`lc-coach-frame`), not a session WebSocket to a PC.
-- Configure the model under **Settings → LLM** on the device (`localhost` there means the tablet).
+- Configure the model under **Settings → LLM** on the device (`localhost` there means the tablet). Paste Groq/OpenAI keys there — the APK has no `GROQ_API_KEY` / `OPENAI_API_KEY` environment.
 - For a local model, run Ollama or llama.cpp on the tablet itself, or point at a URL the tablet can reach (Tailscale, LAN IP, Groq, OpenAI, etc.).
 
 ### Tablet as a second display (optional)

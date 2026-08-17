@@ -5,13 +5,14 @@ use super::{ChatReply, ChatRequest, LlmProvider};
 use crate::config::Config;
 
 /// Any OpenAI-compatible server: Ollama, vLLM, LM Studio, or OpenAI itself.
-/// Local/Ollama use `LC_LOCAL_API_KEY` when set; OpenAI uses `OPENAI_API_KEY`.
+/// Local/Ollama use `LC_LOCAL_API_KEY` when set; OpenAI uses `OPENAI_API_KEY`
+/// then the key stored in Settings.
 pub struct OpenAi {
     label: String,
     base_url: String,
     model: String,
     vision_model: String,
-    api_key_env: &'static str,
+    api_key: Option<String>,
 }
 
 impl OpenAi {
@@ -21,17 +22,17 @@ impl OpenAi {
 
     pub fn from_provider(cfg: &Config, provider: &str) -> Self {
         let endpoint = cfg.llm.endpoint(provider);
-        let api_key_env = if provider == "openai" {
-            "OPENAI_API_KEY"
+        let api_key = if provider == "openai" {
+            crate::config::resolve_api_key("OPENAI_API_KEY", cfg.llm.openai.api_key.as_deref())
         } else {
-            "LC_LOCAL_API_KEY"
+            crate::config::resolve_api_key("LC_LOCAL_API_KEY", None)
         };
         Self {
             label: provider.to_string(),
             base_url: endpoint.base_url.to_string(),
             model: endpoint.model.to_string(),
             vision_model: endpoint.vision_model_name().to_string(),
-            api_key_env,
+            api_key,
         }
     }
 
@@ -43,12 +44,6 @@ impl OpenAi {
             &self.model
         }
     }
-
-    fn api_key(&self) -> Option<String> {
-        std::env::var(self.api_key_env)
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-    }
 }
 
 impl LlmProvider for OpenAi {
@@ -57,10 +52,10 @@ impl LlmProvider for OpenAi {
     }
 
     fn chat(&self, system: &str, user: &str) -> Result<String> {
-        let api_key = self.api_key();
+        let api_key = self.api_key.as_deref();
         self.explain_unreachable(chat_completions(
             &self.base_url,
-            api_key.as_deref(),
+            api_key,
             &self.model,
             system,
             user,
@@ -68,10 +63,10 @@ impl LlmProvider for OpenAi {
     }
 
     fn chat_ex(&self, req: &ChatRequest) -> Result<ChatReply> {
-        let api_key = self.api_key();
+        let api_key = self.api_key.as_deref();
         self.explain_unreachable(chat_completions_ex(
             &self.base_url,
-            api_key.as_deref(),
+            api_key,
             self.model_for(req),
             req,
         ))
