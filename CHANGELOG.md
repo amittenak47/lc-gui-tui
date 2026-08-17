@@ -6,6 +6,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — one tab strip in the header
+
+- **Home and every open workspace are chips in the header.** There was a strip
+  already, but it only listed web pages and it lived under the header, so a
+  notebook and a PDF were not things you could get *back* to — you left them.
+  One strip now lists all of it, next to the brand: `Home`, `google.com`,
+  `google.md`, `doodle`. Home is a tab rather than a button that tears the
+  workspace down.
+- **The top-right icons spawn a tab instead of vanishing.** They used to hide
+  the moment anything was open. Now the icon matching the live workspace keeps
+  its pressed form (tap saves, hold opens the library) and the other two open a
+  workspace beside it. Opening something already in the strip focuses its chip
+  rather than making a second one.
+- **`[indexed]` moved onto the tab it describes.** It was a second widget on the
+  header title, which is the same fact twice now that the tab carries the name.
+- **Web pages are capped at two.** A third evicts the least recently used one —
+  each holds a full page snapshot, and the cap is in the tab reducer rather than
+  at the three places that can open a page.
+- Switching tabs still goes through the save / discard dialog: one board is
+  mounted, so a switch really is leaving. Parking a workspace without that
+  dialog needs the suspend/resume pass.
+
 ### Fixed — punch-list leftovers (after coach-panel branch)
 
 - **Shape tools stay equipped after the trash appears.** Arming already used

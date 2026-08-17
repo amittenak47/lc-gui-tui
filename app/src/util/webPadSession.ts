@@ -1,8 +1,14 @@
 /**
- * Session history for the web annotate pad — tabs, each with back/forward.
+ * Back/forward history for one web pad.
  *
  * Snapshots stay in memory so Back restores the same HTML hash (and its ink)
  * instead of re-fetching a live page.
+ *
+ * The list of open pages is no longer here — it lives in `tabs.ts` with every
+ * other workspace, since the header strip draws them all from one model. What
+ * is left is the per-page history, and it is written against the narrow
+ * {@link WebHistory} shape so a tab record can *be* its own history rather
+ * than holding a second object that has to be kept in step.
  */
 
 export interface WebPadEntry {
@@ -11,38 +17,27 @@ export interface WebPadEntry {
   html: string;
 }
 
-export interface WebPadTab {
-  id: string;
+/** The history slice of a web tab: the entries, and where we are in them. */
+export interface WebHistory {
   entries: WebPadEntry[];
   index: number;
 }
 
-let tabSeq = 0;
-
-export function newWebTabId(): string {
-  tabSeq += 1;
-  return `web-tab-${tabSeq}`;
-}
-
-export function tabFromEntry(entry: WebPadEntry, id = newWebTabId()): WebPadTab {
-  return { id, entries: [entry], index: 0 };
-}
-
-export function currentEntry(tab: WebPadTab): WebPadEntry | undefined {
+export function currentEntry(tab: WebHistory): WebPadEntry | undefined {
   return tab.entries[tab.index];
 }
 
-export function canStepWeb(tab: WebPadTab, delta: number): boolean {
+export function canStepWeb(tab: WebHistory, delta: number): boolean {
   const next = tab.index + delta;
   return next >= 0 && next < tab.entries.length;
 }
 
-export function stepWeb(tab: WebPadTab, delta: number): WebPadTab {
+export function stepWeb<T extends WebHistory>(tab: T, delta: number): T {
   if (!canStepWeb(tab, delta)) return tab;
   return { ...tab, index: tab.index + delta };
 }
 
-export function pushWeb(tab: WebPadTab, entry: WebPadEntry): WebPadTab {
+export function pushWeb<T extends WebHistory>(tab: T, entry: WebPadEntry): T {
   const kept = tab.entries.slice(0, tab.index + 1);
   const last = kept[kept.length - 1];
   if (last && last.url === entry.url && last.html === entry.html) {
@@ -50,32 +45,4 @@ export function pushWeb(tab: WebPadTab, entry: WebPadEntry): WebPadTab {
   }
   const entries = [...kept, entry];
   return { ...tab, entries, index: entries.length - 1 };
-}
-
-export function commitWebPush(
-  tabs: WebPadTab[],
-  tabId: string | null,
-  entry: WebPadEntry,
-  newTab = false,
-): { tabs: WebPadTab[]; tabId: string } {
-  if (newTab || !tabId || !tabs.some((tab) => tab.id === tabId)) {
-    const tab = tabFromEntry(entry);
-    return { tabs: [...tabs, tab], tabId: tab.id };
-  }
-  return {
-    tabs: tabs.map((tab) => (tab.id === tabId ? pushWeb(tab, entry) : tab)),
-    tabId,
-  };
-}
-
-export function closeWebTab(
-  tabs: WebPadTab[],
-  tabId: string,
-): { tabs: WebPadTab[]; tabId: string | null } {
-  const index = tabs.findIndex((tab) => tab.id === tabId);
-  if (index < 0) return { tabs, tabId };
-  const next = tabs.filter((tab) => tab.id !== tabId);
-  if (next.length === 0) return { tabs: next, tabId: null };
-  const neighbor = next[Math.min(index, next.length - 1)];
-  return { tabs: next, tabId: neighbor?.id ?? null };
 }

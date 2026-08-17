@@ -342,6 +342,139 @@ body {
   justify-self: end;
 }
 
+/* ------------------------------------------------------------ tab strip --- */
+
+/*
+ * Home plus every open workspace, in the header beside the brand.
+ *
+ * `flex: 0 1 auto` — wide enough for its chips, but the first thing to give
+ * way. `.lc-header-left` is clamped to its grid track and clips, so a tenth
+ * tab scrolls inside the strip rather than pushing Run / Submit off-centre.
+ */
+.lc-tab-strip {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.lc-tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.lc-tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  max-width: 12rem;
+  min-width: 0;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.lc-tab.is-active {
+  /* The one whose name is worth the most room — it also carries the badge. */
+  max-width: 16rem;
+  border-color: var(--accent);
+}
+
+.lc-header .lc-tab-hit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.lc-tab-glyph {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.lc-tab.is-active .lc-tab-glyph {
+  opacity: 1;
+}
+
+.lc-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The dirty mark rides with the title so a collapsed tab still shows it. */
+.lc-tab-dot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.lc-tab .lc-doc-index-chip {
+  margin-left: 0;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
+.lc-header .lc-tab-close {
+  flex-shrink: 0;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lc-header .lc-tab-close:hover {
+  color: var(--ink);
+}
+
+/*
+ * Collapse titles before the strip starts scrolling. Parked tabs go to icons
+ * first — the one being looked at keeps its name longest, and the `[indexed]`
+ * badge goes with the title it belongs to. 640px is where the brand already
+ * gives up its width, so the strip inherits the same tier.
+ */
+@media (max-width: 900px) {
+  .lc-tab:not(.is-active) .lc-tab-title,
+  .lc-tab:not(.is-active) .lc-doc-index-chip {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .lc-tab-title,
+  .lc-tab .lc-doc-index-chip {
+    display: none;
+  }
+
+  .lc-tab:not(.is-active) .lc-tab-close {
+    display: none;
+  }
+}
+
 .lc-web-omnibox {
   display: flex;
   flex-direction: column;
@@ -352,68 +485,6 @@ body {
   border-bottom: 1px solid var(--chrome-edge);
   background: var(--panel);
   z-index: 54;
-}
-
-.lc-web-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
-
-.lc-web-tab {
-  display: flex;
-  align-items: center;
-  max-width: 12rem;
-  min-width: 0;
-  border: 1px solid var(--chrome-edge);
-  border-radius: 6px;
-  background: var(--bg);
-}
-
-.lc-web-tab.is-active {
-  border-color: var(--accent);
-}
-
-.lc-web-tab-hit,
-.lc-web-tab-new {
-  min-width: 0;
-  padding: 4px 8px;
-  border: 0;
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.lc-web-tab-hit {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.lc-web-tab-close {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  margin-right: 2px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--ink);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.lc-web-tab-new {
-  width: 28px;
-  padding: 4px 0;
-  border: 1px dashed var(--chrome-edge);
-  border-radius: 6px;
 }
 
 .lc-web-omnibox-row {
@@ -534,16 +605,9 @@ html[data-theme="dark"] .lc-web-doc {
 
 @media (max-width: 640px) {
   .lc-brand,
-  .lc-browse-hint,
-  .lc-header-left .lc-current {
+  .lc-browse-hint {
     display: none;
   }
-}
-
-.lc-current {
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 13px;
-  color: var(--muted);
 }
 
 .lc-doc-index-chip {
@@ -8238,10 +8302,6 @@ button.lc-row-selected:hover:not(:disabled) {
     display: none !important;
   }
 
-  .lc-app-problem:not(.lc-mobile) .lc-current {
-    display: none;
-  }
-
   .lc-app-problem:not(.lc-mobile) .lc-header-center {
     max-width: min(560px, 44vw);
     min-width: 0;
@@ -8344,12 +8404,6 @@ button.lc-row-selected:hover:not(:disabled) {
   min-width: 0;
 }
 
-/* On a problem, the board already shows the title — drop the duplicate in the
-   header so Run / Submit / Coach aren't crushed. */
-.lc-mobile.lc-app-problem .lc-current {
-  display: none;
-}
-
 .lc-mobile.lc-app-problem .lc-header {
   grid-template-columns: auto 1fr auto;
 }
@@ -8393,13 +8447,26 @@ button.lc-row-selected:hover:not(:disabled) {
   min-width: 24px;
 }
 
-.lc-mobile .lc-current {
-  max-width: 24vw;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+/* The strip is the header's whole left column on a phone: the brand is gone
+   below 640px, and the icons on the right keep their own room. */
+.lc-mobile .lc-header .lc-tab-hit {
+  height: 22px;
+  min-height: 22px;
+  padding: 0 6px;
   font-size: 11px;
 }
+
+.lc-mobile .lc-tab {
+  max-width: 9rem;
+}
+
+.lc-mobile .lc-header .lc-tab-close {
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  min-height: 18px;
+}
+
 
 .lc-mobile .lc-agent-toggle {
   min-height: 24px;
@@ -8607,11 +8674,6 @@ button.lc-row-selected:hover:not(:disabled) {
   .lc-mobile .lc-agent-toggle {
     min-height: 26px;
     height: 26px;
-  }
-
-  .lc-mobile .lc-current {
-    max-width: 32vw;
-    font-size: 12px;
   }
 
   .lc-mobile .lc-tool {
