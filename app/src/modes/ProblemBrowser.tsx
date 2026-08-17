@@ -19,13 +19,6 @@ import type { LcClient, SearchOptions } from "../api/client";
 import type { DatasetInfo, ProblemSummary, SessionSnapshot } from "../api/types";
 import { DEFAULT_DATASET } from "../api/types";
 import { useIsMobile } from "../util/mobile";
-import {
-  loadOfflinePack,
-  offlineListDatasets,
-  offlineListTags,
-  offlineSearch,
-  type OfflinePack,
-} from "../util/offlineCorpus";
 import { BackgroundPalette } from "../components/BackgroundPalette";
 import { BrowserFilterSelect } from "../components/BrowserFilterSelect";
 import { HoldButton } from "../components/HoldButton";
@@ -113,7 +106,6 @@ export function ProblemBrowser({
   /** Multi-select mode: clicks toggle picks instead of opening. */
   const [selectMode, setSelectMode] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
-  const [offlinePack, setOfflinePack] = useState<OfflinePack | null>(null);
   const [startMode, setStartMode] = useState<"begin" | "random">("begin");
   const [tableFace, setTableFace] = useState<"a" | "b">("a");
   const [tableA, setTableA] = useState<{ key: string; rows: ProblemSummary[] } | null>(
@@ -169,30 +161,6 @@ export function ProblemBrowser({
   useEffect(() => setPage(0), [pageSize]);
 
   useEffect(() => {
-    if (!offline) {
-      setOfflinePack(null);
-      return;
-    }
-    let cancelled = false;
-    void loadOfflinePack().then((pack) => {
-      if (cancelled) return;
-      setOfflinePack(pack);
-      if (pack) {
-        const list = offlineListDatasets(pack);
-        setDatasets(list);
-        setDataset((current) =>
-          list.some((entry) => entry.id === current) ? current : list[0]?.id ?? current,
-        );
-      } else {
-        setDatasets([]);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [offline]);
-
-  useEffect(() => {
     const onReady = () => setSeedTick((n) => n + 1);
     window.addEventListener("lc-seed-ready", onReady);
     return () => window.removeEventListener("lc-seed-ready", onReady);
@@ -201,11 +169,7 @@ export function ProblemBrowser({
   useEffect(() => {
     let cancelled = false;
     if (offline) {
-      if (offlinePack) {
-        setTags(offlineListTags(offlinePack, dataset));
-      } else {
-        setTags([]);
-      }
+      setTags([]);
       return;
     }
     void client
@@ -217,7 +181,7 @@ export function ProblemBrowser({
     return () => {
       cancelled = true;
     };
-  }, [client, dataset, offline, offlinePack, seedTick]);
+  }, [client, dataset, offline, seedTick]);
 
   useEffect(() => {
     if (offline) return;
@@ -260,26 +224,8 @@ export function ProblemBrowser({
   useEffect(() => {
     if (offline) {
       setLoading(false);
-      if (!offlinePack) {
-        setRows([]);
-        setTotal(0);
-        setError(null);
-        tableReadyRef.current = true;
-        setTableReady(true);
-        return;
-      }
-      const result = offlineSearch(offlinePack, {
-        dataset,
-        q: query || undefined,
-        difficulty: difficulty || undefined,
-        tag: tag || undefined,
-        sort,
-        limit: pageSize,
-        offset: page * pageSize,
-      });
-      setRows(result.items);
-      setTotal(result.total);
-      setSelected((current) => Math.min(current, Math.max(result.items.length - 1, 0)));
+      setRows([]);
+      setTotal(0);
       setError(null);
       tableReadyRef.current = true;
       setTableReady(true);
@@ -321,7 +267,7 @@ export function ProblemBrowser({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [client, dataset, query, difficulty, tag, sort, page, pageSize, offline, offlinePack, seedTick]);
+  }, [client, dataset, query, difficulty, tag, sort, page, pageSize, offline, seedTick]);
 
   useEffect(() => {
     if (tableReady) onReady?.();
@@ -618,9 +564,7 @@ export function ProblemBrowser({
             {error && <p className="lc-warning">{error}</p>}
             {offline && (
               <p className="lc-muted">
-                {offlinePack
-                  ? `Offline pack · ${offlinePack.problems.length.toLocaleString()} problems (no KodCode).`
-                  : "Offline — download a problem pack while online (Settings → Workspace), or open a whiteboard."}
+                Harness not running — rebuild the Tauri app. Practice needs the on-device index.
               </p>
             )}
 

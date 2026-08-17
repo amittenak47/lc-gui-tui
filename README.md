@@ -187,7 +187,7 @@ flowchart LR
   end
 ```
 
-### Problems vs pads vs offline pack
+### Problems vs pads
 
 ```mermaid
 flowchart TD
@@ -196,19 +196,16 @@ flowchart TD
     AN[Annotate_IndexedDB]
   end
   subgraph problems [Problems]
-    Online[Online_loadProblem]
-    Offline[Offline_pack_IndexedDB]
-    Online --> Workspace[lc-workspace]
-    Offline --> ReadOnly[Read_statement_and_draw]
-    Workspace --> Tests[Run_tests]
+    Load[lc_load_problem]
+    Load --> Workspace[device_workspace]
+    Workspace --> Tests[lc_run_tests]
   end
 ```
 
 | Surface | Offline | Sync |
 | --- | --- | --- |
 | **Whiteboard / annotate** | Full. Working copy is IndexedDB on the device. | Dual-write to the daemon (`pads.db` + `pad-blobs/`). Tombstone hides a pad on every device that shares that daemon; snapshots and PDF bytes stay with it. Sidecar `.lc-ink.json` is backup, not the sync path. |
-| **Problems (online)** | Autosave parks the board in IndexedDB when the daemon is down. | Same machine as the GUI daemon shares `~/lc-workspace`. On reconnect, Personalise `offlineMerge` (ask / prefer-local / prefer-server) decides which board wins. |
-| **Problems (offline pack)** | Settings can download statements (~100–250 MB). Browse and open a local board. Tests and coach need the in-process daemon (and a configured LLM for coach). | Same merge pref as above once the daemon is up. |
+| **Problems** | Seed corpora (`leetcode`, `leetcode-with-tests`) extract + index on first launch. Optional DLC in Settings. Tests run in-process. | Same machine as the GUI daemon shares the workspace dir. On reconnect, Personalise `offlineMerge` (ask / prefer-local / prefer-server) decides which board wins. |
 
 Tests run in-process via RustPython (`src/workspace/runner.rs`). Coach Review (perceive → claim → verdict) always runs inside the daemon.
 
@@ -228,9 +225,8 @@ To drive the *desktop* window from a tablet, use **spacedesk** (pixels only).
 
 The judge is already in the binary (RustPython). What is not done:
 
-1. **LLM** — Groq/OpenAI, or a local llama.cpp URL this machine can reach.
-2. **Corpus on device** — index + workspaces are still files on this machine; the offline pack is statements only.
-3. **APK size** — embedding the daemon + VM is a later packaging pass.
+1. **LLM keys on Android** — Groq/OpenAI in Settings (APK has no env).
+2. **`lc sync` hub** — pads across devices.
 
 ### Stripped branch (whiteboard + documents)
 

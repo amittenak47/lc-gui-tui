@@ -33,10 +33,8 @@ pub use pads::{
     tombstone_annotate, tombstone_whiteboard,
 };
 pub use corpus::{
-    adjacent_problem, get_problem, list_datasets, list_problems, list_tags, offline_pack,
-    offline_pack_chunk, offline_pack_dataset_keys, offline_pack_manifest, random_problem,
-    AdjacentResponse, OfflineDatasetKeys, OfflinePack, OfflinePackChunk, OfflinePackManifest,
-    ProblemDetail, ProblemPage, ProblemSummary, SearchQuery,
+    adjacent_problem, get_problem, list_datasets, list_problems, list_tags, random_problem,
+    AdjacentResponse, ProblemDetail, ProblemPage, ProblemSummary, SearchQuery,
 };
 pub use practice::{
     enqueue_session, get_session, random_session, reset_session, EnqueueBody, RandomSessionBody,

@@ -43,10 +43,6 @@ fn num(n: Option<u32>) -> Option<String> {
     n.map(|n| n.to_string())
 }
 
-fn num_i64(n: Option<i64>) -> Option<String> {
-    n.map(|n| n.to_string())
-}
-
 async fn go(
     state: State<'_, Shared>,
     method: &str,
@@ -707,60 +703,3 @@ pub async fn lc_clone_device_prefs(
     .await
 }
 
-#[tauri::command]
-pub async fn lc_offline_pack_manifest(state: State<'_, Shared>) -> Result<LcResponse, String> {
-    go(state, "GET", "/offline/pack/manifest".into(), None).await
-}
-
-#[tauri::command]
-pub async fn lc_offline_pack_chunk(
-    state: State<'_, Shared>,
-    dataset: String,
-    offset: u32,
-    limit: Option<u32>,
-    since: Option<i64>,
-) -> Result<LcResponse, String> {
-    go(
-        state,
-        "GET",
-        format!(
-            "/offline/pack/chunk{}",
-            qs(&[
-                ("dataset", Some(dataset)),
-                ("offset", num(Some(offset))),
-                ("limit", num(limit)),
-                ("since", num_i64(since)),
-            ])
-        ),
-        None,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn lc_offline_pack_keys(
-    state: State<'_, Shared>,
-    dataset: String,
-    offset: u32,
-    limit: Option<u32>,
-) -> Result<LcResponse, String> {
-    go(
-        state,
-        "GET",
-        format!(
-            "/offline/pack/keys{}",
-            qs(&[
-                ("dataset", Some(dataset)),
-                ("offset", num(Some(offset))),
-                ("limit", num(limit)),
-            ])
-        ),
-        None,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn lc_offline_pack(state: State<'_, Shared>) -> Result<LcResponse, String> {
-    go(state, "GET", "/offline/pack".into(), None).await
-}
