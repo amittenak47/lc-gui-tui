@@ -5,18 +5,25 @@
 //! Writes one JSON object per issue (dataset, task_id, json_path, kind, detail)
 //! to `--out` (default `audit-tests.jsonl`). Stderr is the count summary only.
 //!
+//! Issues and a sibling `.progress.json` are flushed every `--flush-every`
+//! scanned rows (default 25) so a crash does not lose the run. Resume with
+//! `--resume` using the same `--out`. KodCode is scanned **one jsonl shard at
+//! a time** so the process does not hold every problem in RAM.
+//!
 //! ```text
-//! cargo run --release --bin audit-tests -- --dataset leetcode --limit 50
-//! cargo run --release --bin audit-tests -- --dataset kodcode --out audit-kodcode.jsonl
-//! cargo run --release --bin audit-tests -- --dataset kodcode --sample 500
-//! cargo run --release --bin audit-tests -- --dataset kodcode --full
+//! cargo run --release --bin audit_tests -- --dataset leetcode --limit 50
+//! cargo run --release --bin audit_tests -- --dataset kodcode --out audit-kodcode.jsonl
+//! cargo run --release --bin audit_tests -- --dataset kodcode --out audit-kodcode.jsonl --resume
+//! cargo run --release --bin audit_tests -- --dataset kodcode --sample 500
+//! cargo run --release --bin audit_tests -- --dataset kodcode --full
 //! ```
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -28,6 +35,7 @@ use whiteboard::runner::{self, CaseResult};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(8);
 const STUB: &str = "class Solution:\n    pass\n";
+const DEFAULT_FLUSH_EVERY: usize = 25;
 
 #[derive(Parser)]
 #[command(
@@ -54,9 +62,15 @@ struct Args {
     /// JSONL of issues (default: `audit-tests.jsonl` in cwd). `-` writes stdout.
     #[arg(long, default_value = "audit-tests.jsonl")]
     out: String,
+    /// Flush issues + progress every N scanned rows (default 25).
+    #[arg(long, default_value_t = DEFAULT_FLUSH_EVERY)]
+    flush_every: usize,
+    /// Append to `--out` and skip rows already recorded in the sibling `.progress.json`.
+    #[arg(long)]
+    resume: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum IssueKind {
     NoTests,
@@ -68,7 +82,7 @@ enum IssueKind {
     Harness,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Issue {
     dataset: String,
     task_id: String,
@@ -77,10 +91,167 @@ struct Issue {
     detail: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ScanProgress {
+    dataset: String,
+    json_path: String,
+    last_task_id: String,
+    scanned: usize,
+    issues: usize,
+}
+
+fn progress_path_for(out: &Path) -> PathBuf {
+    let mut raw = out.as_os_str().to_os_string();
+    raw.push(".progress.json");
+    PathBuf::from(raw)
+}
+
+struct IssueSink {
+    writer: Option<BufWriter<File>>,
+    progress_path: Option<PathBuf>,
+    pending: String,
+    flush_every: usize,
+    since_flush: usize,
+    scanned: usize,
+    issues: usize,
+    dataset: String,
+    json_path: String,
+    last_task_id: String,
+}
+
+impl IssueSink {
+    fn create(out: Option<&Path>, resume: bool, flush_every: usize) -> Result<(Self, Option<ScanProgress>)> {
+        let flush_every = flush_every.max(1);
+        let Some(out) = out else {
+            if resume {
+                bail!("--resume needs --out (not '-')");
+            }
+            return Ok((
+                Self {
+                    writer: None,
+                    progress_path: None,
+                    pending: String::new(),
+                    flush_every,
+                    since_flush: 0,
+                    scanned: 0,
+                    issues: 0,
+                    dataset: String::new(),
+                    json_path: String::new(),
+                    last_task_id: String::new(),
+                },
+                None,
+            ));
+        };
+
+        let progress_path = progress_path_for(out);
+        let prior = if resume {
+            let raw = fs::read_to_string(&progress_path).with_context(|| {
+                format!("--resume needs {} (no progress from a crashed pre-flush run)", progress_path.display())
+            })?;
+            Some(serde_json::from_str::<ScanProgress>(&raw)?)
+        } else {
+            None
+        };
+
+        if let Some(parent) = out.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(resume)
+            .truncate(!resume)
+            .open(out)
+            .with_context(|| format!("cannot open {}", out.display()))?;
+
+        let sink = Self {
+            writer: Some(BufWriter::new(file)),
+            progress_path: Some(progress_path),
+            pending: String::new(),
+            flush_every,
+            since_flush: 0,
+            scanned: prior.as_ref().map(|p| p.scanned).unwrap_or(0),
+            issues: prior.as_ref().map(|p| p.issues).unwrap_or(0),
+            dataset: prior.as_ref().map(|p| p.dataset.clone()).unwrap_or_default(),
+            json_path: prior.as_ref().map(|p| p.json_path.clone()).unwrap_or_default(),
+            last_task_id: prior.as_ref().map(|p| p.last_task_id.clone()).unwrap_or_default(),
+        };
+        Ok((sink, prior))
+    }
+
+    fn push_issue(&mut self, issue: Issue) -> Result<()> {
+        self.issues += 1;
+        self.pending.push_str(&serde_json::to_string(&issue)?);
+        self.pending.push('\n');
+        if self.writer.is_none() {
+            println!("{}", serde_json::to_string(&issue)?);
+            self.pending.clear();
+        }
+        Ok(())
+    }
+
+    fn note_row(&mut self, dataset: &str, json_path: &str, task_id: &str) -> Result<()> {
+        self.scanned += 1;
+        self.since_flush += 1;
+        self.dataset = dataset.to_string();
+        self.json_path = json_path.to_string();
+        self.last_task_id = task_id.to_string();
+        if self.since_flush >= self.flush_every {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        if let Some(writer) = self.writer.as_mut() {
+            if !self.pending.is_empty() {
+                writer.write_all(self.pending.as_bytes())?;
+                self.pending.clear();
+            }
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+        }
+        self.since_flush = 0;
+        if let Some(path) = &self.progress_path {
+            if !self.last_task_id.is_empty() {
+                write_progress_atomic(
+                    path,
+                    &ScanProgress {
+                        dataset: self.dataset.clone(),
+                        json_path: self.json_path.clone(),
+                        last_task_id: self.last_task_id.clone(),
+                        scanned: self.scanned,
+                        issues: self.issues,
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn write_progress_atomic(path: &Path, progress: &ScanProgress) -> Result<()> {
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    fs::write(&tmp, serde_json::to_vec_pretty(progress)?)
+        .with_context(|| format!("cannot write {}", tmp.display()))?;
+    let _ = fs::remove_file(path);
+    fs::rename(&tmp, path).with_context(|| format!("cannot replace {}", path.display()))?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
-    // Pin `--out` before any workspace scratch work. Relative paths would
-    // otherwise follow a later cwd change into the temp scan dirs.
+    if args.resume && args.sample.is_some() {
+        bail!("--resume cannot be used with --sample (order is random)");
+    }
+    if args.resume && args.offset > 0 {
+        bail!("--resume cannot be used with --offset (progress file is the offset)");
+    }
+
     let out = if args.out == "-" {
         None
     } else {
@@ -93,6 +264,7 @@ fn main() -> Result<()> {
                 .join(path)
         })
     };
+
     let conn = index::open_db().with_context(|| {
         format!(
             "cannot open {} — run `lc index` first",
@@ -101,8 +273,15 @@ fn main() -> Result<()> {
     })?;
     eprintln!("index {}", index::db_path()?.display());
 
+    let (mut sink, prior) = IssueSink::create(out.as_deref(), args.resume, args.flush_every)?;
+    if let Some(prior) = &prior {
+        eprintln!(
+            "resume {} after {} scanned ({} issues) at {}",
+            prior.dataset, prior.scanned, prior.issues, prior.last_task_id
+        );
+    }
+
     let targets = target_datasets(&args)?;
-    let mut all_issues: Vec<Issue> = Vec::new();
     let scratch = std::env::temp_dir().join("lc-audit-tests");
     let _ = fs::remove_dir_all(&scratch);
     fs::create_dir_all(&scratch)?;
@@ -128,35 +307,120 @@ fn main() -> Result<()> {
                 rows.truncate(limit);
             }
         }
-        eprintln!("{}: {} indexed rows to scan", dataset.id, rows.len());
-        let issues = scan_dataset(dataset, &rows, args.full, &scratch)?;
+
+        let mut groups = group_rows_by_path(&rows);
+        if let Some(prior) = &prior {
+            if prior.dataset != dataset.id {
+                bail!(
+                    "--resume progress is for {}, this scan is {}",
+                    prior.dataset,
+                    dataset.id
+                );
+            }
+            groups = apply_resume(groups, prior)?;
+        }
+
+        let remaining: usize = groups.iter().map(|(_, rows)| rows.len()).sum();
         eprintln!(
-            "{}: {} issues / {} scanned",
+            "{}: {} indexed rows to scan ({} this session)",
             dataset.id,
-            issues.len(),
-            rows.len()
+            rows.len(),
+            remaining
         );
-        all_issues.extend(issues);
+        scan_dataset(dataset, &groups, args.full, &scratch, &mut sink)?;
+        sink.flush()?;
+        eprintln!(
+            "{}: {} issues / {} scanned (this file on disk)",
+            dataset.id,
+            sink.issues,
+            sink.scanned
+        );
     }
 
     let _ = fs::remove_dir_all(&scratch);
+    sink.flush()?;
 
     if let Some(path) = &out {
-        let mut body = String::new();
-        for issue in &all_issues {
-            body.push_str(&serde_json::to_string(issue)?);
-            body.push('\n');
-        }
-        fs::write(path, body).with_context(|| format!("cannot write {}", path.display()))?;
-        eprintln!("wrote {} issues → {}", all_issues.len(), path.display());
+        let issues = load_issues(path)?;
+        print_summary(&issues);
+        eprintln!("wrote {} issues → {}", issues.len(), path.display());
     } else {
-        for issue in &all_issues {
-            println!("{}", serde_json::to_string(issue)?);
-        }
+        eprintln!("\nsummary (stdout; {} issues this session)", sink.issues);
     }
 
-    print_summary(&all_issues);
     Ok(())
+}
+
+fn load_issues(path: &Path) -> Result<Vec<Issue>> {
+    let raw = fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let mut out = Vec::new();
+    for (i, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        out.push(
+            serde_json::from_str(line)
+                .with_context(|| format!("{}:{}: bad issue json", path.display(), i + 1))?,
+        );
+    }
+    Ok(out)
+}
+
+fn group_rows_by_path(rows: &[ProblemRow]) -> Vec<(String, Vec<&ProblemRow>)> {
+    let mut order = Vec::new();
+    let mut map: HashMap<String, Vec<&ProblemRow>> = HashMap::new();
+    for row in rows {
+        map.entry(row.json_path.clone())
+            .or_insert_with(|| {
+                order.push(row.json_path.clone());
+                Vec::new()
+            })
+            .push(row);
+    }
+    order
+        .into_iter()
+        .map(|path| {
+            let rows = map.remove(&path).unwrap_or_default();
+            (path, rows)
+        })
+        .collect()
+}
+
+fn apply_resume<'a>(
+    groups: Vec<(String, Vec<&'a ProblemRow>)>,
+    progress: &ScanProgress,
+) -> Result<Vec<(String, Vec<&'a ProblemRow>)>> {
+    let mut out = Vec::new();
+    let mut seen_file = false;
+    for (path, rows) in groups {
+        if !seen_file {
+            if path != progress.json_path {
+                continue;
+            }
+            seen_file = true;
+            let Some(pos) = rows.iter().position(|row| row.task_id == progress.last_task_id) else {
+                bail!(
+                    "resume: {} not found in {} — progress file does not match this index",
+                    progress.last_task_id,
+                    path
+                );
+            };
+            let rest = rows[pos + 1..].to_vec();
+            if !rest.is_empty() {
+                out.push((path, rest));
+            }
+            continue;
+        }
+        out.push((path, rows));
+    }
+    if !seen_file {
+        bail!(
+            "resume: json_path {} is not in this scan — progress file does not match",
+            progress.json_path
+        );
+    }
+    Ok(out)
 }
 
 fn target_datasets(args: &Args) -> Result<Vec<&'static Dataset>> {
@@ -197,90 +461,95 @@ fn load_rows(
 
 fn scan_dataset(
     dataset: &'static Dataset,
-    rows: &[ProblemRow],
+    groups: &[(String, Vec<&ProblemRow>)],
     run_full: bool,
     scratch: &Path,
-) -> Result<Vec<Issue>> {
-    let mut wanted: HashMap<String, HashSet<String>> = HashMap::new();
-    for row in rows {
-        wanted
-            .entry(row.json_path.clone())
-            .or_default()
-            .insert(row.task_id.clone());
-    }
+    sink: &mut IssueSink,
+) -> Result<()> {
+    let started = Instant::now();
+    let session_total: usize = groups.iter().map(|(_, rows)| rows.len()).sum();
+    let mut session_done = 0usize;
 
-    let mut loaded: HashMap<String, Problem> = HashMap::new();
-    let mut load_errors: Vec<Issue> = Vec::new();
-
-    for (json_path, ids) in &wanted {
+    for (json_path, path_rows) in groups {
+        let wanted: HashSet<String> = path_rows.iter().map(|row| row.task_id.clone()).collect();
+        let mut loaded: HashMap<String, Problem> = HashMap::new();
         let path = Path::new(json_path);
-        if ids.len() == 1 {
-            let task_id = ids.iter().next().unwrap();
+
+        if wanted.len() == 1 {
+            let task_id = wanted.iter().next().unwrap();
             match problem::load_task_for(dataset, path, task_id) {
                 Ok(p) => {
                     loaded.insert(task_id.clone(), p);
                 }
-                Err(err) => load_errors.push(Issue {
-                    dataset: dataset.id.to_string(),
-                    task_id: task_id.clone(),
-                    json_path: json_path.clone(),
-                    kind: IssueKind::LoadError,
-                    detail: format!("{err:#}"),
-                }),
-            }
-            continue;
-        }
-        let mut remaining = ids.clone();
-        if let Err(err) = problem::for_each_for(dataset, path, |p| {
-            if remaining.remove(&p.task_id) {
-                loaded.insert(p.task_id.clone(), p);
-            }
-            Ok(())
-        }) {
-            for task_id in remaining {
-                load_errors.push(Issue {
-                    dataset: dataset.id.to_string(),
-                    task_id,
-                    json_path: json_path.clone(),
-                    kind: IssueKind::LoadError,
-                    detail: format!("{err:#}"),
-                });
+                Err(err) => {
+                    sink.push_issue(Issue {
+                        dataset: dataset.id.to_string(),
+                        task_id: task_id.clone(),
+                        json_path: json_path.clone(),
+                        kind: IssueKind::LoadError,
+                        detail: format!("{err:#}"),
+                    })?;
+                }
             }
         } else {
-            for task_id in remaining {
-                load_errors.push(Issue {
-                    dataset: dataset.id.to_string(),
-                    task_id,
-                    json_path: json_path.clone(),
-                    kind: IssueKind::LoadError,
-                    detail: "task_id not found in corpus file".into(),
-                });
+            let mut remaining = wanted.clone();
+            if let Err(err) = problem::for_each_for(dataset, path, |p| {
+                if remaining.remove(&p.task_id) {
+                    loaded.insert(p.task_id.clone(), p);
+                }
+                Ok(())
+            }) {
+                for row in path_rows {
+                    sink.push_issue(Issue {
+                        dataset: dataset.id.to_string(),
+                        task_id: row.task_id.clone(),
+                        json_path: json_path.clone(),
+                        kind: IssueKind::LoadError,
+                        detail: format!("{err:#}"),
+                    })?;
+                    session_done += 1;
+                    sink.note_row(dataset.id, json_path, &row.task_id)?;
+                }
+                sink.flush()?;
+                continue;
+            }
+            for row in path_rows {
+                if remaining.contains(&row.task_id) {
+                    sink.push_issue(Issue {
+                        dataset: dataset.id.to_string(),
+                        task_id: row.task_id.clone(),
+                        json_path: json_path.clone(),
+                        kind: IssueKind::LoadError,
+                        detail: "task_id not found in corpus file".into(),
+                    })?;
+                }
             }
         }
-    }
 
-    let mut issues = load_errors;
-    let started = Instant::now();
-    let total = rows.len();
-    for (i, row) in rows.iter().enumerate() {
-        if let Some(problem) = loaded.get(&row.task_id) {
-            if let Some(issue) = audit_problem(dataset, row, problem, run_full, scratch) {
-                issues.push(issue);
+        for row in path_rows {
+            if let Some(problem) = loaded.get(&row.task_id) {
+                if let Some(found) = audit_problem(dataset, row, problem, run_full, scratch) {
+                    sink.push_issue(found)?;
+                }
+            }
+            session_done += 1;
+            sink.note_row(dataset.id, json_path, &row.task_id)?;
+            if session_done % 25 == 0 || session_done == session_total {
+                let secs = started.elapsed().as_secs_f32().max(0.001);
+                eprintln!(
+                    "  {} {}/{}  {:.1}/s  {} issues",
+                    dataset.id,
+                    sink.scanned,
+                    sink.scanned + (session_total - session_done),
+                    session_done as f32 / secs,
+                    sink.issues
+                );
             }
         }
-        if (i + 1) % 25 == 0 || i + 1 == total {
-            let secs = started.elapsed().as_secs_f32().max(0.001);
-            eprintln!(
-                "  {} {}/{}  {:.1}/s  {} issues",
-                dataset.id,
-                i + 1,
-                total,
-                (i + 1) as f32 / secs,
-                issues.len()
-            );
-        }
+        drop(loaded);
+        sink.flush()?;
     }
-    Ok(issues)
+    Ok(())
 }
 
 fn audit_problem(
@@ -617,6 +886,66 @@ class Solution:
         assert_eq!(kind_from_text(missing, Some("visit")), Some(IssueKind::MissingEntry));
         let internal = "AttributeError: 'H2O' object has no attribute 'hydrogenSemaphore'";
         assert_eq!(kind_from_text(internal, Some("hydrogen")), None);
+    }
+
+    fn dummy_row(task_id: &str, json_path: &str) -> ProblemRow {
+        ProblemRow {
+            dataset: "kodcode",
+            task_id: task_id.into(),
+            question_id: None,
+            difficulty: None,
+            tags: vec![],
+            json_path: json_path.into(),
+            test_count: 0,
+        }
+    }
+
+    #[test]
+    fn progress_path_sits_next_to_the_jsonl() {
+        let path = progress_path_for(Path::new("audit-kodcode.jsonl"));
+        assert!(path.to_string_lossy().ends_with("audit-kodcode.jsonl.progress.json"), "{path:?}");
+    }
+
+    #[test]
+    fn resume_skips_completed_rows_in_the_current_shard() {
+        let a1 = dummy_row("a1", "shard-a.jsonl");
+        let a2 = dummy_row("a2", "shard-a.jsonl");
+        let b1 = dummy_row("b1", "shard-b.jsonl");
+        let groups = vec![
+            ("shard-a.jsonl".into(), vec![&a1, &a2]),
+            ("shard-b.jsonl".into(), vec![&b1]),
+        ];
+        let progress = ScanProgress {
+            dataset: "kodcode".into(),
+            json_path: "shard-a.jsonl".into(),
+            last_task_id: "a1".into(),
+            scanned: 1,
+            issues: 0,
+        };
+        let next = apply_resume(groups, &progress).unwrap();
+        assert_eq!(next.len(), 2);
+        assert_eq!(next[0].1.iter().map(|r| r.task_id.as_str()).collect::<Vec<_>>(), vec!["a2"]);
+        assert_eq!(next[1].1.iter().map(|r| r.task_id.as_str()).collect::<Vec<_>>(), vec!["b1"]);
+    }
+
+    #[test]
+    fn resume_moves_on_when_the_shard_was_finished() {
+        let a1 = dummy_row("a1", "shard-a.jsonl");
+        let b1 = dummy_row("b1", "shard-b.jsonl");
+        let groups = vec![
+            ("shard-a.jsonl".into(), vec![&a1]),
+            ("shard-b.jsonl".into(), vec![&b1]),
+        ];
+        let progress = ScanProgress {
+            dataset: "kodcode".into(),
+            json_path: "shard-a.jsonl".into(),
+            last_task_id: "a1".into(),
+            scanned: 1,
+            issues: 0,
+        };
+        let next = apply_resume(groups, &progress).unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0, "shard-b.jsonl");
     }
 }
 

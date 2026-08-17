@@ -6,6 +6,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — GTA IV subtitle chrome
+
+- **Chrome sans is DINish** (OFL stand-in for DIN 1451 Mittelschrift, the GTA IV
+  subtitle face). Header, tabs, and buttons inherit it. Overlay titles on the
+  board (mode, pad, page) are white with a thin black edge. Code, Monaco, and
+  Excalidraw Helvetica are unchanged. Not a game-font dump.
+
 ### Added — one tab strip in the header
 
 - **Home and every open workspace are chips in the header.** There was a strip

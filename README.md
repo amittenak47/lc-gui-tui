@@ -251,7 +251,7 @@ Do not merge the two products. Main stays the harness.
 | `whiteboard test [id] [--case N] [--full] [-v]` | Run tests via RustPython — exits `0` when every case passes |
 | `whiteboard ask [id] [--case N] [--provider local\|groq]` | LLM debugging help |
 | `whiteboard stats` · `whiteboard session reset` · `whiteboard list …` | Progress, session, named lists |
-| `cargo run --release --bin audit-tests -- --dataset S --out FILE.jsonl` | List indexed problems whose tests RustPython cannot execute (KodCode: pass `--dataset kodcode`; default out `audit-tests.jsonl`) |
+| `cargo run --release --bin audit_tests -- --dataset S --out FILE.jsonl` | List indexed problems whose tests RustPython cannot execute. Flushes every 25 rows; `--resume` continues after a crash. KodCode: `--dataset kodcode`. |
 | `whiteboard config set/get/show/path` | Manage `config.toml` |
 
 Coach modes are per-provider (`llm.modes.<ambient\|review\|bridge\|viz\|planner>`) and
@@ -279,7 +279,8 @@ GUI installs the same jsonl from GitHub release `corpora-v1` (Settings → Datas
 After indexing, flag un-runnable tests (one JSON object per issue):
 
 ```bash
-cargo run --release --bin audit-tests -- --dataset kodcode --out audit-kodcode.jsonl
+cargo run --release --bin audit_tests -- --dataset kodcode --out audit-kodcode.jsonl
+cargo run --release --bin audit_tests -- --dataset kodcode --out audit-kodcode.jsonl --resume
 ```
 
 Adapters: [`src/datasets/`](src/datasets/). After adapter changes: `whiteboard index --dataset <slug> --rebuild`.

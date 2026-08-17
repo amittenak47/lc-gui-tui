@@ -505,7 +505,7 @@ def running_max(values):
 }
 
 #[test]
-fn kodcode_pytest_import_is_a_full_suite_miss() {
+fn kodcode_pytest_parametrize_full_suite_passes() {
     let dir = tempfile::tempdir().unwrap();
     let meta = serde_json::json!({
         "task_id": "running-max-45219-c",
@@ -515,27 +515,27 @@ fn kodcode_pytest_import_is_a_full_suite_miss() {
     });
     write_workspace(
         dir.path(),
-        "def running_max(values):\n    return values\n",
+        r#"
+def running_max(values):
+    out, m = [], None
+    for v in values:
+        m = v if m is None or v > m else m
+        out.append(m)
+    return out
+"#,
         &meta.to_string(),
     );
     let out = run_runner(dir.path(), &["--full"]);
-    assert_eq!(
-        out.lines.len(),
-        1,
-        "stdout:\n{}\nstderr:\n{}",
-        out.stdout,
-        out.stderr
-    );
+    assert_eq!(out.stderr, "", "stderr: {}", out.stderr);
+    assert_eq!(out.lines.len(), 1, "stdout:\n{}", out.stdout);
     assert!(out.lines[0].suite);
     assert!(
-        !out.lines[0].pass,
-        "pytest is not on the runner path; this must fail cleanly, not crash"
+        out.lines[0].pass,
+        "suite failed: {:?} error={}",
+        out.lines[0].actual,
+        out.lines[0].error.as_deref().unwrap_or("")
     );
-    let err = out.lines[0].error.as_deref().unwrap_or("");
-    assert!(
-        err.contains("pytest") || err.contains("ModuleNotFoundError") || err.contains("ImportError"),
-        "expected a pytest import miss, got: {err}"
-    );
+    assert_eq!(out.exit, 0);
 }
 
 #[test]

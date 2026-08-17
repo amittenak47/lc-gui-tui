@@ -376,16 +376,228 @@ pub(crate) fn io_cases(raw: &Value, keys: &[&str]) -> Vec<IoCase> {
     Vec::new()
 }
 
-/// Drop corpus junk that cannot be fed to `run_tests.py`.
+/// Drop corpus junk that cannot be fed to `run_tests.py`, then rewrite or
+/// drop `None`/`null` outputs from the stub's return annotation.
 ///
 /// The LeetCode dump mixes real keyword cases with leaked parser fragments
 /// (`s`, `]`, truncated quotes) whose stored output is `Error: …`. One of
 /// those would otherwise fail `ast.literal_eval` and look like the whole
 /// problem is unrunnable.
+///
+/// HuggingFace `newfacade/LeetCodeDataset` also stores `"None"` (a string,
+/// not JSON `null`) on value-returning stubs that LeetCode itself never
+/// yields `None` for — Two Sum case 2 is `[-1,-2,-3,-4], -8 → None` against
+/// `-> List[int]`. Official tests have exactly one solution. We do not
+/// rewrite the jsonl; we only fix the in-memory cases.
+///
+/// - `-> List[…]` / `list[…]` / `Optional[List[…]]`: `"None"` / `"null"` → `"[]"`
+/// - `-> None` (in-place): keep
+/// - `ListNode` / `TreeNode`: keep (empty node)
+/// - `-> int` / `str` / `bool` / `float`: drop the case (do not invent `-1`/`0`)
+/// - no annotation: keep (do not guess)
 pub(crate) fn sanitize_io_cases(problem: &mut Problem) {
-    problem
-        .input_output
-        .retain(|case| io_case_is_runnable(&case.input, &case.output));
+    let none_policy = none_output_policy(problem);
+    problem.input_output.retain_mut(|case| {
+        if !io_case_is_runnable(&case.input, &case.output) {
+            return false;
+        }
+        apply_none_output_policy(none_policy, case)
+    });
+}
+
+#[derive(Clone, Copy)]
+enum NoneOutputPolicy {
+    RewriteEmptyList,
+    Keep,
+    Drop,
+}
+
+fn is_noneish_output(output: &str) -> bool {
+    matches!(output.trim(), "None" | "null" | "NULL")
+}
+
+fn apply_none_output_policy(policy: NoneOutputPolicy, case: &mut IoCase) -> bool {
+    if !is_noneish_output(&case.output) {
+        return true;
+    }
+    match policy {
+        NoneOutputPolicy::RewriteEmptyList => {
+            case.output = "[]".into();
+            true
+        }
+        NoneOutputPolicy::Keep => true,
+        NoneOutputPolicy::Drop => false,
+    }
+}
+
+fn none_output_policy(problem: &Problem) -> NoneOutputPolicy {
+    let blob = format!(
+        "{}\n{}",
+        problem.starter_code.as_deref().unwrap_or(""),
+        problem.prompt.as_deref().unwrap_or(""),
+    );
+    let entry = problem
+        .entry_point
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(clean_entry_point)
+        .filter(|s| !s.is_empty())
+        .or_else(|| entry_point_from_code(&blob));
+    let Some(entry) = entry else {
+        return NoneOutputPolicy::Keep;
+    };
+    let Some(ann) = return_annotation_for(&blob, &entry) else {
+        return NoneOutputPolicy::Keep;
+    };
+    match classify_return_ann(&ann) {
+        ReturnAnn::List => NoneOutputPolicy::RewriteEmptyList,
+        ReturnAnn::Scalar => NoneOutputPolicy::Drop,
+        ReturnAnn::Keep => NoneOutputPolicy::Keep,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ReturnAnn {
+    List,
+    Scalar,
+    Keep,
+}
+
+/// `-> …` on `def {entry}(`, if the stub wrote one.
+fn return_annotation_for(source: &str, entry: &str) -> Option<String> {
+    let needle = format!("def {entry}(");
+    let at = source.find(&needle)?;
+    let sig = def_signature_only(&source[at..])?;
+    let rest = sig.trim().strip_prefix("def ")?.trim_start();
+    let after_name = rest.strip_prefix(entry)?.trim_start();
+    let after_open = after_name.strip_prefix('(')?;
+    let close = matching_close_paren(after_open)?;
+    let ret = after_open[close + 1..].trim().trim_end_matches(':').trim();
+    let ret = ret.strip_prefix("->")?.trim();
+    if ret.is_empty() {
+        None
+    } else {
+        Some(ret.to_string())
+    }
+}
+
+fn matching_close_paren(after_open: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, ch) in after_open.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return Some(i);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn classify_return_ann(ann: &str) -> ReturnAnn {
+    let peeled = peel_optional_layers(ann);
+    let compact: String = peeled.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.contains("ListNode") || compact.contains("TreeNode") {
+        return ReturnAnn::Keep;
+    }
+    let lower = compact.to_ascii_lowercase();
+    if lower == "none" {
+        return ReturnAnn::Keep;
+    }
+    if lower.starts_with("list[") || lower == "list" {
+        return ReturnAnn::List;
+    }
+    match lower.as_str() {
+        "int" | "str" | "bool" | "float" => ReturnAnn::Scalar,
+        _ => ReturnAnn::Keep,
+    }
+}
+
+fn peel_optional_layers(ann: &str) -> String {
+    let mut s = ann.trim().trim_start_matches("->").trim().to_string();
+    for _ in 0..8 {
+        let next = peel_optional_once(&s);
+        if next == s {
+            return s;
+        }
+        s = next;
+    }
+    s
+}
+
+fn peel_optional_once(s: &str) -> String {
+    let s = s.trim();
+    if let Some(inner) = unwrap_generic("Optional", s).or_else(|| unwrap_generic("typing.Optional", s))
+    {
+        return inner.trim().to_string();
+    }
+    if let Some(inner) = unwrap_generic("Union", s).or_else(|| unwrap_generic("typing.Union", s)) {
+        let kept = split_top_level(inner, ',')
+            .into_iter()
+            .map(str::trim)
+            .filter(|p| !p.eq_ignore_ascii_case("None"))
+            .collect::<Vec<_>>();
+        if kept.len() == 1 {
+            return kept[0].to_string();
+        }
+    }
+    let parts = split_top_level(s, '|');
+    if parts.len() > 1 {
+        let kept = parts
+            .into_iter()
+            .map(str::trim)
+            .filter(|p| !p.eq_ignore_ascii_case("None"))
+            .collect::<Vec<_>>();
+        if kept.len() == 1 {
+            return kept[0].to_string();
+        }
+    }
+    s.to_string()
+}
+
+fn unwrap_generic<'a>(name: &str, s: &'a str) -> Option<&'a str> {
+    let rest = s.strip_prefix(name)?;
+    let bytes = rest.as_bytes();
+    if bytes.first() != Some(&b'[') {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&rest[1..i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_top_level(s: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0i32;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '[' | '(' | '{' => depth += 1,
+            ']' | ')' | '}' => depth -= 1,
+            c if c == sep && depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
 }
 
 fn io_case_is_runnable(input: &str, output: &str) -> bool {
@@ -1584,6 +1796,96 @@ mod tests {
         sanitize_io_cases(&mut problem);
         assert_eq!(problem.input_output.len(), 1);
         assert_eq!(problem.input_output[0].input, "nums = [1, 2]");
+    }
+
+    fn problem_with_stub(starter: &str, output: &str) -> Problem {
+        Problem {
+            task_id: "demo".into(),
+            question_id: None,
+            difficulty: None,
+            tags: vec![],
+            problem_description: None,
+            prompt: None,
+            starter_code: Some(starter.into()),
+            entry_point: None,
+            test: None,
+            input_output: vec![
+                IoCase {
+                    input: "nums = [-1, -2, -3, -4], target = -8".into(),
+                    output: output.into(),
+                },
+                IoCase {
+                    input: "nums = [2, 7], target = 9".into(),
+                    output: "[0, 1]".into(),
+                },
+            ],
+            estimated_date: None,
+        }
+    }
+
+    #[test]
+    fn list_none_output_rewrites_to_empty_list() {
+        let mut problem = problem_with_stub(
+            "class Solution:\n    def twoSum(self, nums: List[int], target: int) -> List[int]:\n        pass\n",
+            "None",
+        );
+        sanitize_io_cases(&mut problem);
+        assert_eq!(problem.input_output.len(), 2);
+        assert_eq!(problem.input_output[0].output, "[]");
+        assert_eq!(problem.input_output[1].output, "[0, 1]");
+    }
+
+    #[test]
+    fn optional_list_null_output_rewrites_to_empty_list() {
+        let mut problem = problem_with_stub(
+            "class Solution:\n    def foo(self, nums: List[int]) -> Optional[List[int]]:\n        pass\n",
+            "null",
+        );
+        sanitize_io_cases(&mut problem);
+        assert_eq!(problem.input_output[0].output, "[]");
+    }
+
+    #[test]
+    fn inplace_none_output_is_kept() {
+        let mut problem = problem_with_stub(
+            "class Solution:\n    def moveZeroes(self, nums: List[int]) -> None:\n        pass\n",
+            "None",
+        );
+        sanitize_io_cases(&mut problem);
+        assert_eq!(problem.input_output.len(), 2);
+        assert_eq!(problem.input_output[0].output, "None");
+    }
+
+    #[test]
+    fn scalar_none_output_is_dropped() {
+        let mut problem = problem_with_stub(
+            "class Solution:\n    def findMax(self, nums: List[int]) -> int:\n        pass\n",
+            "None",
+        );
+        sanitize_io_cases(&mut problem);
+        assert_eq!(problem.input_output.len(), 1);
+        assert_eq!(problem.input_output[0].output, "[0, 1]");
+    }
+
+    #[test]
+    fn listnode_none_output_is_kept() {
+        let mut problem = problem_with_stub(
+            "class Solution:\n    def reverseList(self, head: Optional[ListNode]) -> Optional[ListNode]:\n        pass\n",
+            "None",
+        );
+        sanitize_io_cases(&mut problem);
+        assert_eq!(problem.input_output.len(), 2);
+        assert_eq!(problem.input_output[0].output, "None");
+    }
+
+    #[test]
+    fn unannotated_none_output_is_kept() {
+        let mut problem = problem_with_stub(
+            "class Solution:\n    def twoSum(self, nums, target):\n        pass\n",
+            "None",
+        );
+        sanitize_io_cases(&mut problem);
+        assert_eq!(problem.input_output[0].output, "None");
     }
 
     #[test]

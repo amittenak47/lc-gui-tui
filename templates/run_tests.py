@@ -24,6 +24,114 @@ from contextlib import redirect_stdout
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAX_STDOUT = 2000
 
+
+def install_pytest_shim():
+    """KodCode suites `import pytest`. RustPython has no pytest wheel.
+
+    Enough of the API that `raises` / `approx` / `mark.parametrize` / `fixture`
+    run. Not CPython pytest — just enough that a stub fails as JSON, not as
+    ModuleNotFoundError.
+    """
+    if sys.modules.get("pytest") is not None:
+        return
+
+    class Raises:
+        def __init__(self, expected, match=None):
+            self.expected = expected
+            self.match = match
+            self.value = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, typ, val, tb):
+            if typ is None:
+                raise AssertionError("%s not raised" % (self.expected,))
+            try:
+                ok = issubclass(typ, self.expected)
+            except TypeError:
+                ok = typ is self.expected
+            if not ok:
+                return False
+            self.value = val
+            if self.match is not None and str(self.match) not in str(val):
+                raise AssertionError("pattern %r not in %s" % (self.match, val))
+            return True
+
+    def raises(expected, *args, **kwargs):
+        return Raises(expected, match=kwargs.get("match"))
+
+    class Approx:
+        def __init__(self, expected, rel=1e-6, abs=None):
+            self.expected = expected
+            self.rel = rel
+            self.abs = abs
+
+        def __eq__(self, other):
+            try:
+                diff = abs(float(other) - float(self.expected))
+            except (TypeError, ValueError):
+                return other == self.expected
+            if self.abs is not None:
+                return diff <= self.abs
+            scale = max(abs(float(self.expected)), abs(float(other)), 1.0)
+            return diff <= self.rel * scale
+
+        def __ne__(self, other):
+            return not self.__eq__(other)
+
+    def approx(expected, rel=1e-6, abs=None):
+        return Approx(expected, rel=rel, abs=abs)
+
+    class Mark:
+        def parametrize(self, names, values=None, **kwargs):
+            if values is None:
+                values = []
+            if isinstance(names, str):
+                argnames = [n.strip() for n in names.split(",") if n.strip()]
+            else:
+                argnames = list(names)
+
+            def deco(fn):
+                def wrapped(*args, **kw):
+                    for row in values:
+                        if not isinstance(row, (list, tuple)):
+                            row = (row,)
+                        call = dict(zip(argnames, row))
+                        call.update(kw)
+                        fn(*args, **call)
+
+                wrapped.__name__ = getattr(fn, "__name__", "test")
+                return wrapped
+
+            return deco
+
+        def __getattr__(self, _name):
+            def deco(*a, **k):
+                if len(a) == 1 and callable(a[0]) and not k:
+                    return a[0]
+                return lambda f: f
+
+            return deco
+
+    def fixture(fn=None, **_k):
+        if fn is None:
+            return lambda f: f
+        return fn
+
+    class Pytest:
+        pass
+
+    pytest = Pytest()
+    pytest.raises = raises
+    pytest.approx = approx
+    pytest.mark = Mark()
+    pytest.fixture = fixture
+    pytest.skip = lambda msg="": (_ for _ in ()).throw(AssertionError("skipped: %s" % msg))
+    pytest.fail = lambda msg="": (_ for _ in ()).throw(AssertionError(msg))
+    sys.modules["pytest"] = pytest
+
+
 TEST_PREAMBLE = (
     "from typing import *\n"
     "import collections, functools, heapq, itertools, math, bisect, re, string\n"
@@ -246,6 +354,7 @@ def main():
     opts = parser.parse_args()
 
     sys.setrecursionlimit(10000)
+    install_pytest_shim()
     meta = load_meta()
     try:
         mod = load_solution()

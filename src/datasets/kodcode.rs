@@ -140,6 +140,12 @@ pub fn normalize(raw: &Value) -> Option<Problem> {
         .as_deref()
         .map(|source| cases_from_asserts(source, entry_point.as_deref()))
         .unwrap_or_default();
+    // Pytest suites do `from solution import TreeNode, foo`. test_info only
+    // names one `def`; the rest become ImportError (audit missing-module).
+    let starter_code = match (starter_code, suite.as_deref()) {
+        (Some(s), Some(test)) => Some(ensure_imported_stubs(&s, test)),
+        (s, _) => s,
+    };
 
     // Complete rows put the statement in the function docstring; Instruct (skipped)
     // is prose; anything else may already be markdown with fences.
@@ -264,6 +270,144 @@ fn id_number(raw: &str) -> Option<u64> {
     best
 }
 
+const LIST_NODE_STUB: &str = "\
+class ListNode:
+    def __init__(self, val=0, next=None):
+        self.val = val
+        self.next = next
+";
+
+const TREE_NODE_STUB: &str = "\
+class TreeNode:
+    def __init__(self, val=0, left=None, right=None):
+        self.val = val
+        self.left = left
+        self.right = right
+";
+
+const NODE_STUB: &str = "\
+class Node:
+    def __init__(self, val=0, left=None, right=None, next=None, neighbors=None, *args, **kwargs):
+        self.val = val
+        self.left = left
+        self.right = right
+        self.next = next
+        self.neighbors = neighbors
+";
+
+/// Names `from solution import …` asks for, then stub any that the starter
+/// does not already define so the suite can import.
+fn ensure_imported_stubs(starter: &str, suite: &str) -> String {
+    let mut extra = String::new();
+    for name in solution_imported_names(suite) {
+        if name_defined(starter, &name) || name_defined(&extra, &name) {
+            continue;
+        }
+        extra.push_str(&stub_for_imported_name(&name));
+        if !extra.ends_with('\n') {
+            extra.push('\n');
+        }
+        extra.push('\n');
+    }
+    if extra.is_empty() {
+        starter.to_string()
+    } else {
+        format!("{extra}{starter}")
+    }
+}
+
+fn solution_imported_names(suite: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut pending = String::new();
+    let mut in_paren = false;
+    for line in suite.lines() {
+        let trimmed = line.trim();
+        let trimmed = trimmed.split('#').next().unwrap_or(trimmed).trim();
+        if in_paren {
+            pending.push(' ');
+            pending.push_str(trimmed);
+            if trimmed.contains(')') {
+                in_paren = false;
+                parse_import_list(&pending, &mut names);
+                pending.clear();
+            }
+            continue;
+        }
+        let Some(at) = trimmed
+            .to_ascii_lowercase()
+            .find("from solution import")
+        else {
+            continue;
+        };
+        let after = trimmed[at + "from solution import".len()..].trim();
+        if after.starts_with('(') || after.ends_with(',') || after.ends_with('\\') {
+            pending = after.trim_start_matches('(').trim_end_matches('\\').to_string();
+            in_paren = !after.contains(')');
+            if !in_paren {
+                parse_import_list(&pending, &mut names);
+                pending.clear();
+            }
+        } else {
+            parse_import_list(after, &mut names);
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn parse_import_list(chunk: &str, names: &mut Vec<String>) {
+    let cleaned = chunk.replace('\\', " ").replace('(', " ").replace(')', " ");
+    for part in cleaned.split(',') {
+        let part = part.trim();
+        if part.is_empty() || part == "*" {
+            continue;
+        }
+        let imported = part
+            .split_once(" as ")
+            .map(|(orig, _)| orig.trim())
+            .unwrap_or(part);
+        if is_python_ident(imported) {
+            names.push(imported.to_string());
+        }
+    }
+}
+
+fn is_python_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn name_defined(src: &str, name: &str) -> bool {
+    let def = format!("def {name}(");
+    let class_space = format!("class {name} ");
+    let class_colon = format!("class {name}:");
+    let class_paren = format!("class {name}(");
+    src.lines().any(|line| {
+        let t = line.trim_start();
+        t.starts_with(&def)
+            || t.starts_with(&class_colon)
+            || t.starts_with(&class_paren)
+            || t.starts_with(&class_space)
+    })
+}
+
+fn stub_for_imported_name(name: &str) -> String {
+    match name {
+        "ListNode" => LIST_NODE_STUB.to_string(),
+        "TreeNode" => TREE_NODE_STUB.to_string(),
+        "Node" => NODE_STUB.to_string(),
+        n if n.starts_with(|c: char| c.is_ascii_uppercase()) => {
+            format!("class {n}:\n    def __init__(self, *args, **kwargs):\n        pass\n")
+        }
+        n => format!("def {n}(*args, **kwargs):\n    pass\n"),
+    }
+}
+
 /// `test_info` is documented as an object, but the released parquet stores it
 /// as a one-element list of objects — and a JSON string in some conversions.
 fn test_info(raw: &Value) -> Option<Value> {
@@ -368,6 +512,30 @@ pub(super) mod tests {
         assert_eq!(problem.input_output[0].input, "[1, 3, 2]");
         assert_eq!(problem.input_output[0].output, "[1, 3, 3]");
         assert_eq!(problem.input_output[1].input, "[]");
+    }
+
+    #[test]
+    fn imported_helpers_are_stubbed_on_the_starter() {
+        let mut record = sample();
+        record["test_code"] = serde_json::json!(
+            "from solution import running_max, TreeNode, helper_sum\n\ndef test_x():\n    assert running_max([1]) == [1]\n"
+        );
+        let problem = normalize(&record).expect("imports");
+        let starter = problem.starter_code.as_deref().unwrap();
+        assert!(starter.contains("def running_max(values):"), "{starter}");
+        assert!(starter.contains("class TreeNode:"), "{starter}");
+        assert!(starter.contains("def helper_sum("), "{starter}");
+    }
+
+    #[test]
+    fn imported_names_ignore_trailing_comments() {
+        let mut record = sample();
+        record["test_code"] = serde_json::json!(
+            "from solution import count_islands  # helper\n\ndef test_x():\n    assert True\n"
+        );
+        let problem = normalize(&record).expect("imports");
+        let starter = problem.starter_code.as_deref().unwrap();
+        assert!(starter.contains("def count_islands("), "{starter}");
     }
 
     /// An assert built from a fixture would not survive `ast.literal_eval`, so
