@@ -86,9 +86,17 @@ def main() -> int:
         action="store_true",
         help="also pack KodCode / ms-python-q / deepseek-leetcode (upload as corpora-v1 release assets; not bundled in the APK)",
     )
+    parser.add_argument(
+        "--dlc-only",
+        action="store_true",
+        help="pack only the DLC slugs (skip seed corpora)",
+    )
     opts = parser.parse_args()
     data_dir = Path(os.path.expanduser(opts.data_dir))
-    slugs = list(SEED) + (list(DLC) if opts.dlc else [])
+    if opts.dlc_only:
+        slugs = list(DLC)
+    else:
+        slugs = list(SEED) + (list(DLC) if opts.dlc else [])
     if opts.fetch:
         fetch = REPO_ROOT / "scripts" / "fetch_dataset.py"
         cmd = [sys.executable, str(fetch), *slugs, "--data-dir", str(data_dir)]
