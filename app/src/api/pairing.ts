@@ -1,8 +1,8 @@
 /**
- * Base URL used only to build request paths in the HTTP client.
+ * Dummy host used only by the browser-test ambient coach WebSocket helper.
  *
- * On Tauri the router is in-process — `lcFetch` dispatches by path and never
- * opens a TCP connection. `baseUrl` stays as a dummy for URL construction.
+ * `LcClient` talks to the in-process harness via named Tauri invoke — no URL.
+ * Tauri coach frames use `lc_coach_*` events, not this socket.
  */
 
 const STORAGE_KEY = "whiteboard.pairing";

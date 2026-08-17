@@ -1,13 +1,8 @@
 /**
- * HTTP client for the embedded harness router.
- *
- * One class, one `request` funnel, so the pairing token is attached in exactly
- * one place and the router's `{"error": "..."}` bodies surface as real messages
- * instead of "500".
+ * Client for the bundled harness. Named Tauri `invoke`s — no URL, no dummy host.
  */
 
-import type { Pairing } from "./pairing";
-import { lcFetch } from "./nativeHttp";
+import { b64ToBytes, bytesToB64, loadInvoke, type LcInvokeResponse } from "./nativeHttp";
 import type {
   AdjacentProblems,
   AttemptOutcome,
@@ -61,7 +56,6 @@ export class LcApiError extends Error {
   }
 }
 
-/** Cap how often failed fetches announce "server unreachable" to the UI. */
 let lastUnreachableEventAt = 0;
 const UNREACHABLE_EVENT_COOLDOWN_MS = 4_000;
 
@@ -84,27 +78,10 @@ export interface SearchOptions {
   sort?: string;
 }
 
-/** `?dataset=…` for a workspace route, or "" for the default corpus. */
-function datasetSuffix(dataset?: string): string {
-  return dataset ? `?dataset=${encodeURIComponent(dataset)}` : "";
-}
-
 export interface OfflinePackOptions {
-  /** `0..1` with Content-Length; `-1` while indeterminate (building / proxy buffer). */
+  /** `0..1`; `-1` while indeterminate. */
   onProgress?: (ratio: number) => void;
   signal?: AbortSignal;
-}
-
-function concatBytes(chunks: Uint8Array[]): Uint8Array {
-  let total = 0;
-  for (const chunk of chunks) total += chunk.length;
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return out;
 }
 
 /** Align with the daemon provider ceiling (`llm/providers/http.rs`). */
@@ -148,241 +125,151 @@ export interface DevicePrefsDto {
   updated_at: number;
 }
 
+function errorMessage(body: string, status: number): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: string };
+    if (typeof parsed.error === "string" && parsed.error.length > 0) return parsed.error;
+  } catch {
+    // Not JSON.
+  }
+  return body.trim() || `request failed with status ${status}`;
+}
+
+function bodyText(body: unknown): string {
+  if (body === null || body === undefined) return "";
+  if (typeof body === "string") return body;
+  return JSON.stringify(body);
+}
+
 export class LcClient {
-  constructor(
-    private pairing: Pairing,
-    private readonly fetchImpl: typeof fetch = lcFetch,
-  ) {}
-
-  setPairing(pairing: Pairing): void {
-    this.pairing = pairing;
-  }
-
   async health(): Promise<{ ok: boolean; version: string; requires_token: boolean }> {
-    return this.request("GET", "/health");
+    return this.cmd("lc_health");
   }
 
-  /** Paginated search against the daemon's SQLite index. */
   async searchProblems(options: SearchOptions = {}): Promise<ProblemPage> {
-    const query = new URLSearchParams();
-    for (const [key, value] of Object.entries(options)) {
-      // `offset: 0` is meaningful, so only skip undefined and empty strings.
-      if (value !== undefined && value !== "") query.set(key, String(value));
-    }
-    const suffix = query.toString();
-    return this.request("GET", `/problems${suffix ? `?${suffix}` : ""}`);
+    return this.cmd("lc_list_problems", { args: options });
   }
 
-  /** Every tag in one corpus, for the browser's filter. */
   async tags(dataset?: string): Promise<string[]> {
-    return this.request("GET", `/tags${datasetSuffix(dataset)}`);
+    return this.cmd("lc_list_tags", { dataset });
   }
 
-  /** The tab strip: every problem set and how many problems it has indexed. */
   async datasets(): Promise<DatasetInfo[]> {
-    return this.request("GET", "/datasets");
+    return this.cmd("lc_list_datasets");
   }
 
-  /** Resumable pack plan (no problem bodies). */
   async offlinePackManifest(): Promise<import("../util/offlinePackDownload").OfflinePackManifest> {
-    return this.request("GET", "/offline/pack/manifest");
+    return this.cmd("lc_offline_pack_manifest");
   }
 
-  /** One page of problems for a resumable pack download. */
   async offlinePackChunk(options: {
     dataset: string;
     offset: number;
     limit?: number;
     since?: number;
   }): Promise<import("../util/offlinePackDownload").OfflinePackChunk> {
-    const query = new URLSearchParams();
-    query.set("dataset", options.dataset);
-    query.set("offset", String(options.offset));
-    if (options.limit !== undefined) query.set("limit", String(options.limit));
-    if (options.since !== undefined) query.set("since", String(options.since));
-    return this.request("GET", `/offline/pack/chunk?${query}`);
+    return this.cmd("lc_offline_pack_chunk", options);
   }
 
-  /** Task ids for one dataset — reconcile deletions on delta refresh. */
   async offlinePackDatasetKeys(options: {
     dataset: string;
     offset: number;
     limit?: number;
   }): Promise<import("../util/offlinePackDownload").OfflineDatasetKeys> {
-    const query = new URLSearchParams();
-    query.set("dataset", options.dataset);
-    query.set("offset", String(options.offset));
-    if (options.limit !== undefined) query.set("limit", String(options.limit));
-    return this.request("GET", `/offline/pack/keys?${query}`);
+    return this.cmd("lc_offline_pack_keys", options);
   }
 
-  /**
-   * Full offline problem pack (every indexed dataset except KodCode).
-   * Prefer {@link offlinePackManifest} + {@link offlinePackChunk} for resumable downloads.
-   *
-   * {@link OfflinePackOptions.onProgress} receives `0..1` when Content-Length
-   * is known, or `-1` while the total is unknown / the body is still buffering
-   * (e.g. Tauri proxy). Closing the app or aborting leaves any prior pack intact.
-   */
   async offlinePack(options: OfflinePackOptions = {}): Promise<import("../util/offlineCorpus").OfflinePack> {
     const { onProgress, signal } = options;
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (this.pairing.token) headers["X-LC-Token"] = this.pairing.token;
-
     onProgress?.(-1);
-
-    let response: Response;
-    try {
-      response = await this.fetchImpl(`${this.pairing.baseUrl}/offline/pack`, {
-        method: "GET",
-        headers,
-        signal,
-      });
-    } catch (cause) {
-      if (signal?.aborted) throw new LcApiError("Download cancelled", 0);
-      const message = `cannot reach the workspace at ${this.pairing.baseUrl} — is the app running?`;
-      announceUnreachable(message);
-      throw new LcApiError(message, 0);
-    }
-
-    if (!response.ok) {
-      const rawText = await response.text();
-      throw new LcApiError(errorMessage(rawText, response.status), response.status);
-    }
-
-    const total = Number(response.headers.get("content-length") || 0);
-    const reader = response.body?.getReader?.();
-
-    let rawText: string;
-    if (!reader) {
-      rawText = await response.text();
-      onProgress?.(1);
-    } else {
-      const chunks: Uint8Array[] = [];
-      let received = 0;
-      if (total <= 0) onProgress?.(-1);
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (!value) continue;
-        chunks.push(value);
-        received += value.length;
-        if (total > 0) onProgress?.(Math.min(0.99, received / total));
-        else onProgress?.(-1);
-      }
-      rawText = new TextDecoder().decode(concatBytes(chunks));
-      onProgress?.(1);
-    }
-
-    return (rawText ? JSON.parse(rawText) : null) as import("../util/offlineCorpus").OfflinePack;
+    if (signal?.aborted) throw new LcApiError("Download cancelled", 0);
+    const pack = await this.cmd<import("../util/offlineCorpus").OfflinePack>("lc_offline_pack");
+    onProgress?.(1);
+    return pack;
   }
 
-  /** One random problem matching the filter — the TUI's `R`. */
   async randomProblem(options: SearchOptions = {}): Promise<ProblemSummary | null> {
-    const query = new URLSearchParams();
-    for (const [key, value] of Object.entries(options)) {
-      if (value !== undefined && value !== "") query.set(key, String(value));
-    }
-    const suffix = query.toString();
-    return this.request("GET", `/random${suffix ? `?${suffix}` : ""}`);
+    return this.cmd("lc_random_problem", { args: options });
   }
 
-  /** Practice session on disk (queue + progress). */
   async getSession(): Promise<SessionSnapshot> {
-    return this.request("GET", "/session");
+    return this.cmd("lc_get_session");
   }
 
   async resetSession(): Promise<SessionSnapshot> {
-    return this.request("POST", "/session/reset");
+    return this.cmd("lc_reset_session");
   }
 
   async enqueueSession(taskId: string, dataset?: string): Promise<SessionSnapshot> {
-    return this.request("POST", "/session/enqueue", { task_id: taskId, dataset });
+    return this.cmd("lc_enqueue_session", { taskId, dataset });
   }
 
-  async randomSession(options: {
-    dataset?: string;
-    count?: number;
-    difficulty?: string;
-    tag?: string;
-    q?: string;
-  } = {}): Promise<SessionSnapshot> {
-    return this.request("POST", "/session/random", options);
+  async randomSession(
+    options: {
+      dataset?: string;
+      count?: number;
+      difficulty?: string;
+      tag?: string;
+      q?: string;
+    } = {},
+  ): Promise<SessionSnapshot> {
+    return this.cmd("lc_random_session", { body: options });
   }
 
   async getConfig(): Promise<LcConfig> {
-    return this.request("GET", "/config");
+    return this.cmd("lc_get_config");
   }
 
-  async putConfig(
-    config: LcConfig,
-    opts?: { timeoutMs?: number },
-  ): Promise<LcConfig> {
-    return this.request("PUT", "/config", config, opts);
+  async putConfig(config: LcConfig, opts?: { timeoutMs?: number }): Promise<LcConfig> {
+    return this.cmd("lc_put_config", { config }, opts?.timeoutMs);
   }
 
   async llmStatus(): Promise<LlmStatus> {
-    return this.request("GET", "/llm/status");
+    return this.cmd("lc_llm_status");
   }
 
   async llmStart(): Promise<LlmStatus> {
-    return this.request("POST", "/llm/start");
+    return this.cmd("lc_llm_start");
   }
 
   async llmStop(): Promise<LlmStatus> {
-    return this.request("POST", "/llm/stop");
+    return this.cmd("lc_llm_stop");
   }
 
-  async openWorkspace(id: string, target: "ide" | "canvas", dataset?: string): Promise<{
+  async openWorkspace(
+    id: string,
+    target: "ide" | "canvas",
+    dataset?: string,
+  ): Promise<{
     task_id: string;
     target: string;
     workspace_dir: string;
   }> {
-    return this.request(
-      "POST",
-      `/workspace/${encodeURIComponent(id)}/open${datasetSuffix(dataset)}`,
-      { target },
-    );
+    return this.cmd("lc_open_workspace", { id, target, dataset });
   }
 
-  /** Prev/next in the filtered problem bank (same order as the browser). */
   async adjacentProblems(id: string, options: SearchOptions = {}): Promise<AdjacentProblems> {
-    const query = new URLSearchParams();
-    for (const [key, value] of Object.entries(options)) {
-      if (value !== undefined && value !== "") query.set(key, String(value));
-    }
-    const suffix = query.toString();
-    return this.request(
-      "GET",
-      `/problems/${encodeURIComponent(id)}/adjacent${suffix ? `?${suffix}` : ""}`,
-    );
+    return this.cmd("lc_adjacent_problem", { id, args: options });
   }
 
   async getProblem(id: string, dataset?: string): Promise<ProblemDetail> {
-    return this.request("GET", `/problems/${encodeURIComponent(id)}${datasetSuffix(dataset)}`);
+    return this.cmd("lc_get_problem", { id, dataset });
   }
 
-  /** Materialize the workspace on the PC (README, solution.py, run_tests.py). */
   async loadProblem(id: string, dataset?: string): Promise<LoadResponse> {
-    return this.request(
-      "POST",
-      `/problems/${encodeURIComponent(id)}/load${datasetSuffix(dataset)}`,
-    );
+    return this.cmd("lc_load_problem", { id, dataset });
   }
 
   async workspaceMeta(id: string, dataset?: string): Promise<WorkspaceMeta> {
-    return this.request("GET", `/workspace/${encodeURIComponent(id)}/meta${datasetSuffix(dataset)}`);
+    return this.cmd("lc_workspace_meta", { id, dataset });
   }
 
   async runTests(id: string, dataset?: string): Promise<TestResponse> {
-    return this.request("POST", `/workspace/${encodeURIComponent(id)}/test${datasetSuffix(dataset)}`);
+    return this.cmd("lc_run_tests", { id, dataset });
   }
 
   async getSolution(id: string, dataset?: string): Promise<{ task_id: string; source: string }> {
-    return this.request(
-      "GET",
-      `/workspace/${encodeURIComponent(id)}/solution${datasetSuffix(dataset)}`,
-    );
+    return this.cmd("lc_get_solution", { id, dataset });
   }
 
   async putSolution(
@@ -390,15 +277,11 @@ export class LcClient {
     source: string,
     dataset?: string,
   ): Promise<{ task_id: string; source: string }> {
-    return this.request(
-      "PUT",
-      `/workspace/${encodeURIComponent(id)}/solution${datasetSuffix(dataset)}`,
-      { source },
-    );
+    return this.cmd("lc_put_solution", { id, source, dataset });
   }
 
   async getBoard(id: string, dataset?: string): Promise<{ task_id: string; board: unknown | null }> {
-    return this.request("GET", `/workspace/${encodeURIComponent(id)}/board${datasetSuffix(dataset)}`);
+    return this.cmd("lc_get_board", { id, dataset });
   }
 
   async putBoard(
@@ -406,19 +289,14 @@ export class LcClient {
     board: unknown,
     dataset?: string,
   ): Promise<{ task_id: string; board: unknown | null }> {
-    return this.request(
-      "PUT",
-      `/workspace/${encodeURIComponent(id)}/board${datasetSuffix(dataset)}`,
-      { board },
-    );
+    return this.cmd("lc_put_board", { id, board, dataset });
   }
 
-  /** The coach transcript stored beside the workspace. */
   async getAgentSession(
     id: string,
     dataset?: string,
   ): Promise<{ task_id: string; dataset: string; messages: unknown[] }> {
-    return this.request("GET", `/workspace/${encodeURIComponent(id)}/agent${datasetSuffix(dataset)}`);
+    return this.cmd("lc_get_agent_session", { id, dataset });
   }
 
   async putAgentSession(
@@ -426,85 +304,59 @@ export class LcClient {
     messages: unknown[],
     dataset?: string,
   ): Promise<{ task_id: string; dataset: string; messages: unknown[] }> {
-    return this.request(
-      "PUT",
-      `/workspace/${encodeURIComponent(id)}/agent${datasetSuffix(dataset)}`,
-      { messages },
-    );
+    return this.cmd("lc_put_agent_session", { id, messages, dataset });
   }
 
-  /**
-   * Leaving a problem: keep the work or clear it. The daemon owns the rules —
-   * notably that a solved attempt always archives its layout and transcript so
-   * the next attempt starts fresh.
-   */
   async finishAttempt(
     id: string,
     options: { solved: boolean; save: boolean },
     dataset?: string,
   ): Promise<AttemptOutcome> {
-    return this.request(
-      "POST",
-      `/workspace/${encodeURIComponent(id)}/attempt${datasetSuffix(dataset)}`,
-      options,
-    );
+    return this.cmd("lc_finish_attempt", {
+      id,
+      solved: options.solved,
+      save: options.save,
+      dataset,
+    });
   }
 
-  /** Per-mode provider / model / vision flags. */
   async capabilities(): Promise<CoachCapabilities> {
-    return this.request("GET", "/coach/capabilities");
+    return this.cmd("lc_coach_capabilities");
   }
 
-  /** Mode A. The daemon validates any cited counterexample before replying. */
   async review(
     taskId: string,
     board: BoardSnapshot,
     dataset?: string,
     opts?: { layoutOnly?: boolean; timeoutMs?: number },
   ): Promise<ReviewResponse> {
-    return this.request(
-      "POST",
-      "/coach/review",
+    return this.cmd(
+      "lc_coach_review",
       {
-        task_id: taskId,
-        dataset,
-        layout_only: opts?.layoutOnly === true,
-        ...board,
+        body: {
+          task_id: taskId,
+          dataset,
+          layout_only: opts?.layoutOnly === true,
+          ...board,
+        },
       },
-      { timeoutMs: opts?.timeoutMs ?? COACH_HTTP_TIMEOUT_MS },
+      opts?.timeoutMs ?? COACH_HTTP_TIMEOUT_MS,
     );
   }
 
-  /**
-   * Fresh-board region prompts for Approach / Complexity / Walkthrough.
-   * Soft-fails on the client — load still seeds the generic template.
-   */
   async scaffoldBoard(taskId: string, dataset?: string): Promise<BoardScaffold> {
-    return this.request("POST", "/coach/scaffold", {
-      task_id: taskId,
-      dataset,
-    });
+    return this.cmd("lc_coach_scaffold", { body: { task_id: taskId, dataset } });
   }
 
-  /**
-   * Phase 4. The model replies with tool calls; the daemon drops any structure
-   * it has no renderer for and any test case it cannot verify, so what comes
-   * back is already safe to draw.
-   */
   async viz(
     taskId: string,
     board: BoardSnapshot,
     ask = "",
     dataset?: string,
   ): Promise<VizEnvelope> {
-    return this.request("POST", "/coach/viz", { task_id: taskId, dataset, board, ask });
+    return this.cmd("lc_coach_viz", { body: { task_id: taskId, dataset, board, ask } });
   }
 
-  /**
-   * Look at a diagram the board already rendered, and redraw it once if the
-   * picture does not say what the program claims. Refused by the daemon unless
-   * `coach.draw_review_enabled` is on.
-   */
   async drawReview(
     taskId: string,
     program: unknown,
@@ -512,19 +364,11 @@ export class LcClient {
     ask = "",
     dataset?: string,
   ): Promise<import("./types").DrawReviewEnvelope> {
-    return this.request("POST", "/coach/draw_review", {
-      task_id: taskId,
-      dataset,
-      program,
-      png,
-      ask,
+    return this.cmd("lc_coach_draw_review", {
+      body: { task_id: taskId, dataset, program, png, ask },
     });
   }
 
-  /**
-   * Phase 5. `confirmReveal` must come from the user's own confirmation, not a
-   * default or a stored preference — the daemon rejects the call without it.
-   */
   async reveal(
     taskId: string,
     board: BoardSnapshot,
@@ -532,45 +376,32 @@ export class LcClient {
     dataset?: string,
     mode: "bridge" | "lazy" = "bridge",
   ): Promise<BridgeResponse> {
-    return this.request("POST", "/coach/reveal", {
-      task_id: taskId,
-      dataset,
-      confirm_reveal: confirmReveal,
-      mode,
-      board,
+    return this.cmd("lc_coach_reveal", {
+      body: {
+        task_id: taskId,
+        dataset,
+        confirm_reveal: confirmReveal,
+        mode,
+        board,
+      },
     });
   }
 
-  /** Fill earned solution.py parts from the board only (no reference). */
   async lazyFill(
     taskId: string,
     board: BoardSnapshot,
     dataset?: string,
   ): Promise<import("./types").LazyFillResponse> {
     try {
-      return await this.request("POST", "/coach/lazy", {
-        task_id: taskId,
-        dataset,
-        board,
-      });
+      return await this.cmd("lc_coach_lazy", { body: { task_id: taskId, dataset, board } });
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 404) {
-        throw new LcApiError(
-          "Lazy fill needs POST /coach/lazy — rebuild and restart the app",
-          404,
-        );
+        throw new LcApiError("Lazy fill needs lc_coach_lazy — rebuild and restart the app", 404);
       }
       throw cause;
     }
   }
 
-  /**
-   * Single-turn Q&A — skips the staged review pipeline.
-   *
-   * `images` are base64 PNGs the student attached with (+). Omitted from the
-   * body when there are none, so a daemon that predates the field sees exactly
-   * the request it always saw.
-   */
   async ask(
     question: string,
     opts: {
@@ -606,9 +437,7 @@ export class LcClient {
       ...(task_id ? { task_id } : {}),
       ...(images && images.length > 0 ? { images } : {}),
     };
-    if (surface === "problem") {
-      body.dataset = dataset;
-    }
+    if (surface === "problem") body.dataset = dataset;
     if (opts.document_hash) body.document_hash = opts.document_hash;
     if (opts.page != null) body.page = opts.page;
     if (opts.highlight) body.highlight = opts.highlight;
@@ -616,25 +445,17 @@ export class LcClient {
     if (opts.marks_prose) body.marks_prose = opts.marks_prose;
     if (opts.preset) body.preset = opts.preset;
     try {
-      return await this.request(
-        "POST",
-        "/coach/ask",
-        body,
-        { timeoutMs: timeoutMs ?? COACH_HTTP_TIMEOUT_MS },
-      );
+      return await this.cmd("lc_coach_ask", { body }, timeoutMs ?? COACH_HTTP_TIMEOUT_MS);
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 404) {
-        throw new LcApiError(
-          "Ask needs a harness that serves POST /coach/ask — rebuild and restart the app",
-          404,
-        );
+        throw new LcApiError("Ask needs lc_coach_ask — rebuild and restart the app", 404);
       }
       throw cause;
     }
   }
 
   async getDocIndex(hash: string): Promise<DocIndexStatus> {
-    return this.request("GET", `/docs/${encodeURIComponent(hash)}/index`);
+    return this.cmd("lc_docs_get_index", { hash });
   }
 
   async putDocIndex(
@@ -645,24 +466,31 @@ export class LcClient {
       pages: Array<{ page: number; text: string; heading?: string }>;
     },
   ): Promise<{ indexed: boolean; wrote: boolean }> {
-    const result = await this.request<{
+    const result = await this.cmd<{
       hash?: string;
       indexed?: boolean;
       wrote?: boolean;
-    } | null>("PUT", `/docs/${encodeURIComponent(hash)}/index`, body, {
-      timeoutMs: 180_000,
-    });
+    } | null>("lc_docs_put_index", { hash, body }, 180_000);
     if (!result) return { indexed: true, wrote: false };
     return { indexed: result.indexed !== false, wrote: Boolean(result.wrote) };
   }
 
   async putDocBytes(hash: string, bytes: ArrayBuffer): Promise<void> {
-    await this.requestBytes("PUT", `/docs/${encodeURIComponent(hash)}/bytes`, bytes);
+    await this.cmd("lc_docs_put_bytes", {
+      hash,
+      rawBase64: bytesToB64(new Uint8Array(bytes)),
+    });
   }
 
   async getDocBytes(hash: string): Promise<ArrayBuffer | null> {
     try {
-      return await this.requestBytes("GET", `/docs/${encodeURIComponent(hash)}/bytes`);
+      const body = await this.cmd<unknown>("lc_docs_get_bytes", { hash });
+      if (body && typeof body === "object" && "$bytes" in body) {
+        const packed = body as { $bytes: string };
+        const copy = b64ToBytes(packed.$bytes).slice();
+        return copy.buffer as ArrayBuffer;
+      }
+      return null;
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 404) return null;
       throw cause;
@@ -670,63 +498,60 @@ export class LcClient {
   }
 
   async listWhiteboardPads(): Promise<WhiteboardPadDto[]> {
-    return this.request("GET", "/pads/whiteboard");
+    return this.cmd("lc_list_whiteboard");
   }
 
   async listWhiteboardArchive(): Promise<WhiteboardPadDto[]> {
-    return this.request("GET", "/pads/whiteboard/archive");
+    return this.cmd("lc_archive_whiteboard");
   }
 
   async putWhiteboardPad(id: string, body: WhiteboardPadDto): Promise<WhiteboardPadDto> {
-    return this.request("PUT", `/pads/whiteboard/${encodeURIComponent(id)}`, body);
+    return this.cmd("lc_put_whiteboard", { id, body });
   }
 
   async tombstoneWhiteboardPad(id: string): Promise<void> {
-    await this.request("POST", `/pads/whiteboard/${encodeURIComponent(id)}/tombstone`);
+    await this.cmd("lc_tombstone_whiteboard", { id });
   }
 
   async restoreWhiteboardPad(id: string): Promise<void> {
-    await this.request("POST", `/pads/whiteboard/${encodeURIComponent(id)}/restore`);
+    await this.cmd("lc_restore_whiteboard", { id });
   }
 
   async listAnnotatePads(): Promise<AnnotatePadDto[]> {
-    return this.request("GET", "/pads/annotate");
+    return this.cmd("lc_list_annotate");
   }
 
   async listAnnotateArchive(): Promise<AnnotatePadDto[]> {
-    return this.request("GET", "/pads/annotate/archive");
+    return this.cmd("lc_archive_annotate");
   }
 
   async putAnnotatePad(id: string, body: AnnotatePadDto): Promise<AnnotatePadDto> {
-    return this.request("PUT", `/pads/annotate/${encodeURIComponent(id)}`, body);
+    return this.cmd("lc_put_annotate", { id, body });
   }
 
   async tombstoneAnnotatePad(id: string): Promise<void> {
-    await this.request("POST", `/pads/annotate/${encodeURIComponent(id)}/tombstone`);
+    await this.cmd("lc_tombstone_annotate", { id });
   }
 
   async restoreAnnotatePad(id: string): Promise<void> {
-    await this.request("POST", `/pads/annotate/${encodeURIComponent(id)}/restore`);
+    await this.cmd("lc_restore_annotate", { id });
   }
 
   async putPadSnapshot(body: PadSnapshotDto): Promise<void> {
-    await this.request("PUT", "/pads/snapshots", body);
+    await this.cmd("lc_put_snapshot", { body });
   }
 
   async getPadSnapshots(kind: string, key: string): Promise<PadSnapshotDto[]> {
-    return this.request(
-      "GET",
-      `/pads/snapshots/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`,
-    );
+    return this.cmd("lc_get_snapshots", { kind, key });
   }
 
   async listDevices(): Promise<DevicePrefsDto[]> {
-    return this.request("GET", "/devices");
+    return this.cmd("lc_list_devices");
   }
 
   async getDevicePrefs(id: string): Promise<DevicePrefsDto | null> {
     try {
-      return await this.request("GET", `/devices/${encodeURIComponent(id)}/prefs`);
+      return await this.cmd("lc_get_device_prefs", { id });
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 404) return null;
       throw cause;
@@ -734,95 +559,55 @@ export class LcClient {
   }
 
   async putDevicePrefs(id: string, body: DevicePrefsDto): Promise<DevicePrefsDto> {
-    return this.request("PUT", `/devices/${encodeURIComponent(id)}/prefs`, body);
+    return this.cmd("lc_put_device_prefs", { id, body });
   }
 
   async cloneDevicePrefs(id: string, role: string): Promise<DevicePrefsDto | null> {
-    const result = await this.request<DevicePrefsDto | null>(
-      "POST",
-      `/devices/${encodeURIComponent(id)}/clone`,
-      { role },
-    );
-    return result;
+    return this.cmd("lc_clone_device_prefs", { id, role });
   }
 
-  private async requestBytes(
-    method: string,
-    path: string,
-    body?: ArrayBuffer,
-  ): Promise<ArrayBuffer> {
-    const headers: Record<string, string> = {};
-    if (this.pairing.token) headers["X-LC-Token"] = this.pairing.token;
-    if (body) headers["Content-Type"] = "application/octet-stream";
-    const response = await this.fetchImpl(`${this.pairing.baseUrl}${path}`, {
-      method,
-      headers,
-      body: body ?? undefined,
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new LcApiError(errorMessage(text, response.status), response.status, text);
-    }
-    return response.arrayBuffer();
-  }
-
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: unknown,
-    opts?: { timeoutMs?: number },
+  private async cmd<T>(
+    command: string,
+    args?: Record<string, unknown>,
+    timeoutMs?: number,
   ): Promise<T> {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (this.pairing.token) headers["X-LC-Token"] = this.pairing.token;
-    if (body !== undefined) headers["Content-Type"] = "application/json";
-
-    const timeoutMs = opts?.timeoutMs;
-    const controller =
-      timeoutMs != null && timeoutMs > 0 && typeof AbortController !== "undefined"
-        ? new AbortController()
-        : null;
-    const timer =
-      controller && timeoutMs != null
-        ? window.setTimeout(() => controller.abort(), timeoutMs)
-        : null;
-
-    let response: Response;
-    try {
-      response = await this.fetchImpl(`${this.pairing.baseUrl}${path}`, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller?.signal,
-      });
-    } catch (cause) {
-      if (timer != null) window.clearTimeout(timer);
-      if (cause instanceof DOMException && cause.name === "AbortError") {
-        throw new LcApiError(
-          `the workspace did not answer ${method} ${path} within ${Math.round((timeoutMs ?? 0) / 1000)}s`,
-          0,
-        );
-      }
-      const message = `cannot reach the workspace at ${this.pairing.baseUrl} — is the app running?`;
+    const invoke = await loadInvoke();
+    if (!invoke) {
+      const message = "this build has no in-process harness — use the Tauri app";
       announceUnreachable(message);
       throw new LcApiError(message, 0);
     }
-    if (timer != null) window.clearTimeout(timer);
 
-    const text = await response.text();
-    if (!response.ok) {
-      throw new LcApiError(errorMessage(text, response.status), response.status, text);
+    const run = invoke<LcInvokeResponse>(command, args ?? {});
+    let result: LcInvokeResponse;
+    try {
+      result =
+        timeoutMs != null && timeoutMs > 0
+          ? await Promise.race([
+              run,
+              new Promise<never>((_, reject) => {
+                window.setTimeout(() => {
+                  reject(
+                    new LcApiError(
+                      `the harness did not answer ${command} within ${Math.round(timeoutMs / 1000)}s`,
+                      0,
+                    ),
+                  );
+                }, timeoutMs);
+              }),
+            ])
+          : await run;
+    } catch (cause) {
+      if (cause instanceof LcApiError) throw cause;
+      const message = cause instanceof Error ? cause.message : String(cause);
+      announceUnreachable(message);
+      throw new LcApiError(message, 0);
     }
-    return (text ? JSON.parse(text) : null) as T;
-  }
-}
 
-/** Prefer the daemon's own `{"error": ...}` message over a bare status line. */
-function errorMessage(body: string, status: number): string {
-  try {
-    const parsed = JSON.parse(body) as { error?: string };
-    if (typeof parsed.error === "string" && parsed.error.length > 0) return parsed.error;
-  } catch {
-    // Not JSON — fall through.
+    if (result.status >= 400) {
+      const text = bodyText(result.body);
+      throw new LcApiError(errorMessage(text, result.status), result.status, text);
+    }
+    return result.body as T;
   }
-  return body.trim() || `request failed with status ${status}`;
 }
