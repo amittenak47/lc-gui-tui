@@ -6,11 +6,10 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-import type { LcClient } from "../api/client";
+import type { DevicePrefsDto, DlcStatus, LcClient } from "../api/client";
 import type { CoachFlags, DatasetInfo, LcConfig, LlmStatus, ProviderConfig } from "../api/types";
 import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { shouldDismissBackdrop } from "../util/backdropDismiss";
-import { HoldButton } from "./HoldButton";
 import { MorphBar } from "./MorphBar";
 import { loadTestForwardMode, saveTestForwardMode, type TestForwardMode } from "../util/agentPrefs";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
@@ -88,8 +87,6 @@ import {
   saveOfflineMergePolicy,
   type OfflineMergePolicy,
 } from "../util/offlineMerge";
-import { offlinePackMeta } from "../util/offlineCorpus";
-import { offlinePackDownloader } from "../util/offlinePackDownload";
 import { useIsMobile } from "../util/mobile";
 import { estimateStorage, formatBytes, type StorageUsage } from "../util/storageQuota";
 import {
@@ -98,7 +95,6 @@ import {
   loadDeviceId,
   saveThisDevicePrefs,
 } from "../util/devicePrefs";
-import type { DevicePrefsDto } from "../api/client";
 import { FEATURE_LEETCODE } from "../featureFlags";
 
 type TabId = "workspace" | "personalise" | "ai" | "llm";
@@ -453,17 +449,7 @@ export function SettingsModal({
   /** Last saved config + device prefs — Cancel restores these; Save advances them. */
   const [baselineConfig, setBaselineConfig] = useState<LcConfig>(emptyConfig);
   const [baselinePrefs, setBaselinePrefs] = useState<DevicePrefs>(loadDevicePrefs);
-  const [packMeta, setPackMeta] = useState<{
-    built_at: number;
-    problemCount: number;
-  } | null>(null);
-  const [packBusy, setPackBusy] = useState(false);
-  const [packError, setPackError] = useState<string | null>(null);
-  const [packProgress, setPackProgress] = useState(0);
-  const [packIndeterminate, setPackIndeterminate] = useState(false);
-  const [packResumable, setPackResumable] = useState(false);
-  const [packInfo, setPackInfo] = useState<string | null>(null);
-  const [packMode, setPackMode] = useState<"full" | "delta" | null>(null);
+  const [dlcRows, setDlcRows] = useState<DlcStatus[]>([]);
 
   const refreshLlm = useCallback(async () => {
     try {
@@ -493,55 +479,53 @@ export function SettingsModal({
     };
   }, [tab]);
 
-  useEffect(() => {
-    return offlinePackDownloader.subscribe((snap) => {
-      setPackBusy(snap.phase === "running");
-      setPackProgress(snap.progress);
-      setPackIndeterminate(snap.indeterminate);
-      setPackResumable(snap.resumable || snap.phase === "paused");
-      setPackInfo(snap.info);
-      setPackMode(snap.mode);
-      if (snap.phase === "error") setPackError(snap.error);
-      else if (snap.phase === "running" || snap.phase === "done") {
-        setPackError(null);
-      }
-      if (snap.phase === "done") {
-        void offlinePackMeta().then((meta) => {
-          if (meta) {
-            setPackMeta({ built_at: meta.built_at, problemCount: meta.problemCount });
-          }
-        });
-      }
-    });
-  }, []);
-
-  const packPct = Math.round(packProgress * 100);
-  const packActive = packBusy || packResumable;
-  const packLabel = packBusy
-    ? packIndeterminate
-      ? "Downloading…"
-      : `Downloading… ${packPct}%`
-    : packResumable
-      ? `Resume download${packProgress > 0 ? ` (${packPct}%)` : ""}`
-      : packMeta
-        ? "Refresh offline pack"
-        : "Download offline pack";
-
-  const onPackTap = useCallback(() => {
-    if (busy) return;
-    if (packBusy) {
-      offlinePackDownloader.pause();
-      return;
+  const refreshDlc = useCallback(async () => {
+    try {
+      setDlcRows(await client.dlcStatus());
+    } catch {
+      setDlcRows([]);
     }
-    setPackError(null);
-    setPackInfo(null);
-    void offlinePackDownloader.start(client, { delta: Boolean(packMeta) });
-  }, [busy, client, packBusy, packMeta]);
+  }, [client]);
 
-  const onPackAbort = useCallback(() => {
-    if (!packActive) return;
-    void offlinePackDownloader.abort();
-  }, [packActive]);
+  useEffect(() => {
+    if (!open || tab !== "workspace") return;
+    void refreshDlc();
+    let stop: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(({ listen }) => {
+      void listen<DlcStatus[]>("lc-dlc-status", (event) => {
+        if (Array.isArray(event.payload)) setDlcRows(event.payload);
+      }).then((unlisten) => {
+        stop = unlisten;
+      });
+    });
+    const timer = window.setInterval(() => void refreshDlc(), 1500);
+    return () => {
+      stop?.();
+      window.clearInterval(timer);
+    };
+  }, [open, tab, refreshDlc]);
+
+  const onDlcInstall = useCallback(
+    (slug: string) => {
+      void client.dlcInstall(slug).then((row) => {
+        setDlcRows((current) => current.map((entry) => (entry.slug === slug ? row : entry)));
+      }).catch((cause) => {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    },
+    [client],
+  );
+
+  const onDlcRemove = useCallback(
+    (slug: string) => {
+      void client.dlcRemove(slug).then((row) => {
+        setDlcRows((current) => current.map((entry) => (entry.slug === slug ? row : entry)));
+      }).catch((cause) => {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    },
+    [client],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -572,11 +556,6 @@ export function SettingsModal({
     setBaselinePrefs(prefs);
     if (initialTab) setTab(initialTab);
     setPage("root");
-    void offlinePackMeta().then((meta) => {
-      if (!cancelled && meta) {
-        setPackMeta({ built_at: meta.built_at, problemCount: meta.problemCount });
-      }
-    });
     void (async () => {
       try {
         const cfg = await client.getConfig();
@@ -865,50 +844,48 @@ export function SettingsModal({
                 <code>&lt;problems folder&gt;/&lt;dataset&gt;/</code>; override it below when it
                 lives somewhere else.
               </p>
-              <div className="lc-settings-subhead">Offline dataset download</div>
+              <div className="lc-settings-subhead">Optional corpora (DLC)</div>
               <p className="lc-settings-hint">
-                Download every indexed dataset except KodCode onto this device (~100–250&nbsp;MB).
-                Browse and open statements offline; tests run in this app.
+                LeetCode and LC + Tests ship in the app. KodCode, MS Python/Q, and DeepSeek
+                download as jsonl zips (GitHub release <code>corpora-v1</code>), unpack, then
+                index. Off until you install. KodCode is large.
               </p>
-              {packMeta && (
-                <p className="lc-muted">
-                  On device: {packMeta.problemCount.toLocaleString()} problems · built{" "}
-                  {new Date(packMeta.built_at * 1000).toLocaleString()}
-                </p>
-              )}
-              {packInfo && <p className="lc-muted">{packInfo}</p>}
-              {packError && <div className="lc-warning">{packError}</div>}
-              <HoldButton
-                label={packLabel}
-                className={[
-                  "lc-pack-download",
-                  "lc-progress-fill",
-                  packActive ? "lc-hold-danger" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                trackProgress={packActive ? packProgress : 0}
-                fillIndeterminate={packBusy && packIndeterminate}
-                disabled={Boolean(busy)}
-                onTap={onPackTap}
-                onConfirm={onPackAbort}
-                ariaLabel={
-                  packActive
-                    ? `${packLabel}: tap to pause, hold to abort`
-                    : packMeta
-                      ? `${packLabel}: tap to delta refresh`
-                      : packLabel
-                }
-              >
-                {packLabel}
-              </HoldButton>
-              <p className="lc-settings-hint">
-                {packActive
-                  ? "Tap to pause · hold to abort (keeps the finished pack on device)."
-                  : packMode === "delta"
-                    ? "Refresh only fetches changed datasets and problems — unchanged corpora stay on device."
-                    : "Downloads in the background — you can close Settings. Closing the app pauses; reopening resumes."}
-              </p>
+              {dlcRows.map((row) => {
+                const working = ["downloading", "unpacking", "indexing"].includes(row.phase);
+                const pct = row.progress >= 0 ? Math.round(row.progress * 100) : null;
+                const label = working
+                  ? row.phase === "downloading" && pct != null
+                    ? `Downloading… ${pct}%`
+                    : `${row.phase}…`
+                  : row.installed
+                    ? "Remove"
+                    : "Install";
+                return (
+                  <div key={row.slug} className="lc-settings-dlc-row">
+                    <span>
+                      {row.label}
+                      <span className="lc-settings-badge">
+                        {row.count.toLocaleString()} indexed
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      className={
+                        row.installed && !working ? "lc-hold-danger" : "lc-primary"
+                      }
+                      disabled={Boolean(busy) || working}
+                      onClick={() =>
+                        row.installed && !working
+                          ? onDlcRemove(row.slug)
+                          : onDlcInstall(row.slug)
+                      }
+                    >
+                      {label}
+                    </button>
+                    {row.error && <p className="lc-warning">{row.error}</p>}
+                  </div>
+                );
+              })}
               {datasets.length === 0 && (
                 <p className="lc-muted">
                   This build does not report datasets — rebuild with the leetcode feature.

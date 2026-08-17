@@ -125,6 +125,16 @@ export interface DevicePrefsDto {
   updated_at: number;
 }
 
+export interface DlcStatus {
+  slug: string;
+  label: string;
+  installed: boolean;
+  count: number;
+  phase: string;
+  progress: number;
+  error: string | null;
+}
+
 function errorMessage(body: string, status: number): string {
   try {
     const parsed = JSON.parse(body) as { error?: string };
@@ -156,6 +166,18 @@ export class LcClient {
 
   async datasets(): Promise<DatasetInfo[]> {
     return this.cmd("lc_list_datasets");
+  }
+
+  async dlcStatus(): Promise<DlcStatus[]> {
+    return this.cmd("lc_dataset_dlc_status");
+  }
+
+  async dlcInstall(slug: string): Promise<DlcStatus> {
+    return this.cmd("lc_dataset_dlc_install", { slug });
+  }
+
+  async dlcRemove(slug: string): Promise<DlcStatus> {
+    return this.cmd("lc_dataset_dlc_remove", { slug });
   }
 
   async offlinePackManifest(): Promise<import("../util/offlinePackDownload").OfflinePackManifest> {

@@ -41,7 +41,6 @@ import { HoldButton } from "./components/HoldButton";
 import { LoadingDoodle } from "./components/LoadingDoodle";
 import { LlmStatusDialog } from "./components/LlmStatusDialog";
 import { SettingsModal } from "./components/SettingsModal";
-import { offlinePackDownloader } from "./util/offlinePackDownload";
 import {
   AUTOSAVE_EVENT,
   loadAutosaveInterval,
@@ -688,26 +687,6 @@ export function App() {
       document.removeEventListener("visibilitychange", onHidden);
     };
   }, [whiteboardNotebookId]);
-
-  /** Background offline pack download — survives leaving Settings; pauses on app background. */
-  useEffect(() => {
-    offlinePackDownloader.bindClient(client);
-    void offlinePackDownloader.hydrate();
-  }, [client]);
-
-  useEffect(() => {
-    const onBackground = () => offlinePackDownloader.onBackground();
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") onBackground();
-      else offlinePackDownloader.onForeground();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("pagehide", onBackground);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("pagehide", onBackground);
-    };
-  }, []);
 
   /** In-process daemon is assumed up; this flag still gates pad sync / tests. */
   const [serverLink] = useState<"checking" | "online" | "offline">("online");

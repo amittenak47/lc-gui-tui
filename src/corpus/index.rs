@@ -240,6 +240,16 @@ fn migrate(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Drop indexed rows for one corpus. Files on disk are the caller's problem.
+pub fn clear_dataset(dataset: &Dataset) -> Result<()> {
+    let conn = open_db()?;
+    conn.execute_batch(&format!(
+        "DELETE FROM {}; DELETE FROM {};",
+        dataset.tag_table, dataset.table
+    ))?;
+    Ok(())
+}
+
 /// Index every dataset that has a corpus folder, or just `only` when given.
 pub fn cmd_index(cfg: &Config, rebuild: bool, only: Option<&'static Dataset>) -> Result<()> {
     let targets: Vec<&'static Dataset> = match only {

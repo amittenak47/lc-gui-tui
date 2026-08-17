@@ -22,9 +22,11 @@ import zipfile
 from pathlib import Path
 
 SEED = ("leetcode", "leetcode-with-tests")
+DLC = ("kodcode", "ms-python-q", "deepseek-leetcode")
 DEFAULT_DATA_DIR = os.path.expanduser(os.environ.get("LC_DATA_DIR", "~/lc-data"))
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = REPO_ROOT / "app" / "src-tauri" / "resources" / "corpora"
+SEED_OUT = REPO_ROOT / "app" / "src-tauri" / "resources" / "corpora"
+DLC_OUT = REPO_ROOT / "dist" / "dlc"
 
 
 def json_files(root: Path) -> list[Path]:
@@ -79,17 +81,23 @@ def main() -> int:
         action="store_true",
         help="run fetch_dataset.py for the seed slugs first",
     )
+    parser.add_argument(
+        "--dlc",
+        action="store_true",
+        help="also pack KodCode / ms-python-q / deepseek-leetcode (upload as corpora-v1 release assets; not bundled in the APK)",
+    )
     opts = parser.parse_args()
     data_dir = Path(os.path.expanduser(opts.data_dir))
+    slugs = list(SEED) + (list(DLC) if opts.dlc else [])
     if opts.fetch:
         fetch = REPO_ROOT / "scripts" / "fetch_dataset.py"
-        cmd = [sys.executable, str(fetch), *SEED, "--data-dir", str(data_dir)]
+        cmd = [sys.executable, str(fetch), *slugs, "--data-dir", str(data_dir)]
         print(" ".join(cmd))
         subprocess.check_call(cmd)
 
     failed = []
-    for slug in SEED:
-        dest = OUT_DIR / f"{slug}.zip"
+    for slug in slugs:
+        dest = (SEED_OUT if slug in SEED else DLC_OUT) / f"{slug}.zip"
         print(f"{slug} -> {dest}")
         try:
             count = pack_slug(data_dir, slug, dest)
