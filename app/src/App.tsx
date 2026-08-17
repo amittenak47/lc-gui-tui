@@ -11,7 +11,7 @@
  * and every request that names a task id names the dataset too.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { LcApiError, LcClient, type DocIndexStatus, type ProposedAnnotation, type SearchOptions } from "./api/client";
 import { AmbientCoach, defaultCoachSocketFactory, type AmbientProbe } from "./api/coachSocket";
@@ -146,14 +146,20 @@ import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelection
 import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
 import { WebDocument } from "./modes/WebDocument";
+import { canStepWeb, currentEntry, stepWeb } from "./util/webPadSession";
+import { TabStrip } from "./components/TabStrip";
 import {
-  canStepWeb,
-  closeWebTab as removeWebTab,
-  commitWebPush,
-  currentEntry,
-  stepWeb,
-  type WebPadTab,
-} from "./util/webPadSession";
+  HOME_TAB_ID,
+  activeTab as activeTabOf,
+  initialTabState,
+  newTabId,
+  sameEntity,
+  tabsReducer,
+  webTabTitle,
+  type TabPatch,
+  type TabRecord,
+  type WebTab,
+} from "./util/tabs";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
 import { loadPdfFilmPref, savePdfFilmPref } from "./modes/pdfFilm";
@@ -495,12 +501,20 @@ export function App() {
   /** Address bar for a web snapshot — kept outside the camera-scaled page. */
   const [webUrl, setWebUrl] = useState(WEB_HOME);
   const [webHtmlSource, setWebHtmlSource] = useState<WebHtmlSource | null>(null);
-  const [webTabs, setWebTabs] = useState<WebPadTab[]>([]);
-  const [webTabId, setWebTabId] = useState<string | null>(null);
-  const webTabIdRef = useRef<string | null>(null);
-  const webTabsRef = useRef<WebPadTab[]>([]);
-  webTabIdRef.current = webTabId;
-  webTabsRef.current = webTabs;
+  /*
+   * The header strip: Home plus one record per open workspace.
+   *
+   * Only one board is mounted, so a record is all a parked tab is — the title
+   * and the key its content is already stored under. Focusing a tab re-reads
+   * the workspace from that key, which is why the open paths below
+   * (`pickProblem`, `openWhiteboard`, `openAnnotate`) are also the reopen
+   * paths: there is one way in, and the strip just calls it again.
+   */
+  const [tabState, dispatchTabs] = useReducer(tabsReducer, undefined, () =>
+    initialTabState(Date.now()),
+  );
+  const tabStateRef = useRef(tabState);
+  tabStateRef.current = tabState;
   /** Library entry this session is writing to, once it has one. */
   const [annotateDocId, setAnnotateDocId] = useState<string | null>(null);
   /**
@@ -619,17 +633,42 @@ export function App() {
   annotateSourceRef.current = annotateSource;
   annotateDocIdRef.current = annotateDocId;
 
-  useEffect(() => {
-    if (annotateSource?.docType !== "web") return;
-    if (webTabsRef.current.length > 0) return;
-    const next = commitWebPush([], null, {
-      url: annotateSource.name,
-      title: titleFromHtml(annotateSource.text) || hostLabelFromUrl(annotateSource.name),
-      html: annotateSource.text,
-    });
-    setWebTabs(next.tabs);
-    setWebTabId(next.tabId);
-  }, [annotateSource]);
+  /**
+   * Open-or-focus, answering with the id the strip settled on.
+   *
+   * The reducer already collapses a repeat open onto the tab that is holding
+   * that entity, so the caller is told which record to keep patching rather
+   * than being handed back the id it proposed.
+   */
+  const openTabRecord = useCallback((tab: TabRecord): string => {
+    const existing = tabStateRef.current.tabs.find((open) => sameEntity(open, tab));
+    dispatchTabs({ type: "open", tab, at: Date.now() });
+    return existing?.id ?? tab.id;
+  }, []);
+
+  /**
+   * The record the one mounted workspace belongs to.
+   *
+   * Not the same thing as "the focused tab", and the difference matters: a
+   * notebook id, an index status or a discard all arrive *while* a switch is
+   * in flight, and aiming them at whatever is focused at that moment lands
+   * them on the incoming tab. Set by each open path, cleared on the way Home.
+   */
+  const liveTabIdRef = useRef<string | null>(null);
+
+  /** Report a key the live workspace has just learned back to its record. */
+  const patchLiveTab = useCallback((patch: TabPatch) => {
+    const id = liveTabIdRef.current;
+    if (id) dispatchTabs({ type: "patch", id, patch });
+  }, []);
+
+  /** Drop the live record — its entity has just been deleted under it. */
+  const dropLiveTab = useCallback(() => {
+    const id = liveTabIdRef.current;
+    if (!id) return;
+    liveTabIdRef.current = null;
+    dispatchTabs({ type: "close", id });
+  }, []);
 
   const pairing = DEFAULT_PAIRING;
   const client = useMemo(() => new LcClient(), []);
@@ -1474,10 +1513,13 @@ export function App() {
         // An untouched board is not an untouched document: a reading session
         // can leave footnotes without ever putting the pen down, and those are
         // exactly as worth keeping as ink.
-        if (
+        const untouched =
           annotatePristineHashRef.current === padContentFingerprint(elements, inkOps) &&
-          footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current
-        ) {
+          footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current;
+        // The tab's dot rides on the comparison the autosave is already making;
+        // fingerprinting the scene a second time for a 5px dot would not be.
+        patchLiveTab({ dirty: !untouched });
+        if (untouched) {
           lastSavedHashRef.current = hash;
           lastSavedMarksRef.current = marks;
           return;
@@ -1536,13 +1578,17 @@ export function App() {
          * your mind, and three seconds later it is a permanent entry. There is
          * also nothing to protect: a crash here loses a blank page.
          */
-        if (whiteboardPristineHashRef.current === padContentFingerprint(elements, inkOps)) {
+        const untouched =
+          whiteboardPristineHashRef.current === padContentFingerprint(elements, inkOps);
+        patchLiveTab({ dirty: !untouched });
+        if (untouched) {
           lastSavedHashRef.current = hash;
           return;
         }
       }
 
       dirtyRef.current = true;
+      if (!isLocalPad(problem)) patchLiveTab({ dirty: true });
       if (isWhiteboard(problem)) {
         lastSavedHashRef.current = hash;
         void (async () => {
@@ -1605,6 +1651,7 @@ export function App() {
   }, [
     autosaveMs,
     client,
+    patchLiveTab,
     problem,
     whiteboardNotebookId,
     whiteboardPageCount,
@@ -1748,6 +1795,33 @@ export function App() {
         if (workspaceLoadGenRef.current !== loadGen) return;
         setBoardPreparing(true);
         setProblem(detail);
+        /*
+         * `{dataset, task_id}` is already the key every route and store names,
+         * so it is the tab's identity too.
+         *
+         * One practice tab, though, not one per problem: ‹ › and Random walk
+         * the bank from inside the workspace, and a strip that grew a chip for
+         * every problem stepped past would be a history, not a set of open
+         * workspaces. Arriving from anywhere else opens a tab.
+         */
+        const practiceIdentity = {
+          title: titleFromSlug(detail.task_id, detail.question_id),
+          dataset: detail.dataset ?? datasetId,
+          taskId: detail.task_id,
+        };
+        const held = activeTabOf(tabStateRef.current);
+        if (held.kind === "practice") {
+          dispatchTabs({ type: "patch", id: held.id, patch: practiceIdentity });
+          liveTabIdRef.current = held.id;
+        } else {
+          liveTabIdRef.current = openTabRecord({
+            id: newTabId("practice"),
+            kind: "practice",
+            dirty: false,
+            lastActive: 0,
+            ...practiceIdentity,
+          });
+        }
         await refreshSession();
 
         const saved = loaded.resume.board as
@@ -1873,6 +1947,7 @@ export function App() {
       boardCssWidth,
       client,
       finishLoadingTransition,
+      openTabRecord,
       problem,
       refreshSession,
       syncDrawingsToBoard,
@@ -1934,6 +2009,21 @@ export function App() {
         setPseudocode("");
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
+        /*
+         * A saved notebook is the same tab wherever it is opened from; a blank
+         * one has no id yet, so every "new notebook" really is a new tab. The
+         * title and the id land below, once the entry has been read or the
+         * autosave has written one.
+         */
+        const tabId = openTabRecord({
+          id: newTabId("whiteboard"),
+          kind: "whiteboard",
+          title: "Whiteboard",
+          dirty: false,
+          lastActive: 0,
+          notebookId: opts?.fresh ? null : (opts?.notebookId ?? null),
+        });
+        liveTabIdRef.current = tabId;
 
         const dark = isDarkTheme(themeId);
         let restored = false;
@@ -1959,6 +2049,11 @@ export function App() {
             });
             setWhiteboardPageCount(pages);
             setWhiteboardNotebookId(notebook.id);
+            dispatchTabs({
+              type: "patch",
+              id: tabId,
+              patch: { title: notebook.title || "Whiteboard", notebookId: notebook.id },
+            });
             if (notebook.agent.length > 0) {
               setAgentMessages(restoreAgentMessages(notebook.agent));
             }
@@ -2050,7 +2145,7 @@ export function App() {
         }
       }
     },
-    [beginPadOpen, busy, endPadOpen, finishLoadingTransition, problem, themeId],
+    [beginPadOpen, busy, endPadOpen, finishLoadingTransition, openTabRecord, problem, themeId],
   );
 
   /**
@@ -2074,6 +2169,15 @@ export function App() {
       /** PDF and EPUB only. */
       bytes?: ArrayBuffer;
       docId?: string | null;
+      /**
+       * The strip record this open belongs to.
+       *
+       * Set by the web paths, which already have a tab: `openWebPage` made one
+       * for the page it fetched, and Back / tab-focus are re-showing a page
+       * that tab is already holding. Left unset everywhere else, and then a
+       * record is opened (or the one already on this document is focused).
+       */
+      tabId?: string;
     }) => {
       if (busy !== null) return;
       beginPadOpen();
@@ -2165,9 +2269,50 @@ export function App() {
         lastSavedHashRef.current = null;
         setAnnotateSource({ name: input.name, text, hash, docType, bytes });
         if (docType === "web") setWebUrl(input.name);
-        else {
-          setWebTabs([]);
-          setWebTabId(null);
+        /*
+         * Give this document a tab, or claim the one it arrived on.
+         *
+         * A page reopened from the annotate library is still a web tab — it
+         * gets the saved HTML as a one-entry history, so Back is simply empty
+         * rather than the tab being a different kind of thing depending on
+         * which door it came through.
+         */
+        if (input.tabId) {
+          dispatchTabs({ type: "focus", id: input.tabId, at: Date.now() });
+          dispatchTabs({
+            type: "patch",
+            id: input.tabId,
+            patch: { docId: existing?.id ?? null, hash, indexed: "idle" },
+          });
+          liveTabIdRef.current = input.tabId;
+        } else if (docType === "web") {
+          const entry = {
+            url: input.name,
+            title: titleFromHtml(text) || hostLabelFromUrl(input.name),
+            html: text,
+          };
+          liveTabIdRef.current = openTabRecord({
+            id: newTabId("web"),
+            kind: "web",
+            title: webTabTitle(entry),
+            dirty: false,
+            lastActive: 0,
+            indexed: "idle",
+            entries: [entry],
+            index: 0,
+          });
+        } else {
+          liveTabIdRef.current = openTabRecord({
+            id: newTabId("annotate"),
+            kind: "annotate",
+            title: input.name,
+            dirty: false,
+            lastActive: 0,
+            docId: existing?.id ?? null,
+            hash,
+            docType,
+            indexed: "idle",
+          });
         }
         setAnnotateHeight(null);
         annotateHeightRef.current = null;
@@ -2377,7 +2522,16 @@ export function App() {
         }
       }
     },
-    [beginPadOpen, busy, client, endPadOpen, finishLoadingTransition, problem, themeId],
+    [
+      beginPadOpen,
+      busy,
+      client,
+      endPadOpen,
+      finishLoadingTransition,
+      openTabRecord,
+      problem,
+      themeId,
+    ],
   );
 
   /**
@@ -2579,20 +2733,42 @@ export function App() {
           title: page.title || hostLabelFromUrl(page.url),
           html: page.html,
         };
-        const next = commitWebPush(
-          webTabsRef.current,
-          webTabIdRef.current,
-          entry,
-          opts?.newTab === true,
-        );
-        setWebTabs(next.tabs);
-        setWebTabId(next.tabId);
+        /*
+         * A page navigated to from the one on screen extends that tab's
+         * history; anything else — the globe, the strip's `+`, a link opened
+         * deliberately in a new tab — is a new tab, and the reducer holds the
+         * cap of two.
+         */
+        const current = activeTabOf(tabStateRef.current);
+        const inPlace = opts?.newTab !== true && current.kind === "web" ? current : null;
+        let tabId: string;
+        if (inPlace) {
+          tabId = inPlace.id;
+          dispatchTabs({ type: "web-push", id: inPlace.id, entry });
+        } else {
+          tabId = newTabId("web");
+          dispatchTabs({
+            type: "open",
+            at: Date.now(),
+            tab: {
+              id: tabId,
+              kind: "web",
+              title: webTabTitle(entry),
+              dirty: false,
+              lastActive: 0,
+              indexed: "idle",
+              entries: [entry],
+              index: 0,
+            },
+          });
+        }
         setBusy(null);
         handedOff = true;
         await openAnnotate({
           name: page.url,
           docType: "web",
           text: page.html,
+          tabId,
         });
       } catch (cause) {
         setError(messageOf(cause));
@@ -2612,12 +2788,14 @@ export function App() {
   );
 
   const showWebEntry = useCallback(
-    async (entry: { url: string; html: string }) => {
-      if (busy !== null) return;
+    async (tab: WebTab) => {
+      const entry = currentEntry(tab);
+      if (!entry || busy !== null) return;
       await openAnnotate({
         name: entry.url,
         docType: "web",
         text: entry.html,
+        tabId: tab.id,
       });
     },
     [busy, openAnnotate],
@@ -2625,41 +2803,12 @@ export function App() {
 
   const stepWebTab = useCallback(
     (delta: number) => {
-      const tab = webTabs.find((item) => item.id === webTabId);
-      if (!tab || !canStepWeb(tab, delta) || busy !== null) return;
-      const next = stepWeb(tab, delta);
-      const entry = currentEntry(next);
-      if (!entry) return;
-      setWebTabs((tabs) => tabs.map((item) => (item.id === next.id ? next : item)));
-      void showWebEntry(entry);
+      const tab = activeTabOf(tabStateRef.current);
+      if (tab.kind !== "web" || !canStepWeb(tab, delta) || busy !== null) return;
+      dispatchTabs({ type: "web-step", id: tab.id, delta });
+      void showWebEntry(stepWeb(tab, delta));
     },
-    [busy, showWebEntry, webTabId, webTabs],
-  );
-
-  const switchWebTab = useCallback(
-    (id: string) => {
-      if (id === webTabId || busy !== null) return;
-      const tab = webTabs.find((item) => item.id === id);
-      const entry = tab ? currentEntry(tab) : undefined;
-      if (!entry) return;
-      setWebTabId(id);
-      void showWebEntry(entry);
-    },
-    [busy, showWebEntry, webTabId, webTabs],
-  );
-
-  const closeWebPadTab = useCallback(
-    (id: string) => {
-      if (busy !== null) return;
-      const next = removeWebTab(webTabs, id);
-      setWebTabs(next.tabs);
-      setWebTabId(next.tabId);
-      if (!next.tabId) return;
-      const tab = next.tabs.find((item) => item.id === next.tabId);
-      const entry = tab ? currentEntry(tab) : undefined;
-      if (entry) void showWebEntry(entry);
-    },
-    [busy, showWebEntry, webTabs],
+    [busy, showWebEntry],
   );
 
   /** Session queue after Start / Random; otherwise the filtered problem bank. */
@@ -4728,13 +4877,18 @@ export function App() {
     // below regardless, and Discard should not wait on a store write.
     if (baseline.entry && baseline.id) {
       void restoreWhiteboardNotebook(baseline.entry).catch(() => {});
-    } else if (whiteboardNotebookId) {
-      void deleteWhiteboardNotebook(whiteboardNotebookId).catch(() => {});
+    } else {
+      if (whiteboardNotebookId) {
+        void deleteWhiteboardNotebook(whiteboardNotebookId).catch(() => {});
+      }
+      // Nothing to come back to, so the chip goes with it. A discard onto a
+      // baseline keeps its tab — that notebook is still in the library.
+      dropLiveTab();
     }
     whiteboardBaselineRef.current = { id: null, entry: null };
     whiteboardPristineHashRef.current = null;
     setWhiteboardNotebookId(null);
-  }, [whiteboardNotebookId]);
+  }, [dropLiveTab, whiteboardNotebookId]);
 
   /** Nothing drawn on this document since it opened. */
   /**
@@ -4777,8 +4931,11 @@ export function App() {
     // action whose whole point is that it costs nothing.
     if (baseline.entry && baseline.id) {
       void restoreAnnotateDoc(baseline.entry).catch(() => {});
-    } else if (annotateDocId) {
-      void deleteAnnotateDoc(annotateDocId).catch(() => {});
+    } else {
+      if (annotateDocId) void deleteAnnotateDoc(annotateDocId).catch(() => {});
+      // See the notebook discard: a tab whose entry has just been deleted has
+      // nothing left to reopen.
+      dropLiveTab();
     }
     annotateBaselineRef.current = { id: null, entry: null };
     annotatePristineHashRef.current = null;
@@ -4791,7 +4948,7 @@ export function App() {
     footnoteCoachUpgradeRef.current = null;
     setOpenFootnoteId(null);
     setFootnoteAnchorRect(null);
-  }, [annotateDocId]);
+  }, [annotateDocId, dropLiveTab]);
 
   /** Commit the annotations to the library. Returns the entry, or null on failure. */
   const saveAnnotateSession = useCallback(async (): Promise<AnnotateDoc | null> => {
@@ -5157,6 +5314,14 @@ export function App() {
     ],
   );
 
+  /**
+   * Unmount the live workspace and land on Home.
+   *
+   * Home is a tab now, so this is a focus change rather than the end of the
+   * session: the strip keeps its records, and the content behind them is
+   * where it has always been — the annotate store, the notebook library, the
+   * daemon's `{dataset, task_id}` pair. Only {@link closeTab} drops a record.
+   */
   const returnToHome = useCallback(() => {
     setSwitchMotion("idle");
     setPracticeOpen(false);
@@ -5166,15 +5331,186 @@ export function App() {
     clearProblemState();
     setError(null);
     setCodeSlot(null);
-    setWebTabs([]);
-    setWebTabId(null);
     setWebHtmlSource(null);
     setHoldBrowseOverlay(false);
     setBrowseMotion("idle");
     setProblem(null);
+    liveTabIdRef.current = null;
+    dispatchTabs({ type: "focus", id: HOME_TAB_ID, at: Date.now() });
   }, [clearProblemState]);
 
-  const activeWebTab = webTabs.find((tab) => tab.id === webTabId);
+  /**
+   * Re-open the workspace a record points at.
+   *
+   * Every arm is the same call the icons and the libraries make, because a
+   * parked tab and a fresh open are the same act: read the entity back out of
+   * the store it was already being written to. Nothing here is a tab-specific
+   * restore path.
+   */
+  const openTabWorkspace = useCallback(
+    async (tab: TabRecord) => {
+      switch (tab.kind) {
+        case "home":
+          returnToHome();
+          return;
+        case "practice":
+          await pickProblem(tab.taskId, { ...bankFilters, dataset: tab.dataset });
+          return;
+        case "whiteboard":
+          await openWhiteboard({ notebookId: tab.notebookId });
+          return;
+        case "web":
+          await showWebEntry(tab);
+          return;
+        case "annotate": {
+          const entry = tab.docId
+            ? await getAnnotateDoc(tab.docId)
+            : tab.hash
+              ? await findAnnotateDocByHash(tab.hash)
+              : null;
+          /*
+           * A document that was only read never reached the library, so there
+           * is nothing to re-open it from. That is not an error to sit on —
+           * drop the chip and say why, rather than leaving a tab that does
+           * nothing when it is clicked.
+           */
+          if (!entry) {
+            dispatchTabs({ type: "close", id: tab.id });
+            setNotice(`“${tab.title}” was not saved, so there is nothing to reopen.`);
+            returnToHome();
+            return;
+          }
+          if (!isBinaryDocType(entry.docType)) {
+            await openAnnotate({
+              name: entry.name,
+              docType: entry.docType,
+              text: entry.source,
+              docId: entry.id,
+              tabId: tab.id,
+            });
+            return;
+          }
+          const bytes = await getDocBytes(entry.hash).catch(() => null);
+          if (!bytes) {
+            setError(
+              `“${entry.name}” is in the library but its file is not on this device — open it again to restore the annotations.`,
+            );
+            returnToHome();
+            return;
+          }
+          await openAnnotate({
+            name: entry.name,
+            docType: entry.docType,
+            bytes,
+            docId: entry.id,
+            tabId: tab.id,
+          });
+          return;
+        }
+      }
+    },
+    [bankFilters, openAnnotate, openWhiteboard, pickProblem, returnToHome, showWebEntry],
+  );
+
+  /**
+   * Focus a tab: tear the live workspace down, then mount the one asked for.
+   *
+   * One board is live, so switching really is leaving — and leaving already
+   * has a contract (`leaveProblem`: save, discard, or think about it), which
+   * is reused here rather than adding a second, quieter way to lose strokes.
+   * The `suspend()` that makes a switch silent is the next step in the plan,
+   * and it belongs with the 2–3 live boards it exists to serve.
+   */
+  const focusTab = useCallback(
+    (id: string) => {
+      if (busy !== null) return;
+      const state = tabStateRef.current;
+      const tab = state.tabs.find((entry) => entry.id === id);
+      if (!tab) return;
+      if (id === state.activeId) {
+        // The problem browser lives on Home, so tapping Home from inside it is
+        // a request to back out, not a no-op on the tab you are already on.
+        if (id === HOME_TAB_ID && practiceOpen) setPracticeOpen(false);
+        return;
+      }
+      leaveProblem(() => {
+        dispatchTabs({ type: "focus", id, at: Date.now() });
+        void openTabWorkspace(tab);
+      });
+    },
+    [busy, leaveProblem, openTabWorkspace, practiceOpen],
+  );
+
+  const closeTab = useCallback(
+    (id: string) => {
+      if (busy !== null || id === HOME_TAB_ID) return;
+      const state = tabStateRef.current;
+      const closing = id === state.activeId;
+      if (!closing) {
+        // A parked tab has nothing mounted; dropping its record is the whole
+        // of closing it. The content stays in its library either way.
+        dispatchTabs({ type: "close", id });
+        return;
+      }
+      leaveProblem(() => {
+        const next = tabsReducer(tabStateRef.current, { type: "close", id });
+        dispatchTabs({ type: "close", id });
+        const landing = next.tabs.find((entry) => entry.id === next.activeId);
+        if (!landing || landing.kind === "home") {
+          returnToHome();
+          return;
+        }
+        void openTabWorkspace(landing);
+      });
+    },
+    [busy, leaveProblem, openTabWorkspace, returnToHome],
+  );
+
+  /*
+   * Keys the live workspace only learns after it opens.
+   *
+   * A blank notebook has no id until the first autosave, and a document has
+   * no index status until the embed comes back. Both are what a parked tab is
+   * later found by, so they are mirrored onto the record as they arrive.
+   */
+  useEffect(() => {
+    patchLiveTab({ notebookId: whiteboardNotebookId });
+  }, [patchLiveTab, whiteboardNotebookId]);
+
+  useEffect(() => {
+    patchLiveTab({ docId: annotateDocId });
+  }, [annotateDocId, patchLiveTab]);
+
+  useEffect(() => {
+    patchLiveTab({ indexed: docIndexStatus });
+  }, [docIndexStatus, patchLiveTab]);
+
+  const activeTabRecord = activeTabOf(tabState);
+  const activeWebTab = activeTabRecord.kind === "web" ? activeTabRecord : undefined;
+
+  /* Which header icon is the live workspace, and so wears the pressed form. */
+  const webPadLive = Boolean(problem && isAnnotate(problem) && annotateSource?.docType === "web");
+  const docPadLive = Boolean(problem && isAnnotate(problem) && annotateSource?.docType !== "web");
+  const boardPadLive = Boolean(problem && isWhiteboard(problem));
+
+  /**
+   * An icon tap with a workspace already open adds a tab beside it.
+   *
+   * Only one board is live, so the outgoing workspace is still being left —
+   * and it is let go of through the same save/discard contract as any other
+   * leave, not quietly dropped because the tap read as "open another one".
+   */
+  const spawnTab = useCallback(
+    (open: () => void) => {
+      if (busy !== null) return;
+      if (!problem) {
+        open();
+        return;
+      }
+      leaveProblem(open);
+    },
+    [busy, leaveProblem, problem],
+  );
 
   const canvasLoading =
     boardPreparing ||
@@ -5246,83 +5582,75 @@ export function App() {
           <Tip tip="lc whiteboard — your coding workspace">
             <span className="lc-brand">lc <strong>whiteboard</strong></span>
           </Tip>
-          {problem || workspaceLoadActive || practiceOpen ? (
-            <>
+          {workspaceLoadActive && (
+            <button
+              type="button"
+              className="lc-secondary lc-home lc-tip-target"
+              data-tip="Cancel loading"
+              data-tip-placement="bottom"
+              onClick={() => cancelWorkspaceLoad()}
+            >
+              <span className="lc-label-long">← Cancel</span>
+              <span className="lc-label-short">←</span>
+            </button>
+          )}
+          {/*
+            The strip is the title slot now. It carries Home, every open
+            workspace and the `[indexed]` badge, so `.lc-current` no longer
+            names the document beside it — that was the same fact twice.
+          */}
+          <TabStrip
+            tabs={tabState.tabs}
+            activeId={tabState.activeId}
+            busy={busy !== null || workspaceLoadActive}
+            onFocus={focusTab}
+            onClose={closeTab}
+            activeIndexChip={
+              problem && isAnnotate(problem) ? (
+                <DocIndexChip status={docIndexStatus} meta={docIndexMeta} error={docIndexError} />
+              ) : undefined
+            }
+          />
+          {/*
+            Only on a bare strip — with Home the one chip there is, the app has
+            nothing open and the prompt is the whole point of the screen. Once
+            a workspace exists the strip says what is going on.
+          */}
+          {tabState.tabs.length === 1 && !practiceOpen && (
+            <span className="lc-muted lc-browse-hint">choose a mode to start</span>
+          )}
+          {problem && !isLocalPad(problem) ? (
+            <div className="lc-problem-nav" role="group" aria-label="Problem">
               <button
                 type="button"
-                className="lc-secondary lc-home lc-tip-target"
-                data-tip={
-                  workspaceLoadActive ? "Cancel loading" : "Return home"
+                className="lc-icon"
+                title={
+                  navigateBySession && (session?.queue?.length ?? 0) > 0
+                    ? "Previous in session queue"
+                    : "Previous in problem bank"
                 }
-                data-tip-placement="bottom"
-                disabled={busy !== null && !workspaceLoadActive}
-                onClick={() => {
-                  if (workspaceLoadActive) cancelWorkspaceLoad();
-                  else leaveProblem(() => returnToHome());
-                }}
+                aria-label="Previous problem"
+                disabled={!canStepPrev || busy !== null}
+                onClick={() => leaveProblem(() => void stepProblem(-1))}
               >
-                <span className="lc-label-long">← Home</span>
-                <span className="lc-label-short">←</span>
+                ‹
               </button>
-              {problem && !isLocalPad(problem) ? (
-              <div className="lc-problem-nav" role="group" aria-label="Problem">
-                <button
-                  type="button"
-                  className="lc-icon"
-                  title={
-                    navigateBySession && (session?.queue?.length ?? 0) > 0
-                      ? "Previous in session queue"
-                      : "Previous in problem bank"
-                  }
-                  aria-label="Previous problem"
-                  disabled={!canStepPrev || busy !== null}
-                  onClick={() => leaveProblem(() => void stepProblem(-1))}
-                >
-                  ‹
-                </button>
-                <span className="lc-current" title={problem.task_id}>
-                  {titleFromSlug(problem.task_id, problem.question_id)}
-                </span>
-                <button
-                  type="button"
-                  className="lc-icon"
-                  title={
-                    navigateBySession && (session?.queue?.length ?? 0) > 0
-                      ? "Next in session queue"
-                      : "Next in problem bank"
-                  }
-                  aria-label="Next problem"
-                  disabled={!canStepNext || busy !== null}
-                  onClick={() => leaveProblem(() => void stepProblem(1))}
-                >
-                  ›
-                </button>
-              </div>
-              ) : problem && isAnnotate(problem) ? (
-                // The document is the thing being worked on, so it gets the
-                // slot the problem's name would have had.
-                <span className="lc-current" title={annotateSource?.name ?? "Document"}>
-                  {annotateSource?.docType === "web" && annotateSource.name
-                    ? hostLabelFromUrl(annotateSource.name)
-                    : (annotateSource?.name ?? "Document")}
-                  <DocIndexChip
-                    status={docIndexStatus}
-                    meta={docIndexMeta}
-                    error={docIndexError}
-                  />
-                </span>
-              ) : problem ? (
-                <span className="lc-current" title="Whiteboard">
-                  Whiteboard
-                </span>
-              ) : null}
-            </>
-          ) : (
-            <span className="lc-muted lc-browse-hint">
-              <span className="lc-label-long">choose a mode to start</span>
-              <span className="lc-label-short">Home</span>
-            </span>
-          )}
+              <button
+                type="button"
+                className="lc-icon"
+                title={
+                  navigateBySession && (session?.queue?.length ?? 0) > 0
+                    ? "Next in session queue"
+                    : "Next in problem bank"
+                }
+                aria-label="Next problem"
+                disabled={!canStepNext || busy !== null}
+                onClick={() => leaveProblem(() => void stepProblem(1))}
+              >
+                ›
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="lc-header-center">
@@ -5371,8 +5699,12 @@ export function App() {
           {/*
             Globe, then the file icon, then paper. Tap opens google.com as a
             snapshot pad; hold is the same annotate library.
+
+            With a workspace already open these no longer disappear — they
+            spawn a tab beside it. The one icon matching what is on screen
+            keeps its pressed form, where tap is Save and hold is the library.
           */}
-          {!problem && (
+          {!webPadLive && (
             <HoldButton
               label="Web"
               ariaLabel="Web pad: tap to open Google, hold for recent documents"
@@ -5380,7 +5712,7 @@ export function App() {
               dataTip="Web — tap to open google.com, hold for recent"
               dataTipPlacement="bottom"
               disabled={busy !== null}
-              onTap={() => void openWebPage(WEB_HOME)}
+              onTap={() => spawnTab(() => void openWebPage(WEB_HOME, { newTab: true }))}
               onConfirm={() => setAnnotateEntryOpen(true)}
             >
               <svg
@@ -5405,7 +5737,7 @@ export function App() {
             Document icon, left of the scratchpad's paper: tap picks a file to
             annotate, hold opens the library. Same split as its neighbour.
           */}
-          {!problem && (
+          {!docPadLive && (
             <HoldButton
               label="Document"
               ariaLabel="Document pad: tap to open a file, hold for recent documents"
@@ -5413,7 +5745,7 @@ export function App() {
               dataTip="Document — tap to open a .md, source file, .pdf or .epub, hold for recent"
               dataTipPlacement="bottom"
               disabled={busy !== null}
-              onTap={() => void pickAndOpenAnnotate()}
+              onTap={() => spawnTab(() => void pickAndOpenAnnotate())}
               onConfirm={() => setAnnotateEntryOpen(true)}
             >
               <svg
@@ -5436,7 +5768,7 @@ export function App() {
               </svg>
             </HoldButton>
           )}
-          {problem && isAnnotate(problem) && annotateSource?.docType === "web" && (
+          {webPadLive && (
             <HoldButton
               label="Web"
               ariaLabel="Web documents: tap to save now, hold for save / open menu"
@@ -5470,7 +5802,7 @@ export function App() {
               </svg>
             </HoldButton>
           )}
-          {problem && isAnnotate(problem) && annotateSource?.docType !== "web" && (
+          {docPadLive && (
             /* Tap to save now, hold for the sheet. */
             <HoldButton
               label="Markdown"
@@ -5509,7 +5841,7 @@ export function App() {
             Starting to write is the common case by a wide margin, and it was
             behind a dialog whose other option nobody wanted most of the time.
           */}
-          {!problem && (
+          {!boardPadLive && (
             <HoldButton
               label="Whiteboard"
               ariaLabel="Whiteboard: tap for a new notebook, hold to open the library"
@@ -5517,7 +5849,7 @@ export function App() {
               dataTip="Whiteboard — tap for new, hold to load"
               dataTipPlacement="bottom"
               disabled={busy !== null}
-              onTap={() => void openWhiteboard({ fresh: true })}
+              onTap={() => spawnTab(() => void openWhiteboard({ fresh: true }))}
               onConfirm={() => setWhiteboardEntryOpen(true)}
             >
               <svg
@@ -5539,7 +5871,7 @@ export function App() {
               </svg>
             </HoldButton>
           )}
-          {problem && isWhiteboard(problem) && (
+          {boardPadLive && (
             /*
               Tap to save now, hold for the sheet.
 
@@ -5630,7 +5962,13 @@ export function App() {
         </div>
       </header>
 
-      {problem && isAnnotate(problem) && annotateSource?.docType === "web" && (
+      {/*
+        The pages are in the header strip with everything else now, so what is
+        left under it is the address bar itself — back, forward, the URL, and
+        the `+` that asks for another page, which stays here beside the address
+        it is about rather than becoming a bare `+` on a strip of mixed kinds.
+      */}
+      {webPadLive && (
         <form
           className="lc-web-omnibox"
           onSubmit={(event) => {
@@ -5638,49 +5976,6 @@ export function App() {
             void openWebPage(webUrl);
           }}
         >
-          <div className="lc-web-tabs" role="tablist" aria-label="Open pages">
-            {webTabs.map((tab) => {
-              const entry = currentEntry(tab);
-              const selected = tab.id === webTabId;
-              return (
-                <div
-                  key={tab.id}
-                  role="tab"
-                  aria-selected={selected}
-                  className={selected ? "lc-web-tab is-active" : "lc-web-tab"}
-                >
-                  <button
-                    type="button"
-                    className="lc-web-tab-hit"
-                    disabled={busy !== null}
-                    onClick={() => switchWebTab(tab.id)}
-                  >
-                    {entry ? hostLabelFromUrl(entry.url) : "Page"}
-                  </button>
-                  {webTabs.length > 1 ? (
-                    <button
-                      type="button"
-                      className="lc-web-tab-close"
-                      aria-label="Close tab"
-                      disabled={busy !== null}
-                      onClick={() => closeWebPadTab(tab.id)}
-                    >
-                      ×
-                    </button>
-                  ) : null}
-                </div>
-              );
-            })}
-            <button
-              type="button"
-              className="lc-web-tab lc-web-tab-new"
-              aria-label="New tab"
-              disabled={busy !== null}
-              onClick={() => void openWebPage(WEB_HOME, { newTab: true })}
-            >
-              +
-            </button>
-          </div>
           <div className="lc-web-omnibox-row">
             <button
               type="button"
@@ -5712,6 +6007,16 @@ export function App() {
             />
             <button type="submit" className="lc-secondary" disabled={busy !== null}>
               Go
+            </button>
+            <button
+              type="button"
+              className="lc-icon"
+              aria-label="New page"
+              title="Open another page"
+              disabled={busy !== null}
+              onClick={() => void openWebPage(WEB_HOME, { newTab: true })}
+            >
+              +
             </button>
             <button
               type="button"

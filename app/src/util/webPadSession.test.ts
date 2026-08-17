@@ -1,21 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  canStepWeb,
-  closeWebTab,
-  commitWebPush,
-  currentEntry,
-  pushWeb,
-  stepWeb,
-  tabFromEntry,
-} from "./webPadSession";
+import { canStepWeb, currentEntry, pushWeb, stepWeb } from "./webPadSession";
 
 const home = { url: "https://www.google.com/", title: "Google", html: "<p>home</p>" };
 const next = { url: "https://www.google.com/imghp", title: "Images", html: "<p>img</p>" };
 
+const history = (...entries: typeof home[]) => ({ entries, index: entries.length - 1 });
+
 describe("webPadSession", () => {
   it("pushes and drops the forward stack", () => {
-    const tab = pushWeb(tabFromEntry(home), next);
+    const tab = pushWeb(history(home), next);
     expect(currentEntry(tab)?.url).toBe(next.url);
     expect(canStepWeb(tab, -1)).toBe(true);
     const back = stepWeb(tab, -1);
@@ -25,22 +19,16 @@ describe("webPadSession", () => {
     expect(canStepWeb(branched, 1)).toBe(false);
   });
 
-  it("opens a new tab instead of replacing the current one", () => {
-    const first = tabFromEntry(home);
-    const pushed = commitWebPush([first], first.id, next);
-    expect(pushed.tabs).toHaveLength(1);
-    expect(currentEntry(pushed.tabs[0]!)?.url).toBe(next.url);
-    const extra = commitWebPush(pushed.tabs, pushed.tabId, home, true);
-    expect(extra.tabs).toHaveLength(2);
-    expect(currentEntry(extra.tabs[1]!)?.url).toBe(home.url);
+  it("replaces the top entry rather than repeating it", () => {
+    const tab = pushWeb(history(home), { ...home });
+    expect(tab.entries).toHaveLength(1);
+    expect(tab.index).toBe(0);
   });
 
-  it("closes a tab onto its neighbor", () => {
-    const a = tabFromEntry(home);
-    const b = tabFromEntry(next);
-    const closed = closeWebTab([a, b], a.id);
-    expect(closed.tabs).toHaveLength(1);
-    expect(closed.tabId).toBe(b.id);
-    expect(closeWebTab([b], b.id).tabId).toBeNull();
+  it("carries the fields of whatever record owns the history", () => {
+    // A tab record *is* its history, so stepping must not strip its identity.
+    const tab = { id: "w1", kind: "web" as const, ...history(home, next) };
+    expect(stepWeb(tab, -1)).toMatchObject({ id: "w1", kind: "web", index: 0 });
+    expect(pushWeb(tab, { url: "https://a.test/", title: "A", html: "<p>a</p>" }).id).toBe("w1");
   });
 });
