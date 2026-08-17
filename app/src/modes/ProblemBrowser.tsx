@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type
 import type { LcClient, SearchOptions } from "../api/client";
 import type { DatasetInfo, ProblemSummary, SessionSnapshot } from "../api/types";
 import { DEFAULT_DATASET } from "../api/types";
+import { leftoverAny, leftoverForDataset } from "../util/sessionLeftover";
 import { useIsMobile } from "../util/mobile";
 import { BackgroundPalette } from "../components/BackgroundPalette";
 import { BrowserFilterSelect } from "../components/BrowserFilterSelect";
@@ -870,7 +871,9 @@ function ProblemTablePanel({
           </button>
         );
       })}
-      {showEmpty && <EmptyTable dataset={dataset} datasets={datasets} />}
+      {showEmpty && (
+        <EmptyTable dataset={dataset} datasets={datasets} session={session} />
+      )}
     </div>
   );
 }
@@ -947,20 +950,25 @@ function DatasetTabs({
 }
 
 /** Why the table is empty: no matches, or nothing indexed for this tab yet. */
-function EmptyTable({ dataset, datasets }: { dataset: string; datasets: DatasetInfo[] }) {
+function EmptyTable({
+  dataset,
+  datasets,
+  session,
+}: {
+  dataset: string;
+  datasets: DatasetInfo[];
+  session: SessionSnapshot | null;
+}) {
   const info = datasets.find((entry) => entry.id === dataset);
+  const leftover = leftoverForDataset(session, dataset);
+  const leftoverLine = leftoverAny(leftover)
+    ? ` ${leftover.passed} passed · ${leftover.failed} failed from last time.`
+    : "";
   if (info && info.count === 0) {
     return (
       <p className="lc-muted lc-table-empty">
-        Nothing indexed for <strong>{info.label}</strong> yet. Download{" "}
-        <code>{info.source}</code>
-        {info.corpus_dir ? (
-          <>
-            {" "}
-            into <code>{info.corpus_dir}</code>
-          </>
-        ) : null}
-        , then run <code>lc index --dataset {info.id}</code>.
+        Nothing installed for <strong>{info.label}</strong> yet. Settings →
+        Datasets → Install.{leftoverLine}
       </p>
     );
   }

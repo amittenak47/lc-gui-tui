@@ -47,6 +47,21 @@ pub struct Session {
     pub reveals: HashMap<String, u32>,
 }
 
+/// Per-dataset slice of [`Session`] used when the corpus is not installed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DatasetLeftover {
+    pub loaded: u32,
+    pub passed: u32,
+    pub failed: u32,
+    pub reveals: u32,
+}
+
+impl DatasetLeftover {
+    pub fn any(&self) -> bool {
+        self.loaded + self.passed + self.failed + self.reveals > 0
+    }
+}
+
 impl Session {
     pub fn new() -> Self {
         Self {
@@ -175,6 +190,28 @@ impl Session {
         self.reveals.get(key).copied().unwrap_or(0)
     }
 
+    /// Pass/fail still on disk after DLC Remove (index empty, `session.json` kept).
+    pub fn leftover_for_dataset(&self, dataset: &str) -> DatasetLeftover {
+        let prefix = format!("{dataset}/");
+        let mut out = DatasetLeftover::default();
+        for (key, progress) in &self.problems {
+            if !key.starts_with(&prefix) {
+                continue;
+            }
+            match progress.state {
+                ProblemState::Loaded => out.loaded += 1,
+                ProblemState::Passed => out.passed += 1,
+                ProblemState::Failed => out.failed += 1,
+            }
+        }
+        for (key, count) in &self.reveals {
+            if key.starts_with(&prefix) {
+                out.reveals += *count;
+            }
+        }
+        out
+    }
+
     /// Problems the user tapped out on, and how many times, worst first.
     pub fn revealed_problems(&self) -> Vec<(&str, u32)> {
         let mut out: Vec<(&str, u32)> = self
@@ -269,5 +306,42 @@ mod tests {
         let twice = session.problems.keys().cloned().collect::<Vec<_>>();
         assert_eq!(once, twice);
         assert_eq!(once, vec!["leetcode/two-sum"]);
+    }
+
+    #[test]
+    fn leftover_stats_survive_an_empty_index_for_that_dataset() {
+        let mut session = Session::new();
+        session.problems.insert(
+            "kodcode/running-max".into(),
+            ProblemProgress {
+                state: ProblemState::Passed,
+                passed_cases: 3,
+                total_cases: 3,
+                updated_at: 1,
+            },
+        );
+        session.problems.insert(
+            "leetcode/two-sum".into(),
+            ProblemProgress {
+                state: ProblemState::Failed,
+                passed_cases: 0,
+                total_cases: 2,
+                updated_at: 1,
+            },
+        );
+        session.reveals.insert("kodcode/running-max".into(), 2);
+        let kodcode = session.leftover_for_dataset("kodcode");
+        assert_eq!(
+            kodcode,
+            DatasetLeftover {
+                loaded: 0,
+                passed: 1,
+                failed: 0,
+                reveals: 2,
+            }
+        );
+        assert!(kodcode.any());
+        assert_eq!(session.leftover_for_dataset("ms-python-q"), DatasetLeftover::default());
+        assert_eq!(session.progress("kodcode/running-max").map(|p| p.state), Some(ProblemState::Passed));
     }
 }

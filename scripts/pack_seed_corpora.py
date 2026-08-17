@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-"""Zip seed corpora for the Tauri/APK resource bundle.
+"""Zip corpora for the GitHub `corpora-v1` DLC release.
 
 Does not commit jsonl. Reads already-fetched folders (or `--fetch`s them)
-and writes:
-
-    app/src-tauri/resources/corpora/leetcode.zip
-    app/src-tauri/resources/corpora/leetcode-with-tests.zip
-
-First launch extracts these into the device data-dir and indexes them.
+and writes `dist/dlc/{slug}.zip`. Nothing is bundled in the APK.
 
     python scripts/pack_seed_corpora.py
     python scripts/pack_seed_corpora.py --fetch --data-dir ~/lc-data
+    python scripts/pack_seed_corpora.py --slugs leetcode leetcode-with-tests
 """
 from __future__ import annotations
 
@@ -21,11 +17,15 @@ import sys
 import zipfile
 from pathlib import Path
 
-SEED = ("leetcode", "leetcode-with-tests")
-DLC = ("kodcode", "ms-python-q", "deepseek-leetcode")
+ALL = (
+    "leetcode",
+    "leetcode-with-tests",
+    "kodcode",
+    "ms-python-q",
+    "deepseek-leetcode",
+)
 DEFAULT_DATA_DIR = os.path.expanduser(os.environ.get("LC_DATA_DIR", "~/lc-data"))
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SEED_OUT = REPO_ROOT / "app" / "src-tauri" / "resources" / "corpora"
 DLC_OUT = REPO_ROOT / "dist" / "dlc"
 
 
@@ -79,24 +79,31 @@ def main() -> int:
     parser.add_argument(
         "--fetch",
         action="store_true",
-        help="run fetch_dataset.py for the seed slugs first",
+        help="run fetch_dataset.py for the packed slugs first",
+    )
+    parser.add_argument(
+        "--slugs",
+        nargs="+",
+        metavar="SLUG",
+        help="subset to pack (default: all five)",
     )
     parser.add_argument(
         "--dlc",
         action="store_true",
-        help="also pack KodCode / ms-python-q / deepseek-leetcode (upload as corpora-v1 release assets; not bundled in the APK)",
+        help="deprecated: all slugs are DLC; ignored",
     )
     parser.add_argument(
         "--dlc-only",
         action="store_true",
-        help="pack only the DLC slugs (skip seed corpora)",
+        help="deprecated: all slugs are DLC; pack every slug",
     )
     opts = parser.parse_args()
     data_dir = Path(os.path.expanduser(opts.data_dir))
-    if opts.dlc_only:
-        slugs = list(DLC)
-    else:
-        slugs = list(SEED) + (list(DLC) if opts.dlc else [])
+    slugs = list(opts.slugs) if opts.slugs else list(ALL)
+    unknown = [slug for slug in slugs if slug not in ALL]
+    if unknown:
+        print(f"unknown slug(s): {', '.join(unknown)}", file=sys.stderr)
+        return 1
     if opts.fetch:
         fetch = REPO_ROOT / "scripts" / "fetch_dataset.py"
         cmd = [sys.executable, str(fetch), *slugs, "--data-dir", str(data_dir)]
@@ -105,7 +112,7 @@ def main() -> int:
 
     failed = []
     for slug in slugs:
-        dest = (SEED_OUT if slug in SEED else DLC_OUT) / f"{slug}.zip"
+        dest = DLC_OUT / f"{slug}.zip"
         print(f"{slug} -> {dest}")
         try:
             count = pack_slug(data_dir, slug, dest)

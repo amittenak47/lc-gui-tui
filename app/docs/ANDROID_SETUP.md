@@ -158,7 +158,7 @@ adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-u
 
 ### Option C — Pads-only APK (no Practice)
 
-Default APK keeps Practice + RustPython. Pads-only hides Practice in the frontend (`VITE_FEATURE_LEETCODE=0`) and omits the `leetcode` Cargo feature (`--no-default-features`: no RustPython, no seed extract). Both flags must stay together.
+Default APK keeps Practice + RustPython. Pads-only hides Practice in the frontend (`VITE_FEATURE_LEETCODE=0`) and omits the `leetcode` Cargo feature (`--no-default-features`: no RustPython). Both flags must stay together.
 
 From the repo root:
 
@@ -181,7 +181,7 @@ Release: `npm run android:apk:pads:release`. Same APK path as the default debug 
 
 ## 5. Running on the tablet
 
-The APK bundles the full harness — corpus index, RustPython tests, pad library, and coach — inside the app process. Nothing on your PC needs to be running for the tablet to work.
+The APK bundles the harness — RustPython tests, pad library, and coach — inside the app process. Problem corpora are DLC (Settings → Datasets → Install from GitHub `corpora-v1`). First launch Practice is an empty table until you install a set. Nothing on your PC needs to be running for the tablet to work.
 
 ### Architecture
 

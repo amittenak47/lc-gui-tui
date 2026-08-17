@@ -32,8 +32,6 @@ pub fn run() {
                     app.manage(state);
                     app.manage(lc_client::CoachHub::new());
                     app.manage(dlc::DlcHub::new());
-                    #[cfg(feature = "leetcode")]
-                    seed::spawn(app);
                 }
                 Err(err) => {
                     eprintln!("cannot load config for embedded router: {err:#}");

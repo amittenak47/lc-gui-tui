@@ -205,7 +205,7 @@ flowchart TD
 | Surface | Offline | Sync |
 | --- | --- | --- |
 | **Whiteboard / annotate** | Full. Working copy is IndexedDB on the device. | Dual-write to the daemon (`pads.db` + `pad-blobs/`). Tombstone hides a pad on every device that shares that daemon; snapshots and PDF bytes stay with it. Sidecar `.lc-ink.json` is backup, not the sync path. |
-| **Problems** | Seed corpora (`leetcode`, `leetcode-with-tests`) extract + index on first launch. Optional DLC in Settings. Tests run in-process. | Same machine as the GUI daemon shares the workspace dir. On reconnect, Personalise `offlineMerge` (ask / prefer-local / prefer-server) decides which board wins. |
+| **Problems** | Empty until Settings → Datasets → Install (GitHub `corpora-v1` jsonl zip). Tests run in-process. Pass/fail stays in `session.json` across Remove/reinstall. | Same machine as the GUI daemon shares the workspace dir. On reconnect, Personalise `offlineMerge` (ask / prefer-local / prefer-server) decides which board wins. |
 
 Tests run in-process via RustPython (`src/workspace/runner.rs`). Coach Review (perceive → claim → verdict) always runs inside the daemon.
 
@@ -223,10 +223,9 @@ To drive the *desktop* window from a tablet, use **spacedesk** (pixels only).
 
 ### Fully untethered LeetCode (remaining gaps)
 
-The judge is already in the binary (RustPython). What is not done:
+The judge is already in the binary (RustPython). Groq/OpenAI keys paste in Settings. What is not done:
 
-1. **LLM keys on Android** — Groq/OpenAI in Settings (APK has no env).
-2. **`lc sync` hub** — pads across devices.
+1. **`lc sync` hub** — pads across devices.
 
 ### Stripped branch (whiteboard + documents)
 
@@ -252,6 +251,7 @@ Do not merge the two products. Main stays the harness.
 | `whiteboard test [id] [--case N] [--full] [-v]` | Run tests via RustPython — exits `0` when every case passes |
 | `whiteboard ask [id] [--case N] [--provider local\|groq]` | LLM debugging help |
 | `whiteboard stats` · `whiteboard session reset` · `whiteboard list …` | Progress, session, named lists |
+| `cargo run --release --bin audit-tests -- --dataset S --out FILE.jsonl` | List indexed problems whose tests RustPython cannot execute (KodCode: pass `--dataset kodcode`; default out `audit-tests.jsonl`) |
 | `whiteboard config set/get/show/path` | Manage `config.toml` |
 
 Coach modes are per-provider (`llm.modes.<ambient\|review\|bridge\|viz\|planner>`) and
@@ -272,6 +272,14 @@ the coach feature flags are `coach.<ws_runs\|process_events_ui\|approach_commitm
 ```bash
 python scripts/fetch_dataset.py <slug> --data-dir ~/lc-data
 whiteboard index --dataset <slug>
+```
+
+GUI installs the same jsonl from GitHub release `corpora-v1` (Settings → Datasets). Pack zips with `python scripts/pack_seed_corpora.py`.
+
+After indexing, flag un-runnable tests (one JSON object per issue):
+
+```bash
+cargo run --release --bin audit-tests -- --dataset kodcode --out audit-kodcode.jsonl
 ```
 
 Adapters: [`src/datasets/`](src/datasets/). After adapter changes: `whiteboard index --dataset <slug> --rebuild`.

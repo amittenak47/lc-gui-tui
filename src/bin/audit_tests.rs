@@ -2,9 +2,14 @@
 //! RustPython cannot execute. Does not re-index. Does not mutate `problems.db`
 //! or `~/lc-workspace`. KodCode is skipped unless `--all` / `--dataset kodcode`.
 //!
+//! Writes one JSON object per issue (dataset, task_id, json_path, kind, detail)
+//! to `--out` (default `audit-tests.jsonl`). Stderr is the count summary only.
+//!
 //! ```text
-//! cargo run --release --bin audit-tests
 //! cargo run --release --bin audit-tests -- --dataset leetcode --limit 50
+//! cargo run --release --bin audit-tests -- --dataset kodcode --out audit-kodcode.jsonl
+//! cargo run --release --bin audit-tests -- --dataset kodcode --sample 500
+//! cargo run --release --bin audit-tests -- --dataset kodcode --full
 //! ```
 
 use anyhow::{Context, Result};
@@ -46,9 +51,9 @@ struct Args {
     /// Also run `--full` when the problem has a `test` suite.
     #[arg(long)]
     full: bool,
-    /// JSONL of issues (default: stdout stays the summary; issues go here).
-    #[arg(long)]
-    out: Option<PathBuf>,
+    /// JSONL of issues (default: `audit-tests.jsonl` in cwd). `-` writes stdout.
+    #[arg(long, default_value = "audit-tests.jsonl")]
+    out: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
@@ -76,15 +81,18 @@ fn main() -> Result<()> {
     let args = Args::parse();
     // Pin `--out` before any workspace scratch work. Relative paths would
     // otherwise follow a later cwd change into the temp scan dirs.
-    let out = args.out.as_ref().map(|path| {
-        if path.is_absolute() {
-            path.clone()
+    let out = if args.out == "-" {
+        None
+    } else {
+        let path = PathBuf::from(&args.out);
+        Some(if path.is_absolute() {
+            path
         } else {
             std::env::current_dir()
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .join(path)
-        }
-    });
+        })
+    };
     let conn = index::open_db().with_context(|| {
         format!(
             "cannot open {} — run `lc index` first",

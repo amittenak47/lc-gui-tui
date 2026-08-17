@@ -76,11 +76,11 @@ Start / Reset / Select / Random — works the same on any tab: the dataset is on
 more parameter on the same queries. Filters do reset on a switch, since a tag
 from one corpus matches nothing in another's tables.
 
-A tab whose corpus is not on this device still appears, showing `0`. The
-default APK ships `leetcode` and `leetcode-with-tests` (extracted + indexed on
-first launch). KodCode / MS Python/Q / DeepSeek stay optional DLC. Empty tabs
-still name the Hugging Face repo and `whiteboard index --dataset …` for a
-desktop checkout that has not packed seed zips yet.
+A tab whose corpus is not on this device still appears, showing `0`. Nothing
+ships in the APK — Settings → Datasets → Install downloads GitHub
+`corpora-v1`. Pass/fail badges survive Remove and reinstall (`dataset/task_id`
+in `session.json`). Empty tabs also name the Hugging Face repo for a desktop
+`whiteboard index --dataset …` checkout.
 Pass/fail badges are per problem set: the router keys session progress on
 `dataset/task_id`, so solving `two-sum` in one corpus does not mark the
 identically-named problem in another.

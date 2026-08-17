@@ -241,8 +241,13 @@ fn migrate(conn: &Connection) -> Result<()> {
 }
 
 /// Drop indexed rows for one corpus. Files on disk are the caller's problem.
+/// Does not touch `session.json`, workspaces, or `submissions`.
 pub fn clear_dataset(dataset: &Dataset) -> Result<()> {
     let conn = open_db()?;
+    clear_dataset_on(&conn, dataset)
+}
+
+pub fn clear_dataset_on(conn: &Connection, dataset: &Dataset) -> Result<()> {
     conn.execute_batch(&format!(
         "DELETE FROM {}; DELETE FROM {};",
         dataset.tag_table, dataset.table
@@ -841,6 +846,7 @@ mod tests {
         for dataset in &DATASETS {
             conn.execute_batch(&dataset_schema(dataset)).unwrap();
         }
+        migrate(&conn).unwrap();
         conn
     }
 
@@ -920,6 +926,29 @@ mod tests {
 
         assert_eq!(search_count(&conn, kodcode, None, None, None).unwrap(), 0);
         assert_eq!(search_count(&conn, leetcode, None, None, None).unwrap(), 1);
+    }
+
+    #[test]
+    fn clear_dataset_drops_index_rows_not_submissions_or_session_keys() {
+        let conn = memory_db();
+        let kodcode = dataset::get("kodcode").unwrap();
+        let leetcode = dataset::get("leetcode").unwrap();
+        upsert(&conn, kodcode, &problem("running-max", "Easy", &["Docs"]), "b.jsonl", 1).unwrap();
+        upsert(&conn, leetcode, &problem("two-sum", "Easy", &["Array"]), "a.json", 1).unwrap();
+        record_submission(&conn, kodcode, "running-max", "/ws", 3, 3, true).unwrap();
+
+        clear_dataset_on(&conn, kodcode).unwrap();
+
+        assert_eq!(search_count(&conn, kodcode, None, None, None).unwrap(), 0);
+        assert_eq!(search_count(&conn, leetcode, None, None, None).unwrap(), 1);
+        let submissions: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM submissions WHERE dataset = 'kodcode'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(submissions, 1);
     }
 
     #[test]

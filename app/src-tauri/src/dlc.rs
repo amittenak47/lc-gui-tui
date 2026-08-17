@@ -1,7 +1,8 @@
-//! Optional corpus DLC: KodCode, MS Python/Q, DeepSeek LC.
+//! Optional corpus DLC: every dataset in [`harness::dataset::DATASETS`].
 //!
-//! Not in the default APK. Settings downloads a prebuilt jsonl zip (GitHub
-//! release asset — no Hugging Face on device), unpacks, and indexes.
+//! Nothing is bundled in the APK. Settings downloads a prebuilt jsonl zip
+//! (GitHub release `corpora-v1` — no Hugging Face on device), unpacks, and
+//! indexes.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -16,9 +17,24 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use zip::ZipArchive;
 
-const DLC_SLUGS: &[&str] = &["kodcode", "ms-python-q", "deepseek-leetcode"];
 const DLC_RELEASE: &str =
     "https://github.com/amittenak47/lc-gui-tui/releases/download/corpora-v1";
+
+fn dlc_slugs() -> impl Iterator<Item = &'static str> {
+    dataset::DATASETS.iter().map(|d| d.id)
+}
+
+fn is_dlc_slug(slug: &str) -> bool {
+    dataset::DATASETS.iter().any(|d| d.id == slug)
+}
+
+fn slug_list() -> String {
+    dataset::DATASETS
+        .iter()
+        .map(|d| d.id)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DlcStatus {
@@ -38,7 +54,7 @@ pub struct DlcHub {
 impl DlcHub {
     pub fn new() -> Self {
         let mut map = HashMap::new();
-        for slug in DLC_SLUGS {
+        for slug in dlc_slugs() {
             let dataset = dataset::get(slug).expect("known DLC slug");
             map.insert(
                 slug.to_string(),
@@ -61,9 +77,8 @@ impl DlcHub {
 
 fn snapshot(hub: &DlcHub) -> Vec<DlcStatus> {
     let map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
-    DLC_SLUGS
-        .iter()
-        .filter_map(|slug| map.get(*slug).cloned())
+    dlc_slugs()
+        .filter_map(|slug| map.get(slug).cloned())
         .collect()
 }
 
@@ -144,7 +159,7 @@ pub async fn lc_dataset_dlc_status(
     state: State<'_, Shared>,
 ) -> Result<Vec<DlcStatus>, String> {
     let cfg = state.cfg_snapshot();
-    for slug in DLC_SLUGS {
+    for slug in dlc_slugs() {
         refresh_installed(&hub, slug, &cfg);
     }
     let rows = snapshot(&hub);
@@ -158,10 +173,10 @@ pub async fn lc_dataset_dlc_install(
     hub: State<'_, DlcHub>,
     slug: String,
 ) -> Result<DlcStatus, String> {
-    if !DLC_SLUGS.contains(&slug.as_str()) {
+    if !is_dlc_slug(&slug) {
         return Err(format!(
             "unknown DLC {slug:?} — expected one of {}",
-            DLC_SLUGS.join(", ")
+            slug_list()
         ));
     }
     {
@@ -195,7 +210,7 @@ pub async fn lc_dataset_dlc_remove(
     state: State<'_, Shared>,
     slug: String,
 ) -> Result<DlcStatus, String> {
-    if !DLC_SLUGS.contains(&slug.as_str()) {
+    if !is_dlc_slug(&slug) {
         return Err(format!("unknown DLC {slug:?}"));
     }
     let dataset = dataset::get(&slug).map_err(|err| err.to_string())?;
@@ -330,5 +345,21 @@ fn sanitize_zip_name(name: &str) -> Option<PathBuf> {
         None
     } else {
         Some(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_zip_name;
+    use std::path::PathBuf;
+
+    #[test]
+    fn zip_names_drop_traversal() {
+        assert_eq!(
+            sanitize_zip_name("train.jsonl"),
+            Some(PathBuf::from("train.jsonl"))
+        );
+        assert!(sanitize_zip_name("../secret").is_none());
+        assert!(sanitize_zip_name("foo/../../etc/passwd").is_none());
     }
 }

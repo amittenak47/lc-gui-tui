@@ -79,27 +79,6 @@ jobs:
         working-directory: app
         run: npm ci
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Cache packed seed corpora
-        id: seed-cache
-        uses: actions/cache@v4
-        with:
-          path: app/src-tauri/resources/corpora
-          key: seed-corpora-leetcode-lwt-v1
-
-      - name: Fetch and pack seed corpora
-        if: steps.seed-cache.outputs.cache-hit != 'true'
-        run: |
-          python -m pip install -U huggingface_hub pyarrow
-          python scripts/fetch_dataset.py leetcode leetcode-with-tests --data-dir "$RUNNER_TEMP/lc-data"
-          python scripts/pack_seed_corpora.py --data-dir "$RUNNER_TEMP/lc-data"
-          test -s app/src-tauri/resources/corpora/leetcode.zip
-          test -s app/src-tauri/resources/corpora/leetcode-with-tests.zip
-
       - name: Init Android project + cleartext overlay
         working-directory: app
         run: npm run android:init

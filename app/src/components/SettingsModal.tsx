@@ -868,11 +868,12 @@ export function SettingsModal({
                 <code>&lt;problems folder&gt;/&lt;dataset&gt;/</code>; override it below when it
                 lives somewhere else.
               </p>
-              <div className="lc-settings-subhead">Optional corpora (DLC)</div>
+              <div className="lc-settings-subhead">Corpora (DLC)</div>
               <p className="lc-settings-hint">
-                LeetCode and LC + Tests ship in the app. KodCode, MS Python/Q, and DeepSeek
-                download as jsonl zips (GitHub release <code>corpora-v1</code>), unpack, then
-                index. Off until you install. KodCode is large.
+                Nothing ships in the APK. Install a set to download its jsonl zip
+                (GitHub release <code>corpora-v1</code>), unpack, and index. Off
+                until you install. KodCode is large (~1 GB). Pass/fail badges stay
+                in <code>session.json</code> if you Remove and later reinstall.
               </p>
               {dlcRows.map((row) => {
                 const working = ["downloading", "unpacking", "indexing"].includes(row.phase);
