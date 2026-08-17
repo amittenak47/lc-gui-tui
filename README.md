@@ -119,7 +119,7 @@ Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorre
 
 The canvas lives in [`app/`](app/). The desktop window **is** the router: Tauri holds axum in-process (no TCP bind) and runs tests with RustPython. There is no separate `lc serve` step.
 
-Landing is a home chooser: **Practice** (corpus + tests), **Whiteboard**, **Annotate**. Back from a session returns home, not the problem table. Hide Practice with `VITE_FEATURE_LEETCODE=0` (frontend) and a pads-only Tauri build (`--no-default-features`, omits the `leetcode` Cargo feature / RustPython).
+Landing is a home chooser: **Practice** (corpus + tests), **Whiteboard**, **Annotate**. Back from a session returns home, not the problem table. Hide Practice with `VITE_FEATURE_LEETCODE=0` (frontend) and a pads-only Tauri build (`--no-default-features`, omits the `leetcode` Cargo feature / RustPython). Wrappers: `npm run android:apk:pads` / `app\scripts\android-install-pads.cmd`.
 
 ```bash
 cd app && npm install && npm run tauri dev
@@ -179,7 +179,7 @@ flowchart LR
     RP[RustPython]
     Corpus[SQLite_corpus]
     WS[lc_workspace]
-    UI -->|"lc_dispatch"| Axum
+    UI -->|"named invoke"| Axum
     Axum --> RP
     Axum --> Corpus
     Axum --> WS
