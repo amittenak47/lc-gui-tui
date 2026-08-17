@@ -4,11 +4,13 @@
 //! offscreen view from JS, then this command reads `document.readyState` and
 //! the serialize result via `eval_with_callback`.
 
+use tauri::AppHandle;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::Manager;
 
 #[tauri::command]
 pub async fn webview_eval_json(
-    app: tauri::AppHandle,
+    app: AppHandle,
     label: String,
     script: String,
 ) -> Result<String, String> {

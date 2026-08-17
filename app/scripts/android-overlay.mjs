@@ -6,13 +6,15 @@
  * a missing project runs `tauri android init --ci` instead of failing with a
  * "run init first" message.
  *
- * After init (or on every later build) the two edits:
+ * After init (or on every later build) the edits:
  *
  *   1. copy `android-overlay/network_security_config.xml` into the project's
- *      `res/xml/`, and
- *   2. point the manifest's `<application>` at it.
+ *      `res/xml/`,
+ *   2. point the manifest's `<application>` at it, and
+ *   3. rewrite generated `BuildTask.kt` so it uses `ExecOperations` instead of
+ *      deprecated `Project.exec` (Gradle 8.11+ warning, gone in 9).
  *
- * Without them Android 9+ blocks the WebView's cleartext HTTP fetches to
+ * Without (1)+(2) Android 9+ blocks the WebView's cleartext HTTP fetches to
  * external http:// pages (Annotate mode). The harness router itself is in-process.
  *
  * Idempotent: running it twice is a no-op, so it is safe to chain in front of
@@ -20,7 +22,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,6 +52,65 @@ export function withNetworkSecurityConfig(manifest) {
   }
   const at = opening.index + opening[0].length;
   return `${manifest.slice(0, at)}\n        ${ATTRIBUTE}${manifest.slice(at)}`;
+}
+
+/**
+ * Swap Tauri's generated `project.exec { ... }` for injected `ExecOperations`.
+ *
+ * Gradle 8.11 deprecates `Project.exec(Action)`; 9.0 removes it. The file lives
+ * under gitignored `gen/android`, so this rewrite runs after every init.
+ *
+ * @param {string} source raw BuildTask.kt
+ * @returns {string}
+ */
+export function withExecOperations(source) {
+  if (source.includes("execOperations.exec")) return source;
+  if (!/\bproject\.exec\s*\{/.test(source)) {
+    throw new Error("BuildTask.kt has no project.exec — did the Tauri template change?");
+  }
+
+  let next = source;
+  if (!next.includes("import org.gradle.process.ExecOperations")) {
+    if (!next.includes("import org.gradle.api.tasks.TaskAction")) {
+      throw new Error("BuildTask.kt missing TaskAction import — cannot patch");
+    }
+    next = next.replace(
+      /import org\.gradle\.api\.tasks\.TaskAction\r?\n/,
+      (line) => `${line}import org.gradle.process.ExecOperations\nimport javax.inject.Inject\n`,
+    );
+  }
+
+  if (!next.includes("abstract val execOperations")) {
+    const classPat = /open class BuildTask\s*:\s*DefaultTask\(\)\s*\{/;
+    if (!classPat.test(next)) {
+      throw new Error("BuildTask.kt class header not recognised — cannot patch");
+    }
+    next = next.replace(
+      classPat,
+      "abstract class BuildTask : DefaultTask() {\n    @get:Inject\n    abstract val execOperations: ExecOperations\n",
+    );
+  }
+
+  return next.replace(/\bproject\.exec\s*\{/g, "execOperations.exec {");
+}
+
+/**
+ * Locate generated BuildTask.kt under buildSrc (package path varies).
+ *
+ * @returns {string | null}
+ */
+export function findBuildTaskKt(projectDir = PROJECT) {
+  for (const root of [
+    join(projectDir, "buildSrc", "src", "main", "java"),
+    join(projectDir, "buildSrc", "src", "main", "kotlin"),
+  ]) {
+    if (!existsSync(root)) continue;
+    const hits = readdirSync(root, { recursive: true }).filter((name) =>
+      String(name).replaceAll("\\", "/").endsWith("BuildTask.kt"),
+    );
+    if (hits.length) return join(root, String(hits[0]));
+  }
+  return null;
 }
 
 function ensureAndroidProject() {
@@ -85,10 +146,21 @@ async function main() {
   const patched = withNetworkSecurityConfig(manifest);
   if (patched === manifest) {
     console.log("android overlay: config copied; manifest already references it");
-    return;
+  } else {
+    await writeFile(MANIFEST, patched);
+    console.log("android overlay: config copied and referenced from <application>");
   }
-  await writeFile(MANIFEST, patched);
-  console.log("android overlay: config copied and referenced from <application>");
+
+  const buildTask = findBuildTaskKt();
+  if (!buildTask) {
+    throw new Error("no BuildTask.kt under gen/android/buildSrc — is the project generated?");
+  }
+  const kotlin = await readFile(buildTask, "utf8");
+  const kotlinPatched = withExecOperations(kotlin);
+  if (kotlinPatched !== kotlin) {
+    await writeFile(buildTask, kotlinPatched);
+    console.log("android overlay: BuildTask.kt uses ExecOperations");
+  }
 }
 
 // Only run when invoked as a script — the test imports the pure half.
