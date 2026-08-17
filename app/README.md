@@ -39,7 +39,10 @@ npm run tauri dev
 ```
 
 Opens on a **home chooser**: Practice, Whiteboard, or Annotate. Back from a
-session returns there. Hide Practice with `VITE_FEATURE_LEETCODE=0` in `app/.env`.
+session returns there. Hide Practice with `VITE_FEATURE_LEETCODE=0` in `app/.env`
+(frontend only). A pads-only APK also needs `--no-default-features` so Cargo
+drops RustPython and seed extract: `npm run android:apk:pads` or
+`app\scripts\android-install-pads.cmd`. Default `android:apk` keeps Practice.
 LLM config is **Settings → LLM** (`localhost` is this machine). Tests: **Settings
 → Workspace → Test Cases** (hidden when Practice is off).
 

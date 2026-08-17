@@ -2,7 +2,7 @@
 
 Guide for installing the APK on an Android tablet (e.g. XPPen Magic Note Pad) and fixing PATH on Windows.
 
-The APK is **self-contained**: it runs the same in-process harness router as desktop (`lc_dispatch` / Tauri events). There is no Host/Port/Code pairing UI, no `POST /pair`, and no PC daemon on port 7878.
+The APK is **self-contained**: it runs the same in-process harness router as desktop (named Tauri invoke per route + coach events). There is no Host/Port/Code pairing UI, no `POST /pair`, and no PC daemon on port 7878.
 
 ---
 
@@ -21,8 +21,8 @@ On the tablet: **Settings → About → tap Build number 7×** → Developer opt
 
 ## 2. One-time project setup
 
-`src-tauri/gen/android/` is **not in git**. `android:apk`, `android:dev`, and
-`app\scripts\android-install.cmd` run `tauri android init` themselves when that
+`src-tauri/gen/android/` is **not in git**. `android:apk`, `android:apk:pads`, `android:dev`, and
+`app\scripts\android-install.cmd` / `android-install-pads.cmd` run `tauri android init` themselves when that
 folder is missing (needs Android SDK, NDK, JDK 17+). You can still generate it
 by hand:
 
@@ -38,14 +38,14 @@ npm run android:init
 
 `src-tauri/gen/android/` is **generated** by `tauri android init` and is not in git. Android 9+ blocks cleartext HTTP in WebViews by default.
 
-The harness router is in-process (`lc_dispatch`) — the overlay is **not** for LAN daemon pairing. It allows the WebView to fetch cleartext `http://` pages in **Annotate** mode (external document URLs). Without it, those fetches fail even though coach and corpus traffic never leaves the app.
+The harness router is in-process (named invoke) — the overlay is **not** for LAN daemon pairing. It allows the WebView to fetch cleartext `http://` pages in **Annotate** mode (external document URLs). Without it, those fetches fail even though coach and corpus traffic never leaves the app.
 
 `scripts/android-overlay.mjs` re-applies two edits after every init or regen:
 
 1. Copy `src-tauri/android-overlay/network_security_config.xml` into the generated `res/xml/`.
 2. Add `android:networkSecurityConfig="@xml/network_security_config"` on `<application>` in `AndroidManifest.xml`.
 
-`android:dev`, `android:apk`, `android-dev.cmd`, and `android-install.cmd` run this automatically before every build. Idempotent — safe to run twice.
+`android:dev`, `android:apk`, `android:apk:pads`, `android-dev.cmd`, `android-install.cmd`, and `android-install-pads.cmd` run this automatically before every build. Idempotent — safe to run twice.
 
 ---
 
@@ -156,6 +156,27 @@ adb uninstall dev.lc.whiteboard
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
 ```
 
+### Option C — Pads-only APK (no Practice)
+
+Default APK keeps Practice + RustPython. Pads-only hides Practice in the frontend (`VITE_FEATURE_LEETCODE=0`) and omits the `leetcode` Cargo feature (`--no-default-features`: no RustPython, no seed extract). Both flags must stay together.
+
+From the repo root:
+
+```cmd
+app\scripts\android-install-pads.cmd
+app\scripts\android-install-pads.cmd <your-device-serial>
+```
+
+Or from `app\`:
+
+```cmd
+cd <repo>\app
+npm run android:apk:pads
+adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
+```
+
+Release: `npm run android:apk:pads:release`. Same APK path as the default debug build — do not mix a pads-only APK with a Practice APK on the same install without knowing which you just built.
+
 ---
 
 ## 5. Running on the tablet
@@ -165,7 +186,7 @@ The APK bundles the full harness — corpus index, RustPython tests, pad library
 ### Architecture
 
 ```
-Tablet APK  ──in-process──►  axum router (lc_dispatch)  ──►  LLM URL from Settings → LLM
+Tablet APK  ──in-process──►  axum router (named invoke)  ──►  LLM URL from Settings → LLM
 ```
 
 - Coach answers stream over Tauri events (`lc-coach-frame`), not a session WebSocket to a PC.
