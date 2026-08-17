@@ -68,7 +68,7 @@ whiteboard config set llm.local.model qwen3-vl-8b
 whiteboard config set llm.local.vision_model qwen3-vl-8b
 ```
 
-API keys stay in the environment (`GROQ_API_KEY`, optional `LC_LOCAL_API_KEY`) — not in the TOML. Config path: `whiteboard config path`.
+API keys: env (`GROQ_API_KEY`, `OPENAI_API_KEY`, optional `LC_LOCAL_API_KEY`) wins; Settings → LLM stores a fallback in config.toml for the APK. Config path: `whiteboard config path`.
 
 ---
 
@@ -127,7 +127,7 @@ cd app && npm install && npm run tauri dev
 app\scripts\android-install.cmd
 ```
 
-Use the Tauri app (`npm run tauri dev`) or the Android APK — Vite-only (`npm run dev`) in a browser is not a supported path. LLM config is **Settings → LLM**. `localhost` there is this machine.
+Use the Tauri app (`npm run tauri dev`) or the Android APK — Vite-only (`npm run dev`) in a browser is not a supported path. LLM config is **Settings → LLM**. `localhost` there is this machine. Cloud Groq/OpenAI keys paste there too (env still wins on desktop).
 
 **Review** — draw, tap **Submit**. Verdict, ratings, strengths, gaps, a Socratic question, and — when wrong — a counterexample citing a real sample case.
 

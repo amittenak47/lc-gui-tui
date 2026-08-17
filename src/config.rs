@@ -375,7 +375,31 @@ impl Default for OllamaLlmConfig {
     }
 }
 
-/// OpenAI (or compatible) remote API. Key from `OPENAI_API_KEY` env, never toml.
+/// Env `OPENAI_API_KEY` / `GROQ_API_KEY` wins. Settings stores a fallback in
+/// toml so the APK can call cloud APIs without a process environment.
+pub fn resolve_api_key(env_name: &str, stored: Option<&str>) -> Option<String> {
+    std::env::var(env_name)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            stored
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        })
+}
+
+fn stored_api_key(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// OpenAI (or compatible) remote API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenAiLlmConfig {
@@ -385,6 +409,9 @@ pub struct OpenAiLlmConfig {
     pub vision_model: String,
     #[serde(default)]
     pub vision: Option<bool>,
+    /// Fallback when `OPENAI_API_KEY` is unset. Never sent on GET /config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 impl Default for OpenAiLlmConfig {
@@ -394,6 +421,7 @@ impl Default for OpenAiLlmConfig {
             model: "gpt-4o-mini".into(),
             vision_model: String::new(),
             vision: None,
+            api_key: None,
         }
     }
 }
@@ -408,7 +436,9 @@ pub struct GroqLlmConfig {
     /// Whether the model accepts images. `None` → infer from the model name.
     #[serde(default)]
     pub vision: Option<bool>,
-    // API key comes from the GROQ_API_KEY environment variable, never this file.
+    /// Fallback when `GROQ_API_KEY` is unset. Never sent on GET /config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 impl Default for GroqLlmConfig {
@@ -418,6 +448,7 @@ impl Default for GroqLlmConfig {
             model: "llama-3.1-8b-instant".into(),
             vision_model: String::new(),
             vision: None,
+            api_key: None,
         }
     }
 }
@@ -556,9 +587,11 @@ impl Config {
             "llm.openai.base_url" => self.llm.openai.base_url = value.to_string(),
             "llm.openai.model" => self.llm.openai.model = value.to_string(),
             "llm.openai.vision_model" => self.llm.openai.vision_model = value.to_string(),
+            "llm.openai.api_key" => self.llm.openai.api_key = stored_api_key(value),
             "llm.groq.base_url" => self.llm.groq.base_url = value.to_string(),
             "llm.groq.model" => self.llm.groq.model = value.to_string(),
             "llm.groq.vision_model" => self.llm.groq.vision_model = value.to_string(),
+            "llm.groq.api_key" => self.llm.groq.api_key = stored_api_key(value),
             "serve.port" => {
                 self.serve.port = value
                     .parse()
@@ -580,8 +613,8 @@ impl Config {
                  data.datasets.<{}>, tests.stop_on_first_failure, \
                  llm.provider, llm.local.{{base_url,model,vision_model,embed_model,embed_base_url}}, \
                  llm.ollama.{{base_url,model,vision_model}}, \
-                 llm.openai.{{base_url,model,vision_model}}, \
-                 llm.groq.{{base_url,model,vision_model}}, llm.modes.<{}>, serve.port, serve.token, serve.searxng_url, \
+                 llm.openai.{{base_url,model,vision_model,api_key}}, \
+                 llm.groq.{{base_url,model,vision_model,api_key}}, llm.modes.<{}>, serve.port, serve.token, serve.searxng_url, \
                  coach.{{ws_runs,process_events_ui,planner_enabled,draw_review_enabled,approach_commitment}}",
                 crate::dataset::DATASETS
                     .iter()
@@ -622,9 +655,23 @@ impl Config {
             "llm.openai.base_url" => self.llm.openai.base_url.clone(),
             "llm.openai.model" => self.llm.openai.model.clone(),
             "llm.openai.vision_model" => self.llm.openai.vision_model.clone(),
+            "llm.openai.api_key" => self
+                .llm
+                .openai
+                .api_key
+                .as_ref()
+                .map(|_| "set".to_string())
+                .unwrap_or_default(),
             "llm.groq.base_url" => self.llm.groq.base_url.clone(),
             "llm.groq.model" => self.llm.groq.model.clone(),
             "llm.groq.vision_model" => self.llm.groq.vision_model.clone(),
+            "llm.groq.api_key" => self
+                .llm
+                .groq
+                .api_key
+                .as_ref()
+                .map(|_| "set".to_string())
+                .unwrap_or_default(),
             "serve.port" => self.serve.port.to_string(),
             "serve.token" => self.serve.token.clone().unwrap_or_default(),
             "serve.searxng_url" => self.serve.searxng_url.clone(),
@@ -776,6 +823,25 @@ mod tests {
         assert!(cfg.set("llm.modes.review", "gpt5").is_err());
         assert!(cfg.set("llm.modes.telepathy", "local").is_err());
         assert!(cfg.get("llm.modes.telepathy").is_err());
+    }
+
+    #[test]
+    fn resolve_api_key_uses_stored_when_env_missing() {
+        assert_eq!(
+            resolve_api_key("LC_TEST_NO_SUCH_KEY_XYZ", Some(" stored ")).as_deref(),
+            Some("stored")
+        );
+        assert_eq!(resolve_api_key("LC_TEST_NO_SUCH_KEY_XYZ", Some("  ")), None);
+        assert_eq!(resolve_api_key("LC_TEST_NO_SUCH_KEY_XYZ", None), None);
+    }
+
+    #[test]
+    fn cli_get_api_key_says_set_not_the_secret() {
+        let mut cfg = Config::default();
+        cfg.set("llm.openai.api_key", " sk-secret ").unwrap();
+        assert_eq!(cfg.get("llm.openai.api_key").unwrap(), "set");
+        cfg.set("llm.openai.api_key", "").unwrap();
+        assert_eq!(cfg.get("llm.openai.api_key").unwrap(), "");
     }
 
     /// The two flags that only change *how* an answer arrives ship on; the two

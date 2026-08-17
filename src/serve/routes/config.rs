@@ -66,6 +66,16 @@ pub struct ConfigDto {
     /// Present on GET only — never echo the secret.
     #[serde(default)]
     pub token_set: bool,
+    /// Write-only. `None` leaves the stored key. `Some("")` clears it. GET omits this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groq_api_key: Option<String>,
+    /// Env or stored key is present. The secret itself is never returned.
+    #[serde(default)]
+    pub openai_key_set: bool,
+    #[serde(default)]
+    pub groq_key_set: bool,
 }
 
 fn config_dto(cfg: &Config) -> ConfigDto {
@@ -115,6 +125,26 @@ fn config_dto(cfg: &Config) -> ConfigDto {
             .token
             .as_ref()
             .is_some_and(|t| !t.trim().is_empty()),
+        openai_api_key: None,
+        groq_api_key: None,
+        openai_key_set: crate::config::resolve_api_key(
+            "OPENAI_API_KEY",
+            cfg.llm.openai.api_key.as_deref(),
+        )
+        .is_some(),
+        groq_key_set: crate::config::resolve_api_key(
+            "GROQ_API_KEY",
+            cfg.llm.groq.api_key.as_deref(),
+        )
+        .is_some(),
+    }
+}
+
+fn apply_stored_key(slot: &mut Option<String>, incoming: Option<&str>) {
+    match incoming {
+        None => {}
+        Some(value) if value.trim().is_empty() => *slot = None,
+        Some(value) => *slot = Some(value.trim().to_string()),
     }
 }
 
@@ -145,6 +175,11 @@ fn apply_config_dto(cfg: &mut Config, dto: &ConfigDto) -> anyhow::Result<()> {
     cfg.llm.groq.base_url = dto.groq.base_url.clone();
     cfg.llm.groq.model = dto.groq.model.clone();
     cfg.llm.groq.vision_model = dto.groq.vision_model.clone();
+    apply_stored_key(
+        &mut cfg.llm.openai.api_key,
+        dto.openai_api_key.as_deref(),
+    );
+    apply_stored_key(&mut cfg.llm.groq.api_key, dto.groq_api_key.as_deref());
     cfg.set("llm.modes.ambient", &dto.modes.ambient)?;
     cfg.set("llm.modes.review", &dto.modes.review)?;
     cfg.set("llm.modes.bridge", &dto.modes.bridge)?;
@@ -218,5 +253,31 @@ mod tests {
         assert_eq!(cfg.llm.local.embed_model, "nomic");
         assert_eq!(cfg.llm.local.embed_base_url, "http://127.0.0.1:8081/v1");
         assert_eq!(cfg.serve.searxng_url, "http://127.0.0.1:8888");
+    }
+
+    #[test]
+    fn put_config_sets_and_clears_stored_api_keys_without_echoing() {
+        let mut cfg = Config::default();
+        let mut dto = config_dto(&cfg);
+        assert!(!dto.openai_key_set);
+        dto.openai_api_key = Some(" sk-test ".into());
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.llm.openai.api_key.as_deref(), Some("sk-test"));
+        let echoed = config_dto(&cfg);
+        assert!(echoed.openai_key_set);
+        assert!(echoed.openai_api_key.is_none());
+        dto = echoed;
+        dto.openai_api_key = Some(String::new());
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert!(cfg.llm.openai.api_key.is_none());
+    }
+
+    #[test]
+    fn omitted_api_key_field_leaves_stored_key() {
+        let mut cfg = Config::default();
+        cfg.llm.groq.api_key = Some("gsk-keep".into());
+        let dto = config_dto(&cfg);
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.llm.groq.api_key.as_deref(), Some("gsk-keep"));
     }
 }

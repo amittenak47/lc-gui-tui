@@ -156,7 +156,16 @@ export interface LcConfig {
   /** Streaming-coach feature flags. Absent on a daemon older than Phase 1. */
   coach?: CoachFlags;
   token_set: boolean;
+  /** Env or a stored Settings key exists. The secret is never returned. */
+  openai_key_set?: boolean;
+  groq_key_set?: boolean;
 }
+
+/** PUT /config extras. Omit to leave a stored key; empty string clears it. */
+export type LcConfigPut = LcConfig & {
+  openai_api_key?: string;
+  groq_api_key?: string;
+};
 
 /** Settings → Coach. Mirrors `CoachConfig` in `src/config.rs`. */
 export interface CoachFlags {

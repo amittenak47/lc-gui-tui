@@ -13,12 +13,10 @@ pub struct Groq {
 
 impl Groq {
     pub fn from_config(cfg: &Config) -> Result<Self> {
-        let api_key = std::env::var("GROQ_API_KEY")
-            .ok()
-            .filter(|k| !k.trim().is_empty())
+        let api_key = crate::config::resolve_api_key("GROQ_API_KEY", cfg.llm.groq.api_key.as_deref())
             .context(
-                "GROQ_API_KEY is not set — export it (get one at https://console.groq.com/keys) \
-                 or use --provider local",
+                "no Groq API key — paste one in Settings → LLM, or export GROQ_API_KEY \
+                 (https://console.groq.com/keys), or use --provider local",
             )?;
         let endpoint = cfg.llm.endpoint("groq");
         Ok(Self {
