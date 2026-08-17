@@ -6,6 +6,8 @@ pub mod colorhunt;
 pub mod lc_client;
 pub mod lc_routes;
 pub mod web_capture;
+#[cfg(feature = "leetcode")]
+pub mod seed;
 
 use tauri::Manager;
 
@@ -20,10 +22,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             match harness::config::Config::load() {
-                Ok(cfg) => {
+                Ok(mut cfg) => {
+                    #[cfg(feature = "leetcode")]
+                    if let Err(err) = seed::ensure_corpus_root(&mut cfg, app) {
+                        eprintln!("corpus root: {err}");
+                    }
                     let state = harness::serve::new_state(cfg);
                     app.manage(state);
                     app.manage(lc_client::CoachHub::new());
+                    #[cfg(feature = "leetcode")]
+                    seed::spawn(app);
                 }
                 Err(err) => {
                     eprintln!("cannot load config for embedded router: {err:#}");
