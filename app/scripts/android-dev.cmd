@@ -1,5 +1,5 @@
 @echo off
-REM Hot-reload on USB device.
+REM Hot-reload on USB device. First run generates src-tauri\gen\android if missing.
 REM   android-dev.cmd
 REM   android-dev.cmd <your-device-serial>
 REM

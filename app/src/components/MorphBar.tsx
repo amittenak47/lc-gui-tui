@@ -57,8 +57,16 @@ export function MorphBar({
     if (!measure) return;
 
     const read = () => {
-      const next =
-        axis === "height" ? measure.scrollHeight : measure.scrollWidth;
+      if (axis === "height") {
+        setSize(measure.scrollHeight);
+        return;
+      }
+      // Width shells start at 0 with overflow:hidden. Measure max-content so
+      // flex children are not squeezed before the first size commit.
+      const previous = measure.style.width;
+      measure.style.width = "max-content";
+      const next = measure.scrollWidth;
+      measure.style.width = previous;
       setSize(next);
     };
 

@@ -346,6 +346,73 @@ class Solution:
 }
 
 #[test]
+fn full_suite_solution_ctor_uses_class_from_module() {
+    let dir = tempfile::tempdir().unwrap();
+    write_workspace(
+        dir.path(),
+        r#"
+class Solution:
+    def __init__(self, m, n):
+        self.m = m
+        self.n = n
+    def flip(self):
+        return [0, 0]
+"#,
+        r#"{
+  "task_id": "flip",
+  "entry_point": "flip",
+  "cases": [],
+  "test": "def check(candidate):\n    assert Solution(1, 1).flip() == [0, 0]\n"
+}"#,
+    );
+    let out = run_runner(dir.path(), &["--full"]);
+    assert_eq!(out.stderr, "", "stderr: {}", out.stderr);
+    assert_eq!(out.lines.len(), 1, "stdout:\n{}", out.stdout);
+    assert!(out.lines[0].suite, "expected the full-suite JSON line");
+    assert!(
+        out.lines[0].pass,
+        "suite failed: {:?} error={}",
+        out.lines[0].actual,
+        out.lines[0].error.as_deref().unwrap_or("")
+    );
+    assert_eq!(out.exit, 0);
+}
+
+#[test]
+fn full_suite_solution_ctor_stub_is_assertion_not_nameerror() {
+    let dir = tempfile::tempdir().unwrap();
+    write_workspace(
+        dir.path(),
+        r#"
+class Solution:
+    def __init__(self, m=0, n=0):
+        pass
+    def flip(self):
+        pass
+"#,
+        r#"{
+  "task_id": "flip",
+  "entry_point": "flip",
+  "cases": [],
+  "test": "def check(candidate):\n    assert Solution(1, 1).flip() == [0, 0]\n"
+}"#,
+    );
+    let out = run_runner(dir.path(), &["--full"]);
+    assert_eq!(out.lines.len(), 1, "stdout:\n{}", out.stdout);
+    assert!(out.lines[0].suite);
+    assert!(!out.lines[0].pass, "stub must fail the assert");
+    let err = out.lines[0].error.as_deref().unwrap_or("");
+    assert!(
+        !err.contains("NameError"),
+        "Solution must be visible in check(); got:\n{err}"
+    );
+    assert!(
+        err.contains("AssertionError"),
+        "expected a failed assert, not a crash:\n{err}"
+    );
+}
+
+#[test]
 fn kodcode_module_level_cases_pass() {
     let dir = tempfile::tempdir().unwrap();
     let meta = serde_json::json!({

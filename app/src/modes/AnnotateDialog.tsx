@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useLibraryDeleteArm } from "../util/armedDelete";
 import { deleteAnnotateDoc, listAnnotateDocs, type AnnotateDocMeta } from "../util/annotateStore";
 import { TOMBSTONE_COPY } from "../util/padSync";
 import {
@@ -65,6 +66,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const { tapArmed, arm } = useLibraryDeleteArm();
 
   useEffect(() => {
     setDocs(listAnnotateDocs());
@@ -108,6 +110,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
     try {
       if (props.onDelete) await props.onDelete(id);
       else await deleteAnnotateDoc(id);
+      arm();
     } catch {
       /* ignore */
     }
@@ -139,7 +142,9 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
             {pickingSnapshots
               ? "Hold a snapshot to roll this file back. Latest autosave is the live library entry."
               : pickingRecent
-              ? "Hold a document to reopen it, or hold its bin to remove its annotations."
+              ? tapArmed
+                ? "Hold a document to reopen it. Tap a bin to remove its annotations."
+                : "Hold a document to reopen it, or hold its bin to remove its annotations."
               : isLeave
                 ? dirty
                   ? "Discard throws away this session's annotations. The file itself is never changed. Hold to confirm."
@@ -198,7 +203,16 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     label={`Delete annotations for ${doc.name}`}
                     className="lc-scratch-load-trash"
                     disabled={locked}
-                    onConfirm={() => removeDoc(doc.id)}
+                    ariaLabel={
+                      tapArmed
+                        ? `Delete annotations for ${doc.name} — tap to delete`
+                        : `Delete annotations for ${doc.name} — hold to delete`
+                    }
+                    onTap={tapArmed ? () => void confirmRemove(doc.id) : undefined}
+                    onConfirm={() => {
+                      if (tapArmed) void confirmRemove(doc.id);
+                      else removeDoc(doc.id);
+                    }}
                     resetKey={error}
                   >
                     <svg

@@ -125,16 +125,58 @@ impl SearchSort {
         }
     }
 
-    fn order_clause(self, dataset: &Dataset) -> String {
-        match self {
-            Self::TaskId => "task_id".into(),
-            Self::Question => "CAST(question_id AS INTEGER), task_id".into(),
-            Self::Difficulty => {
-                "CASE difficulty WHEN 'Easy' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Hard' THEN 3 ELSE 4 END, task_id".into()
-            }
-            Self::Cases => "test_count DESC, task_id".into(),
-            Self::Tags => format!(
-                "(SELECT MIN(tag) FROM {tags} pt WHERE pt.task_id = {table}.task_id), task_id",
+    pub fn default_desc(self) -> bool {
+        matches!(self, Self::Cases)
+    }
+}
+
+/// A search key plus direction. Bare `cases` is descending (most tests first);
+/// every other key is ascending. `:desc` / `:asc` / a leading `-` override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchOrder {
+    pub key: SearchSort,
+    pub desc: bool,
+}
+
+impl From<SearchSort> for SearchOrder {
+    fn from(key: SearchSort) -> Self {
+        Self {
+            key,
+            desc: key.default_desc(),
+        }
+    }
+}
+
+impl SearchOrder {
+    pub fn parse(raw: &str) -> Option<Self> {
+        let lower = raw.to_ascii_lowercase();
+        let (rest, forced) = if let Some(stripped) = lower.strip_prefix('-') {
+            (stripped.to_string(), Some(true))
+        } else if let Some(stripped) = lower.strip_suffix(":desc") {
+            (stripped.to_string(), Some(true))
+        } else if let Some(stripped) = lower.strip_suffix(":asc") {
+            (stripped.to_string(), Some(false))
+        } else {
+            (lower, None)
+        };
+        let key = SearchSort::parse(&rest)?;
+        Some(Self {
+            key,
+            desc: forced.unwrap_or(key.default_desc()),
+        })
+    }
+
+    pub fn order_clause(self, dataset: &Dataset) -> String {
+        let dir = if self.desc { "DESC" } else { "ASC" };
+        match self.key {
+            SearchSort::TaskId => format!("task_id {dir}"),
+            SearchSort::Question => format!("CAST(question_id AS INTEGER) {dir}, task_id"),
+            SearchSort::Difficulty => format!(
+                "CASE difficulty WHEN 'Easy' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Hard' THEN 3 ELSE 4 END {dir}, task_id"
+            ),
+            SearchSort::Cases => format!("test_count {dir}, task_id"),
+            SearchSort::Tags => format!(
+                "(SELECT MIN(tag) FROM {tags} pt WHERE pt.task_id = {table}.task_id) {dir}, task_id",
                 tags = dataset.tag_table,
                 table = dataset.table
             ),
@@ -511,8 +553,9 @@ pub fn search(
     query: Option<&str>,
     limit: u32,
     random: bool,
-    sort: SearchSort,
+    sort: impl Into<SearchOrder>,
 ) -> Result<Vec<ProblemRow>> {
+    let sort = sort.into();
     let (clauses, params) = filter_clauses(dataset, difficulty, tag, query);
     let mut sql = format!("SELECT {ROW_COLUMNS} FROM {}", dataset.table);
     with_where(&mut sql, &clauses);
@@ -555,10 +598,11 @@ pub fn search_page(
     difficulty: Option<&str>,
     tag: Option<&str>,
     query: Option<&str>,
-    sort: SearchSort,
+    sort: impl Into<SearchOrder>,
     limit: u32,
     offset: u32,
 ) -> Result<Vec<ProblemRow>> {
+    let sort = sort.into();
     let (clauses, params) = filter_clauses(dataset, difficulty, tag, query);
     let mut sql = format!("SELECT {ROW_COLUMNS} FROM {}", dataset.table);
     with_where(&mut sql, &clauses);
@@ -600,10 +644,11 @@ pub fn search_page_since(
     conn: &Connection,
     dataset: &'static Dataset,
     since_mtime: i64,
-    sort: SearchSort,
+    sort: impl Into<SearchOrder>,
     limit: u32,
     offset: u32,
 ) -> Result<Vec<ProblemRow>> {
+    let sort = sort.into();
     let mut sql = format!("SELECT {ROW_COLUMNS} FROM {}", dataset.table);
     sql.push_str(&format!(" WHERE mtime > {since_mtime}"));
     sql.push_str(" ORDER BY ");
@@ -660,8 +705,9 @@ pub fn adjacent_task_ids(
     difficulty: Option<&str>,
     tag: Option<&str>,
     query: Option<&str>,
-    sort: SearchSort,
+    sort: impl Into<SearchOrder>,
 ) -> Result<(Option<String>, Option<String>)> {
+    let sort = sort.into();
     let (clauses, params) = filter_clauses(dataset, difficulty, tag, query);
     let mut sql = format!("SELECT task_id FROM {}", dataset.table);
     with_where(&mut sql, &clauses);
@@ -738,8 +784,9 @@ pub fn record_submission(
 pub fn list_problem_rows(
     conn: &Connection,
     list_name: &str,
-    sort: SearchSort,
+    sort: impl Into<SearchOrder>,
 ) -> Result<Vec<ProblemRow>> {
+    let sort = sort.into();
     let dataset = dataset::default();
     let list_id: i64 = conn.query_row(
         "SELECT id FROM lists WHERE name = ?1",
@@ -934,5 +981,28 @@ mod tests {
             )
             .unwrap();
         assert_eq!(kodcode_rows, 1);
+    }
+
+    #[test]
+    fn search_order_parses_suffix_and_flips_sql_dir() {
+        let ds = dataset::default();
+        let question = SearchOrder::parse("question").unwrap();
+        assert!(!question.desc);
+        assert!(question.order_clause(ds).contains("ASC"));
+
+        let question_desc = SearchOrder::parse("question:desc").unwrap();
+        assert!(question_desc.desc);
+        assert!(question_desc.order_clause(ds).contains("DESC"));
+        assert_eq!(
+            SearchOrder::parse("-question"),
+            SearchOrder::parse("question:desc")
+        );
+
+        let cases = SearchOrder::parse("cases").unwrap();
+        assert!(cases.desc);
+        assert!(cases.order_clause(ds).contains("test_count DESC"));
+        let cases_asc = SearchOrder::parse("cases:asc").unwrap();
+        assert!(!cases_asc.desc);
+        assert!(cases_asc.order_clause(ds).contains("test_count ASC"));
     }
 }

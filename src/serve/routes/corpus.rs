@@ -11,7 +11,7 @@ use super::common::DatasetQuery;
 use super::{blocking, AppError, Shared};
 use crate::dataset::{self, Dataset};
 use crate::dataset::DatasetInfo;
-use crate::index::{self, ProblemRow, SearchSort};
+use crate::index::{self, ProblemRow, SearchOrder, SearchSort};
 use crate::loader;
 use crate::problem::{self, IoCase, Problem};
 
@@ -138,9 +138,9 @@ pub async fn list_problems(
     let dataset = dataset::resolve(query.dataset.as_deref()).map_err(AppError::bad_request)?;
     let page = blocking(move || {
         let sort = match query.sort.as_deref() {
-            Some(raw) => SearchSort::parse(raw)
+            Some(raw) => SearchOrder::parse(raw)
                 .ok_or_else(|| anyhow!("unknown sort {raw:?} — expected task_id, question, difficulty, cases, or tags"))?,
-            None => SearchSort::TaskId,
+            None => SearchSort::TaskId.into(),
         };
         let limit = query.limit.unwrap_or(15).clamp(1, 500);
         let offset = query.offset.unwrap_or(0);
@@ -225,10 +225,10 @@ pub async fn adjacent_problem(
     let dataset = dataset::resolve(query.dataset.as_deref()).map_err(AppError::bad_request)?;
     let response = blocking(move || {
         let sort = match query.sort.as_deref() {
-            Some(raw) => SearchSort::parse(raw).ok_or_else(|| {
+            Some(raw) => SearchOrder::parse(raw).ok_or_else(|| {
                 anyhow!("unknown sort {raw:?} — expected task_id, question, difficulty, cases, or tags")
             })?,
-            None => SearchSort::TaskId,
+            None => SearchSort::TaskId.into(),
         };
         let conn = index::open_db()?;
         let (prev, next) = index::adjacent_task_ids(

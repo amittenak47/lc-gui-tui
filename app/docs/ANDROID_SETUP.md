@@ -21,6 +21,11 @@ On the tablet: **Settings → About → tap Build number 7×** → Developer opt
 
 ## 2. One-time project setup
 
+`src-tauri/gen/android/` is **not in git**. `android:apk`, `android:dev`, and
+`app\scripts\android-install.cmd` run `tauri android init` themselves when that
+folder is missing (needs Android SDK, NDK, JDK 17+). You can still generate it
+by hand:
+
 ```cmd
 cd <repo>\app
 npm install
@@ -40,7 +45,7 @@ The harness router is in-process (`lc_dispatch`) — the overlay is **not** for 
 1. Copy `src-tauri/android-overlay/network_security_config.xml` into the generated `res/xml/`.
 2. Add `android:networkSecurityConfig="@xml/network_security_config"` on `<application>` in `AndroidManifest.xml`.
 
-`android:dev`, `android:apk`, and `android-dev.mjs` run this automatically before every build. Idempotent — safe to run twice.
+`android:dev`, `android:apk`, `android-dev.cmd`, and `android-install.cmd` run this automatically before every build. Idempotent — safe to run twice.
 
 ---
 
@@ -127,6 +132,15 @@ taskkill /PID <pid> /F
 
 ### Option B — APK file (simpler)
 
+From the repo root (builds, then `adb install -r`):
+
+```cmd
+app\scripts\android-install.cmd
+app\scripts\android-install.cmd <your-device-serial>
+```
+
+Or from `app\`:
+
 ```cmd
 cd <repo>\app
 npm run android:apk
@@ -187,6 +201,7 @@ If it still feels tight on your device, the constant lives in `app/src/styles.cs
 | `cargo` works, `adb` does not | Old cmd window — close all cmd, reopen |
 | Tauri opens Android Studio | No device/emulator seen — fix `adb` PATH, `adb devices` |
 | Coach offline / LLM unreachable | **Settings → LLM** on the tablet — check provider, API key env, and that the model URL is reachable **from the tablet** |
+| `no src-tauri/gen/android` / init failed | Overlay now runs `tauri android init` itself. If that fails: SDK, NDK, JDK 17+, then `cd app && npm run android:init` |
 | Annotate cannot load `http://` pages | Rebuild after overlay (`npm run android:overlay` then `android:apk`) |
 | Palette under system bar | Reinstall APK after safe-area fix (§6) |
 
