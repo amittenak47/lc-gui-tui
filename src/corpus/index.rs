@@ -354,7 +354,18 @@ fn index_dataset(
     }
 
     let mut stats = IndexStats::default();
-    for entry in walkdir::WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+    // Default corpus lives in the data-dir root. Do not descend into
+    // `kodcode/` etc. — WalkDir would otherwise visit hundreds of thousands
+    // of sibling files before the LeetCode jsonl, so the live count stuck
+    // at 0 or 1 until the walk finished.
+    for entry in walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry.file_type().is_dir()
+                || !dataset::belongs_to_other_dataset(dir, entry.path(), dataset)
+        })
+        .filter_map(|e| e.ok())
+    {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -364,11 +375,7 @@ fn index_dataset(
         if dataset::belongs_to_other_dataset(dir, path, dataset) {
             continue;
         }
-        let is_corpus = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("jsonl"));
-        if !is_corpus {
+        if !dataset::is_corpus_file(path) {
             continue;
         }
         if path

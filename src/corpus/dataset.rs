@@ -210,6 +210,23 @@ pub fn belongs_to_other_dataset(root: &Path, path: &Path, me: &Dataset) -> bool 
     DATASETS.iter().any(|d| d.id != me.id && d.id == name)
 }
 
+/// JSON/JSONL that is a problem corpus, not a sidecar.
+///
+/// Hugging Face leaves `.cache__huggingface__trees__*.json` in the data-dir
+/// root. Those are not problems; indexing them prints a parse warning and
+/// counts a failure.
+pub fn is_corpus_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if name.starts_with('.') {
+        return false;
+    }
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json") || ext.eq_ignore_ascii_case("jsonl"))
+}
+
 /// Delete one dataset's files on disk.
 ///
 /// Nested corpora (`<data-dir>/kodcode/`) can go as a whole directory. The
@@ -239,10 +256,7 @@ pub fn remove_corpus_dir(dataset: &Dataset, dest: &Path, json_root: &Path) -> Re
                 .unwrap_or_default();
             let is_zip_part = name.starts_with(&format!(".{}", dataset.id))
                 && name.ends_with(".zip.part");
-            let is_json = matches!(
-                path.extension().and_then(|ext| ext.to_str()),
-                Some("json" | "jsonl")
-            );
+            let is_json = is_corpus_file(&path);
             if is_json || is_zip_part {
                 std::fs::remove_file(&path)?;
             }
@@ -272,9 +286,8 @@ pub fn dir_has_own_corpus_files(dir: &Path, me: &Dataset) -> bool {
             }
             continue;
         }
-        match path.extension().and_then(|ext| ext.to_str()) {
-            Some("json" | "jsonl") => return true,
-            _ => {}
+        if is_corpus_file(&path) {
+            return true;
         }
     }
     false
@@ -418,5 +431,26 @@ mod tests {
         );
         std::fs::write(root.join("train.jsonl"), "{}").unwrap();
         assert!(dir_has_own_corpus_files(root, leetcode));
+    }
+
+    #[test]
+    fn huggingface_cache_json_is_not_a_corpus_file() {
+        let cache = Path::new(
+            r"C:\data\.cache__huggingface__trees__215604aeed660029df7de2fea5a4d7b6ed476a08.json",
+        );
+        assert!(!is_corpus_file(cache));
+        assert!(is_corpus_file(Path::new(r"C:\data\train.jsonl")));
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join(".cache__huggingface__trees__deadbeef.json"),
+            "{}",
+        )
+        .unwrap();
+        let leetcode = get(DEFAULT_DATASET).unwrap();
+        assert!(
+            !dir_has_own_corpus_files(root, leetcode),
+            "HF cache json must not count as LeetCode installed"
+        );
     }
 }

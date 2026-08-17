@@ -67,7 +67,14 @@ pub fn inspect(cfg: &Config, dataset: &'static Dataset) -> Result<Vec<FileReport
     if !dir.is_dir() {
         return Ok(out);
     }
-    for entry in walkdir::WalkDir::new(&dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(&dir)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry.file_type().is_dir()
+                || !dataset::belongs_to_other_dataset(&dir, entry.path(), dataset)
+        })
+        .filter_map(|e| e.ok())
+    {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -75,11 +82,7 @@ pub fn inspect(cfg: &Config, dataset: &'static Dataset) -> Result<Vec<FileReport
         if dataset::belongs_to_other_dataset(&dir, path, dataset) {
             continue;
         }
-        let is_corpus = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("jsonl"));
-        if !is_corpus {
+        if !dataset::is_corpus_file(path) {
             continue;
         }
         out.push(inspect_file(dataset, path)?);

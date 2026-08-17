@@ -140,11 +140,16 @@ fn refresh_installed(hub: &DlcHub, slug: &str, cfg: &harness::config::Config) {
     let mut map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(row) = map.get_mut(slug) {
         row.installed = installed;
-        row.count = count;
+        // Status is polled while DLC indexes. COUNT(*) on another connection
+        // does not see the open transaction, and the default corpus walk used
+        // to spend that time inside sibling folders — live `set_index_count`
+        // would get overwritten with 0. Leave the in-memory count alone until
+        // the row is idle again.
         if row.phase != "downloading"
             && row.phase != "unpacking"
             && row.phase != "indexing"
         {
+            row.count = count;
             row.phase = "idle".into();
             row.progress = if installed { 1.0 } else { 0.0 };
         }
@@ -288,8 +293,8 @@ async fn install_one(app: &AppHandle, slug: &str) -> Result<(), String> {
     .await
     .map_err(|err| err.to_string())??;
 
-    refresh_installed(&hub, slug, &state.cfg_snapshot());
     set_phase(&hub, slug, "idle", 1.0, None);
+    refresh_installed(&hub, slug, &state.cfg_snapshot());
     emit(app);
     let _ = app.emit("lc-seed-ready", ());
     Ok(())
