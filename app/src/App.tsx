@@ -5985,9 +5985,11 @@ export function App() {
                   />
                 ) : !holdBrowseOverlay ? (
                   <HomeChooser
+                    busy={busy !== null || boardPreparing || workspaceLoadActive}
                     onPractice={() => setPracticeOpen(true)}
                     onWhiteboard={() => setWhiteboardEntryOpen(true)}
                     onAnnotate={() => setAnnotateEntryOpen(true)}
+                    onBrowse={() => void openWebPage(WEB_HOME)}
                   />
                 ) : null}
               </div>
