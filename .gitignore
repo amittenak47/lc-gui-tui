@@ -78,6 +78,13 @@ audit-*.jsonl
 # --- Misc tooling ---
 .mimicflow/
 .tmp-unix/
+.tmp-frames/
+
+# Accidental tsc outDir under the source tree
+/app/src/modes/dist/
+
+# Cargo vendor/patch stamp — not a source file
+**/.cargo-ok
 
 # --- Local / agent docs (not shipped; ingest from docs/fix-log/) ---
 docs/*.md
