@@ -26,6 +26,12 @@
 
 :root {
   --lc-sans: "DINish", "DIN Alternate", ui-sans-serif, system-ui, sans-serif;
+  /* GTA IV subtitle recipe: fill changes, black edge stays opaque. */
+  --lc-sub-edge: #000;
+  --lc-sub-stroke: 0.07em;
+  --lc-sub-fill: #f4f4f4;
+  --lc-sub-muted: #c4c4c4;
+  --lc-sub-emph: #ffcc00;
   --ink: #111827;
   --muted: #4b5563;
   --hint: #6b7280;
@@ -619,10 +625,22 @@ html[data-theme="dark"] .lc-web-doc {
 
 .lc-brand {
   font-size: 15px;
-  font-weight: 400;
-  letter-spacing: -0.01em;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   line-height: 1;
   white-space: nowrap;
+  color: var(--lc-sub-muted);
+  -webkit-text-stroke: var(--lc-sub-stroke) var(--lc-sub-edge);
+  paint-order: stroke fill;
+  text-shadow: 1px 1px 0 var(--lc-sub-edge);
+}
+
+.lc-brand strong {
+  color: var(--lc-sub-emph);
+  font-weight: 700;
+  -webkit-text-stroke: var(--lc-sub-stroke) var(--lc-sub-edge);
+  paint-order: stroke fill;
+  text-shadow: 1px 1px 0 var(--lc-sub-edge);
 }
 
 @media (max-width: 640px) {
@@ -948,15 +966,15 @@ input[type="checkbox"] {
   padding: 0.5rem 0.9rem;
   border: none;
   background: transparent;
-  color: #fff;
+  color: var(--lc-sub-fill);
   font-family: var(--lc-sans);
   font-weight: 700;
   font-size: 1.05rem;
   letter-spacing: 0.01em;
   line-height: 1;
-  -webkit-text-stroke: 0.07em #000;
+  -webkit-text-stroke: var(--lc-sub-stroke) var(--lc-sub-edge);
   paint-order: stroke fill;
-  text-shadow: 1px 2px 0 #000;
+  text-shadow: 1px 2px 0 var(--lc-sub-edge);
   opacity: 0;
   transition: opacity 220ms ease-out;
   will-change: opacity;
@@ -987,16 +1005,16 @@ input[type="checkbox"] {
   padding: 0;
   border: none;
   background: transparent;
-  color: #fff;
+  color: var(--lc-sub-fill);
   font-family: var(--lc-sans);
   font-size: clamp(1.35rem, 3.6vw, 1.85rem);
   font-weight: 700;
   letter-spacing: 0.04em;
   line-height: 1.1;
   text-transform: none;
-  -webkit-text-stroke: 0.07em #000;
+  -webkit-text-stroke: var(--lc-sub-stroke) var(--lc-sub-edge);
   paint-order: stroke fill;
-  text-shadow: 1px 2px 0 #000;
+  text-shadow: 1px 2px 0 var(--lc-sub-edge);
   opacity: 0;
   transition: opacity 420ms ease-out;
   will-change: opacity;
@@ -1035,13 +1053,13 @@ input[type="checkbox"] {
   padding: 0.42rem 0.85rem;
   border: none;
   background: transparent;
-  color: #fff;
+  color: var(--lc-sub-fill);
   font-family: var(--lc-sans);
   font-weight: 700;
   line-height: 1;
-  -webkit-text-stroke: 0.07em #000;
+  -webkit-text-stroke: var(--lc-sub-stroke) var(--lc-sub-edge);
   paint-order: stroke fill;
-  text-shadow: 1px 2px 0 #000;
+  text-shadow: 1px 2px 0 var(--lc-sub-edge);
   max-width: min(90vw, 28rem);
   opacity: 0;
   transition: opacity 260ms ease-out;
@@ -1063,19 +1081,20 @@ input[type="checkbox"] {
 .lc-page-indicator-title {
   font-size: 1rem;
   letter-spacing: 0.01em;
+  color: var(--lc-sub-emph);
 }
 
-/* Secondary: the position is support for the name, not a peer of it. */
+/* Secondary: gray fill, same black edge. Opacity would fade the stroke too. */
 .lc-page-indicator-count {
   font-size: 0.8rem;
-  opacity: 0.62;
+  color: var(--lc-sub-muted);
   font-variant-numeric: tabular-nums;
 }
 
 .lc-page-indicator-blurb {
   font-size: 0.78rem;
   line-height: 1.25;
-  opacity: 0.62;
+  color: var(--lc-sub-muted);
   text-align: center;
 }
 
