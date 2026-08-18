@@ -89,3 +89,4 @@ audit-*.jsonl
 # --- Local / agent docs (not shipped; ingest from docs/fix-log/) ---
 docs/*.md
 docs/fix-log/
+docs/plans/
