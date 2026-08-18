@@ -1,10 +1,23 @@
-# Build a sideloadable debug APK on every push to main (and on manual run).
+# Build both sideloadable debug APKs on every push to main (and on manual run).
 #
 # This is a Tauri 2 Android app under `app/` — not a root Gradle project.
-# Local equivalent: `cd app && npm run android:init && npm run android:apk`
 #
-# Install on tablet: Actions → this workflow → latest run → Artifacts →
-# download `lc-whiteboard-debug-apk` → open the APK (allow unknown apps).
+# Two flavors, one matrix:
+#
+#   Practice          everything, including the Practice card and the
+#                     RustPython judge. aarch64 only — rustpython 0.5 does not
+#                     compile for 32-bit Android.
+#   Whiteboard-only   no Practice, no RustPython. Needs both the Vite flag and
+#                     `--no-default-features`; the wrapper script sets both.
+#
+# Local equivalent:
+#   cd app && npm run android:init
+#   npm run android:apk:practice      # or android:apk:whiteboard
+#
+# Install on tablet: Actions -> this workflow -> latest run -> Artifacts ->
+# download the flavor you want -> open the APK (allow unknown apps). Both
+# flavors share the app id `dev.lc.whiteboard`, so run
+# `adb uninstall dev.lc.whiteboard` before switching from one to the other.
 
 name: Build Android APK
 
@@ -22,9 +35,22 @@ concurrency:
 
 jobs:
   build:
-    name: build debug apk
+    name: build ${{ matrix.flavor }} apk
     runs-on: ubuntu-latest
     timeout-minutes: 90
+
+    strategy:
+      # One flavor failing should not cancel the other — a Practice-only break
+      # (RustPython, the judge) says nothing about the Whiteboard-only build.
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: practice
+            script: android:apk:practice
+            artifact: whiteboard-practice-debug.apk
+          - flavor: whiteboard-only
+            script: android:apk:whiteboard
+            artifact: whiteboard-only-debug.apk
 
     steps:
       - name: Checkout
@@ -46,6 +72,9 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # CI pins r26d. A local tablet build may be on NDK 29 — that is fine and
+      # the two produce equivalent APKs, but if a build fails here and not on
+      # your machine (or the reverse), the NDK gap is the first thing to check.
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk
@@ -68,6 +97,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: app/src-tauri -> target
+          # The two flavors differ by cargo features, so they must not share a
+          # cache entry — one would keep restoring the other's artifacts.
+          key: ${{ matrix.flavor }}
 
       # Gradle BuildTask.kt invokes `cargo tauri …`; the npm CLI alone is not enough.
       - name: Install cargo tauri-cli
@@ -85,23 +117,34 @@ jobs:
 
       - name: Build debug APK
         working-directory: app
-        run: npm run android:apk
+        run: npm run ${{ matrix.script }}
 
+      # Tauri names the output for what it built: `universal` when it built
+      # every architecture, `arm64` when it was pinned to aarch64. Practice is
+      # pinned, Whiteboard-only is not, so both names are in play.
       - name: Stage APK
         run: |
-          APK="app/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk"
-          test -f "$APK" || {
-            echo "APK missing at $APK — searching outputs…"
-            find app/src-tauri/gen/android/app/build/outputs -name '*.apk' -print || true
+          set -euo pipefail
+          OUT="app/src-tauri/gen/android/app/build/outputs"
+          APK=""
+          for candidate in \
+            "$OUT/apk/universal/debug/app-universal-debug.apk" \
+            "$OUT/apk/arm64/debug/app-arm64-debug.apk"; do
+            if [ -f "$candidate" ]; then APK="$candidate"; break; fi
+          done
+          if [ -z "$APK" ]; then
+            echo "No APK at either expected path — searching $OUT …"
+            find "$OUT" -name '*.apk' -print || true
             exit 1
-          }
+          fi
           mkdir -p dist
-          cp "$APK" "dist/lc-whiteboard-debug.apk"
+          cp "$APK" "dist/${{ matrix.artifact }}"
+          echo "Staged $APK -> dist/${{ matrix.artifact }}"
           ls -lh dist/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lc-whiteboard-debug-apk
-          path: dist/lc-whiteboard-debug.apk
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
           retention-days: 30
