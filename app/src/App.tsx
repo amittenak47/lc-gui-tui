@@ -49,6 +49,7 @@ import {
   HOME_TAB_ID,
   activeTab as activeTabOf,
   axisOfEdge,
+  clampSplitRatio,
   groupOf,
   liveOverflow,
   openedRecord,
@@ -110,6 +111,24 @@ function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+/**
+ * The bar between a split's two panes — the VS Code sash.
+ *
+ * At rest it is nothing: a few transparent pixels between two boards. Hover it
+ * or drag it and a blue line lights up down the seam, which is the whole of the
+ * affordance. The drag resizes live and tracks the pointer exactly — no easing,
+ * no morph, no commit-on-release — because a sash that lags the finger feels
+ * broken in a way a slightly expensive reflow does not.
+ *
+ * Two details that only matter once you actually drag one:
+ *
+ * - Pointer capture keeps the events coming when the pointer leaves the strip,
+ *   but the *cursor* still belongs to whatever is underneath, so the resize
+ *   cursor flickers into a text caret halfway across a document. A body class
+ *   pins it for the length of the drag.
+ * - Double-tap resets to an even split, because dragging back to exactly half
+ *   by hand is a fiddle.
+ */
 function SplitSash({
   axis,
   onRatio,
@@ -119,6 +138,28 @@ function SplitSash({
 }) {
   const [dragging, setDragging] = useState(false);
   const lastTapRef = useRef(0);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const body = document.body;
+    body.dataset.lcSashDrag = axis;
+    return () => {
+      delete body.dataset.lcSashDrag;
+    };
+  }, [axis, dragging]);
+
+  /** Pointer position as a ratio of the split container, already clamped. */
+  const ratioAt = (sash: HTMLElement, x: number, y: number): number | null => {
+    const main = sash.parentElement;
+    if (!main) return null;
+    const box = main.getBoundingClientRect();
+    return clampSplitRatio(
+      axis === "vertical"
+        ? (x - box.left) / Math.max(1, box.width)
+        : (y - box.top) / Math.max(1, box.height),
+    );
+  };
+
   return (
     <button
       type="button"
@@ -133,6 +174,7 @@ function SplitSash({
         const now = Date.now();
         if (now - lastTapRef.current < 320) {
           lastTapRef.current = 0;
+          setDragging(false);
           onRatio(0.5);
           return;
         }
@@ -142,14 +184,8 @@ function SplitSash({
       }}
       onPointerMove={(event) => {
         if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-        const main = event.currentTarget.parentElement;
-        if (!main) return;
-        const box = main.getBoundingClientRect();
-        const ratio =
-          axis === "vertical"
-            ? (event.clientX - box.left) / Math.max(1, box.width)
-            : (event.clientY - box.top) / Math.max(1, box.height);
-        onRatio(ratio);
+        const ratio = ratioAt(event.currentTarget, event.clientX, event.clientY);
+        if (ratio !== null) onRatio(ratio);
       }}
       onPointerUp={(event) => {
         if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -158,6 +194,28 @@ function SplitSash({
         setDragging(false);
       }}
       onPointerCancel={() => setDragging(false)}
+      // Keyboard resize, since a separator you can only reach with a pointer is
+      // not a control. Home puts it back to even.
+      onKeyDown={(event) => {
+        const main = event.currentTarget.parentElement;
+        if (!main) return;
+        const box = main.getBoundingClientRect();
+        const span = axis === "vertical" ? box.width : box.height;
+        const sash = event.currentTarget.getBoundingClientRect();
+        const here = clampSplitRatio(
+          axis === "vertical"
+            ? (sash.left + sash.width / 2 - box.left) / Math.max(1, box.width)
+            : (sash.top + sash.height / 2 - box.top) / Math.max(1, box.height),
+        );
+        const step = (event.shiftKey ? 40 : 12) / Math.max(1, span);
+        const back = axis === "vertical" ? "ArrowLeft" : "ArrowUp";
+        const forward = axis === "vertical" ? "ArrowRight" : "ArrowDown";
+        if (event.key === back) onRatio(clampSplitRatio(here - step));
+        else if (event.key === forward) onRatio(clampSplitRatio(here + step));
+        else if (event.key === "Home") onRatio(0.5);
+        else return;
+        event.preventDefault();
+      }}
     />
   );
 }
