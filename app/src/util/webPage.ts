@@ -59,6 +59,15 @@ export interface FetchedWebPage {
   title: string;
   html: string;
   source: WebHtmlSource;
+  /**
+   * Why the rendered capture was not used, when it was not.
+   *
+   * Falling back is not the plan — the capture runs the page's JS in a hidden
+   * webview and serialises what it produced, which is the whole reason a
+   * script-heavy page renders at all. So a fetch is a *failure*, and it used
+   * to be one you could only see in the console.
+   */
+  note?: string;
 }
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -298,6 +307,7 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
 
   let fetched: { url: string; html: string };
   let source: WebHtmlSource = "fetch";
+  let note: string | undefined;
   if (isTauriRuntime()) {
     try {
       const { captureRenderedPage } = await import("./webPageCapture");
@@ -310,6 +320,7 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
       });
       source = "capture";
     } catch (cause) {
+      note = cause instanceof Error ? cause.message : String(cause);
       console.warn("[lc-web] capture failed, falling back", cause);
       const invoke = await loadInvoke();
       if (invoke) {
@@ -339,5 +350,5 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
     styleAfter: after,
   });
   const title = titleFromHtml(fetched.html) || fetched.url;
-  return { url: fetched.url, title, html, source };
+  return { url: fetched.url, title, html, source, note };
 }

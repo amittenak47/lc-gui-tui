@@ -19,7 +19,12 @@ export const CAPTURE_WEBVIEW_LABEL = "lc-web-capture";
 const CAPTURE_WIDTH = WEB_PAGE_W;
 const CAPTURE_HEIGHT = 800;
 const LOAD_TIMEOUT_MS = 20_000;
-const SETTLE_MS = 1_500;
+/*
+ * A script-built page is not finished when `readyState` says it is — the
+ * framework still has to hydrate and paint. 1.5s caught simple pages and
+ * snapshotted several heavy ones mid-build.
+ */
+const SETTLE_MS = 2_800;
 const SERIALIZE_TIMEOUT_MS = 8_000;
 const POLL_MS = 100;
 const CHROME_UA =

@@ -13,12 +13,15 @@
  * the parked ones get the flat word, which is all their record knows.
  */
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "motion/react";
 
-import { HOME_TAB_ID, type TabIndexState, type TabRecord } from "../util/tabs";
+import { HOME_TAB_ID, type TabGroup, type TabIndexState, type TabRecord } from "../util/tabs";
 
 export interface TabStripProps {
   tabs: TabRecord[];
+  /** Splits, so the strip can draw the pair inside one frame. */
+  groups?: TabGroup[];
   activeId: string;
   /** A workspace is opening; the strip stops taking taps. */
   busy?: boolean;
@@ -124,6 +127,7 @@ function indexStateOf(tab: TabRecord): TabIndexState | null {
 
 export function TabStrip({
   tabs,
+  groups = [],
   activeId,
   busy = false,
   onFocus,
@@ -152,9 +156,62 @@ export function TabStrip({
     return () => window.cancelAnimationFrame(first);
   }, [activeId, tabs.length, busy, activeIndexChip]);
 
+  /*
+   * A split's two halves are drawn side by side, in the group's own order.
+   *
+   * They can be anywhere in `tabs` — the pair is made by dragging one chip
+   * onto the other's board, not by them happening to be neighbours — so the
+   * render order is rebuilt here. The chips travel to meet each other, which
+   * is what makes forming a group read as forming a group.
+   */
+  const rows = useMemo(() => {
+    const byId = new Map(tabs.map((tab) => [tab.id, tab]));
+    const seen = new Set<string>();
+    const out: Array<{ group: TabGroup | null; members: TabRecord[] }> = [];
+    for (const tab of tabs) {
+      if (seen.has(tab.id)) continue;
+      const group = tab.group ? (groups.find((g) => g.id === tab.group) ?? null) : null;
+      if (!group) {
+        seen.add(tab.id);
+        out.push({ group: null, members: [tab] });
+        continue;
+      }
+      const members = group.children
+        .map((id) => byId.get(id))
+        .filter((member): member is TabRecord => Boolean(member));
+      for (const member of members) seen.add(member.id);
+      out.push({ group, members });
+    }
+    return out;
+  }, [groups, tabs]);
+
+  const still = useReducedMotion();
+  const travel = still ? { duration: 0 } : { type: "spring" as const, stiffness: 520, damping: 42 };
+
   return (
     <div className="lc-tab-strip" role="tablist" aria-label="Open workspaces" ref={stripRef}>
-      {tabs.map((tab) => {
+      <LayoutGroup id="lc-tabs">
+      {rows.map((row) => (
+        <motion.div
+          key={row.group ? row.group.id : row.members[0]!.id}
+          layout
+          transition={travel}
+          className={row.group ? "lc-tab-row is-group" : "lc-tab-row"}
+        >
+          <AnimatePresence initial={false}>
+            {row.group ? (
+              <motion.span
+                key="frame"
+                className="lc-tab-group-frame"
+                aria-hidden
+                initial={still ? false : { opacity: 0, scaleX: 0.7 }}
+                animate={{ opacity: 1, scaleX: 1 }}
+                exit={still ? { opacity: 0 } : { opacity: 0, scaleX: 0.7 }}
+                transition={travel}
+              />
+            ) : null}
+          </AnimatePresence>
+          {row.members.map((tab) => {
         const selected = tab.id === activeId;
         const indexState = indexStateOf(tab);
         // Home wears Cancel for the length of a load — same chip, same slot.
@@ -244,7 +301,10 @@ export function TabStrip({
             )}
           </div>
         );
-      })}
+          })}
+        </motion.div>
+      ))}
+      </LayoutGroup>
     </div>
   );
 }
