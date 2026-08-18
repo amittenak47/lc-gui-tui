@@ -1,8 +1,9 @@
 @echo off
-REM Build debug APK and adb install -r. From repo root or app\:
+REM Windows: build debug APK and adb install -r. From repo root or app\:
 REM   app\scripts\android-install.cmd
 REM   app\scripts\android-install.cmd <your-device-serial>
 REM First run generates src-tauri\gen\android (not in git) if missing.
+REM Linux: app/scripts/android-install.sh — do not run this .cmd there.
 setlocal
 cd /d "%~dp0\.."
 

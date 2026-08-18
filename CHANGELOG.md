@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Linux tablet APK wrappers
+
+- **`app/scripts/android-install.sh`** (and `-pads.sh`) for Linux only. They refuse Windows, check SDK/NDK/JDK/`make`/the `aarch64-linux-android` target up front, then build + `adb install`. On this Windows machine keep using `android-install.cmd`.
+
 ### Changed — a tab whose content has gone says so, on the tab
 
 - **Opening a tab whose content is missing opens the tab.** It used to close

@@ -132,11 +132,20 @@ taskkill /PID <pid> /F
 
 ### Option B — APK file (simpler)
 
-From the repo root (builds, then `adb install -r`):
+From the repo root (builds, then `adb install -r`).
+
+**Windows** (this machine): use the `.cmd` wrappers. They put Git `usr\bin` on PATH so bundled `libffi-sys` can find Unix `cp`/`make`. Do not call `npm run android:apk` from a shell that lacks those tools.
 
 ```cmd
 app\scripts\android-install.cmd
 app\scripts\android-install.cmd <your-device-serial>
+```
+
+**Linux:** do not use the `.cmd` files. The `.sh` wrappers refuse to run on Windows and fail up front if SDK/NDK/JDK/`make`/the `aarch64-linux-android` Rust target are missing:
+
+```bash
+./app/scripts/android-install.sh
+./app/scripts/android-install.sh <device-serial>
 ```
 
 Or from `app\`:
@@ -166,6 +175,8 @@ From the repo root:
 app\scripts\android-install-pads.cmd
 app\scripts\android-install-pads.cmd <your-device-serial>
 ```
+
+Linux: `./app/scripts/android-install-pads.sh` (same checks as the Practice `.sh`).
 
 Or from `app\`:
 

@@ -1,8 +1,9 @@
 @echo off
-REM Pads-only debug APK + adb install -r. From repo root or app\:
+REM Windows: pads-only debug APK + adb install -r. From repo root or app\:
 REM   app\scripts\android-install-pads.cmd
 REM   app\scripts\android-install-pads.cmd <your-device-serial>
 REM First run generates src-tauri\gen\android (not in git) if missing.
+REM Linux: app/scripts/android-install-pads.sh
 setlocal
 cd /d "%~dp0\.."
 
