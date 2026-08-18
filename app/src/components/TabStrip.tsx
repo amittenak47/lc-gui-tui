@@ -237,7 +237,6 @@ export function TabStrip({
                 type="button"
                 className="lc-tab-close"
                 aria-label={`Close ${tab.title}`}
-                disabled={busy}
                 onClick={() => onClose(tab.id)}
               >
                 ×

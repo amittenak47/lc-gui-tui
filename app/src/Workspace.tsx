@@ -130,7 +130,7 @@ import {
 } from "./util/docExtract";
 import type { DocAnchor } from "./util/docAnchors";
 import { installHandednessAttr } from "./util/inkHandedness";
-import { openExternalUrl, normalizeExternalUrl } from "./util/openExternal";
+import { openExternalUrl } from "./util/openExternal";
 import { WEB_HOME, fetchWebPage, hostLabelFromUrl, titleFromHtml, webPageWidthForViewport, type WebHtmlSource } from "./util/webPage";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { CodeDocument } from "./modes/CodeDocument";
@@ -5955,46 +5955,45 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             >
               ›
             </button>
-            <input
-              type="text"
-              inputMode="url"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              value={webUrl}
-              aria-label="Page address"
-              onChange={(event) => setWebUrl(event.target.value)}
-            />
-            <button type="submit" className="lc-secondary" disabled={busy !== null}>
-              Go
-            </button>
-            <button
-              type="button"
-              className="lc-icon"
-              aria-label="New page"
-              title="Open another page"
-              disabled={busy !== null}
-              onClick={() => void openWebPage(WEB_HOME, { newTab: true })}
-            >
-              +
-            </button>
-            <button
-              type="button"
-              className="lc-secondary"
-              disabled={busy !== null}
-              onClick={() => {
-                const url = normalizeExternalUrl(webUrl);
-                if (!url) {
-                  setError("that does not look like an http(s) address");
-                  return;
-                }
-                void openExternalUrl(url).catch(() => {
-                  setError("could not hand the page to a browser on this device");
-                });
-              }}
-            >
-              Open in browser
-            </button>
+            {/*
+              Go rides inside the field, the way an address bar has for years —
+              it is the same gesture as pressing Enter, so it belongs with the
+              text rather than beside it as a button the width of a word.
+            */}
+            <div className="lc-web-address">
+              <input
+                type="text"
+                inputMode="url"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                value={webUrl}
+                aria-label="Page address"
+                onChange={(event) => setWebUrl(event.target.value)}
+              />
+              <button
+                type="submit"
+                className="lc-web-go"
+                aria-label="Go"
+                title="Go"
+                disabled={busy !== null}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="15"
+                  height="15"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M4 12h14" />
+                  <path d="m12 6 6 6-6 6" />
+                </svg>
+              </button>
+            </div>
           </div>
         </form>
       )}
