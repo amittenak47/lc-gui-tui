@@ -10,6 +10,7 @@ import {
   HOME_TAB_ID,
   homeTab,
   type AnnotateTab,
+  type TabGroup,
   type TabRecord,
   type WhiteboardTab,
 } from "../util/tabs";
@@ -57,6 +58,11 @@ function mount(props: Partial<Parameters<typeof TabStrip>[0]> & { tabs: TabRecor
   return {
     host,
     chips: () => Array.from(host.querySelectorAll<HTMLElement>(".lc-tab")),
+    rerender: (next: Partial<Parameters<typeof TabStrip>[0]> & { tabs: TabRecord[] }) => {
+      act(() => {
+        root.render(<TabStrip {...merged} {...next} />);
+      });
+    },
     unmount: () => act(() => root.unmount()),
   };
 }
@@ -154,5 +160,84 @@ describe("TabStrip", () => {
     expect(view.chips()[1]?.querySelector(".lc-tab-dot")).not.toBeNull();
     expect(view.chips()[0]?.querySelector(".lc-tab-dot")).toBeNull();
     view.unmount();
+  });
+
+  it("closes a tab that is not Home", () => {
+    const onClose = vi.fn();
+    const view = mount({ tabs: [homeTab(), board("b1", "doodle")], onClose });
+    // Home has no close button — you cannot close the place you land.
+    expect(view.chips()[0]?.querySelector(".lc-tab-close")).toBeNull();
+    act(() => {
+      view.chips()[1]?.querySelector<HTMLButtonElement>(".lc-tab-close")?.click();
+    });
+    expect(onClose).toHaveBeenCalledWith("b1");
+    view.unmount();
+  });
+
+  it("stays closable while another tab is loading", () => {
+    const onClose = vi.fn();
+    const view = mount({ tabs: [homeTab(), board("b1", "doodle")], busy: true, onClose });
+    act(() => {
+      view.chips()[1]?.querySelector<HTMLButtonElement>(".lc-tab-close")?.click();
+    });
+    expect(onClose).toHaveBeenCalledWith("b1");
+    view.unmount();
+  });
+
+  describe("groups", () => {
+    const pair: TabGroup = {
+      id: "g1",
+      children: ["b2", "b1"],
+      split: { axis: "vertical", ratio: 0.5 },
+    };
+
+    function grouped(id: string, title: string): WhiteboardTab {
+      return { ...board(id, title), group: "g1" };
+    }
+
+    it("draws a split's chips side by side, in the group's order", () => {
+      // `b1` and `b2` are not neighbours in the tab order, and the group lists
+      // them the other way round — the strip follows the group, not the order.
+      const view = mount({
+        tabs: [homeTab(), grouped("b1", "left"), board("b3", "loose"), grouped("b2", "right")],
+        groups: [pair],
+      });
+      expect(view.chips().map((chip) => chip.querySelector(".lc-tab-title")?.textContent)).toEqual([
+        "Home",
+        "right",
+        "left",
+        "loose",
+      ]);
+      const rows = Array.from(view.host.querySelectorAll(".lc-tab-row"));
+      // Home, the pair, and the loose tab — three rows, one of them a group.
+      expect(rows).toHaveLength(3);
+      const group = view.host.querySelector(".lc-tab-row.is-group");
+      expect(group?.querySelectorAll(".lc-tab")).toHaveLength(2);
+      expect(group?.querySelector(".lc-tab-group-frame")).not.toBeNull();
+      view.unmount();
+    });
+
+    it("drops the frame when the group disbands", () => {
+      const view = mount({
+        tabs: [homeTab(), grouped("b1", "left"), grouped("b2", "right")],
+        groups: [pair],
+      });
+      expect(view.host.querySelector(".lc-tab-row.is-group")).not.toBeNull();
+      view.rerender({ tabs: [homeTab(), board("b1", "left"), board("b2", "right")], groups: [] });
+      expect(view.host.querySelector(".lc-tab-row.is-group")).toBeNull();
+      expect(view.chips()).toHaveLength(3);
+      view.unmount();
+    });
+
+    it("survives a group naming a tab that is already gone", () => {
+      // Closing one half before the reducer drops the group must not blank the
+      // strip — the missing child is skipped, the survivor still draws.
+      const view = mount({ tabs: [homeTab(), grouped("b1", "left")], groups: [pair] });
+      expect(view.chips().map((chip) => chip.querySelector(".lc-tab-title")?.textContent)).toEqual([
+        "Home",
+        "left",
+      ]);
+      view.unmount();
+    });
   });
 });

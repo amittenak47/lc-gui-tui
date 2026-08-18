@@ -959,15 +959,48 @@ input[type="checkbox"] {
   order: 3;
 }
 
+/*
+ * The sash, VS Code's way: invisible at rest, a blue seam under the pointer.
+ *
+ * The button is a wide-enough hit target to actually grab; the line you see is
+ * the `::after`, thin and centred, so the highlight reads as a seam lighting up
+ * rather than a bar getting a colour. It sits above the boards because a split
+ * pane can paint right up to its own edge.
+ */
 .lc-split-sash {
   order: 2;
-  flex: 0 0 10px;
+  flex: 0 0 6px;
+  position: relative;
   padding: 0;
   border: 0;
   border-radius: 0;
-  background: var(--chrome-edge);
+  background: transparent;
   touch-action: none;
-  z-index: 6;
+  z-index: 32;
+}
+
+.lc-split-sash::after {
+  content: "";
+  position: absolute;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-split-sash::after {
+    transition: none;
+  }
+}
+
+.lc-split-sash:hover::after,
+.lc-split-sash:focus-visible::after,
+.lc-split-sash.is-dragging::after {
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.lc-split-sash:focus-visible {
+  outline: none;
 }
 
 .lc-split-sash.is-vertical {
@@ -975,40 +1008,85 @@ input[type="checkbox"] {
   align-self: stretch;
 }
 
+.lc-split-sash.is-vertical::after {
+  inset: 0 auto 0 50%;
+  width: 2px;
+  margin-left: -1px;
+}
+
 .lc-split-sash.is-horizontal {
   cursor: row-resize;
   width: 100%;
 }
 
-.lc-split-sash.is-dragging {
-  background: var(--accent);
+.lc-split-sash.is-horizontal::after {
+  inset: 50% 0 auto 0;
+  height: 2px;
+  margin-top: -1px;
 }
 
+/*
+ * Pointer capture keeps the *events* on the sash once the pointer wanders off
+ * it, but not the cursor — that still comes from whatever is underneath, so a
+ * drag across a document flickers into a text caret. Pin it on the body for the
+ * length of the drag, and stop anything below from claiming the pointer.
+ */
+body[data-lc-sash-drag] {
+  user-select: none;
+}
+
+body[data-lc-sash-drag] * {
+  cursor: inherit !important;
+  pointer-events: none;
+}
+
+/* The sash keeps its own pointer events — it is holding the capture. */
+body[data-lc-sash-drag] .lc-split-sash.is-dragging {
+  pointer-events: auto;
+}
+
+body[data-lc-sash-drag="vertical"] {
+  cursor: col-resize;
+}
+
+body[data-lc-sash-drag="horizontal"] {
+  cursor: row-resize;
+}
+
+/*
+ * Where the dragged tab would land, painted before you let go.
+ *
+ * It covers the *half* the new pane would take, not the narrow band that
+ * triggers it (`splitEdgeAt`, 22%) — the question the reader is asking mid-drag
+ * is "how much room does this get", and answering it with the trigger band
+ * would understate the answer by half.
+ */
 .lc-split-target {
   position: absolute;
   z-index: 30;
   pointer-events: none;
   background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
 .lc-split-target.is-left {
   inset: 0 auto 0 0;
-  width: 22%;
+  width: 50%;
 }
 
 .lc-split-target.is-right {
   inset: 0 0 0 auto;
-  width: 22%;
+  width: 50%;
 }
 
 .lc-split-target.is-top {
   inset: 0 0 auto 0;
-  height: 22%;
+  height: 50%;
 }
 
 .lc-split-target.is-bottom {
   inset: auto 0 0 0;
-  height: 22%;
+  height: 50%;
 }
 
 /*
