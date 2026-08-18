@@ -138,6 +138,46 @@ export async function getPadSnapshot(
   return getRecord(recordKey(kind, key, tier));
 }
 
+/**
+ * Move a pad's three tiers from one key to another.
+ *
+ * Only used by the annotate hash-to-id migration. A tier already present under
+ * the destination wins — the migration runs after the app has been writing
+ * id-keyed snapshots, so a newer id-keyed tier must not be clobbered by the
+ * stale hash-keyed one it replaced.
+ */
+export async function renamePadSnapshots(
+  kind: PadSnapshotKind,
+  fromKey: string,
+  toKey: string,
+): Promise<number> {
+  let moved = 0;
+  for (const tier of PAD_SNAPSHOT_TIERS) {
+    const row = await getRecord(recordKey(kind, fromKey, tier.id));
+    if (!row) continue;
+    const already = await getRecord(recordKey(kind, toKey, tier.id));
+    if (!already) {
+      try {
+        await run(STORE_SNAPSHOTS, "readwrite", (store) =>
+          store.put({ ...row, key: toKey }, recordKey(kind, toKey, tier.id)),
+        );
+        moved += 1;
+      } catch {
+        // Could not copy — leave the original so a later run can retry.
+        continue;
+      }
+    }
+    try {
+      await run(STORE_SNAPSHOTS, "readwrite", (store) =>
+        store.delete(recordKey(kind, fromKey, tier.id)),
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+  return moved;
+}
+
 export async function deletePadSnapshots(kind: PadSnapshotKind, key: string): Promise<void> {
   for (const tier of PAD_SNAPSHOT_TIERS) {
     try {

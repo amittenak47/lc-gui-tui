@@ -11,12 +11,14 @@ import { encodeInkOps } from "../canvas/inkCodec";
 import { NO_PRESSURE, type InkDrawOp } from "../canvas/rasterInk";
 
 describe("ink page keys", () => {
-  it("scopes md-ink by content hash and whiteboard by notebook id", () => {
-    expect(annotateDocKey("abc")).toBe("md:abc");
+  it("scopes both pad kinds by their library id", () => {
+    // Annotate keys on the sidecar id, not the file hash — two annotation sets
+    // on one PDF have to be able to hold different strokes.
+    expect(annotateDocKey("mdink-1")).toBe("md:mdink-1");
     expect(whiteboardDocKey("n1")).toBe("wb:n1");
   });
 
-  it("uses a separator so a hash prefix does not steal another document's pages", () => {
+  it("uses a separator so an id prefix does not steal another document's pages", () => {
     const inside = inkPageKey("md:ab", 12);
     const neighbour = inkPageKey("md:abc", 1);
     expect(inside.startsWith("md:ab\u001f")).toBe(true);

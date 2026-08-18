@@ -23,8 +23,8 @@ import type { BoardBlob } from "../canvas/BoardHandle";
 import { deleteContent, getContent, putContent } from "./contentStore";
 import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
-import { deletePadSnapshots } from "./padSnapshotStore";
-import { deleteInkPages, annotateDocKey } from "./inkPageStore";
+import { deletePadSnapshots, renamePadSnapshots } from "./padSnapshotStore";
+import { deleteInkPages, annotateDocKey, renameInkPages } from "./inkPageStore";
 import { setStorageItem } from "./storageQuota";
 
 export const ANNOTATE_LIBRARY_LIMIT = 30;
@@ -253,10 +253,41 @@ export async function getAnnotateDoc(id: string): Promise<AnnotateDoc | null> {
   return meta ? readContent(meta) : null;
 }
 
-/** The annotation set drawn over this exact markdown, if there is one. */
+/**
+ * Every annotation set drawn over these exact bytes, newest first.
+ *
+ * Meta only and synchronous, like {@link listAnnotateDocs} — the caller is
+ * deciding whether to show a chooser, which is a question about how many rows
+ * there are, not about what is in them.
+ */
+export function listAnnotateDocsByHash(hash: string): AnnotateDocMeta[] {
+  return readIndex()
+    .filter((entry) => entry.hash === hash)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/**
+ * The most recent annotation set drawn over this exact markdown.
+ *
+ * Kept for the callers that want "reopen what I had" without asking. When more
+ * than one set exists, prefer {@link listAnnotateDocsByHash} and let the reader
+ * choose — this returns the newest and silently ignores the rest.
+ */
 export async function findAnnotateDocByHash(hash: string): Promise<AnnotateDoc | null> {
-  const meta = readIndex().find((entry) => entry.hash === hash);
+  const meta = listAnnotateDocsByHash(hash)[0];
   return meta ? readContent(meta) : null;
+}
+
+/**
+ * An id for a set that has not been saved yet.
+ *
+ * Ink and snapshots are keyed by sidecar id, and both start writing well before
+ * the first save — so the id has to exist from the moment the document opens,
+ * not from the moment it lands in the library. Minting one does not reserve a
+ * library slot: nothing is written until `saveAnnotateDoc` is called with it.
+ */
+export function freshAnnotateId(): string {
+  return freshId(readIndex(), Date.now());
 }
 
 /**
@@ -281,6 +312,69 @@ function freshId(library: readonly AnnotateDocMeta[], now: number): string {
     const candidate = `${base}-${suffix.toString(36)}`;
     if (!library.some((entry) => entry.id === candidate)) return candidate;
   }
+}
+
+const KEY_MIGRATION_FLAG = "whiteboard.annotate.keys.byId.v1";
+
+/**
+ * Move ink and snapshots from the file hash onto the sidecar id, once.
+ *
+ * Both used to be keyed by the hash of the annotated file, which is why only
+ * one annotation set per file was ever possible — the second set would have
+ * written over the first one's strokes. New writes go to `md:{id}` and
+ * `annotate:{id}:{tier}`; this brings the existing rows across so nobody's ink
+ * disappears on the upgrade.
+ *
+ * Rows whose hash is shared by more than one index entry are the ambiguous
+ * case. That should not exist — the save path forbade it — but a library
+ * carried across builds could hold one, so the ink goes to the most recently
+ * updated set rather than being duplicated onto both or dropped. The others get
+ * a clean start, which is the honest outcome: there is no way to tell whose
+ * strokes those were.
+ *
+ * Best-effort and idempotent. A failure leaves the old rows in place and the
+ * flag unset, so the next open tries again; the app reads id keys either way,
+ * so the worst case is ink that has not arrived yet rather than ink that is
+ * gone.
+ */
+export function annotateKeyMigrationPlan(
+  index: readonly AnnotateDocMeta[],
+): Array<{ from: string; to: string }> {
+  const claimed = new Set<string>();
+  const plan: Array<{ from: string; to: string }> = [];
+  // Newest first, so when two sets share a hash the live one takes the ink.
+  for (const meta of [...index].sort((a, b) => b.updatedAt - a.updatedAt)) {
+    if (claimed.has(meta.hash)) continue;
+    claimed.add(meta.hash);
+    // A row whose hash already equals its id would rename a key onto itself.
+    if (meta.hash === meta.id) continue;
+    plan.push({ from: meta.hash, to: meta.id });
+  }
+  return plan;
+}
+
+export async function migrateAnnotateKeysToId(): Promise<number> {
+  try {
+    if (localStorage.getItem(KEY_MIGRATION_FLAG)) return 0;
+  } catch {
+    return 0;
+  }
+  let moved = 0;
+  for (const { from, to } of annotateKeyMigrationPlan(readIndex())) {
+    try {
+      moved += await renameInkPages(annotateDocKey(from), annotateDocKey(to));
+      moved += await renamePadSnapshots("annotate", from, to);
+    } catch {
+      // Leave the flag unset so the next mount picks up where this stopped.
+      return moved;
+    }
+  }
+  try {
+    localStorage.setItem(KEY_MIGRATION_FLAG, "1");
+  } catch {
+    /* private browsing — the rename already happened, so a repeat is a no-op */
+  }
+  return moved;
 }
 
 /**
@@ -308,13 +402,20 @@ export async function saveAnnotateDoc(input: {
 }): Promise<AnnotateDoc> {
   const index = readIndex();
   const now = Date.now();
-  // An annotation set is identified by what it was drawn over, so re-saving the
-  // same file updates its entry instead of stacking a second one beside it.
-  const existing =
-    (input.id ? index.find((entry) => entry.id === input.id) : null) ??
-    index.find((entry) => entry.hash === input.hash) ??
-    null;
-  const id = existing?.id ?? input.id ?? freshId(index, now);
+  /*
+   * An annotation set is identified by its own id, never by the file it was
+   * drawn over.
+   *
+   * This used to fall back to `index.find(entry => entry.hash === input.hash)`,
+   * which made a second annotation set on one PDF impossible: the second save
+   * found the first set's row and overwrote it. A hash answers "are these the
+   * same bytes"; it was never an answer to "which of my sets is this".
+   *
+   * Callers that have no id yet pass none and get a fresh one — one file can
+   * now carry as many sets as the library holds.
+   */
+  const existing = input.id ? index.find((entry) => entry.id === input.id) ?? null : null;
+  const id = input.id ?? freshId(index, now);
   if (!existing && index.length >= ANNOTATE_LIBRARY_LIMIT) {
     throw new AnnotateLibraryFullError(
       `At most ${ANNOTATE_LIBRARY_LIMIT} annotated documents — delete one to keep another.`,
@@ -353,8 +454,8 @@ export async function deleteAnnotateDoc(id: string): Promise<void> {
   writeIndex(kept);
   await deleteContent(id);
   if (going) {
-    void deletePadSnapshots("annotate", going.hash).catch(() => {});
-    void deleteInkPages(annotateDocKey(going.hash)).catch(() => {});
+    void deletePadSnapshots("annotate", going.id).catch(() => {});
+    void deleteInkPages(annotateDocKey(going.id)).catch(() => {});
   }
   /*
    * A binary document's bytes outlive its entry unless something removes them.

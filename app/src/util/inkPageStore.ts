@@ -31,8 +31,19 @@ export interface InkPageRecord {
   updatedAt: number;
 }
 
-export function annotateDocKey(hash: string): string {
-  return `md:${hash}`;
+/**
+ * Ink for one annotation set.
+ *
+ * Keyed by the sidecar's library id, not by the hash of the file it was drawn
+ * over. Two annotation sets on one PDF are two ids and one hash; keying on the
+ * hash meant they shared these rows, so the second set's strokes landed on top
+ * of the first set's. The id is minted when the document opens, before anything
+ * is saved, so ink written in the first few seconds still has somewhere of its
+ * own to go. See `migrateAnnotateKeysToId` in `annotateStore` for the rows
+ * written by the build that keyed these on the hash.
+ */
+export function annotateDocKey(sidecarId: string): string {
+  return `md:${sidecarId}`;
 }
 
 export function whiteboardDocKey(id: string): string {
@@ -186,6 +197,31 @@ export async function deleteInkPages(docKey: string): Promise<void> {
   } catch {
     /* private browsing / missing store */
   }
+}
+
+/**
+ * Move every page of ink from one doc key to another.
+ *
+ * Only used by the hash-to-id migration. Copy-then-delete rather than a cursor
+ * `update`: the key is part of the record's identity here, and a half-finished
+ * rename that left rows under both keys would restore ink twice.
+ */
+export async function renameInkPages(fromKey: string, toKey: string): Promise<number> {
+  const rows = await getInkPageRecords(fromKey);
+  if (rows.length === 0) return 0;
+  try {
+    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
+      for (const row of rows) {
+        store.put({ ...row, docKey: toKey }, inkPageKey(toKey, row.pageId));
+      }
+    });
+  } catch {
+    // Nothing was moved, so leave the originals where they are and try again
+    // on the next open rather than deleting ink we failed to copy.
+    return 0;
+  }
+  await deleteInkPages(fromKey);
+  return rows.length;
 }
 
 /** Leftover dirty rows from a crash — gzip drain (WAKE_UP). */
