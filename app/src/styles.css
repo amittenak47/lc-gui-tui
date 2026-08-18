@@ -877,6 +877,32 @@ input[type="checkbox"] {
   --lc-pdf-film: 0px;
 }
 
+/*
+ * A workspace that is mounted but not on screen.
+ *
+ * `display: none` rather than unmounting is the whole point of keeping it:
+ * the board, its ink layer and any pdf.js workers stay up, so coming back is
+ * showing it again instead of reading it out of the store. It also takes no
+ * flex space, which is what stops two mounted workspaces splitting the width.
+ */
+.lc-canvas-wrap.lc-canvas-parked {
+  display: none;
+}
+
+/*
+ * Painted over the workspace arriving underneath it.
+ *
+ * Only Home does this, and only while its overlay slides away. Absolute
+ * rather than another flex child, so the two do not share the width — this is
+ * the same place the overlay sat when there was one canvas for the whole app.
+ */
+.lc-canvas-wrap.lc-canvas-over {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  flex: none;
+}
+
 .lc-canvas-wrap.lc-has-pdf-film {
   --lc-pdf-film: 96px;
   display: flex;
