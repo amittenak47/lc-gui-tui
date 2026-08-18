@@ -1,0 +1,189 @@
+/**
+ * What the shell owns and every workspace borrows.
+ *
+ * The tab strip made the app two things: a shell that outlives any one
+ * workspace — the daemon client, the theme, the pen's prefs, the LLM's health,
+ * the strip itself — and a `Workspace` that is mounted per tab and torn down
+ * with it. This is the seam between them.
+ *
+ * It is a context rather than three dozen props because the borrowed values
+ * are used at every depth of a workspace, and threading them by hand would
+ * have meant editing several thousand lines that otherwise did not need to
+ * change. The field names are the names the code already used, so the move
+ * stayed a move.
+ *
+ * Home is a workspace too — `kind: "home"`, no board to load, the chooser
+ * painted over an idle canvas, which is what it always was. That is why the
+ * library dialogs and the "open another one" icons are not in here: they work
+ * the same whether a pad is live or you are looking at the cards, so they stay
+ * with the workspace that renders them.
+ */
+
+import {
+  createContext,
+  useContext,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from "react";
+
+import type { LcClient, SearchOptions } from "./api/client";
+import type { CoachCapabilities, CoachFlags, SessionSnapshot } from "./api/types";
+import type { InkRecognizer } from "./canvas/ink";
+import type { BoardReadingSize } from "./modes/codeFontSize";
+import type { TestForwardMode } from "./util/agentPrefs";
+import type { AutosaveInterval } from "./util/autosavePref";
+import type { TabRecord } from "./util/tabs";
+
+/** The Home overlay's beats as a workspace opens under it. */
+export type BrowseMotion = "enter" | "idle" | "busy" | "exit" | "done";
+
+/**
+ * Where a workspace hangs its own header controls.
+ *
+ * The header outlives any one workspace — the strip must not remount when you
+ * switch — so the shell renders it, and the parts that belong to whatever is
+ * open arrive through `createPortal`. The DOM lands in the header; the React
+ * tree stays with the workspace, which is what keeps them wired to its state.
+ * Only the active workspace fills them.
+ */
+export interface HeaderSlots {
+  /** Beside the strip: the problem stepper, or Home's prompt. */
+  left: HTMLElement | null;
+  /** Run / Submit / Open in IDE. */
+  center: HTMLElement | null;
+  /** Pad icons, gear and Agent — one slot, so their order is the file's. */
+  right: HTMLElement | null;
+  /** Under the header: the web omnibox. */
+  chrome: HTMLElement | null;
+  /**
+   * The coach column.
+   *
+   * `.lc-side` is `position: absolute; top: 38px`, so its containing block has
+   * to stay `.lc-app` — rendering it inside `.lc-main`, which is itself
+   * positioned, would drop it 38px below the header instead of against it.
+   * The dialogs need no slot: their backdrops are `position: fixed`.
+   */
+  agentPanel: HTMLElement | null;
+}
+
+/**
+ * What the active workspace needs on the app wrapper, and on the strip.
+ *
+ * The classes are global — header height, agent column width, whether the
+ * board is dimmed — so with more than one workspace mounted they can only come
+ * from the one on screen. The index status rides along because the strip is
+ * the shell's but the chunk counts behind the `[indexed]` badge are not.
+ */
+export interface WorkspaceChrome {
+  problem: boolean;
+  pad: boolean;
+  agentOpen: boolean;
+  loading: boolean;
+  busy: boolean;
+  loadActive: boolean;
+  docIndex: { status: "idle" | "indexing" | "indexed" | "error"; meta: unknown; error: string | null };
+}
+
+export const NO_CHROME: WorkspaceChrome = {
+  problem: false,
+  pad: false,
+  agentOpen: false,
+  loading: false,
+  busy: false,
+  loadActive: false,
+  docIndex: { status: "idle", meta: null, error: null },
+};
+
+/** What the shell may ask of a workspace before it unmounts it. */
+export interface WorkspaceApi {
+  /** Commit whatever the autosave has not; no dialog, nothing discarded. */
+  park: () => Promise<void>;
+  /** The save / discard / cancel dialog. Resolves only if it went through. */
+  leave: () => Promise<boolean>;
+}
+
+export interface ShellValue {
+  client: LcClient;
+  mobile: boolean;
+
+  /** In-process daemon is assumed up; this still gates pad sync and tests. */
+  serverLink: "checking" | "online" | "offline";
+  serverLinkRef: MutableRefObject<"checking" | "online" | "offline">;
+
+  themeId: string;
+  setThemeId: Dispatch<SetStateAction<string>>;
+  readingSize: BoardReadingSize;
+  setReadingSize: Dispatch<SetStateAction<BoardReadingSize>>;
+  autosaveMs: AutosaveInterval;
+  setAutosaveMs: Dispatch<SetStateAction<AutosaveInterval>>;
+  testForward: TestForwardMode;
+  setTestForward: Dispatch<SetStateAction<TestForwardMode>>;
+  sheetDragLocked: boolean;
+  setSheetDragLocked: Dispatch<SetStateAction<boolean>>;
+  pdfFilmOpen: boolean;
+  setPdfFilmOpen: Dispatch<SetStateAction<boolean>>;
+  recognizer: InkRecognizer;
+
+  capabilities: CoachCapabilities | null;
+  coachFlags: CoachFlags;
+  llmLink: "unknown" | "online" | "offline";
+  refreshCoachFlags: () => Promise<void>;
+
+  settingsOpen: boolean;
+  setSettingsOpen: Dispatch<SetStateAction<boolean>>;
+  setSettingsTab: Dispatch<
+    SetStateAction<"paths" | "llm" | "serve" | "datasets" | "workspace" | "agent" | undefined>
+  >;
+
+  /** Banner text. The shell paints them; a workspace is usually what writes. */
+  notice: string | null;
+  setNotice: Dispatch<SetStateAction<string | null>>;
+  error: string | null;
+  setError: Dispatch<SetStateAction<string | null>>;
+
+  /**
+   * The Home overlay's beats.
+   *
+   * Home is a workspace, but the beats are the shell's because they outlive
+   * it: the overlay has to keep sliding away *after* the tab it belongs to has
+   * been switched off, and a workspace cannot own state that survives its own
+   * unmount.
+   */
+  browseMotion: BrowseMotion;
+  setBrowseMotion: Dispatch<SetStateAction<BrowseMotion>>;
+  holdBrowseOverlay: boolean;
+  setHoldBrowseOverlay: Dispatch<SetStateAction<boolean>>;
+
+  session: SessionSnapshot | null;
+  setSession: Dispatch<SetStateAction<SessionSnapshot | null>>;
+  bankFilters: SearchOptions;
+  setBankFilters: Dispatch<SetStateAction<SearchOptions>>;
+  refreshSession: () => Promise<void>;
+
+  /** Tabs. Opening writes a record; the workspace that mounts for it loads. */
+  openWorkspace: (tab: TabRecord) => TabRecord;
+  focusTab: (id: string) => void;
+  closeTab: (id: string) => void;
+  patchTab: (id: string, patch: import("./util/tabs").TabPatch) => void;
+  /** A web tab's history is on its record, so stepping it is a record edit. */
+  webPush: (id: string, entry: import("./util/webPadSession").WebPadEntry) => void;
+  webStep: (id: string, delta: number) => void;
+  tabsRef: MutableRefObject<import("./util/tabs").TabState>;
+
+  headerSlots: HeaderSlots;
+  /** The active workspace reports the wrapper classes it needs. */
+  setChrome: (chrome: WorkspaceChrome) => void;
+  /** Registers `park` / `leave`, and null on the way out. */
+  setWorkspaceApi: (id: string, api: WorkspaceApi | null) => void;
+  /** The load found nothing to open; the shell keeps the chip and prompts. */
+  onMissingContent: (tabId: string, title: string, detail: string) => void;
+}
+
+export const ShellContext = createContext<ShellValue | null>(null);
+
+export function useShell(): ShellValue {
+  const value = useContext(ShellContext);
+  if (!value) throw new Error("useShell outside the app shell");
+  return value;
+}
