@@ -321,6 +321,33 @@ describe("split groups", () => {
     expect(state.tabs.find((tab) => tab.id === "b2")?.group).toBeUndefined();
   });
 
+  it("keeps a tab in at most one split, and clears the partner left behind", () => {
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: board("b1", "nb-1"), at: 1 },
+      { type: "open", tab: board("b2", "nb-2"), at: 2 },
+      { type: "open", tab: board("b3", "nb-3"), at: 3 },
+      { type: "split", a: "b1", b: "b2", axis: "vertical", edge: "right", at: 4 },
+      { type: "split", a: "b1", b: "b3", axis: "vertical", edge: "right", at: 5 },
+    );
+    expect(state.groups).toHaveLength(1);
+    expect(state.groups[0]?.children).toEqual(["b1", "b3"]);
+    expect(state.tabs.find((tab) => tab.id === "b2")?.group).toBeUndefined();
+  });
+
+  it("unsplits without closing either tab", () => {
+    const grouped = run(
+      initialTabState(),
+      { type: "open", tab: board("b1", "nb-1"), at: 1 },
+      { type: "open", tab: board("b2", "nb-2"), at: 2 },
+      { type: "split", a: "b1", b: "b2", axis: "vertical", at: 3 },
+    );
+    const state = tabsReducer(grouped, { type: "unsplit", id: "b1" });
+    expect(state.groups).toEqual([]);
+    expect(state.tabs.map((tab) => tab.id)).toEqual([HOME_TAB_ID, "b1", "b2"]);
+    expect(state.tabs.find((tab) => tab.id === "b1")?.group).toBeUndefined();
+  });
+
   it("clamps the sash ratio", () => {
     const grouped = run(
       initialTabState(),
@@ -333,12 +360,20 @@ describe("split groups", () => {
     expect(wide.groups[0]?.split.ratio).toBe(0.8);
     const same = tabsReducer(wide, { type: "set-ratio", groupId, ratio: 0.8 });
     expect(same).toBe(wide);
+    expect(
+      tabsReducer(grouped, { type: "set-ratio", groupId, ratio: Number.NaN }).groups[0]?.split.ratio,
+    ).toBe(0.5);
   });
 
   it("pins both split panes at the front of the live list", () => {
     expect(pinLive(["home", "b1", "b2"], ["b2", "b1"])).toEqual(["b2", "b1", "home"]);
     const ids = ["b1", "b2"];
     expect(pinLive(ids, ["b1", "b2"])).toBe(ids);
+  });
+
+  it("needs a third live slot when two panes are on screen, so the parked tab stays", () => {
+    expect(liveOverflow(["b1", "b2", "home"], 2)).toEqual(["home"]);
+    expect(liveOverflow(["b1", "b2", "home"], 3)).toEqual([]);
   });
 
   it("names the edge the pointer is in, and ignores the middle", () => {

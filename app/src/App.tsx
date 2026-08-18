@@ -117,14 +117,28 @@ function SplitSash({
   axis: SplitAxis;
   onRatio: (ratio: number) => void;
 }) {
+  const [dragging, setDragging] = useState(false);
+  const lastTapRef = useRef(0);
   return (
     <button
       type="button"
-      className={`lc-split-sash is-${axis}`}
+      role="separator"
+      aria-orientation={axis === "vertical" ? "vertical" : "horizontal"}
       aria-label="Resize split"
+      className={["lc-split-sash", `is-${axis}`, dragging ? "is-dragging" : ""]
+        .filter(Boolean)
+        .join(" ")}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
+        const now = Date.now();
+        if (now - lastTapRef.current < 320) {
+          lastTapRef.current = 0;
+          onRatio(0.5);
+          return;
+        }
+        lastTapRef.current = now;
         event.currentTarget.setPointerCapture(event.pointerId);
+        setDragging(true);
       }}
       onPointerMove={(event) => {
         if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
@@ -133,10 +147,17 @@ function SplitSash({
         const box = main.getBoundingClientRect();
         const ratio =
           axis === "vertical"
-            ? (event.clientX - box.left) / box.width
-            : (event.clientY - box.top) / box.height;
+            ? (event.clientX - box.left) / Math.max(1, box.width)
+            : (event.clientY - box.top) / Math.max(1, box.height);
         onRatio(ratio);
       }}
+      onPointerUp={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        setDragging(false);
+      }}
+      onPointerCancel={() => setDragging(false)}
     />
   );
 }
@@ -177,8 +198,8 @@ export function App() {
   const client = useMemo(() => new LcClient(), []);
   const [recognizer, setRecognizer] = useState<InkRecognizer>(() => new NoopRecognizer());
 
-  // Overlay: spinner until the first LLM probe, then checkmark. No /health wait —
-  // the daemon is in-process. Missing model still opens Continue without LLM.
+  // Overlay is opaque from the first paint (no fade-in). The rAF only
+  // advances the phase machine; CSS must not start this overlay at opacity 0.
   useEffect(() => {
     let cancelled = false;
     window.requestAnimationFrame(() => {
@@ -572,7 +593,13 @@ export function App() {
    * that simply stops matching.
    */
   useEffect(() => {
-    const doomed = liveOverflow(liveIds, LIVE_LIMIT);
+    /*
+     * A split occupies two live slots. Raise the budget by one so the tab
+     * just left still stays mounted — otherwise both halves eat the floor
+     * of two and switching away remounts.
+     */
+    const liveLimit = Math.max(LIVE_LIMIT, visibleIds.length + 1);
+    const doomed = liveOverflow(liveIds, liveLimit);
     if (doomed.length === 0) return;
     let cancelled = false;
     void (async () => {
@@ -584,7 +611,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [liveIds]);
+  }, [liveIds, visibleIds.length]);
 
   const focusTab = useCallback(
     (id: string) => {
@@ -838,6 +865,7 @@ export function App() {
           chrome.pad ? "lc-app-pad" : "",
           chrome.agentOpen ? "lc-app-agent-open" : "",
           chrome.loading ? "lc-app-loading" : "",
+          bootPhase !== "gone" && bootPhase !== "exit" ? "lc-app-booting" : "",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -999,9 +1027,6 @@ export function App() {
         <div
           className={[
             "lc-server-gate-boot",
-            bootPhase === "enter" || bootPhase === "show" || bootPhase === "done"
-              ? "lc-server-gate-boot-enter"
-              : "",
             bootPhase === "exit" ? "lc-server-gate-boot-exit" : "",
           ]
             .filter(Boolean)
