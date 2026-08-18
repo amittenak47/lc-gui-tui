@@ -19,7 +19,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   snapshot is out of memory, a problem the daemon will not serve. The last one
   used to be an error banner over a board that never opened.
 - Walking to another tab answers the prompt by leaving: the empty tab stays,
-  the modal does not follow you.
+  the modal does not follow you. **Keep it empty** stays on that chip without
+  painting Home over it. **Close tab** lands on whatever tab remains, not
+  always Home. **Try again** that succeeds takes the prompt down.
 
 ### Fixed — tabs stop disappearing when you switch away from them
 

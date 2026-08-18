@@ -5595,7 +5595,15 @@ export function App() {
         }
       }
     },
-    [bankFilters, loadAnnotate, loadProblem, loadWhiteboard, reportMissingTab, showWebEntry],
+    [
+      bankFilters,
+      loadAnnotate,
+      loadProblem,
+      loadWhiteboard,
+      reportMissingTab,
+      returnToHome,
+      showWebEntry,
+    ],
   );
 
   /**
@@ -5739,11 +5747,13 @@ export function App() {
   /*
    * The prompt belongs to one chip. Switching away answers it by walking off,
    * which is an answer — leave the empty tab where it is and take the modal
-   * down rather than carrying it onto whatever was opened instead.
+   * down rather than carrying it onto whatever was opened instead. A retry that
+   * actually loaded also answers it: the workspace is no longer empty.
    */
   useEffect(() => {
-    if (missingTab && tabState.activeId !== missingTab.id) setMissingTab(null);
-  }, [missingTab, tabState.activeId]);
+    if (!missingTab) return;
+    if (tabState.activeId !== missingTab.id || problem) setMissingTab(null);
+  }, [missingTab, problem, tabState.activeId]);
 
   const activeTabRecord = activeTabOf(tabState);
   const activeWebTab = activeTabRecord.kind === "web" ? activeTabRecord : undefined;
@@ -6499,7 +6509,12 @@ export function App() {
               onJump={(page) => boardRef.current?.scrollToPdfPage(page)}
             />
           )}
-          {!problem && (
+          {!problem &&
+            !missingTab &&
+            (tabState.activeId === HOME_TAB_ID ||
+              holdBrowseOverlay ||
+              boardPreparing ||
+              browseMotion !== "idle") && (
             <div
               className={[
                 "lc-overlay",
@@ -6515,12 +6530,7 @@ export function App() {
                 .join(" ")}
             >
               <div className="lc-overlay-content">
-                {/*
-                  A tab whose content has gone lands here with `problem` null,
-                  and it is emphatically not Home — so the cards stay away and
-                  what is left is the empty workspace the prompt sits over.
-                */}
-                {missingTab ? null : practiceOpen && FEATURE_LEETCODE ? (
+                {tabState.activeId === HOME_TAB_ID && practiceOpen && FEATURE_LEETCODE ? (
                   <ProblemBrowser
                     client={client}
                     onPick={pickProblem}
@@ -6542,7 +6552,7 @@ export function App() {
                     }}
                     onRandomSession={(filters) => void startRandomSession(filters)}
                   />
-                ) : !holdBrowseOverlay ? (
+                ) : tabState.activeId === HOME_TAB_ID && !holdBrowseOverlay ? (
                   <HomeChooser
                     busy={busy !== null || boardPreparing || workspaceLoadActive}
                     onPractice={() => setPracticeOpen(true)}
@@ -7057,9 +7067,9 @@ export function App() {
               <button
                 type="button"
                 onClick={() => {
-                  dispatchTabs({ type: "close", id: missingTab.id });
+                  const id = missingTab.id;
                   setMissingTab(null);
-                  returnToHome();
+                  closeTab(id);
                 }}
               >
                 Close tab
