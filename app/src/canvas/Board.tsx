@@ -1098,6 +1098,16 @@ export interface BoardProps {
    * is scroll-only (internal hand — never shown in the UI).
    */
   annotateToggle?: boolean;
+  /**
+   * Owned markdown — offer Edit beside the annotate toggle.
+   *
+   * Hidden everywhere else: an imported file has no source of its own to edit,
+   * and a whiteboard or a problem has no source at all.
+   */
+  editToggle?: boolean;
+  /** Edit is on. Owned by the workspace, since it owns the buffer. */
+  editing?: boolean;
+  onToggleEdit?: () => void;
   /** Annotation mode changed — the caller makes the dock stop taking pointers. */
   onAnnotateCodeChange?: (on: boolean) => void;
   /** Show lined-paper toggle in the map chrome. */
@@ -1172,6 +1182,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     transparentCanvas = false,
     docPaper = false,
     annotateToggle = true,
+    editToggle = false,
+    editing = false,
+    onToggleEdit,
     onAnnotateCodeChange,
     linedPaperToggle = false,
     coachFold = null,
@@ -2301,6 +2314,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     if (!annotateCode && highlighting) setHighlighting(false);
   }, [annotateCode, highlighting]);
+
+  /*
+   * Edit and the pen are mutually exclusive.
+   *
+   * Monaco wants the pointer for a caret and the ink layer wants it for a
+   * stroke; a surface where a drag sometimes does either is worse than either
+   * mode alone. Entering Edit therefore puts both down rather than leaving the
+   * reader to notice.
+   */
+  useEffect(() => {
+    if (!editing) return;
+    if (annotateCode) setAnnotateCode(false);
+    if (highlighting) setHighlighting(false);
+  }, [annotateCode, editing, highlighting]);
 
   /** Annotate PE/class flip can desync host-bound ink — repaint after the mode settles. */
   useEffect(() => {
@@ -7478,6 +7505,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   >
                     <AnnotateIcon on={annotateCode} />
                   </button>
+                  {editToggle && (
+                    <button
+                      type="button"
+                      className={
+                        editing
+                          ? "lc-lined-toggle lc-tip-target is-active"
+                          : "lc-lined-toggle lc-tip-target"
+                      }
+                      aria-pressed={editing}
+                      aria-label={editing ? "Done editing" : "Edit markdown"}
+                      data-tip={editing ? "Done editing — back to the page" : "Edit this note"}
+                      data-tip-placement="bottom"
+                      onClick={() => onToggleEdit?.()}
+                    >
+                      <EditMarkdownIcon on={editing} />
+                    </button>
+                  )}
                 </div>
               )}
               {annotateToggle && !chromeShown.chrome && !annotatePeek && (
@@ -8266,6 +8310,29 @@ function PagesFilmIcon() {
 /**
  * A page with a nib on it — the toolbar toggle, same 24-grid as the eye.
  */
+/** Same page outline as {@link AnnotateIcon}, with a caret instead of a nib. */
+function EditMarkdownIcon({ on = false }: { on?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 3h9l4 4v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M11 10v8" />
+      <path d="M9.4 10h3.2" />
+      <path d="M9.4 18h3.2" />
+      {on && <path d="M7 7h4" />}
+    </svg>
+  );
+}
+
 function AnnotateIcon({ on = false }: { on?: boolean }) {
   return (
     <svg

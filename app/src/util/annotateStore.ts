@@ -1,8 +1,11 @@
 /**
  * Annotation sets for markdown files — the library behind Markdown Ink.
  *
- * The file on disk is never written to. An entry holds the writer's ink and a
- * *copy* of the markdown it was drawn over — the copy only so that an entry can
+ * Two kinds of entry live here, and the difference is who owns the text.
+ *
+ * **Imported** (everything opened through the picker): the file on disk is
+ * never written to. An entry holds the writer's ink and a *copy* of the
+ * markdown it was drawn over — the copy only so that an entry can
  * be reopened from the library without hunting down the file again. Discarding
  * a session throws away annotations; nothing in here can touch the original.
  *
@@ -13,6 +16,11 @@
  * was drawn over, so content is what it belongs to. A file that changes under
  * an old annotation set gets a soft warning rather than a silent mismatch, and
  * the name is kept alongside purely so the library reads as file names.
+ *
+ * **Owned** (`owned: true`, made by New file): there is no original. `source`
+ * *is* the note, editing it is editing the document, and its hash moves every
+ * time it is saved. Nothing about the storage differs — same index row, same
+ * content record, same ink keys — only the claim over the text.
  *
  * Mirrors `whiteboardStore` deliberately — same shape, same restore-for-discard
  * contract, same coach thread on the entry — so the two modes behave identically
@@ -76,6 +84,19 @@ export interface AnnotateDocMeta {
    * the better label anyway. See {@link annotateDocLabel}.
    */
   label?: string;
+  /**
+   * This note was written in the app, rather than opened from somewhere else.
+   *
+   * The distinction is about who owns the text. An imported file's `source` is
+   * a *copy*, kept only so the set can be reopened without hunting for the file
+   * again — the original is never written to, and nothing in here can touch it.
+   * An owned note has no original: `source` is the note, and editing it is
+   * editing the document rather than annotating a snapshot of one.
+   *
+   * Absent on everything opened through the file picker, and on every set made
+   * before New file existed, so a missing value reads as "imported".
+   */
+  owned?: boolean;
 }
 
 /**
@@ -443,6 +464,8 @@ export async function saveAnnotateDoc(input: {
   docType?: DocType;
   /** Undefined keeps whatever the set is already called. */
   label?: string;
+  /** Undefined keeps whatever the set already claims. */
+  owned?: boolean;
   source: string;
   board: BoardBlob;
   footnotes?: readonly DocFootnote[];
@@ -479,6 +502,7 @@ export async function saveAnnotateDoc(input: {
   const footnotes = input.footnotes ? [...input.footnotes] : prior?.footnotes ?? [];
   const agent = Array.isArray(input.agent) ? input.agent : prior?.agent ?? [];
   const label = input.label?.trim() || existing?.label;
+  const owned = input.owned ?? existing?.owned;
   const meta: AnnotateDocMeta = {
     id,
     name: input.name.trim() || existing?.name || "Untitled.md",
@@ -486,6 +510,7 @@ export async function saveAnnotateDoc(input: {
     docType: input.docType ?? existing?.docType ?? "markdown",
     updatedAt: now,
     ...(label ? { label } : {}),
+    ...(owned ? { owned: true } : {}),
   };
   writeIndex([meta, ...index.filter((entry) => entry.id !== id)]);
   await putContent(id, {

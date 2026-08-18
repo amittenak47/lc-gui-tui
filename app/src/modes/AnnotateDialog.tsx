@@ -30,7 +30,9 @@ export type MdInkEntryChoice =
   | "import"
   | "snapshot"
   /** Start a second set of annotations on the file already open. */
-  | "fork";
+  | "fork"
+  /** Write a new markdown note in the app, rather than opening one. */
+  | "new";
 
 interface LeaveProps {
   mode: "leave";
@@ -72,6 +74,8 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const [docs, setDocs] = useState<AnnotateDocMeta[]>(() => listAnnotateDocs());
   const [pickingRecent, setPickingRecent] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
+  /** Naming a new note. Null when the dialog is not on that step. */
+  const [newTitle, setNewTitle] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const { tapArmed, arm } = useLibraryDeleteArm();
@@ -147,7 +151,9 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
         <div className="lc-settings-head">
           <h2>{isLeave ? "Leave document?" : "Document"}</h2>
           <p className="lc-muted">
-            {pickingSnapshots
+            {newTitle !== null
+              ? "Name the note. It lives in this app — there is no file on disk until you export it."
+              : pickingSnapshots
               ? "Hold a snapshot to roll this file back. Latest autosave is the live library entry."
               : pickingRecent
               ? tapArmed
@@ -159,14 +165,45 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                   : "Nothing annotated since the last save — leaving changes nothing."
                 : allowSave
                   ? "Save these annotations, start a second set on this file, or open another document."
-                  : "Open a document to annotate, or reopen a recent one."}
+                  : "Write a new note, open a document to annotate, or reopen a recent one."}
           </p>
         </div>
 
         <div className="lc-settings-body">
           {error && <div className="lc-warning">{error}</div>}
 
-          {pickingSnapshots && entry ? (
+          {newTitle !== null && entry ? (
+            <div className="lc-settings-choice">
+              <label className="lc-md-new-title">
+                <span className="lc-muted">Title</span>
+                <input
+                  type="text"
+                  value={newTitle}
+                  autoFocus
+                  placeholder="Untitled"
+                  disabled={locked}
+                  onChange={(event) => setNewTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || locked) return;
+                    event.preventDefault();
+                    entry.onChoose("new", newTitle.trim() || "Untitled");
+                  }}
+                />
+              </label>
+              <HoldButton
+                label="Create note"
+                className="lc-hold-choice"
+                disabled={locked}
+                onConfirm={() => entry.onChoose("new", newTitle.trim() || "Untitled")}
+                resetKey={error}
+              >
+                <strong>Create</strong>
+                <span className="lc-muted">
+                  Opens a blank note you can edit, annotate, and link to.
+                </span>
+              </HoldButton>
+            </div>
+          ) : pickingSnapshots && entry ? (
             <div className="lc-settings-choice">
               {PAD_SNAPSHOT_TIERS.map((tier) => {
                 const row = snapshots.find((snap) => snap.tier === tier.id);
@@ -308,6 +345,17 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     </HoldButton>
                   )}
                   <HoldButton
+                    label="New file"
+                    className="lc-hold-choice"
+                    disabled={locked}
+                    onConfirm={() => setNewTitle("")}
+                  >
+                    <strong>New file…</strong>
+                    <span className="lc-muted">
+                      A markdown note you write here, and can edit.
+                    </span>
+                  </HoldButton>
+                  <HoldButton
                     label="Open document"
                     className="lc-hold-choice"
                     disabled={locked}
@@ -387,7 +435,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
         </div>
 
         <div className="lc-settings-foot">
-          {(pickingRecent || pickingSnapshots) && (
+          {(pickingRecent || pickingSnapshots || newTitle !== null) && (
             <button
               type="button"
               className="lc-secondary"
@@ -395,6 +443,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
               onClick={() => {
                 setPickingRecent(false);
                 setPickingSnapshots(false);
+                setNewTitle(null);
               }}
             >
               Back

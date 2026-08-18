@@ -247,6 +247,68 @@ describe("listAnnotateDocsByHash", () => {
   });
 });
 
+describe("owned notes", () => {
+  it("remembers that a note was written here, not opened", async () => {
+    const saved = await saveAnnotateDoc({
+      name: "ideas.md",
+      hash: hashMarkdown("# Ideas\n\n"),
+      owned: true,
+      source: "# Ideas\n\n",
+      board: board(),
+    });
+    expect(listAnnotateDocs()[0]!.owned).toBe(true);
+    expect((await getAnnotateDoc(saved.id))?.owned).toBe(true);
+  });
+
+  it("treats anything opened from a file as imported", async () => {
+    await saveAnnotateDoc({ name: "dp.pdf", hash: "h", source: "", board: board() });
+    // Absent rather than false — an old row that predates New file has to read
+    // as imported too, and that is what a missing value means.
+    expect(listAnnotateDocs()[0]!.owned).toBeUndefined();
+  });
+
+  it("keeps ownership across a save that does not mention it", async () => {
+    // Autosave passes no `owned`. Dropping it would turn a note the reader can
+    // edit into one they cannot, three seconds after they started.
+    const saved = await saveAnnotateDoc({
+      name: "ideas.md",
+      hash: "h1",
+      owned: true,
+      source: "# Ideas",
+      board: board(),
+    });
+    await saveAnnotateDoc({ id: saved.id, name: "ideas.md", hash: "h2", source: "# Edited", board: board() });
+    expect(listAnnotateDocs()[0]!.owned).toBe(true);
+  });
+
+  it("keeps one id while the text — and so the hash — moves", async () => {
+    // The reason ink stopped being hash-keyed: editing a note renames every
+    // byte of it, and the strokes over it have to survive that.
+    const first = hashMarkdown("# One");
+    const saved = await saveAnnotateDoc({
+      name: "n.md",
+      hash: first,
+      owned: true,
+      source: "# One",
+      board: board("ink"),
+    });
+    const second = hashMarkdown("# Two");
+    const after = await saveAnnotateDoc({
+      id: saved.id,
+      name: "n.md",
+      hash: second,
+      owned: true,
+      source: "# Two",
+      board: board("ink"),
+    });
+    expect(after.id).toBe(saved.id);
+    expect(after.hash).toBe(second);
+    expect(listAnnotateDocs()).toHaveLength(1);
+    expect(listAnnotateDocsByHash(first)).toEqual([]);
+    expect(listAnnotateDocsByHash(second).map((entry) => entry.id)).toEqual([saved.id]);
+  });
+});
+
 describe("annotateDocLabel", () => {
   const meta = (over: Partial<Parameters<typeof annotateDocLabel>[0]> = {}) => ({
     id: "mdink-1",
