@@ -531,6 +531,22 @@ export async function deleteAnnotateDoc(id: string): Promise<void> {
   if (going) {
     void deletePadSnapshots("annotate", going.id).catch(() => {});
     void deleteInkPages(annotateDocKey(going.id)).catch(() => {});
+    /*
+     * The graph loses this node's edges with it.
+     *
+     * Both directions: an edge whose *target* is gone would otherwise draw a
+     * line to a node the atlas cannot name, which reads as data loss rather
+     * than as a deletion the reader asked for. Imported dynamically so the
+     * store does not pull the links module into every caller.
+     */
+    void import("./noteLinks")
+      .then((links) =>
+        Promise.all([
+          links.deleteEdgesFor({ type: "annotate", id: going.id }),
+          links.deleteEdgesFor({ type: "web", id: going.id }),
+        ]),
+      )
+      .catch(() => {});
   }
   /*
    * A binary document's bytes outlive its entry unless something removes them.

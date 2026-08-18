@@ -26,12 +26,12 @@ export const DB_NAME = "whiteboard.docs";
 export const LEGACY_DB_NAME = "lc.docs";
 
 /**
- * Bumped from 3 when per-page ink shards moved in beside rolling snapshots.
+ * Bumped from 5 when the note-links store arrived.
  *
  * `onupgradeneeded` is additive and guarded per store, so an existing database
  * gains the new stores and keeps everything already in `bytes`.
  */
-export const DB_VERSION = 5;
+export const DB_VERSION = 6;
 
 /** Binary documents — PDF and EPUB bytes, keyed by content hash. */
 export const STORE_BYTES = "bytes";
@@ -45,6 +45,16 @@ export const STORE_INK_PAGES = "ink_pages";
 export const STORE_SYNC_QUEUE = "pad_sync_queue";
 /** Offline coding-problem boards waiting to merge on reconnect. */
 export const STORE_OFFLINE_BOARDS = "offline_boards";
+/**
+ * Explicit links between workspaces — see `noteLinks`. Keyed by edge id.
+ *
+ * Here rather than in `docs.db` on purpose. That database is hash-keyed
+ * retrieval: chunks and embeddings of *file text*, shared by every annotation
+ * set on the same bytes. The graph is about sets, notebooks and problems, it
+ * has to work on a tablet with no daemon, and cosine neighbours are
+ * suggestions rather than edges. Different question, different store.
+ */
+export const STORE_LINKS = "note_links";
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -67,6 +77,7 @@ export function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_OFFLINE_BOARDS)) {
         db.createObjectStore(STORE_OFFLINE_BOARDS);
       }
+      if (!db.objectStoreNames.contains(STORE_LINKS)) db.createObjectStore(STORE_LINKS);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
