@@ -657,6 +657,13 @@ export function App() {
    */
   const liveTabIdRef = useRef<string | null>(null);
 
+  /** Set by {@link reportMissingTab}; cleared by answering it, or by leaving. */
+  const [missingTab, setMissingTab] = useState<{
+    id: string;
+    title: string;
+    detail: string;
+  } | null>(null);
+
   /**
    * `loadWhiteboard` has one reason to ask for a whole fresh open — the
    * library is full and the writer has just freed a slot — and `openWhiteboard`
@@ -1723,8 +1730,11 @@ export function App() {
       if (
         browsePickBlocked(padOpenLockRef.current > 0, browsePickQuietUntilRef.current)
       ) {
-        return;
+        return true;
       }
+      // `opened` is the honest answer to "did a workspace appear?" — the
+      // caller turns a false into the missing-content prompt.
+      let opened = false;
       const loadGen = ++workspaceLoadGenRef.current;
       const offline = serverLinkRef.current !== "online";
       const datasetId = bank?.dataset ?? DEFAULT_DATASET;
@@ -1776,10 +1786,10 @@ export function App() {
         // statement for the board template. `resume` is whatever the last
         // visit chose to keep — the daemon already cleared what it did not.
         const loaded = await client.loadProblem(taskId, datasetId);
-        if (workspaceLoadGenRef.current !== loadGen) return;
+        if (workspaceLoadGenRef.current !== loadGen) return true;
         setAttemptState(loaded.resume.attempt);
         const detail = await client.getProblem(taskId, datasetId);
-        if (workspaceLoadGenRef.current !== loadGen) return;
+        if (workspaceLoadGenRef.current !== loadGen) return true;
         const fresh = ensureCodingRoom(detail.starter_code ?? "");
         let source = fresh;
         try {
@@ -1806,9 +1816,10 @@ export function App() {
         loadedSourceRef.current = source;
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the viewport does not jump.
-        if (workspaceLoadGenRef.current !== loadGen) return;
+        if (workspaceLoadGenRef.current !== loadGen) return true;
         setBoardPreparing(true);
         setProblem(detail);
+        opened = true;
         /*
          * The record exists already; what it could not know until now is the
          * problem's display title, which comes off the detail the daemon just
@@ -1915,7 +1926,7 @@ export function App() {
         await boardRef.current?.settleFitView();
 
         await finishLoadingTransition(fromBrowse, switching, loadGen);
-        if (workspaceLoadGenRef.current !== loadGen) return;
+        if (workspaceLoadGenRef.current !== loadGen) return true;
 
         setBrowseMotion("idle");
         setSwitchMotion("idle");
@@ -1930,7 +1941,7 @@ export function App() {
           setEntering(false);
         }, boardFadeMs() || 1);
       } catch (cause) {
-        if (workspaceLoadGenRef.current !== loadGen) return;
+        if (workspaceLoadGenRef.current !== loadGen) return true;
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
@@ -1945,6 +1956,7 @@ export function App() {
           setWorkspaceLoadActive(false);
         }
       }
+      return opened;
     },
     [
       boardCssWidth,
@@ -2694,7 +2706,7 @@ export function App() {
    * tab is never withdrawn: that one had a workspace before this call.
    */
   const fillWorkspaceRecord = useCallback(
-    async (proposed: TabRecord, load: (tabId: string) => Promise<void>): Promise<void> => {
+    async (proposed: TabRecord, load: (tabId: string) => Promise<unknown>): Promise<void> => {
       const { record, fresh } = openWorkspaceRecord(proposed);
       try {
         await load(record.id);
@@ -5438,22 +5450,57 @@ export function App() {
    * where it has always been — the annotate store, the notebook library, the
    * daemon's `{dataset, task_id}` pair. Only {@link closeTab} drops a record.
    */
-  const returnToHome = useCallback(() => {
+  /**
+   * Put the canvas back to empty and stop every beat of a load.
+   *
+   * Where you *land* afterwards is the caller's business: Home focuses the
+   * Home chip, a tab whose content has gone stays on its own chip and shows
+   * the prompt over an empty board.
+   */
+  const clearWorkspace = useCallback(() => {
     setSwitchMotion("idle");
     setPracticeOpen(false);
     setActiveRegion("constraints");
     setBoardPreparing(false);
     setEntering(false);
     clearProblemState();
-    setError(null);
     setCodeSlot(null);
     setWebHtmlSource(null);
     setHoldBrowseOverlay(false);
     setBrowseMotion("idle");
     setProblem(null);
     liveTabIdRef.current = null;
-    dispatchTabs({ type: "focus", id: HOME_TAB_ID, at: Date.now() });
   }, [clearProblemState]);
+
+  const returnToHome = useCallback(() => {
+    clearWorkspace();
+    setError(null);
+    dispatchTabs({ type: "focus", id: HOME_TAB_ID, at: Date.now() });
+  }, [clearWorkspace]);
+
+  /**
+   * The tab opened; what it pointed at did not.
+   *
+   * The chip stays, and it stays focused. Closing it out from under the tap
+   * would be the app deciding on the reader's behalf at the exact moment they
+   * said what they wanted — so the switch they asked for happens, they land on
+   * an empty workspace, and the prompt explains it there. A notebook deleted
+   * from the library, a PDF whose file has gone, a problem set uninstalled
+   * since: same shape, same three answers.
+   */
+  const reportMissingTab = useCallback(
+    (tab: TabRecord, detail: string) => {
+      clearWorkspace();
+      // Nothing downstream is going to clear these: the load that would have
+      // is the one that just failed.
+      setWorkspaceLoadActive(false);
+      setBusy(null);
+      setError(null);
+      dispatchTabs({ type: "focus", id: tab.id, at: Date.now() });
+      setMissingTab({ id: tab.id, title: tab.title, detail });
+    },
+    [clearWorkspace],
+  );
 
   /**
    * Re-open the workspace a record points at.
@@ -5469,16 +5516,45 @@ export function App() {
         case "home":
           returnToHome();
           return;
-        case "practice":
-          await loadProblem(tab.taskId, { ...bankFilters, dataset: tab.dataset }, { tabId: tab.id });
+        case "practice": {
+          /*
+           * A dataset uninstalled since the tab was opened, or a daemon that
+           * cannot answer right now — from here they look the same, and both
+           * are worth a prompt with Try again rather than an error banner over
+           * a board that never opened.
+           */
+          const opened = await loadProblem(
+            tab.taskId,
+            { ...bankFilters, dataset: tab.dataset },
+            { tabId: tab.id },
+          );
+          if (!opened) {
+            reportMissingTab(tab, `“${tab.taskId}” could not be loaded from ${tab.dataset}.`);
+          }
           return;
-        case "whiteboard":
+        }
+        case "whiteboard": {
+          /*
+           * A blank notebook has no id and reopens blank, which is correct. An
+           * id that the library no longer answers for is a deleted notebook,
+           * and silently handing back an empty board would look like the
+           * writing had been lost rather than the notebook removed.
+           */
+          if (tab.notebookId && !(await getWhiteboardNotebook(tab.notebookId))) {
+            reportMissingTab(tab, "The notebook is no longer in the library on this device.");
+            return;
+          }
           // The loader, not the request wrapper: a blank notebook has no id to
           // be recognised by, so asking to "open" one would grow a second chip
           // rather than refill the one being focused.
           await loadWhiteboard({ notebookId: tab.notebookId, tabId: tab.id });
           return;
+        }
         case "web":
+          if (!currentEntry(tab)) {
+            reportMissingTab(tab, "The captured page is no longer in memory.");
+            return;
+          }
           await showWebEntry(tab);
           return;
         case "annotate": {
@@ -5503,10 +5579,10 @@ export function App() {
               await loadAnnotate({ name, docType, bytes, docId: entry?.id, tabId: tab.id });
               return;
             }
-            setError(
-              `“${name}” is in the library but its file is not on this device — open it again to restore the annotations.`,
+            reportMissingTab(
+              tab,
+              "It is still in the library, but its file is not on this device — open the file again to restore the annotations.",
             );
-            returnToHome();
             return;
           }
           const text = entry?.source ?? tab.source;
@@ -5514,16 +5590,12 @@ export function App() {
             await loadAnnotate({ name, docType, text, docId: entry?.id, tabId: tab.id });
             return;
           }
-          // Nothing left anywhere. Say so and drop the chip rather than leave
-          // a tab that does nothing when it is clicked.
-          dispatchTabs({ type: "close", id: tab.id });
-          setNotice(`“${tab.title}” is no longer on this device.`);
-          returnToHome();
+          reportMissingTab(tab, "The document is not in the library and its file is not on this device.");
           return;
         }
       }
     },
-    [bankFilters, loadAnnotate, loadProblem, loadWhiteboard, returnToHome, showWebEntry],
+    [bankFilters, loadAnnotate, loadProblem, loadWhiteboard, reportMissingTab, showWebEntry],
   );
 
   /**
@@ -5663,6 +5735,15 @@ export function App() {
   useEffect(() => {
     patchLiveTab({ indexed: docIndexStatus });
   }, [docIndexStatus, patchLiveTab]);
+
+  /*
+   * The prompt belongs to one chip. Switching away answers it by walking off,
+   * which is an answer — leave the empty tab where it is and take the modal
+   * down rather than carrying it onto whatever was opened instead.
+   */
+  useEffect(() => {
+    if (missingTab && tabState.activeId !== missingTab.id) setMissingTab(null);
+  }, [missingTab, tabState.activeId]);
 
   const activeTabRecord = activeTabOf(tabState);
   const activeWebTab = activeTabRecord.kind === "web" ? activeTabRecord : undefined;
@@ -6434,7 +6515,12 @@ export function App() {
                 .join(" ")}
             >
               <div className="lc-overlay-content">
-                {practiceOpen && FEATURE_LEETCODE ? (
+                {/*
+                  A tab whose content has gone lands here with `problem` null,
+                  and it is emphatically not Home — so the cards stay away and
+                  what is left is the empty workspace the prompt sits over.
+                */}
+                {missingTab ? null : practiceOpen && FEATURE_LEETCODE ? (
                   <ProblemBrowser
                     client={client}
                     onPick={pickProblem}
@@ -6935,6 +7021,52 @@ export function App() {
             whiteboardLibResumeRef.current = null;
           }}
         />
+      )}
+
+      {missingTab && (
+        <div
+          className="lc-modal-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setMissingTab(null);
+          }}
+        >
+          <div className="lc-modal" role="dialog" aria-modal="true" aria-label="Tab is empty">
+            <h2>“{missingTab.title}” could not be opened</h2>
+            <p>{missingTab.detail}</p>
+            <p className="lc-muted">
+              The tab is still here and still empty. Closing it throws nothing away — whatever it
+              held is already gone from this device.
+            </p>
+            <div className="lc-modal-actions">
+              <button
+                type="button"
+                className="lc-secondary"
+                onClick={() => {
+                  const id = missingTab.id;
+                  setMissingTab(null);
+                  const tab = tabStateRef.current.tabs.find((entry) => entry.id === id);
+                  if (tab) void openTabWorkspace(tab);
+                }}
+              >
+                Try again
+              </button>
+              <button type="button" className="lc-secondary" onClick={() => setMissingTab(null)}>
+                Keep it empty
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  dispatchTabs({ type: "close", id: missingTab.id });
+                  setMissingTab(null);
+                  returnToHome();
+                }}
+              >
+                Close tab
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {bootPhase !== "gone" && (

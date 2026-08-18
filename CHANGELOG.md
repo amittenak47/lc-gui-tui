@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — a tab whose content has gone says so, on the tab
+
+- **Opening a tab whose content is missing opens the tab.** It used to close
+  the chip and drop you on Home with a one-line notice — the app deciding
+  something on your behalf at the exact moment you said what you wanted. Now
+  the switch you asked for happens, you land on an empty workspace, and a
+  prompt on that tab explains it: **Try again**, **Keep it empty**, or
+  **Close tab**. Closing throws nothing away; whatever it held is already gone.
+- **All four kinds report it the same way** — a notebook deleted from the
+  library, a PDF whose file is no longer on the device, a captured page whose
+  snapshot is out of memory, a problem the daemon will not serve. The last one
+  used to be an error banner over a board that never opened.
+- Walking to another tab answers the prompt by leaving: the empty tab stays,
+  the modal does not follow you.
+
 ### Fixed — tabs stop disappearing when you switch away from them
 
 - **Switching parks the workspace; it no longer discards it.** Leaving says you
