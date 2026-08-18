@@ -1,0 +1,183 @@
+# Publish the two APKs on a version tag.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# What this release contains: **the two APKs, and nothing else.**
+#
+# Problem corpora are deliberately not here. They live on their own permanent
+# `corpora-v1` tag, which `app/src-tauri/src/dlc.rs` downloads from by name at
+# runtime (Settings -> Datasets -> Install). If corpora were attached to
+# version tags instead, that URL would have to change on every release and
+# every already-installed tablet would stop finding its datasets. Repack the
+# corpus zips with `python scripts/pack_seed_corpora.py` and upload them to
+# `corpora-v1` by hand when the data changes — which is rarely, and on a
+# schedule unrelated to app releases.
+
+name: Release APKs
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach APKs to (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-apks-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build ${{ matrix.flavor }} apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    strategy:
+      # A release must be all-or-nothing: publishing one flavor and silently
+      # dropping the other is worse than publishing neither.
+      fail-fast: true
+      matrix:
+        include:
+          - flavor: practice
+            script: android:apk:practice
+            artifact: whiteboard-practice-debug.apk
+          - flavor: whiteboard-only
+            script: android:apk:whiteboard
+            artifact: whiteboard-only-debug.apk
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # Same r26d pin as build-android-apk.yml. Keep the two in step: a
+      # release built on a different NDK than CI has been testing is a
+      # difference nobody will think to look for.
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+          link-to-sdk: true
+
+      - name: Export Android env
+        run: |
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+          key: release-${{ matrix.flavor }}
+
+      - name: Install cargo tauri-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2.11.4
+
+      - name: Install npm dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Init Android project + cleartext overlay
+        working-directory: app
+        run: npm run android:init
+
+      - name: Build APK
+        working-directory: app
+        run: npm run ${{ matrix.script }}
+
+      - name: Stage APK
+        run: |
+          set -euo pipefail
+          OUT="app/src-tauri/gen/android/app/build/outputs"
+          APK=""
+          for candidate in \
+            "$OUT/apk/universal/debug/app-universal-debug.apk" \
+            "$OUT/apk/arm64/debug/app-arm64-debug.apk"; do
+            if [ -f "$candidate" ]; then APK="$candidate"; break; fi
+          done
+          if [ -z "$APK" ]; then
+            echo "No APK at either expected path — searching $OUT …"
+            find "$OUT" -name '*.apk' -print || true
+            exit 1
+          fi
+          mkdir -p dist
+          cp "$APK" "dist/${{ matrix.artifact }}"
+          ls -lh dist/
+
+      - name: Upload for the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          retention-days: 7
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download both APKs
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List what will be attached
+        run: ls -lh dist/
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          # Draft, so a human reads the notes and checks both APKs are present
+          # before anyone can download them.
+          draft: true
+          files: |
+            dist/whiteboard-practice-debug.apk
+            dist/whiteboard-only-debug.apk
+          body: |
+            Two debug APKs. Pick one — they share the app id
+            `dev.lc.whiteboard`, so run `adb uninstall dev.lc.whiteboard`
+            before switching from one to the other.
+
+            | Build | Has | Missing |
+            | --- | --- | --- |
+            | `whiteboard-practice-debug.apk` | Whiteboard, Annotate, Browse, Agent, **Practice + tests** | — |
+            | `whiteboard-only-debug.apk` | Whiteboard, Annotate, Browse, Agent | Practice, RustPython |
+
+            Problem corpora are **not** in this release, and not inside the
+            APK. Install them in the app: Settings -> Datasets -> Install,
+            which pulls from the separate permanent
+            [`corpora-v1`](https://github.com/amittenak47/lc-gui-tui/releases/tag/corpora-v1)
+            release.
