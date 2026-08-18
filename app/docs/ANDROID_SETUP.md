@@ -1,6 +1,8 @@
 # Android tablet setup — Whiteboard
 
-Guide for installing the APK on an Android tablet (e.g. XPPen Magic Note Pad) and fixing PATH on Windows.
+Guide for installing the APK on an Android tablet and fixing PATH on Windows.
+
+**Author device:** XPPen Magic Note Pad (MNP1095), Android 14 (API 34), NDK 29.0.13846066. If the APK misbehaves on another tablet, [open an issue](https://github.com/amittenak47/lc-gui-tui/issues).
 
 The APK is **self-contained**: it runs the same in-process harness router as desktop (named Tauri invoke per route + coach events). There is no Host/Port/Code pairing UI, no `POST /pair`, and no PC daemon on port 7878.
 

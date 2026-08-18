@@ -6,12 +6,11 @@
  * wants to get back to is "the notebook" or "that PDF", not "one of the two
  * kinds of thing that happened to have a strip".
  *
- * It draws from tab records, never from a live workspace: only one board is
- * mounted, so every tab but the active one has nothing behind it but its
- * record. That is also why the `[indexed]` badge comes in two forms — the
- * active tab gets the real {@link DocIndexChip}, with its chunk counts and its
- * popover, and the parked ones get the flat word, which is all their record
- * knows.
+ * It draws from tab records, never from a live workspace: only the painted
+ * panes are mounted as boards, so every other chip is its record. That is
+ * also why the `[indexed]` badge comes in two forms — the focused tab gets
+ * the real {@link DocIndexChip}, with its chunk counts and its popover, and
+ * the parked ones get the flat word, which is all their record knows.
  */
 
 import { useEffect, useRef, type ReactNode } from "react";
@@ -35,6 +34,14 @@ export interface TabStripProps {
    * then shifts them back, and the place you land when you cancel *is* Home.
    */
   onCancelLoad?: () => void;
+  /**
+   * Drag a chip onto the board to split. Home does not drag.
+   *
+   * Pointer coords, not HTML5 drag — Android WebView drops that on the floor.
+   */
+  onTabDrag?: (id: string, x: number, y: number) => void;
+  onTabDrop?: (id: string, x: number, y: number) => void;
+  onTabDragEnd?: () => void;
 }
 
 function Glyph({ children }: { children: ReactNode }) {
@@ -123,15 +130,27 @@ export function TabStrip({
   onClose,
   activeIndexChip,
   onCancelLoad,
+  onTabDrag,
+  onTabDrop,
+  onTabDragEnd,
 }: TabStripProps) {
   const stripRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ id: string; x: number; y: number; moved: boolean } | null>(null);
+  const skipClickRef = useRef(false);
 
   // A tab focused from anywhere other than the strip — an icon spawning one,
   // a close landing on its neighbour — can be scrolled out of sight.
   useEffect(() => {
     const active = stripRef.current?.querySelector<HTMLElement>('[data-tab-active="true"]');
-    active?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activeId, tabs.length]);
+    if (!active) return;
+    const snap = () => active.scrollIntoView({ block: "nearest", inline: "nearest" });
+    snap();
+    const first = window.requestAnimationFrame(() => {
+      snap();
+      window.requestAnimationFrame(snap);
+    });
+    return () => window.cancelAnimationFrame(first);
+  }, [activeId, tabs.length, busy, activeIndexChip]);
 
   return (
     <div className="lc-tab-strip" role="tablist" aria-label="Open workspaces" ref={stripRef}>
@@ -141,6 +160,7 @@ export function TabStrip({
         // Home wears Cancel for the length of a load — same chip, same slot.
         const cancelling = tab.kind === "home" && Boolean(onCancelLoad);
         const label = cancelling ? "Cancel" : tab.title;
+        const grouped = Boolean(tab.group);
         return (
           <div
             key={tab.id}
@@ -148,9 +168,13 @@ export function TabStrip({
             aria-selected={selected}
             data-tab-active={selected ? "true" : "false"}
             data-tab-kind={cancelling ? "cancel" : tab.kind}
-            className={
-              cancelling ? "lc-tab is-cancelling" : selected ? "lc-tab is-active" : "lc-tab"
-            }
+            data-tab-group={tab.group ?? undefined}
+            className={[
+              cancelling ? "lc-tab is-cancelling" : selected ? "lc-tab is-active" : "lc-tab",
+              grouped ? "is-grouped" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
           >
             <button
               type="button"
@@ -158,7 +182,42 @@ export function TabStrip({
               disabled={busy && !cancelling}
               title={cancelling ? "Cancel loading" : tab.title}
               aria-label={label}
-              onClick={() => (cancelling ? onCancelLoad?.() : onFocus(tab.id))}
+              onClick={() => {
+                if (skipClickRef.current) {
+                  skipClickRef.current = false;
+                  return;
+                }
+                cancelling ? onCancelLoad?.() : onFocus(tab.id);
+              }}
+              onPointerDown={(event) => {
+                if (cancelling || tab.id === HOME_TAB_ID || busy) return;
+                if (event.button !== 0) return;
+                dragRef.current = { id: tab.id, x: event.clientX, y: event.clientY, moved: false };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                const drag = dragRef.current;
+                if (!drag || drag.id !== tab.id) return;
+                const dx = event.clientX - drag.x;
+                const dy = event.clientY - drag.y;
+                if (!drag.moved && dx * dx + dy * dy < 100) return;
+                drag.moved = true;
+                onTabDrag?.(tab.id, event.clientX, event.clientY);
+              }}
+              onPointerUp={(event) => {
+                const drag = dragRef.current;
+                if (!drag || drag.id !== tab.id) return;
+                if (drag.moved) {
+                  skipClickRef.current = true;
+                  onTabDrop?.(tab.id, event.clientX, event.clientY);
+                }
+                dragRef.current = null;
+                onTabDragEnd?.();
+              }}
+              onPointerCancel={() => {
+                dragRef.current = null;
+                onTabDragEnd?.();
+              }}
             >
               <TabIcon kind={cancelling ? "cancel" : tab.kind} />
               <span className="lc-tab-title">{label}</span>

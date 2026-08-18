@@ -76,7 +76,14 @@ export async function extractDocumentPages(input: {
 
 async function extractPdfPages(bytes: ArrayBuffer): Promise<ExtractedPage[]> {
   const pdfjs = await loadPdfJs();
-  const task = pdfjs.getDocument({ data: bytes.slice(0) });
+  // Share the viewer's worker — a second workerPort hangs getDocument —
+  // so yield between pages or flick-scroll stalls behind getTextContent.
+  const task = pdfjs.getDocument({
+    data: bytes.slice(0),
+    standardFontDataUrl: new URL("standard_fonts/", document.baseURI).href,
+    cMapUrl: new URL("cmaps/", document.baseURI).href,
+    cMapPacked: true,
+  });
   const pages: ExtractedPage[] = [];
   try {
     const doc = await task.promise;
@@ -88,12 +95,20 @@ async function extractPdfPages(bytes: ArrayBuffer): Promise<ExtractedPage[]> {
         .join(" ")
         .replace(/\s+/g, " ")
         .trim();
-      if (!text) continue;
-      pages.push({
-        page: n,
-        text,
-        heading: headingFrom(text),
-        scope: `p${n}`,
+      if (text) {
+        pages.push({
+          page: n,
+          text,
+          heading: headingFrom(text),
+          scope: `p${n}`,
+        });
+      }
+      await new Promise<void>((resolve) => {
+        if (typeof window === "undefined" || !window.requestAnimationFrame) {
+          resolve();
+          return;
+        }
+        window.requestAnimationFrame(() => resolve());
       });
     }
   } finally {

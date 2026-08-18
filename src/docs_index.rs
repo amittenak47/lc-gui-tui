@@ -337,11 +337,15 @@ fn first_heading(text: &str) -> Option<String> {
 }
 
 fn embed_texts(cfg: &Config, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-    if let Some(model) = cfg.embed_model().filter(|m| !m.is_empty()) {
-        match http_embed(cfg.embed_base_url(), model, texts) {
-            Ok(vectors) if vectors.len() == texts.len() => return Ok(vectors),
-            Ok(_) => {}
-            Err(_) => {}
+    const HTTP_EMBED_MAX_CHARS: usize = 24_000;
+    let total: usize = texts.iter().map(|t| t.len()).sum();
+    if total <= HTTP_EMBED_MAX_CHARS {
+        if let Some(model) = cfg.embed_model().filter(|m| !m.is_empty()) {
+            match http_embed(cfg.embed_base_url(), model, texts) {
+                Ok(vectors) if vectors.len() == texts.len() => return Ok(vectors),
+                Ok(_) => {}
+                Err(_) => {}
+            }
         }
     }
     Ok(texts.iter().map(|t| hashed_embedding(t)).collect())
@@ -349,7 +353,7 @@ fn embed_texts(cfg: &Config, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
 
 fn http_embed(base_url: &str, model: &str, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(2))
         .build()?;
     let url = format!("{}/embeddings", base_url.trim_end_matches('/'));
     let body = serde_json::json!({ "model": model, "input": texts });

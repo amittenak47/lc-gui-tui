@@ -11,10 +11,14 @@ import {
   activeTab,
   initialTabState,
   liveOverflow,
+  pinLive,
   promoteLive,
   sameEntity,
+  splitChildren,
+  splitEdgeAt,
   tabsReducer,
   openTarget,
+  visibleTabIds,
   webTabCount,
   webTabTitle,
 } from "./tabs";
@@ -272,5 +276,77 @@ describe("tabsReducer", () => {
     });
     const stepped = tabsReducer(opened, { type: "web-step", id: "w1", delta: -1 });
     expect((activeTab(stepped) as WebTab).index).toBe(0);
+  });
+});
+
+describe("split groups", () => {
+  it("places the dragged tab on the named edge of the anchor", () => {
+    expect(splitChildren("a", "b", "right")).toEqual(["a", "b"]);
+    expect(splitChildren("a", "b", "left")).toEqual(["b", "a"]);
+    expect(splitChildren("a", "b", "top")).toEqual(["b", "a"]);
+  });
+
+  it("groups two workspaces and keeps the anchor focused", () => {
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: board("b1", "nb-1"), at: 1 },
+      { type: "open", tab: board("b2", "nb-2"), at: 2 },
+      { type: "split", a: "b1", b: "b2", axis: "vertical", edge: "right", at: 3 },
+    );
+    expect(state.activeId).toBe("b1");
+    expect(state.groups).toHaveLength(1);
+    expect(state.groups[0]?.children).toEqual(["b1", "b2"]);
+    expect(visibleTabIds(state)).toEqual(["b1", "b2"]);
+    expect(state.tabs.find((tab) => tab.id === "b1")?.group).toBe(state.groups[0]?.id);
+  });
+
+  it("refuses Home and a tab paired with itself", () => {
+    const opened = run(initialTabState(), { type: "open", tab: board("b1", "nb-1"), at: 1 });
+    expect(tabsReducer(opened, { type: "split", a: HOME_TAB_ID, b: "b1", axis: "vertical", at: 2 })).toBe(
+      opened,
+    );
+    expect(tabsReducer(opened, { type: "split", a: "b1", b: "b1", axis: "vertical", at: 2 })).toBe(opened);
+  });
+
+  it("dissolves the group when one child closes, and lands on the partner", () => {
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: board("b1", "nb-1"), at: 1 },
+      { type: "open", tab: board("b2", "nb-2"), at: 2 },
+      { type: "split", a: "b1", b: "b2", axis: "vertical", at: 3 },
+      { type: "close", id: "b1" },
+    );
+    expect(state.groups).toEqual([]);
+    expect(state.activeId).toBe("b2");
+    expect(state.tabs.find((tab) => tab.id === "b2")?.group).toBeUndefined();
+  });
+
+  it("clamps the sash ratio", () => {
+    const grouped = run(
+      initialTabState(),
+      { type: "open", tab: board("b1", "nb-1"), at: 1 },
+      { type: "open", tab: board("b2", "nb-2"), at: 2 },
+      { type: "split", a: "b1", b: "b2", axis: "vertical", at: 3 },
+    );
+    const groupId = grouped.groups[0]!.id;
+    const wide = tabsReducer(grouped, { type: "set-ratio", groupId, ratio: 2 });
+    expect(wide.groups[0]?.split.ratio).toBe(0.8);
+    const same = tabsReducer(wide, { type: "set-ratio", groupId, ratio: 0.8 });
+    expect(same).toBe(wide);
+  });
+
+  it("pins both split panes at the front of the live list", () => {
+    expect(pinLive(["home", "b1", "b2"], ["b2", "b1"])).toEqual(["b2", "b1", "home"]);
+    const ids = ["b1", "b2"];
+    expect(pinLive(ids, ["b1", "b2"])).toBe(ids);
+  });
+
+  it("names the edge the pointer is in, and ignores the middle", () => {
+    const box = { left: 0, top: 0, width: 100, height: 100 };
+    expect(splitEdgeAt(box, 5, 50)).toBe("left");
+    expect(splitEdgeAt(box, 95, 50)).toBe("right");
+    expect(splitEdgeAt(box, 50, 5)).toBe("top");
+    expect(splitEdgeAt(box, 50, 50)).toBeNull();
+    expect(splitEdgeAt(box, -1, 50)).toBeNull();
   });
 });

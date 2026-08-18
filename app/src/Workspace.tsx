@@ -419,16 +419,16 @@ export interface WorkspaceProps {
   /**
    * Painted, even if not active.
    *
-   * The two differ for exactly one case, and it is the reason this is a
-   * separate flag rather than `!active` meaning hidden: Home keeps painting
-   * while its overlay slides away over the workspace that is arriving
-   * underneath it. Everything else that is mounted but not active is a warm
-   * board waiting to be switched back to, and is not painted at all.
+   * Home keeps painting while its overlay slides away over the arriving
+   * workspace. A split partner stays painted too — it is on screen, just not
+   * the pane that owns the header chrome.
    */
   showing: boolean;
+  /** Which half of a split this wrap is, or null when it owns the whole main. */
+  splitRole?: "a" | "b" | null;
 }
 
-export function Workspace({ tab, active, showing }: WorkspaceProps) {
+export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceProps) {
   const {
     client,
     mobile,
@@ -2224,41 +2224,46 @@ export function Workspace({ tab, active, showing }: WorkspaceProps) {
         const indexType = docType;
         const indexText = text;
         const indexBytes = bytes;
-        void (async () => {
-          try {
-            const pages = await extractDocumentPages({
-              docType: indexType,
-              name: indexName,
-              text: indexText,
-              bytes: indexBytes,
-            });
-            rememberExtractedPages(indexHash, pages);
-            if (pages.length === 0) {
-              if (workspaceLoadGenRef.current === loadGen) setDocIndexStatus("idle");
-              return;
-            }
-            const result = await client.putDocIndex(indexHash, {
-              name: indexName,
-              doc_type: indexType,
-              pages,
-            });
-            if (workspaceLoadGenRef.current !== loadGen) return;
-            if (!result.indexed) {
-              setDocIndexStatus("error");
-              return;
-            }
+        const indexDelayMs = indexType === "pdf" ? 1200 : 0;
+        window.setTimeout(() => {
+          if (workspaceLoadGenRef.current !== loadGen) return;
+          void (async () => {
             try {
-              setDocIndexMeta(await client.getDocIndex(indexHash));
-            } catch {
-              setDocIndexMeta(null);
+              const pages = await extractDocumentPages({
+                docType: indexType,
+                name: indexName,
+                text: indexText,
+                bytes: indexBytes,
+              });
+              rememberExtractedPages(indexHash, pages);
+              if (pages.length === 0) {
+                if (workspaceLoadGenRef.current === loadGen) setDocIndexStatus("idle");
+                return;
+              }
+              const result = await client.putDocIndex(indexHash, {
+                name: indexName,
+                doc_type: indexType,
+                pages,
+              });
+              if (workspaceLoadGenRef.current !== loadGen) return;
+              if (!result.indexed) {
+                setDocIndexStatus("error");
+                setDocIndexError("the harness did not keep the index");
+                return;
+              }
+              try {
+                setDocIndexMeta(await client.getDocIndex(indexHash));
+              } catch {
+                setDocIndexMeta(null);
+              }
+              setDocIndexStatus("indexed");
+            } catch (cause) {
+              if (workspaceLoadGenRef.current !== loadGen) return;
+              setDocIndexStatus("error");
+              setDocIndexError(messageOf(cause));
             }
-            setDocIndexStatus("indexed");
-          } catch (cause) {
-            if (workspaceLoadGenRef.current !== loadGen) return;
-            setDocIndexStatus("error");
-            setDocIndexError(messageOf(cause));
-          }
-        })();
+          })();
+        }, indexDelayMs);
       } catch (cause) {
         if (workspaceLoadGenRef.current !== loadGen) return;
         setError(messageOf(cause));
@@ -2767,6 +2772,10 @@ export function Workspace({ tab, active, showing }: WorkspaceProps) {
     if (!problem) return;
     const ambient = AMBIENT_ENABLED && mode === "ambient";
     if (!ambient && !coachFlags.ws_runs) return;
+    // Named invoke carries Ask / Review. The LAN socket is 127.0.0.1:7878,
+    // which the APK does not bind — opening it paints "the agent connection
+    // failed" on every document.
+    if (isTauriRuntime() && !ambient) return;
 
     const onFrame = (frame: ServerFrame) => {
       switch (frame.type) {
@@ -5240,13 +5249,34 @@ export function Workspace({ tab, active, showing }: WorkspaceProps) {
           await loadWhiteboard({ notebookId: tab.notebookId, tabId: tab.id });
           return;
         }
-        case "web":
-          if (!currentEntry(tab)) {
+        case "web": {
+          const entry = currentEntry(tab);
+          if (!entry) {
             reportMissingTab(tab, "The captured page is no longer in memory.");
+            return;
+          }
+          if (!entry.html) {
+            try {
+              const page = await fetchWebPage(entry.url);
+              webPush(tab.id, {
+                url: page.url,
+                title: page.title || hostLabelFromUrl(page.url),
+                html: page.html,
+              });
+              await loadAnnotate({
+                name: page.url,
+                docType: "web",
+                text: page.html,
+                tabId: tab.id,
+              });
+            } catch {
+              reportMissingTab(tab, "The page could not be fetched again.");
+            }
             return;
           }
           await showWebEntry(tab);
           return;
+        }
         case "annotate": {
           const entry = tab.docId
             ? await getAnnotateDoc(tab.docId)
@@ -5292,6 +5322,7 @@ export function Workspace({ tab, active, showing }: WorkspaceProps) {
       loadWhiteboard,
       reportMissingTab,
       showWebEntry,
+      webPush,
     ],
   );
 
@@ -5975,7 +6006,9 @@ export function Workspace({ tab, active, showing }: WorkspaceProps) {
             !showing && "lc-canvas-parked",
             // Painted over the workspace arriving underneath — Home's overlay
             // sliding away is the only thing that does this.
-            showing && !active && "lc-canvas-over",
+            showing && !active && tab.kind === "home" && "lc-canvas-over",
+            splitRole === "a" && "is-split-a",
+            splitRole === "b" && "is-split-b",
             entering && "lc-entering",
             canvasLoading && "lc-canvas-loading",
             boardPreparing && "lc-canvas-preparing",
@@ -5987,6 +6020,9 @@ export function Workspace({ tab, active, showing }: WorkspaceProps) {
           ]
             .filter(Boolean)
             .join(" ")}
+          onPointerDown={() => {
+            if (!active && showing) focusTab(tab.id);
+          }}
         >
           <Board
             ref={boardRef}
@@ -5994,6 +6030,7 @@ export function Workspace({ tab, active, showing }: WorkspaceProps) {
             onThemePick={setThemeId}
             readingSize={readingSize}
             interactive={Boolean(
+              showing &&
               problem &&
                 switchMotion === "idle" &&
                 !boardPreparing &&

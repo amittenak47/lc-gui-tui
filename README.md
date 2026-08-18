@@ -4,6 +4,18 @@
 
 # Whiteboard
 
+**Tested on:** XPPen Magic Note Pad (MNP1095), Android 14 (API 34). APK built with Android NDK **29.0.13846066**.
+
+If you run into any bugs, [please let me know](https://github.com/amittenak47/lc-gui-tui/issues) so I can fix it ASAP. I only have this one Android device so I'm not sure what compatibility issues people may encounter.
+
+The app is free. Feel free to tip if you like it. Most of my repo is lazy documented with Cursor/Claude because I spent more time adding+finalizing features and fixing small bugs than actually using the app, so I will improve documentation with more of my own language in the near future.
+
+TUI is still using an earlier build, and is still in progress. The AI agent endpoints need to be updated after I updated the GUI app. 
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/amittenak47)
+
+---
+
 A Rust CLI and terminal UI for practicing LeetCode-style problems from **local JSON corpora**. Index thousands of problems into SQLite, browse and filter them, generate Python workspaces, run tests, and ask an LLM tutor for hints — **without ever loading or sending reference solutions** from the dataset.
 
 There is a second path: sketch the approach by hand on a tablet or desktop canvas while an agent watches, grills you, and points at the sample case your approach breaks on.
@@ -119,13 +131,36 @@ Pairs well with **[LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorre
 
 The canvas lives in [`app/`](app/). The desktop window **is** the router: Tauri holds axum in-process (no TCP bind) and runs tests with RustPython. There is no separate `lc serve` step.
 
-Landing is a home chooser: **Practice** (corpus + tests), **Whiteboard**, **Annotate**. Back from a session returns home, not the problem table. Hide Practice with `VITE_FEATURE_LEETCODE=0` (frontend) and a pads-only Tauri build (`--no-default-features`, omits the `leetcode` Cargo feature / RustPython). Wrappers: `npm run android:apk:pads` / `app\scripts\android-install-pads.cmd`.
+Landing is a home chooser: **Practice** (corpus + tests), **Whiteboard**, **Annotate**. Back from a session returns home, not the problem table.
 
 ```bash
 cd app && npm install && npm run tauri dev
 # APK + adb install (first run generates src-tauri/gen/android — not in git):
 app\scripts\android-install.cmd
 ```
+
+### Pads-only (no Practice / no LeetCode)
+
+Default desktop and APK builds keep Practice and RustPython. Pads-only hides the Practice card (`VITE_FEATURE_LEETCODE=0`) and omits the `leetcode` Cargo feature (`--no-default-features`: no RustPython). Both flags must stay together.
+
+**Android APK** (from the repo root; optional USB serial as the first argument):
+
+```cmd
+app\scripts\android-install-pads.cmd
+app\scripts\android-install-pads.cmd <your-device-serial>
+```
+
+Linux: `./app/scripts/android-install-pads.sh`. From `app/`: `npm run android:apk:pads` then `adb install -r` the universal debug APK. Release: `npm run android:apk:pads:release`. Full PATH / NDK notes: [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md).
+
+**Desktop window:**
+
+```powershell
+cd app
+$env:VITE_FEATURE_LEETCODE = "0"
+npm run tauri -- dev -- --no-default-features
+```
+
+Linux / macOS: `VITE_FEATURE_LEETCODE=0 npm run tauri -- dev -- --no-default-features`.
 
 Use the Tauri app (`npm run tauri dev`) or the Android APK — Vite-only (`npm run dev`) in a browser is not a supported path. LLM config is **Settings → LLM**. `localhost` there is this machine. Cloud Groq/OpenAI keys paste there too (env still wins on desktop).
 
@@ -289,11 +324,8 @@ Adapters: [`src/datasets/`](src/datasets/). After adapter changes: `whiteboard i
 
 ## Upcoming changes
 
-- Desktop scrolling page indicator
+- Update TUI to use similar features as the GUI
 - Chat improvements
-- Optional corpus bundle / hosted dataset (see [Where the work lives](#where-the-work-lives))
-
----
 
 ## 7. License and references
 
