@@ -21,7 +21,28 @@ beforeAll(() => {
   if (!Element.prototype.scrollIntoView) {
     Element.prototype.scrollIntoView = function () {};
   }
+  // jsdom ships no pointer capture, and the drag holds one for its whole life.
+  if (!Element.prototype.setPointerCapture) {
+    Element.prototype.setPointerCapture = function () {};
+    Element.prototype.releasePointerCapture = function () {};
+    Element.prototype.hasPointerCapture = function () {
+      return true;
+    };
+  }
 });
+
+/** A pointer event jsdom will carry — it has no PointerEvent of its own. */
+function pointer(type: string, init: { x: number; y: number; type?: string; button?: number }) {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    clientX: init.x,
+    clientY: init.y,
+    button: init.button ?? 0,
+  });
+  Object.defineProperty(event, "pointerId", { value: 1 });
+  Object.defineProperty(event, "pointerType", { value: init.type ?? "mouse" });
+  return event;
+}
 
 function board(id: string, title: string, dirty = false): WhiteboardTab {
   return { id, kind: "whiteboard", title, dirty, lastActive: 0, notebookId: "nb-1" };
@@ -63,6 +84,24 @@ function mount(props: Partial<Parameters<typeof TabStrip>[0]> & { tabs: TabRecor
         root.render(<TabStrip {...merged} {...next} />);
       });
     },
+    rightClick: (title: string) => {
+      const chip = Array.from(host.querySelectorAll<HTMLElement>(".lc-tab")).find(
+        (entry) => entry.querySelector(".lc-tab-title")?.textContent === title,
+      );
+      act(() => {
+        chip
+          ?.querySelector(".lc-tab-hit")
+          ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+      });
+    },
+    menuItems: () =>
+      Array.from(document.querySelectorAll<HTMLElement>(".lc-tab-menu button")).map(
+        (entry) => entry.textContent,
+      ),
+    menuItem: (label: string) =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>(".lc-tab-menu button")).find(
+        (entry) => entry.textContent === label,
+      ),
     unmount: () => act(() => root.unmount()),
   };
 }
@@ -162,6 +201,126 @@ describe("TabStrip", () => {
     view.unmount();
   });
 
+  describe("drag to split", () => {
+    function grab(view: ReturnType<typeof mount>, title: string) {
+      return Array.from(view.host.querySelectorAll<HTMLElement>(".lc-tab"))
+        .find((chip) => chip.querySelector(".lc-tab-title")?.textContent === title)!
+        .querySelector<HTMLElement>(".lc-tab-hit")!;
+    }
+
+    it("carries a chip under the pointer and drops it on the board", () => {
+      const onTabDrag = vi.fn();
+      const onTabDrop = vi.fn();
+      const onFocus = vi.fn();
+      const view = mount({
+        tabs: [homeTab(), board("b1", "doodle")],
+        onTabDrag,
+        onTabDrop,
+        onFocus,
+      });
+      const hit = grab(view, "doodle");
+
+      act(() => {
+        hit.dispatchEvent(pointer("pointerdown", { x: 100, y: 20 }));
+      });
+      // Under the slop threshold this is still a press, not a drag.
+      act(() => {
+        hit.dispatchEvent(pointer("pointermove", { x: 103, y: 22 }));
+      });
+      expect(onTabDrag).not.toHaveBeenCalled();
+      expect(document.querySelector(".lc-tab-ghost")).toBeNull();
+
+      act(() => {
+        hit.dispatchEvent(pointer("pointermove", { x: 300, y: 400 }));
+      });
+      expect(onTabDrag).toHaveBeenCalledWith("b1", 300, 400);
+      // The ghost is what makes the gesture visible while it is happening.
+      expect(document.querySelector(".lc-tab-ghost")?.textContent).toBe("doodle");
+      expect(view.chips()[1]?.className).toContain("is-carrying");
+
+      act(() => {
+        hit.dispatchEvent(pointer("pointerup", { x: 300, y: 400 }));
+      });
+      expect(onTabDrop).toHaveBeenCalledWith("b1", 300, 400);
+      expect(document.querySelector(".lc-tab-ghost")).toBeNull();
+      // A drag that ends on the board must not also read as a click.
+      act(() => {
+        hit.click();
+      });
+      expect(onFocus).not.toHaveBeenCalled();
+      view.unmount();
+    });
+
+    it("leaves Home where it is", () => {
+      const onTabDrag = vi.fn();
+      const view = mount({ tabs: [homeTab(), board("b1", "doodle")], onTabDrag });
+      const hit = grab(view, "Home");
+      act(() => {
+        hit.dispatchEvent(pointer("pointerdown", { x: 40, y: 20 }));
+        hit.dispatchEvent(pointer("pointermove", { x: 300, y: 400 }));
+      });
+      expect(onTabDrag).not.toHaveBeenCalled();
+      expect(document.querySelector(".lc-tab-ghost")).toBeNull();
+      view.unmount();
+    });
+
+    it("drops the ghost when the pointer is taken away", () => {
+      const onTabDragEnd = vi.fn();
+      const view = mount({ tabs: [homeTab(), board("b1", "doodle")], onTabDragEnd });
+      const hit = grab(view, "doodle");
+      act(() => {
+        hit.dispatchEvent(pointer("pointerdown", { x: 100, y: 20 }));
+        hit.dispatchEvent(pointer("pointermove", { x: 300, y: 400 }));
+      });
+      expect(document.querySelector(".lc-tab-ghost")).not.toBeNull();
+      act(() => {
+        hit.dispatchEvent(pointer("pointercancel", { x: 300, y: 400 }));
+      });
+      expect(document.querySelector(".lc-tab-ghost")).toBeNull();
+      expect(onTabDragEnd).toHaveBeenCalled();
+      view.unmount();
+    });
+
+    it("opens the menu on a touch hold, and a drag cancels the hold", async () => {
+      vi.useFakeTimers();
+      try {
+        const view = mount({ tabs: [homeTab(), board("b1", "doodle")] });
+        const hit = grab(view, "doodle");
+
+        // Hold still: the menu arrives, because touch has no right button.
+        act(() => {
+          hit.dispatchEvent(pointer("pointerdown", { x: 100, y: 20, type: "touch" }));
+        });
+        act(() => {
+          vi.advanceTimersByTime(500);
+        });
+        expect(view.menuItems()).toContain("Close");
+
+        act(() => {
+          document.querySelector<HTMLButtonElement>(".lc-tab-menu-backdrop")?.click();
+        });
+        expect(view.menuItems()).toEqual([]);
+
+        // Move first: this is a drag, so the hold must not fire underneath it.
+        act(() => {
+          hit.dispatchEvent(pointer("pointerdown", { x: 100, y: 20, type: "touch" }));
+          hit.dispatchEvent(pointer("pointermove", { x: 300, y: 400, type: "touch" }));
+        });
+        act(() => {
+          vi.advanceTimersByTime(500);
+        });
+        expect(view.menuItems()).toEqual([]);
+        expect(document.querySelector(".lc-tab-ghost")).not.toBeNull();
+        act(() => {
+          hit.dispatchEvent(pointer("pointerup", { x: 300, y: 400, type: "touch" }));
+        });
+        view.unmount();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("closes a tab that is not Home", () => {
     const onClose = vi.fn();
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")], onClose });
@@ -226,6 +385,59 @@ describe("TabStrip", () => {
       view.rerender({ tabs: [homeTab(), board("b1", "left"), board("b2", "right")], groups: [] });
       expect(view.host.querySelector(".lc-tab-row.is-group")).toBeNull();
       expect(view.chips()).toHaveLength(3);
+      view.unmount();
+    });
+
+    it("offers Unsplit for a grouped tab and Split for a loose one", () => {
+      const onSplitWithActive = vi.fn();
+      const onUnsplit = vi.fn();
+      const view = mount({
+        tabs: [homeTab(), grouped("b1", "left"), grouped("b2", "right"), board("b3", "loose")],
+        groups: [pair],
+        groupedIds: ["b1", "b2"],
+        activeId: "b1",
+        onSplitWithActive,
+        onUnsplit,
+      });
+
+      // A tab already in a split can only leave it.
+      view.rightClick("left");
+      expect(view.menuItems()).toEqual(["Unsplit", "Close"]);
+      act(() => {
+        view.menuItem("Unsplit")?.click();
+      });
+      expect(onUnsplit).toHaveBeenCalledWith("b1");
+      // Acting closes the menu — it is pinned to a point that is now stale.
+      expect(view.menuItems()).toEqual([]);
+
+      // A loose tab can join the one on screen, in either direction.
+      view.rightClick("loose");
+      expect(view.menuItems()).toEqual(["Split right", "Split down", "Close"]);
+      act(() => {
+        view.menuItem("Split down")?.click();
+      });
+      expect(onSplitWithActive).toHaveBeenCalledWith("b3", "bottom");
+      view.unmount();
+    });
+
+    it("will not split the open tab with itself", () => {
+      const view = mount({
+        tabs: [homeTab(), board("b1", "doodle")],
+        activeId: "b1",
+        onSplitWithActive: () => {},
+      });
+      view.rightClick("doodle");
+      // Splitting needs two panes, and this tab is already the only one.
+      expect(view.menuItem("Split right")?.disabled).toBe(true);
+      expect(view.menuItem("Close")?.disabled).toBe(false);
+      view.unmount();
+    });
+
+    it("keeps its menu off Home", () => {
+      const view = mount({ tabs: [homeTab(), board("b1", "doodle")] });
+      view.rightClick("Home");
+      // Home is not a pane, so it has nothing to split and nothing to close.
+      expect(view.menuItems()).toEqual([]);
       view.unmount();
     });
 

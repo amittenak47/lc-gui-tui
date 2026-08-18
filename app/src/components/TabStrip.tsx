@@ -13,10 +13,17 @@
  * the parked ones get the flat word, which is all their record knows.
  */
 
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "motion/react";
 
-import { HOME_TAB_ID, type TabGroup, type TabIndexState, type TabRecord } from "../util/tabs";
+import {
+  HOME_TAB_ID,
+  type SplitEdge,
+  type TabGroup,
+  type TabIndexState,
+  type TabRecord,
+} from "../util/tabs";
 
 export interface TabStripProps {
   tabs: TabRecord[];
@@ -45,6 +52,17 @@ export interface TabStripProps {
   onTabDrag?: (id: string, x: number, y: number) => void;
   onTabDrop?: (id: string, x: number, y: number) => void;
   onTabDragEnd?: () => void;
+  /**
+   * Split from the chip's menu, for readers who never find the drag.
+   *
+   * A gesture nobody is told about is a feature nobody has, so the same two
+   * outcomes the drag reaches — join this tab to the open one, break the pair
+   * apart — are also plain menu items on a right-click or a long press.
+   */
+  onSplitWithActive?: (id: string, edge: SplitEdge) => void;
+  onUnsplit?: (id: string) => void;
+  /** Which tabs are currently half of a split, so the menu can say `Unsplit`. */
+  groupedIds?: string[];
 }
 
 function Glyph({ children }: { children: ReactNode }) {
@@ -137,10 +155,50 @@ export function TabStrip({
   onTabDrag,
   onTabDrop,
   onTabDragEnd,
+  onSplitWithActive,
+  onUnsplit,
+  groupedIds = [],
 }: TabStripProps) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ id: string; x: number; y: number; moved: boolean } | null>(null);
   const skipClickRef = useRef(false);
+
+  /*
+   * The chip that is currently being carried, and where.
+   *
+   * Without this the gesture had no picture: you pressed a tab, dragged, and
+   * nothing on screen moved until you happened to reach an edge band. So the
+   * drag was indistinguishable from a press that had not registered, which is
+   * why it read as broken rather than as undiscovered.
+   */
+  const [carry, setCarry] = useState<{ id: string; title: string; x: number; y: number } | null>(
+    null,
+  );
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const holdRef = useRef<{ id: string; timer: number } | null>(null);
+
+  const clearHold = useCallback(() => {
+    if (holdRef.current) window.clearTimeout(holdRef.current.timer);
+    holdRef.current = null;
+  }, []);
+
+  // Any scroll, resize or outside press dismisses the chip menu — it is pinned
+  // to a viewport point, so it goes stale the moment the strip moves.
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
 
   // A tab focused from anywhere other than the strip — an icon spawning one,
   // a close landing on its neighbour — can be scrolled out of sight.
@@ -229,6 +287,7 @@ export function TabStrip({
             className={[
               cancelling ? "lc-tab is-cancelling" : selected ? "lc-tab is-active" : "lc-tab",
               grouped ? "is-grouped" : "",
+              carry?.id === tab.id ? "is-carrying" : "",
             ]
               .filter(Boolean)
               .join(" ")}
@@ -237,7 +296,13 @@ export function TabStrip({
               type="button"
               className="lc-tab-hit"
               disabled={busy && !cancelling}
-              title={cancelling ? "Cancel loading" : tab.title}
+              title={
+                cancelling
+                  ? "Cancel loading"
+                  : tab.id === HOME_TAB_ID
+                    ? tab.title
+                    : `${tab.title}\nDrag onto the board to split · right-click for more`
+              }
               aria-label={label}
               onClick={() => {
                 if (skipClickRef.current) {
@@ -246,11 +311,30 @@ export function TabStrip({
                 }
                 cancelling ? onCancelLoad?.() : onFocus(tab.id);
               }}
+              onContextMenu={(event) => {
+                if (cancelling || tab.id === HOME_TAB_ID) return;
+                event.preventDefault();
+                setMenu({ id: tab.id, x: event.clientX, y: event.clientY });
+              }}
               onPointerDown={(event) => {
                 if (cancelling || tab.id === HOME_TAB_ID || busy) return;
                 if (event.button !== 0) return;
                 dragRef.current = { id: tab.id, x: event.clientX, y: event.clientY, moved: false };
                 event.currentTarget.setPointerCapture(event.pointerId);
+                // Touch and pen have no right button, so a hold opens the menu.
+                if (event.pointerType !== "mouse") {
+                  const { clientX, clientY } = event;
+                  clearHold();
+                  holdRef.current = {
+                    id: tab.id,
+                    timer: window.setTimeout(() => {
+                      if (dragRef.current?.moved) return;
+                      dragRef.current = null;
+                      skipClickRef.current = true;
+                      setMenu({ id: tab.id, x: clientX, y: clientY });
+                    }, 480),
+                  };
+                }
               }}
               onPointerMove={(event) => {
                 const drag = dragRef.current;
@@ -259,9 +343,12 @@ export function TabStrip({
                 const dy = event.clientY - drag.y;
                 if (!drag.moved && dx * dx + dy * dy < 100) return;
                 drag.moved = true;
+                clearHold();
+                setCarry({ id: tab.id, title: tab.title, x: event.clientX, y: event.clientY });
                 onTabDrag?.(tab.id, event.clientX, event.clientY);
               }}
               onPointerUp={(event) => {
+                clearHold();
                 const drag = dragRef.current;
                 if (!drag || drag.id !== tab.id) return;
                 if (drag.moved) {
@@ -269,10 +356,13 @@ export function TabStrip({
                   onTabDrop?.(tab.id, event.clientX, event.clientY);
                 }
                 dragRef.current = null;
+                setCarry(null);
                 onTabDragEnd?.();
               }}
               onPointerCancel={() => {
+                clearHold();
                 dragRef.current = null;
+                setCarry(null);
                 onTabDragEnd?.();
               }}
             >
@@ -305,6 +395,99 @@ export function TabStrip({
         </motion.div>
       ))}
       </LayoutGroup>
+
+      {/*
+        * The chip under the pointer. Portalled to the body because the strip
+        * clips its own overflow — a ghost drawn inside it would be sliced off
+        * the moment it left the header, which is the entire journey.
+        */}
+      {carry
+        ? createPortal(
+            <div
+              className="lc-tab-ghost"
+              aria-hidden
+              style={{ transform: `translate3d(${carry.x}px, ${carry.y}px, 0)` }}
+            >
+              {carry.title}
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {menu
+        ? createPortal(
+            <>
+              <button
+                type="button"
+                className="lc-tab-menu-backdrop"
+                aria-label="Dismiss tab actions"
+                onClick={() => setMenu(null)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenu(null);
+                }}
+              />
+              <div
+                className="lc-tab-menu"
+                role="menu"
+                style={{ top: menu.y, left: menu.x }}
+                onClick={(event) => event.stopPropagation()}
+              >
+                {groupedIds.includes(menu.id) ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      onUnsplit?.(menu.id);
+                      setMenu(null);
+                    }}
+                  >
+                    Unsplit
+                  </button>
+                ) : (
+                  <>
+                    {/* Splitting needs a partner, and the partner is whatever
+                        is already on screen — so the open tab cannot split
+                        with itself. */}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={menu.id === activeId}
+                      onClick={() => {
+                        onSplitWithActive?.(menu.id, "right");
+                        setMenu(null);
+                      }}
+                    >
+                      Split right
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={menu.id === activeId}
+                      onClick={() => {
+                        onSplitWithActive?.(menu.id, "bottom");
+                        setMenu(null);
+                      }}
+                    >
+                      Split down
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onClose(menu.id);
+                    setMenu(null);
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            </>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

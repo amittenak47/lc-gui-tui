@@ -778,6 +778,28 @@ export function App() {
     dispatchTabs({ type: "unsplit", id });
   }, []);
 
+  /*
+   * The chip menu's split, which is the drag's outcome without the gesture.
+   *
+   * The drag picks its partner by where you drop — this picks the tab already
+   * on screen, because that is the only other pane in play. Home is not a
+   * partner: splitting with the landing page would put two of it on screen.
+   */
+  const splitWithActive = useCallback(
+    (id: string, edge: SplitEdge) => {
+      const anchor = tabsRef.current.activeId;
+      if (anchor === id || anchor === HOME_TAB_ID) return;
+      splitTabs(anchor, id, edge);
+    },
+    [splitTabs],
+  );
+
+  /** Which tabs are half of a split — the menu says `Unsplit` for those. */
+  const groupedIds = useMemo(
+    () => tabState.groups.flatMap((group) => group.children),
+    [tabState.groups],
+  );
+
   const setSplitRatio = useCallback((groupId: string, ratio: number) => {
     dispatchTabs({ type: "set-ratio", groupId, ratio });
   }, []);
@@ -967,6 +989,9 @@ export function App() {
             onTabDrag={onTabDrag}
             onTabDrop={onTabDrop}
             onTabDragEnd={onTabDragEnd}
+            onSplitWithActive={splitWithActive}
+            onUnsplit={unsplitTab}
+            groupedIds={groupedIds}
             activeIndexChip={
               chrome.docIndex.status === "idle" ? undefined : (
                 <DocIndexChip
