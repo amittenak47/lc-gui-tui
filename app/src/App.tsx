@@ -675,6 +675,24 @@ export function App() {
     });
   }, []);
 
+  /**
+   * Cancel: stop the load, and take the chip with it.
+   *
+   * Unmounting is what aborts the load — the generation guard turns whatever
+   * is still in flight into a no-op, and the component it would have written
+   * to is gone. Nothing is asked on the way out because a workspace that never
+   * finished opening has nothing to save; that is the difference between this
+   * and closing a tab, which does ask.
+   */
+  const cancelLoad = useCallback(() => {
+    const id = tabsRef.current.activeId;
+    if (id === HOME_TAB_ID) return;
+    dispatchTabs({ type: "close", id });
+    setLiveIds((current) => current.filter((entry) => entry !== id));
+    setMissingTab(null);
+    setError(null);
+  }, []);
+
   const patchTab = useCallback((id: string, patch: TabPatch) => {
     dispatchTabs({ type: "patch", id, patch });
   }, []);
@@ -886,7 +904,7 @@ export function App() {
             busy={chrome.busy || chrome.loadActive}
             onFocus={focusTab}
             onClose={closeTab}
-            onCancelLoad={chrome.loadActive ? () => focusTab(HOME_TAB_ID) : undefined}
+            onCancelLoad={chrome.loadActive ? cancelLoad : undefined}
             onTabDrag={onTabDrag}
             onTabDrop={onTabDrop}
             onTabDragEnd={onTabDragEnd}

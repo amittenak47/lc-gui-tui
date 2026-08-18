@@ -308,7 +308,7 @@ body {
 .lc-header {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   column-gap: 12px;
   height: auto;
@@ -548,6 +548,53 @@ body {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+/*
+ * The address field, with Go inside it.
+ *
+ * Same shape the old server-address box had: one bordered box, the action
+ * tucked against its trailing edge, so the row reads as an address bar rather
+ * than a text input with a word-shaped button bolted on.
+ */
+.lc-web-address {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+}
+
+.lc-web-address input {
+  flex: 1;
+  min-width: 0;
+  padding-right: 30px;
+}
+
+.lc-web-go {
+  position: absolute;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.lc-web-go:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.lc-web-go:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .lc-web-omnibox input {
@@ -8547,8 +8594,8 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-header {
-  /* Equal side columns so the host in the center is screen-centered. */
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  /* Same as desktop: the strip takes the room up to the icons. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   column-gap: 4px;
   padding: calc(2px + var(--lc-safe-top)) calc(4px + var(--lc-safe-right)) 3px
     calc(4px + var(--lc-safe-left));
