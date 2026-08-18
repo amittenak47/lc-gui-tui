@@ -155,6 +155,32 @@ export function webTabCount(state: TabState): number {
   return state.tabs.reduce((count, tab) => count + (tab.kind === "web" ? 1 : 0), 0);
 }
 
+/**
+ * The mount budget, as a list of ids, most recently looked at first.
+ *
+ * Records are cheap and mounts are not, so most parked tabs are a record and
+ * nothing else. This is the short list of the ones that stay *mounted* — the
+ * board, its ink layer, any pdf.js workers — so that coming back to one is
+ * showing it again rather than reading it out of the store and re-fitting.
+ *
+ * Separated from the component because the interesting part is a list
+ * operation, and a list operation should not need a browser to check.
+ */
+export function promoteLive(ids: string[], id: string): string[] {
+  return ids[0] === id ? ids : [id, ...ids.filter((entry) => entry !== id)];
+}
+
+/**
+ * The ids past the limit: the ones to flush and unmount, oldest last.
+ *
+ * They have to be flushed *before* they are dropped — the board handle is what
+ * the flush writes through — which is why this answers with a list to act on
+ * rather than doing the trimming itself.
+ */
+export function liveOverflow(ids: string[], limit: number): string[] {
+  return ids.length <= limit ? [] : ids.slice(limit);
+}
+
 /** Hostnames, not page titles — `google.com`, not `Google`. */
 export function webTabTitle(entry: WebPadEntry | undefined): string {
   return entry ? hostLabelFromUrl(entry.url) : "Page";

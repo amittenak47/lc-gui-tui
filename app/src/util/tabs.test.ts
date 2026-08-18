@@ -10,6 +10,8 @@ import {
   type WebTab,
   activeTab,
   initialTabState,
+  liveOverflow,
+  promoteLive,
   sameEntity,
   tabsReducer,
   openTarget,
@@ -59,6 +61,38 @@ function problem(id: string, taskId: string, dataset = "leetcode"): TabRecord {
 function run(state: TabState, ...actions: Parameters<typeof tabsReducer>[1][]): TabState {
   return actions.reduce(tabsReducer, state);
 }
+
+describe("the mount budget", () => {
+  it("puts the tab just looked at at the front", () => {
+    expect(promoteLive(["home"], "b1")).toEqual(["b1", "home"]);
+    expect(promoteLive(["b1", "home"], "home")).toEqual(["home", "b1"]);
+  });
+
+  it("keeps the list unique — coming back is a move, not a second entry", () => {
+    const ids = promoteLive(promoteLive(["home"], "b1"), "home");
+    expect(promoteLive(ids, "b1")).toEqual(["b1", "home"]);
+  });
+
+  it("returns the same array when nothing moved, so no needless remount", () => {
+    const ids = ["b1", "home"];
+    expect(promoteLive(ids, "b1")).toBe(ids);
+  });
+
+  it("names the tabs past the limit, oldest last", () => {
+    expect(liveOverflow(["a"], 2)).toEqual([]);
+    expect(liveOverflow(["a", "b"], 2)).toEqual([]);
+    expect(liveOverflow(["a", "b", "c", "d"], 2)).toEqual(["c", "d"]);
+  });
+
+  it("keeps the one just left mounted, and drops the one before it", () => {
+    // Home → notebook → document: the notebook stays warm, Home falls off.
+    let ids = ["home"];
+    ids = promoteLive(ids, "b1");
+    ids = promoteLive(ids, "d1");
+    expect(ids.slice(0, 2)).toEqual(["d1", "b1"]);
+    expect(liveOverflow(ids, 2)).toEqual(["home"]);
+  });
+});
 
 describe("tabsReducer", () => {
   it("starts on Home and never closes it", () => {
