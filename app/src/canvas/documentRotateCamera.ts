@@ -22,6 +22,25 @@ export interface SceneBox {
   maxY: number;
 }
 
+/**
+ * Board hole for a fit. Prefer the live DOM box — `appState` width/height can
+ * still be the previous orientation, and `Math.max(state, box)` kept the stale
+ * *larger* side (landscape width after a rotate to portrait).
+ */
+export function liveBoardViewSize(
+  boardBox: { width: number; height: number } | null | undefined,
+  state: { width?: number; height?: number },
+): { viewWidth: number; viewHeight: number } {
+  const liveW = boardBox && boardBox.width > 8 ? Math.round(boardBox.width) : 0;
+  const liveH = boardBox && boardBox.height > 8 ? Math.round(boardBox.height) : 0;
+  const stateW = Number.isFinite(state.width) ? Math.round(state.width as number) : 0;
+  const stateH = Number.isFinite(state.height) ? Math.round(state.height as number) : 0;
+  return {
+    viewWidth: liveW > 8 ? liveW : Math.max(0, stateW),
+    viewHeight: liveH > 8 ? liveH : Math.max(0, stateH),
+  };
+}
+
 export function documentCameraAfterViewportChange(input: {
   box: SceneBox;
   inset: ViewportInset;

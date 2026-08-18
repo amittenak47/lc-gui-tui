@@ -455,6 +455,27 @@ export function App() {
     "enter" | "idle" | "busy" | "exit" | "done"
   >("idle");
   const [holdBrowseOverlay, setHoldBrowseOverlay] = useState(false);
+  const overlayTopRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const node = overlayTopRef.current;
+    if (!node) return;
+    const app = node.closest(".lc-app");
+    const apply = () => {
+      const height = node.offsetHeight;
+      (app as HTMLElement | null)?.style.setProperty(
+        "--lc-top-banner-h",
+        height > 0 ? `${height}px` : "0px",
+      );
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      (app as HTMLElement | null)?.style.removeProperty("--lc-top-banner-h");
+    };
+  }, []);
 
   /**
    * Let go of the live workspace, then land on the new tab.
@@ -685,7 +706,7 @@ export function App() {
         <span className="lc-header-slot" ref={setHeaderChrome} />
 
         <main className="lc-main">
-          <div className="lc-chrome-overlay-top" aria-live="polite">
+          <div className="lc-chrome-overlay-top" aria-live="polite" ref={overlayTopRef}>
             <StatusBanner text={error} variant="error" />
             <StatusBanner text={!error ? notice : null} variant="notice" />
           </div>

@@ -1021,7 +1021,8 @@ input[type="checkbox"] {
 .lc-pad-title {
   position: absolute;
   left: 1.1rem;
-  top: 1rem;
+  /* Sit under an open status banner — `--lc-top-banner-h` is the overlay height. */
+  top: calc(1rem + var(--lc-top-banner-h, 0px));
   z-index: 65;
   pointer-events: none;
   margin: 0;
@@ -1039,7 +1040,9 @@ input[type="checkbox"] {
   paint-order: stroke fill;
   text-shadow: 1px 2px 0 var(--lc-sub-edge);
   opacity: 0;
-  transition: opacity 420ms ease-out;
+  transition:
+    opacity 420ms ease-out,
+    top 220ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: opacity;
 }
 
@@ -5814,6 +5817,7 @@ input[type="checkbox"] {
 .lc-banner-slot {
   display: grid;
   grid-template-rows: 0fr;
+  /* Duration is `BANNER_IN_MS` in StatusBanner.tsx — pad title waits for it. */
   transition: grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1);
   /* Overlay the canvas — never steal flex height from `.lc-main` / Excalidraw. */
   pointer-events: none;

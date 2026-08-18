@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { documentCameraAfterViewportChange } from "./documentRotateCamera";
+import { documentCameraAfterViewportChange, liveBoardViewSize } from "./documentRotateCamera";
 
 const inset = { top: 6, left: 2, right: 2, bottom: 12 };
 const box = { minX: 0, minY: 0, maxX: 342, maxY: 4000 };
@@ -80,5 +80,19 @@ describe("documentCameraAfterViewportChange", () => {
     const before = inset.top / portrait.zoom - portrait.scrollY;
     const after = inset.top / landscape.zoom - landscape.scrollY;
     expect(after).toBeCloseTo(before, 5);
+  });
+});
+
+describe("liveBoardViewSize", () => {
+  it("prefers the live board box over a larger stale appState (portrait after landscape)", () => {
+    const size = liveBoardViewSize({ width: 800, height: 1200 }, { width: 1280, height: 800 });
+    expect(size.viewWidth).toBe(800);
+    expect(size.viewHeight).toBe(1200);
+  });
+
+  it("uses appState when the board box is not laid out yet", () => {
+    const size = liveBoardViewSize({ width: 0, height: 0 }, { width: 390, height: 844 });
+    expect(size.viewWidth).toBe(390);
+    expect(size.viewHeight).toBe(844);
   });
 });

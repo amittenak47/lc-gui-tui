@@ -38,6 +38,7 @@ import { DEFAULT_DATASET } from "./api/types";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { HoldButton } from "./components/HoldButton";
 import { LoadingDoodle } from "./components/LoadingDoodle";
+import { waitForTopBannersIdle } from "./components/StatusBanner";
 import {
   AUTOSAVE_EVENT,
   loadAutosaveInterval,
@@ -1887,6 +1888,9 @@ export function Workspace({ tab, active }: WorkspaceProps) {
         agentSaveSuspendedRef.current = false;
         setWorkspaceLoadActive(false);
         setCoachOpen(false);
+        // Banner first (LLM offline, etc.), then the board fade and title.
+        await waitForTopBannersIdle();
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setEntering(true);
         const fadeMs = boardFadeMs() || 1;
         window.setTimeout(() => {

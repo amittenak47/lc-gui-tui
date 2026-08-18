@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — tablet rotate black bar; Recentre keeps the page
+
+- Portrait→landscape sometimes fitted against a stale board box (`Math.max` of `appState` and the DOM kept the old larger side) or skipped the camera after a pan (`fitFrame` only), leaving a black gutter. Rotate now retries keep-Y at 0/80/200/400/700ms, prefers the live box, and listens to `visualViewport` plus `screen.orientation`. Recentre does the same keep-Y fit instead of jumping to page 1 / the top of the pad.
+
+### Fixed — Whiteboard title waits for the top banner
+
+- Opening a whiteboard used to fade the "Whiteboard" pad title in at the same time as a top status banner (LLM offline, "Agent off", …). The title now waits until that banner's slide-in is idle, and sits under the banner strip (`--lc-top-banner-h`).
+
 ### Fixed — tablet splash crash (`__clear_cache`)
 
 - **APK died at the icon** with `UnsatisfiedLinkError: cannot locate symbol "__clear_cache"` in `libwhiteboard_lib.so`. libffi's aarch64 trampoline flush compiled to that libc symbol; NDK 29 left it undefined and the tablet's bionic does not export it. The libffi-sys Android build now statically links `libclang_rt.builtins-*-android.a`. `android-dev.cmd` also gets the same Git `usr\bin`/`make` PATH as `android-install.cmd`.

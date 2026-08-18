@@ -6,6 +6,42 @@ export interface StatusBannerProps {
   variant: "error" | "notice";
 }
 
+/** Keep in sync with `.lc-banner-slot` / `.lc-banner` open transition. */
+export const BANNER_IN_MS = 220;
+
+/**
+ * Resolve once top status banners are idle (open motion done, or none).
+ *
+ * Pad title and other board-open chrome sit in the same strip. They wait so
+ * they start *after* a notice like "Agent off" has finished sliding in.
+ */
+export async function waitForTopBannersIdle(): Promise<void> {
+  if (typeof document === "undefined") return;
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+  const overlay = document.querySelector(".lc-chrome-overlay-top");
+  if (!overlay) return;
+  const nodes: Element[] = [
+    overlay,
+    ...overlay.querySelectorAll(".lc-banner-slot, .lc-banner"),
+  ];
+  const waits: Promise<unknown>[] = [];
+  for (const node of nodes) {
+    if (typeof node.getAnimations !== "function") continue;
+    for (const anim of node.getAnimations()) {
+      waits.push(anim.finished.catch(() => undefined));
+    }
+  }
+  if (waits.length === 0) return;
+  await Promise.race([
+    Promise.all(waits),
+    new Promise<void>((resolve) => {
+      window.setTimeout(resolve, BANNER_IN_MS + 80);
+    }),
+  ]);
+}
+
 /**
  * Header status strip — opens and closes with a short slide + height crunch.
  */

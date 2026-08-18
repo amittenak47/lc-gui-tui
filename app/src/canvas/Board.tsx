@@ -112,7 +112,7 @@ import {
   viewportBand,
   type PageableElement,
 } from "./pageView";
-import { documentCameraAfterViewportChange } from "./documentRotateCamera";
+import { documentCameraAfterViewportChange, liveBoardViewSize } from "./documentRotateCamera";
 import { encodeInkOps } from "./inkCodec";
 import { fallbackPageFrames, pageFramesFromPdfSlot, pageIdFromCamera } from "./inkPageIndex";
 import { eraserScreenRadius } from "./rasterInk";
@@ -1551,6 +1551,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const pageBoundsRef = useRef<SceneBounds | null>(null);
   /** Student changed zoom/pan — skip auto camera reset on resize refits. */
   const userAdjustedCameraRef = useRef(false);
+  /** Last board box we fitted to — skip no-op resize; clear on orientation. */
+  const lastFittedBoardBoxRef = useRef({ w: 0, h: 0 });
   const zoomAnimRef = useRef<{
     from: number;
     to: number;
@@ -5058,16 +5060,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         width?: number;
         height?: number;
       };
-      // Prefer the live board box — appState can lag a coach open/close by a frame.
+      // Live board box first — appState can still be the previous orientation.
       const boardBox = boardRef.current?.getBoundingClientRect();
-      const viewWidth = Math.max(
-        num(state.width, 0),
-        boardBox && boardBox.width > 8 ? Math.round(boardBox.width) : 0,
-      );
-      const viewHeight = Math.max(
-        num(state.height, 0),
-        boardBox && boardBox.height > 8 ? Math.round(boardBox.height) : 0,
-      );
+      const { viewWidth, viewHeight } = liveBoardViewSize(boardBox, state);
       if (viewWidth < 1 || viewHeight < 1) return;
 
       const safeTop = mobile ? 0 : safeCssPx("--lc-safe-top");
@@ -5299,7 +5294,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           scrollY?: number;
           zoom?: { value?: number };
         };
-        const keepDocumentY = mode === "keepY" && widthOnly;
+        const keepDocumentY = mode === "keepY";
         const rotated = keepDocumentY
           ? documentCameraAfterViewportChange({
               box: { minX, minY, maxX, maxY },
@@ -5386,6 +5381,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     },
     [runFit],
   );
+
+  const recentreKeepPlace = useCallback(() => {
+    runFit(null, "keepY");
+  }, [runFit]);
 
   const fitView = useCallback(
     (regionId?: string | null) => {
@@ -5584,46 +5583,56 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const board = boardRef.current;
     if (!board || typeof ResizeObserver === "undefined") return;
     let timer: number | null = null;
-    let late: number | null = null;
-    const run = () => {
-      // Documents: recenter X and width-fit, keep the reading line. Skipping
-      // the camera after any pan (the old path) left portrait scrollX in a
-      // landscape hole. A full refitToViewport would jump back to page 1.
-      if (pageContentRef.current) {
-        runFit(null, "keepY");
+    const late: number[] = [];
+    const ORIENT_RETRIES_MS = [0, 80, 200, 400, 700];
+    const run = (force: boolean) => {
+      const box = boardRef.current?.getBoundingClientRect();
+      const w = Math.round(box?.width ?? 0);
+      const h = Math.round(box?.height ?? 0);
+      if (w < 8 || h < 8) return;
+      if (
+        !force &&
+        w === lastFittedBoardBoxRef.current.w &&
+        h === lastFittedBoardBoxRef.current.h
+      ) {
         return;
       }
-      // Once the user has zoomed or panned, the camera is theirs: resize the
-      // page frame to the new viewport, but leave zoom and scroll alone.
-      // Desktop used to bail when `mobileRegion === null`, so opening a file
-      // and then resizing the window never refit the reading column.
-      if (userAdjustedCameraRef.current) {
-        fitFrame();
-        return;
-      }
-      refitToViewport();
+      // Documents *and* whiteboard: width-fit + center X, keep the reading
+      // line. The old split (keepY only if pageContent; else fitFrame after a
+      // pan) left portrait zoom in a landscape hole — black bar on the right.
+      // A full refitToViewport jumped back to page 1 / the top of the pad.
+      runFit(null, "keepY");
+      lastFittedBoardBoxRef.current = { w, h };
     };
     const schedule = () => {
       if (timer != null) window.clearTimeout(timer);
-      timer = window.setTimeout(run, 60);
+      timer = window.setTimeout(() => run(false), 60);
     };
     const observer = new ResizeObserver(schedule);
     observer.observe(board);
     window.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("resize", schedule);
     const onOrient = () => {
-      schedule();
-      if (late != null) window.clearTimeout(late);
-      late = window.setTimeout(run, 200);
+      lastFittedBoardBoxRef.current = { w: 0, h: 0 };
+      for (const id of late) window.clearTimeout(id);
+      late.length = 0;
+      for (const ms of ORIENT_RETRIES_MS) {
+        late.push(window.setTimeout(() => run(true), ms));
+      }
     };
     window.addEventListener("orientationchange", onOrient);
+    const orientation = window.screen?.orientation;
+    orientation?.addEventListener("change", onOrient);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("resize", schedule);
       window.removeEventListener("orientationchange", onOrient);
+      orientation?.removeEventListener("change", onOrient);
       if (timer != null) window.clearTimeout(timer);
-      if (late != null) window.clearTimeout(late);
+      for (const id of late) window.clearTimeout(id);
     };
-  }, [interactive, fitFrame, refitToViewport, runFit]);
+  }, [interactive, runFit]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
@@ -7617,14 +7626,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 }
               >
                 {/*
-                  The way back.
-
-                  Even with the page frame locked and the context menu gone,
-                  a board can end up somewhere the writer did not put it — a
-                  pinch that got away, a restore that landed short. Everything
-                  else on this stack is a preference; this is the one control
-                  that exists so a board is never lost, and it is deliberately
-                  one tap with nothing to read first.
+                  Recentre: width-fit the page to the hole and center X, keep
+                  the reading line. A full fitView jumped to page 1 / the top
+                  of the pad — the same reset that "fixed" a rotate black bar.
                 */}
                 {!mapChromeHidden && (
                   <button
@@ -7633,7 +7637,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     aria-label="Recentre the board"
                     data-tip="Recentre the board"
                     data-tip-placement="bottom"
-                    onClick={() => fitView()}
+                    onClick={() => recentreKeepPlace()}
                   >
                     <RecentreIcon />
                   </button>
