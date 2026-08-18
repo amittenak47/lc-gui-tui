@@ -439,6 +439,13 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  /*
+   * The strip scrolls horizontally, and a tab drag is horizontal, so without
+   * this the browser hands the gesture to the scroller and the drag-to-split
+   * simply cannot be performed with a finger or a pen — the two ways this app
+   * is actually driven.
+   */
+  touch-action: none;
   min-width: 0;
   flex: 1 1 0;
   overflow: hidden;
@@ -1051,6 +1058,141 @@ body[data-lc-sash-drag="vertical"] {
 
 body[data-lc-sash-drag="horizontal"] {
   cursor: row-resize;
+}
+
+/*
+ * A chip that is currently being carried.
+ *
+ * It stays in the strip — the tab order does not change until the drop — but
+ * it goes quiet, so the ghost under the pointer is the one that reads as the
+ * thing you are holding.
+ */
+.lc-tab.is-carrying {
+  opacity: 0.35;
+}
+
+/*
+ * The chip that follows the pointer.
+ *
+ * Body-level and `pointer-events: none`, so it never becomes the drop target
+ * or hit-tests over the board it is being dragged onto. The translate is set
+ * inline per frame; the offset here keeps it just under the cursor rather than
+ * centred on it, where it would hide the very edge you are aiming at.
+ */
+.lc-tab-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  margin: -10px 0 0 14px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  background: var(--chrome-bg, var(--panel-bg, #1b1b1f));
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 14rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.35);
+}
+
+/*
+ * The board, while a chip is over it.
+ *
+ * The four edge bands are hinted the moment a drag starts rather than only
+ * once you are inside one. The old behaviour showed nothing until you had
+ * already found the target, which is no use to anyone who does not know the
+ * targets exist — and not knowing they exist was the whole problem.
+ */
+/*
+ * Everything outside this rectangle is a drop band.
+ *
+ * `inset: 22%` matches `splitEdgeAt`'s band exactly — percentage insets resolve
+ * against the container's own width and height, which is the same arithmetic
+ * the hit test does. (Percentage *border-width* does not exist, which is how
+ * the first version of this silently drew a 1px box instead.)
+ */
+.lc-main.is-split-targeting::before {
+  content: "";
+  position: absolute;
+  inset: 22%;
+  z-index: 29;
+  pointer-events: none;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lc-main.is-split-targeting::before {
+    animation: lc-split-hint 160ms ease-out;
+  }
+}
+
+@keyframes lc-split-hint {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ * The chip's own menu — right-click, or hold on touch.
+ *
+ * Same shape as the agent panel's message menu: a full-window backdrop button
+ * that swallows the next press, and the menu pinned to the point you opened it
+ * from. It exists because drag-to-split is invisible until someone tells you,
+ * and a menu tells you.
+ */
+.lc-tab-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.lc-tab-menu {
+  position: fixed;
+  z-index: 71;
+  display: flex;
+  flex-direction: column;
+  min-width: 9rem;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--chrome-edge);
+  background: var(--chrome-bg, var(--panel-bg, #1b1b1f));
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.4);
+}
+
+.lc-tab-menu button {
+  appearance: none;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.lc-tab-menu button:hover:not(:disabled),
+.lc-tab-menu button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.lc-tab-menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /*
