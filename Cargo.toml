@@ -16,7 +16,7 @@ path = "src/bin/audit_tests.rs"
 
 [features]
 default = ["leetcode"]
-# Practice corpus, RustPython judge, /workspace/:id/test. Pads-only Tauri
+# Practice corpus, RustPython judge, /workspace/:id/test. Whiteboard-only Tauri
 # builds omit this so the APK does not link the VM.
 leetcode = ["dep:rustpython", "dep:malachite-bigint"]
 

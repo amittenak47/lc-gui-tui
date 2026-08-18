@@ -1,5 +1,4 @@
 @echo off
-REM Pads-only debug APK (no Practice, no RustPython). First run generates gen\android if missing.
-REM Output: src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
-cd /d "%~dp0\.."
-call npm run android:apk:pads
+REM Renamed: "pads-only" is now called Whiteboard-only. Forwards to
+REM android-apk-whiteboard.cmd. Kept so existing shortcuts keep working.
+call "%~dp0android-apk-whiteboard.cmd" %*
