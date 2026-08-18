@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — tablet splash crash (`__clear_cache`)
+
+- **APK died at the icon** with `UnsatisfiedLinkError: cannot locate symbol "__clear_cache"` in `libwhiteboard_lib.so`. libffi's aarch64 trampoline flush compiled to that libc symbol; NDK 29 left it undefined and the tablet's bionic does not export it. The libffi-sys Android build now statically links `libclang_rt.builtins-*-android.a`. `android-dev.cmd` also gets the same Git `usr\bin`/`make` PATH as `android-install.cmd`.
+
 ### Added — Linux tablet APK wrappers
 
 - **`app/scripts/android-install.sh`** (and `-pads.sh`) for Linux only. They refuse Windows, check SDK/NDK/JDK/`make`/the `aarch64-linux-android` target up front, then build + `adb install`. On this Windows machine keep using `android-install.cmd`.

@@ -59,6 +59,7 @@ pub fn build_and_link() {
     println!("cargo:rustc-link-search={}", libdir.display());
     println!("cargo:rustc-link-search={}", libdir32.display());
     println!("cargo:rustc-link-search={}", libdir64.display());
+    link_android_compiler_rt();
 }
 
 pub fn probe_and_link() {
@@ -205,4 +206,58 @@ fn patch_android_libtool(build_dir: &Path) {
         }
     }
     walk(build_dir);
+}
+
+/// Pull `__clear_cache` into the cdylib.
+///
+/// libffi's aarch64 `ffi_clear_cache` compiles to a call to `__clear_cache`.
+/// NDK 29 clang does not bake compiler-rt into that .o, and the tablet's
+/// bionic does not export the symbol, so `System.loadLibrary` dies at the
+/// splash: `UnsatisfiedLinkError: cannot locate symbol "__clear_cache"`.
+fn link_android_compiler_rt() {
+    let target = match env::var("TARGET") {
+        Ok(t) if t.contains("android") => t,
+        _ => return,
+    };
+    let arch = if target.starts_with("aarch64") {
+        "aarch64"
+    } else if target.starts_with("armv7") || target.starts_with("arm-") {
+        "arm"
+    } else if target.starts_with("x86_64") {
+        "x86_64"
+    } else if target.starts_with("i686") {
+        "i686"
+    } else {
+        return;
+    };
+    let host = env::var("HOST").unwrap_or_default();
+    let mut c_cfg = cc::Build::new();
+    c_cfg
+        .cargo_metadata(false)
+        .target(&target)
+        .warnings(false)
+        .host(&host);
+    let compiler = c_cfg.get_compiler();
+    let Some(prebuilt) = compiler.path().parent().and_then(|p| p.parent()) else {
+        return;
+    };
+    let clang_lib = prebuilt.join("lib").join("clang");
+    let Ok(vers) = fs::read_dir(&clang_lib) else {
+        println!(
+            "cargo:warning=libffi-sys: no {} — tablet may crash on __clear_cache",
+            clang_lib.display()
+        );
+        return;
+    };
+    let libname = format!("libclang_rt.builtins-{arch}-android.a");
+    for ver in vers.flatten() {
+        let dir = ver.path().join("lib").join("linux");
+        let archive = dir.join(&libname);
+        if archive.is_file() {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+            println!("cargo:rustc-link-lib=static=clang_rt.builtins-{arch}-android");
+            return;
+        }
+    }
+    println!("cargo:warning=libffi-sys: {libname} not under {}", clang_lib.display());
 }
