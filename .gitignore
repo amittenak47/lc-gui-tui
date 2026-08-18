@@ -80,8 +80,10 @@ audit-*.jsonl
 .tmp-unix/
 .tmp-frames/
 
-# Accidental tsc outDir under the source tree
+# Accidental build outDir under the source tree — a `vite build` run from a
+# subdirectory drops pdf.js cmaps and fonts wherever it was invoked.
 /app/src/modes/dist/
+/app/src/**/dist/
 
 # Cargo vendor/patch stamp — not a source file
 **/.cargo-ok

@@ -42,14 +42,19 @@ function board(id: string, notebookId: string | null, lastActive = 0): TabRecord
   return { id, kind: "whiteboard", title: "Whiteboard", dirty: false, lastActive, notebookId };
 }
 
-function doc(id: string, hash: string | null, lastActive = 0): AnnotateTab {
+function doc(
+  id: string,
+  hash: string | null,
+  lastActive = 0,
+  docId: string | null = null,
+): AnnotateTab {
   return {
     id,
     kind: "annotate",
     title: "notes.md",
     dirty: false,
     lastActive,
-    docId: null,
+    docId,
     hash,
     docType: "markdown",
     indexed: "idle",
@@ -135,14 +140,34 @@ describe("tabsReducer", () => {
     expect(sameEntity(doc("d1", null), doc("d2", null))).toBe(false);
   });
 
-  it("matches annotate tabs on the content hash", () => {
+  it("matches annotate tabs on the annotation set, not the file", () => {
     const state = run(
       initialTabState(),
-      { type: "open", tab: doc("d1", "h-1"), at: 1 },
-      { type: "open", tab: doc("d2", "h-1"), at: 2 },
+      { type: "open", tab: doc("d1", "h-1", 1, "mdink-1"), at: 1 },
+      { type: "open", tab: doc("d2", "h-1", 2, "mdink-1"), at: 2 },
     );
+    // Same set reopened — one chip, focused.
     expect(state.tabs).toHaveLength(2);
     expect(state.activeId).toBe("d1");
+  });
+
+  it("gives two annotation sets on one file two tabs", () => {
+    // The whole point of forks: same bytes, same hash, different boards. A
+    // hash match here would hand the second set the first one's chip.
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: doc("d1", "h-1", 1, "mdink-1"), at: 1 },
+      { type: "open", tab: doc("d2", "h-1", 2, "mdink-2"), at: 2 },
+    );
+    expect(state.tabs).toHaveLength(3);
+    expect(state.activeId).toBe("d2");
+    expect(sameEntity(doc("d1", "h-1", 0, "mdink-1"), doc("d2", "h-1", 0, "mdink-2"))).toBe(false);
+  });
+
+  it("does not fold two sets together just because neither is saved yet", () => {
+    // Mid-open records carry no set. Matching on null would collapse the very
+    // documents this feature exists to keep apart.
+    expect(sameEntity(doc("d1", "h-1"), doc("d2", "h-1"))).toBe(false);
   });
 
   it("caps web tabs and evicts the least recently used one", () => {

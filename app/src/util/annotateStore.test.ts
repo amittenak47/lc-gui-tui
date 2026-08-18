@@ -5,8 +5,10 @@ import {
   deleteAnnotateDoc,
   findAnnotateDocByHash,
   findStaleAnnotateDoc,
+  annotateDocLabel,
   annotateKeyMigrationPlan,
   freshAnnotateId,
+  setAnnotateDocLabel,
   listAnnotateDocsByHash,
   getAnnotateDoc,
   hashMarkdown,
@@ -242,6 +244,83 @@ describe("listAnnotateDocsByHash", () => {
     const second = await saveAnnotateDoc({ name: "dp.pdf", hash, source: "", board: board("two") });
 
     expect((await findAnnotateDocByHash(hash))?.id).toBe(second.id);
+  });
+});
+
+describe("annotateDocLabel", () => {
+  const meta = (over: Partial<Parameters<typeof annotateDocLabel>[0]> = {}) => ({
+    id: "mdink-1",
+    name: "dp.pdf",
+    hash: "h",
+    docType: "pdf" as const,
+    updatedAt: new Date("2026-08-18T10:00:00Z").getTime(),
+    ...over,
+  });
+
+  it("uses the set's own name once it has been given one", () => {
+    expect(annotateDocLabel(meta({ label: "Second pass" }))).toBe("Second pass");
+  });
+
+  it("falls back to the file name and a date, not a counter", () => {
+    // "dp.pdf (2)" says only that it was not the first. A date says which
+    // sitting it was, which is the thing the reader actually remembers.
+    const label = annotateDocLabel(meta());
+    expect(label.startsWith("dp.pdf — ")).toBe(true);
+    expect(label).not.toBe("dp.pdf");
+  });
+
+  it("ignores a label that is only whitespace", () => {
+    expect(annotateDocLabel(meta({ label: "   " })).startsWith("dp.pdf — ")).toBe(true);
+  });
+
+  it("falls back to the bare name when the timestamp is unusable", () => {
+    expect(annotateDocLabel(meta({ updatedAt: Number.NaN }))).toBe("dp.pdf");
+  });
+});
+
+describe("setAnnotateDocLabel", () => {
+  it("renames the set without freshening it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_700_000_000_000));
+    const saved = await saveAnnotateDoc({ name: "dp.pdf", hash: "h", source: "", board: board() });
+
+    vi.setSystemTime(new Date(1_700_000_900_000));
+    setAnnotateDocLabel(saved.id, "Second pass");
+
+    const meta = listAnnotateDocs()[0]!;
+    expect(meta.label).toBe("Second pass");
+    // Renaming is not annotating — it must not push the set up Recent.
+    expect(meta.updatedAt).toBe(1_700_000_000_000);
+  });
+
+  it("clears the label when given an empty name", async () => {
+    const saved = await saveAnnotateDoc({
+      name: "dp.pdf",
+      hash: "h",
+      label: "Second pass",
+      source: "",
+      board: board(),
+    });
+    setAnnotateDocLabel(saved.id, "  ");
+    expect(listAnnotateDocs()[0]!.label).toBeUndefined();
+  });
+
+  it("keeps a label across a save that does not mention one", async () => {
+    // Autosave passes no label. Dropping it there would rename the set back
+    // every three seconds.
+    const saved = await saveAnnotateDoc({
+      name: "dp.pdf",
+      hash: "h",
+      label: "Second pass",
+      source: "",
+      board: board(),
+    });
+    await saveAnnotateDoc({ id: saved.id, name: "dp.pdf", hash: "h", source: "", board: board("x") });
+    expect(listAnnotateDocs()[0]!.label).toBe("Second pass");
+  });
+
+  it("does nothing for an id that is not in the library", () => {
+    expect(() => setAnnotateDocLabel("mdink-nope", "x")).not.toThrow();
   });
 });
 
