@@ -933,6 +933,10 @@ input[type="checkbox"] {
   width: 100%;
 }
 
+.lc-split-sash.is-dragging {
+  background: var(--accent);
+}
+
 .lc-split-target {
   position: absolute;
   z-index: 30;
@@ -7670,6 +7674,15 @@ button.lc-row-selected:hover:not(:disabled) {
   color: color-mix(in srgb, var(--ink) 55%, transparent);
   overflow: hidden;
   touch-action: none;
+}
+
+/*
+ * Boot overlay must cover the first paint. Do not fade it in — that lets the
+ * homepage show sharp, then the spinner take over. Hide the shell until the
+ * checkmark beat. Overlay then exits and the page is what appears.
+ */
+.lc-app.lc-app-booting > :not(.lc-server-gate-boot) {
+  visibility: hidden;
 }
 
 .lc-loading-doodle {
