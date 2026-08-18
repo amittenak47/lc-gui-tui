@@ -297,8 +297,16 @@ export async function pullPads(client: LcClient): Promise<void> {
   for (const row of [...whiteboards, ...wbArchive]) {
     await fillMissingSnapshots(client, "whiteboard", row.id);
   }
+  /*
+   * Annotate snapshots are keyed by the sidecar id, like whiteboard's.
+   *
+   * They used to be keyed by the annotated file's hash, which meant two
+   * annotation sets on one PDF would have shared all three tiers. Snapshots
+   * the daemon still holds under a hash are simply not pulled — they belong to
+   * a key nothing asks for any more, and the live pad rows carry the ink.
+   */
   for (const row of [...annotate, ...anArchive]) {
-    await fillMissingSnapshots(client, "annotate", row.hash || row.id);
+    await fillMissingSnapshots(client, "annotate", row.id);
   }
 }
 

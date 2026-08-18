@@ -5,6 +5,9 @@ import {
   deleteAnnotateDoc,
   findAnnotateDocByHash,
   findStaleAnnotateDoc,
+  annotateKeyMigrationPlan,
+  freshAnnotateId,
+  listAnnotateDocsByHash,
   getAnnotateDoc,
   hashMarkdown,
   listAnnotateDocs,
@@ -50,15 +53,34 @@ describe("hashMarkdown", () => {
 });
 
 describe("saveAnnotateDoc", () => {
-  it("updates the entry for markdown it has already seen", async () => {
+  it("updates the entry it is given the id of", async () => {
     const hash = hashMarkdown("# Notes");
     const first = await saveAnnotateDoc({ name: "notes.md", hash, source: "# Notes", board: board("one") });
-    const second = await saveAnnotateDoc({ name: "notes.md", hash, source: "# Notes", board: board("two") });
+    const second = await saveAnnotateDoc({
+      id: first.id,
+      name: "notes.md",
+      hash,
+      source: "# Notes",
+      board: board("two"),
+    });
 
-    // The same document annotated twice is one library entry, not two.
+    // One session, one entry — the second save is the same set, moved on.
     expect(second.id).toBe(first.id);
     expect(listAnnotateDocs()).toHaveLength(1);
     expect((await getAnnotateDoc(first.id))?.board.elements).toEqual([{ id: "two" }]);
+  });
+
+  it("starts a second set on one file rather than overwriting the first", async () => {
+    // The whole point of keying on id: one PDF, two independent sets of marks.
+    const hash = hashMarkdown("# Shared");
+    const first = await saveAnnotateDoc({ name: "dp.pdf", hash, source: "", board: board("first") });
+    const second = await saveAnnotateDoc({ name: "dp.pdf", hash, source: "", board: board("second") });
+
+    expect(second.id).not.toBe(first.id);
+    expect(listAnnotateDocs()).toHaveLength(2);
+    // Neither set has touched the other.
+    expect((await getAnnotateDoc(first.id))?.board.elements).toEqual([{ id: "first" }]);
+    expect((await getAnnotateDoc(second.id))?.board.elements).toEqual([{ id: "second" }]);
   });
 
   it("keeps annotations of different files apart", async () => {
@@ -93,12 +115,35 @@ describe("saveAnnotateDoc", () => {
   });
 
   it("still updates a known document when the library is full", async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < ANNOTATE_LIBRARY_LIMIT; i += 1) {
+      const saved = await saveAnnotateDoc({
+        name: `n${i}.md`,
+        hash: `hash-${i}`,
+        source: "# src",
+        board: board(),
+      });
+      ids.push(saved.id);
+    }
+    await expect(
+      saveAnnotateDoc({
+        id: ids[0],
+        name: "n0.md",
+        hash: "hash-0",
+        source: "# src",
+        board: board("more"),
+      }),
+    ).resolves.toBeTruthy();
+  });
+
+  it("refuses a second set on a known file when the library is full", async () => {
+    // A fork is a new row, so it is subject to the cap like any other.
     for (let i = 0; i < ANNOTATE_LIBRARY_LIMIT; i += 1) {
       await saveAnnotateDoc({ name: `n${i}.md`, hash: `hash-${i}`, source: "# src", board: board() });
     }
     await expect(
-      saveAnnotateDoc({ name: "n0.md", hash: "hash-0", source: "# src", board: board("more") }),
-    ).resolves.toBeTruthy();
+      saveAnnotateDoc({ name: "n0.md", hash: "hash-0", source: "# src", board: board("fork") }),
+    ).rejects.toThrow(AnnotateLibraryFullError);
   });
 
   it("stores code documents with docType code and their source text", async () => {
@@ -140,7 +185,13 @@ describe("restoreAnnotateDoc", () => {
     const baseline = (await getAnnotateDoc(original.id)) as AnnotateDoc;
     await saveAnnotateDoc({ name: "other.md", hash: "other", source: "# src", board: board("other") });
 
-    await saveAnnotateDoc({ name: "kept.md", hash, source: "# Kept", board: board("scribbles") });
+    await saveAnnotateDoc({
+      id: original.id,
+      name: "kept.md",
+      hash,
+      source: "# Kept",
+      board: board("scribbles"),
+    });
     await restoreAnnotateDoc(baseline);
 
     expect(await getAnnotateDoc(original.id)).toEqual(baseline);
@@ -165,6 +216,82 @@ describe("deleteAnnotateDoc", () => {
     await deleteAnnotateDoc(saved.id);
     expect(await getAnnotateDoc(saved.id)).toBeNull();
     expect(listAnnotateDocs()).toHaveLength(0);
+  });
+});
+
+describe("listAnnotateDocsByHash", () => {
+  it("returns every set on those bytes, newest first", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_700_000_000_000));
+    const hash = hashMarkdown("# Shared");
+    const first = await saveAnnotateDoc({ name: "dp.pdf", hash, source: "", board: board("one") });
+    vi.setSystemTime(new Date(1_700_000_060_000));
+    const second = await saveAnnotateDoc({ name: "dp.pdf", hash, source: "", board: board("two") });
+    await saveAnnotateDoc({ name: "other.pdf", hash: "elsewhere", source: "", board: board() });
+
+    expect(listAnnotateDocsByHash(hash).map((entry) => entry.id)).toEqual([second.id, first.id]);
+    expect(listAnnotateDocsByHash("nothing-here")).toEqual([]);
+  });
+
+  it("hands the newest set to the single-result lookup", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_700_000_000_000));
+    const hash = hashMarkdown("# Shared");
+    await saveAnnotateDoc({ name: "dp.pdf", hash, source: "", board: board("one") });
+    vi.setSystemTime(new Date(1_700_000_060_000));
+    const second = await saveAnnotateDoc({ name: "dp.pdf", hash, source: "", board: board("two") });
+
+    expect((await findAnnotateDocByHash(hash))?.id).toBe(second.id);
+  });
+});
+
+describe("freshAnnotateId", () => {
+  it("hands out an id without reserving a library slot", async () => {
+    const id = freshAnnotateId();
+    expect(id).toMatch(/^mdink-/);
+    // Nothing is written until a save uses it.
+    expect(listAnnotateDocs()).toHaveLength(0);
+    expect(await getAnnotateDoc(id)).toBeNull();
+  });
+
+  it("does not collide with an entry already in the library", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_700_000_000_000));
+    const saved = await saveAnnotateDoc({ name: "a.md", hash: "h", source: "", board: board() });
+    expect(freshAnnotateId()).not.toBe(saved.id);
+  });
+});
+
+describe("annotateKeyMigrationPlan", () => {
+  const row = (id: string, hash: string, updatedAt: number) =>
+    ({ id, name: `${id}.md`, hash, docType: "markdown", updatedAt }) as const;
+
+  it("moves each set's ink from its file hash onto its own id", () => {
+    expect(
+      annotateKeyMigrationPlan([row("mdink-1", "bin-abc", 10), row("mdink-2", "md-xyz", 20)]),
+    ).toEqual([
+      { from: "md-xyz", to: "mdink-2" },
+      { from: "bin-abc", to: "mdink-1" },
+    ]);
+  });
+
+  it("gives shared-hash ink to the most recently updated set", () => {
+    // Two sets on one file cannot both own one pile of hash-keyed strokes, and
+    // there is no way to tell whose they were — so the live set takes them and
+    // the older one starts clean rather than the ink being copied to both.
+    const plan = annotateKeyMigrationPlan([
+      row("mdink-old", "bin-abc", 10),
+      row("mdink-new", "bin-abc", 99),
+    ]);
+    expect(plan).toEqual([{ from: "bin-abc", to: "mdink-new" }]);
+  });
+
+  it("skips a row whose hash is already its id", () => {
+    expect(annotateKeyMigrationPlan([row("same", "same", 1)])).toEqual([]);
+  });
+
+  it("plans nothing for an empty library", () => {
+    expect(annotateKeyMigrationPlan([])).toEqual([]);
   });
 });
 

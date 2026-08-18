@@ -180,6 +180,8 @@ import {
   deleteAnnotateDoc,
   findAnnotateDocByHash,
   findStaleAnnotateDoc,
+  freshAnnotateId,
+  migrateAnnotateKeysToId,
   getAnnotateDoc,
   hashMarkdown,
   isBinaryDocType,
@@ -738,12 +740,24 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
   useEffect(() => {
     void requestPersistentStorage();
     void drainDirtyInkArchives();
+    /*
+     * Bring hash-keyed ink and snapshots onto the sidecar id.
+     *
+     * Runs before any document is opened rather than inside the open path: the
+     * open would otherwise race a rename of the very rows it is restoring, and
+     * a reader who never opens the migrated file would keep the old keys
+     * forever. Idempotent and self-flagging, so this is one localStorage read
+     * on every mount after the first.
+     */
+    void migrateAnnotateKeysToId().catch(() => {});
     const flush = () => {
       const board = boardRef.current;
       if (!board || board.isInking()) return;
       const source = annotateSourceRef.current;
       const key = source
-        ? annotateDocKey(source.hash)
+        ? annotateDocIdRef.current
+          ? annotateDocKey(annotateDocIdRef.current)
+          : null
         : whiteboardNotebookId
           ? whiteboardDocKey(whiteboardNotebookId)
           : null;
@@ -1360,7 +1374,9 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         // refused. One attempt per change is the most that can ever help.
         lastSavedHashRef.current = hash;
         lastSavedMarksRef.current = marks;
-        const docKey = annotateDocKey(source.hash);
+        const docKey = annotateDocIdRef.current
+          ? annotateDocKey(annotateDocIdRef.current)
+          : null;
         void (async () => {
           await flushDirtyInk(board, docKey);
           const liveBoard = board.saveBoard({ assembleInk: false });
@@ -1381,12 +1397,12 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void recordRollingSnapshots({
               kind: "annotate",
-              key: saved.hash,
+              key: saved.id,
               name: saved.name,
               board: snapBoard,
               footnotes: saved.footnotes,
               agent: saved.agent,
-            }).then(() => void pushRecentSnapshots(client, "annotate", saved.hash));
+            }).then(() => void pushRecentSnapshots(client, "annotate", saved.id));
           } catch (cause: unknown) {
             noteStorageFull(cause);
           }
@@ -2121,9 +2137,21 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             }),
           );
           setAnnotateDocId(existing.id);
+          annotateDocIdRef.current = existing.id;
         } else {
           boardRef.current?.seedTemplate(skeletons);
-          setAnnotateDocId(null);
+          /*
+           * A set that has not been saved still needs an id.
+           *
+           * Ink and snapshots are keyed by sidecar id and both start writing
+           * long before the first save, so leaving this null until then would
+           * leave the opening strokes with nowhere of their own to go. Minting
+           * one costs nothing and reserves no library slot — the row appears
+           * when `saveAnnotateDoc` is first called with it.
+           */
+          const sessionId = freshAnnotateId();
+          setAnnotateDocId(sessionId);
+          annotateDocIdRef.current = sessionId;
         }
         // Footnotes belong to the entry, so a fresh open of the same file gets
         // its marks back and an unrelated document starts clean.
@@ -2146,7 +2174,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         // once the document itself has finished measuring.
         if (existing) {
           const handle = boardRef.current;
-          if (handle) await restoreInk(handle, annotateDocKey(hash), existing.board);
+          if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board);
         }
         await boardRef.current?.settleFitView();
 
@@ -4401,7 +4429,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         const source = annotateSourceRef.current;
         if (!board || !source) return;
         void (async () => {
-          await flushDirtyInk(board, annotateDocKey(source.hash));
+          await flushDirtyInk(
+            board,
+            annotateDocIdRef.current ? annotateDocKey(annotateDocIdRef.current) : null,
+          );
           const liveBoard = board.saveBoard({ assembleInk: false });
           try {
             const saved = await saveAnnotateDoc({
@@ -4769,7 +4800,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     const board = boardRef.current;
     const source = annotateSource;
     if (!board || !source) return null;
-    await flushDirtyInk(board, annotateDocKey(source.hash));
+    await flushDirtyInk(board, annotateDocId ? annotateDocKey(annotateDocId) : null);
     const blob = board.saveBoard({ assembleInk: false });
     if (!blob) return null;
     try {
@@ -4795,12 +4826,12 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       const snapBoard = await boardWithAssembledInk(board, blob);
       void recordRollingSnapshots({
         kind: "annotate",
-        key: saved.hash,
+        key: saved.id,
         name: saved.name,
         board: snapBoard,
         footnotes: saved.footnotes,
         agent: saved.agent,
-      }).then(() => void pushRecentSnapshots(client, "annotate", saved.hash));
+      }).then(() => void pushRecentSnapshots(client, "annotate", saved.id));
       return saved;
     } catch (cause) {
       if (cause instanceof AnnotateLibraryFullError) {
@@ -6588,7 +6619,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
           mode="entry"
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isAnnotate(problem))}
-          snapshotKey={annotateSource?.hash ?? null}
+          snapshotKey={annotateDocId}
           archived={anArchive}
           onRestoreArchive={(id) => restoreArchivedPad(client, "annotate", id)}
           onDelete={(id) =>
