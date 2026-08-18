@@ -49,7 +49,9 @@ import {
   HOME_TAB_ID,
   activeTab as activeTabOf,
   initialTabState,
+  liveOverflow,
   openedRecord,
+  promoteLive,
   tabsReducer,
   type TabPatch,
   type TabRecord,
@@ -64,6 +66,17 @@ import {
   type WorkspaceApi,
   type WorkspaceChrome,
 } from "./shellContext";
+
+/**
+ * How many workspaces stay mounted at once.
+ *
+ * Excalidraw, pdf.js and Monaco cannot all stay up for ten tabs, so most
+ * parked tabs are records and nothing else. Two is the floor worth paying
+ * for: the one being looked at, and the one just left — which is the switch
+ * people actually repeat, and the one that used to cost a full reload. Split
+ * panes raise it, because both halves are being looked at.
+ */
+const LIVE_LIMIT = 2;
 
 const LLM_ONLINE_POLL_MS = 20_000;
 const LLM_OFFLINE_POLL_MS = 60_000;
@@ -478,31 +491,53 @@ export function App() {
   }, []);
 
   /**
-   * Let go of the live workspace, then land on the new tab.
+   * Which workspaces are mounted, most recently looked at first.
    *
-   * The park has to finish before the switch: focusing unmounts the outgoing
-   * workspace, and its board handle goes with it, so a save still in flight
-   * would be saving through a torn-down board. Nothing in the strip is
-   * disabled meanwhile — `chrome.busy` already covers that.
+   * Switching no longer parks anything, and that is the whole of "switching
+   * stopped reloading": the tab you left is still mounted, so coming back is
+   * showing it again rather than reading it out of the store and re-fitting a
+   * board. Only falling off the end of this list costs anything.
    */
-  const partWithLive = useCallback(async () => {
-    const live = apisRef.current.get(tabsRef.current.activeId);
-    if (live) await live.park();
+  const [liveIds, setLiveIds] = useState<string[]>([HOME_TAB_ID]);
+  const promote = useCallback((id: string) => {
+    setLiveIds((current) => promoteLive(current, id));
   }, []);
+
+  /**
+   * Evicting is where the parking went.
+   *
+   * A workspace past the limit is flushed *before* it is dropped, and it stays
+   * mounted for the length of that flush — its board handle is what the flush
+   * writes through, so unmounting first would save through a torn-down board.
+   * That is the whole reason this is an effect over a list rather than a `key`
+   * that simply stops matching.
+   */
+  useEffect(() => {
+    const doomed = liveOverflow(liveIds, LIVE_LIMIT);
+    if (doomed.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const id of doomed) {
+        await apisRef.current.get(id)?.park().catch(() => {});
+      }
+      if (!cancelled) setLiveIds((current) => current.filter((x) => !doomed.includes(x)));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [liveIds]);
 
   const focusTab = useCallback(
     (id: string) => {
       const state = tabsRef.current;
       const tab = state.tabs.find((entry) => entry.id === id);
       if (!tab || id === state.activeId) return;
-      void (async () => {
-        await partWithLive();
-        setMissingTab(null);
-        setError(null);
-        dispatchTabs({ type: "focus", id, at: Date.now() });
-      })();
+      setMissingTab(null);
+      setError(null);
+      promote(id);
+      dispatchTabs({ type: "focus", id, at: Date.now() });
     },
-    [partWithLive],
+    [promote],
   );
 
   const openWorkspace = useCallback(
@@ -511,35 +546,45 @@ export function App() {
       // same call it makes, so the answer here cannot disagree with it.
       const landed = openedRecord(tabsRef.current, proposed);
       if (landed.id === tabsRef.current.activeId) return landed;
-      void (async () => {
-        await partWithLive();
-        setMissingTab(null);
-        setError(null);
-        dispatchTabs({ type: "open", tab: proposed, at: Date.now() });
-      })();
+      setMissingTab(null);
+      setError(null);
+      promote(landed.id);
+      dispatchTabs({ type: "open", tab: proposed, at: Date.now() });
       return landed;
     },
-    [partWithLive],
+    [promote],
   );
 
   const closeTab = useCallback((id: string) => {
     if (id === HOME_TAB_ID) return;
     const state = tabsRef.current;
     if (id !== state.activeId) {
-      // A parked tab has nothing mounted; dropping the record is the whole of
-      // closing it, and its content stays in whichever library holds it.
+      // Not on screen — but it may still be mounted behind this one, so it is
+      // asked the same question rather than dropped out from under itself.
+      const parked = apisRef.current.get(id);
+      if (parked) {
+        void parked.leave().then(() => {
+          dispatchTabs({ type: "close", id });
+          setLiveIds((current) => current.filter((x) => x !== id));
+        });
+        return;
+      }
+      // A record and nothing else; dropping it is the whole of closing it, and
+      // its content stays in whichever library holds it.
       dispatchTabs({ type: "close", id });
       return;
     }
     const live = apisRef.current.get(id);
     if (!live) {
       dispatchTabs({ type: "close", id });
+      setLiveIds((current) => current.filter((x) => x !== id));
       setMissingTab(null);
       return;
     }
     // Closing really is leaving, so it asks. A cancel simply never resolves.
     void live.leave().then(() => {
       dispatchTabs({ type: "close", id });
+      setLiveIds((current) => current.filter((x) => x !== id));
       setMissingTab(null);
     });
   }, []);
@@ -584,13 +629,29 @@ export function App() {
    * it is kept alive for the length of them. This is the floor of the mount
    * budget the split panes will build on.
    */
+  /*
+   * The mounted set, and which of them is painted.
+   *
+   * Everything in `liveIds` stays mounted; only the active one is laid out.
+   * The exception is Home while its overlay is still sliding away — the beats
+   * that carry the chooser off screen belong to the tab being left, so it is
+   * kept *visible* over the one arriving underneath, which is exactly where
+   * the overlay sat when there was only ever one canvas.
+   */
   const liveTabs = useMemo(() => {
-    const home = tabState.tabs.find((tab) => tab.id === HOME_TAB_ID)!;
     const transitioning = browseMotion !== "idle" || holdBrowseOverlay;
-    return activeRecord.id === HOME_TAB_ID || !transitioning
-      ? [activeRecord]
-      : [activeRecord, home];
-  }, [activeRecord, browseMotion, holdBrowseOverlay, tabState.tabs]);
+    const ids = liveIds.includes(activeRecord.id) ? liveIds : [activeRecord.id, ...liveIds];
+    return ids
+      .map((id) => tabState.tabs.find((tab) => tab.id === id))
+      .filter((tab): tab is TabRecord => Boolean(tab))
+      .map((tab) => ({
+        tab,
+        active: tab.id === activeRecord.id,
+        showing:
+          tab.id === activeRecord.id ||
+          (tab.id === HOME_TAB_ID && transitioning && activeRecord.id !== HOME_TAB_ID),
+      }));
+  }, [activeRecord.id, browseMotion, holdBrowseOverlay, liveIds, tabState.tabs]);
 
   const shell: ShellValue = useMemo(
     () => ({
@@ -710,11 +771,12 @@ export function App() {
             <StatusBanner text={error} variant="error" />
             <StatusBanner text={!error ? notice : null} variant="notice" />
           </div>
-          {liveTabs.map((tab) => (
+          {liveTabs.map(({ tab, active, showing }) => (
             <Workspace
-              key={`${tab.id}:${tab.id === activeRecord.id ? retryToken : 0}`}
+              key={`${tab.id}:${active ? retryToken : 0}`}
               tab={tab}
-              active={tab.id === activeRecord.id}
+              active={active}
+              showing={showing}
             />
           ))}
         </main>
