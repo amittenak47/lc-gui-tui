@@ -900,6 +900,7 @@ export function App() {
           */}
           <TabStrip
             tabs={tabState.tabs}
+            groups={tabState.groups}
             activeId={tabState.activeId}
             busy={chrome.busy || chrome.loadActive}
             onFocus={focusTab}

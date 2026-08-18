@@ -568,6 +568,8 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
   /** Address bar for a web snapshot — kept outside the camera-scaled page. */
   const [webUrl, setWebUrl] = useState(WEB_HOME);
   const [webHtmlSource, setWebHtmlSource] = useState<WebHtmlSource | null>(null);
+  /** Why the rendered capture was skipped, when it was. */
+  const [webHtmlNote, setWebHtmlNote] = useState<string | null>(null);
   /** Library entry this session is writing to, once it has one. */
   const [annotateDocId, setAnnotateDocId] = useState<string | null>(null);
   /**
@@ -2624,6 +2626,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       try {
         const page = await fetchWebPage(raw);
         setWebHtmlSource(page.source);
+        setWebHtmlNote(page.note ?? null);
         const entry = {
           url: page.url,
           title: page.title || hostLabelFromUrl(page.url),
@@ -6150,6 +6153,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                       html={annotateSource.text}
                       url={annotateSource.name}
                       source={webHtmlSource ?? undefined}
+                      note={webHtmlNote ?? undefined}
                       onMeasure={onMdInkMeasure}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                       onNavigate={(href) => void openWebPage(href)}
