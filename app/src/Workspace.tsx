@@ -450,6 +450,8 @@ export function Workspace({ tab, active }: WorkspaceProps) {
     session,
     setSession,
     refreshSession,
+    navigateBySession,
+    setNavigateBySession,
     bankFilters,
     setBankFilters,
     openWorkspace,
@@ -955,7 +957,6 @@ export function Workspace({ tab, active }: WorkspaceProps) {
    * Header ‹ › walks the session queue only after Start / Random. A plain table
    * click is just a cursor — prev/next then walk the filtered problem bank.
    */
-  const [navigateBySession, setNavigateBySession] = useState(false);
   const [canStepPrev, setCanStepPrev] = useState(false);
   const [canStepNext, setCanStepNext] = useState(false);
   /** Distinguishes header Run tests vs Submit for the results panel. */
@@ -1537,7 +1538,6 @@ export function Workspace({ tab, active }: WorkspaceProps) {
       agentSaveSuspendedRef.current = true;
       setAttemptState(null);
       if (bank) setBankFilters(bank);
-      if (!opts.keepSessionNav) setNavigateBySession(false);
       if (fromBrowse) {
         setHoldBrowseOverlay(true);
         setBrowseMotion("busy");
@@ -2442,50 +2442,28 @@ export function Workspace({ tab, active }: WorkspaceProps) {
   );
 
 
-  /**
-   * Write the record, load into it, and take the chip back if nothing came.
+  /*
+   * Opening is writing a record, and nothing else.
    *
-   * Writing first is the whole point of the inversion, but it means a load
-   * that bails — another open already in flight, a file that would not read —
-   * leaves a chip standing for a workspace that never existed. `liveTabIdRef`
-   * is set at the moment a loader commits, so it is the honest signal for
-   * whether the tab was ever filled. A chip that collapsed onto an existing
-   * tab is never withdrawn: that one had a workspace before this call.
+   * The shell parks whatever is live, focuses the new chip and mounts a
+   * workspace for it, and *that* workspace loads on mount. Loading here as
+   * well would open the same notebook twice — once into an instance that is
+   * about to be torn down.
    */
-  const fillWorkspaceRecord = useCallback(
-    async (proposed: TabRecord, load: (tabId: string) => Promise<unknown>): Promise<void> => {
-      const record = openWorkspace(proposed);
-      const fresh = record.id === proposed.id;
-      try {
-        await load(record.id);
-      } finally {
-        if (fresh && liveTabIdRef.current !== record.id) {
-          closeTab(record.id);
-        }
-      }
-    },
-    [closeTab, openWorkspace],
-  );
-
   const openWhiteboard = useCallback(
-    async (opts?: { notebookId?: string | null; fresh?: boolean }) => {
-      if (busy !== null) return;
-      await fillWorkspaceRecord(
-        {
-          id: newTabId("whiteboard"),
-          kind: "whiteboard",
-          title: "Whiteboard",
-          dirty: false,
-          lastActive: 0,
-          // A saved notebook is the same tab wherever it is opened from; a
-          // blank one has no id, so every "new notebook" really is a new tab.
-          notebookId: opts?.fresh ? null : (opts?.notebookId ?? null),
-        },
-        (tabId) =>
-          loadWhiteboard({ notebookId: opts?.notebookId ?? null, fresh: opts?.fresh, tabId }),
-      );
+    (opts?: { notebookId?: string | null; fresh?: boolean }) => {
+      openWorkspace({
+        id: newTabId("whiteboard"),
+        kind: "whiteboard",
+        title: "Whiteboard",
+        dirty: false,
+        lastActive: 0,
+        // A saved notebook is the same tab wherever it is opened from; a blank
+        // one has no id, so every "new notebook" really is a new tab.
+        notebookId: opts?.fresh ? null : (opts?.notebookId ?? null),
+      });
     },
-    [busy, fillWorkspaceRecord, loadWhiteboard],
+    [openWorkspace],
   );
   openWhiteboardRef.current = (opts) => void openWhiteboard(opts);
 
@@ -2500,6 +2478,7 @@ export function Workspace({ tab, active }: WorkspaceProps) {
       tabId?: string;
     }) => {
       if (input.tabId) {
+        // Already has a chip — the web paths, and any reopen from the strip.
         await loadAnnotate({ ...input, tabId: input.tabId });
         return;
       }
@@ -2541,27 +2520,35 @@ export function Workspace({ tab, active }: WorkspaceProps) {
               indexed: "idle",
               source: null,
             };
-      await fillWorkspaceRecord(proposed, (tabId) => loadAnnotate({ ...input, tabId, hash }));
+      /*
+       * A document with no library entry has nowhere else to be read back
+       * from, so its text rides on the record — that is what the mounting
+       * workspace will load from.
+       */
+      if (proposed.kind === "annotate" && !input.bytes && !input.docId) {
+        proposed.source = input.text ?? null;
+      }
+      openWorkspace(proposed);
     },
-    [fillWorkspaceRecord, loadAnnotate, webTabRecord],
+    [openWorkspace, webTabRecord],
   );
 
   const pickProblem = useCallback(
-    async (taskId: string, bank?: SearchOptions, opts?: { keepSessionNav?: boolean }) => {
-      await fillWorkspaceRecord(
-        {
-          id: newTabId("practice"),
-          kind: "practice",
-          title: titleFromSlug(taskId),
-          dirty: false,
-          lastActive: 0,
-          dataset: bank?.dataset ?? DEFAULT_DATASET,
-          taskId,
-        },
-        (tabId) => loadProblem(taskId, bank, { keepSessionNav: opts?.keepSessionNav, tabId }),
-      );
+    (taskId: string, bank?: SearchOptions, opts?: { keepSessionNav?: boolean }) => {
+      // The queue-vs-bank choice is the session's, so it is set before the
+      // switch rather than carried into a workspace that has not mounted yet.
+      setNavigateBySession(opts?.keepSessionNav === true);
+      openWorkspace({
+        id: newTabId("practice"),
+        kind: "practice",
+        title: titleFromSlug(taskId),
+        dirty: false,
+        lastActive: 0,
+        dataset: bank?.dataset ?? DEFAULT_DATASET,
+        taskId,
+      });
     },
-    [fillWorkspaceRecord, loadProblem],
+    [openWorkspace, setNavigateBySession],
   );
 
   const pickAndOpenAnnotate = useCallback(async () => {

@@ -157,6 +157,14 @@ export interface ShellValue {
 
   session: SessionSnapshot | null;
   setSession: Dispatch<SetStateAction<SessionSnapshot | null>>;
+  /**
+   * Whether ‹ › walk the session queue rather than the problem bank.
+   *
+   * Shell state because it is a fact about the *session*, and it has to
+   * outlive the workspace switch that opening the next problem performs.
+   */
+  navigateBySession: boolean;
+  setNavigateBySession: Dispatch<SetStateAction<boolean>>;
   bankFilters: SearchOptions;
   setBankFilters: Dispatch<SetStateAction<SearchOptions>>;
   refreshSession: () => Promise<void>;
