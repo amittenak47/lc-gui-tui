@@ -370,6 +370,19 @@ body {
   justify-self: end;
 }
 
+/*
+ * Portal targets for the workspace's own chrome.
+ *
+ * `display: contents` so the wrapper itself lays out as nothing: the controls
+ * inside become direct flex children of the header row they were always in,
+ * and the agent column stays a child of `.lc-app` rather than of `.lc-main`,
+ * which is what keeps `.lc-side`'s `top: 38px` measured from the right box.
+ */
+.lc-header-slot,
+.lc-agent-slot {
+  display: contents;
+}
+
 /* ------------------------------------------------------------ tab strip --- */
 
 /*
