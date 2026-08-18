@@ -1,5 +1,5 @@
 # Shared Linux env + dependency checks for the tablet APK.
-# Sourced by android-install.sh and android-install-pads.sh.
+# Sourced by android-install-practice.sh and android-install-whiteboard.sh.
 # Not for Windows — that path is android-install.cmd (Git usr/bin + NDK).
 
 android_linux_require() {
@@ -7,7 +7,7 @@ android_linux_require() {
     Linux) ;;
     *)
       echo "android-install: this script is Linux-only." >&2
-      echo "On Windows use app/scripts/android-install.cmd (or android-install-pads.cmd)." >&2
+      echo "On Windows use app/scripts/android-install-practice.cmd (or android-install-whiteboard.cmd)." >&2
       echo "Do not run npm run android:apk from a Linux-shaped PATH on Windows:" >&2
       echo "libffi-sys will look for Unix cp/make and fail." >&2
       return 1

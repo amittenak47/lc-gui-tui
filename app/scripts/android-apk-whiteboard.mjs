@@ -1,10 +1,12 @@
 /**
- * Pads-only APK: hide Practice in Vite and omit the `leetcode` Cargo feature
- * (no RustPython, no seed extract). Both flags must stay together.
+ * Whiteboard-only APK: hide Practice in Vite and omit the `leetcode` Cargo
+ * feature (no RustPython, no seed extract). Both flags must stay together —
+ * dropping the feature without the Vite flag ships a Practice card that opens
+ * onto a judge that is not in the binary.
  *
  * Usage (from app/):
- *   node scripts/android-apk-pads.mjs --debug
- *   node scripts/android-apk-pads.mjs
+ *   node scripts/android-apk-whiteboard.mjs --debug
+ *   node scripts/android-apk-whiteboard.mjs
  */
 
 import { spawnSync } from "node:child_process";
