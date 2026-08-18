@@ -188,6 +188,10 @@ export async function deleteWhiteboardNotebook(id: string): Promise<void> {
   writeIndex(readIndex().filter((entry) => entry.id !== id));
   await deleteContent(id);
   void deletePadSnapshots("whiteboard", id).catch(() => {});
+  // Its links go too — see `deleteAnnotateDoc` for why both directions.
+  void import("./noteLinks")
+    .then((links) => links.deleteEdgesFor({ type: "whiteboard", id }))
+    .catch(() => {});
   void deleteInkPages(whiteboardDocKey(id)).catch(() => {});
 }
 

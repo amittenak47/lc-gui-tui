@@ -147,6 +147,20 @@ import {
   type TabRecord,
   type WebTab,
 } from "./util/tabs";
+import {
+  deleteEdge,
+  edgesFor,
+  footnoteEdges,
+  putEdge,
+  makeEdge,
+  isUnresolved,
+  replaceWikiEdges,
+  sameNode,
+  type Edge,
+  type NodeRef,
+} from "./util/noteLinks";
+import { WorkspaceLinkPicker, groupLabel, type LinkTarget } from "./modes/WorkspaceLinkPicker";
+import { resolveWikiLinks } from "./util/wikiLinks";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
 import { savePdfFilmPref } from "./modes/pdfFilm";
@@ -186,6 +200,7 @@ import {
   findStaleAnnotateDoc,
   getAnnotateDocMeta,
   freshAnnotateId,
+  listAnnotateDocs,
   listAnnotateDocsByHash,
   migrateAnnotateKeysToId,
   getAnnotateDoc,
@@ -201,6 +216,7 @@ import {
 import {
   deleteWhiteboardNotebook,
   getWhiteboardNotebook,
+  listWhiteboardNotebooks,
   migrateLegacyWhiteboard,
   restoreWhiteboardNotebook,
   saveWhiteboardNotebook,
@@ -1994,6 +2010,124 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
    * because a reader switching between a note and a textbook should not be
    * switching between two apps.
    */
+  /**
+   * This workspace, as a node in the graph.
+   *
+   * Null when there is nothing addressable open — Home, or a document still
+   * loading. Everything downstream (the links list, the picker, the lift)
+   * needs the same answer, and it is one the tab already knows.
+   */
+  const hereNode = useMemo((): NodeRef | null => {
+    if (tab.kind === "whiteboard") {
+      return whiteboardNotebookId
+        ? { type: "whiteboard", id: whiteboardNotebookId, title: tab.title }
+        : null;
+    }
+    if (tab.kind === "practice") {
+      return { type: "practice", id: `${tab.dataset}/${tab.taskId}`, title: tab.title };
+    }
+    if (tab.kind === "annotate" || tab.kind === "web") {
+      return annotateDocId
+        ? {
+            type: tab.kind === "web" ? "web" : "annotate",
+            id: annotateDocId,
+            title: annotateSource?.name ?? tab.title,
+          }
+        : null;
+    }
+    return null;
+  }, [annotateDocId, annotateSource?.name, tab, whiteboardNotebookId]);
+
+  /** Edges touching the live pad, refreshed when it or the graph changes. */
+  const [hereEdges, setHereEdges] = useState<Edge[]>([]);
+  const [linkPickerOpen, setLinkPickerOpen] = useState(false);
+
+  const refreshHereEdges = useCallback(() => {
+    const node = hereNode;
+    if (!node) {
+      setHereEdges([]);
+      return;
+    }
+    void edgesFor(node)
+      .then(setHereEdges)
+      .catch(() => setHereEdges([]));
+  }, [hereNode]);
+
+  useEffect(() => {
+    refreshHereEdges();
+  }, [refreshHereEdges]);
+
+  /**
+   * What this pad is linked to, as rows for the footnote hub.
+   *
+   * Undirected: a link typed in a note and one drawn back at it are the same
+   * adjacency, and a reader hopping the graph does not care which end was
+   * written first.
+   */
+  const workspaceLinkRows = useMemo(() => {
+    const here = hereNode;
+    if (!here) return [];
+    return hereEdges.map((edge) => {
+      const other = sameNode(edge.from, here) ? edge.to : edge.from;
+      return {
+        edgeId: edge.id,
+        title: other.title ?? other.id,
+        kindLabel: `${groupLabel(other.type)} · ${edge.kind}`,
+      };
+    });
+  }, [hereEdges, hereNode]);
+
+  /** Everything this pad could be linked to: open tabs, then the libraries. */
+  const linkTargets = useMemo((): LinkTarget[] => {
+    const here = hereNode;
+    if (!here) return [];
+    const out: LinkTarget[] = [];
+    const seen = new Set<string>([`${here.type}:${here.id}`]);
+    const add = (node: NodeRef, group: string) => {
+      const key = `${node.type}:${node.id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ node, group });
+    };
+    for (const open of tabsRef.current.tabs) {
+      if (open.kind === "home") continue;
+      if (open.kind === "practice") {
+        add({ type: "practice", id: `${open.dataset}/${open.taskId}`, title: open.title }, "Open tabs");
+      } else if (open.kind === "whiteboard" && open.notebookId) {
+        add({ type: "whiteboard", id: open.notebookId, title: open.title }, "Open tabs");
+      } else if (open.kind === "annotate" && open.docId) {
+        add({ type: "annotate", id: open.docId, title: open.title }, "Open tabs");
+      }
+      // Web tabs carry no `docId` on the record — a capture reaches the graph
+      // through its annotate sidecar, which the library loop below picks up.
+    }
+    for (const doc of listAnnotateDocs()) {
+      add({ type: "annotate", id: doc.id, title: annotateDocLabel(doc) }, "Notes and documents");
+    }
+    for (const notebook of listWhiteboardNotebooks()) {
+      add({ type: "whiteboard", id: notebook.id, title: notebook.title }, "Whiteboards");
+    }
+    return out;
+  }, [hereNode, tabsRef]);
+
+  const addWorkspaceLink = useCallback(
+    (to: NodeRef) => {
+      const here = hereNode;
+      setLinkPickerOpen(false);
+      if (!here) return;
+      void putEdge(makeEdge(here, to, "picker")).then(refreshHereEdges);
+    },
+    [hereNode, refreshHereEdges],
+  );
+
+  const removeWorkspaceLink = useCallback(
+    (id: string) => {
+      // The edge, never the thing on the other end of it.
+      void deleteEdge(id).then(refreshHereEdges);
+    },
+    [refreshHereEdges],
+  );
+
   const askSidecarChoice = useCallback(
     (docName: string, matches: AnnotateDocMeta[]) =>
       new Promise<SidecarChoice>((resolve) => {
@@ -2242,6 +2376,25 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         // its marks back and an unrelated document starts clean.
         setAnnotateFootnotes(existing?.footnotes ?? []);
         annotateFootnotesRef.current = existing?.footnotes ?? [];
+        /*
+         * Marks that already were links become edges.
+         *
+         * A footnote that opened a coach thread, or that had a URL saved on
+         * it, is a connection the reader made — it just lived on the mark
+         * rather than in the graph. Lifting is a read, not a creation, and the
+         * ids are derived from the endpoints, so running it on every open
+         * rewrites the same rows instead of stacking copies.
+         */
+        if (existing?.footnotes?.length) {
+          const pad: NodeRef = {
+            type: docType === "web" ? "web" : "annotate",
+            id: sessionDocId,
+            title: existing.name,
+          };
+          for (const edge of footnoteEdges(pad, existing.footnotes)) {
+            void putEdge(edge).catch(() => {});
+          }
+        }
         pendingQuoteRef.current = null;
         const resumed = restoreAgentMessages(existing?.agent ?? []);
         if (resumed.length > 0) setAgentMessages(resumed);
@@ -2833,6 +2986,26 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
           .putDocIndex(hash, { name: source.name, doc_type: "markdown", pages })
           .catch(() => {});
       }
+      /*
+       * `[[Wiki]]` links, parsed here and nowhere else.
+       *
+       * On save rather than on keystroke because a half-typed `[[gra` names
+       * nothing and would spend the interim as an unresolved node. Owned
+       * markdown only: brackets in an imported textbook are its author's
+       * punctuation, and reading them as links would invent edges out of
+       * documents this reader never wrote.
+       */
+      void replaceWikiEdges(
+        { type: "annotate", id, title: saved.name },
+        resolveWikiLinks(next, {
+          annotate: listAnnotateDocs().filter((entry) => entry.id !== id),
+          whiteboards: listWhiteboardNotebooks().map((entry) => ({
+            id: entry.id,
+            title: entry.title,
+          })),
+          defaultDataset: DEFAULT_DATASET,
+        }),
+      ).catch(() => {});
       return true;
     } catch (cause) {
       if (cause instanceof AnnotateLibraryFullError) setError(cause.message);
@@ -2875,6 +3048,68 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     setEditBuffer(annotateSourceRef.current?.text ?? "");
     setEditMarkdown(true);
   }, [annotateOwned, editMarkdown, saveEditBuffer]);
+
+  /**
+   * Follow a link to whatever is on the other end.
+   *
+   * Each type opens the way it already opens — a problem through
+   * `loadProblem` and its one board, a notebook by id, a sidecar by id. The
+   * link is a pointer, so nothing here creates a second copy of anything.
+   *
+   * Two cases decline rather than guess: an unresolved `[[Title]]` names no
+   * workspace to open, and a thread lives inside a pad, which is a hop the
+   * graph page will do properly (§6) rather than something to fake here.
+   */
+  const openLinkedNode = useCallback(
+    (node: NodeRef) => {
+      if (isUnresolved(node)) {
+        setNotice(`“${node.title ?? "That note"}” does not exist yet — New file will create it.`);
+        return;
+      }
+      switch (node.type) {
+        case "practice": {
+          const [dataset, ...rest] = node.id.split("/");
+          const taskId = rest.join("/");
+          if (!dataset || !taskId) return;
+          // Still one problem tab: opening replaces it, as Home Practice does.
+          pickProblem(taskId, { dataset } as SearchOptions);
+          return;
+        }
+        case "whiteboard":
+          openWhiteboard({ notebookId: node.id });
+          return;
+        case "annotate":
+        case "web": {
+          const meta = getAnnotateDocMeta(node.id);
+          if (!meta) {
+            setError("That workspace is no longer in the library.");
+            return;
+          }
+          void (async () => {
+            const entry = await getAnnotateDoc(node.id);
+            if (!entry) {
+              setError("That workspace is no longer in the library.");
+              return;
+            }
+            await openAnnotate({
+              name: entry.name,
+              docType: entry.docType,
+              text: entry.source,
+              bytes: isBinaryDocType(entry.docType)
+                ? (await getDocBytes(entry.hash).catch(() => null)) ?? undefined
+                : undefined,
+              docId: entry.id,
+            });
+          })();
+          return;
+        }
+        case "thread":
+          setNotice("Open that pad to reach its thread.");
+          return;
+      }
+    },
+    [openAnnotate, openWhiteboard, pickProblem],
+  );
 
   const pickAndOpenAnnotate = useCallback(async () => {
     if (busy !== null) return;
@@ -6786,6 +7021,15 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         <>
         {openFootnote && (
           <FootnoteOverview
+            workspaceLinks={workspaceLinkRows}
+            onAddWorkspaceLink={hereNode ? () => setLinkPickerOpen(true) : undefined}
+            onOpenWorkspaceLink={(id) => {
+              const here = hereNode;
+              const edge = hereEdges.find((entry) => entry.id === id);
+              if (!here || !edge) return;
+              openLinkedNode(sameNode(edge.from, here) ? edge.to : edge.from);
+            }}
+            onRemoveWorkspaceLink={removeWorkspaceLink}
             footnote={openFootnote}
             number={footnoteNumbers.get(openFootnote.id)}
             threadMessages={footnoteThreadMessages}
@@ -6952,6 +7196,15 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         * an open that is waiting on this question cannot proceed until it is
         * answered, so nothing else on screen should be able to take the tap.
         */}
+      {linkPickerOpen && hereNode && (
+        <WorkspaceLinkPicker
+          fromTitle={hereNode.title ?? "this workspace"}
+          targets={linkTargets}
+          onPick={addWorkspaceLink}
+          onCancel={() => setLinkPickerOpen(false)}
+        />
+      )}
+
       {sidecarChoice && (
         <SidecarChooser
           docName={sidecarChoice.docName}

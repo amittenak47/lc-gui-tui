@@ -52,6 +52,17 @@ export interface FootnoteOverviewProps {
   openThreadRootId?: string | null;
   /** Hub-row hover — page paints that sub-mark's span. */
   onHoverSubMark?: (id: string | null) => void;
+  /**
+   * Links to other workspaces, as opposed to the external URLs above.
+   *
+   * Kept as a separate list on purpose: "link to my DP notebook" is not a
+   * `https://`, and stuffing it into one would mean either a fake URL scheme
+   * or a list where half the rows do not open in a browser.
+   */
+  workspaceLinks?: ReadonlyArray<{ edgeId: string; title: string; kindLabel: string }>;
+  onAddWorkspaceLink?: () => void;
+  onOpenWorkspaceLink?: (edgeId: string) => void;
+  onRemoveWorkspaceLink?: (edgeId: string) => void;
 }
 type Task =
   | { kind: "note"; id: string | null }
@@ -197,6 +208,10 @@ export function FootnoteOverview({
   onSendCoach,
   onAttachCoach,
   onOpenExternal,
+  workspaceLinks = [],
+  onAddWorkspaceLink,
+  onOpenWorkspaceLink,
+  onRemoveWorkspaceLink,
   anchorRect,
   subMarkMode,
   onSubMarkModeChange,
@@ -709,6 +724,33 @@ export function FootnoteOverview({
                   </ul>
                 )}
               </HubSection>
+              {onAddWorkspaceLink && (
+                <HubSection title="Workspace links" onAdd={onAddWorkspaceLink}>
+                  {workspaceLinks.length > 0 && (
+                    <ul className="lc-footnote-overview-link-list">
+                      {workspaceLinks.map((link) => (
+                        <li key={link.edgeId}>
+                          <HoldButton
+                            label={link.title}
+                            className="lc-agent-scope-option lc-footnote-overview-entry-hold lc-hold-danger"
+                            ariaLabel={`${link.title} — tap to open, hold to unlink`}
+                            holdMs={HOLD_SENSITIVE_MS}
+                            holdThrough
+                            onTap={() => onOpenWorkspaceLink?.(link.edgeId)}
+                            // Holding removes the *link*, never the thing it
+                            // points at — the notebook on the other end is not
+                            // this card's to delete.
+                            onConfirm={() => onRemoveWorkspaceLink?.(link.edgeId)}
+                          >
+                            <strong className="lc-footnote-overview-entry-text">{link.title}</strong>
+                            <span className="lc-muted">{link.kindLabel}</span>
+                          </HoldButton>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </HubSection>
+              )}
               {isAiTab ? (
                 notes.length > 0 ? (
                   <HubSection title="Notes">
