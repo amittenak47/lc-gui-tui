@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — tabs stop disappearing when you switch away from them
+
+- **Switching parks the workspace; it no longer discards it.** Leaving says you
+  are done with the thing, which is why it asks. Moving to another tab says
+  nothing of the kind — but it went down the same path, so an untouched
+  notebook was *deleted* on the way out and its chip went with it. That is why
+  only one browser tab and one file-or-whiteboard tab could ever be open at
+  once. Parking commits whatever the autosave has not caught up with and stops
+  there; closing a tab is still the explicit discard, and still asks.
+- **A document that was only read survives being parked.** It never reaches the
+  library — the store deliberately does not fill with every file ever opened —
+  so its text rides on the tab record until a save gives it somewhere better to
+  live. Binary files were never at risk; their bytes go to IndexedDB on open.
+- **Practice is capped at one tab.** A problem workspace is an open attempt with
+  a solution file, a run, and a coach thread reading both. A second problem
+  moves the tab that exists rather than opening another.
+- **Cancel replaces Home in place during a load**, instead of a button arriving
+  beside the strip and shifting every tab along for the length of the load.
+
 ### Changed — GTA IV subtitle chrome
 
 - **Chrome sans is DINish** (OFL stand-in for DIN 1451 Mittelschrift, the GTA IV

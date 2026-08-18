@@ -27,6 +27,14 @@ export interface TabStripProps {
   onClose: (id: string) => void;
   /** The live index chip for the active document, if it has one. */
   activeIndexChip?: ReactNode;
+  /**
+   * A workspace is opening, and this cancels it.
+   *
+   * Home takes the job rather than a Cancel button appearing beside the strip:
+   * a chip that arrives for the length of a load shifts every tab along and
+   * then shifts them back, and the place you land when you cancel *is* Home.
+   */
+  onCancelLoad?: () => void;
 }
 
 function Glyph({ children }: { children: ReactNode }) {
@@ -49,13 +57,20 @@ function Glyph({ children }: { children: ReactNode }) {
 }
 
 /** Same shapes as the home cards and the header icons — one vocabulary. */
-function TabIcon({ kind }: { kind: TabRecord["kind"] }) {
+function TabIcon({ kind }: { kind: TabRecord["kind"] | "cancel" }) {
   switch (kind) {
     case "home":
       return (
         <Glyph>
           <path d="M3 10.5 12 3l9 7.5" />
           <path d="M5.5 9.5V20h13V9.5" />
+        </Glyph>
+      );
+    case "cancel":
+      return (
+        <Glyph>
+          <circle cx="12" cy="12" r="9" />
+          <path d="m9 9 6 6M15 9l-6 6" />
         </Glyph>
       );
     case "practice":
@@ -107,6 +122,7 @@ export function TabStrip({
   onFocus,
   onClose,
   activeIndexChip,
+  onCancelLoad,
 }: TabStripProps) {
   const stripRef = useRef<HTMLDivElement | null>(null);
 
@@ -122,25 +138,30 @@ export function TabStrip({
       {tabs.map((tab) => {
         const selected = tab.id === activeId;
         const indexState = indexStateOf(tab);
+        // Home wears Cancel for the length of a load — same chip, same slot.
+        const cancelling = tab.kind === "home" && Boolean(onCancelLoad);
+        const label = cancelling ? "Cancel" : tab.title;
         return (
           <div
             key={tab.id}
             role="tab"
             aria-selected={selected}
             data-tab-active={selected ? "true" : "false"}
-            data-tab-kind={tab.kind}
-            className={selected ? "lc-tab is-active" : "lc-tab"}
+            data-tab-kind={cancelling ? "cancel" : tab.kind}
+            className={
+              cancelling ? "lc-tab is-cancelling" : selected ? "lc-tab is-active" : "lc-tab"
+            }
           >
             <button
               type="button"
               className="lc-tab-hit"
-              disabled={busy}
-              title={tab.title}
-              aria-label={tab.title}
-              onClick={() => onFocus(tab.id)}
+              disabled={busy && !cancelling}
+              title={cancelling ? "Cancel loading" : tab.title}
+              aria-label={label}
+              onClick={() => (cancelling ? onCancelLoad?.() : onFocus(tab.id))}
             >
-              <TabIcon kind={tab.kind} />
-              <span className="lc-tab-title">{tab.title}</span>
+              <TabIcon kind={cancelling ? "cancel" : tab.kind} />
+              <span className="lc-tab-title">{label}</span>
               {tab.dirty ? (
                 <span className="lc-tab-dot" aria-label="Unsaved changes" title="Unsaved changes" />
               ) : null}

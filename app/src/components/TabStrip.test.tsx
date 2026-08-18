@@ -37,6 +37,7 @@ function doc(id: string, title: string, indexed: AnnotateTab["indexed"] = "idle"
     hash: "h-1",
     docType: "markdown",
     indexed,
+    source: null,
   };
 }
 
@@ -122,6 +123,29 @@ describe("TabStrip", () => {
   it("keeps the index badge off kinds that are never embedded", () => {
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")] });
     expect(view.host.querySelectorAll(".lc-doc-index-chip")).toHaveLength(0);
+    view.unmount();
+  });
+
+  it("turns Home into Cancel in place while a workspace opens", () => {
+    const onCancelLoad = vi.fn();
+    const onFocus = vi.fn();
+    const view = mount({
+      tabs: [homeTab(), board("b1", "doodle")],
+      activeId: "b1",
+      busy: true,
+      onFocus,
+      onCancelLoad,
+    });
+    // Same number of chips, same slot — nothing shifts for the length of a load.
+    expect(view.chips()).toHaveLength(2);
+    const home = view.chips()[0]!;
+    expect(home.querySelector(".lc-tab-title")?.textContent).toBe("Cancel");
+    act(() => {
+      home.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
+    });
+    // Cancel stays live while everything else is disabled by the same load.
+    expect(onCancelLoad).toHaveBeenCalledTimes(1);
+    expect(onFocus).not.toHaveBeenCalled();
     view.unmount();
   });
 

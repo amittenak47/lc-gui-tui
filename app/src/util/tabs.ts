@@ -33,6 +33,16 @@ export const HOME_TAB_ID = "home";
 /** See the note at the top: two captured pages is the ceiling. */
 export const WEB_TAB_LIMIT = 2;
 
+/**
+ * Practice is capped at one, and unlike the web cap this is not about memory.
+ *
+ * A problem workspace is an attempt: a solution file on disk, a run, a graded
+ * submission, a coach thread that has been reading all of it. Two of those
+ * open at once is a lot of state for the app to keep straight and more than a
+ * reader wants to hold either. A second problem moves the tab that exists.
+ */
+export const PRACTICE_TAB_LIMIT = 1;
+
 interface TabBase {
   id: string;
   title: string;
@@ -66,6 +76,16 @@ export interface AnnotateTab extends TabBase {
   hash: string | null;
   docType: DocType;
   indexed: TabIndexState;
+  /**
+   * The text, held only while this document has nowhere else to be read from.
+   *
+   * A document that was merely *read* never reaches the library — the store
+   * deliberately does not fill with every file ever opened — so parking one
+   * would otherwise be losing it. Dropped the moment a save gives the tab a
+   * `docId`. Binary types never set it: their bytes went to IndexedDB under
+   * the hash when the file was opened, annotations or not.
+   */
+  source: string | null;
 }
 
 export interface WebTab extends TabBase, WebHistory {
@@ -100,6 +120,7 @@ export type TabPatch = Partial<{
   hash: string | null;
   docType: DocType;
   indexed: TabIndexState;
+  source: string | null;
 }>;
 
 export type TabAction =
@@ -163,6 +184,22 @@ export function sameEntity(a: TabRecord, b: TabRecord): boolean {
   }
 }
 
+/**
+ * The record an `open` collapses onto, or null when it earns a new chip.
+ *
+ * Two things collapse an open: it is the same entity, or it is Practice and a
+ * problem is already open. Exported because the caller needs the same answer
+ * the reducer is about to reach — it has to know which record to keep
+ * patching as the workspace loads.
+ */
+export function openTarget(state: TabState, tab: TabRecord): TabRecord | null {
+  const same = state.tabs.find((open) => sameEntity(open, tab));
+  if (same) return same;
+  if (tab.kind !== "practice") return null;
+  const practice = state.tabs.filter((open) => open.kind === "practice");
+  return practice.length >= PRACTICE_TAB_LIMIT ? (practice[0] ?? null) : null;
+}
+
 /** Only keys the record already declares are written; the rest are dropped. */
 function applyPatch(tab: TabRecord, patch: TabPatch): TabRecord {
   const next: Record<string, unknown> = { ...tab };
@@ -211,8 +248,24 @@ export function tabsReducer(state: TabState, action: TabAction): TabState {
     }
 
     case "open": {
-      const existing = state.tabs.find((tab) => sameEntity(tab, action.tab));
-      if (existing) return tabsReducer(state, { type: "focus", id: existing.id, at: action.at });
+      const target = openTarget(state, action.tab);
+      if (target) {
+        // A practice tab reused for a different problem takes that problem's
+        // identity; every other collapse is onto the entity already there.
+        const renamed =
+          target.kind === "practice" && action.tab.kind === "practice"
+            ? tabsReducer(state, {
+                type: "patch",
+                id: target.id,
+                patch: {
+                  title: action.tab.title,
+                  dataset: action.tab.dataset,
+                  taskId: action.tab.taskId,
+                },
+              })
+            : state;
+        return tabsReducer(renamed, { type: "focus", id: target.id, at: action.at });
+      }
       const opened = { ...action.tab, lastActive: action.at };
       return {
         tabs: evictOverCap([...state.tabs, opened], opened.id),

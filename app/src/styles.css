@@ -411,6 +411,16 @@ body {
   border-color: var(--accent);
 }
 
+/* Home wearing Cancel for the length of a load. Same chip, same slot, so the
+   strip does not shift out from under whatever is being pointed at. */
+.lc-tab.is-cancelling {
+  border-color: var(--accent);
+}
+
+.lc-tab.is-cancelling .lc-tab-hit {
+  color: var(--accent);
+}
+
 .lc-header .lc-tab-hit {
   display: flex;
   align-items: center;

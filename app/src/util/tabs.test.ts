@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   HOME_TAB_ID,
+  PRACTICE_TAB_LIMIT,
   WEB_TAB_LIMIT,
+  type AnnotateTab,
   type TabRecord,
   type TabState,
   type WebTab,
@@ -10,6 +12,7 @@ import {
   initialTabState,
   sameEntity,
   tabsReducer,
+  openTarget,
   webTabCount,
   webTabTitle,
 } from "./tabs";
@@ -33,7 +36,7 @@ function board(id: string, notebookId: string | null, lastActive = 0): TabRecord
   return { id, kind: "whiteboard", title: "Whiteboard", dirty: false, lastActive, notebookId };
 }
 
-function doc(id: string, hash: string | null, lastActive = 0): TabRecord {
+function doc(id: string, hash: string | null, lastActive = 0): AnnotateTab {
   return {
     id,
     kind: "annotate",
@@ -44,7 +47,12 @@ function doc(id: string, hash: string | null, lastActive = 0): TabRecord {
     hash,
     docType: "markdown",
     indexed: "idle",
+    source: null,
   };
+}
+
+function problem(id: string, taskId: string, dataset = "leetcode"): TabRecord {
+  return { id, kind: "practice", title: taskId, dirty: false, lastActive: 0, dataset, taskId };
 }
 
 /** Fold a script of actions so the arrange step of each test stays one line. */
@@ -124,6 +132,35 @@ describe("tabsReducer", () => {
     expect(state.tabs).toHaveLength(5);
   });
 
+  it("keeps Practice to one tab and moves it to the new problem", () => {
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: problem("p1", "two-sum"), at: 1 },
+      { type: "open", tab: problem("p2", "add-two-numbers"), at: 2 },
+    );
+    expect(state.tabs.filter((tab) => tab.kind === "practice")).toHaveLength(PRACTICE_TAB_LIMIT);
+    expect(state.activeId).toBe("p1");
+    expect(activeTab(state)).toMatchObject({ id: "p1", taskId: "add-two-numbers" });
+  });
+
+  it("tells the caller which record an open will land on", () => {
+    const state = run(initialTabState(), { type: "open", tab: problem("p1", "two-sum"), at: 1 });
+    // The caller has to patch the record the reducer picked, not the one it proposed.
+    expect(openTarget(state, problem("p2", "reverse-list"))?.id).toBe("p1");
+    expect(openTarget(state, board("b1", null))).toBeNull();
+  });
+
+  it("keeps a practice tab out of the way of other kinds", () => {
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: problem("p1", "two-sum"), at: 1 },
+      { type: "open", tab: board("b1", "nb-1"), at: 2 },
+      { type: "open", tab: problem("p2", "three-sum"), at: 3 },
+    );
+    expect(state.tabs.map((tab) => tab.id)).toEqual([HOME_TAB_ID, "p1", "b1"]);
+    expect(state.activeId).toBe("p1");
+  });
+
   it("closes onto the neighbour that took the slot", () => {
     const state = run(
       initialTabState(),
@@ -155,6 +192,16 @@ describe("tabsReducer", () => {
     const tab = activeTab(state);
     expect(tab).toMatchObject({ kind: "whiteboard", notebookId: "nb-9", dirty: true });
     expect(tab).not.toHaveProperty("docId");
+  });
+
+  it("drops the parked text once a save gives the tab a docId", () => {
+    const parked: AnnotateTab = { ...doc("d1", "h-1"), source: "# notes" };
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: parked, at: 1 },
+      { type: "patch", id: "d1", patch: { docId: "saved-1", source: null } },
+    );
+    expect(activeTab(state)).toMatchObject({ docId: "saved-1", source: null });
   });
 
   it("keeps the same object when a patch changes nothing", () => {

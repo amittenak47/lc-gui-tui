@@ -153,7 +153,7 @@ import {
   activeTab as activeTabOf,
   initialTabState,
   newTabId,
-  sameEntity,
+  openTarget,
   tabsReducer,
   webTabTitle,
   type TabPatch,
@@ -641,9 +641,9 @@ export function App() {
    * than being handed back the id it proposed.
    */
   const openTabRecord = useCallback((tab: TabRecord): string => {
-    const existing = tabStateRef.current.tabs.find((open) => sameEntity(open, tab));
+    const target = openTarget(tabStateRef.current, tab);
     dispatchTabs({ type: "open", tab, at: Date.now() });
-    return existing?.id ?? tab.id;
+    return target?.id ?? tab.id;
   }, []);
 
   /**
@@ -1799,29 +1799,22 @@ export function App() {
          * `{dataset, task_id}` is already the key every route and store names,
          * so it is the tab's identity too.
          *
-         * One practice tab, though, not one per problem: ‹ › and Random walk
-         * the bank from inside the workspace, and a strip that grew a chip for
-         * every problem stepped past would be a history, not a set of open
-         * workspaces. Arriving from anywhere else opens a tab.
+         * There is only ever one Practice chip — `PRACTICE_TAB_LIMIT` — so
+         * this both opens the tab and moves it: ‹ ›, Random and picking a
+         * different problem from the browser all land on the same record.
          */
         const practiceIdentity = {
           title: titleFromSlug(detail.task_id, detail.question_id),
           dataset: detail.dataset ?? datasetId,
           taskId: detail.task_id,
         };
-        const held = activeTabOf(tabStateRef.current);
-        if (held.kind === "practice") {
-          dispatchTabs({ type: "patch", id: held.id, patch: practiceIdentity });
-          liveTabIdRef.current = held.id;
-        } else {
-          liveTabIdRef.current = openTabRecord({
-            id: newTabId("practice"),
-            kind: "practice",
-            dirty: false,
-            lastActive: 0,
-            ...practiceIdentity,
-          });
-        }
+        liveTabIdRef.current = openTabRecord({
+          id: newTabId("practice"),
+          kind: "practice",
+          dirty: false,
+          lastActive: 0,
+          ...practiceIdentity,
+        });
         await refreshSession();
 
         const saved = loaded.resume.board as
@@ -2312,6 +2305,9 @@ export function App() {
             hash,
             docType,
             indexed: "idle",
+            // Only for a document with no library entry to be read back from,
+            // and only for the types whose bytes are not already in IndexedDB.
+            source: existing || bytes ? null : text,
           });
         }
         setAnnotateHeight(null);
@@ -4833,7 +4829,7 @@ export function App() {
    * pruned, since that differs between the sheet and the header.
    */
   const saveWhiteboardNow = useCallback(
-    async (onFull?: () => void) => {
+    async (onFull?: () => void, opts?: { quiet?: boolean }) => {
       const board = boardRef.current;
       if (!board || !problem || !isWhiteboard(problem)) return;
       try {
@@ -4848,7 +4844,7 @@ export function App() {
         setWhiteboardNotebookId(saved.id);
         await flushDirtyInk(board, whiteboardDocKey(saved.id));
         await rebaselineWhiteboardSession(saved.id);
-        setNotice(`Saved “${saved.title}”.`);
+        if (!opts?.quiet) setNotice(`Saved “${saved.title}”.`);
         void pushWhiteboardPad(client, saved);
         const snapBoard = await boardWithAssembledInk(board, liveBoard);
         void recordRollingSnapshots({
@@ -5368,43 +5364,38 @@ export function App() {
             : tab.hash
               ? await findAnnotateDocByHash(tab.hash)
               : null;
+          const docType = entry?.docType ?? tab.docType;
+          const name = entry?.name ?? tab.title;
           /*
-           * A document that was only read never reached the library, so there
-           * is nothing to re-open it from. That is not an error to sit on —
-           * drop the chip and say why, rather than leaving a tab that does
-           * nothing when it is clicked.
+           * Three places the document can come back from, in order of how
+           * much they know: the library entry with its annotations; the bytes
+           * IndexedDB kept under the hash whether or not anything was written
+           * on them; and — for a document that was only read, and so was never
+           * written anywhere — the text parked on the record itself.
            */
-          if (!entry) {
-            dispatchTabs({ type: "close", id: tab.id });
-            setNotice(`“${tab.title}” was not saved, so there is nothing to reopen.`);
-            returnToHome();
-            return;
-          }
-          if (!isBinaryDocType(entry.docType)) {
-            await openAnnotate({
-              name: entry.name,
-              docType: entry.docType,
-              text: entry.source,
-              docId: entry.id,
-              tabId: tab.id,
-            });
-            return;
-          }
-          const bytes = await getDocBytes(entry.hash).catch(() => null);
-          if (!bytes) {
+          if (isBinaryDocType(docType)) {
+            const hash = entry?.hash ?? tab.hash;
+            const bytes = hash ? await getDocBytes(hash).catch(() => null) : null;
+            if (bytes) {
+              await openAnnotate({ name, docType, bytes, docId: entry?.id, tabId: tab.id });
+              return;
+            }
             setError(
-              `“${entry.name}” is in the library but its file is not on this device — open it again to restore the annotations.`,
+              `“${name}” is in the library but its file is not on this device — open it again to restore the annotations.`,
             );
             returnToHome();
             return;
           }
-          await openAnnotate({
-            name: entry.name,
-            docType: entry.docType,
-            bytes,
-            docId: entry.id,
-            tabId: tab.id,
-          });
+          const text = entry?.source ?? tab.source;
+          if (text !== null && text !== undefined) {
+            await openAnnotate({ name, docType, text, docId: entry?.id, tabId: tab.id });
+            return;
+          }
+          // Nothing left anywhere. Say so and drop the chip rather than leave
+          // a tab that does nothing when it is clicked.
+          dispatchTabs({ type: "close", id: tab.id });
+          setNotice(`“${tab.title}” is no longer on this device.`);
+          returnToHome();
           return;
         }
       }
@@ -5421,6 +5412,71 @@ export function App() {
    * The `suspend()` that makes a switch silent is the next step in the plan,
    * and it belongs with the 2–3 live boards it exists to serve.
    */
+  /**
+   * Let go of the live workspace without asking, and without discarding it.
+   *
+   * A *switch* is not a *leave*. Leaving says the writer is done with the
+   * thing, which is why it gets a dialog; moving to another tab says nothing
+   * of the kind. A prompt on every switch is a nag, and worse than a nag — it
+   * puts a Discard button under work that was only being parked, which is how
+   * an untouched notebook and an unannotated document used to lose their
+   * chips on the way out.
+   *
+   * So parking commits whatever the autosave tick has not caught up with and
+   * stops there. The blank cases write nothing at all: a notebook nobody drew
+   * on still leaves no empty entry in the library, and a document that was
+   * only read is held on its record instead (see `AnnotateTab.source`).
+   */
+  const parkWorkspace = useCallback(
+    (next: () => void) => {
+      const board = boardRef.current;
+      if (!problem || !board) {
+        next();
+        return;
+      }
+      boardSaveSuspendedRef.current = true;
+      agentSaveSuspendedRef.current = true;
+      setSwitchMotion("busy");
+      setBoardPreparing(true);
+      void (async () => {
+        try {
+          if (isAnnotate(problem)) {
+            if (!annotateUntouched()) await saveAnnotateSession();
+          } else if (isWhiteboard(problem)) {
+            if (!whiteboardUntouched()) await saveWhiteboardNow(undefined, { quiet: true });
+          } else {
+            // A problem workspace is an open attempt and parking does not end
+            // it — no `finishAttempt` here. The solution and the thread are
+            // what would otherwise be a few seconds behind.
+            await syncSolution().catch(() => {});
+            if (agentMessagesRef.current.length > 0) {
+              await client
+                .putAgentSession(
+                  problem.task_id,
+                  persistableAgentMessages(agentMessagesRef.current),
+                  problem.dataset,
+                )
+                .catch(() => {});
+            }
+          }
+        } catch {
+          // The record survives regardless, and the switch must not stall on
+          // a store that is refusing writes. The autosave will say so.
+        }
+        next();
+      })();
+    },
+    [
+      annotateUntouched,
+      client,
+      problem,
+      saveAnnotateSession,
+      saveWhiteboardNow,
+      syncSolution,
+      whiteboardUntouched,
+    ],
+  );
+
   const focusTab = useCallback(
     (id: string) => {
       if (busy !== null) return;
@@ -5433,12 +5489,12 @@ export function App() {
         if (id === HOME_TAB_ID && practiceOpen) setPracticeOpen(false);
         return;
       }
-      leaveProblem(() => {
+      parkWorkspace(() => {
         dispatchTabs({ type: "focus", id, at: Date.now() });
         void openTabWorkspace(tab);
       });
     },
-    [busy, leaveProblem, openTabWorkspace, practiceOpen],
+    [busy, openTabWorkspace, parkWorkspace, practiceOpen],
   );
 
   const closeTab = useCallback(
@@ -5478,7 +5534,7 @@ export function App() {
   }, [patchLiveTab, whiteboardNotebookId]);
 
   useEffect(() => {
-    patchLiveTab({ docId: annotateDocId });
+    patchLiveTab({ docId: annotateDocId, ...(annotateDocId ? { source: null } : {}) });
   }, [annotateDocId, patchLiveTab]);
 
   useEffect(() => {
@@ -5507,9 +5563,9 @@ export function App() {
         open();
         return;
       }
-      leaveProblem(open);
+      parkWorkspace(open);
     },
-    [busy, leaveProblem, problem],
+    [busy, parkWorkspace, problem],
   );
 
   const canvasLoading =
@@ -5582,18 +5638,6 @@ export function App() {
           <Tip tip="lc whiteboard — your coding workspace">
             <span className="lc-brand">lc <strong>whiteboard</strong></span>
           </Tip>
-          {workspaceLoadActive && (
-            <button
-              type="button"
-              className="lc-secondary lc-home lc-tip-target"
-              data-tip="Cancel loading"
-              data-tip-placement="bottom"
-              onClick={() => cancelWorkspaceLoad()}
-            >
-              <span className="lc-label-long">← Cancel</span>
-              <span className="lc-label-short">←</span>
-            </button>
-          )}
           {/*
             The strip is the title slot now. It carries Home, every open
             workspace and the `[indexed]` badge, so `.lc-current` no longer
@@ -5605,6 +5649,7 @@ export function App() {
             busy={busy !== null || workspaceLoadActive}
             onFocus={focusTab}
             onClose={closeTab}
+            onCancelLoad={workspaceLoadActive ? () => cancelWorkspaceLoad() : undefined}
             activeIndexChip={
               problem && isAnnotate(problem) ? (
                 <DocIndexChip status={docIndexStatus} meta={docIndexMeta} error={docIndexError} />
@@ -6558,7 +6603,9 @@ export function App() {
         }}
         onBrowse={() => {
           setTests(null);
-          leaveProblem(() => returnToHome());
+          // Home is a tab, so this parks the attempt rather than ending it —
+          // unlike Next / Random, which move on from the problem.
+          parkWorkspace(() => returnToHome());
         }}
         canNext={canStepNext}
       />
