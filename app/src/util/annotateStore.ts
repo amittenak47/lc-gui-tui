@@ -65,6 +65,35 @@ export interface AnnotateDocMeta {
   hash: string;
   docType: DocType;
   updatedAt: number;
+  /**
+   * What to call this set of annotations, when its file name is not enough.
+   *
+   * A file can carry several sets now, and they all share one `name` — a list
+   * of three rows reading `dp.pdf` tells the reader nothing about which is
+   * which. Renaming here renames the *set*: the file on disk is untouched and
+   * the hash does not move. Absent on sets made before forks existed, and on
+   * every set that is still the only one on its file, where the file name is
+   * the better label anyway. See {@link annotateDocLabel}.
+   */
+  label?: string;
+}
+
+/**
+ * The name to show for one annotation set.
+ *
+ * Falls back to the date the set was last touched rather than to a counter:
+ * "dp.pdf — 18 Aug" says something about which session it was, where
+ * "dp.pdf (2)" only says it was not the first.
+ */
+export function annotateDocLabel(meta: AnnotateDocMeta): string {
+  const label = meta.label?.trim();
+  if (label) return label;
+  const when = new Date(meta.updatedAt);
+  if (Number.isNaN(when.getTime())) return meta.name;
+  return `${meta.name} — ${when.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  })}`;
 }
 
 export interface AnnotateDoc extends AnnotateDocMeta {
@@ -218,6 +247,23 @@ function writeIndex(entries: AnnotateDocMeta[]): void {
  */
 export function listAnnotateDocs(): AnnotateDocMeta[] {
   return readIndex().sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/**
+ * Rename one annotation set, without touching its file or its content.
+ *
+ * Deliberately not a `saveAnnotateDoc` call: renaming is not editing, and
+ * going through the save path would freshen `updatedAt` and move the set to
+ * the top of Recent for something the reader did not draw.
+ */
+export function setAnnotateDocLabel(id: string, label: string): void {
+  const index = readIndex();
+  const meta = index.find((entry) => entry.id === id);
+  if (!meta) return;
+  const trimmed = label.trim();
+  const next: AnnotateDocMeta = trimmed ? { ...meta, label: trimmed } : { ...meta };
+  if (!trimmed) delete next.label;
+  writeIndex(index.map((entry) => (entry.id === id ? next : entry)));
 }
 
 /** Meta for one entry, without touching its content. */
@@ -395,6 +441,8 @@ export async function saveAnnotateDoc(input: {
   name: string;
   hash: string;
   docType?: DocType;
+  /** Undefined keeps whatever the set is already called. */
+  label?: string;
   source: string;
   board: BoardBlob;
   footnotes?: readonly DocFootnote[];
@@ -430,12 +478,14 @@ export async function saveAnnotateDoc(input: {
       : await getContent<AnnotateContent>(id);
   const footnotes = input.footnotes ? [...input.footnotes] : prior?.footnotes ?? [];
   const agent = Array.isArray(input.agent) ? input.agent : prior?.agent ?? [];
+  const label = input.label?.trim() || existing?.label;
   const meta: AnnotateDocMeta = {
     id,
     name: input.name.trim() || existing?.name || "Untitled.md",
     hash: input.hash,
     docType: input.docType ?? existing?.docType ?? "markdown",
     updatedAt: now,
+    ...(label ? { label } : {}),
   };
   writeIndex([meta, ...index.filter((entry) => entry.id !== id)]);
   await putContent(id, {

@@ -22,7 +22,15 @@ import {
 } from "../util/padSnapshotStore";
 
 export type MdInkLeaveChoice = "save" | "discard";
-export type MdInkEntryChoice = "open" | "recent" | "save" | "export" | "import" | "snapshot";
+export type MdInkEntryChoice =
+  | "open"
+  | "recent"
+  | "save"
+  | "export"
+  | "import"
+  | "snapshot"
+  /** Start a second set of annotations on the file already open. */
+  | "fork";
 
 interface LeaveProps {
   mode: "leave";
@@ -150,7 +158,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                   ? "Discard throws away this session's annotations. The file itself is never changed. Hold to confirm."
                   : "Nothing annotated since the last save — leaving changes nothing."
                 : allowSave
-                  ? "Save these annotations, open another document, or reopen a recent one."
+                  ? "Save these annotations, start a second set on this file, or open another document."
                   : "Open a document to annotate, or reopen a recent one."}
           </p>
         </div>
@@ -310,6 +318,19 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                       Pick a .md, source file, .pdf or .epub to annotate.
                     </span>
                   </HoldButton>
+                  {allowSave && (
+                    <HoldButton
+                      label="New annotation set on this file"
+                      className="lc-hold-choice"
+                      disabled={locked}
+                      onConfirm={() => props.onChoose("fork")}
+                    >
+                      <strong>New annotation set…</strong>
+                      <span className="lc-muted">
+                        A second blank board over the same file. This one is kept.
+                      </span>
+                    </HoldButton>
+                  )}
                   <HoldButton
                     label="Recent"
                     className="lc-hold-choice"

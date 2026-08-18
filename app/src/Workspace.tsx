@@ -151,6 +151,7 @@ import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocu
 import { PdfPageRail } from "./modes/PdfPageRail";
 import { savePdfFilmPref } from "./modes/pdfFilm";
 import { AnnotateDialog } from "./modes/AnnotateDialog";
+import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
 import { StatementDocument } from "./modes/StatementDocument";
 import {
@@ -178,9 +179,12 @@ import {
 } from "./util/annotateFs";
 import {
   deleteAnnotateDoc,
+  annotateDocLabel,
   findAnnotateDocByHash,
   findStaleAnnotateDoc,
+  getAnnotateDocMeta,
   freshAnnotateId,
+  listAnnotateDocsByHash,
   migrateAnnotateKeysToId,
   getAnnotateDoc,
   hashMarkdown,
@@ -574,6 +578,18 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
   const [webHtmlNote, setWebHtmlNote] = useState<string | null>(null);
   /** Library entry this session is writing to, once it has one. */
   const [annotateDocId, setAnnotateDocId] = useState<string | null>(null);
+  /*
+   * The open is parked on a question: which of this file's annotation sets?
+   *
+   * A promise held in state rather than a callback chain, because the answer
+   * has to arrive *inside* `loadAnnotate` — before the session id is minted and
+   * before the board can take a stroke. Resolving it resumes the same open.
+   */
+  const [sidecarChoice, setSidecarChoice] = useState<{
+    docName: string;
+    matches: AnnotateDocMeta[];
+    resolve: (choice: SidecarChoice) => void;
+  } | null>(null);
   /**
    * Marks this reading session has left on the page.
    *
@@ -1960,6 +1976,14 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
    * because a reader switching between a note and a textbook should not be
    * switching between two apps.
    */
+  const askSidecarChoice = useCallback(
+    (docName: string, matches: AnnotateDocMeta[]) =>
+      new Promise<SidecarChoice>((resolve) => {
+        setSidecarChoice({ docName, matches, resolve });
+      }),
+    [],
+  );
+
   const loadAnnotate = useCallback(
     async (input: {
       name: string;
@@ -2026,9 +2050,47 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
           );
         }
         const hash = input.hash ?? (bytes ? hashBytes(bytes) : hashMarkdown(text));
-        const existing = input.docId
-          ? await getAnnotateDoc(input.docId)
-          : await findAnnotateDocByHash(hash);
+
+        /*
+         * Which set of annotations on this file — asked before anything is set.
+         *
+         * Ordering is the whole of this block. The session id is minted below
+         * for a set that does not exist yet, and ink starts writing under that
+         * id as soon as the board can take a stroke. So the question has to be
+         * answered *here*, above `setAnnotateSource` and above the mint: ask it
+         * any later and a two-set file would mint a third id, start collecting
+         * strokes under it, and then restore an older board on top.
+         *
+         * A caller that already knows the set — Recent, a tab being restored,
+         * the strip — passes `docId` and is never asked.
+         */
+        let existing: AnnotateDoc | null = null;
+        if (input.docId) {
+          existing = await getAnnotateDoc(input.docId);
+        } else {
+          const matches = listAnnotateDocsByHash(hash);
+          if (matches.length === 1) {
+            existing = await getAnnotateDoc(matches[0]!.id);
+          } else if (matches.length > 1) {
+            const choice = await askSidecarChoice(input.name, matches);
+            // The reader may have moved on while the question sat there.
+            if (workspaceLoadGenRef.current !== loadGen) return;
+            if (choice.kind === "cancel") throw new AnnotateOpenCancelled();
+            // "New annotation set" deliberately leaves `existing` null: the
+            // mint below is exactly the behaviour it is asking for.
+            if (choice.kind === "open") existing = await getAnnotateDoc(choice.id);
+          }
+        }
+
+        /*
+         * The id this session writes under, settled before the board mounts.
+         *
+         * `input.docId` wins even when it has no saved content — a set chosen
+         * as "new" upstream arrives as an id with nothing behind it yet, and
+         * minting a second one here would strand the ink the reader is about
+         * to lay down under an id nothing else knows about.
+         */
+        const sessionDocId = input.docId ?? existing?.id ?? freshAnnotateId();
 
         /*
          * The bytes go in before anything is restored over them.
@@ -2081,7 +2143,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
          * IndexedDB under the hash regardless.
          */
         patchTab(input.tabId, {
-          docId: existing?.id ?? null,
+          // The session id, not just a saved one: the record is what
+          // `sameEntity` reads, so a set that has not been written yet still
+          // has to be findable by it or reopening the file would fork again.
+          docId: sessionDocId,
           hash,
           docType,
           indexed: "idle",
@@ -2136,23 +2201,20 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               };
             }),
           );
-          setAnnotateDocId(existing.id);
-          annotateDocIdRef.current = existing.id;
         } else {
           boardRef.current?.seedTemplate(skeletons);
-          /*
-           * A set that has not been saved still needs an id.
-           *
-           * Ink and snapshots are keyed by sidecar id and both start writing
-           * long before the first save, so leaving this null until then would
-           * leave the opening strokes with nowhere of their own to go. Minting
-           * one costs nothing and reserves no library slot — the row appears
-           * when `saveAnnotateDoc` is first called with it.
-           */
-          const sessionId = freshAnnotateId();
-          setAnnotateDocId(sessionId);
-          annotateDocIdRef.current = sessionId;
         }
+        /*
+         * A set that has not been saved still needs an id.
+         *
+         * Ink and snapshots are keyed by sidecar id and both start writing long
+         * before the first save, so leaving this null until then would leave
+         * the opening strokes with nowhere of their own to go. Holding no
+         * library slot is what makes that safe — the row appears when
+         * `saveAnnotateDoc` is first called with this id.
+         */
+        setAnnotateDocId(sessionDocId);
+        annotateDocIdRef.current = sessionDocId;
         // Footnotes belong to the entry, so a fresh open of the same file gets
         // its marks back and an unrelated document starts clean.
         setAnnotateFootnotes(existing?.footnotes ?? []);
@@ -2296,7 +2358,12 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         }, indexDelayMs);
       } catch (cause) {
         if (workspaceLoadGenRef.current !== loadGen) return;
-        setError(messageOf(cause));
+        // Declining to open something is an answer, not an error — so the
+        // chrome comes down but no banner goes up, and the chip this open was
+        // going to fill goes with it.
+        const cancelled = cause instanceof AnnotateOpenCancelled;
+        if (cancelled) closeTab(input.tabId);
+        else setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
         setHoldBrowseOverlay(false);
@@ -2550,6 +2617,43 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
        * second chip for it rather than focusing the first.
        */
       const hash = input.bytes ? hashBytes(input.bytes) : hashMarkdown(input.text ?? "");
+
+      /*
+       * Which annotation set, decided here — before a record exists.
+       *
+       * `sameEntity` matches annotate tabs on `docId` now, so the record has to
+       * carry one from the start or opening a file twice would grow a second
+       * chip for the same set. Deciding here also makes Cancel free: nothing
+       * has been created yet, so declining is a `return` rather than an open
+       * that has to be unwound.
+       *
+       * Every branch ends with a concrete id. A set that does not exist yet
+       * gets a minted one — `freshAnnotateId` reserves no library slot, and the
+       * alternative is ink arriving before the session has anywhere to put it.
+       */
+      let sidecarId = input.docId ?? null;
+      if (!sidecarId && docType !== "web") {
+        const matches = listAnnotateDocsByHash(hash);
+        if (matches.length === 1) {
+          sidecarId = matches[0]!.id;
+        } else if (matches.length > 1) {
+          const choice = await askSidecarChoice(input.name, matches);
+          if (choice.kind === "cancel") return;
+          sidecarId = choice.kind === "open" ? choice.id : freshAnnotateId();
+        } else {
+          sidecarId = freshAnnotateId();
+        }
+      }
+      /*
+       * Nothing saved under this id yet — so the text has to ride the record.
+       *
+       * Asked of the library rather than tracked as a flag, because the same
+       * answer is wanted for a minted id, for a fork of an open file, and for
+       * a caller that handed us an id it had just made up. Only a set that is
+       * genuinely in the library can be read back from it.
+       */
+      const newSet = !sidecarId || !getAnnotateDocMeta(sidecarId);
+
       const proposed: TabRecord =
         docType === "web"
           ? webTabRecord({
@@ -2563,7 +2667,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               title: input.name,
               dirty: false,
               lastActive: 0,
-              docId: input.docId ?? null,
+              docId: sidecarId,
               hash,
               docType,
               indexed: "idle",
@@ -2574,12 +2678,12 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
        * from, so its text rides on the record — that is what the mounting
        * workspace will load from.
        */
-      if (proposed.kind === "annotate" && !input.bytes && !input.docId) {
+      if (proposed.kind === "annotate" && !input.bytes && newSet) {
         proposed.source = input.text ?? null;
       }
       openWorkspace(proposed);
     },
-    [openWorkspace, webTabRecord],
+    [askSidecarChoice, openWorkspace, webTabRecord],
   );
 
   const pickProblem = useCallback(
@@ -5317,6 +5421,16 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             : tab.hash
               ? await findAnnotateDocByHash(tab.hash)
               : null;
+          /*
+           * The record's id outranks the entry's, because it may not have one.
+           *
+           * A set that has been drawn on but not yet saved has an id on the
+           * record and nothing in the library behind it. Falling back to
+           * `entry?.id` there would hand the reload no id at all, a second one
+           * would be minted, and the ink already in the WAL under the first
+           * would be stranded under a key nothing looks up again.
+           */
+          const restoreDocId = tab.docId ?? entry?.id;
           const docType = entry?.docType ?? tab.docType;
           const name = entry?.name ?? tab.title;
           /*
@@ -5330,7 +5444,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             const hash = entry?.hash ?? tab.hash;
             const bytes = hash ? await getDocBytes(hash).catch(() => null) : null;
             if (bytes) {
-              await loadAnnotate({ name, docType, bytes, docId: entry?.id, tabId: tab.id });
+              await loadAnnotate({ name, docType, bytes, docId: restoreDocId, tabId: tab.id });
               return;
             }
             reportMissingTab(
@@ -5341,7 +5455,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
           }
           const text = entry?.source ?? tab.source;
           if (text !== null && text !== undefined) {
-            await loadAnnotate({ name, docType, text, docId: entry?.id, tabId: tab.id });
+            await loadAnnotate({ name, docType, text, docId: restoreDocId, tabId: tab.id });
             return;
           }
           reportMissingTab(tab, "The document is not in the library and its file is not on this device.");
@@ -5449,6 +5563,22 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
 
   useEffect(() => {
     patchTab(tab.id, { docId: annotateDocId, ...(annotateDocId ? { source: null } : {}) });
+  }, [annotateDocId, patchTab, tab.id]);
+
+  /*
+   * Two sets on one file would otherwise be two chips reading `dp.pdf`.
+   *
+   * Only once the set is actually in the library: an unsaved session has no
+   * label to show and no sibling to be confused with, so it keeps the file
+   * name. `annotateDocLabel` falls back to "{name} — {date}", which says which
+   * session it was rather than merely that it was not the first.
+   */
+  useEffect(() => {
+    if (!annotateDocId) return;
+    const meta = getAnnotateDocMeta(annotateDocId);
+    if (!meta) return;
+    const siblings = listAnnotateDocsByHash(meta.hash);
+    patchTab(tab.id, { title: siblings.length > 1 ? annotateDocLabel(meta) : meta.name });
   }, [annotateDocId, patchTab, tab.id]);
 
   useEffect(() => {
@@ -6614,6 +6744,25 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         />
       )}
 
+      {/*
+        * Which annotation set — asked over the loading board, mid-open.
+        *
+        * Rendered last so it sits above the leave dialog and the entry dialog:
+        * an open that is waiting on this question cannot proceed until it is
+        * answered, so nothing else on screen should be able to take the tap.
+        */}
+      {sidecarChoice && (
+        <SidecarChooser
+          docName={sidecarChoice.docName}
+          matches={sidecarChoice.matches}
+          onChoose={(choice) => {
+            const pending = sidecarChoice;
+            setSidecarChoice(null);
+            pending.resolve(choice);
+          }}
+        />
+      )}
+
       {annotateEntryOpen && (
         <AnnotateDialog
           mode="entry"
@@ -6645,10 +6794,30 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             }
             if (choice === "snapshot" && docId) {
               setAnnotateEntryOpen(false);
-              const source = annotateSourceRef.current;
-              if (source) {
-                void restorePadSnapshot("annotate", source.hash, docId as PadSnapshotTier);
-              }
+              // The open set's id, not the file's hash — two sets on one file
+              // each keep their own 2h/24h/7d, and the hash names neither.
+              const setId = annotateDocIdRef.current;
+              if (setId) void restorePadSnapshot("annotate", setId, docId as PadSnapshotTier);
+              return;
+            }
+            if (choice === "fork") {
+              setAnnotateEntryOpen(false);
+              // The state, not the ref: the ref's type drops `bytes`, and a
+              // fork of a PDF needs them to have anything to draw over.
+              const source = annotateSource;
+              if (!source) return;
+              /*
+               * A second set on the file that is open, by handing the open a
+               * brand new id. The chooser is skipped precisely because the
+               * reader has already answered its question.
+               */
+              void openAnnotate({
+                name: source.name,
+                docType: source.docType,
+                text: source.text,
+                bytes: source.bytes ?? undefined,
+                docId: freshAnnotateId(),
+              });
               return;
             }
             if (choice === "recent" && docId) {
@@ -6905,6 +7074,22 @@ function boardFadeMs(): number {
   return prefersReducedMotion() ? 0 : 420;
 }
 
+
+/**
+ * The reader cancelled the "which set of annotations?" question.
+ *
+ * Thrown rather than returned so the open unwinds through the same path a
+ * failure does — the loading chrome, the suspended saves and the generation
+ * guard all get reset by code that already exists. Caught by name at the
+ * bottom of `loadAnnotate`, where it clears the chrome without an error
+ * message: declining to open something is not a fault.
+ */
+class AnnotateOpenCancelled extends Error {
+  constructor() {
+    super("annotate-open-cancelled");
+    this.name = "AnnotateOpenCancelled";
+  }
+}
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);

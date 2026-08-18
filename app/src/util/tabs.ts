@@ -347,7 +347,18 @@ export function sameEntity(a: TabRecord, b: TabRecord): boolean {
     case "whiteboard":
       return a.notebookId !== null && a.notebookId === (b as WhiteboardTab).notebookId;
     case "annotate":
-      return a.hash !== null && a.hash === (b as AnnotateTab).hash;
+      /*
+       * The annotation set, not the file it was drawn over.
+       *
+       * This matched on `hash` while a file could only carry one set. Now that
+       * it can carry several, the hash is the wrong question — two forks of
+       * `dp.pdf` share it, and matching on it would fold them into one chip
+       * and hand whichever opened second the other's board.
+       *
+       * Null matches nothing: a record mid-open has no set yet, and must not
+       * collapse onto an unrelated document that is in the same state.
+       */
+      return a.docId !== null && a.docId === (b as AnnotateTab).docId;
     case "web":
       return false;
   }
