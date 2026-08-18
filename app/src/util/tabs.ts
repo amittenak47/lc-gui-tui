@@ -200,6 +200,25 @@ export function openTarget(state: TabState, tab: TabRecord): TabRecord | null {
   return practice.length >= PRACTICE_TAB_LIMIT ? (practice[0] ?? null) : null;
 }
 
+/**
+ * The record an `open` leaves focused — what the loader should then read.
+ *
+ * Opening is two steps now: write the record, then load from it. Which record
+ * gets loaded is the reducer's decision, so this is where that decision lives
+ * and {@link tabsReducer} calls it too. A caller that guessed instead would
+ * load the problem it proposed into the tab the reducer actually kept.
+ */
+export function openedRecord(state: TabState, tab: TabRecord): TabRecord {
+  const target = openTarget(state, tab);
+  if (!target) return tab;
+  // The one collapse that is not onto the same entity: a Practice tab reused
+  // for a different problem keeps its id and takes the new identity.
+  if (target.kind === "practice" && tab.kind === "practice") {
+    return { ...target, title: tab.title, dataset: tab.dataset, taskId: tab.taskId };
+  }
+  return target;
+}
+
 /** Only keys the record already declares are written; the rest are dropped. */
 function applyPatch(tab: TabRecord, patch: TabPatch): TabRecord {
   const next: Record<string, unknown> = { ...tab };
@@ -250,20 +269,11 @@ export function tabsReducer(state: TabState, action: TabAction): TabState {
     case "open": {
       const target = openTarget(state, action.tab);
       if (target) {
-        // A practice tab reused for a different problem takes that problem's
-        // identity; every other collapse is onto the entity already there.
+        const landed = openedRecord(state, action.tab);
         const renamed =
-          target.kind === "practice" && action.tab.kind === "practice"
-            ? tabsReducer(state, {
-                type: "patch",
-                id: target.id,
-                patch: {
-                  title: action.tab.title,
-                  dataset: action.tab.dataset,
-                  taskId: action.tab.taskId,
-                },
-              })
-            : state;
+          landed === target
+            ? state
+            : { ...state, tabs: state.tabs.map((tab) => (tab.id === target.id ? landed : tab)) };
         return tabsReducer(renamed, { type: "focus", id: target.id, at: action.at });
       }
       const opened = { ...action.tab, lastActive: action.at };

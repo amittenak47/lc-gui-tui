@@ -146,7 +146,7 @@ import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelection
 import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
 import { WebDocument } from "./modes/WebDocument";
-import { canStepWeb, currentEntry, stepWeb } from "./util/webPadSession";
+import { canStepWeb, currentEntry, stepWeb, type WebPadEntry } from "./util/webPadSession";
 import { TabStrip } from "./components/TabStrip";
 import {
   HOME_TAB_ID,
@@ -154,6 +154,7 @@ import {
   initialTabState,
   newTabId,
   openTarget,
+  openedRecord,
   tabsReducer,
   webTabTitle,
   type TabPatch,
@@ -655,6 +656,15 @@ export function App() {
    * them on the incoming tab. Set by each open path, cleared on the way Home.
    */
   const liveTabIdRef = useRef<string | null>(null);
+
+  /**
+   * `loadWhiteboard` has one reason to ask for a whole fresh open — the
+   * library is full and the writer has just freed a slot — and `openWhiteboard`
+   * is defined below it. The ref is the loop-breaker, not a second entry point.
+   */
+  const openWhiteboardRef = useRef<(opts?: { notebookId?: string | null; fresh?: boolean }) => void>(
+    () => {},
+  );
 
   /** Report a key the live workspace has just learned back to its record. */
   const patchLiveTab = useCallback((patch: TabPatch) => {
@@ -1704,8 +1714,12 @@ export function App() {
     [],
   );
 
-  const pickProblem = useCallback(
-    async (taskId: string, bank?: SearchOptions, opts?: { keepSessionNav?: boolean }) => {
+  const loadProblem = useCallback(
+    async (
+      taskId: string,
+      bank: SearchOptions | undefined,
+      opts: { keepSessionNav?: boolean; tabId: string },
+    ) => {
       if (
         browsePickBlocked(padOpenLockRef.current > 0, browsePickQuietUntilRef.current)
       ) {
@@ -1743,7 +1757,7 @@ export function App() {
       agentSaveSuspendedRef.current = true;
       setAttemptState(null);
       if (bank) setBankFilters(bank);
-      if (!opts?.keepSessionNav) setNavigateBySession(false);
+      if (!opts.keepSessionNav) setNavigateBySession(false);
       if (fromBrowse) {
         setHoldBrowseOverlay(true);
         setBrowseMotion("busy");
@@ -1796,24 +1810,20 @@ export function App() {
         setBoardPreparing(true);
         setProblem(detail);
         /*
-         * `{dataset, task_id}` is already the key every route and store names,
-         * so it is the tab's identity too.
-         *
-         * There is only ever one Practice chip — `PRACTICE_TAB_LIMIT` — so
-         * this both opens the tab and moves it: ‹ ›, Random and picking a
-         * different problem from the browser all land on the same record.
+         * The record exists already; what it could not know until now is the
+         * problem's display title, which comes off the detail the daemon just
+         * returned. `{dataset, task_id}` is the identity either way — the same
+         * key every route and store already names.
          */
-        const practiceIdentity = {
-          title: titleFromSlug(detail.task_id, detail.question_id),
-          dataset: detail.dataset ?? datasetId,
-          taskId: detail.task_id,
-        };
-        liveTabIdRef.current = openTabRecord({
-          id: newTabId("practice"),
-          kind: "practice",
-          dirty: false,
-          lastActive: 0,
-          ...practiceIdentity,
+        liveTabIdRef.current = opts.tabId;
+        dispatchTabs({
+          type: "patch",
+          id: opts.tabId,
+          patch: {
+            title: titleFromSlug(detail.task_id, detail.question_id),
+            dataset: detail.dataset ?? datasetId,
+            taskId: detail.task_id,
+          },
         });
         await refreshSession();
 
@@ -1948,15 +1958,17 @@ export function App() {
     ],
   );
 
-  const openWhiteboard = useCallback(
-    async (opts?: { notebookId?: string | null; fresh?: boolean }) => {
+  const loadWhiteboard = useCallback(
+    async (opts: { notebookId?: string | null; fresh?: boolean; tabId: string }) => {
       if (busy !== null) return;
       beginPadOpen();
       const loadGen = ++workspaceLoadGenRef.current;
       if (opts?.fresh && !opts.notebookId && whiteboardLibraryCount() >= WHITEBOARD_LIBRARY_LIMIT) {
         endPadOpen();
+        // Asks again from the top rather than reusing this tab id: the chip is
+        // withdrawn when a load bails, so by resume time that id is gone.
         whiteboardLibResumeRef.current = () => {
-          void openWhiteboard({ fresh: true });
+          void openWhiteboardRef.current({ fresh: true });
         };
         setWhiteboardLibOpen(true);
         return;
@@ -2002,20 +2014,10 @@ export function App() {
         setPseudocode("");
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
-        /*
-         * A saved notebook is the same tab wherever it is opened from; a blank
-         * one has no id yet, so every "new notebook" really is a new tab. The
-         * title and the id land below, once the entry has been read or the
-         * autosave has written one.
-         */
-        const tabId = openTabRecord({
-          id: newTabId("whiteboard"),
-          kind: "whiteboard",
-          title: "Whiteboard",
-          dirty: false,
-          lastActive: 0,
-          notebookId: opts?.fresh ? null : (opts?.notebookId ?? null),
-        });
+        // The record already exists — `openWhiteboard` wrote it before calling
+        // here. The title and the notebook id land below, once the entry has
+        // been read or the autosave has written one.
+        const tabId = opts.tabId;
         liveTabIdRef.current = tabId;
 
         const dark = isDarkTheme(themeId);
@@ -2153,7 +2155,7 @@ export function App() {
    * because a reader switching between a note and a textbook should not be
    * switching between two apps.
    */
-  const openAnnotate = useCallback(
+  const loadAnnotate = useCallback(
     async (input: {
       name: string;
       docType?: DocType;
@@ -2162,15 +2164,10 @@ export function App() {
       /** PDF and EPUB only. */
       bytes?: ArrayBuffer;
       docId?: string | null;
-      /**
-       * The strip record this open belongs to.
-       *
-       * Set by the web paths, which already have a tab: `openWebPage` made one
-       * for the page it fetched, and Back / tab-focus are re-showing a page
-       * that tab is already holding. Left unset everywhere else, and then a
-       * record is opened (or the one already on this document is focused).
-       */
-      tabId?: string;
+      /** The strip record this open fills. Written before the load starts. */
+      tabId: string;
+      /** Already computed by the caller that had to key the record on it. */
+      hash?: string;
     }) => {
       if (busy !== null) return;
       beginPadOpen();
@@ -2223,7 +2220,7 @@ export function App() {
               `${Math.round(CODE_SOURCE_MAX_CHARS / 1000)}k).`,
           );
         }
-        const hash = bytes ? hashBytes(bytes) : hashMarkdown(text);
+        const hash = input.hash ?? (bytes ? hashBytes(bytes) : hashMarkdown(text));
         const existing = input.docId
           ? await getAnnotateDoc(input.docId)
           : await findAnnotateDocByHash(hash);
@@ -2270,46 +2267,27 @@ export function App() {
          * rather than the tab being a different kind of thing depending on
          * which door it came through.
          */
-        if (input.tabId) {
-          dispatchTabs({ type: "focus", id: input.tabId, at: Date.now() });
-          dispatchTabs({
-            type: "patch",
-            id: input.tabId,
-            patch: { docId: existing?.id ?? null, hash, indexed: "idle" },
-          });
-          liveTabIdRef.current = input.tabId;
-        } else if (docType === "web") {
-          const entry = {
-            url: input.name,
-            title: titleFromHtml(text) || hostLabelFromUrl(input.name),
-            html: text,
-          };
-          liveTabIdRef.current = openTabRecord({
-            id: newTabId("web"),
-            kind: "web",
-            title: webTabTitle(entry),
-            dirty: false,
-            lastActive: 0,
-            indexed: "idle",
-            entries: [entry],
-            index: 0,
-          });
-        } else {
-          liveTabIdRef.current = openTabRecord({
-            id: newTabId("annotate"),
-            kind: "annotate",
-            title: input.name,
-            dirty: false,
-            lastActive: 0,
+        /*
+         * The record was written before this load began, but the hash and the
+         * library id are only known now — the hash is of the bytes that just
+         * arrived, and whether the library already holds them is a lookup.
+         * A document with neither keeps its text on the record so parking it
+         * is not losing it; binary types never need to, their bytes are in
+         * IndexedDB under the hash regardless.
+         */
+        dispatchTabs({ type: "focus", id: input.tabId, at: Date.now() });
+        dispatchTabs({
+          type: "patch",
+          id: input.tabId,
+          patch: {
             docId: existing?.id ?? null,
             hash,
             docType,
             indexed: "idle",
-            // Only for a document with no library entry to be read back from,
-            // and only for the types whose bytes are not already in IndexedDB.
-            source: existing || bytes ? null : text,
-          });
-        }
+            source: docType === "web" || existing || bytes ? null : text,
+          },
+        });
+        liveTabIdRef.current = input.tabId;
         setAnnotateHeight(null);
         annotateHeightRef.current = null;
 
@@ -2670,6 +2648,162 @@ export function App() {
   );
 
   /** Pick a document from disk and open it on the pad. */
+  /*
+   * ---------------------------------------------------------------- opening
+   *
+   * Opening is two steps: write the record, then load from it. It has to be,
+   * now that a workspace belongs to a tab — the chip is what the loader reads,
+   * so it cannot be something the loader produces on its way out.
+   *
+   * `openedRecord` is what decides which chip the load lands in, and it is the
+   * same call the reducer makes, so a repeat open cannot load one tab while
+   * the strip focuses another.
+   */
+  /** A page is a web tab with a one-entry history, whichever door it came in. */
+  const webTabRecord = useCallback(
+    (entry: WebPadEntry): WebTab => ({
+      id: newTabId("web"),
+      kind: "web",
+      title: webTabTitle(entry),
+      dirty: false,
+      lastActive: 0,
+      indexed: "idle",
+      entries: [entry],
+      index: 0,
+    }),
+    [],
+  );
+
+  const openWorkspaceRecord = useCallback(
+    (proposed: TabRecord): { record: TabRecord; fresh: boolean } => {
+      const landed = openedRecord(tabStateRef.current, proposed);
+      dispatchTabs({ type: "open", tab: proposed, at: Date.now() });
+      return { record: landed, fresh: landed.id === proposed.id };
+    },
+    [],
+  );
+
+  /**
+   * Write the record, load into it, and take the chip back if nothing came.
+   *
+   * Writing first is the whole point of the inversion, but it means a load
+   * that bails — another open already in flight, a file that would not read —
+   * leaves a chip standing for a workspace that never existed. `liveTabIdRef`
+   * is set at the moment a loader commits, so it is the honest signal for
+   * whether the tab was ever filled. A chip that collapsed onto an existing
+   * tab is never withdrawn: that one had a workspace before this call.
+   */
+  const fillWorkspaceRecord = useCallback(
+    async (proposed: TabRecord, load: (tabId: string) => Promise<void>): Promise<void> => {
+      const { record, fresh } = openWorkspaceRecord(proposed);
+      try {
+        await load(record.id);
+      } finally {
+        if (fresh && liveTabIdRef.current !== record.id) {
+          dispatchTabs({ type: "close", id: record.id });
+        }
+      }
+    },
+    [openWorkspaceRecord],
+  );
+
+  const openWhiteboard = useCallback(
+    async (opts?: { notebookId?: string | null; fresh?: boolean }) => {
+      if (busy !== null) return;
+      await fillWorkspaceRecord(
+        {
+          id: newTabId("whiteboard"),
+          kind: "whiteboard",
+          title: "Whiteboard",
+          dirty: false,
+          lastActive: 0,
+          // A saved notebook is the same tab wherever it is opened from; a
+          // blank one has no id, so every "new notebook" really is a new tab.
+          notebookId: opts?.fresh ? null : (opts?.notebookId ?? null),
+        },
+        (tabId) =>
+          loadWhiteboard({ notebookId: opts?.notebookId ?? null, fresh: opts?.fresh, tabId }),
+      );
+    },
+    [busy, fillWorkspaceRecord, loadWhiteboard],
+  );
+  openWhiteboardRef.current = (opts) => void openWhiteboard(opts);
+
+  const openAnnotate = useCallback(
+    async (input: {
+      name: string;
+      docType?: DocType;
+      text?: string;
+      bytes?: ArrayBuffer;
+      docId?: string | null;
+      /** Already has a record — the web paths, and any reopen from the strip. */
+      tabId?: string;
+    }) => {
+      if (input.tabId) {
+        await loadAnnotate({ ...input, tabId: input.tabId });
+        return;
+      }
+      const docType = input.docType ?? "markdown";
+      /*
+       * A captured page is a *web* tab wherever it came from, including out of
+       * the annotate library — it gets the saved HTML as a one-entry history,
+       * so Back is simply empty rather than the chip being a different kind of
+       * thing depending on which door it came through.
+       *
+       * Otherwise: the hash is not known yet, being of bytes this function
+       * does not read, so the record opens without one and `loadAnnotate`
+       * patches it in. That is why `sameEntity` treats a null hash as matching
+       * nothing — a record mid-open must not collapse onto another document.
+       */
+      /*
+       * The hash has to be known here, not inside the load. It is what
+       * `sameEntity` matches annotate tabs on, so a record opened without one
+       * matches nothing — and opening the same document twice would grow a
+       * second chip for it rather than focusing the first.
+       */
+      const hash = input.bytes ? hashBytes(input.bytes) : hashMarkdown(input.text ?? "");
+      const proposed: TabRecord =
+        docType === "web"
+          ? webTabRecord({
+              url: input.name,
+              title: titleFromHtml(input.text ?? "") || hostLabelFromUrl(input.name),
+              html: input.text ?? "",
+            })
+          : {
+              id: newTabId("annotate"),
+              kind: "annotate",
+              title: input.name,
+              dirty: false,
+              lastActive: 0,
+              docId: input.docId ?? null,
+              hash,
+              docType,
+              indexed: "idle",
+              source: null,
+            };
+      await fillWorkspaceRecord(proposed, (tabId) => loadAnnotate({ ...input, tabId, hash }));
+    },
+    [fillWorkspaceRecord, loadAnnotate, webTabRecord],
+  );
+
+  const pickProblem = useCallback(
+    async (taskId: string, bank?: SearchOptions, opts?: { keepSessionNav?: boolean }) => {
+      await fillWorkspaceRecord(
+        {
+          id: newTabId("practice"),
+          kind: "practice",
+          title: titleFromSlug(taskId),
+          dirty: false,
+          lastActive: 0,
+          dataset: bank?.dataset ?? DEFAULT_DATASET,
+          taskId,
+        },
+        (tabId) => loadProblem(taskId, bank, { keepSessionNav: opts?.keepSessionNav, tabId }),
+      );
+    },
+    [fillWorkspaceRecord, loadProblem],
+  );
+
   const pickAndOpenAnnotate = useCallback(async () => {
     if (busy !== null) return;
     beginPadOpen();
@@ -2742,25 +2876,11 @@ export function App() {
           tabId = inPlace.id;
           dispatchTabs({ type: "web-push", id: inPlace.id, entry });
         } else {
-          tabId = newTabId("web");
-          dispatchTabs({
-            type: "open",
-            at: Date.now(),
-            tab: {
-              id: tabId,
-              kind: "web",
-              title: webTabTitle(entry),
-              dirty: false,
-              lastActive: 0,
-              indexed: "idle",
-              entries: [entry],
-              index: 0,
-            },
-          });
+          tabId = openWorkspaceRecord(webTabRecord(entry)).record.id;
         }
         setBusy(null);
         handedOff = true;
-        await openAnnotate({
+        await loadAnnotate({
           name: page.url,
           docType: "web",
           text: page.html,
@@ -2780,21 +2900,21 @@ export function App() {
         }
       }
     },
-    [beginPadOpen, busy, endPadOpen, openAnnotate, problem],
+    [beginPadOpen, busy, endPadOpen, loadAnnotate, openWorkspaceRecord, problem, webTabRecord],
   );
 
   const showWebEntry = useCallback(
     async (tab: WebTab) => {
       const entry = currentEntry(tab);
       if (!entry || busy !== null) return;
-      await openAnnotate({
+      await loadAnnotate({
         name: entry.url,
         docType: "web",
         text: entry.html,
         tabId: tab.id,
       });
     },
-    [busy, openAnnotate],
+    [busy, loadAnnotate],
   );
 
   const stepWebTab = useCallback(
@@ -5350,10 +5470,13 @@ export function App() {
           returnToHome();
           return;
         case "practice":
-          await pickProblem(tab.taskId, { ...bankFilters, dataset: tab.dataset });
+          await loadProblem(tab.taskId, { ...bankFilters, dataset: tab.dataset }, { tabId: tab.id });
           return;
         case "whiteboard":
-          await openWhiteboard({ notebookId: tab.notebookId });
+          // The loader, not the request wrapper: a blank notebook has no id to
+          // be recognised by, so asking to "open" one would grow a second chip
+          // rather than refill the one being focused.
+          await loadWhiteboard({ notebookId: tab.notebookId, tabId: tab.id });
           return;
         case "web":
           await showWebEntry(tab);
@@ -5377,7 +5500,7 @@ export function App() {
             const hash = entry?.hash ?? tab.hash;
             const bytes = hash ? await getDocBytes(hash).catch(() => null) : null;
             if (bytes) {
-              await openAnnotate({ name, docType, bytes, docId: entry?.id, tabId: tab.id });
+              await loadAnnotate({ name, docType, bytes, docId: entry?.id, tabId: tab.id });
               return;
             }
             setError(
@@ -5388,7 +5511,7 @@ export function App() {
           }
           const text = entry?.source ?? tab.source;
           if (text !== null && text !== undefined) {
-            await openAnnotate({ name, docType, text, docId: entry?.id, tabId: tab.id });
+            await loadAnnotate({ name, docType, text, docId: entry?.id, tabId: tab.id });
             return;
           }
           // Nothing left anywhere. Say so and drop the chip rather than leave
@@ -5400,7 +5523,7 @@ export function App() {
         }
       }
     },
-    [bankFilters, openAnnotate, openWhiteboard, pickProblem, returnToHome, showWebEntry],
+    [bankFilters, loadAnnotate, loadProblem, loadWhiteboard, returnToHome, showWebEntry],
   );
 
   /**
