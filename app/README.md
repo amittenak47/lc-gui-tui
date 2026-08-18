@@ -1,5 +1,7 @@
 # Whiteboard
 
+**Tested on:** XPPen Magic Note Pad (MNP1095), Android 14 (API 34). APK built with Android NDK **29.0.13846066**. Bugs: [open an issue](https://github.com/amittenak47/lc-gui-tui/issues) — I want compatibility reports across devices.
+
 Practice LeetCode by *whiteboarding*: sketch an approach by hand while an agent
 watches, grills you, and points at the specific test case your approach breaks
 on.
@@ -39,10 +41,33 @@ npm run tauri dev
 ```
 
 Opens on a **home chooser**: Practice, Whiteboard, or Annotate. Back from a
-session returns there. Hide Practice with `VITE_FEATURE_LEETCODE=0` in `app/.env`
-(frontend only). A pads-only APK also needs `--no-default-features` so Cargo
-drops RustPython and seed extract: `npm run android:apk:pads` or
-`app\scripts\android-install-pads.cmd`. Default `android:apk` keeps Practice.
+session returns there.
+
+### Pads-only (no Practice / no LeetCode)
+
+Default `android:apk` / `npm run tauri dev` keep Practice. Pads-only hides the
+Practice card (`VITE_FEATURE_LEETCODE=0`) and omits the `leetcode` Cargo feature
+(`--no-default-features`: no RustPython). Both flags must stay together.
+
+From the repo root:
+
+```cmd
+app\scripts\android-install-pads.cmd
+app\scripts\android-install-pads.cmd <your-device-serial>
+```
+
+Linux: `./app/scripts/android-install-pads.sh`. From this directory:
+`npm run android:apk:pads` then `adb install -r` the universal debug APK.
+Release: `npm run android:apk:pads:release`. Details: [`docs/ANDROID_SETUP.md`](docs/ANDROID_SETUP.md).
+
+Desktop window (PowerShell):
+
+```powershell
+$env:VITE_FEATURE_LEETCODE = "0"
+npm run tauri -- dev -- --no-default-features
+```
+
+Linux / macOS: `VITE_FEATURE_LEETCODE=0 npm run tauri -- dev -- --no-default-features`.
 LLM config is **Settings → LLM** (`localhost` is this machine). Paste Groq/OpenAI
 keys there on the APK (no process env). Tests: **Settings
 → Workspace → Test Cases** (hidden when Practice is off).

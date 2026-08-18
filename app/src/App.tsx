@@ -48,14 +48,21 @@ import { useIsMobile } from "./util/mobile";
 import {
   HOME_TAB_ID,
   activeTab as activeTabOf,
-  initialTabState,
+  axisOfEdge,
+  groupOf,
   liveOverflow,
   openedRecord,
+  pinLive,
   promoteLive,
+  splitEdgeAt,
   tabsReducer,
+  visibleTabIds,
+  type SplitAxis,
+  type SplitEdge,
   type TabPatch,
   type TabRecord,
 } from "./util/tabs";
+import { loadTabState, saveTabState } from "./util/tabPersist";
 import type { WebPadEntry } from "./util/webPadSession";
 import { Workspace } from "./Workspace";
 import {
@@ -101,6 +108,37 @@ function waitMs(ms: number): Promise<void> {
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+function SplitSash({
+  axis,
+  onRatio,
+}: {
+  axis: SplitAxis;
+  onRatio: (ratio: number) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`lc-split-sash is-${axis}`}
+      aria-label="Resize split"
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+        const main = event.currentTarget.parentElement;
+        if (!main) return;
+        const box = main.getBoundingClientRect();
+        const ratio =
+          axis === "vertical"
+            ? (event.clientX - box.left) / box.width
+            : (event.clientY - box.top) / box.height;
+        onRatio(ratio);
+      }}
+    />
+  );
 }
 
 /** Tauri's `invoke`, or null on plain web / `vite dev`. */
@@ -416,11 +454,13 @@ export function App() {
 
   /* ------------------------------------------------------------------ tabs */
 
-  const [tabState, dispatchTabs] = useReducer(tabsReducer, undefined, () =>
-    initialTabState(Date.now()),
-  );
+  const [tabState, dispatchTabs] = useReducer(tabsReducer, undefined, loadTabState);
   const tabsRef = useRef(tabState);
   tabsRef.current = tabState;
+
+  useEffect(() => {
+    saveTabState(tabState);
+  }, [tabState]);
 
   /**
    * What a workspace will answer if the shell asks it to let go.
@@ -498,10 +538,29 @@ export function App() {
    * showing it again rather than reading it out of the store and re-fitting a
    * board. Only falling off the end of this list costs anything.
    */
-  const [liveIds, setLiveIds] = useState<string[]>([HOME_TAB_ID]);
+  const [liveIds, setLiveIds] = useState<string[]>(() => visibleTabIds(tabState));
   const promote = useCallback((id: string) => {
     setLiveIds((current) => promoteLive(current, id));
   }, []);
+
+  const visibleIds = useMemo(() => visibleTabIds(tabState), [tabState]);
+  const activeGroup = groupOf(tabState, tabState.activeId);
+
+  /*
+   * Split panes occupy the live slots first. Without that, one half falls off
+   * the budget and remounts the first time you look at it.
+   */
+  useEffect(() => {
+    const known = new Set(tabState.tabs.map((tab) => tab.id));
+    setLiveIds((current) => {
+      const trimmed = current.filter((id) => known.has(id));
+      const base =
+        trimmed.length === current.length && trimmed.every((id, i) => id === current[i])
+          ? current
+          : trimmed;
+      return pinLive(base, visibleIds);
+    });
+  }, [tabState.tabs, visibleIds]);
 
   /**
    * Evicting is where the parking went.
@@ -599,6 +658,59 @@ export function App() {
     dispatchTabs({ type: "web-step", id, delta });
   }, []);
 
+  const splitTabs = useCallback((anchor: string, incoming: string, edge: SplitEdge) => {
+    if (anchor === HOME_TAB_ID || incoming === HOME_TAB_ID || anchor === incoming) return;
+    dispatchTabs({
+      type: "split",
+      a: anchor,
+      b: incoming,
+      axis: axisOfEdge(edge),
+      edge,
+      at: Date.now(),
+    });
+    setLiveIds((current) => pinLive(current, [anchor, incoming]));
+  }, []);
+
+  const unsplitTab = useCallback((id: string) => {
+    dispatchTabs({ type: "unsplit", id });
+  }, []);
+
+  const setSplitRatio = useCallback((groupId: string, ratio: number) => {
+    dispatchTabs({ type: "set-ratio", groupId, ratio });
+  }, []);
+
+  const mainRef = useRef<HTMLElement | null>(null);
+  const [dragTabId, setDragTabId] = useState<string | null>(null);
+  const [dragEdge, setDragEdge] = useState<SplitEdge | null>(null);
+
+  const onTabDrag = useCallback((id: string, x: number, y: number) => {
+    setDragTabId(id);
+    const box = mainRef.current?.getBoundingClientRect();
+    setDragEdge(box ? splitEdgeAt(box, x, y) : null);
+  }, []);
+
+  const onTabDrop = useCallback(
+    (id: string, x: number, y: number) => {
+      const box = mainRef.current?.getBoundingClientRect();
+      const edge = box ? splitEdgeAt(box, x, y) : null;
+      const anchor = tabsRef.current.activeId;
+      if (edge && anchor !== id) {
+        splitTabs(anchor, id, edge);
+      } else if (!edge && groupOf(tabsRef.current, id) && id === anchor) {
+        // Drag the focused pane off the board to dissolve the split.
+        unsplitTab(id);
+      }
+      setDragTabId(null);
+      setDragEdge(null);
+    },
+    [splitTabs, unsplitTab],
+  );
+
+  const onTabDragEnd = useCallback(() => {
+    setDragTabId(null);
+    setDragEdge(null);
+  }, []);
+
   /*
    * The header's slots, as state rather than refs: a portal needs the element
    * to exist, and a ref assignment does not re-render to say that it now does.
@@ -641,6 +753,7 @@ export function App() {
   const liveTabs = useMemo(() => {
     const transitioning = browseMotion !== "idle" || holdBrowseOverlay;
     const ids = liveIds.includes(activeRecord.id) ? liveIds : [activeRecord.id, ...liveIds];
+    const painted = new Set(visibleIds);
     return ids
       .map((id) => tabState.tabs.find((tab) => tab.id === id))
       .filter((tab): tab is TabRecord => Boolean(tab))
@@ -648,10 +761,10 @@ export function App() {
         tab,
         active: tab.id === activeRecord.id,
         showing:
-          tab.id === activeRecord.id ||
+          painted.has(tab.id) ||
           (tab.id === HOME_TAB_ID && transitioning && activeRecord.id !== HOME_TAB_ID),
       }));
-  }, [activeRecord.id, browseMotion, holdBrowseOverlay, liveIds, tabState.tabs]);
+  }, [activeRecord.id, browseMotion, holdBrowseOverlay, liveIds, tabState.tabs, visibleIds]);
 
   const shell: ShellValue = useMemo(
     () => ({
@@ -746,6 +859,9 @@ export function App() {
             onFocus={focusTab}
             onClose={closeTab}
             onCancelLoad={chrome.loadActive ? () => focusTab(HOME_TAB_ID) : undefined}
+            onTabDrag={onTabDrag}
+            onTabDrop={onTabDrop}
+            onTabDragEnd={onTabDragEnd}
             activeIndexChip={
               chrome.docIndex.status === "idle" ? undefined : (
                 <DocIndexChip
@@ -766,19 +882,69 @@ export function App() {
 
         <span className="lc-header-slot" ref={setHeaderChrome} />
 
-        <main className="lc-main">
+        <main
+          ref={mainRef}
+          className={[
+            "lc-main",
+            activeGroup ? `is-split-${activeGroup.split.axis}` : "",
+            dragTabId ? "is-split-targeting" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          style={
+            activeGroup
+              ? {
+                  ["--lc-split-a" as string]: String(activeGroup.split.ratio),
+                  ["--lc-split-b" as string]: String(1 - activeGroup.split.ratio),
+                }
+              : undefined
+          }
+        >
           <div className="lc-chrome-overlay-top" aria-live="polite" ref={overlayTopRef}>
             <StatusBanner text={error} variant="error" />
             <StatusBanner text={!error ? notice : null} variant="notice" />
           </div>
-          {liveTabs.map(({ tab, active, showing }) => (
-            <Workspace
-              key={`${tab.id}:${active ? retryToken : 0}`}
-              tab={tab}
-              active={active}
-              showing={showing}
+          {liveTabs
+            .filter((item) => !item.showing)
+            .map(({ tab, active, showing }) => (
+              <Workspace
+                key={`${tab.id}:${active ? retryToken : 0}`}
+                tab={tab}
+                active={active}
+                showing={showing}
+              />
+            ))}
+          {(activeGroup ? activeGroup.children : visibleIds).map((id, index) => {
+            const item = liveTabs.find((entry) => entry.tab.id === id);
+            if (!item) return null;
+            const splitRole = activeGroup ? (index === 0 ? "a" : "b") : null;
+            return (
+              <Workspace
+                key={`${item.tab.id}:${item.active ? retryToken : 0}`}
+                tab={item.tab}
+                active={item.active}
+                showing={item.showing}
+                splitRole={splitRole}
+              />
+            );
+          })}
+          {activeGroup ? (
+            <SplitSash
+              axis={activeGroup.split.axis}
+              onRatio={(ratio) => setSplitRatio(activeGroup.id, ratio)}
             />
-          ))}
+          ) : null}
+          {liveTabs
+            .filter((item) => item.showing && !visibleIds.includes(item.tab.id))
+            .map(({ tab, active, showing }) => (
+              <Workspace
+                key={`${tab.id}:${active ? retryToken : 0}`}
+                tab={tab}
+                active={active}
+                showing={showing}
+              />
+            ))}
+          {dragEdge ? <div className={`lc-split-target is-${dragEdge}`} aria-hidden /> : null}
         </main>
 
         <span className="lc-agent-slot" ref={setAgentPanel} />

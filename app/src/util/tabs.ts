@@ -95,10 +95,67 @@ export interface WebTab extends TabBase, WebHistory {
 
 export type TabRecord = HomeTab | PracticeTab | WhiteboardTab | AnnotateTab | WebTab;
 
+/** Vertical sash = left | right panes. Horizontal sash = top | bottom. */
+export type SplitAxis = "vertical" | "horizontal";
+
+export type SplitEdge = "left" | "right" | "top" | "bottom";
+
+export interface TabSplit {
+  axis: SplitAxis;
+  /** Fraction of the main axis given to `children[0]`. Clamped 0.2–0.8. */
+  ratio: number;
+}
+
+export interface TabGroup {
+  id: string;
+  children: [string, string];
+  split: TabSplit;
+}
+
 export interface TabState {
   /** Home is always `tabs[0]`, and it is the one tab that cannot be closed. */
   tabs: TabRecord[];
   activeId: string;
+  groups: TabGroup[];
+}
+
+export const SPLIT_RATIO_MIN = 0.2;
+export const SPLIT_RATIO_MAX = 0.8;
+
+export function clampSplitRatio(ratio: number): number {
+  if (!Number.isFinite(ratio)) return 0.5;
+  return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, ratio));
+}
+
+export function axisOfEdge(edge: SplitEdge): SplitAxis {
+  return edge === "left" || edge === "right" ? "vertical" : "horizontal";
+}
+
+/**
+ * Which edge of `box` the pointer is in, or null when it is in the middle.
+ *
+ * `band` is a fraction of the width/height. Corners pick the nearer axis.
+ */
+export function splitEdgeAt(
+  box: { left: number; top: number; width: number; height: number },
+  x: number,
+  y: number,
+  band = 0.22,
+): SplitEdge | null {
+  if (box.width <= 0 || box.height <= 0) return null;
+  const l = (x - box.left) / box.width;
+  const t = (y - box.top) / box.height;
+  if (l < 0 || l > 1 || t < 0 || t > 1) return null;
+  const dl = l;
+  const dr = 1 - l;
+  const dt = t;
+  const db = 1 - t;
+  const min = Math.min(dl, dr, dt, db);
+  if (min > band) return null;
+  if (min === dl) return "left";
+  if (min === dr) return "right";
+  if (min === dt) return "top";
+  return "bottom";
 }
 
 /**
@@ -130,13 +187,41 @@ export type TabAction =
   | { type: "patch"; id: string; patch: TabPatch }
   | { type: "web-push"; id: string; entry: WebPadEntry }
   | { type: "web-step"; id: string; delta: number }
+  | { type: "split"; a: string; b: string; axis: SplitAxis; edge?: SplitEdge; at: number }
+  | { type: "unsplit"; id: string }
+  | { type: "set-ratio"; groupId: string; ratio: number }
   | { type: "hydrate"; state: TabState };
 
 let tabSeq = 0;
+let groupSeq = 0;
 
 export function newTabId(kind: TabKind): string {
   tabSeq += 1;
   return `${kind}-${tabSeq}`;
+}
+
+export function newGroupId(): string {
+  groupSeq += 1;
+  return `group-${groupSeq}`;
+}
+
+/** After hydrate, new ids must not collide with restored `kind-N` chips. */
+export function syncTabSeq(tabs: TabRecord[]): void {
+  let max = tabSeq;
+  for (const tab of tabs) {
+    const match = /^.+-(\d+)$/.exec(tab.id);
+    if (match) max = Math.max(max, Number(match[1]));
+  }
+  tabSeq = max;
+}
+
+export function syncGroupSeq(groups: TabGroup[]): void {
+  let max = groupSeq;
+  for (const group of groups) {
+    const match = /^group-(\d+)$/.exec(group.id);
+    if (match) max = Math.max(max, Number(match[1]));
+  }
+  groupSeq = max;
 }
 
 export function homeTab(at = 0): HomeTab {
@@ -144,7 +229,65 @@ export function homeTab(at = 0): HomeTab {
 }
 
 export function initialTabState(at = 0): TabState {
-  return { tabs: [homeTab(at)], activeId: HOME_TAB_ID };
+  return { tabs: [homeTab(at)], activeId: HOME_TAB_ID, groups: [] };
+}
+
+export function groupOf(state: TabState, id: string): TabGroup | undefined {
+  const tab = state.tabs.find((entry) => entry.id === id);
+  const groupId = tab?.group;
+  if (!groupId) return undefined;
+  return state.groups.find((group) => group.id === groupId);
+}
+
+/**
+ * What is painted: a split pair, or the focused tab alone.
+ *
+ * Home is never in a group, so focusing it is always a single pane.
+ */
+export function visibleTabIds(state: TabState): string[] {
+  if (state.activeId === HOME_TAB_ID) return [HOME_TAB_ID];
+  const group = groupOf(state, state.activeId);
+  return group ? [...group.children] : [state.activeId];
+}
+
+/**
+ * Pin ids at the front of the live list, in that order, without duplicates.
+ *
+ * Split panes have to occupy the mount-budget slots or one half remounts.
+ */
+export function pinLive(ids: string[], pinned: string[]): string[] {
+  const pin: string[] = [];
+  for (const id of pinned) {
+    if (!pin.includes(id)) pin.push(id);
+  }
+  const rest = ids.filter((id) => !pin.includes(id));
+  const next = [...pin, ...rest];
+  return next.length === ids.length && next.every((id, i) => id === ids[i]) ? ids : next;
+}
+
+function clearGroup(state: TabState, groupId: string): TabState {
+  return {
+    ...state,
+    groups: state.groups.filter((group) => group.id !== groupId),
+    tabs: state.tabs.map((tab) => (tab.group === groupId ? { ...tab, group: undefined } : tab)),
+  };
+}
+
+function detachFromGroup(state: TabState, id: string): TabState {
+  const group = groupOf(state, id);
+  return group ? clearGroup(state, group.id) : state;
+}
+
+/**
+ * Order the pair so `edge` places `incoming` on that side of `anchor`.
+ */
+export function splitChildren(
+  anchor: string,
+  incoming: string,
+  edge: SplitEdge = "right",
+): [string, string] {
+  if (edge === "left" || edge === "top") return [incoming, anchor];
+  return [anchor, incoming];
 }
 
 export function activeTab(state: TabState): TabRecord {
@@ -277,14 +420,32 @@ function evictOverCap(tabs: TabRecord[], keepId: string): TabRecord[] {
   return tabs.filter((tab) => !doomed.has(tab.id));
 }
 
+function pruneGroups(state: TabState): TabState {
+  const ids = new Set(state.tabs.map((tab) => tab.id));
+  const groups = state.groups.filter(
+    (group) => ids.has(group.children[0]) && ids.has(group.children[1]),
+  );
+  const live = new Set(groups.map((group) => group.id));
+  const tabs = state.tabs.map((tab) =>
+    tab.group && !live.has(tab.group) ? { ...tab, group: undefined } : tab,
+  );
+  const groupsSame =
+    groups.length === state.groups.length && groups.every((group, i) => group === state.groups[i]);
+  const tabsSame = tabs.every((tab, i) => tab === state.tabs[i]);
+  return groupsSame && tabsSame ? state : { ...state, tabs, groups };
+}
+
 export function tabsReducer(state: TabState, action: TabAction): TabState {
   switch (action.type) {
     case "hydrate":
+      syncTabSeq(action.state.tabs);
+      syncGroupSeq(action.state.groups);
       return action.state;
 
     case "focus": {
       if (!state.tabs.some((tab) => tab.id === action.id)) return state;
       return {
+        ...state,
         tabs: state.tabs.map((tab) =>
           tab.id === action.id ? { ...tab, lastActive: action.at } : tab,
         ),
@@ -303,21 +464,27 @@ export function tabsReducer(state: TabState, action: TabAction): TabState {
         return tabsReducer(renamed, { type: "focus", id: target.id, at: action.at });
       }
       const opened = { ...action.tab, lastActive: action.at };
-      return {
+      return pruneGroups({
+        ...state,
         tabs: evictOverCap([...state.tabs, opened], opened.id),
         activeId: opened.id,
-      };
+      });
     }
 
     case "close": {
       if (action.id === HOME_TAB_ID) return state;
       const index = state.tabs.findIndex((tab) => tab.id === action.id);
       if (index < 0) return state;
-      const tabs = state.tabs.filter((tab) => tab.id !== action.id);
-      if (state.activeId !== action.id) return { ...state, tabs };
-      // Land on whatever slid into the closed tab's place, the way a browser does.
-      const neighbour = tabs[Math.min(index, tabs.length - 1)] ?? tabs[0]!;
-      return { tabs, activeId: neighbour.id };
+      const group = groupOf(state, action.id);
+      const partner = group?.children.find((child) => child !== action.id);
+      const stripped = group ? clearGroup(state, group.id) : state;
+      const tabs = stripped.tabs.filter((tab) => tab.id !== action.id);
+      if (stripped.activeId !== action.id) return { ...stripped, tabs };
+      const neighbour =
+        (partner && tabs.find((tab) => tab.id === partner)) ||
+        tabs[Math.min(index, tabs.length - 1)] ||
+        tabs[0]!;
+      return { ...stripped, tabs, activeId: neighbour.id };
     }
 
     case "patch": {
@@ -347,6 +514,57 @@ export function tabsReducer(state: TabState, action: TabAction): TabState {
           return { ...stepped, title: webTabTitle(currentEntry(stepped)) };
         }),
       };
+    }
+
+    case "split": {
+      if (action.a === action.b) return state;
+      if (action.a === HOME_TAB_ID || action.b === HOME_TAB_ID) return state;
+      if (!state.tabs.some((tab) => tab.id === action.a)) return state;
+      if (!state.tabs.some((tab) => tab.id === action.b)) return state;
+      const existing = groupOf(state, action.a);
+      const children = splitChildren(action.a, action.b, action.edge ?? "right");
+      if (existing && existing.children.includes(action.b)) {
+        return {
+          ...state,
+          activeId: action.a,
+          groups: state.groups.map((group) =>
+            group.id === existing.id
+              ? { ...group, children, split: { ...group.split, axis: action.axis } }
+              : group,
+          ),
+        };
+      }
+      let next = detachFromGroup(state, action.a);
+      next = detachFromGroup(next, action.b);
+      const id = newGroupId();
+      const group: TabGroup = {
+        id,
+        children,
+        split: { axis: action.axis, ratio: 0.5 },
+      };
+      return {
+        ...next,
+        activeId: action.a,
+        groups: [...next.groups, group],
+        tabs: next.tabs.map((tab) =>
+          tab.id === action.a || tab.id === action.b
+            ? { ...tab, group: id, lastActive: tab.id === action.a ? action.at : tab.lastActive }
+            : tab,
+        ),
+      };
+    }
+
+    case "unsplit":
+      return detachFromGroup(state, action.id);
+
+    case "set-ratio": {
+      const ratio = clampSplitRatio(action.ratio);
+      const groups = state.groups.map((group) =>
+        group.id !== action.groupId || group.split.ratio === ratio
+          ? group
+          : { ...group, split: { ...group.split, ratio } },
+      );
+      return groups.every((group, i) => group === state.groups[i]) ? state : { ...state, groups };
     }
   }
 }
