@@ -153,6 +153,7 @@ import { savePdfFilmPref } from "./modes/pdfFilm";
 import { AnnotateDialog } from "./modes/AnnotateDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
+import { AnnotateMarkdownEditor } from "./modes/AnnotateMarkdownEditor";
 import { StatementDocument } from "./modes/StatementDocument";
 import {
   buildAnnotateTemplate,
@@ -173,6 +174,7 @@ import {
   exportAnnotateSidecar,
   sidecarNameFor,
   languageForName,
+  exportMarkdownNote,
   pickDocumentFile,
   pickSidecarFile,
   readAnnotateSidecar,
@@ -578,6 +580,22 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
   const [webHtmlNote, setWebHtmlNote] = useState<string | null>(null);
   /** Library entry this session is writing to, once it has one. */
   const [annotateDocId, setAnnotateDocId] = useState<string | null>(null);
+  /** This set is an owned note — its `source` is the document, not a copy. */
+  const [annotateOwned, setAnnotateOwned] = useState(false);
+  const annotateOwnedRef = useRef(false);
+  annotateOwnedRef.current = annotateOwned;
+  /**
+   * Editing the note's markdown rather than drawing on it.
+   *
+   * Owned markdown only. Mutually exclusive with the pen: Monaco and the ink
+   * layer both want the pointer, and a caret that sometimes draws is worse
+   * than either mode on its own.
+   */
+  const [editMarkdown, setEditMarkdown] = useState(false);
+  /** The live buffer while Edit is open — `content.source` until it is saved. */
+  const [editBuffer, setEditBuffer] = useState("");
+  const editBufferRef = useRef("");
+  editBufferRef.current = editBuffer;
   /*
    * The open is parked on a question: which of this file's annotation sets?
    *
@@ -2215,6 +2233,11 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
          */
         setAnnotateDocId(sessionDocId);
         annotateDocIdRef.current = sessionDocId;
+        // Owned notes get the Edit toggle; imported files never do, because
+        // editing one would write over a copy of somebody else's document.
+        setAnnotateOwned(Boolean(existing?.owned) && docType === "markdown");
+        setEditMarkdown(false);
+        setEditBuffer(text);
         // Footnotes belong to the entry, so a fresh open of the same file gets
         // its marks back and an unrelated document starts clean.
         setAnnotateFootnotes(existing?.footnotes ?? []);
@@ -2401,6 +2424,13 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     const board = boardRef.current;
     const source = annotateSourceRef.current;
     if (!board || !source) return;
+    /*
+     * An owned note has no original on disk, so exporting it means two files:
+     * the text, which is the note itself and the only copy that exists outside
+     * this app, and the sidecar of ink over it. Imported files skip the first
+     * — the reader already has the document.
+     */
+    if (annotateOwnedRef.current) exportMarkdownNote(source.name, source.text);
     void exportAnnotateSidecar(
       buildAnnotateSidecar({
         sourceName: source.name,
@@ -2411,8 +2441,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       }),
     ).catch((cause: unknown) => setError(messageOf(cause)));
     setNotice(
-      `Downloaded “${sidecarNameFor(source.name)}” — look in this device’s Downloads folder. ` +
-        `Import it from the Document sheet after opening the same file.`,
+      annotateOwnedRef.current
+        ? `Downloaded “${source.name}” and its annotations — look in this device’s Downloads folder.`
+        : `Downloaded “${sidecarNameFor(source.name)}” — look in this device’s Downloads folder. ` +
+          `Import it from the Document sheet after opening the same file.`,
     );
   }, []);
 
@@ -2703,6 +2735,146 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     },
     [openWorkspace, setNavigateBySession],
   );
+
+  /**
+   * Write a new markdown note, in the app.
+   *
+   * Saved before it is opened, on purpose. Imported files deliberately wait
+   * for first ink before taking a library slot — the store should not fill up
+   * with every file ever glanced at — but an empty owned note *is* the
+   * product, and it needs a row so Recent, the tab record and the links graph
+   * all have something to name it by.
+   */
+  const createOwnedNote = useCallback(
+    async (rawTitle: string) => {
+      const title = rawTitle.trim() || "Untitled";
+      const source = `# ${title}\n\n`;
+      try {
+        const saved = await saveAnnotateDoc({
+          id: freshAnnotateId(),
+          name: title.toLowerCase().endsWith(".md") ? title : `${title}.md`,
+          hash: hashMarkdown(source),
+          docType: "markdown",
+          owned: true,
+          source,
+          // A blank board with a real camera — the note is opened straight
+          // after, and the open seeds the page template over this.
+          board: { v: 1, elements: [], appState: { scrollX: 0, scrollY: 0, zoom: 1 } },
+        });
+        await openAnnotate({
+          name: saved.name,
+          docType: "markdown",
+          text: source,
+          docId: saved.id,
+        });
+      } catch (cause) {
+        if (cause instanceof AnnotateLibraryFullError) setError(cause.message);
+        else setError(messageOf(cause));
+      }
+    },
+    [openAnnotate],
+  );
+
+  /**
+   * Commit the Edit buffer into the note, and re-index it.
+   *
+   * The note has no disk handle to flush — `content.source` *is* the document,
+   * so writing the entry is the save. The hash moves with the text, which is
+   * the whole reason ink had to stop being keyed by it (step 1): the same set
+   * keeps its id and its strokes across an edit that renames every byte.
+   */
+  const saveEditBuffer = useCallback(async (): Promise<boolean> => {
+    const source = annotateSource;
+    const id = annotateDocIdRef.current;
+    if (!source || !id || !annotateOwned) return false;
+    const next = editBufferRef.current;
+    if (next.length > CODE_SOURCE_MAX_CHARS) {
+      setError(
+        `This note is too large to keep here ` +
+          `(${Math.round(next.length / 1000)}k characters; max about ` +
+          `${Math.round(CODE_SOURCE_MAX_CHARS / 1000)}k).`,
+      );
+      return false;
+    }
+    const hash = hashMarkdown(next);
+    try {
+      const saved = await saveAnnotateDoc({
+        id,
+        name: source.name,
+        hash,
+        docType: "markdown",
+        owned: true,
+        source: next,
+        board: boardRef.current?.saveBoard({ assembleInk: false }) ?? { 
+          v: 1,
+          elements: [],
+          appState: { scrollX: 0, scrollY: 0, zoom: 1 },
+        },
+        footnotes: annotateFootnotesRef.current,
+        agent: persistableAgentMessages(agentMessages),
+      });
+      setAnnotateSource({ ...source, text: next, hash });
+      void pushAnnotatePad(client, saved);
+      /*
+       * Re-index under the new hash so Ask answers about what the note says
+       * now. The old hash's chunks are left where they are: `docs.db` is
+       * hash-keyed and shared, deleting is not exposed to the client, and a
+       * stale document nothing looks up again is wasted rows rather than a
+       * wrong answer.
+       */
+      const pages = await extractDocumentPages({
+        docType: "markdown",
+        name: source.name,
+        text: next,
+      });
+      if (pages.length > 0) {
+        rememberExtractedPages(hash, pages);
+        void client
+          .putDocIndex(hash, { name: source.name, doc_type: "markdown", pages })
+          .catch(() => {});
+      }
+      return true;
+    } catch (cause) {
+      if (cause instanceof AnnotateLibraryFullError) setError(cause.message);
+      else noteStorageFull(cause);
+      return false;
+    }
+  }, [agentMessages, annotateOwned, annotateSource, client, noteStorageFull]);
+
+  /*
+   * Autosave while Edit is open.
+   *
+   * The board's own autosave fingerprints the scene and the marks, and neither
+   * can see a text buffer — so without this an hour of typing with no strokes
+   * would sit only in memory. Debounced on the buffer rather than run on the
+   * board's interval: a save rehashes the note and re-indexes it, which is not
+   * something to do between keystrokes.
+   */
+  useEffect(() => {
+    if (!editMarkdown || !annotateOwned || autosaveMs <= 0) return;
+    if (editBuffer === (annotateSourceRef.current?.text ?? "")) return;
+    const timer = window.setTimeout(() => void saveEditBuffer(), Math.max(autosaveMs, 1500));
+    return () => window.clearTimeout(timer);
+  }, [annotateOwned, autosaveMs, editBuffer, editMarkdown, saveEditBuffer]);
+
+  /**
+   * Enter or leave Edit.
+   *
+   * Leaving commits first: the paper re-renders from `annotateSource.text`, so
+   * a buffer that had not been written back would simply vanish when the note
+   * became a page again.
+   */
+  const toggleEditMarkdown = useCallback(() => {
+    if (!annotateOwned) return;
+    if (editMarkdown) {
+      void saveEditBuffer().then((ok) => {
+        if (ok) setEditMarkdown(false);
+      });
+      return;
+    }
+    setEditBuffer(annotateSourceRef.current?.text ?? "");
+    setEditMarkdown(true);
+  }, [annotateOwned, editMarkdown, saveEditBuffer]);
 
   const pickAndOpenAnnotate = useCallback(async () => {
     if (busy !== null) return;
@@ -4854,6 +5026,16 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     const board = boardRef.current;
     const pristine = annotatePristineHashRef.current;
     if (!board || pristine === null) return false;
+    /*
+     * An edited buffer is a change even when nothing was drawn.
+     *
+     * The board fingerprint cannot see Monaco, so a note whose text was
+     * rewritten but never inked would read as "only read" and be discarded on
+     * the way out without so much as a prompt.
+     */
+    if (annotateOwnedRef.current && editBufferRef.current !== (annotateSourceRef.current?.text ?? "")) {
+      return false;
+    }
     if (footnoteRevision(annotateFootnotesRef.current) !== annotatePristineMarksRef.current) {
       return false;
     }
@@ -4891,6 +5073,9 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     annotatePristineMarksRef.current = "";
     annotatePristineAgentRef.current = "";
     setAnnotateDocId(null);
+    setAnnotateOwned(false);
+    setEditMarkdown(false);
+    setEditBuffer("");
     setAnnotateFootnotes([]);
     annotateFootnotesRef.current = [];
     pendingQuoteRef.current = null;
@@ -4904,6 +5089,11 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     const board = boardRef.current;
     const source = annotateSource;
     if (!board || !source) return null;
+    // Commit the buffer first: the write below sends `source.text`, which is
+    // still the pre-edit copy until `saveEditBuffer` has moved it.
+    if (annotateOwnedRef.current && editBufferRef.current !== source.text) {
+      await saveEditBuffer();
+    }
     await flushDirtyInk(board, annotateDocId ? annotateDocKey(annotateDocId) : null);
     const blob = board.saveBoard({ assembleInk: false });
     if (!blob) return null;
@@ -4945,7 +5135,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       setError(messageOf(cause));
       return null;
     }
-  }, [annotateDocId, annotateFootnotes, annotateSource, agentMessages, client]);
+  }, [annotateDocId, annotateFootnotes, annotateSource, agentMessages, client, saveEditBuffer]);
 
 
   /*
@@ -6216,6 +6406,9 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                     (activeRegion === "constraints" || activeRegion === "code"))),
             )}
             annotateToggle={Boolean(problem)}
+            editToggle={annotateOwned}
+            editing={editMarkdown}
+            onToggleEdit={toggleEditMarkdown}
             onAnnotateCodeChange={setAnnotateCode}
             // Ruled lines under somebody else's typography would be noise.
             linedPaperToggle={Boolean(problem) && !isAnnotate(problem)}
@@ -6268,7 +6461,15 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             onMarksSlot={setMarksSlot}
             onHighlightingChange={setHighlighting}
             pageContent={
-              problem && isAnnotate(problem) && annotateSource ? (
+              problem && isAnnotate(problem) && annotateSource && editMarkdown ? (
+                <AnnotateMarkdownEditor
+                  value={editBuffer}
+                  onChange={setEditBuffer}
+                  themeId={themeId}
+                  readingSize={readingSize}
+                  onMeasure={onMdInkMeasure}
+                />
+              ) : problem && isAnnotate(problem) && annotateSource ? (
                 <DocSelectionLayer
                   enabled={!annotateCode || Boolean(openFootnote) || highlighting}
                   highlighting={highlighting}
@@ -6798,6 +6999,13 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               // each keep their own 2h/24h/7d, and the hash names neither.
               const setId = annotateDocIdRef.current;
               if (setId) void restorePadSnapshot("annotate", setId, docId as PadSnapshotTier);
+              return;
+            }
+            if (choice === "new") {
+              setAnnotateEntryOpen(false);
+              // `docId` carries the title on this branch — the dialog reuses
+              // the same second argument for whatever the choice needs.
+              void createOwnedNote(docId ?? "Untitled");
               return;
             }
             if (choice === "fork") {

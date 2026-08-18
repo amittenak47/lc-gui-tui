@@ -301,6 +301,26 @@ export async function exportAnnotateSidecar(sidecar: AnnotateSidecar): Promise<v
 }
 
 /**
+ * Download an owned note as a real `.md` file.
+ *
+ * The only way a note written here becomes a file anywhere else — there is no
+ * filesystem handle and deliberately no Tauri fs plugin, so this is a plain
+ * blob download like the sidecar export beside it. Unlike that one it carries
+ * no ink: this is the text, for reading somewhere that is not this app.
+ */
+export function exportMarkdownNote(name: string, source: string): void {
+  const blob = new Blob([source], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name.toLowerCase().endsWith(".md") ? name : `${name}.md`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
  * Ask for a document of any kind the pad understands, and read it.
  *
  * Same cancel contract as {@link pickMarkdownFile} — see the note there.
