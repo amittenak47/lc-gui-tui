@@ -21,9 +21,8 @@ the RustPython judge. There is no LAN pairing UI (no Host/Port/Code header).
   APK size is a later pass). Tablet-as-display: spacedesk.
 ```
 
-How the layers split (pad UI vs in-process router vs LLM), flags, and the
-stripped Ask-only sibling: [Where the work lives](../README.md#where-the-work-lives)
-in the repo README.
+How the layers split (canvas UI vs in-process router vs LLM), flags, and the
+stripped Ask-only sibling: [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 The Magic Note Pad is a standalone Android tablet, not a pen display — Drawing
 Display Mode needs DP-IN and only exists on the Magic *Drawing* Pad. Hence
@@ -40,25 +39,35 @@ npm install
 npm run tauri dev
 ```
 
-Opens on a **home chooser**: Practice, Whiteboard, or Annotate. Back from a
-session returns there.
+Opens on **Home**: four cards — Practice, Whiteboard, Annotate, Browse. Each
+opens in its own tab, and Home stays as the first tab rather than being
+something you navigate back to.
 
-### Pads-only (no Practice / no LeetCode)
+### Whiteboard-only (no Practice)
 
-Default `android:apk` / `npm run tauri dev` keep Practice. Pads-only hides the
-Practice card (`VITE_FEATURE_LEETCODE=0`) and omits the `leetcode` Cargo feature
-(`--no-default-features`: no RustPython). Both flags must stay together.
+Two build flavors, one flag pair. **Practice** is the default and has
+everything. **Whiteboard-only** hides the Practice card
+(`VITE_FEATURE_LEETCODE=0`) and omits the `leetcode` Cargo feature
+(`--no-default-features`, so no RustPython). Both flags must stay together —
+dropping the Cargo feature alone leaves a Practice card pointing at a judge
+that is not in the binary.
 
 From the repo root:
 
 ```cmd
-app\scripts\android-install-pads.cmd
-app\scripts\android-install-pads.cmd <your-device-serial>
+app\scripts\android-install-whiteboard.cmd
+app\scripts\android-install-whiteboard.cmd <your-device-serial>
 ```
 
-Linux: `./app/scripts/android-install-pads.sh`. From this directory:
-`npm run android:apk:pads` then `adb install -r` the universal debug APK.
-Release: `npm run android:apk:pads:release`. Details: [`docs/ANDROID_SETUP.md`](docs/ANDROID_SETUP.md).
+Linux: `./app/scripts/android-install-whiteboard.sh`. From this directory:
+`npm run android:apk:whiteboard` then `adb install -r` the universal debug APK.
+Release: `npm run android:apk:whiteboard:release`. Details: [`docs/ANDROID_SETUP.md`](docs/ANDROID_SETUP.md).
+
+Both flavors write the same APK path and share the app id `dev.lc.whiteboard`,
+so run `adb uninstall dev.lc.whiteboard` before switching between them.
+
+The old `*-pads*` script and npm names still work — they forward to these — but
+they are on their way out.
 
 Desktop window (PowerShell):
 
@@ -95,7 +104,7 @@ your approach to a working one. It is never a solution dump, and it is logged so
 
 ## Problem sets
 
-Landing is the home chooser; **Practice** opens the problem table. A tab strip
+Home's **Practice** card opens the problem table. A tab strip
 above that table switches between the five corpora `whiteboard` indexes. Everything under it — search, filters, paging, session
 Start / Reset / Select / Random — works the same on any tab: the dataset is one
 more parameter on the same queries. Filters do reset on a switch, since a tag
@@ -144,7 +153,7 @@ answer you already drew is not practice. The router owns the rules
 
 - **Desktop window on a tablet screen:** spacedesk (below). Router stays in-process.
 - **APK:** same Tauri binary with the in-process router. From the repo root:
-  `app\scripts\android-install.cmd` (optional USB serial). First run generates
+  `app\scripts\android-install-practice.cmd` (optional USB serial). First run generates
   `src-tauri/gen/android/` if missing. Corpus and LLM still have to exist on
   that device; packaging/size is later.
 
@@ -178,7 +187,7 @@ there is no Host/Port/Code pairing UI.
 | `src/canvas/` | Excalidraw wrapper, capture extractors, ink recognizers |
 | `src/templates/` | Board regions and the pre-seeded problem layout |
 | `src/viz/` | Viz schema, the nine renderers, applier, frame scrubber |
-| `src/modes/` | Home chooser, Review, reveal, test results, attempt dialog, problem picker |
+| `src/modes/` | Home, Review, reveal, test results, attempt dialog, problem picker |
 | `src/util/datasetKey.ts` | `dataset/task_id` keys — how per-problem state is addressed |
 | `src-tauri/` | Tauri shell, in-process harness router, coach events, ML Kit plugin |
 

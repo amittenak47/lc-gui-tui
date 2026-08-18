@@ -23,10 +23,11 @@ On the tablet: **Settings → About → tap Build number 7×** → Developer opt
 
 ## 2. One-time project setup
 
-`src-tauri/gen/android/` is **not in git**. `android:apk`, `android:apk:pads`, `android:dev`, and
-`app\scripts\android-install.cmd` / `android-install-pads.cmd` run `tauri android init` themselves when that
-folder is missing (needs Android SDK, NDK, JDK 17+). You can still generate it
-by hand:
+`src-tauri/gen/android/` is **not in git**. `android:apk:practice`,
+`android:apk:whiteboard`, `android:dev`, and
+`app\scripts\android-install-practice.cmd` / `android-install-whiteboard.cmd` run
+`tauri android init` themselves when that folder is missing (needs Android SDK,
+NDK, JDK 17+). You can still generate it by hand:
 
 ```cmd
 cd <repo>\app
@@ -47,7 +48,7 @@ The harness router is in-process (named invoke) — the overlay is **not** for L
 1. Copy `src-tauri/android-overlay/network_security_config.xml` into the generated `res/xml/`.
 2. Add `android:networkSecurityConfig="@xml/network_security_config"` on `<application>` in `AndroidManifest.xml`.
 
-`android:dev`, `android:apk`, `android:apk:pads`, `android-dev.cmd`, `android-install.cmd`, and `android-install-pads.cmd` run this automatically before every build. Idempotent — safe to run twice.
+`android:dev`, `android:apk:practice`, `android:apk:whiteboard`, `android-dev.cmd`, `android-install-practice.cmd`, and `android-install-whiteboard.cmd` run this automatically before every build. Idempotent — safe to run twice.
 
 ---
 
@@ -100,6 +101,10 @@ for %P in ("%PATH:;=";"%") do @echo %~P
 
 ## 4. Build and install the APK
 
+The two flavors are **Practice** (default, everything) and **Whiteboard-only**
+(no Practice, no RustPython). Options A and B below build Practice; Option C
+builds Whiteboard-only.
+
 ### Option A — USB dev loop (build + install + hot reload)
 
 All npm commands below run from **`app\`** (not the repo root).
@@ -136,25 +141,25 @@ taskkill /PID <pid> /F
 
 From the repo root (builds, then `adb install -r`).
 
-**Windows** (this machine): use the `.cmd` wrappers. They put Git `usr\bin` on PATH so bundled `libffi-sys` can find Unix `cp`/`make`. Do not call `npm run android:apk` from a shell that lacks those tools.
+**Windows** (this machine): use the `.cmd` wrappers. They put Git `usr\bin` on PATH so bundled `libffi-sys` can find Unix `cp`/`make`. Do not call `npm run android:apk:practice` from a shell that lacks those tools. (Whiteboard-only has no RustPython, so it needs none of this.)
 
 ```cmd
-app\scripts\android-install.cmd
-app\scripts\android-install.cmd <your-device-serial>
+app\scripts\android-install-practice.cmd
+app\scripts\android-install-practice.cmd <your-device-serial>
 ```
 
 **Linux:** do not use the `.cmd` files. The `.sh` wrappers refuse to run on Windows and fail up front if SDK/NDK/JDK/`make`/the `aarch64-linux-android` Rust target are missing:
 
 ```bash
-./app/scripts/android-install.sh
-./app/scripts/android-install.sh <device-serial>
+./app/scripts/android-install-practice.sh
+./app/scripts/android-install-practice.sh <device-serial>
 ```
 
 Or from `app\`:
 
 ```cmd
 cd <repo>\app
-npm run android:apk
+npm run android:apk:practice
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
 ```
 
@@ -167,28 +172,42 @@ adb uninstall dev.lc.whiteboard
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
 ```
 
-### Option C — Pads-only APK (no Practice)
+### Option C — Whiteboard-only APK (no Practice)
 
-Default APK keeps Practice + RustPython. Pads-only hides Practice in the frontend (`VITE_FEATURE_LEETCODE=0`) and omits the `leetcode` Cargo feature (`--no-default-features`: no RustPython). Both flags must stay together.
+The default APK is the **Practice** build: everything, including RustPython.
+**Whiteboard-only** hides Practice in the frontend (`VITE_FEATURE_LEETCODE=0`)
+and omits the `leetcode` Cargo feature (`--no-default-features`, so no
+RustPython). Both flags must stay together — the wrapper scripts set both.
 
 From the repo root:
 
 ```cmd
-app\scripts\android-install-pads.cmd
-app\scripts\android-install-pads.cmd <your-device-serial>
+app\scripts\android-install-whiteboard.cmd
+app\scripts\android-install-whiteboard.cmd <your-device-serial>
 ```
 
-Linux: `./app/scripts/android-install-pads.sh` (same checks as the Practice `.sh`).
+Linux: `./app/scripts/android-install-whiteboard.sh`.
 
 Or from `app\`:
 
 ```cmd
 cd <repo>\app
-npm run android:apk:pads
+npm run android:apk:whiteboard
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
 ```
 
-Release: `npm run android:apk:pads:release`. Same APK path as the default debug build — do not mix a pads-only APK with a Practice APK on the same install without knowing which you just built.
+Release: `npm run android:apk:whiteboard:release`.
+
+**Both flavors write the same APK path and share the app id
+`dev.lc.whiteboard`**, so nothing on disk or on the device tells you which one
+you have. Before switching:
+
+```cmd
+adb uninstall dev.lc.whiteboard
+```
+
+The old `android-install-pads.*` scripts and `android:apk:pads` npm targets
+still work — they forward to the names above — but they will be removed.
 
 ---
 
@@ -219,7 +238,7 @@ The system navigation bar (gesture bar at the bottom) was overlapping the **Appe
 **Fix (in app):** mobile layout now adds `--lc-safe-bottom` (at least 48px on tablets) so bottom chrome sits above the system bar. Rebuild and reinstall the APK after pulling latest code:
 
 ```cmd
-npm run android:apk
+npm run android:apk:practice
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
 ```
 
@@ -236,7 +255,7 @@ If it still feels tight on your device, the constant lives in `app/src/styles.cs
 | Tauri opens Android Studio | No device/emulator seen — fix `adb` PATH, `adb devices` |
 | Coach offline / LLM unreachable | **Settings → LLM** on the tablet — check provider, API key env, and that the model URL is reachable **from the tablet** |
 | `no src-tauri/gen/android` / init failed | Overlay now runs `tauri android init` itself. If that fails: SDK, NDK, JDK 17+, then `cd app && npm run android:init` |
-| Annotate cannot load `http://` pages | Rebuild after overlay (`npm run android:overlay` then `android:apk`) |
+| Annotate cannot load `http://` pages | Rebuild after overlay (`npm run android:overlay` then `android:apk:practice`) |
 | Palette under system bar | Reinstall APK after safe-area fix (§6) |
 
 ---
