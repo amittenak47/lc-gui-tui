@@ -413,11 +413,21 @@ function isLocalPad(problem: ProblemDetail | null | undefined): boolean {
 export interface WorkspaceProps {
   /** The record this workspace fills; its key is what gets loaded. */
   tab: TabRecord;
-  /** The one on screen. Others stay mounted but hidden — see the mount budget. */
+  /** The one on screen: it takes input, and it fills the header slots. */
   active: boolean;
+  /**
+   * Painted, even if not active.
+   *
+   * The two differ for exactly one case, and it is the reason this is a
+   * separate flag rather than `!active` meaning hidden: Home keeps painting
+   * while its overlay slides away over the workspace that is arriving
+   * underneath it. Everything else that is mounted but not active is a warm
+   * board waiting to be switched back to, and is not painted at all.
+   */
+  showing: boolean;
 }
 
-export function Workspace({ tab, active }: WorkspaceProps) {
+export function Workspace({ tab, active, showing }: WorkspaceProps) {
   const {
     client,
     mobile,
@@ -5444,6 +5454,26 @@ export function Workspace({ tab, active }: WorkspaceProps) {
   );
 
   /*
+   * Excalidraw cannot measure a box that is not laid out.
+   *
+   * A parked board sits at `display: none`, so a window resize while it was
+   * away never reached it. Coming back, the size is right again but nothing
+   * has told it so — hence the nudge, on the frame after it is painted. The
+   * camera is untouched: this is a re-measure, not a re-fit, so a tab comes
+   * back exactly where it was left.
+   */
+  const wasShowingRef = useRef(showing);
+  useEffect(() => {
+    const returning = showing && !wasShowingRef.current;
+    wasShowingRef.current = showing;
+    if (!returning) return;
+    const frame = window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [showing]);
+
+  /*
    * Mounting *is* opening.
    *
    * The shell writes the record and renders a workspace under `key={tab.id}`;
@@ -5937,6 +5967,11 @@ export function Workspace({ tab, active }: WorkspaceProps) {
         <div
           className={[
             "lc-canvas-wrap",
+            // Mounted but not on screen: takes no layout, keeps its board.
+            !showing && "lc-canvas-parked",
+            // Painted over the workspace arriving underneath — Home's overlay
+            // sliding away is the only thing that does this.
+            showing && !active && "lc-canvas-over",
             entering && "lc-entering",
             canvasLoading && "lc-canvas-loading",
             boardPreparing && "lc-canvas-preparing",
