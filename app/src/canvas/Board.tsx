@@ -7878,22 +7878,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 */}
                 <div className="lc-explore-chrome-slot" data-lc-explore-chrome />
                 {/*
-                  Recentre: width-fit the page to the hole and center X, keep
-                  the reading line. A full fitView jumped to page 1 / the top
-                  of the pad — the same reset that "fixed" a rotate black bar.
+                  Order here is deliberate, and the stack is bottom-anchored:
+                  it grows upward off the eye, so everything optional sits
+                  ABOVE the fixed trio. Recentre / theme / eye then keep the
+                  same slot whatever tab is open — the page-film button on a
+                  PDF used to shove the theme swatch up a notch, and a reader
+                  aims at where the swatch was last time.
                 */}
-                {!mapChromeHidden && (
-                  <button
-                    type="button"
-                    className="lc-lined-toggle lc-tip-target"
-                    aria-label="Recentre the board"
-                    data-tip="Recentre the board"
-                    data-tip-placement="bottom"
-                    onClick={() => recentreKeepPlace()}
-                  >
-                    <RecentreIcon />
-                  </button>
-                )}
                 {!mapChromeHidden &&
                   linedPaperToggle &&
                   isDrawPageRegion(mobileRegion ?? null) && (
@@ -7920,8 +7911,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       <span aria-hidden>🗒️</span>
                     </button>
                   )}
-                {!mapChromeHidden && onThemePick && (
-                  <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
+                {!mapChromeHidden && pageFilm && (
+                  <button
+                    type="button"
+                    className={
+                      pageFilm.open
+                        ? "lc-lined-toggle lc-tip-target is-active"
+                        : "lc-lined-toggle lc-tip-target"
+                    }
+                    aria-pressed={pageFilm.open}
+                    aria-label={
+                      pageFilm.open ? "Hide page previews" : "Show page previews"
+                    }
+                    data-tip={
+                      pageFilm.open ? "Hide page previews" : "Show page previews"
+                    }
+                    data-tip-placement="bottom"
+                    onClick={pageFilm.onToggle}
+                  >
+                    <PagesFilmIcon />
+                  </button>
                 )}
                 {!mapChromeHidden && mobile && onToggleSheetLock && (
                   <button
@@ -7949,26 +7958,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <LockIcon locked={sheetDragLocked} />
                   </button>
                 )}
-                {!mapChromeHidden && pageFilm && (
+                {/*
+                  Recentre: width-fit the page to the hole and center X, keep
+                  the reading line. A full fitView jumped to page 1 / the top
+                  of the pad — the same reset that "fixed" a rotate black bar.
+                */}
+                {!mapChromeHidden && (
                   <button
                     type="button"
-                    className={
-                      pageFilm.open
-                        ? "lc-lined-toggle lc-tip-target is-active"
-                        : "lc-lined-toggle lc-tip-target"
-                    }
-                    aria-pressed={pageFilm.open}
-                    aria-label={
-                      pageFilm.open ? "Hide page previews" : "Show page previews"
-                    }
-                    data-tip={
-                      pageFilm.open ? "Hide page previews" : "Show page previews"
-                    }
+                    className="lc-lined-toggle lc-tip-target"
+                    aria-label="Recentre the board"
+                    data-tip="Recentre the board"
                     data-tip-placement="bottom"
-                    onClick={pageFilm.onToggle}
+                    onClick={() => recentreKeepPlace()}
                   >
-                    <PagesFilmIcon />
+                    <RecentreIcon />
                   </button>
+                )}
+                {!mapChromeHidden && onThemePick && (
+                  <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
                 )}
                 {chromeShown.eye && (
                   <button

@@ -430,6 +430,12 @@ body {
  * chips then scroll inside the strip rather than pushing the icons.
  */
 .lc-tab-strip {
+  /*
+   * How wide one chip is allowed to get. The strip still spans the header —
+   * chips grow to share it — but they stop at a tab-sized tab, so a lone Home
+   * is a chip and not a banner across the whole row.
+   */
+  --lc-tab-max: 300px;
   display: flex;
   flex: 1 1 0;
   align-items: stretch;
@@ -454,7 +460,7 @@ body {
   flex: 1 1 0;
   align-items: center;
   min-width: 44px;
-  max-width: none;
+  max-width: var(--lc-tab-max, none);
   overflow: hidden;
   border: 0;
   border-radius: 0;
@@ -1008,11 +1014,17 @@ input[type="checkbox"] {
  * Absolute over `.lc-main` so a split pair still has one toolbar spanning the
  * page, the way a single tab does. The focused workspace fills this slot;
  * tapping the other pane swaps the items.
+ *
+ * Stacked above the sash (90) and below anything modal (100+): the pen island
+ * and the map chrome belong to the whole pane row, not to one half of it, so
+ * the seam must not be drawn through them. The slot itself is
+ * pointer-transparent, so the sash still takes the drag everywhere except
+ * under an actual control.
  */
 .lc-board-chrome-slot {
   position: absolute;
   inset: 0;
-  z-index: 50;
+  z-index: 95;
   pointer-events: none;
 }
 
@@ -1039,20 +1051,31 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   transition: none;
 }
 
-.lc-canvas-wrap.is-split-a {
+/*
+ * The two halves take their share from the sash's variables.
+ *
+ * `.lc-app` is on the selector on purpose. Without it these lose to
+ * `.lc-app:not(.lc-app-agent-open) .lc-canvas-wrap { flex: 1 1 auto }` above,
+ * which is one class heavier — so the sash moved, wrote the variables, and
+ * both panes stayed at half the width because their `flex-grow` was still 1.
+ * `width: auto` undoes the `width: 100%` from that same rule.
+ */
+.lc-app .lc-canvas-wrap.is-split-a {
   flex-grow: var(--lc-split-a, 0.5);
   flex-shrink: 1;
   flex-basis: 0;
+  width: auto;
   min-width: 0;
   min-height: 0;
   order: 1;
   overflow: hidden;
 }
 
-.lc-canvas-wrap.is-split-b {
+.lc-app .lc-canvas-wrap.is-split-b {
   flex-grow: var(--lc-split-b, 0.5);
   flex-shrink: 1;
   flex-basis: 0;
+  width: auto;
   min-width: 0;
   min-height: 0;
   order: 3;
@@ -1071,8 +1094,13 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
  */
 .lc-main.is-split-vertical > .lc-split-sash.is-vertical {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  /*
+   * Held off the pane's own top and bottom edge. The seam paints above the
+   * header (z-index below), so a glow that started at `top: 0` bled up over
+   * the tab strip. The hit target keeps the full height — see `::before`.
+   */
+  top: 6px;
+  bottom: 6px;
   height: auto;
   display: block;
   left: calc(
@@ -1082,7 +1110,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   width: 24px;
   margin-left: -12px;
   flex: none;
-  z-index: 1000;
+  z-index: 90;
 }
 
 /*
@@ -1107,9 +1135,10 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   touch-action: none;
   -webkit-touch-callout: none;
   user-select: none;
-  /* Above the board-chrome slot (50) and capture overlays (80). A pane
-   * paints to its edge; without this the wrap eats the seam. */
-  z-index: 400;
+  /* Above the canvases and the capture overlays (≤82) — a pane paints right
+   * up to its own edge — but under the board-chrome slot (95), so the pen
+   * island and the map chrome sit on the seam rather than being cut by it. */
+  z-index: 90;
   pointer-events: auto;
   isolation: isolate;
 }
@@ -1117,7 +1146,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-split-sash.is-vertical::before {
   content: "";
   position: absolute;
-  inset: 0 -16px;
+  inset: -6px -16px;
 }
 
 .lc-split-sash::after {
@@ -1133,13 +1162,15 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   }
 }
 
+/* A seam lighting up, not a bar getting a colour: one hairline ring and a
+   short bloom. The wide 18px glow read as a band the width of the button. */
 .lc-split-sash:hover::after,
 .lc-split-sash:focus-visible::after,
 .lc-split-sash.is-dragging::after {
   background: var(--accent);
   box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
-    0 0 18px color-mix(in srgb, var(--accent) 80%, transparent);
+    0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+    0 0 7px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .lc-split-sash:focus-visible {
@@ -1147,10 +1178,9 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   outline-offset: 2px;
 }
 
-.lc-split-sash.is-dragging {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
+/* No outline while dragging: it drew the button's whole 24px box as a second
+   pair of lines, which is what made the seam look thick. The lit `::after`
+   already says the sash has the pointer. */
 
 .lc-split-sash.is-vertical {
   cursor: col-resize;
@@ -1191,8 +1221,8 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-split-sash.is-vertical:hover::after,
 .lc-split-sash.is-vertical:focus-visible::after,
 .lc-split-sash.is-vertical.is-dragging::after {
-  width: 4px;
-  margin-left: -2px;
+  width: 3px;
+  margin-left: -1.5px;
 }
 
 .lc-split-sash.is-horizontal {
@@ -1225,7 +1255,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   }
 
   .lc-split-sash.is-vertical::before {
-    inset: 0 -12px;
+    inset: -6px -12px;
   }
 
   .lc-split-sash.is-vertical::after {
@@ -1440,6 +1470,13 @@ body[data-lc-sash-drag="horizontal"] {
   align-items: center;
   gap: 0;
   min-width: 0;
+  /* One chip's worth per member, so a split pair is capped like the two
+     chips it holds rather than at one chip's width. */
+  max-width: var(--lc-tab-max, none);
+}
+
+.lc-tab-row.is-group {
+  max-width: calc(var(--lc-tab-max, 300px) * 2);
 }
 
 .lc-tab-row .lc-tab:last-child {
@@ -4031,11 +4068,37 @@ body[data-lc-sash-drag="horizontal"] {
   align-items: stretch;
 }
 
+/*
+ * One cell per mode, and the cell is what the card measures itself against.
+ *
+ * The grid alone could not answer "does this card still fit prose": five modes
+ * across a 600px chooser is a 110px card, and the chooser-level tiers happily
+ * left a full card there — the title then ran out past its own border and over
+ * its neighbour. Now a card reads the width it was actually handed, so the
+ * same rules hold however many modes are compiled in and however the row is
+ * divided.
+ */
+.lc-home-cell {
+  container-type: inline-size;
+  container-name: lc-card;
+  display: flex;
+  min-width: 0;
+}
+
+.lc-home-cell > .lc-home-card {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
 .lc-home-card {
+  overflow: hidden;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: clamp(10px, 1.8cqi, 18px);
+  /* `cqi` is the cell's width from here down — the card, and everything in
+     it, scales with the space it got rather than with the whole chooser. */
+  gap: clamp(8px, 7cqi, 18px);
   /*
    * Height comes from the row, width from the column — every card fills its
    * cell, so the block stays symmetric however many modes are compiled in. An
@@ -4043,8 +4106,8 @@ body[data-lc-sash-drag="horizontal"] {
    * of a square shrinks its width too, and the cards pull away from the
    * right-hand edge of a grid that is supposed to be centred.
    */
-  min-height: clamp(150px, 17cqi, 210px);
-  padding: clamp(14px, 2cqi, 22px);
+  min-height: clamp(120px, 85cqi, 210px);
+  padding: clamp(12px, 8cqi, 22px);
   border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
   border-radius: 16px;
   background: color-mix(in srgb, var(--paper) 92%, var(--ink) 8%);
@@ -4083,12 +4146,13 @@ body[data-lc-sash-drag="horizontal"] {
   opacity: 0.55;
 }
 
+/* `cqi` is the card's own width down here — the tile is a quarter of it. */
 .lc-home-card-icon {
   display: grid;
   place-items: center;
   flex: none;
-  width: clamp(34px, 5.2cqi, 46px);
-  height: clamp(34px, 5.2cqi, 46px);
+  width: clamp(34px, 24cqi, 46px);
+  height: clamp(34px, 24cqi, 46px);
   border-radius: 12px;
   background: color-mix(in srgb, var(--ink) 7%, transparent);
   color: color-mix(in srgb, var(--ink) 78%, transparent);
@@ -4115,7 +4179,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-home-card-kicker {
-  font-size: clamp(0.66rem, 1.1cqi, 0.75rem);
+  font-size: clamp(0.66rem, 6cqi, 0.75rem);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -4123,13 +4187,17 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-home-card-title {
-  font-size: clamp(1.05rem, 2.1cqi, 1.35rem);
+  font-size: clamp(1.05rem, 11cqi, 1.35rem);
   font-weight: 650;
   line-height: 1.15;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lc-home-card-blurb {
-  font-size: clamp(0.82rem, 1.4cqi, 0.95rem);
+  font-size: clamp(0.82rem, 7.5cqi, 0.95rem);
   line-height: 1.4;
   color: color-mix(in srgb, var(--ink) 68%, transparent);
 }
@@ -4187,6 +4255,100 @@ body[data-lc-sash-drag="horizontal"] {
   .lc-home-card-kicker,
   .lc-home-card-blurb {
     display: none;
+  }
+}
+
+/* -------------------------------------------------------- card tiers ---
+ * Measured on the cell each card was handed, so they hold at any column
+ * count. Last in the file on purpose: a card that has run out of width
+ * outranks a chooser that still thinks it has some, and outranks the
+ * short-window rule above.
+ */
+
+/* One mode, one colour — the only thing left to tell them apart once the
+ * prose goes. Kept off the full card, where the words already do that job. */
+.lc-home-card[data-mode="practice"] {
+  --lc-home-mode: #a78bfa;
+}
+
+.lc-home-card[data-mode="whiteboard"] {
+  --lc-home-mode: #60a5fa;
+}
+
+.lc-home-card[data-mode="annotate"] {
+  --lc-home-mode: #f0a33a;
+}
+
+.lc-home-card[data-mode="browse"] {
+  --lc-home-mode: #34d399;
+}
+
+.lc-home-card[data-mode="explore"] {
+  --lc-home-mode: #f472b6;
+}
+
+/* Squeezed: the blurb goes, the name stays beside the glyph. */
+@container lc-card (max-width: 156px) {
+  .lc-home-card {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    aspect-ratio: auto;
+    min-height: 0;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .lc-home-card-icon {
+    width: 30px;
+    height: 30px;
+    color: var(--lc-home-mode, currentColor);
+  }
+
+  .lc-home-card-text {
+    min-width: 0;
+  }
+
+  .lc-home-card-kicker,
+  .lc-home-card-blurb {
+    display: none;
+  }
+
+  .lc-home-card-title {
+    font-size: 0.92rem;
+  }
+}
+
+/* Rail: only the glyph fits, so the glyph has to carry the mode. */
+@container lc-card (max-width: 128px) {
+  .lc-home-card {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    /* Not `aspect-ratio`: the grid stretches its cells, which wins, and the
+       card came out a letterbox with a pill inside it. */
+    aspect-ratio: auto;
+    min-height: 62px;
+    gap: 0;
+    padding: 8px;
+    border-color: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 40%, transparent);
+  }
+
+  .lc-home-card-text {
+    display: none;
+  }
+
+  .lc-home-card-icon {
+    width: min(42px, 62%);
+    height: auto;
+    aspect-ratio: 1 / 1;
+    background: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 18%, transparent);
+    color: var(--lc-home-mode, var(--ink));
+  }
+
+  .lc-home-card:hover:not(:disabled) .lc-home-card-icon {
+    background: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 30%, transparent);
+    color: var(--lc-home-mode, var(--ink));
   }
 }
 
@@ -9306,6 +9468,15 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 7px;
 }
 
+/*
+ * The chip with nothing to talk to: still in the row, still the same width,
+ * just not there. Unmounting it resized every tab in the strip.
+ */
+.lc-agent-toggle.is-vacant {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .lc-agent-toggle .lc-agent-live-dot {
   width: 8px;
   height: 8px;
@@ -12686,9 +12857,9 @@ button.lc-row-selected:hover:not(:disabled) {
   max-height: min(70vh, calc(var(--lc-vvh, 100vh) - 32px), 420px);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   overflow: hidden;
-  padding: 8px;
+  padding: 7px;
   /* clampPanel sets left/top. Sheet pop uses transform — it would shove the card. */
   animation: none;
 }
@@ -12715,7 +12886,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-footnote-overview-task {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   min-height: 0;
 }
 
@@ -12948,10 +13119,12 @@ button.lc-row-selected:hover:not(:disabled) {
   background: color-mix(in srgb, var(--lc-fn-color, var(--accent)) 12%, transparent) !important;
 }
 
+/* `+` on the right edge, so every section's button lands in one column
+   instead of trailing a label of whatever length. */
 .lc-footnote-overview-section-head {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: 4px;
   min-height: 0;
 }
@@ -12962,11 +13135,11 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-footnote-overview-add {
-  width: 22px;
-  min-width: 22px;
-  height: 22px;
-  min-height: 22px !important;
-  max-height: 22px;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px !important;
+  max-height: 20px;
   padding: 0 !important;
   border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--border, #ccc) 80%, transparent);
@@ -13066,7 +13239,7 @@ button.lc-row-selected:hover:not(:disabled) {
   outline: 2px solid color-mix(in srgb, var(--accent, #0d9488) 55%, transparent);
 }
 
-.lc-footnote-overview-scroll-list {
+.lc-footnote-overview-scroll-list.is-scrolling {
   max-height: 4.5rem;
   overflow-y: auto;
 }
@@ -13084,7 +13257,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-footnote-overview-section {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   min-height: 0;
 }
 
@@ -13102,17 +13275,34 @@ button.lc-row-selected:hover:not(:disabled) {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
+}
+
+.lc-doc-sheet-marks {
   max-height: 72px;
   overflow-y: auto;
 }
 
 /*
- * Hub lists keep a track even when they fit, so adding a row does not pop a
- * gutter in and shove the ✕. `lc-scroll-pane` kills Windows ↑↓ steppers.
+ * A short list is a list, not a scroller.
+ *
+ * These used to keep a permanent track so adding a row could not pop a gutter
+ * in and shove the ✕ — but Windows Chromium paints ↑↓ steppers on a track it
+ * decides is wide enough, and a card with one link came up wearing two arrow
+ * tips. `is-scrolling` arrives with the third row, which is also the first row
+ * `max-height` would cut off; the gutter is reserved either way.
  */
 .lc-footnote-overview-link-list {
-  overflow-y: scroll;
+  overflow: hidden;
+  /* The gutter the 8px pane below would take, held open — rows keep their
+     width when the third one turns the list into a scroller. */
+  padding-right: 8px;
+}
+
+.lc-footnote-overview-link-list.is-scrolling {
+  max-height: 72px;
+  overflow-y: auto;
+  padding-right: 0;
 }
 
 .lc-doc-sheet-marks .lc-agent-scope-option,
@@ -13122,7 +13312,7 @@ button.lc-row-selected:hover:not(:disabled) {
   text-align: left;
   border: 1px solid var(--chrome-edge);
   background: var(--panel);
-  padding: 4px 7px;
+  padding: 3px 6px;
   gap: 0;
   font-size: 11px;
   border-radius: 6px;
