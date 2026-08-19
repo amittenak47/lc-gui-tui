@@ -13,6 +13,9 @@ pub struct ProviderConfigDto {
     pub base_url: String,
     pub model: String,
     pub vision_model: String,
+    /// None on PUT = leave the stored flag (older clients). Some(true/false) persists.
+    #[serde(default)]
+    pub vision: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -92,21 +95,25 @@ fn config_dto(cfg: &Config) -> ConfigDto {
             base_url: cfg.llm.local.base_url.clone(),
             model: cfg.llm.local.model.clone(),
             vision_model: cfg.llm.local.vision_model.clone(),
+            vision: cfg.llm.local.vision,
         },
         ollama: ProviderConfigDto {
             base_url: cfg.llm.ollama.base_url.clone(),
             model: cfg.llm.ollama.model.clone(),
             vision_model: cfg.llm.ollama.vision_model.clone(),
+            vision: cfg.llm.ollama.vision,
         },
         openai: ProviderConfigDto {
             base_url: cfg.llm.openai.base_url.clone(),
             model: cfg.llm.openai.model.clone(),
             vision_model: cfg.llm.openai.vision_model.clone(),
+            vision: cfg.llm.openai.vision,
         },
         groq: ProviderConfigDto {
             base_url: cfg.llm.groq.base_url.clone(),
             model: cfg.llm.groq.model.clone(),
             vision_model: cfg.llm.groq.vision_model.clone(),
+            vision: cfg.llm.groq.vision,
         },
         modes: ModesConfigDto {
             ambient: cfg.llm.modes.ambient.clone(),
@@ -175,15 +182,27 @@ fn apply_config_dto(cfg: &mut Config, dto: &ConfigDto) -> anyhow::Result<()> {
     cfg.llm.local.base_url = dto.local.base_url.clone();
     cfg.llm.local.model = dto.local.model.clone();
     cfg.llm.local.vision_model = dto.local.vision_model.clone();
+    if let Some(flag) = dto.local.vision {
+        cfg.llm.local.vision = Some(flag);
+    }
     cfg.llm.ollama.base_url = dto.ollama.base_url.clone();
     cfg.llm.ollama.model = dto.ollama.model.clone();
     cfg.llm.ollama.vision_model = dto.ollama.vision_model.clone();
+    if let Some(flag) = dto.ollama.vision {
+        cfg.llm.ollama.vision = Some(flag);
+    }
     cfg.llm.openai.base_url = dto.openai.base_url.clone();
     cfg.llm.openai.model = dto.openai.model.clone();
     cfg.llm.openai.vision_model = dto.openai.vision_model.clone();
+    if let Some(flag) = dto.openai.vision {
+        cfg.llm.openai.vision = Some(flag);
+    }
     cfg.llm.groq.base_url = dto.groq.base_url.clone();
     cfg.llm.groq.model = dto.groq.model.clone();
     cfg.llm.groq.vision_model = dto.groq.vision_model.clone();
+    if let Some(flag) = dto.groq.vision {
+        cfg.llm.groq.vision = Some(flag);
+    }
     apply_stored_key(
         &mut cfg.llm.openai.api_key,
         dto.openai_api_key.as_deref(),
@@ -288,5 +307,26 @@ mod tests {
         let dto = config_dto(&cfg);
         apply_config_dto(&mut cfg, &dto).unwrap();
         assert_eq!(cfg.llm.groq.api_key.as_deref(), Some("gsk-keep"));
+    }
+
+    #[test]
+    fn apply_config_dto_persists_vision_false_and_keeps_omitted() {
+        let mut cfg = Config::default();
+        cfg.llm.local.vision = Some(true);
+        cfg.llm.openai.vision = Some(true);
+        let mut dto = config_dto(&cfg);
+        dto.local.vision = Some(false);
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.llm.local.vision, Some(false));
+        assert_eq!(cfg.llm.openai.vision, Some(true));
+
+        dto = config_dto(&cfg);
+        dto.openai.vision = None;
+        dto.ollama.vision = Some(true);
+        dto.groq.vision = Some(false);
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.llm.openai.vision, Some(true), "omitted flag leaves stored");
+        assert_eq!(cfg.llm.ollama.vision, Some(true));
+        assert_eq!(cfg.llm.groq.vision, Some(false));
     }
 }

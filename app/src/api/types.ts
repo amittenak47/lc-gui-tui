@@ -130,6 +130,8 @@ export interface ProviderConfig {
   base_url: string;
   model: string;
   vision_model: string;
+  /** Explicit image support. Omit to use the provider default. */
+  vision?: boolean | null;
 }
 
 export interface LcConfig {

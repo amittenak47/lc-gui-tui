@@ -115,6 +115,13 @@ pub async fn finish_attempt(
     if !outcome.kept_layout {
         let mut store = state.board_sessions.lock().await;
         store.clear_task(&dataset.key(&task_id));
+        let pad_id = dataset.key(&task_id);
+        let _ = blocking(move || {
+            let conn = crate::pads::open(&crate::pads::db_path()?)?;
+            crate::pads::tombstone(&conn, crate::pads::PadKind::Problem, &pad_id)?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await;
     }
     Ok(Json(outcome))
 }

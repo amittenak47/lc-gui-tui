@@ -1817,6 +1817,18 @@ export function Workspace({
           const handle = boardRef.current;
           if (handle) await restoreInk(handle, null, saved);
         }
+        if (!livePad && hasSavedBoard && saved) {
+          const seed = {
+            id: padId,
+            dataset: datasetId,
+            taskId,
+            updatedAt: Date.now(),
+            board: saved as import("./canvas/BoardHandle").BoardBlob,
+            agent: persistableAgentMessages(resumedMessages),
+          };
+          await putProblemBoard(seed);
+          void pushProblemPad(client, seed);
+        }
         await boardRef.current?.settleFitView();
 
         if (userLoad) {
