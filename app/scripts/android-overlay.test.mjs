@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { withExecOperations, withNetworkSecurityConfig } from "./android-overlay.mjs";
+import { withBuildSrcJvm17, withExecOperations, withNetworkSecurityConfig } from "./android-overlay.mjs";
 
 const MANIFEST = `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -78,5 +78,33 @@ describe("withExecOperations", () => {
 
   it("refuses a file it does not recognise rather than writing junk", () => {
     expect(() => withExecOperations("open class Other")).toThrow(/project\.exec/);
+  });
+});
+
+const BUILD_SRC = `plugins {
+    \`kotlin-dsl\`
+}
+
+gradlePlugin {
+    plugins {
+        create("pluginsForCoolKids") {
+            id = "rust"
+            implementationClass = "RustPlugin"
+        }
+    }
+}
+`;
+
+describe("withBuildSrcJvm17", () => {
+  it("pins KotlinCompile to JVM 17", () => {
+    const patched = withBuildSrcJvm17(BUILD_SRC);
+    expect(patched).toContain("JvmTarget.JVM_17");
+    expect(patched).toContain("kotlin-dsl");
+  });
+
+  it("is idempotent — overlay runs before every apk build", () => {
+    const once = withBuildSrcJvm17(BUILD_SRC);
+    expect(withBuildSrcJvm17(once)).toBe(once);
+    expect(once.match(/JvmTarget\.JVM_17/g)).toHaveLength(1);
   });
 });
