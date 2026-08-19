@@ -153,6 +153,11 @@ export interface LcConfig {
     planner: string;
   };
   serve_port: number;
+  /**
+   * LAN pad-sync token. GET shows it so another device can ping this PC.
+   * PUT ignores it.
+   */
+  serve_token?: string | null;
   /** Streaming-coach feature flags. Absent on a daemon older than Phase 1. */
   coach?: CoachFlags;
   token_set: boolean;

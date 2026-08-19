@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LcApiError, type LcClient } from "../api/client";
 import {
+  applyPadSyncPing,
   deletePadEverywhere,
   enqueuePadSync,
   flushPadSyncQueue,
@@ -18,6 +19,8 @@ const listWhiteboardNotebooks = vi.fn(() => [] as { id: string }[]);
 const listAnnotateDocs = vi.fn(() => [] as { id: string }[]);
 const getAnnotateDoc = vi.fn(async (_id?: string) => null);
 const restoreAnnotateDoc = vi.fn(async (_entry?: unknown) => {});
+const deleteWhiteboardNotebook = vi.fn(async () => {});
+const deleteAnnotateDoc = vi.fn(async () => {});
 const getDocBytes = vi.fn(async (_hash?: string) => null);
 const putDocBytes = vi.fn(async (_hash?: string, _bytes?: ArrayBuffer) => {});
 const getPadSnapshot = vi.fn(async (_kind?: string, _key?: string, _tier?: string) => null);
@@ -26,14 +29,14 @@ vi.mock("./whiteboardStore", () => ({
   listWhiteboardNotebooks: () => listWhiteboardNotebooks(),
   getWhiteboardNotebook: (id: string) => getWhiteboardNotebook(id),
   restoreWhiteboardNotebook: (entry: unknown) => restoreWhiteboardNotebook(entry),
-  deleteWhiteboardNotebook: vi.fn(async () => {}),
+  deleteWhiteboardNotebook: (id: string) => deleteWhiteboardNotebook(id),
 }));
 
 vi.mock("./annotateStore", () => ({
   listAnnotateDocs: () => listAnnotateDocs(),
   getAnnotateDoc: (id: string) => getAnnotateDoc(id),
   restoreAnnotateDoc: (entry: unknown) => restoreAnnotateDoc(entry),
-  deleteAnnotateDoc: vi.fn(async () => {}),
+  deleteAnnotateDoc: (id: string) => deleteAnnotateDoc(id),
 }));
 
 vi.mock("./docBytes", () => ({
@@ -66,6 +69,12 @@ function fakeClient(overrides: Partial<LcClient> = {}): LcClient {
     listAnnotateArchive: vi.fn(async () => []),
     getPadSnapshots: vi.fn(async () => []),
     getDocBytes: vi.fn(async () => null),
+    pingPadSync: vi.fn(async () => ({
+      now: 1,
+      whiteboard: [],
+      annotate: [],
+      snapshots: [],
+    })),
     ...overrides,
   } as unknown as LcClient;
 }
@@ -73,12 +82,17 @@ function fakeClient(overrides: Partial<LcClient> = {}): LcClient {
 beforeEach(() => {
   resetPadSyncQueueForTests();
   restoreWhiteboardNotebook.mockClear();
+  restoreAnnotateDoc.mockClear();
+  deleteWhiteboardNotebook.mockClear();
+  deleteAnnotateDoc.mockClear();
   deletePadSnapshots.mockClear();
   deleteDocBytes.mockClear();
   getWhiteboardNotebook.mockReset();
   getWhiteboardNotebook.mockResolvedValue(null);
   listWhiteboardNotebooks.mockReturnValue([]);
   listAnnotateDocs.mockReturnValue([]);
+  getAnnotateDoc.mockReset();
+  getAnnotateDoc.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -173,5 +187,91 @@ describe("deletePadEverywhere", () => {
     expect(localDelete).toHaveBeenCalled();
     expect(client.tombstoneWhiteboardPad).toHaveBeenCalledWith("w1");
     expect(client).not.toHaveProperty("deleteWhiteboardPad");
+  });
+});
+
+describe("padSync ping", () => {
+  it("writes a newer whiteboard and skips an older annotate", async () => {
+    getWhiteboardNotebook.mockResolvedValue({
+      id: "w1",
+      updatedAt: 10,
+      board: { v: 1, elements: [] },
+    });
+    getAnnotateDoc.mockResolvedValue({
+      id: "a1",
+      updatedAt: 90,
+      board: { v: 1, elements: [] },
+    });
+    const client = fakeClient({
+      pingPadSync: vi.fn(async () => ({
+        now: 100,
+        whiteboard: [
+          {
+            id: "w1",
+            title: "N",
+            updated_at: 40,
+            page_count: 1,
+            board: { v: 1, elements: [{ id: "x" }] },
+            agent: [],
+          },
+        ],
+        annotate: [
+          {
+            id: "a1",
+            name: "n.md",
+            hash: "h",
+            doc_type: "markdown",
+            updated_at: 40,
+            source: "#",
+            footnotes: [],
+            board: { v: 1, elements: [] },
+            agent: [],
+          },
+        ],
+        snapshots: [],
+      })),
+    });
+    await applyPadSyncPing(client);
+    expect(restoreWhiteboardNotebook).toHaveBeenCalledTimes(1);
+    expect(restoreAnnotateDoc).not.toHaveBeenCalled();
+  });
+
+  it("tombstones an unlocked pad and leaves a locked one", async () => {
+    listWhiteboardNotebooks.mockReturnValue([{ id: "locked", locked: true }]);
+    listAnnotateDocs.mockReturnValue([{ id: "gone" }]);
+    const client = fakeClient({
+      pingPadSync: vi.fn(async () => ({
+        now: 100,
+        whiteboard: [
+          {
+            id: "locked",
+            title: "N",
+            updated_at: 1,
+            page_count: 1,
+            deleted_at: 50,
+            board: {},
+            agent: [],
+          },
+        ],
+        annotate: [
+          {
+            id: "gone",
+            name: "n.md",
+            hash: "h",
+            doc_type: "markdown",
+            updated_at: 1,
+            deleted_at: 50,
+            source: "",
+            footnotes: [],
+            board: {},
+            agent: [],
+          },
+        ],
+        snapshots: [],
+      })),
+    });
+    await applyPadSyncPing(client);
+    expect(deleteWhiteboardNotebook).not.toHaveBeenCalled();
+    expect(deleteAnnotateDoc).toHaveBeenCalledWith("gone");
   });
 });

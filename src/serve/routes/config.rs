@@ -66,6 +66,9 @@ pub struct ConfigDto {
     /// Present on GET only — never echo the secret.
     #[serde(default)]
     pub token_set: bool,
+    /// LAN pad-sync ping token. GET shows it so a tablet can type it; PUT ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serve_token: Option<String>,
     /// Write-only. `None` leaves the stored key. `Some("")` clears it. GET omits this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openai_api_key: Option<String>,
@@ -125,6 +128,12 @@ fn config_dto(cfg: &Config) -> ConfigDto {
             .token
             .as_ref()
             .is_some_and(|t| !t.trim().is_empty()),
+        serve_token: cfg
+            .serve
+            .token
+            .as_ref()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty()),
         openai_api_key: None,
         groq_api_key: None,
         openai_key_set: crate::config::resolve_api_key(

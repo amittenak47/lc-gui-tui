@@ -38,12 +38,17 @@ import {
   saveToolbarLayout,
   TOOLBAR_DOCK_SNAP_PX,
   TOOLBAR_LEFT_CHROME_INSET_PX,
-  TOOLBAR_NARROW_COLUMN_PX,
   toolbarAxis,
+  toolbarBoardIsNarrow,
   type ToolbarLayout,
 } from "../util/toolbarLayout";
 import type { ToolName } from "./BoardHandle";
 import { ColorRadial } from "./ColorRadial";
+import {
+  cycleResetClearMode,
+  resetClearModeLabel,
+  type ResetClearMode,
+} from "./resetClearMode";
 import { FontSizeSlider } from "./FontSizeSlider";
 import { inkSwatches } from "./inkColors";
 import { InkFullnessSlider } from "./InkFullnessSlider";
@@ -161,8 +166,8 @@ export interface BoardToolbarProps {
   onToggleCaptureMenu: () => void;
   onCaptureEntire: () => void;
   onCaptureRegion: () => void;
-  /** Back to the original problem layout — the only destructive control here. */
-  onReset: () => void;
+  /** Back to a clean board — mode is ink, annotations, or both. */
+  onReset: (mode: ResetClearMode) => void;
   /** Pen / highlighter draw a straight chord from the starting point. */
   straightInk?: boolean;
   onStraightInk?: (on: boolean) => void;
@@ -230,6 +235,7 @@ export function BoardToolbar({
   const [shapeSlot, setShapeSlot] = useState<ShapeSlot>("shapes");
   const [shapeFlyout, setShapeFlyout] = useState<"shapes" | "capture">("shapes");
   const [resetLocked, setResetLocked] = useState(true);
+  const [resetMode, setResetMode] = useState<ResetClearMode>("all");
   const [configuring, setConfiguring] = useState<ShapeStamp | null>(null);
   const [mods, setMods] = useState<Record<string, ShapeModValue>>({});
   const [moveAsOne, setMoveAsOne] = useState(true);
@@ -238,7 +244,9 @@ export function BoardToolbar({
 
   const [layout, setLayout] = useState<ToolbarLayout>(() => loadToolbarLayout());
   const [boardNarrow, setBoardNarrow] = useState(
-    () => typeof window !== "undefined" && window.innerWidth <= TOOLBAR_NARROW_COLUMN_PX,
+    () =>
+      typeof window !== "undefined" &&
+      toolbarBoardIsNarrow(window.innerWidth, window.innerWidth),
   );
   const [dragging, setDragging] = useState(false);
   const [docking, setDocking] = useState(false);
@@ -280,7 +288,7 @@ export function BoardToolbar({
     typeof window === "undefined" ? 1280 : window.innerWidth,
     dockNear,
     axisPrevRef.current,
-    boardNarrow ? TOOLBAR_NARROW_COLUMN_PX : Number.POSITIVE_INFINITY,
+    boardNarrow ? 1 : Number.POSITIVE_INFINITY,
   );
   axisPrevRef.current = axis;
   const layoutRef = useRef(layout);
@@ -363,7 +371,10 @@ export function BoardToolbar({
       toolbarRootRef.current?.closest(".lc-board") ?? document.querySelector(".lc-board");
     if (!(board instanceof HTMLElement)) return;
     const publish = () => {
-      const next = board.clientWidth <= TOOLBAR_NARROW_COLUMN_PX;
+      const next = toolbarBoardIsNarrow(
+        board.clientWidth,
+        typeof window === "undefined" ? board.clientWidth : window.innerWidth,
+      );
       setBoardNarrow((was) => (was === next ? was : next));
     };
     publish();
@@ -507,7 +518,7 @@ export function BoardToolbar({
       window.innerWidth,
       false,
       axisPrevRef.current,
-      boardNarrow ? TOOLBAR_NARROW_COLUMN_PX : Number.POSITIVE_INFINITY,
+      boardNarrow ? 1 : Number.POSITIVE_INFINITY,
     );
     const extraLeft = nextAxis === "column" ? TOOLBAR_LEFT_CHROME_INSET_PX : 0;
     const next = clampFloatingPos(tentative.x, tentative.y, drag.width, drag.height, extraLeft);
@@ -949,28 +960,40 @@ export function BoardToolbar({
           label="Reset board"
           ariaLabel={
             resetLocked
-              ? "Reset board locked — hold to unlock"
-              : "Reset board unlocked — tap to reset, hold to lock"
+              ? `Reset ${resetClearModeLabel(resetMode)} locked — tap to switch mode, hold to unlock`
+              : `Reset ${resetClearModeLabel(resetMode)} unlocked — tap to reset, hold to lock`
           }
           dataTip={
             resetLocked
-              ? "Reset locked — hold to unlock"
-              : "Reset — tap to reset, hold to lock"
+              ? `Reset ${resetClearModeLabel(resetMode)} — tap to switch, hold to unlock`
+              : `Reset ${resetClearModeLabel(resetMode)} — tap to reset, hold to lock`
           }
           dataTipPlacement="bottom"
           className={[
-            "lc-tool lc-tip-target lc-hold-icon",
+            "lc-tool lc-tip-target lc-hold-icon lc-reset-tool",
             resetLocked ? "is-locked" : "lc-hold-danger",
+            `is-reset-${resetMode}`,
           ].join(" ")}
           pressed={!resetLocked}
           onConfirm={() => setResetLocked((locked) => !locked)}
           onTap={() => {
-            if (resetLocked) return;
-            onReset();
+            if (resetLocked) {
+              setResetMode((mode) => cycleResetClearMode(mode));
+              return;
+            }
+            onReset(resetMode);
             setResetLocked(true);
           }}
         >
           <ResetIcon />
+          <span className="lc-reset-mode-dots" aria-hidden>
+            {(resetMode === "all" || resetMode === "ink") && (
+              <i className="lc-reset-dot is-ink" />
+            )}
+            {(resetMode === "all" || resetMode === "annotations") && (
+              <i className="lc-reset-dot is-annotations" />
+            )}
+          </span>
         </HoldButton>
 
         {showStrokeSizes && (

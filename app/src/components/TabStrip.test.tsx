@@ -333,43 +333,27 @@ describe("TabStrip", () => {
       view.unmount();
     });
 
-    it("opens the menu on a touch hold, and a drag cancels the hold", async () => {
-      vi.useFakeTimers();
-      try {
-        const view = mount({ tabs: [homeTab(), board("b1", "doodle")] });
-        const hit = grab(view, "doodle");
+    it("lets a touch hold stay a drag, and ignores the long-press context menu", () => {
+      const onTabDrag = vi.fn();
+      const view = mount({ tabs: [homeTab(), board("b1", "doodle")], onTabDrag });
+      const hit = grab(view, "doodle");
 
-        // Hold still: the menu arrives, because touch has no right button.
-        act(() => {
-          hit.dispatchEvent(pointer("pointerdown", { x: 100, y: 20, type: "touch" }));
-        });
-        act(() => {
-          vi.advanceTimersByTime(500);
-        });
-        expect(view.menuItems()).toContain("Close");
+      act(() => {
+        hit.dispatchEvent(pointer("pointerdown", { x: 100, y: 20, type: "touch" }));
+        hit.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+      });
+      expect(view.menuItems()).toEqual([]);
 
-        act(() => {
-          document.querySelector<HTMLButtonElement>(".lc-tab-menu-backdrop")?.click();
-        });
-        expect(view.menuItems()).toEqual([]);
-
-        // Move first: this is a drag, so the hold must not fire underneath it.
-        act(() => {
-          hit.dispatchEvent(pointer("pointerdown", { x: 100, y: 20, type: "touch" }));
-          hit.dispatchEvent(pointer("pointermove", { x: 300, y: 400, type: "touch" }));
-        });
-        act(() => {
-          vi.advanceTimersByTime(500);
-        });
-        expect(view.menuItems()).toEqual([]);
-        expect(document.querySelector(".lc-tab-ghost")).not.toBeNull();
-        act(() => {
-          hit.dispatchEvent(pointer("pointerup", { x: 300, y: 400, type: "touch" }));
-        });
-        view.unmount();
-      } finally {
-        vi.useRealTimers();
-      }
+      act(() => {
+        hit.dispatchEvent(pointer("pointermove", { x: 300, y: 400, type: "touch" }));
+      });
+      expect(onTabDrag).toHaveBeenCalledWith("b1", 300, 400);
+      expect(document.querySelector(".lc-tab-ghost")).not.toBeNull();
+      expect(view.menuItems()).toEqual([]);
+      act(() => {
+        hit.dispatchEvent(pointer("pointerup", { x: 300, y: 400, type: "touch" }));
+      });
+      view.unmount();
     });
   });
 

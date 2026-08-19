@@ -85,8 +85,10 @@ export function NodeSheet({
   const close = () => {
     if (closing) return;
     setClosing(true);
-    window.setTimeout(() => closeRef.current(), 220);
+    window.setTimeout(() => closeRef.current(), 200);
   };
+
+  const place = sheetPlace(from);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -110,6 +112,9 @@ export function NodeSheet({
       <div
         className={`lc-preset-sheet lc-node-sheet ${closing ? "is-closing" : "is-open"}`}
         style={{
+          left: place.left,
+          top: place.top,
+          width: place.width,
           ["--lc-morph-x" as string]: `${from.left + from.width / 2}px`,
           ["--lc-morph-y" as string]: `${from.top + from.height / 2}px`,
         }}
@@ -243,4 +248,20 @@ export function NodeSheet({
     </div>,
     document.body,
   );
+}
+
+/** Park the sheet near the node, clamped to the viewport. */
+function sheetPlace(from: { left: number; top: number; width: number; height: number }): {
+  left: number;
+  top: number;
+  width: number;
+} {
+  const viewW = typeof window === "undefined" ? 1024 : window.innerWidth;
+  const viewH = typeof window === "undefined" ? 768 : window.innerHeight;
+  const width = Math.min(400, Math.max(280, viewW - 24));
+  const pad = 12;
+  const left = Math.max(pad, Math.min(from.left + from.width / 2 - width / 2, viewW - width - pad));
+  const below = from.top + from.height + 14;
+  const top = below + 320 > viewH - pad ? Math.max(pad, from.top - 12 - 280) : below;
+  return { left, top, width };
 }

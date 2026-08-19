@@ -9,6 +9,7 @@
 
 import type { StrokeBox, StrokePoint } from "./linkStroke";
 import { CHIP_HIT_RADIUS, boxCenter } from "./linkStroke";
+import { isPageCoverRect } from "../util/docMarquee";
 
 export type LinkHitKind = "mark" | "image" | "drawing" | "snippet";
 
@@ -89,6 +90,78 @@ export function pickBestHit(hits: readonly LinkHit[], loop: StrokeBox): LinkHit 
   );
 }
 
+/** True when the hit's center is inside the loop, or most of its area is. */
+export function hitMostlyInside(
+  hit: LinkHit,
+  loop: StrokeBox,
+  fraction = 0.5,
+): boolean {
+  const inter = intersectionArea(loop, hit);
+  if (inter <= 0) return false;
+  const hitArea = Math.max(1, hit.width * hit.height);
+  const center = boxCenter(hit);
+  const centerIn =
+    center.x >= loop.left &&
+    center.x <= loop.left + loop.width &&
+    center.y >= loop.top &&
+    center.y <= loop.top + loop.height;
+  return centerIn || inter / hitArea >= fraction;
+}
+
+/**
+ * Union of every `kind` hit that sits inside the loop — not nearest-only.
+ *
+ * Circling two drawings must make one snippet. Neighbours outside the box
+ * stay out.
+ */
+export function groupHitsOfKind(
+  hits: readonly LinkHit[],
+  loop: StrokeBox,
+  kind: LinkHitKind,
+): LinkHit | null {
+  const inside = hits.filter((hit) => hit.kind === kind && hitMostlyInside(hit, loop));
+  if (inside.length < 2) return null;
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  const ids: string[] = [];
+  for (const hit of inside) {
+    ids.push(hit.id);
+    left = Math.min(left, hit.left);
+    top = Math.min(top, hit.top);
+    right = Math.max(right, hit.left + hit.width);
+    bottom = Math.max(bottom, hit.top + hit.height);
+  }
+  ids.sort();
+  const noun = kind === "drawing" ? "drawings" : kind === "mark" ? "marks" : kind;
+  return {
+    id: `group:${kind}:${ids.join("+")}`,
+    label: `${inside.length} ${noun}`,
+    kind: "snippet",
+    left,
+    top,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top),
+  };
+}
+
+/**
+ * What a loop/scribble should pick.
+ *
+ * Two-plus drawings inside the box group into one snippet — unless a mark
+ * is also inside, in which case the mark wins (do not swallow a footnote).
+ * Otherwise the smallest overlapping target, same as {@link pickBestHit}.
+ */
+export function pickLoopTarget(hits: readonly LinkHit[], loop: StrokeBox): LinkHit | null {
+  const markInside = hits.some((hit) => hit.kind === "mark" && hitMostlyInside(hit, loop));
+  if (!markInside) {
+    const grouped = groupHitsOfKind(hits, loop, "drawing");
+    if (grouped) return grouped;
+  }
+  return pickBestHit(hits, loop);
+}
+
 export function nearestHit(
   hits: readonly LinkHit[],
   point: StrokePoint,
@@ -145,14 +218,33 @@ export function collectDomLinkHits(
       let right = box.right;
       let bottom = box.bottom;
       const pack = node.closest(".lc-doc-footnote-pack");
+      const host = node.closest(".lc-doc-selectable-body");
       if (pack) {
         for (const band of pack.querySelectorAll(".lc-doc-footnote-band")) {
           const rect = band.getBoundingClientRect();
+          if (
+            host instanceof HTMLElement &&
+            isPageCoverRect(
+              { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+              host,
+            )
+          ) {
+            continue;
+          }
           left = Math.min(left, rect.left);
           top = Math.min(top, rect.top);
           right = Math.max(right, rect.right);
           bottom = Math.max(bottom, rect.bottom);
         }
+      }
+      if (
+        host instanceof HTMLElement &&
+        isPageCoverRect({ left, top, right, bottom }, host)
+      ) {
+        left = box.left;
+        top = box.top;
+        right = box.right;
+        bottom = box.bottom;
       }
       const hit: LinkHit = {
         id,

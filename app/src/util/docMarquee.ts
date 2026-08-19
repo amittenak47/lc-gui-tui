@@ -89,12 +89,23 @@ export function scaleOf(node: HTMLElement): number {
 /** Viewport boxes treated as the same when they match within this many CSS px. */
 export const HOST_COVER_SLOP_PX = 4;
 
+/**
+ * Fraction of a reference box a rect must fill to count as a page wash.
+ *
+ * Edge-cover against the selectable body is not enough: the body is often a
+ * long document, while `getClientRects` inside `contain:paint` answers with
+ * the visible paper / content-slot box. That slot-sized wash is not a line.
+ */
+export const SLOT_COVER_FRACTION = 0.72;
+
 export interface ViewportBox {
   left: number;
   top: number;
   right: number;
   bottom: number;
 }
+
+const COVER_SLOT_SELECTORS = [".lc-page-content-slot", ".lc-page-marks-slot"] as const;
 
 /**
  * True when `rect` is the host/slot box (or larger), not a line or block.
@@ -115,6 +126,80 @@ export function coversViewportBox(
     rect.right >= box.right - slop &&
     rect.bottom >= box.bottom - slop
   );
+}
+
+export function boxArea(box: ViewportBox): number {
+  return Math.max(0, box.right - box.left) * Math.max(0, box.bottom - box.top);
+}
+
+export function overlapArea(a: ViewportBox, b: ViewportBox): number {
+  const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+  const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+  return width * height;
+}
+
+/** True when `rect` fills most of `box` — a page wash, not a quote. */
+export function coversMostOfBox(
+  rect: ViewportBox,
+  box: ViewportBox,
+  fraction = SLOT_COVER_FRACTION,
+): boolean {
+  const area = boxArea(box);
+  if (area < 1) return false;
+  return overlapArea(rect, box) / area >= fraction && boxArea(rect) / area >= fraction;
+}
+
+export function isCoverRect(
+  rect: ViewportBox,
+  box: ViewportBox,
+  slop = HOST_COVER_SLOP_PX,
+): boolean {
+  return coversViewportBox(rect, box, slop) || coversMostOfBox(rect, box);
+}
+
+/**
+ * Boxes a quote rect must not match: the body, the paper slot, the marks slot.
+ *
+ * Compare against the visible paper, not only the selectable body. A long
+ * document's body is taller than the page; a slot-sized artifact then survives
+ * an edge-cover test and paints as a whole-page wash.
+ */
+export function coverReferenceBoxes(host: HTMLElement): ViewportBox[] {
+  const boxes: ViewportBox[] = [];
+  const seen = new Set<string>();
+  const push = (node: Element | null | undefined) => {
+    if (!(node instanceof HTMLElement)) return;
+    const box = node.getBoundingClientRect();
+    if (box.width <= 1 || box.height <= 1) return;
+    const key = `${Math.round(box.left)}:${Math.round(box.top)}:${Math.round(box.width)}:${Math.round(box.height)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    boxes.push(box);
+  };
+  push(host);
+  for (const selector of COVER_SLOT_SELECTORS) {
+    push(host.closest(selector));
+  }
+  push(host.closest(".lc-canvas-wrap"));
+  const board = host.closest(".lc-board");
+  if (board) {
+    push(board);
+    for (const node of board.querySelectorAll(
+      ".lc-page-content-slot, .lc-page-marks-slot, .lc-doc-select-overlay",
+    )) {
+      push(node);
+    }
+  }
+  push(host.parentElement?.querySelector(".lc-doc-select-overlay"));
+  return boxes;
+}
+
+export function isPageCoverRect(
+  rect: ViewportBox,
+  host: HTMLElement,
+  slop = HOST_COVER_SLOP_PX,
+): boolean {
+  return coverReferenceBoxes(host).some((box) => isCoverRect(rect, box, slop));
 }
 
 export function unionViewportBoxes(
@@ -171,12 +256,11 @@ function textRectsInRange(range: Range): DOMRect[] {
 }
 
 function blockBoxForRange(range: Range, host: HTMLElement): DOMRect[] {
-  const hostBox = host.getBoundingClientRect();
   let node: Node | null = range.commonAncestorContainer;
   if (node.nodeType !== Node.ELEMENT_NODE) node = node.parentElement;
   while (node && node instanceof HTMLElement && host.contains(node)) {
     const box = node.getBoundingClientRect();
-    if (usableClientRect(box) && !coversViewportBox(box, hostBox)) return [box];
+    if (usableClientRect(box) && !isPageCoverRect(box, host)) return [box];
     if (node === host) break;
     node = node.parentElement;
   }
@@ -190,9 +274,8 @@ function blockBoxForRange(range: Range, host: HTMLElement): DOMRect[] {
  * is not the page itself.
  */
 export function tightClientRects(range: Range, host: HTMLElement): DOMRect[] {
-  const hostBox = host.getBoundingClientRect();
   const keep = (rects: readonly DOMRect[]) =>
-    rects.filter((rect) => usableClientRect(rect) && !coversViewportBox(rect, hostBox));
+    rects.filter((rect) => usableClientRect(rect) && !isPageCoverRect(rect, host));
   const fromRange = keep(Array.from(range.getClientRects()));
   if (fromRange.length > 0) return fromRange;
   const fromText = keep(textRectsInRange(range));
@@ -222,6 +305,14 @@ export function localRects(host: HTMLElement, range: Range): LocalRect[] {
   return clientRectsToLocal(host, tightClientRects(range, host));
 }
 
+/** Drop page-wash bands; keep line / block boxes. */
+export function tightLocalRects(
+  host: HTMLElement,
+  rects: readonly LocalRect[],
+): LocalRect[] {
+  return rects.filter((rect) => !localRectCoversHost(host, rect));
+}
+
 export function localRectCoversHost(
   host: HTMLElement,
   rect: LocalRect,
@@ -229,14 +320,14 @@ export function localRectCoversHost(
 ): boolean {
   const origin = host.getBoundingClientRect();
   const scale = scaleOf(host) || 1;
-  return coversViewportBox(
+  return isPageCoverRect(
     {
       left: origin.left + rect.left * scale,
       top: origin.top + rect.top * scale,
       right: origin.left + (rect.left + rect.width) * scale,
       bottom: origin.top + (rect.top + rect.height) * scale,
     },
-    origin,
+    host,
     slop,
   );
 }
@@ -423,7 +514,7 @@ export function hitRectsUnder(
     const box = node.getBoundingClientRect();
     if (box.width < 2 || box.height < 2) continue;
     // Page-sized wrappers used to become the "block" wash.
-    if (coversViewportBox(box, bodyBox)) continue;
+    if (isPageCoverRect(box, body)) continue;
     const overlaps =
       box.left < right && box.right > left && box.top < bottom && box.bottom > top;
     if (!overlaps) continue;

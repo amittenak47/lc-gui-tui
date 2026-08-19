@@ -59,6 +59,7 @@ import {
   type LocalRect,
   bandFromLocalPoints,
   coversViewportBox,
+  isPageCoverRect,
   finalizeMarquee,
   hitRectsUnder,
   localRectCoversHost,
@@ -67,6 +68,7 @@ import {
   scopeRootAtPoint,
   textUnder,
   tightClientRects,
+  tightLocalRects,
   unionLocalRects,
   unionViewportBoxes,
   viewportToLocal,
@@ -92,7 +94,7 @@ function isOverlayControl(target: EventTarget | null): boolean {
   const element = target as Element | null;
   return Boolean(
     element?.closest?.(
-      ".lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-doc-sheet-backdrop, .lc-doc-selection-chrome, .lc-footnote-overview, .lc-doc-submark-grip",
+      ".lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-doc-sheet-backdrop, .lc-doc-selection-chrome, .lc-footnote-overview, .lc-doc-submark-grip, .lc-split-sash",
     ),
   );
 }
@@ -405,6 +407,11 @@ export function DocSelectionLayer({
       bandFadeTimerRef.current = null;
     }
     setBandFading(false);
+    if (localRectCoversHost(body, rect)) {
+      setBand(null);
+      setHitRects([]);
+      return;
+    }
     setBand(rect);
     setHitRects(hitRectsUnder(body, root, rect));
   }, []);
@@ -539,10 +546,12 @@ export function DocSelectionLayer({
       const root = scopeRootIn(body, scope) as HTMLElement | null;
       if (!root) return null;
       const stored =
-        subMarkParent.bands && subMarkParent.bands.length > 0 ? subMarkParent.bands : null;
-      if (stored) return [...stored];
+        subMarkParent.bands && subMarkParent.bands.length > 0
+          ? tightLocalRects(body, subMarkParent.bands)
+          : [];
+      if (stored.length > 0) return stored;
       const at = rectForAnchor(body, root, subMarkParent.anchor);
-      return at ? [at] : null;
+      return at && !localRectCoversHost(body, at) ? [at] : null;
     };
 
     const rangeHitsBands = (range: Range, bands: readonly LocalRect[]): boolean => {
@@ -635,13 +644,14 @@ export function DocSelectionLayer({
       const root = scopeRootIn(body, scope) as HTMLElement | null;
       if (!root) return false;
       const stored =
-        subMarkParent.bands && subMarkParent.bands.length > 0 ? subMarkParent.bands : null;
-      const bands =
-        stored ??
-        (() => {
-          const at = rectForAnchor(body, root, subMarkParent.anchor);
-          return at ? [at] : [];
-        })();
+        subMarkParent.bands && subMarkParent.bands.length > 0
+          ? tightLocalRects(body, subMarkParent.bands)
+          : [];
+      const fallback = (() => {
+        const at = rectForAnchor(body, root, subMarkParent.anchor);
+        return at && !localRectCoversHost(body, at) ? [at] : [];
+      })();
+      const bands = stored.length > 0 ? stored : fallback;
       if (bands.length === 0) return false;
       return pointInLocalBands(body, bands, clientX, clientY, SUBMARK_HIT_PAD);
     };
@@ -903,13 +913,14 @@ export function DocSelectionLayer({
       const root = scopeRootIn(body, scope) as HTMLElement | null;
       if (!root) return null;
       const storedBands =
-        subMarkParent.bands && subMarkParent.bands.length > 0 ? subMarkParent.bands : null;
-      const bands =
-        storedBands ??
-        (() => {
-          const at = rectForAnchor(body, root, subMarkParent.anchor);
-          return at ? [at] : [];
-        })();
+        subMarkParent.bands && subMarkParent.bands.length > 0
+          ? tightLocalRects(body, subMarkParent.bands)
+          : [];
+      const fallback = (() => {
+        const at = rectForAnchor(body, root, subMarkParent.anchor);
+        return at && !localRectCoversHost(body, at) ? [at] : [];
+      })();
+      const bands = storedBands.length > 0 ? storedBands : fallback;
       if (bands.length === 0) return null;
       const bounds = parentTextBounds(body, root, subMarkParent, bands);
       return { body, root, scope, bands, bounds };
@@ -1323,19 +1334,19 @@ export function DocSelectionLayer({
         if (!root) continue;
         const storedBands =
           footnote.bands && footnote.bands.length > 0
-            ? footnote.bands.filter((band) => !localRectCoversHost(body, band))
-            : null;
+            ? tightLocalRects(body, footnote.bands)
+            : [];
         const live =
           isTextAnchor(footnote.anchor)
             ? (() => {
                 const range = rangeFromAnchor(root, footnote.anchor);
-                return range ? localRects(body, range) : [];
+                return range ? tightLocalRects(body, localRects(body, range)) : [];
               })()
             : [];
         const bands =
           live.length > 0
             ? live
-            : storedBands && storedBands.length > 0
+            : storedBands.length > 0
               ? storedBands
               : (() => {
                   const at = rectForAnchor(body, root, footnote.anchor);
@@ -1348,7 +1359,7 @@ export function DocSelectionLayer({
           footnote,
           at,
           bands,
-          useBands: live.length > 0 || (storedBands != null && storedBands.length > 0),
+          useBands: live.length > 0 || storedBands.length > 0,
           number: numbers.get(footnote.id) ?? 0,
         });
       }
@@ -1394,6 +1405,23 @@ export function DocSelectionLayer({
       });
     };
     body.addEventListener("scroll", onHostScroll, { capture: true, passive: true });
+    const onViewResize = () => {
+      if (isDocCameraLive()) {
+        placementDeferred = true;
+        return;
+      }
+      if (scrollFrame != null) return;
+      scrollFrame = requestAnimationFrame(() => {
+        scrollFrame = null;
+        place();
+      });
+    };
+    window.addEventListener("resize", onViewResize);
+    window.visualViewport?.addEventListener("resize", onViewResize);
+    const unbindView = () => {
+      window.removeEventListener("resize", onViewResize);
+      window.visualViewport?.removeEventListener("resize", onViewResize);
+    };
 
     /*
      * Live mutation watching is for reading / highlight — text layers land
@@ -1409,6 +1437,7 @@ export function DocSelectionLayer({
     let frame: number | null = null;
     if (!watchMutations || footnotes.length === 0 || typeof MutationObserver !== "function") {
       return () => {
+        unbindView();
         body.removeEventListener("scroll", onHostScroll, true);
         if (scrollFrame != null) cancelAnimationFrame(scrollFrame);
         placeRef.current = null;
@@ -1462,6 +1491,7 @@ export function DocSelectionLayer({
     return () => {
       stopObserver();
       onDocCameraLiveChange(null);
+      unbindView();
       body.removeEventListener("scroll", onHostScroll, true);
       placeRef.current = null;
       if (frame != null) cancelAnimationFrame(frame);
@@ -1525,9 +1555,13 @@ export function DocSelectionLayer({
     );
   };
 
-  const tightBox = (box: DOMRect | null | undefined, hostBox: DOMRect): DOMRect | null => {
+  const tightBox = (
+    box: DOMRect | null | undefined,
+    host: HTMLElement | null,
+    hostBox: DOMRect,
+  ): DOMRect | null => {
     if (!box || (box.width <= 0 && box.height <= 0)) return null;
-    if (coversViewportBox(box, hostBox)) return null;
+    if (host ? isPageCoverRect(box, host) : coversViewportBox(box, hostBox)) return null;
     return box;
   };
 
@@ -1549,11 +1583,11 @@ export function DocSelectionLayer({
   /**
    * The highlight's box on screen.
    *
-   * This layer's overlay only — never every `.lc-doc-marquee-hit` in the
-   * document (parked tabs / the other split pane used to union into a page
-   * box). Host-sized rects from `getClientRects` inside the transformed page
-   * slot are dropped so Copy / Google / Annotate hang off the quote, not the
-   * paper's corners.
+   * Current selection paint only — never every highlight band on the page.
+   *
+   * Footnote washes live in the same overlay. Unioning them with the quote
+   * made highlightBox the paper, so ✓/✕ / Copy / Annotate clamped to the
+   * pane's top-right corner and the whole page took the mark colour.
    */
   const highlightBox = (): DOMRect | null => {
     const host = bodyRef.current;
@@ -1561,23 +1595,35 @@ export function DocSelectionLayer({
     if (actionsViaRef.current === "native") {
       const live = host ? liveSelectionBox(host) : null;
       if (live) return live;
-      const captured = tightBox(selectionScreenBoxRef.current, hostBox);
+      const captured = tightBox(selectionScreenBoxRef.current, host, hostBox);
       if (captured) return captured;
     }
     const paintedRoot = overlayRef.current;
     const painted = paintedRoot
       ? Array.from(
           paintedRoot.querySelectorAll(
-            ".lc-doc-select-rect, .lc-doc-highlight-band:not(.is-fading), .lc-doc-marquee-band:not(.is-fading), .lc-doc-marquee-hit, .lc-doc-submark-live",
+            ".lc-doc-select-rect, .lc-doc-marquee-band:not(.is-fading), .lc-doc-marquee-hit, .lc-doc-submark-live",
           ),
         )
       : [];
     const paintedBoxes = painted
       .map((node) => node.getBoundingClientRect())
-      .filter((box) => box.width > 0.5 && box.height > 0.5 && !coversViewportBox(box, hostBox));
+      .filter((box) => {
+        if (box.width <= 0.5 || box.height <= 0.5) return false;
+        if (host) return !isPageCoverRect(box, host);
+        return !coversViewportBox(box, hostBox);
+      });
     const fromPaint = unionViewportBoxes(paintedBoxes);
-    if (fromPaint) return fromPaint;
-    const captured = tightBox(selectionScreenBoxRef.current, hostBox);
+    if (fromPaint && !(host ? isPageCoverRect(fromPaint, host) : coversViewportBox(fromPaint, hostBox))) {
+      return fromPaint;
+    }
+    // Union of many line boxes can still fill the paper. Hang chrome off the
+    // topmost tight box instead of the paper's top-right corner.
+    if (paintedBoxes.length > 0) {
+      const top = paintedBoxes.reduce((best, box) => (box.top < best.top ? box : best));
+      return new DOMRect(top.left, top.top, top.right - top.left, top.bottom - top.top);
+    }
+    const captured = tightBox(selectionScreenBoxRef.current, host, hostBox);
     if (captured) return captured;
     return host ? liveSelectionBox(host) : null;
   };
@@ -1616,7 +1662,7 @@ export function DocSelectionLayer({
     if (!node) return;
     const at = highlightBox();
     if (!at) {
-      clampInto(node, window.innerWidth / 2 - node.offsetWidth / 2, 12);
+      node.style.visibility = "hidden";
       return;
     }
     // Just outside the corner, and above the line rather than over the next
@@ -1650,14 +1696,17 @@ export function DocSelectionLayer({
 
   useLayoutEffect(() => {
     if (phase !== "confirm" && phase !== "actions" && !subMarkConfirm) return;
-    const node = selectionChromeRef.current;
-    if (!node) return;
-    placeSelectionChrome(node);
+    const relayout = () => placeSelectionChrome(selectionChromeRef.current);
+    relayout();
     // Android / Motion: one more place after layout paints select rects.
-    const id = requestAnimationFrame(() => {
-      placeSelectionChrome(selectionChromeRef.current);
-    });
-    return () => cancelAnimationFrame(id);
+    const id = requestAnimationFrame(relayout);
+    window.addEventListener("resize", relayout);
+    window.visualViewport?.addEventListener("resize", relayout);
+    return () => {
+      cancelAnimationFrame(id);
+      window.removeEventListener("resize", relayout);
+      window.visualViewport?.removeEventListener("resize", relayout);
+    };
   }, [phase, placeSelectionChrome, overlaps.length, selection, copied, subMarkConfirm, subMarkLive]);
 
   const paintedSubMarks = useMemo(() => {
@@ -1721,7 +1770,8 @@ export function DocSelectionLayer({
           className="lc-doc-select-overlay"
           aria-hidden={rects.length === 0 && hitRects.length === 0 && !band && ribbons.length === 0}
         >
-          {band && (
+          {band &&
+            !(bodyRef.current && localRectCoversHost(bodyRef.current, band)) && (
             <div
               className={
                 (highlighting ? "lc-doc-highlight-band" : "lc-doc-marquee-band") +
@@ -1775,8 +1825,13 @@ export function DocSelectionLayer({
               footnote.color ?? inkPalette[0],
               inkPalette,
             );
-            const paintBands =
-              useBands && bands.length > 0 ? bands : at ? [at] : [];
+            const paintBands = (
+              useBands && bands.length > 0 ? bands : at ? [at] : []
+            ).filter(
+              (bandRect) =>
+                !bodyRef.current || !localRectCoversHost(bodyRef.current, bandRect),
+            );
+            if (paintBands.length === 0) return null;
             const topBand =
               paintBands.length > 0
                 ? paintBands.reduce((best, bandRect) =>
@@ -1963,8 +2018,7 @@ export function DocSelectionLayer({
                 }}
               />
             )}
-            <motion.div
-              layoutId="doc-selection-chrome"
+            <div
               className={
                 phase === "actions"
                   ? "lc-doc-sheet lc-doc-sheet-actions-menu lc-doc-selection-chrome"
@@ -1974,13 +2028,7 @@ export function DocSelectionLayer({
               ref={bindSelectionChrome}
               /* Do not put left/top here — React would reset every render and
                  fight clampInto. Start hidden; placeSelectionChrome reveals. */
-              initial={false}
               style={{ visibility: "hidden" }}
-              transition={{ layout: { duration: 0.22, ease: [0.22, 1, 0.36, 1] } }}
-              onLayoutAnimationComplete={() => {
-                const node = selectionChromeRef.current;
-                if (node) placeSelectionChrome(node);
-              }}
             >
               <AnimatePresence mode="popLayout" initial={false}>
                 {phase !== "actions" ? (
@@ -2133,7 +2181,7 @@ export function DocSelectionLayer({
                   </motion.div>
                 )}
               </AnimatePresence>
-            </motion.div>
+            </div>
           </>,
           document.body,
         )}

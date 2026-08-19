@@ -8,6 +8,7 @@ import {
   saveToolbarLayout,
   TOOLBAR_DOCK_SNAP_PX,
   toolbarAxis,
+  toolbarBoardIsNarrow,
 } from "./toolbarLayout";
 
 const KEY = "whiteboard.toolbar.layout.v1";
@@ -64,10 +65,16 @@ describe("toolbarAxis", () => {
     expect(toolbarAxis("floating", 10, 48, 1280, true)).toBe("row");
   });
 
-  it("becomes a column when the board hole is too narrow for a row", () => {
+  it("becomes a column when the board hole is a split sliver or a tiny window", () => {
     expect(toolbarAxis("docked", 0, 400, 1280, false, "row", 400)).toBe("column");
-    expect(toolbarAxis("docked", 0, 400, 400, false)).toBe("column");
-    expect(toolbarAxis("floating", 200, 48, 400, true, "row", 400)).toBe("column");
+    expect(toolbarAxis("docked", 0, 400, 1280, false, "row", 250)).toBe("column");
+    expect(toolbarAxis("docked", 0, 400, 300, false)).toBe("column");
+  });
+
+  it("stays a row on a full-screen tablet whose CSS width sits under 480", () => {
+    expect(toolbarAxis("docked", 0, 400, 400, false)).toBe("row");
+    expect(toolbarAxis("floating", 200, 48, 400, true, "row", 400)).toBe("row");
+    expect(toolbarAxis("floating", 120, 280, 800, false, "row", 800)).toBe("row");
   });
 
   it("becomes a column in a left or right edge band", () => {
@@ -79,5 +86,18 @@ describe("toolbarAxis", () => {
   it("uses hysteresis so the axis does not flicker at the band", () => {
     expect(toolbarAxis("floating", 100, 48, 1280, false, "column")).toBe("column");
     expect(toolbarAxis("floating", 200, 48, 1280, false, "column")).toBe("row");
+  });
+});
+
+describe("toolbarBoardIsNarrow", () => {
+  it("treats a full-screen tablet as wide even when CSS px sit under 480", () => {
+    expect(toolbarBoardIsNarrow(400, 400)).toBe(false);
+    expect(toolbarBoardIsNarrow(800, 800)).toBe(false);
+  });
+
+  it("treats a split sliver or a squeezed window as narrow", () => {
+    expect(toolbarBoardIsNarrow(400, 1280)).toBe(true);
+    expect(toolbarBoardIsNarrow(250, 800)).toBe(true);
+    expect(toolbarBoardIsNarrow(300, 300)).toBe(true);
   });
 });

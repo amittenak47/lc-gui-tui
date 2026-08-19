@@ -5,10 +5,13 @@ use axum::extract::Path as UrlPath;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde::Deserialize;
+use axum::extract::Query;
+use serde::{Deserialize, Serialize};
 
 use super::{blocking, AppError};
-use crate::pads::{self, AnnotatePad, DevicePrefs, PadKind, PutOutcome, SnapshotRow, WhiteboardPad};
+use crate::pads::{
+    self, AnnotatePad, DevicePrefs, PadKind, PutOutcome, SnapshotRow, WhiteboardPad,
+};
 use crate::serve::MAX_BODY_BYTES;
 
 fn map_put<T: serde::Serialize>(outcome: PutOutcome<T>) -> Result<Response, AppError> {
@@ -130,6 +133,45 @@ async fn restore_kind(kind: PadKind, id: String) -> Result<StatusCode, AppError>
             anyhow::anyhow!("live {kind} library is full ({limit})"),
         )),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SyncQuery {
+    #[serde(default)]
+    pub since: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PadSyncPing {
+    pub now: i64,
+    pub whiteboard: Vec<WhiteboardPad>,
+    pub annotate: Vec<AnnotatePad>,
+    pub snapshots: Vec<SnapshotRow>,
+}
+
+/// Periodic ping: saved whiteboards, annotated files, and rolling snapshots
+/// whose `updated_at` / `written_at` / tombstone is newer than `since`.
+pub async fn sync_pads(Query(query): Query<SyncQuery>) -> Result<Json<PadSyncPing>, AppError> {
+    let since = query.since;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let (whiteboard, annotate, snapshots) = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        Ok((
+            pads::list_changed_whiteboard(&conn, since)?,
+            pads::list_changed_annotate(&conn, since)?,
+            pads::list_changed_snapshots(&conn, since)?,
+        ))
+    })
+    .await?;
+    Ok(Json(PadSyncPing {
+        now,
+        whiteboard,
+        annotate,
+        snapshots,
+    }))
 }
 
 pub async fn put_snapshot(Json(body): Json<SnapshotRow>) -> Result<StatusCode, AppError> {

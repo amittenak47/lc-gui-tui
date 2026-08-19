@@ -26,6 +26,8 @@ export interface WhiteboardNotebookMeta {
   title: string;
   updatedAt: number;
   pageCount: number;
+  /** Blocks trash. Local-only — not part of pads.db. */
+  locked?: boolean;
 }
 
 export interface WhiteboardNotebook extends WhiteboardNotebookMeta {
@@ -194,13 +196,26 @@ export async function saveWhiteboardNotebook(input: {
     title,
     updatedAt: now,
     pageCount: Math.min(WHITEBOARD_PAGE_LIMIT, Math.max(1, input.pageCount)),
+    ...(existing?.locked ? { locked: true } : {}),
   };
   writeIndex([meta, ...library.filter((entry) => entry.id !== id)]);
   await putContent(id, { board: input.board, agent } satisfies WhiteboardContent);
   return { ...meta, board: input.board, agent };
 }
 
+export function setWhiteboardNotebookLocked(id: string, locked: boolean): void {
+  const library = readIndex();
+  const existing = library.find((entry) => entry.id === id);
+  if (!existing) return;
+  const next: WhiteboardNotebookMeta = locked
+    ? { ...existing, locked: true }
+    : { id: existing.id, title: existing.title, updatedAt: existing.updatedAt, pageCount: existing.pageCount };
+  writeIndex([next, ...library.filter((entry) => entry.id !== id)]);
+}
+
 export async function deleteWhiteboardNotebook(id: string): Promise<void> {
+  const existing = readIndex().find((entry) => entry.id === id);
+  if (existing?.locked) return;
   writeIndex(readIndex().filter((entry) => entry.id !== id));
   await deleteContent(id);
   void deletePadSnapshots("whiteboard", id).catch(() => {});

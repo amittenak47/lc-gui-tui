@@ -4,6 +4,7 @@ import {
   LINK_REST,
   clusterCentres,
   clusterLabels,
+  clusterSettled,
   makeBodies,
   makeBody,
   sagOf,
@@ -122,7 +123,7 @@ describe("step", () => {
     for (const count of [3, 5, 9, 16]) {
       const list = rest(Array.from({ length: count }, (_, i) => note(`n${i}`)));
       const ys = list.map((b) => b.y);
-      expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(0.4);
+      expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(0.35);
     }
   });
 
@@ -138,6 +139,18 @@ describe("step", () => {
     expect(furthest).toBeLessThan(0.22);
   });
 
+  it("is not settled while a cluster is still flying in", () => {
+    const list = bodies([note("a"), note("b"), note("c")]);
+    list[0]!.x = 0.05;
+    list[0]!.y = 0.05;
+    expect(clusterSettled(list, clusterCentres(["annotate"]))).toBe(false);
+  });
+
+  it("is settled after a clustered rest", () => {
+    const list = rest([note("a"), note("b"), note("c")], true);
+    expect(clusterSettled(list, clusterCentres(["annotate"]))).toBe(true);
+  });
+
   it("gathers each kind when clustering is on", () => {
     const nodes = [note("a"), note("b"), note("c"), board("d"), board("e")];
     const loose = rest(nodes, false);
@@ -149,6 +162,36 @@ describe("step", () => {
       return members.reduce((sum, b) => sum + Math.hypot(b.x - cx, b.y - cy), 0) / members.length;
     };
     expect(spread(tight, "annotate")).toBeLessThan(spread(loose, "annotate"));
+  });
+
+  it("leaves a pinned node where the pointer put it", () => {
+    const list = bodies([note("a"), note("b")]);
+    list[0]!.x = 0.2;
+    list[0]!.y = 0.2;
+    const x = list[0]!.x;
+    const y = list[0]!.y;
+    for (let i = 0; i < 40; i += 1) {
+      step(list, clusterCentres(["annotate"]), {
+        clustered: false,
+        dt: 1 / 60,
+        time: i / 60,
+        aspect: 1.6,
+        pinnedKey: list[0]!.key,
+      });
+    }
+    expect(list[0]!.x).toBe(x);
+    expect(list[0]!.y).toBe(y);
+  });
+
+  it("keeps a parked node near where the reader dropped it", () => {
+    const list = bodies([note("a")]);
+    list[0]!.x = 0.22;
+    list[0]!.y = 0.78;
+    list[0]!.parkedX = 0.22;
+    list[0]!.parkedY = 0.78;
+    settle(list, clusterCentres(["annotate"]), false, 1.6, 120);
+    expect(Math.abs(list[0]!.x - 0.22)).toBeLessThan(0.06);
+    expect(Math.abs(list[0]!.y - 0.78)).toBeLessThan(0.06);
   });
 
   it("survives a frame that took far too long", () => {

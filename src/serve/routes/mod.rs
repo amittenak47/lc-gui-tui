@@ -32,7 +32,7 @@ pub use pads::{
     archive_annotate, archive_whiteboard, clone_device_prefs, get_device_prefs, get_doc_bytes,
     get_snapshots, list_annotate, list_devices, list_whiteboard, put_annotate, put_device_prefs,
     put_doc_bytes, put_snapshot, put_whiteboard, restore_annotate, restore_whiteboard,
-    tombstone_annotate, tombstone_whiteboard,
+    sync_pads, tombstone_annotate, tombstone_whiteboard,
 };
 pub use corpus::{
     adjacent_problem, get_problem, list_datasets, list_problems, list_tags, random_problem,

@@ -4,12 +4,15 @@ import { describe, expect, it } from "vitest";
 import {
   MIN_BAND_PX,
   bandFromLocalPoints,
+  coversMostOfBox,
   coversViewportBox,
   finalizeMarquee,
   hitRectsUnder,
+  isPageCoverRect,
   localRectCoversHost,
   scaleOf,
   tightClientRects,
+  tightLocalRects,
   unionLocalRects,
   unionViewportBoxes,
   viewportToLocal,
@@ -329,6 +332,70 @@ describe("docMarquee", () => {
     );
   });
 
+  it("coversMostOfBox treats a paper-sized wash as covering a shorter slot", () => {
+    const slot = { left: 0, top: 0, right: 400, bottom: 800 };
+    expect(coversMostOfBox({ left: 0, top: 0, right: 400, bottom: 800 }, slot)).toBe(
+      true,
+    );
+    expect(coversMostOfBox({ left: 10, top: 40, right: 300, bottom: 64 }, slot)).toBe(
+      false,
+    );
+    expect(
+      coversViewportBox({ left: 0, top: 0, right: 400, bottom: 800 }, {
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 4000,
+      }),
+    ).toBe(false);
+  });
+
+  it("isPageCoverRect drops a slot-sized wash on a taller document host", () => {
+    const slot = document.createElement("div");
+    slot.className = "lc-page-content-slot";
+    const slotBox = {
+      left: 0,
+      top: 0,
+      width: 400,
+      height: 800,
+      right: 400,
+      bottom: 800,
+      x: 0,
+      y: 0,
+      toJSON() {},
+    } as DOMRect;
+    slot.getBoundingClientRect = () => slotBox;
+    const host = document.createElement("div");
+    host.className = "lc-doc-selectable-body";
+    Object.defineProperty(host, "offsetWidth", { value: 400 });
+    host.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 4000,
+        right: 400,
+        bottom: 4000,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    slot.append(host);
+    document.body.append(slot);
+    const wash = { left: 0, top: 0, right: 400, bottom: 800 };
+    expect(coversViewportBox(wash, host.getBoundingClientRect())).toBe(false);
+    expect(isPageCoverRect(wash, host)).toBe(true);
+    expect(isPageCoverRect({ left: 12, top: 40, right: 212, bottom: 64 }, host)).toBe(
+      false,
+    );
+    expect(
+      localRectCoversHost(host, { left: 0, top: 0, width: 400, height: 800 }),
+    ).toBe(true);
+    expect(
+      localRectCoversHost(host, { left: 12, top: 40, width: 200, height: 24 }),
+    ).toBe(false);
+  });
+
   it("unionViewportBoxes unions tight line boxes", () => {
     expect(unionViewportBoxes([])).toBeNull();
     const box = unionViewportBoxes([
@@ -363,6 +430,12 @@ describe("docMarquee", () => {
     expect(
       localRectCoversHost(body, { left: 12, top: 40, width: 200, height: 24 }),
     ).toBe(false);
+    expect(
+      tightLocalRects(body, [
+        { left: 0, top: 0, width: 400, height: 800 },
+        { left: 12, top: 40, width: 200, height: 24 },
+      ]),
+    ).toEqual([{ left: 12, top: 40, width: 200, height: 24 }]);
   });
 
   it("hitRectsUnder skips a wrapper that covers the page", () => {
@@ -397,6 +470,68 @@ describe("docMarquee", () => {
     document.body.append(body);
     const hits = hitRectsUnder(body, body, { left: 0, top: 0, width: 400, height: 80 });
     expect(hits).toEqual([]);
+  });
+
+  it("tightClientRects falls back to the paragraph when getClientRects is the visible slot", () => {
+    const slot = document.createElement("div");
+    slot.className = "lc-page-content-slot";
+    const slotBox = {
+      left: 0,
+      top: 0,
+      width: 400,
+      height: 800,
+      right: 400,
+      bottom: 800,
+      x: 0,
+      y: 0,
+      toJSON() {},
+    } as DOMRect;
+    slot.getBoundingClientRect = () => slotBox;
+    const host = document.createElement("div");
+    Object.defineProperty(host, "offsetWidth", { value: 400 });
+    host.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 4000,
+        right: 400,
+        bottom: 4000,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    const p = document.createElement("p");
+    p.textContent = "hello world";
+    p.getBoundingClientRect = () =>
+      ({
+        left: 12,
+        top: 40,
+        width: 200,
+        height: 24,
+        right: 212,
+        bottom: 64,
+        x: 12,
+        y: 40,
+        toJSON() {},
+      }) as DOMRect;
+    host.append(p);
+    slot.append(host);
+    document.body.append(slot);
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const prev = Range.prototype.getClientRects;
+    Range.prototype.getClientRects = function getClientRects() {
+      return [slotBox] as unknown as DOMRectList;
+    };
+    try {
+      const rects = tightClientRects(range, host);
+      expect(rects).toHaveLength(1);
+      expect(rects[0].width).toBe(200);
+      expect(rects[0].height).toBe(24);
+    } finally {
+      Range.prototype.getClientRects = prev;
+    }
   });
 
   it("tightClientRects falls back to the paragraph when getClientRects is the page", () => {

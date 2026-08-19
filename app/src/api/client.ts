@@ -3,6 +3,7 @@
  */
 
 import { b64ToBytes, bytesToB64, loadInvoke, readInvokeResult } from "./nativeHttp";
+import { loadPadHub, type PadHub } from "../util/padHub";
 import type {
   AdjacentProblems,
   AttemptOutcome,
@@ -68,6 +69,67 @@ function announceUnreachable(message: string): void {
   window.dispatchEvent(new CustomEvent("lc-server-unreachable", { detail: message }));
 }
 
+async function hubFetch(
+  hub: PadHub,
+  method: string,
+  path: string,
+  init?: { json?: unknown; bytes?: ArrayBuffer },
+): Promise<{ json: unknown; bytes: ArrayBuffer }> {
+  const url = `${hub.url}${path}`;
+  const headers: Record<string, string> = { "x-lc-token": hub.token };
+  let body: BodyInit | undefined;
+  if (init?.json !== undefined) {
+    headers["content-type"] = "application/json";
+    body = JSON.stringify(init.json);
+  } else if (init?.bytes) {
+    headers["content-type"] = "application/octet-stream";
+    body = init.bytes;
+  }
+  let res: Response;
+  try {
+    res = await fetch(url, { method, headers, body });
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    announceUnreachable(message);
+    throw new LcApiError(message, 0);
+  }
+  const bytes = await res.arrayBuffer();
+  let json: unknown = null;
+  const ct = res.headers.get("content-type") ?? "";
+  if (ct.includes("json")) {
+    try {
+      json = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    } catch {
+      json = null;
+    }
+  }
+  if (!res.ok) {
+    const errBody =
+      json && typeof json === "object" && "error" in json
+        ? String((json as { error: unknown }).error)
+        : new TextDecoder().decode(bytes).slice(0, 240);
+    throw new LcApiError(errBody || res.statusText, res.status, errBody);
+  }
+  return { json, bytes };
+}
+
+async function padInvokeOrHub<T>(
+  invoke: () => Promise<T>,
+  method: string,
+  path: string,
+  json?: unknown,
+): Promise<T> {
+  const hub = loadPadHub();
+  if (!hub) return invoke();
+  const { json: body } = await hubFetch(
+    hub,
+    method,
+    path,
+    json !== undefined ? { json } : undefined,
+  );
+  return body as T;
+}
+
 export interface SearchOptions {
   /** Problem set to search. Omitted means the default LeetCode corpus. */
   dataset?: string;
@@ -111,6 +173,13 @@ export interface PadSnapshotDto {
   tier: string;
   written_at: number;
   payload: unknown;
+}
+
+export interface PadSyncPingDto {
+  now: number;
+  whiteboard: WhiteboardPadDto[];
+  annotate: AnnotatePadDto[];
+  snapshots: PadSnapshotDto[];
 }
 
 export interface DevicePrefsDto {
@@ -501,6 +570,11 @@ export class LcClient {
   }
 
   async putDocBytes(hash: string, bytes: ArrayBuffer): Promise<void> {
+    const hub = loadPadHub();
+    if (hub) {
+      await hubFetch(hub, "PUT", `/docs/${encodeURIComponent(hash)}/bytes`, { bytes });
+      return;
+    }
     await this.cmd("lc_docs_put_bytes", {
       hash,
       rawBase64: bytesToB64(new Uint8Array(bytes)),
@@ -508,6 +582,16 @@ export class LcClient {
   }
 
   async getDocBytes(hash: string): Promise<ArrayBuffer | null> {
+    const hub = loadPadHub();
+    if (hub) {
+      try {
+        const { bytes } = await hubFetch(hub, "GET", `/docs/${encodeURIComponent(hash)}/bytes`);
+        return bytes;
+      } catch (cause) {
+        if (cause instanceof LcApiError && cause.status === 404) return null;
+        throw cause;
+      }
+    }
     try {
       const body = await this.cmd<unknown>("lc_docs_get_bytes", { hash });
       if (body && typeof body === "object" && "$bytes" in body) {
@@ -522,52 +606,117 @@ export class LcClient {
     }
   }
 
+  async pingPadSync(since: number): Promise<PadSyncPingDto> {
+    const body = await padInvokeOrHub<PadSyncPingDto>(
+      () => this.cmd("lc_pads_sync", { since }),
+      "GET",
+      `/pads/sync?since=${Math.max(0, Math.floor(since))}`,
+    );
+    return {
+      now: typeof body?.now === "number" ? body.now : Date.now(),
+      whiteboard: Array.isArray(body?.whiteboard) ? body.whiteboard : [],
+      annotate: Array.isArray(body?.annotate) ? body.annotate : [],
+      snapshots: Array.isArray(body?.snapshots) ? body.snapshots : [],
+    };
+  }
+
   async listWhiteboardPads(): Promise<WhiteboardPadDto[]> {
-    return this.cmd("lc_list_whiteboard");
+    return padInvokeOrHub(
+      () => this.cmd("lc_list_whiteboard"),
+      "GET",
+      "/pads/whiteboard",
+    );
   }
 
   async listWhiteboardArchive(): Promise<WhiteboardPadDto[]> {
-    return this.cmd("lc_archive_whiteboard");
+    return padInvokeOrHub(
+      () => this.cmd("lc_archive_whiteboard"),
+      "GET",
+      "/pads/whiteboard/archive",
+    );
   }
 
   async putWhiteboardPad(id: string, body: WhiteboardPadDto): Promise<WhiteboardPadDto> {
-    return this.cmd("lc_put_whiteboard", { id, body });
+    return padInvokeOrHub(
+      () => this.cmd("lc_put_whiteboard", { id, body }),
+      "PUT",
+      `/pads/whiteboard/${encodeURIComponent(id)}`,
+      body,
+    );
   }
 
   async tombstoneWhiteboardPad(id: string): Promise<void> {
-    await this.cmd("lc_tombstone_whiteboard", { id });
+    await padInvokeOrHub(
+      () => this.cmd("lc_tombstone_whiteboard", { id }),
+      "POST",
+      `/pads/whiteboard/${encodeURIComponent(id)}/tombstone`,
+    );
   }
 
   async restoreWhiteboardPad(id: string): Promise<void> {
-    await this.cmd("lc_restore_whiteboard", { id });
+    await padInvokeOrHub(
+      () => this.cmd("lc_restore_whiteboard", { id }),
+      "POST",
+      `/pads/whiteboard/${encodeURIComponent(id)}/restore`,
+    );
   }
 
   async listAnnotatePads(): Promise<AnnotatePadDto[]> {
-    return this.cmd("lc_list_annotate");
+    return padInvokeOrHub(
+      () => this.cmd("lc_list_annotate"),
+      "GET",
+      "/pads/annotate",
+    );
   }
 
   async listAnnotateArchive(): Promise<AnnotatePadDto[]> {
-    return this.cmd("lc_archive_annotate");
+    return padInvokeOrHub(
+      () => this.cmd("lc_archive_annotate"),
+      "GET",
+      "/pads/annotate/archive",
+    );
   }
 
   async putAnnotatePad(id: string, body: AnnotatePadDto): Promise<AnnotatePadDto> {
-    return this.cmd("lc_put_annotate", { id, body });
+    return padInvokeOrHub(
+      () => this.cmd("lc_put_annotate", { id, body }),
+      "PUT",
+      `/pads/annotate/${encodeURIComponent(id)}`,
+      body,
+    );
   }
 
   async tombstoneAnnotatePad(id: string): Promise<void> {
-    await this.cmd("lc_tombstone_annotate", { id });
+    await padInvokeOrHub(
+      () => this.cmd("lc_tombstone_annotate", { id }),
+      "POST",
+      `/pads/annotate/${encodeURIComponent(id)}/tombstone`,
+    );
   }
 
   async restoreAnnotatePad(id: string): Promise<void> {
-    await this.cmd("lc_restore_annotate", { id });
+    await padInvokeOrHub(
+      () => this.cmd("lc_restore_annotate", { id }),
+      "POST",
+      `/pads/annotate/${encodeURIComponent(id)}/restore`,
+    );
   }
 
   async putPadSnapshot(body: PadSnapshotDto): Promise<void> {
-    await this.cmd("lc_put_snapshot", { body });
+    await padInvokeOrHub(
+      () => this.cmd("lc_put_snapshot", { body }),
+      "PUT",
+      "/pads/snapshots",
+      body,
+    );
   }
 
   async getPadSnapshots(kind: string, key: string): Promise<PadSnapshotDto[]> {
-    return this.cmd("lc_get_snapshots", { kind, key });
+    return padInvokeOrHub(
+      () => this.cmd("lc_get_snapshots", { kind, key }),
+      "GET",
+      `/pads/snapshots/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`,
+    );
   }
 
   async listDevices(): Promise<DevicePrefsDto[]> {

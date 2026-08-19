@@ -6,6 +6,7 @@ import {
   listWhiteboardNotebooks,
   restoreWhiteboardNotebook,
   saveWhiteboardNotebook,
+  setWhiteboardNotebookLocked,
   WhiteboardLibraryFullError,
   WHITEBOARD_LIBRARY_LIMIT,
   type WhiteboardBoardBlob,
@@ -141,5 +142,14 @@ describe("deleteWhiteboardNotebook", () => {
     const drop = await saveWhiteboardNotebook({ board: board("b"), pageCount: 1, title: "Drop" });
     await deleteWhiteboardNotebook(drop.id);
     expect(listWhiteboardNotebooks().map((entry) => entry.id)).toEqual([keep.id]);
+  });
+
+  it("refuses to delete a locked notebook, and a later save keeps the lock", async () => {
+    const row = await saveWhiteboardNotebook({ board: board("a"), pageCount: 1, title: "Keep" });
+    setWhiteboardNotebookLocked(row.id, true);
+    await deleteWhiteboardNotebook(row.id);
+    expect(listWhiteboardNotebooks()).toHaveLength(1);
+    await saveWhiteboardNotebook({ id: row.id, board: board("b"), pageCount: 1 });
+    expect(listWhiteboardNotebooks()[0]?.locked).toBe(true);
   });
 });

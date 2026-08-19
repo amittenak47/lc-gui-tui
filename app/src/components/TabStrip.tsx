@@ -13,9 +13,9 @@
  * the parked ones get the flat word, which is all their record knows.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "motion/react";
+import { useReducedMotion } from "motion/react";
 
 import {
   HOME_TAB_ID,
@@ -215,15 +215,11 @@ export function TabStrip({
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [cancelHit, setCancelHit] = useState(false);
-  const holdRef = useRef<{ id: string; timer: number } | null>(null);
+  /** Last down's pointer type, so a touch long-press `contextmenu` is not a menu. */
+  const lastPointerTypeRef = useRef<string>("mouse");
   const cancelTimerRef = useRef<number | null>(null);
   const onCancelLoadRef = useRef(onCancelLoad);
   onCancelLoadRef.current = onCancelLoad;
-
-  const clearHold = useCallback(() => {
-    if (holdRef.current) window.clearTimeout(holdRef.current.timer);
-    holdRef.current = null;
-  }, []);
 
   // Any scroll, resize or outside press dismisses the chip menu — it is pinned
   // to a viewport point, so it goes stale the moment the strip moves.
@@ -273,8 +269,8 @@ export function TabStrip({
    *
    * They can be anywhere in `tabs` — the pair is made by dragging one chip
    * onto the other, not by them happening to be neighbours — so the
-   * render order is rebuilt here. The chips travel to meet each other, which
-   * is what makes forming a group read as forming a group.
+   * render order is rebuilt here. The strip itself does not layout-animate;
+   * the canvas is what swaps.
    */
   const rows = useMemo(() => {
     const byId = new Map(tabs.map((tab) => [tab.id, tab]));
@@ -298,31 +294,15 @@ export function TabStrip({
   }, [groups, tabs]);
 
   const still = useReducedMotion();
-  const travel = still ? { duration: 0 } : { type: "spring" as const, stiffness: 520, damping: 42 };
 
   return (
     <div className="lc-tab-strip" role="tablist" aria-label="Open workspaces" ref={stripRef}>
-      <LayoutGroup id="lc-tabs">
       {rows.map((row) => (
-        <motion.div
+        <div
           key={row.group ? row.group.id : row.members[0]!.id}
-          layout
-          transition={travel}
           className={row.group ? "lc-tab-row is-group" : "lc-tab-row"}
         >
-          <AnimatePresence initial={false}>
-            {row.group ? (
-              <motion.span
-                key="frame"
-                className="lc-tab-group-frame"
-                aria-hidden
-                initial={still ? false : { opacity: 0, scaleX: 0.7 }}
-                animate={{ opacity: 1, scaleX: 1 }}
-                exit={still ? { opacity: 0 } : { opacity: 0, scaleX: 0.7 }}
-                transition={travel}
-              />
-            ) : null}
-          </AnimatePresence>
+          {row.group ? <span className="lc-tab-group-frame" aria-hidden /> : null}
           {row.members.map((tab) => {
         const selected = tab.id === activeId;
         const indexState = indexStateOf(tab);
@@ -382,29 +362,19 @@ export function TabStrip({
                 }, CANCEL_HIT_MS);
               }}
               onContextMenu={(event) => {
-                if (cancelling || tab.id === HOME_TAB_ID) return;
                 event.preventDefault();
+                if (cancelling || tab.id === HOME_TAB_ID) return;
+                // Android WebView fires this on a finger hold. That hold is a
+                // drag, same as desktop; the ⋯ button is the touch menu.
+                if (lastPointerTypeRef.current !== "mouse") return;
                 setMenu({ id: tab.id, x: event.clientX, y: event.clientY });
               }}
               onPointerDown={(event) => {
+                lastPointerTypeRef.current = event.pointerType;
                 if (cancelling || tab.id === HOME_TAB_ID || busy) return;
                 if (event.button !== 0) return;
                 dragRef.current = { id: tab.id, x: event.clientX, y: event.clientY, moved: false };
                 event.currentTarget.setPointerCapture(event.pointerId);
-                // Touch and pen have no right button, so a hold opens the menu.
-                if (event.pointerType !== "mouse") {
-                  const { clientX, clientY } = event;
-                  clearHold();
-                  holdRef.current = {
-                    id: tab.id,
-                    timer: window.setTimeout(() => {
-                      if (dragRef.current?.moved) return;
-                      dragRef.current = null;
-                      skipClickRef.current = true;
-                      setMenu({ id: tab.id, x: clientX, y: clientY });
-                    }, 480),
-                  };
-                }
               }}
               onPointerMove={(event) => {
                 const drag = dragRef.current;
@@ -413,14 +383,12 @@ export function TabStrip({
                 const dy = event.clientY - drag.y;
                 if (!drag.moved && dx * dx + dy * dy < 100) return;
                 drag.moved = true;
-                clearHold();
                 const onto = chipIdAt(stripRef.current, event.clientX, event.clientY, tab.id);
                 setDropTargetId(onto);
                 setCarry({ id: tab.id, title: tab.title, x: event.clientX, y: event.clientY });
                 onTabDrag?.(tab.id, event.clientX, event.clientY);
               }}
               onPointerUp={(event) => {
-                clearHold();
                 const drag = dragRef.current;
                 if (!drag || drag.id !== tab.id) return;
                 if (drag.moved) {
@@ -435,7 +403,6 @@ export function TabStrip({
                 onTabDragEnd?.();
               }}
               onPointerCancel={() => {
-                clearHold();
                 dragRef.current = null;
                 setCarry(null);
                 setDropTargetId(null);
@@ -443,18 +410,7 @@ export function TabStrip({
               }}
             >
               <TabIcon kind={cancelling ? "cancel" : tab.kind} />
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.span
-                  key={label}
-                  className="lc-tab-title"
-                  initial={still ? false : { opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={still ? { opacity: 0 } : { opacity: 0, y: -4 }}
-                  transition={{ duration: still ? 0 : 0.16 }}
-                >
-                  {label}
-                </motion.span>
-              </AnimatePresence>
+              <span className="lc-tab-title">{label}</span>
               {tab.dirty ? (
                 <span className="lc-tab-dot" aria-label="Unsaved changes" title="Unsaved changes" />
               ) : null}
@@ -479,9 +435,8 @@ export function TabStrip({
           </div>
         );
           })}
-        </motion.div>
+        </div>
       ))}
-      </LayoutGroup>
 
       {/*
         * The chip under the pointer. Portalled to the body because the strip

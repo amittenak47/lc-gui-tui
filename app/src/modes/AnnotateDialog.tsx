@@ -13,7 +13,8 @@ import { useEffect, useState } from "react";
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useLibraryDeleteArm } from "../util/armedDelete";
-import { deleteAnnotateDoc, listAnnotateDocs, type AnnotateDocMeta } from "../util/annotateStore";
+import { deleteAnnotateDoc, listAnnotateDocs, setAnnotateDocLocked, type AnnotateDocMeta } from "../util/annotateStore";
+import { LibraryPadlock } from "./LibraryPadlock";
 import { TOMBSTONE_COPY } from "../util/padSync";
 import {
   listPadSnapshots,
@@ -243,7 +244,16 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                       Annotated {new Date(doc.updatedAt).toLocaleString()}
                     </span>
                   </HoldButton>
-                  {/* Hold to delete — see WhiteboardDialog for why. */}
+                  <LibraryPadlock
+                    name={doc.name}
+                    locked={Boolean(doc.locked)}
+                    disabled={locked}
+                    onToggle={() => {
+                      setAnnotateDocLocked(doc.id, !doc.locked);
+                      setDocs(listAnnotateDocs());
+                    }}
+                  />
+                  {!doc.locked && (
                   <HoldButton
                     label={`Delete annotations for ${doc.name}`}
                     className="lc-scratch-load-trash"
@@ -277,6 +287,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                       <path d="M10 10v7M14 10v7" />
                     </svg>
                   </HoldButton>
+                  )}
                 </div>
               ))}
               {archived.length > 0 && (
