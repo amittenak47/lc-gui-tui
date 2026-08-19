@@ -10,6 +10,7 @@ import {
   pullPads,
   PAD_TRASH_OP_QUEUE_CAP,
   pushPadSnapshot,
+  pushProblemPad,
   pushWhiteboardPad,
   resetPadSyncQueueForTests,
   restoreTrashedPad,
@@ -72,6 +73,18 @@ vi.mock("./annotateStore", () => ({
   markAnnotateHubAck: () => {},
 }));
 
+const deleteProblemBoard = vi.fn(async (_id?: string) => {});
+const putProblemBoard = vi.fn(async (_row?: unknown) => {});
+const getProblemBoard = vi.fn(async (_id?: string): Promise<unknown> => null);
+
+vi.mock("./problemBoardStore", () => ({
+  deleteProblemBoard: (id: string) => deleteProblemBoard(id),
+  getProblemBoard: (id: string) => getProblemBoard(id),
+  putProblemBoard: (row: unknown) => putProblemBoard(row),
+  markProblemHubAck: () => {},
+  problemPadId: (dataset: string, taskId: string) => `${dataset}/${taskId}`,
+}));
+
 vi.mock("./docBytes", () => ({
   getDocBytes: (hash: string) => getDocBytes(hash),
   putDocBytes: (hash: string, bytes: ArrayBuffer) => putDocBytes(hash, bytes),
@@ -97,6 +110,8 @@ function fakeClient(overrides: Partial<LcClient> = {}): LcClient {
     putDocBytes: vi.fn(async () => {}),
     tombstoneWhiteboardPad: vi.fn(async () => ({ applied: true, seq: 1 })),
     tombstoneAnnotatePad: vi.fn(async () => ({ applied: true, seq: 1 })),
+    tombstoneProblemPad: vi.fn(async () => ({ applied: true, seq: 1 })),
+    putProblemPad: vi.fn(async () => ({})),
     listWhiteboardPads: vi.fn(async () => []),
     listAnnotatePads: vi.fn(async () => []),
     listWhiteboardArchive: vi.fn(async () => []),
@@ -137,6 +152,10 @@ beforeEach(() => {
   markAnnotateDeleteAcked.mockClear();
   getAnnotateDoc.mockReset();
   getAnnotateDoc.mockResolvedValue(null);
+  putProblemBoard.mockClear();
+  deleteProblemBoard.mockClear();
+  getProblemBoard.mockReset();
+  getProblemBoard.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -551,6 +570,39 @@ describe("live PUT CAS and gone", () => {
     });
     await pushWhiteboardPad(client, notebook);
     expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+  });
+
+  it("applies a problem 409 body and does not queue", async () => {
+    const hub = {
+      id: "leetcode/two-sum",
+      dataset: "leetcode",
+      task_id: "two-sum",
+      updated_at: 40,
+      board: { v: 1, elements: [{ id: "hub" }] },
+      agent: [],
+    };
+    const client = fakeClient({
+      putProblemPad: vi.fn(async () => {
+        throw new LcApiError("conflict", 409, JSON.stringify(hub), hub);
+      }),
+    });
+    await pushProblemPad(client, {
+      id: "leetcode/two-sum",
+      dataset: "leetcode",
+      taskId: "two-sum",
+      updatedAt: 999,
+      hubAckUpdatedAt: 1,
+      board: emptyBoard,
+      agent: [],
+    });
+    expect(putProblemBoard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "leetcode/two-sum",
+        updatedAt: 40,
+        hubAckUpdatedAt: 40,
+      }),
+    );
     expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
 

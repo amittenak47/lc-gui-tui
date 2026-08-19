@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{blocking, AppError};
 use crate::pads::{
-    self, AnnotatePad, ApplyAck, DevicePrefs, GoneRow, PadKind, PutOutcome, SnapshotRow,
+    self, AnnotatePad, ApplyAck, DevicePrefs, GoneRow, PadKind, ProblemPad, PutOutcome, SnapshotRow,
     WhiteboardPad,
 };
 use crate::serve::MAX_BODY_BYTES;
@@ -121,6 +121,61 @@ pub async fn restore_annotate(UrlPath(id): UrlPath<String>) -> Result<StatusCode
     restore_kind(PadKind::Annotate, id).await
 }
 
+fn problem_id(dataset: &str, task_id: &str) -> String {
+    format!("{}/{}", dataset.trim(), task_id.trim())
+}
+
+fn mirror_problem_board(pad: &ProblemPad) {
+    let Ok(cfg) = crate::config::Config::load() else { return };
+    let Ok(dataset) = crate::corpus::dataset::resolve(Some(pad.dataset.as_str())) else { return };
+    let Ok(dir) = crate::workspace::runner::locate_workspace_in(&cfg, dataset, Some(&pad.task_id))
+    else {
+        return;
+    };
+    let Ok(text) = serde_json::to_string(&pad.board) else { return };
+    let _ = std::fs::write(dir.join("board.json"), text);
+}
+
+pub async fn get_problem(
+    UrlPath((dataset, task_id)): UrlPath<(String, String)>,
+) -> Result<Response, AppError> {
+    let id = problem_id(&dataset, &task_id);
+    let row = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pads::get_problem(&conn, &id)
+    })
+    .await?;
+    match row {
+        Some(pad) => Ok((StatusCode::OK, Json(pad)).into_response()),
+        None => Err(AppError::not_found(anyhow::anyhow!("no live problem pad"))),
+    }
+}
+
+pub async fn put_problem(
+    UrlPath((dataset, task_id)): UrlPath<(String, String)>,
+    Json(mut body): Json<ProblemPad>,
+) -> Result<Response, AppError> {
+    body.dataset = dataset;
+    body.task_id = task_id;
+    body.id = problem_id(&body.dataset, &body.task_id);
+    let outcome = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pads::put_problem(&conn, &body)
+    })
+    .await?;
+    if let PutOutcome::Written(ref row) = outcome {
+        mirror_problem_board(row);
+    }
+    map_put(outcome)
+}
+
+pub async fn tombstone_problem(
+    UrlPath((dataset, task_id)): UrlPath<(String, String)>,
+    Json(body): Json<SeqBody>,
+) -> Result<Json<ApplyAck>, AppError> {
+    delete_kind(PadKind::Problem, problem_id(&dataset, &task_id), body.seq).await
+}
+
 async fn delete_kind(kind: PadKind, id: String, seq: i64) -> Result<Json<ApplyAck>, AppError> {
     let (ack, hash) = blocking(move || {
         let conn = pads::open(&pads::db_path()?)?;
@@ -186,23 +241,25 @@ pub struct PadSyncPing {
     pub now: i64,
     pub whiteboard: Vec<WhiteboardPad>,
     pub annotate: Vec<AnnotatePad>,
+    pub problem: Vec<ProblemPad>,
     pub snapshots: Vec<SnapshotRow>,
     pub gone: Vec<GoneRow>,
 }
 
-/// Periodic ping: saved whiteboards, annotated files, and rolling snapshots
-/// whose `updated_at` / `written_at` / tombstone is newer than `since`.
+/// Periodic ping: saved whiteboards, annotated files, problem canvases, and
+/// rolling snapshots whose stamp is newer than `since`.
 pub async fn sync_pads(Query(query): Query<SyncQuery>) -> Result<Json<PadSyncPing>, AppError> {
     let since = query.since;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    let (whiteboard, annotate, snapshots, gone) = blocking(move || {
+    let (whiteboard, annotate, problem, snapshots, gone) = blocking(move || {
         let conn = pads::open(&pads::db_path()?)?;
         Ok((
             pads::list_changed_whiteboard(&conn, since)?,
             pads::list_changed_annotate(&conn, since)?,
+            pads::list_changed_problem(&conn, since)?,
             pads::list_changed_snapshots(&conn, since)?,
             pads::list_changed_gone(&conn, since)?,
         ))
@@ -212,6 +269,7 @@ pub async fn sync_pads(Query(query): Query<SyncQuery>) -> Result<Json<PadSyncPin
         now,
         whiteboard,
         annotate,
+        problem,
         snapshots,
         gone,
     }))

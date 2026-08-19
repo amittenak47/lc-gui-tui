@@ -8,6 +8,7 @@ import type {
   AnnotatePadDto,
   LcClient,
   PadSnapshotDto,
+  ProblemPadDto,
   WhiteboardPadDto,
 } from "../api/client";
 import { LcApiError as ApiError } from "../api/client";
@@ -35,6 +36,13 @@ import {
   type PadSnapshot,
   type PadSnapshotKind,
 } from "./padSnapshotStore";
+import {
+  deleteProblemBoard,
+  getProblemBoard,
+  markProblemHubAck,
+  putProblemBoard,
+  type ProblemBoardRecord,
+} from "./problemBoardStore";
 import {
   deleteWhiteboardNotebook,
   getWhiteboardNotebook,
@@ -69,11 +77,18 @@ function emitPadHub(detail: PadHubWindowDetail): void {
   window.dispatchEvent(new CustomEvent(PAD_HUB_WINDOW_EVENT, { detail }));
 }
 
-export type PadKindSync = "whiteboard" | "annotate";
+function splitProblemPadId(id: string): { dataset: string; taskId: string } | null {
+  const slash = id.indexOf("/");
+  if (slash <= 0 || slash === id.length - 1) return null;
+  return { dataset: id.slice(0, slash), taskId: id.slice(slash + 1) };
+}
+
+export type PadKindSync = "whiteboard" | "annotate" | "problem";
 
 export type PadSyncJobInput =
   | { op: "putWhiteboard"; body: WhiteboardPadDto }
   | { op: "putAnnotate"; body: AnnotatePadDto }
+  | { op: "putProblem"; body: ProblemPadDto }
   | { op: "putSnapshot"; body: PadSnapshotDto }
   | { op: "putBytes"; hash: string; bytes: ArrayBuffer }
   | { op: "deletePad"; kind: PadKindSync; padId: string; seq: number }
@@ -120,6 +135,9 @@ export async function enqueuePadSync(job: PadSyncJobInput): Promise<void> {
   if (job.op === "putAnnotate") {
     await dropMatching((entry) => entry.op === "putAnnotate" && entry.body.id === job.body.id);
   }
+  if (job.op === "putProblem") {
+    await dropMatching((entry) => entry.op === "putProblem" && entry.body.id === job.body.id);
+  }
   if (job.op === "deletePad") {
     await dropMatching(
       (entry) => entry.op === "deletePad" && entry.kind === job.kind && entry.padId === job.padId,
@@ -144,6 +162,7 @@ async function dropPadPayloadJobs(kind: PadKindSync, padId: string): Promise<voi
   await dropMatching((job) => {
     if (kind === "whiteboard" && job.op === "putWhiteboard") return job.body.id === padId;
     if (kind === "annotate" && job.op === "putAnnotate") return job.body.id === padId;
+    if (kind === "problem" && job.op === "putProblem") return job.body.id === padId;
     if (job.op === "putSnapshot") {
       return job.body.key === padId && kindOfSnap(job.body.kind) === kind;
     }
@@ -152,11 +171,13 @@ async function dropPadPayloadJobs(kind: PadKindSync, padId: string): Promise<voi
 }
 
 function padIsTrashed(kind: PadKindSync, padId: string): boolean {
+  if (kind === "problem") return false;
   if (kind === "whiteboard") return listWhiteboardTrash().some((row) => row.id === padId);
   return listAnnotateTrash().some((row) => row.id === padId);
 }
 
 function padIsLive(kind: PadKindSync, padId: string): boolean {
+  if (kind === "problem") return false;
   if (kind === "whiteboard") return listWhiteboardNotebooks().some((row) => row.id === padId);
   return listAnnotateDocs().some((row) => row.id === padId);
 }
@@ -242,6 +263,7 @@ async function applyLivePutFailure(
 ): Promise<boolean> {
   if (isGoneStatus(cause)) {
     await dropPadPayloadJobs(kind, padId);
+    if (kind === "problem") await deleteProblemBoard(padId).catch(() => {});
     emitPadHub({ kind, id: padId, op: "close" });
     return true;
   }
@@ -249,8 +271,10 @@ async function applyLivePutFailure(
   const body = errorJson(cause);
   if (kind === "whiteboard") {
     await applyHubWhiteboard(body, { emitReload: true });
-  } else {
+  } else if (kind === "annotate") {
     await applyHubAnnotate(body, { emitReload: true });
+  } else {
+    await applyHubProblem(body, { emitReload: true });
   }
   await dropPadPayloadJobs(kind, padId);
   return true;
@@ -307,6 +331,28 @@ async function applyHubAnnotate(
   return true;
 }
 
+async function applyHubProblem(
+  raw: unknown,
+  opts: { emitReload: boolean },
+): Promise<boolean> {
+  if (!raw || typeof raw !== "object") return false;
+  const row = raw as ProblemPadDto;
+  if (typeof row.id !== "string" || !row.board) return false;
+  await putProblemBoard({
+    id: row.id,
+    dataset: row.dataset,
+    taskId: row.task_id,
+    updatedAt: row.updated_at,
+    syncSeq: row.sync_seq,
+    hubAckUpdatedAt: row.updated_at,
+    board: row.board as BoardBlob,
+    agent: Array.isArray(row.agent) ? row.agent : [],
+  });
+  markProblemHubAck(row.id, row.updated_at);
+  if (opts.emitReload) emitPadHub({ kind: "problem", id: row.id, op: "reload" });
+  return true;
+}
+
 export async function pushWhiteboardPad(
   client: LcClient,
   notebook: WhiteboardNotebook,
@@ -353,6 +399,31 @@ export async function pushAnnotatePad(client: LcClient, doc: AnnotateDoc): Promi
   } catch (cause) {
     if (await applyLivePutFailure("annotate", doc.id, cause)) return false;
     await enqueuePadSync({ op: "putAnnotate", body });
+    return false;
+  }
+}
+
+export async function pushProblemPad(
+  client: LcClient,
+  row: ProblemBoardRecord,
+): Promise<boolean> {
+  const body: ProblemPadDto = {
+    id: row.id,
+    dataset: row.dataset,
+    task_id: row.taskId,
+    updated_at: row.updatedAt,
+    sync_seq: row.syncSeq ?? 0,
+    base_updated_at: row.hubAckUpdatedAt ?? 0,
+    board: row.board,
+    agent: row.agent ?? [],
+  };
+  try {
+    const written = await client.putProblemPad(row.dataset, row.taskId, body);
+    markProblemHubAck(row.id, written.updated_at ?? row.updatedAt);
+    return true;
+  } catch (cause) {
+    if (await applyLivePutFailure("problem", row.id, cause)) return false;
+    await enqueuePadSync({ op: "putProblem", body });
     return false;
   }
 }
@@ -408,7 +479,7 @@ export async function pushPadSnapshot(client: LcClient, snap: PadSnapshot): Prom
   }
 }
 
-function kindOfSnap(kind: string): PadKindSync {
+function kindOfSnap(kind: string): PadSnapshotKind {
   return kind === "annotate" ? "annotate" : "whiteboard";
 }
 
@@ -441,6 +512,11 @@ export async function deletePadEverywhere(
   padId: string,
   _localDelete?: () => Promise<void>,
 ): Promise<void> {
+  if (kind === "problem") {
+    await dropPadPayloadJobs(kind, padId);
+    await sendDeletePad(client, kind, padId, 0);
+    return;
+  }
   await ensureTrashQueueRoom({ kind, padId });
   const seq =
     kind === "whiteboard"
@@ -456,6 +532,7 @@ export async function restoreTrashedPad(
   kind: PadKindSync,
   padId: string,
 ): Promise<void> {
+  if (kind === "problem") return;
   await dropMatching(
     (job) => job.op === "deletePad" && job.kind === kind && job.padId === padId,
   );
@@ -480,6 +557,17 @@ async function sendDeletePad(
   await dropMatching(
     (job) => job.op === "deletePad" && job.kind === kind && job.padId === padId,
   );
+  if (kind === "problem") {
+    const parts = splitProblemPadId(padId);
+    if (!parts) return;
+    try {
+      await client.tombstoneProblemPad(parts.dataset, parts.taskId, seq);
+      await deleteProblemBoard(padId);
+    } catch {
+      await enqueuePadSync({ op: "deletePad", kind, padId, seq });
+    }
+    return;
+  }
   await ensureTrashQueueRoom({ kind, padId });
   try {
     const ack =
@@ -497,6 +585,7 @@ function applyDeleteAck(
   padId: string,
   ack: { applied?: boolean } | void,
 ): void {
+  if (kind === "problem") return;
   if (!ack || typeof ack !== "object") {
     if (kind === "whiteboard") markWhiteboardDeleteAcked(padId, true);
     else markAnnotateDeleteAcked(padId, true);
@@ -535,6 +624,9 @@ export async function flushPadSyncQueue(client: LcClient): Promise<void> {
       } else if (job.op === "putAnnotate") {
         const written = await client.putAnnotatePad(job.body.id, job.body);
         markAnnotateHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
+      } else if (job.op === "putProblem") {
+        const written = await client.putProblemPad(job.body.dataset, job.body.task_id, job.body);
+        markProblemHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
       } else if (job.op === "putSnapshot") {
         if (!liveAckMatchesStore(kindOfSnap(job.body.kind), job.body.key)) {
           await dropJob(job.id);
@@ -547,11 +639,19 @@ export async function flushPadSyncQueue(client: LcClient): Promise<void> {
       } else if (job.op === "putBytes") await client.putDocBytes(job.hash, job.bytes);
       else if (job.op === "deletePad") {
         await dropPadPayloadJobs(job.kind, job.padId);
-        const ack =
-          job.kind === "whiteboard"
-            ? await client.tombstoneWhiteboardPad(job.padId, job.seq)
-            : await client.tombstoneAnnotatePad(job.padId, job.seq);
-        applyDeleteAck(job.kind, job.padId, ack);
+        if (job.kind === "problem") {
+          const parts = splitProblemPadId(job.padId);
+          if (parts) {
+            await client.tombstoneProblemPad(parts.dataset, parts.taskId, job.seq);
+            await deleteProblemBoard(job.padId);
+          }
+        } else {
+          const ack =
+            job.kind === "whiteboard"
+              ? await client.tombstoneWhiteboardPad(job.padId, job.seq)
+              : await client.tombstoneAnnotatePad(job.padId, job.seq);
+          applyDeleteAck(job.kind, job.padId, ack);
+        }
       } else if (job.op === "restorePad") {
         await pushRestoreAllFour(client, job.kind, job.padId, job.seq);
       }
@@ -564,6 +664,11 @@ export async function flushPadSyncQueue(client: LcClient): Promise<void> {
         }
       } else if (job.op === "putAnnotate") {
         if (await applyLivePutFailure("annotate", job.body.id, cause)) {
+          await dropJob(job.id);
+          continue;
+        }
+      } else if (job.op === "putProblem") {
+        if (await applyLivePutFailure("problem", job.body.id, cause)) {
           await dropJob(job.id);
           continue;
         }
@@ -583,6 +688,7 @@ async function pushRestoreAllFour(
   padId: string,
   seq: number,
 ): Promise<void> {
+  if (kind === "problem") return;
   if (kind === "whiteboard") {
     const notebook = await getWhiteboardNotebook(padId);
     if (!notebook) return;
@@ -725,7 +831,8 @@ export async function applyPadSyncPing(
   const trashAn = new Set(listAnnotateTrash().map((row) => row.id));
 
   for (const gone of ping.gone ?? []) {
-    const kind = gone.kind === "annotate" ? "annotate" : "whiteboard";
+    const kind: PadKindSync =
+      gone.kind === "annotate" ? "annotate" : gone.kind === "problem" ? "problem" : "whiteboard";
     await dropPadPayloadJobs(kind, gone.id);
     if (emit) emitPadHub({ kind, id: gone.id, op: "close" });
     if (gone.kind === "whiteboard") {
@@ -742,6 +849,8 @@ export async function applyPadSyncPing(
         continue;
       }
       await deleteAnnotateDoc(gone.id).catch(() => {});
+    } else if (gone.kind === "problem") {
+      await deleteProblemBoard(gone.id).catch(() => {});
     }
   }
 
@@ -781,6 +890,21 @@ export async function applyPadSyncPing(
         if (bytes && bytes.byteLength > 0) await putDocBytes(row.hash, bytes);
       }
     }
+  }
+
+  for (const row of ping.problem ?? []) {
+    if (pendingDelete.has(`problem:${row.id}`)) continue;
+    const local = await getProblemBoard(row.id);
+    const stale =
+      !local ||
+      boardLooksCorrupt(local.board) ||
+      row.updated_at > local.updatedAt;
+    if (!stale) {
+      markProblemHubAck(row.id, row.updated_at);
+      continue;
+    }
+    await dropPadPayloadJobs("problem", row.id);
+    await applyHubProblem(row, { emitReload: emit });
   }
 
   for (const row of ping.snapshots) {

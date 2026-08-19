@@ -31,7 +31,7 @@ export const LEGACY_DB_NAME = "lc.docs";
  * `onupgradeneeded` is additive and guarded per store, so an existing database
  * gains the new stores and keeps everything already in `bytes`.
  */
-export const DB_VERSION = 6;
+export const DB_VERSION = 7;
 
 /** Binary documents — PDF and EPUB bytes, keyed by content hash. */
 export const STORE_BYTES = "bytes";
@@ -43,8 +43,10 @@ export const STORE_SNAPSHOTS = "snapshots";
 export const STORE_INK_PAGES = "ink_pages";
 /** Quiet dual-write jobs that could not reach the harness. */
 export const STORE_SYNC_QUEUE = "pad_sync_queue";
-/** Offline coding-problem boards waiting to merge on reconnect. */
+/** Offline coding-problem boards (legacy queue). */
 export const STORE_OFFLINE_BOARDS = "offline_boards";
+/** Live practice canvases keyed by `{dataset}/{taskId}`. */
+export const STORE_PROBLEM_BOARDS = "problem_boards";
 /**
  * Explicit links between workspaces — see `noteLinks`. Keyed by edge id.
  *
@@ -76,6 +78,9 @@ export function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_SYNC_QUEUE)) db.createObjectStore(STORE_SYNC_QUEUE);
       if (!db.objectStoreNames.contains(STORE_OFFLINE_BOARDS)) {
         db.createObjectStore(STORE_OFFLINE_BOARDS);
+      }
+      if (!db.objectStoreNames.contains(STORE_PROBLEM_BOARDS)) {
+        db.createObjectStore(STORE_PROBLEM_BOARDS);
       }
       if (!db.objectStoreNames.contains(STORE_LINKS)) db.createObjectStore(STORE_LINKS);
     };

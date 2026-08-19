@@ -1562,37 +1562,6 @@ export function SettingsModal({
                 ))}
               </div>
 
-              <div className="lc-settings-subhead">Offline ↔ online boards</div>
-              <p className="lc-settings-hint">
-                When the tablet reconnects after working offline, how should local and server
-                copies of the same problem board be reconciled? Saved on this device only.
-              </p>
-              <div className="lc-settings-choice" role="radiogroup" aria-label="Offline merge policy">
-                {(
-                  [
-                    ["ask", "Ask each time", "Show a chooser when both sides have work."],
-                    ["prefer-local", "Prefer this device", "Keep the tablet copy; overwrite the server."],
-                    ["prefer-server", "Prefer the server", "Keep the PC copy; discard local edits."],
-                  ] as const
-                ).map(([id, label, hint]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    role="radio"
-                    aria-checked={offlineMerge === id}
-                    className={
-                      offlineMerge === id
-                        ? "lc-settings-choice-option is-active"
-                        : "lc-settings-choice-option"
-                    }
-                    onClick={() => setOfflineMerge(id)}
-                  >
-                    <strong>{label}</strong>
-                    <span className="lc-muted">{hint}</span>
-                  </button>
-                ))}
-              </div>
-
               <div className="lc-settings-subhead">Storage on this device</div>
               <p className="lc-settings-hint">
                 Annotated documents, whiteboard notebooks, board images and any offline

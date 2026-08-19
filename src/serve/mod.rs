@@ -170,6 +170,14 @@ pub fn router(state: Shared) -> Router {
             post(routes::tombstone_annotate),
         )
         .route("/pads/annotate/:id/restore", post(routes::restore_annotate))
+        .route(
+            "/pads/problem/:dataset/:task_id",
+            get(routes::get_problem_pad).put(routes::put_problem),
+        )
+        .route(
+            "/pads/problem/:dataset/:task_id/tombstone",
+            post(routes::tombstone_problem),
+        )
         .route("/pads/snapshots", put(routes::put_snapshot))
         .route("/pads/snapshots/:kind/:key", get(routes::get_snapshots))
         .route("/pads/sync", get(routes::sync_pads))
