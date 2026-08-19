@@ -1,12 +1,12 @@
 # Build both sideloadable debug APKs on every push to main (and on manual run).
 #
-# This is a Tauri 2 Android app under `app/` — not a root Gradle project.
+# This is a Tauri 2 Android app under `app/`, not a root Gradle project.
 #
 # Two flavors, one matrix:
 #
 #   Practice          everything, including the Practice card and the
-#                     RustPython judge. aarch64 only — rustpython 0.5 does not
-#                     compile for 32-bit Android.
+#                     RustPython judge. aarch64 only, because rustpython 0.5
+#                     does not compile for 32-bit Android.
 #   Whiteboard-only   no Practice, no RustPython. Needs both the Vite flag and
 #                     `--no-default-features`; the wrapper script sets both.
 #
@@ -40,8 +40,8 @@ jobs:
     timeout-minutes: 90
 
     strategy:
-      # One flavor failing should not cancel the other — a Practice-only break
-      # (RustPython, the judge) says nothing about the Whiteboard-only build.
+      # One flavor failing should not cancel the other. A Practice-only break
+      # in RustPython or the judge says nothing about the Whiteboard-only build.
       fail-fast: false
       matrix:
         include:
@@ -72,9 +72,9 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # CI pins r26d. A local tablet build may be on NDK 29 — that is fine and
-      # the two produce equivalent APKs, but if a build fails here and not on
-      # your machine (or the reverse), the NDK gap is the first thing to check.
+      # CI pins r26d. A local tablet build may be on NDK 29. Both produce
+      # equivalent APKs, but if a build fails here and not on your machine, or
+      # the reverse, check the NDK gap first.
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk
@@ -98,7 +98,7 @@ jobs:
         with:
           workspaces: app/src-tauri -> target
           # The two flavors differ by cargo features, so they must not share a
-          # cache entry — one would keep restoring the other's artifacts.
+          # cache entry, or one keeps restoring the other's artifacts.
           key: ${{ matrix.flavor }}
 
       # Gradle BuildTask.kt invokes `cargo tauri …`; the npm CLI alone is not enough.
@@ -133,7 +133,7 @@ jobs:
             if [ -f "$candidate" ]; then APK="$candidate"; break; fi
           done
           if [ -z "$APK" ]; then
-            echo "No APK at either expected path — searching $OUT …"
+            echo "No APK at either expected path. Searching $OUT"
             find "$OUT" -name '*.apk' -print || true
             exit 1
           fi

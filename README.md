@@ -4,8 +4,8 @@
 
 # Whiteboard
 
-Handwrite your way through a problem on a tablet — sketch the approach, mark up a
-PDF, or think on a blank page — with an agent reading the board over your
+Handwrite your way through a problem on a tablet. Sketch the approach, mark up a
+PDF, or think on a blank page, with an agent reading the board over your
 shoulder.
 
 **Tested on:** XPPen Magic Note Pad (MNP1095), Android 14 (API 34). APK built with Android NDK **29.0.13846066**.
@@ -25,21 +25,20 @@ The app is free. Feel free to tip if you like it. Most of my repo is lazy docume
 The terminal UI (`lc`) is still on an earlier build. Its agent endpoints need
 updating now that the GUI has moved on. Planned, in rough order:
 
-1. **TUI agent chat** — the same Review / Ask / Draw pipeline the GUI has.
-   Today the TUI's chat is a single blocking text card.
-2. **Open the canvas from the TUI** — "Open in Canvas" currently just prints a
-   status. It should launch the desktop window on the current workspace, with
-   the board and the agent but not Annotate or Browse.
-3. **TUI corpora from `corpora-v1`** — the TUI still wants
-   `scripts/fetch_dataset.py` plus `whiteboard index`. The GUI already installs
-   datasets from the GitHub release; the TUI should use the same source.
-4. **"Coach" becomes "Agent" everywhere you can see it** — the TUI menu, the
-   board region, the "Coach LLM offline" notice. Config keys and HTTP routes
-   stay as they are.
+1. **TUI agent chat.** The same Review / Ask / Draw pipeline the GUI has. Today
+   the TUI chat is one blocking text card.
+2. **Open the canvas from the TUI.** "Open in Canvas" prints a status and
+   nothing else. It should launch the desktop window on the current workspace,
+   with the board and the agent but no Annotate or Browse.
+3. **TUI corpora from `corpora-v1`.** The TUI still wants
+   `scripts/fetch_dataset.py` and `whiteboard index`. The GUI installs datasets
+   from the GitHub release. The TUI should use the same source.
+4. **"Coach" becomes "Agent" in the visible strings.** The TUI menu, the board
+   region, the "Coach LLM offline" notice. Config keys and HTTP routes stay put.
 
-Not planned for the TUI: tabs and split panes, PDF annotation, web browsing,
-and the notebook library internals. Those are canvas features and the terminal
-is the wrong shape for them.
+Not planned for the TUI: tabs and split panes, PDF annotation, web browsing, and
+the notebook library internals. Those are canvas features and the terminal is
+the wrong shape for them.
 
 ---
 
@@ -47,8 +46,8 @@ is the wrong shape for them.
 
 Two ways in, sharing one engine.
 
-**The canvas app** (tablet or desktop) is the main one. Four things you can
-open, each in its own tab:
+**The canvas app** runs on a tablet or a desktop and is the main one. Four
+things you can open, each in its own tab:
 
 | | |
 | --- | --- |
@@ -57,13 +56,13 @@ open, each in its own tab:
 | **Browse** | Open a web page, then write straight onto the snapshot. |
 | **Practice** | Pick a problem, work it out by hand, run the tests. |
 
-**The terminal UI** (`lc`) is a keyboard-driven version of Practice alone —
-browse the problem sets, generate a workspace, run tests, ask for a hint. See
+**The terminal UI** (`lc`) is a keyboard-driven version of Practice alone. Browse
+the problem sets, generate a workspace, run tests, ask for a hint. See
 [Upcoming](#upcoming) for where it stands.
 
-Problems come from **local JSON corpora** you install yourself. Nothing is
-fetched from a judge site, and the agent never sees the reference solution that
-ships with a dataset — it works from your board and the sample cases only.
+Problems come from local JSON corpora you install yourself. Nothing is fetched
+from a judge site, and the agent never sees the reference solution that ships
+with a dataset. It works from your board and the sample cases.
 
 ---
 
@@ -73,7 +72,7 @@ Two APKs. Same app, one difference.
 
 | Build | You get | Left out |
 | --- | --- | --- |
-| **Practice** *(default)* | Whiteboard, Annotate, Browse, Agent, **and Practice with its test runner** | — |
+| **Practice** *(default)* | Whiteboard, Annotate, Browse, Agent, and Practice with its test runner | nothing |
 | **Whiteboard-only** | Whiteboard, Annotate, Browse, Agent | Practice, and the Python engine that runs tests |
 
 Take **Practice** unless you want a smaller app and know you will never run a
@@ -92,20 +91,20 @@ then install the other one.
 
 ## Install
 
-### Android — no build tools
+### Android, no build tools
 
 [Releases](https://github.com/amittenak47/lc-gui-tui/releases) → the newest
 version tag → download `whiteboard-practice-debug.apk` or
 `whiteboard-only-debug.apk` → open it on the tablet and allow installs from
 unknown apps.
 
-Or, for the newest build of `main` rather than the newest release: the
-[Actions tab](https://github.com/amittenak47/lc-gui-tui/actions) → the latest
-**Build Android APK** run → **Artifacts**.
+For the newest build of `main` rather than the newest release, go to the
+[Actions tab](https://github.com/amittenak47/lc-gui-tui/actions), open the latest
+**Build Android APK** run, and take the APK from **Artifacts**.
 
-### Android — building it yourself
+### Android, building it yourself
 
-Needs the Android SDK, an NDK, and JDK 17+. First run generates
+You need the Android SDK, an NDK, and JDK 17+. The first run generates
 `app/src-tauri/gen/android`, which is not in git.
 
 ```cmd
@@ -120,8 +119,8 @@ app\scripts\android-install-whiteboard.cmd <your-device-serial>
 ./app/scripts/android-install-whiteboard.sh <device-serial>
 ```
 
-Both scripts build the APK and `adb install -r` it. PATH, NDK, and driver
-troubleshooting: [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md).
+Both scripts build the APK and `adb install -r` it. For PATH, NDK, and driver
+trouble, see [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md).
 
 ### Desktop
 
@@ -131,9 +130,9 @@ npm install
 npm run tauri dev
 ```
 
-For the Whiteboard-only desktop window, both flags have to be set together —
-the Vite flag hides the Practice card, the Cargo flag leaves the test engine
-out of the binary:
+The Whiteboard-only desktop window needs both flags together. The Vite flag
+hides the Practice card, the Cargo flag leaves the test engine out of the
+binary.
 
 ```bash
 # Linux / macOS
@@ -160,13 +159,12 @@ lc                       # or: lc tui
 
 ## Problem sets are a separate download
 
-The APK does not contain any problems — it would be several times the size if
-it did. Datasets are installed from inside the app:
-
-**Settings → Datasets → Install**, which pulls from the
+The APK contains no problems. It would be several times the size if it did.
+Datasets install from inside the app, under **Settings → Datasets → Install**,
+which pulls from the
 [`corpora-v1`](https://github.com/amittenak47/lc-gui-tui/releases/tag/corpora-v1)
 release. That tag is permanent and separate from app releases, so updating the
-app does not disturb your datasets and vice versa.
+app leaves your datasets alone and vice versa.
 
 Until you install one, Practice opens to an empty table. Everything else works
 without it.
@@ -174,14 +172,14 @@ without it.
 | Set | Source | What you get |
 | --- | --- | --- |
 | `leetcode` *(default)* | [newfacade/LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) | ~2.9k Python LeetCode problems |
-| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | Large synthetic set — **Complete** style only |
+| `kodcode` | [KodCode/KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) | Large synthetic set, **Complete** style only |
 | `ms-python-q` | [morganstanley/sft-python-q-problems](https://huggingface.co/datasets/morganstanley/sft-python-q-problems) | Structured `test_cases` |
 | `deepseek-leetcode` | [davidheineman/deepseek-leetcode](https://huggingface.co/datasets/davidheineman/deepseek-leetcode) | DeepSeek contest benchmark |
 | `leetcode-with-tests` | [kr4t0n/leetcode-with-tests](https://huggingface.co/datasets/kr4t0n/leetcode-with-tests) | Community pack with pytest-style checks |
 
 Your pass/fail marks survive removing and reinstalling a set.
 
-For the TUI, which does not use `corpora-v1` yet, fetch and index by hand:
+The TUI does not use `corpora-v1` yet, so fetch and index by hand:
 
 ```bash
 pip install -U huggingface_hub pyarrow
@@ -194,16 +192,16 @@ whiteboard index
 
 ## Pointing it at a model
 
-**Settings → LLM**, in the app. It talks to anything OpenAI-compatible —
-llama.cpp, Ollama, LM Studio, vLLM — or to Groq.
+**Settings → LLM**, in the app. It talks to anything OpenAI-compatible, so
+llama.cpp, Ollama, LM Studio and vLLM all work, as does Groq.
 
 `localhost` in that box means the machine the app is running on. On a tablet
-that is the tablet, so a model running on your PC needs the PC's address (or
-something like Tailscale), not `localhost`.
+that is the tablet, so a model running on your PC needs the PC's address, or
+something like Tailscale. Not `localhost`.
 
-On desktop, environment variables win over whatever is in Settings:
-`GROQ_API_KEY`, `OPENAI_API_KEY`, `LC_LOCAL_API_KEY`. On Android there are no
-env vars, so Settings is the only route.
+On desktop, environment variables beat whatever is in Settings: `GROQ_API_KEY`,
+`OPENAI_API_KEY`, `LC_LOCAL_API_KEY`. Android has no env vars, so Settings is
+the only route there.
 
 From the CLI:
 
@@ -220,28 +218,31 @@ whiteboard config path        # where config.toml lives
 
 Draw your approach, then tap **Submit**.
 
-- **Review** — reads the board, says what it thinks your approach is, and
-  checks it against the real sample cases. You get a verdict, what is strong,
-  what is missing, and a question back. When it is wrong, it names the specific
-  case that breaks it rather than saying "this fails on edge cases".
-- **Draw it** — answers with a diagram instead of a paragraph. Multi-step
-  traces get a scrubber.
-- **Reveal** — a stepwise path onward from where you actually are. You have to
-  ask for it and confirm, it never dumps a solution, and it is recorded.
-- **Lazy** — turns a board you have justified into `solution.py`, implementing
-  the parts you earned and stubbing the rest.
+**Review** reads the board, says what it thinks your approach is, and checks it
+against the real sample cases. You get a verdict, what is strong, what is
+missing, and a question back. When it thinks you are wrong it names the case
+that breaks you rather than saying "this fails on edge cases".
 
-Review arrives in stages — reading the board, naming the approach, checking the
-cases — rather than in one silent lump. It also holds **one approach per
-board**: most problems admit several, and an agent that quietly switches
-between them ends up arguing with itself. If your board changes enough to
-change the answer, it says so and says why.
+**Draw it** answers with a diagram instead of a paragraph. Multi-step traces get
+a scrubber.
 
-Two extras are off until you turn them on in **Settings → AI Behavior**: a
-**planner** (worth pointing at a larger model) that works out which approach
-families a problem admits before the local agent reads your board, and a
-**diagram check** that looks at each rendered diagram and redraws it once if the
-picture does not show what it claims.
+**Reveal** gives a stepwise path onward from where you actually are. You have to
+ask for it and confirm, it never dumps a solution, and it goes in the record.
+
+**Lazy** turns a board you have justified into `solution.py`, implementing the
+parts you earned and stubbing the rest.
+
+Review arrives in stages, so you watch it read the board, name the approach, and
+check the cases, rather than waiting for one silent lump. It also holds one
+approach per board. Most problems admit several, and an agent that quietly
+switches between them ends up arguing with itself. If your board changes enough
+to change the answer, it says so and says why.
+
+Two extras stay off until you turn them on in **Settings → AI Behavior**. A
+planner works out which approach families a problem admits before the local
+agent reads your board, and is worth pointing at a larger model. A diagram check
+looks at each rendered diagram and redraws it once if the picture does not show
+what it claims.
 
 ---
 
@@ -259,7 +260,7 @@ lc
 | **G** | Cycle problem set |
 | **T** / **E** | Cycle tag / difficulty |
 | **O** | Cycle sort |
-| **Enter** | Actions — load workspace, open in editor, run tests, send to whiteboard |
+| **Enter** | Actions: load workspace, open in editor, run tests, send to whiteboard |
 | **Q** | Quit |
 
 ### Working in an editor instead
@@ -285,7 +286,7 @@ and tests.
 | `whiteboard datasets [--inspect]` | Problem sets and indexed counts |
 | `whiteboard search` / `whiteboard random` | Filter or pick (`--dataset`, `--difficulty`, `--tag`, `-q`, `--sort`) |
 | `whiteboard load <id> [--open] [--force]` | Generate a workspace; id = slug, question #, or prefix |
-| `whiteboard test [id] [--case N] [--full] [-v]` | Run tests — exits `0` when every case passes |
+| `whiteboard test [id] [--case N] [--full] [-v]` | Run tests, exits `0` when every case passes |
 | `whiteboard ask [id] [--case N] [--provider local\|groq]` | LLM debugging help |
 | `whiteboard stats` · `whiteboard session reset` · `whiteboard list …` | Progress, session, named lists |
 | `whiteboard config set/get/show/path` | Manage `config.toml` |
@@ -297,23 +298,22 @@ OS config directory named `lc`.
 
 ## Building, contributing, internals
 
-How the pieces fit together — the in-process router, where notebooks are
-stored, what syncs and what does not — is in
-[ARCHITECTURE.md](ARCHITECTURE.md). Android specifics are in
-[`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md), and the client's own
-notes are in [`app/README.md`](app/README.md).
+[ARCHITECTURE.md](ARCHITECTURE.md) covers how the pieces fit together: the
+in-process router, where notebooks are stored, what syncs and what does not.
+Android specifics live in [`app/docs/ANDROID_SETUP.md`](app/docs/ANDROID_SETUP.md),
+and the client's own notes in [`app/README.md`](app/README.md).
 
 ---
 
 ## License and references
 
-[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — free for personal, educational, and other noncommercial use; commercial use needs a separate license. See [LICENSE](LICENSE).
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0). Free for personal, educational, and other noncommercial use; commercial use needs a separate license. See [LICENSE](LICENSE).
 
-Problem corpus licensing is separate and differs per dataset: [LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) is Apache 2.0; [KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) is CC BY-NC 4.0 (non-commercial).
+Problem corpus licensing is separate and differs per dataset. [LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) is Apache 2.0; [KodCode-V1](https://huggingface.co/datasets/KodCode/KodCode-V1) is CC BY-NC 4.0, non-commercial.
 
 Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ### References
 
-- [ascii-morph](https://github.com/tholman/ascii-morph) (Tim Holman) — dissolve morph between ASCII stills; the TUI coach viz player is a Rust/ratatui take on that idea (`src/tui/ascii_morph.rs`)
-- [LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorrect) — editor companion for fixing code as you type
+- [ascii-morph](https://github.com/tholman/ascii-morph) by Tim Holman. Dissolve morph between ASCII stills; the TUI coach viz player is a Rust/ratatui take on that idea (`src/tui/ascii_morph.rs`).
+- [LLM Autocorrect](https://github.com/amittenak47/LLM-AutoCorrect). Editor companion for fixing code as you type.
