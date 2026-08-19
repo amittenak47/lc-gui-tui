@@ -175,6 +175,14 @@ whole integer is truly a single register.\n\
 matters. Pointers should name what they mean (`i`, `rev`, `num`). The scrubber and the chat \
 reply should agree on what each step shows.\n\
 - Every frame carries the FULL state at that step, not a diff.\n\
+- A frame's contents go in `cells` (array, grid, stack, queue, linkedlist, tree, heap, graph) or \
+in `entries` (a hashmap's [key, value] pairs, and edges elsewhere). `pointers` takes integer \
+INDICES only, and `label` / `note` are prose. A frame whose `cells` and `entries` are both empty \
+draws an empty box and is thrown away, however good its note is — this is the single most common \
+way a diagram is lost.\n\
+  Right: {\"label\": \"i=1\", \"cells\": [2,7,11,15], \"pointers\": {\"i\": 1}, \"note\": \"need = 2\"}.\n\
+  Wrong: {\"label\": \"i=1\", \"pointers\": {\"num\": 7, \"need\": 2}} — those are values, not \
+indices, and the frame draws nothing.\n\
 - Reuse the same `id` when you mean the same structure, so it is updated rather than duplicated.\n\
 - `cite_test_case` only accepts indices into the sample cases you were shown.\n\
 - Keep the prose reply short but specific: name what the diagram shows and what \

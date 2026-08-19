@@ -104,11 +104,32 @@ function normalizeFrame(raw: unknown): VizFrame | null {
   };
 }
 
-/** Render a cell value as board text. */
+/** Keys a model reaches for when it wraps a scalar it was asked to give bare. */
+const VALUE_KEYS = ["text", "value", "val", "label", "v", "key", "name"] as const;
+
+/**
+ * Render a cell value as board text.
+ *
+ * Cells are meant to be scalars, but models routinely wrap them — `[{"text":
+ * "2"}, {"text": "7"}]` instead of `[2, 7]`. Stringifying that draws
+ * `{"text":"2"}` inside the box, which is worse than useless on a student's
+ * board, so a single-valued wrapper is unwrapped rather than printed.
+ */
 export function cellText(value: unknown): string {
   if (value === null || value === undefined) return "·";
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    // One key, or one of the names above: that is the value, not a structure.
+    const named = VALUE_KEYS.find((key) => record[key] !== undefined);
+    const only = keys.length === 1 ? keys[0] : undefined;
+    const inner = named ?? only;
+    if (inner !== undefined && typeof record[inner] !== "object") {
+      return cellText(record[inner]);
+    }
+  }
   return JSON.stringify(value);
 }
 
@@ -122,10 +143,19 @@ export function entryPair(entry: unknown): [string, string] | null {
     const from = record.from ?? record.key ?? record.k;
     const to = record.to ?? record.value ?? record.v;
     if (from !== undefined && to !== undefined) return [cellText(from), cellText(to)];
+    // A wrapped pair — `{"text": "1 -> 0"}` — is the same wrapper habit that
+    // hits `cells`, and dropping it empties the whole map: every row of a
+    // nine-frame trace disappeared behind an "(empty map)" placeholder.
+    const unwrapped = cellText(entry);
+    if (unwrapped !== JSON.stringify(entry)) return entryPair(unwrapped);
   }
-  if (typeof entry === "string" && entry.includes("->")) {
-    const [from, to] = entry.split("->", 2);
-    return [from.trim(), to.trim()];
+  if (typeof entry === "string") {
+    for (const arrow of ["->", "→", "=>", ":"]) {
+      if (entry.includes(arrow)) {
+        const [from, to] = entry.split(arrow, 2);
+        return [from.trim(), to.trim()];
+      }
+    }
   }
   return null;
 }
