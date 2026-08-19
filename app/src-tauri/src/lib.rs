@@ -80,6 +80,7 @@ pub fn run() {
         lc_routes::lc_get_config,
         lc_routes::lc_put_config,
         lc_routes::lc_llm_status,
+        lc_routes::lc_llm_models,
         lc_routes::lc_llm_start,
         lc_routes::lc_llm_stop,
         lc_routes::lc_get_problem,

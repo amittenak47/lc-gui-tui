@@ -142,6 +142,8 @@ export interface LcConfig {
   /** Settings → Tests: stop at the first failing case instead of running all. */
   stop_on_first_failure: boolean;
   default_provider: string;
+  /** Folder of downloaded weights, scanned to offer a Local model list. */
+  models_dir: string;
   local: ProviderConfig;
   ollama: ProviderConfig;
   openai: ProviderConfig;
@@ -173,6 +175,32 @@ export type LcConfigPut = LcConfig & {
   openai_api_key?: string;
   groq_api_key?: string;
 };
+
+/** One model a provider could be pointed at. Mirrors `src/llm/catalog.rs`. */
+export interface ModelEntry {
+  id: string;
+  /** `server` = the endpoint listed it; `disk` = found in the models folder. */
+  source: "server" | "disk";
+  /**
+   * Present only when the server said so. Absent means "not reported", which
+   * is not the same as "no" — the flag stays the reader's to set.
+   */
+  advertises_vision?: boolean;
+  /** A projector file sits beside these weights. Evidence, not a capability. */
+  has_mmproj?: boolean;
+  size_bytes?: number;
+  path?: string;
+}
+
+export interface ModelCatalog {
+  provider: string;
+  base_url: string;
+  models_dir: string;
+  server_reachable: boolean;
+  models: ModelEntry[];
+  /** Why the list is short, in the reader's terms. Never an error. */
+  notes: string[];
+}
 
 /** Settings → Coach. Mirrors `CoachConfig` in `src/config.rs`. */
 export interface CoachFlags {

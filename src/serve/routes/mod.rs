@@ -22,7 +22,7 @@ pub use attempt::{
     FinishAttemptBody,
 };
 pub use config::{
-    get_config, llm_start, llm_status, llm_stop, put_config, ConfigDto, ModesConfigDto,
+    get_config, llm_start, llm_models, llm_status, llm_stop, put_config, ConfigDto, ModesConfigDto,
     ProviderConfigDto,
 };
 pub use docs::{

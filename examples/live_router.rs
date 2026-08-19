@@ -19,9 +19,12 @@ async fn main() -> Result<()> {
         .nth(1)
         .and_then(|a| a.parse().ok())
         .unwrap_or(7979);
+    // The router's auth is `AppState::token`, which `new_state` already leaves
+    // as `None`. Do NOT clear `cfg.serve.token` to get the same effect: a
+    // `PUT /config` through this router writes the loaded config back to disk,
+    // and clearing it here means testing the config route deletes the user's
+    // pad-hub pairing code.
     let mut cfg = Config::load()?;
-    // Loopback only, no pairing: the token exists for the LAN pad hub.
-    cfg.serve.token = None;
     // LC_CFG_SET="coach.planner_enabled=true,coach.draw_review_enabled=false"
     if let Ok(overrides) = std::env::var("LC_CFG_SET") {
         for pair in overrides.split(',').map(str::trim).filter(|p| !p.is_empty()) {

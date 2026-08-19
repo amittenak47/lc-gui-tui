@@ -332,6 +332,10 @@ pub struct LocalLlmConfig {
     /// send PNGs. Never inferred from the model name.
     #[serde(default)]
     pub vision: Option<bool>,
+    /// Folder of downloaded weights, scanned to offer a model list before the
+    /// server is up. A folder per model or a flat pile of `.gguf` both read.
+    #[serde(default)]
+    pub models_dir: String,
     /// Small embedding model. Empty → hashed bag-of-words fallback (no extra VRAM).
     #[serde(default)]
     pub embed_model: String,
@@ -347,6 +351,7 @@ impl Default for LocalLlmConfig {
             model: "qwen2.5-coder:7b".into(),
             vision_model: String::new(),
             vision: None,
+            models_dir: String::new(),
             embed_model: String::new(),
             embed_base_url: String::new(),
         }
@@ -562,6 +567,7 @@ impl Config {
             "llm.local.model" => self.llm.local.model = value.to_string(),
             "llm.local.vision_model" => self.llm.local.vision_model = value.to_string(),
             "llm.local.vision" => self.llm.local.vision = Some(parse_bool(value)?),
+            "llm.local.models_dir" => self.llm.local.models_dir = value.to_string(),
             "llm.local.embed_model" => self.llm.local.embed_model = value.to_string(),
             "llm.local.embed_base_url" => self.llm.local.embed_base_url = value.to_string(),
             "llm.ollama.base_url" => self.llm.ollama.base_url = value.to_string(),
@@ -597,7 +603,7 @@ impl Config {
             other => bail!(
                 "unknown config key {other:?}; known keys: data-dir, workspace, python, \
                  data.datasets.<{}>, tests.stop_on_first_failure, \
-                 llm.provider, llm.local.{{base_url,model,vision_model,vision,embed_model,embed_base_url}}, \
+                 llm.provider, llm.local.{{base_url,model,vision_model,vision,models_dir,embed_model,embed_base_url}}, \
                  llm.ollama.{{base_url,model,vision_model,vision}}, \
                  llm.openai.{{base_url,model,vision_model,vision,api_key}}, \
                  llm.groq.{{base_url,model,vision_model,vision,api_key}}, llm.modes.<{}>, serve.port, serve.token, serve.searxng_url, \
@@ -639,6 +645,7 @@ impl Config {
                 .vision
                 .map(|flag| flag.to_string())
                 .unwrap_or_default(),
+            "llm.local.models_dir" => self.llm.local.models_dir.clone(),
             "llm.local.embed_model" => self.llm.local.embed_model.clone(),
             "llm.local.embed_base_url" => self.llm.local.embed_base_url.clone(),
             "llm.ollama.base_url" => self.llm.ollama.base_url.clone(),
