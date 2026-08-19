@@ -201,6 +201,7 @@ import {
 import {
   deleteAnnotateDoc,
   annotateDocLabel,
+  setAnnotateDocLabel,
   findAnnotateDocByHash,
   findStaleAnnotateDoc,
   getAnnotateDocMeta,
@@ -223,6 +224,7 @@ import {
   getWhiteboardNotebook,
   listWhiteboardNotebooks,
   migrateLegacyWhiteboard,
+  renameWhiteboardNotebook,
   restoreWhiteboardNotebook,
   saveWhiteboardNotebook,
   WhiteboardLibraryFullError,
@@ -2270,6 +2272,24 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     },
     [client],
   );
+
+  /**
+   * Rename what a graph node stands for.
+   *
+   * The display name only. An annotate node renames its *set*, so the file on
+   * disk keeps its name and the hash does not move; a whiteboard renames its
+   * notebook. Practice, web and thread nodes are named by things this app does
+   * not own, so they decline rather than pretend.
+   */
+  const renameGraphNode = useCallback((node: NodeRef, title: string) => {
+    if (node.type === "annotate" || node.type === "web") {
+      setAnnotateDocLabel(node.id, title);
+      return;
+    }
+    if (node.type === "whiteboard") {
+      renameWhiteboardNotebook(node.id, title);
+    }
+  }, []);
 
   const addWorkspaceLink = useCallback(
     (to: NodeRef) => {
@@ -7209,6 +7229,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                   <ExploreWorkspace
                     nodes={[...exploreNodes, ...exploreExtra]}
                     here={hereNode}
+                    themeId={themeId}
+                    onThemePick={setThemeId}
+                    onUnlink={(edgeId) => void deleteEdge(edgeId)}
+                    onRename={(node, title) => renameGraphNode(node, title)}
                     onOpen={openLinkedNode}
                     onOpenInNewTab={openLinkedNode}
                     // Practice is one tab, so a second chip for a problem is
