@@ -249,20 +249,21 @@ import {
   pushAnnotatePad,
   pushDocBytes,
   pushRolledSnapshots,
+  pushProblemPad,
   pushWhiteboardPad,
   restoreTrashedPad,
   sweepPadTrash,
+  tombstonePad,
   type PadHubWindowDetail,
 } from "./util/padSync";
-import {
-  chooseOfflineMerge,
-  deleteOfflineBoard,
-  listOfflineBoards,
-  putOfflineBoard,
-} from "./util/offlineBoardStore";
-import { loadOfflineMergePolicy } from "./util/offlineMerge";
 import { ensureDevicePrefs } from "./util/devicePrefs";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
+import {
+  deleteProblemBoard,
+  getProblemBoard,
+  problemPadId,
+  putProblemBoard,
+} from "./util/problemBoardStore";
 import {
   getInkPages,
   annotateDocKey,
@@ -588,12 +589,6 @@ export function Workspace({
    */
   const [codeContentHeight, setCodeContentHeight] = useState<number | null>(null);
   const [whiteboardLibOpen, setWhiteboardLibOpen] = useState(false);
-  const [offlineMergeAsk, setOfflineMergeAsk] = useState<{
-    dataset: string;
-    taskId: string;
-    board: import("./canvas/BoardHandle").BoardBlob;
-    updatedAt: number;
-  } | null>(null);
   const whiteboardLibResumeRef = useRef<(() => void) | null>(null);
   /**
    * What the library held for this notebook when the session opened.
@@ -914,31 +909,6 @@ export function Workspace({
         await flushPadSyncQueue(client);
         if (cancelled) return;
         void ensureDevicePrefs(client).catch(() => {});
-        const pending = await listOfflineBoards();
-        const policy = loadOfflineMergePolicy();
-        for (const row of pending) {
-          if (cancelled) return;
-          let serverUpdated: number | null = null;
-          try {
-            const remote = await client.getBoard(row.taskId, row.dataset);
-            serverUpdated = remote.board ? 0 : null;
-          } catch {
-            serverUpdated = null;
-          }
-          const choice = chooseOfflineMerge(policy, row.updatedAt, serverUpdated);
-          const useLocal = async () => {
-            await client.putBoard(row.taskId, row.board, row.dataset);
-            await deleteOfflineBoard(row.dataset, row.taskId);
-          };
-          if (choice === "local") {
-            await useLocal().catch(() => {});
-          } else if (choice === "server") {
-            await deleteOfflineBoard(row.dataset, row.taskId);
-          } else {
-            setOfflineMergeAsk(row);
-            return;
-          }
-        }
       } catch {
         /* daemon missing the new routes — keep the local cache */
       }
@@ -977,6 +947,8 @@ export function Workspace({
   /** Home chooser vs today's problem browser when no board is open. */
   const [practiceOpen, setPracticeOpen] = useState(false);
   const [problem, setProblem] = useState<ProblemDetail | null>(null);
+  const problemRef = useRef<ProblemDetail | null>(null);
+  problemRef.current = problem;
   const [mode, setMode] = useState<Mode>("review");
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -1559,27 +1531,23 @@ export function Workspace({
         return;
       }
       const blob = board.saveBoard();
-      if (serverLinkRef.current !== "online") {
-        void putOfflineBoard({
+      void (async () => {
+        const padId = problemPadId(problem.dataset, problem.task_id);
+        const prev = await getProblemBoard(padId);
+        const row = {
+          id: padId,
           dataset: problem.dataset,
           taskId: problem.task_id,
-          board: blob,
           updatedAt: Date.now(),
-        }).then(() => {
-          lastSavedHashRef.current = hash;
-        }).catch(() => {});
-        return;
-      }
-      void client.putBoard(problem.task_id, blob, problem.dataset).then(() => {
+          syncSeq: prev?.syncSeq ?? 0,
+          hubAckUpdatedAt: prev?.hubAckUpdatedAt,
+          board: blob,
+          agent: persistableAgentMessages(agentMessages),
+        };
+        await putProblemBoard(row);
         lastSavedHashRef.current = hash;
-      }).catch(() => {
-        void putOfflineBoard({
-          dataset: problem.dataset,
-          taskId: problem.task_id,
-          board: blob,
-          updatedAt: Date.now(),
-        }).catch(() => {});
-      });
+        await pushProblemPad(client, row);
+      })().catch(() => {});
     }, autosaveMs);
     return () => window.clearInterval(timer);
   }, [
@@ -1704,8 +1672,38 @@ export function Workspace({
         } catch {
           // Fresh load — starter_code is fine.
         }
+        const padId = problemPadId(datasetId, taskId);
+        let livePad = await getProblemBoard(padId);
+        try {
+          const remote = await client.getProblemPad(datasetId, taskId);
+          if (remote?.board) {
+            const newer = !livePad || remote.updated_at > livePad.updatedAt;
+            if (newer) {
+              livePad = {
+                id: remote.id || padId,
+                dataset: remote.dataset || datasetId,
+                taskId: remote.task_id || taskId,
+                updatedAt: remote.updated_at,
+                syncSeq: remote.sync_seq,
+                hubAckUpdatedAt: remote.updated_at,
+                board: remote.board as import("./canvas/BoardHandle").BoardBlob,
+                agent: Array.isArray(remote.agent) ? remote.agent : [],
+              };
+              await putProblemBoard(livePad);
+            }
+          }
+        } catch {
+          /* first visit has no hub row yet */
+        }
         // A saved coach thread comes back with drawings attached to turns.
-        const resumedMessages = restoreAgentMessages(loaded.resume.agent_messages);
+        const liveAgent =
+          livePad && Array.isArray(livePad.agent) && livePad.agent.length > 0
+            ? restoreAgentMessages(livePad.agent)
+            : [];
+        const resumedMessages =
+          liveAgent.length > 0
+            ? liveAgent
+            : restoreAgentMessages(loaded.resume.agent_messages);
         if (resumedMessages.length > 0) setAgentMessages(resumedMessages);
 
         setPseudocode(source);
@@ -1729,7 +1727,7 @@ export function Workspace({
         });
         await refreshSession();
 
-        const saved = loaded.resume.board as
+        const resumeBoard = loaded.resume.board as
           | {
               v?: number;
               elements?: unknown[];
@@ -1739,6 +1737,11 @@ export function Workspace({
               inkPalettes?: import("./canvas/BoardHandle").BoardBlob["inkPalettes"];
             }
           | null;
+        const liveBoard = livePad?.board as typeof resumeBoard | undefined;
+        const saved =
+          liveBoard && liveBoard.v === 1 && Array.isArray(liveBoard.elements)
+            ? liveBoard
+            : resumeBoard;
         const hasSavedBoard =
           saved && saved.v === 1 && Array.isArray(saved.elements) && saved.elements.length > 0;
 
@@ -2800,6 +2803,25 @@ export function Workspace({
         if (detail.kind === "annotate" && annotateDocIdRef.current === detail.id) {
           closeTab(tab.id);
         }
+        if (detail.kind === "problem") {
+          const current = problemRef.current;
+          if (current && !isLocalPad(current) && problemPadId(current.dataset, current.task_id) === detail.id) {
+            closeTab(tab.id);
+          }
+        }
+        return;
+      }
+      if (detail.kind === "problem") {
+        const current = problemRef.current;
+        if (!current || isLocalPad(current)) return;
+        if (problemPadId(current.dataset, current.task_id) !== detail.id) return;
+        padHubApplyRef.current = true;
+        void loadProblem(current.task_id, { dataset: current.dataset }, {
+          tabId: tab.id,
+          userLoad: false,
+        }).finally(() => {
+          padHubApplyRef.current = false;
+        });
         return;
       }
       if (detail.kind === "whiteboard" && whiteboardNotebookIdRef.current !== detail.id) return;
@@ -2828,7 +2850,7 @@ export function Workspace({
     };
     window.addEventListener(PAD_HUB_WINDOW_EVENT, onHub);
     return () => window.removeEventListener(PAD_HUB_WINDOW_EVENT, onHub);
-  }, [closeTab, loadAnnotate, loadWhiteboard, tab.id]);
+  }, [closeTab, loadAnnotate, loadProblem, loadWhiteboard, tab.id]);
 
   /**
    * Write the annotation set out as a file the writer can keep.
@@ -6062,7 +6084,12 @@ export function Workspace({
             problem.task_id,
             { solved: attemptState?.solved ?? tests?.all_passed ?? false, save },
             problem.dataset,
-          );
+          ).then(async (outcome) => {
+            if (outcome.kept_layout) return;
+            const id = problemPadId(problem.dataset, problem.task_id);
+            await tombstonePad(client, "problem", id);
+            await deleteProblemBoard(id).catch(() => {});
+          });
         })();
 
         await dismissDialog();
@@ -7609,29 +7636,6 @@ export function Workspace({
             }}
           />
         )}
-
-      {offlineMergeAsk && (
-        <ConfirmDialog
-          title="Keep the tablet board or the PC board?"
-          message="This problem was edited while offline. Both copies exist."
-          detail="Hold Keep tablet to upload this device's ink. Cancel keeps the PC copy."
-          confirmLabel="Keep tablet"
-          cancelLabel="Keep PC"
-          onConfirm={() => {
-            const row = offlineMergeAsk;
-            setOfflineMergeAsk(null);
-            void client
-              .putBoard(row.taskId, row.board, row.dataset)
-              .then(() => deleteOfflineBoard(row.dataset, row.taskId))
-              .catch(() => {});
-          }}
-          onCancel={() => {
-            const row = offlineMergeAsk;
-            setOfflineMergeAsk(null);
-            if (row) void deleteOfflineBoard(row.dataset, row.taskId).catch(() => {});
-          }}
-        />
-      )}
 
       {resetOpen && (
         <ConfirmDialog

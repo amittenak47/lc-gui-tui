@@ -53,6 +53,15 @@ pub fn open(path: &Path) -> Result<Connection> {
             board_json TEXT NOT NULL,
             agent_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS problem (
+            id TEXT PRIMARY KEY,
+            dataset TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            board_json TEXT NOT NULL,
+            agent_json TEXT NOT NULL,
+            sync_seq INTEGER NOT NULL DEFAULT 0
+        );
         CREATE TABLE IF NOT EXISTS snapshots (
             kind TEXT NOT NULL,
             key TEXT NOT NULL,
@@ -84,6 +93,7 @@ pub fn open(path: &Path) -> Result<Connection> {
         );
         CREATE INDEX IF NOT EXISTS idx_whiteboard_live ON whiteboard(deleted_at, updated_at);
         CREATE INDEX IF NOT EXISTS idx_annotate_live ON annotate(deleted_at, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_problem_updated ON problem(updated_at);
         CREATE INDEX IF NOT EXISTS idx_revisions_pad ON revisions(kind, pad_id);
         CREATE INDEX IF NOT EXISTS idx_gone_at ON gone(gone_at);
         "#,
@@ -144,6 +154,7 @@ fn migrate_tombstones_to_gone(conn: &Connection) -> Result<()> {
 pub enum PadKind {
     Whiteboard,
     Annotate,
+    Problem,
 }
 
 impl PadKind {
@@ -151,6 +162,7 @@ impl PadKind {
         match self {
             Self::Whiteboard => "whiteboard",
             Self::Annotate => "annotate",
+            Self::Problem => "problem",
         }
     }
 }
@@ -193,6 +205,22 @@ pub struct AnnotatePad {
     pub source: String,
     #[serde(default)]
     pub footnotes: serde_json::Value,
+    pub board: serde_json::Value,
+    #[serde(default)]
+    pub agent: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProblemPad {
+    #[serde(default)]
+    pub id: String,
+    pub dataset: String,
+    pub task_id: String,
+    pub updated_at: i64,
+    #[serde(default, skip_serializing_if = "is_zero_seq")]
+    pub sync_seq: i64,
+    #[serde(default, skip_serializing)]
+    pub base_updated_at: Option<i64>,
     pub board: serde_json::Value,
     #[serde(default)]
     pub agent: serde_json::Value,
@@ -493,6 +521,7 @@ fn stored_seq(conn: &Connection, kind: PadKind, id: &str) -> Result<i64> {
     let live = match kind {
         PadKind::Whiteboard => read_whiteboard(conn, id)?.map(|row| row.sync_seq).unwrap_or(0),
         PadKind::Annotate => read_annotate(conn, id)?.map(|row| row.sync_seq).unwrap_or(0),
+        PadKind::Problem => read_problem(conn, id)?.map(|row| row.sync_seq).unwrap_or(0),
     };
     Ok(live.max(gone_seq(conn, kind, id)?))
 }
@@ -725,6 +754,138 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
     ))
 }
 
+pub fn get_problem(conn: &Connection, id: &str) -> Result<Option<ProblemPad>> {
+    read_problem(conn, id)
+}
+
+pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<ProblemPad>> {
+    let id = if pad.id.trim().is_empty() {
+        format!("{}/{}", pad.dataset.trim(), pad.task_id.trim())
+    } else {
+        pad.id.clone()
+    };
+    let mut pad = pad.clone();
+    pad.id = id;
+    if pad.dataset.is_empty() || pad.task_id.is_empty() {
+        if let Some((dataset, task_id)) = pad.id.split_once('/') {
+            if pad.dataset.is_empty() {
+                pad.dataset = dataset.to_string();
+            }
+            if pad.task_id.is_empty() {
+                pad.task_id = task_id.to_string();
+            }
+        }
+    }
+    let existing = read_problem(conn, &pad.id)?;
+    let gone = gone_seq(conn, PadKind::Problem, &pad.id)?;
+    if gone > 0 && pad.sync_seq <= gone {
+        return Ok(PutOutcome::Gone { seq: gone });
+    }
+    if pad.sync_seq > 0
+        && pad.sync_seq < existing.as_ref().map(|row| row.sync_seq).unwrap_or(0)
+    {
+        if let Some(stored) = existing {
+            return Ok(PutOutcome::Conflict(stored));
+        }
+    }
+    if let Some(stored) = existing.as_ref() {
+        if let Some(base) = pad.base_updated_at {
+            if base != stored.updated_at {
+                return Ok(PutOutcome::Conflict(stored.clone()));
+            }
+        } else if pad.updated_at < stored.updated_at {
+            return Ok(PutOutcome::Conflict(stored.clone()));
+        }
+        insert_revision(
+            conn,
+            "problem",
+            &stored.id,
+            stored.updated_at,
+            &serde_json::to_value(stored)?,
+        )?;
+    }
+
+    let next_seq = if pad.sync_seq > 0 {
+        pad.sync_seq
+    } else {
+        existing.as_ref().map(|row| row.sync_seq).unwrap_or(0)
+    };
+    if pad.sync_seq > gone {
+        clear_gone(conn, PadKind::Problem, &pad.id)?;
+    }
+
+    conn.execute(
+        "INSERT INTO problem (id, dataset, task_id, updated_at, board_json, agent_json, sync_seq)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET
+            dataset = excluded.dataset,
+            task_id = excluded.task_id,
+            updated_at = excluded.updated_at,
+            board_json = excluded.board_json,
+            agent_json = excluded.agent_json,
+            sync_seq = excluded.sync_seq",
+        params![
+            pad.id,
+            pad.dataset,
+            pad.task_id,
+            pad.updated_at,
+            json_text(&pad.board),
+            json_text(&pad.agent),
+            next_seq,
+        ],
+    )?;
+    Ok(PutOutcome::Written(
+        read_problem(conn, &pad.id)?.expect("just wrote"),
+    ))
+}
+
+fn read_problem(conn: &Connection, id: &str) -> Result<Option<ProblemPad>> {
+    let row = conn
+        .query_row(
+            "SELECT id, dataset, task_id, updated_at, board_json, agent_json, ifnull(sync_seq, 0)
+             FROM problem WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(ProblemPad {
+                    id: row.get(0)?,
+                    dataset: row.get(1)?,
+                    task_id: row.get(2)?,
+                    updated_at: row.get(3)?,
+                    board: parse_json(&row.get::<_, String>(4)?),
+                    agent: parse_json(&row.get::<_, String>(5)?),
+                    sync_seq: row.get(6)?,
+                    base_updated_at: None,
+                })
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
+fn map_problem_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProblemPad> {
+    Ok(ProblemPad {
+        id: row.get(0)?,
+        dataset: row.get(1)?,
+        task_id: row.get(2)?,
+        updated_at: row.get(3)?,
+        board: parse_json(&row.get::<_, String>(4)?),
+        agent: parse_json(&row.get::<_, String>(5)?),
+        sync_seq: row.get(6)?,
+        base_updated_at: None,
+    })
+}
+
+pub fn list_changed_problem(conn: &Connection, since: i64) -> Result<Vec<ProblemPad>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, dataset, task_id, updated_at, board_json, agent_json, ifnull(sync_seq, 0)
+         FROM problem
+         WHERE updated_at > ?1
+         ORDER BY updated_at DESC",
+    )?;
+    let rows = stmt.query_map(params![since], map_problem_row)?;
+    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
 /// Compat: bump seq and hard-delete. Prefer [`delete_pad`] with an explicit seq.
 pub fn tombstone(conn: &Connection, kind: PadKind, id: &str) -> Result<bool> {
     let seq = stored_seq(conn, kind, id)?.saturating_add(1).max(1);
@@ -732,6 +893,9 @@ pub fn tombstone(conn: &Connection, kind: PadKind, id: &str) -> Result<bool> {
 }
 
 pub fn restore(conn: &Connection, kind: PadKind, id: &str) -> Result<PutOutcome<()>> {
+    if kind == PadKind::Problem {
+        anyhow::bail!("problem pads are not archived");
+    }
     let table = kind.as_str();
     let found: Option<Option<i64>> = conn
         .query_row(
@@ -752,6 +916,7 @@ pub fn restore(conn: &Connection, kind: PadKind, id: &str) -> Result<PutOutcome<
     let cap = match kind {
         PadKind::Whiteboard => WHITEBOARD_LIVE_CAP,
         PadKind::Annotate => ANNOTATE_LIVE_CAP,
+        PadKind::Problem => 0,
     };
     if live_count(conn, table)? >= cap {
         return Ok(PutOutcome::LiveCap {
@@ -1002,6 +1167,20 @@ mod tests {
             source: "# hi".into(),
             footnotes: json!([{"id": "f1", "kind": "ai"}]),
             board: json!({"v": 1, "elements": []}),
+            agent: json!([]),
+        }
+    }
+
+    fn pb(id: &str, updated_at: i64) -> ProblemPad {
+        let (dataset, task_id) = id.split_once('/').unwrap();
+        ProblemPad {
+            id: id.into(),
+            dataset: dataset.into(),
+            task_id: task_id.into(),
+            updated_at,
+            sync_seq: 0,
+            base_updated_at: None,
+            board: json!({"v": 1, "elements": [{"id": "ink"}]}),
             agent: json!([]),
         }
     }
@@ -1415,6 +1594,30 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(get_whiteboard(&conn, "w1").unwrap().unwrap().updated_at, 100);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn problem_cas_mismatch_keeps_hub() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        let first = pb("leetcode/two-sum", 100);
+        match put_problem(&conn, &first).unwrap() {
+            PutOutcome::Written(row) => assert_eq!(row.updated_at, 100),
+            other => panic!("{other:?}"),
+        }
+        let mut stale = pb("leetcode/two-sum", 999);
+        stale.base_updated_at = Some(1);
+        match put_problem(&conn, &stale).unwrap() {
+            PutOutcome::Conflict(row) => assert_eq!(row.updated_at, 100),
+            other => panic!("{other:?}"),
+        }
+        let mut ok = pb("leetcode/two-sum", 200);
+        ok.base_updated_at = Some(100);
+        match put_problem(&conn, &ok).unwrap() {
+            PutOutcome::Written(row) => assert_eq!(row.updated_at, 200),
+            other => panic!("{other:?}"),
+        }
         let _ = std::fs::remove_file(path);
     }
 

@@ -661,6 +661,65 @@ pub async fn lc_restore_annotate(
 }
 
 #[tauri::command]
+pub async fn lc_get_problem_pad(
+    state: State<'_, Shared>,
+    dataset: String,
+    task_id: String,
+) -> Result<LcResponse, String> {
+    go(
+        state,
+        "GET",
+        format!(
+            "/pads/problem/{}/{}",
+            enc(&dataset),
+            enc(&task_id)
+        ),
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn lc_put_problem(
+    state: State<'_, Shared>,
+    dataset: String,
+    task_id: String,
+    body: serde_json::Value,
+) -> Result<LcResponse, String> {
+    go(
+        state,
+        "PUT",
+        format!(
+            "/pads/problem/{}/{}",
+            enc(&dataset),
+            enc(&task_id)
+        ),
+        Some(body),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn lc_tombstone_problem(
+    state: State<'_, Shared>,
+    dataset: String,
+    task_id: String,
+    seq: Option<i64>,
+) -> Result<LcResponse, String> {
+    go(
+        state,
+        "POST",
+        format!(
+            "/pads/problem/{}/{}/tombstone",
+            enc(&dataset),
+            enc(&task_id)
+        ),
+        Some(json!({ "seq": seq.unwrap_or(0) })),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn lc_put_snapshot(
     state: State<'_, Shared>,
     body: serde_json::Value,

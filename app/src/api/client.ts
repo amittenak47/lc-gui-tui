@@ -194,10 +194,22 @@ export interface ApplyAckDto {
   seq: number;
 }
 
+export interface ProblemPadDto {
+  id: string;
+  dataset: string;
+  task_id: string;
+  updated_at: number;
+  sync_seq?: number;
+  base_updated_at?: number | null;
+  board: unknown;
+  agent: unknown;
+}
+
 export interface PadSyncPingDto {
   now: number;
   whiteboard: WhiteboardPadDto[];
   annotate: AnnotatePadDto[];
+  problem?: ProblemPadDto[];
   snapshots: PadSnapshotDto[];
   gone?: PadGoneDto[];
 }
@@ -641,6 +653,7 @@ export class LcClient {
       now: typeof body?.now === "number" ? body.now : Date.now(),
       whiteboard: Array.isArray(body?.whiteboard) ? body.whiteboard : [],
       annotate: Array.isArray(body?.annotate) ? body.annotate : [],
+      problem: Array.isArray(body?.problem) ? body.problem : [],
       snapshots: Array.isArray(body?.snapshots) ? body.snapshots : [],
       gone: Array.isArray(body?.gone) ? body.gone : [],
     };
@@ -727,6 +740,37 @@ export class LcClient {
       () => this.cmd("lc_restore_annotate", { id }),
       "POST",
       `/pads/annotate/${encodeURIComponent(id)}/restore`,
+    );
+  }
+
+  async getProblemPad(dataset: string, taskId: string): Promise<ProblemPadDto | null> {
+    try {
+      return await padInvokeOrHub(
+        () => this.cmd("lc_get_problem_pad", { dataset, task_id: taskId }),
+        "GET",
+        `/pads/problem/${encodeURIComponent(dataset)}/${encodeURIComponent(taskId)}`,
+      );
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 404) return null;
+      throw cause;
+    }
+  }
+
+  async putProblemPad(dataset: string, taskId: string, body: ProblemPadDto): Promise<ProblemPadDto> {
+    return padInvokeOrHub(
+      () => this.cmd("lc_put_problem", { dataset, task_id: taskId, body }),
+      "PUT",
+      `/pads/problem/${encodeURIComponent(dataset)}/${encodeURIComponent(taskId)}`,
+      body,
+    );
+  }
+
+  async tombstoneProblemPad(dataset: string, taskId: string, seq = 0): Promise<ApplyAckDto> {
+    return padInvokeOrHub(
+      () => this.cmd("lc_tombstone_problem", { dataset, task_id: taskId, seq }),
+      "POST",
+      `/pads/problem/${encodeURIComponent(dataset)}/${encodeURIComponent(taskId)}/tombstone`,
+      { seq },
     );
   }
 
