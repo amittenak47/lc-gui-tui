@@ -66,6 +66,7 @@ pub(crate) fn chat_completions_ex(
     if let Some(limit) = req.max_tokens {
         map.insert("max_tokens".into(), serde_json::json!(limit));
     }
+    crate::llm::reasoning::apply_thinking_request(map, base_url, req.reasoning);
 
     let value = post_chat(&client, &url, api_key, &body)?;
     let message = value

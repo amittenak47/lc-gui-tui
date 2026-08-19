@@ -616,6 +616,10 @@ pub struct AskRequest {
     /// Slash preset: `de_jargon` | `explain_math` | `analyze_methodology` | `reverse_engineer`.
     #[serde(default)]
     pub preset: Option<String>,
+    /// Ask the model to think out loud. Local servers get think-mode flags;
+    /// the full text lands in [`AskEnvelope::reasoning`] and a WS `reasoning` frame.
+    #[serde(default)]
+    pub reasoning: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -659,6 +663,13 @@ impl From<&crate::llm::coach::CoachEvent> for ProcessEventDto {
                 status: Some(status.as_str().to_string()),
                 ts,
             },
+            crate::llm::coach::CoachEvent::Reasoning { text } => Self {
+                kind: "reasoning".into(),
+                label: "reasoning".into(),
+                detail: Some(text.clone()),
+                status: None,
+                ts,
+            },
         }
     }
 }
@@ -668,6 +679,8 @@ pub struct AskEnvelope {
     pub task_id: String,
     pub provider: String,
     pub reply: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reasoning: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proposed_annotations: Vec<crate::llm::docs::ProposedAnnotation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -688,8 +701,31 @@ pub async fn ask(
         }
     });
     let mut envelope = run_ask(&state, request, events).await?;
-    envelope.process_events = bag.lock().map(|g| g.clone()).unwrap_or_default();
+    let (process, reasoning) = split_process_and_reasoning(&bag);
+    envelope.process_events = process;
+    envelope.reasoning = reasoning;
     Ok(Json(envelope))
+}
+
+fn split_process_and_reasoning(
+    bag: &std::sync::Mutex<Vec<ProcessEventDto>>,
+) -> (Vec<ProcessEventDto>, String) {
+    let all = bag.lock().map(|g| g.clone()).unwrap_or_default();
+    let mut reasoning = String::new();
+    let mut process = Vec::new();
+    for event in all {
+        if event.kind == "reasoning" {
+            if let Some(text) = event.detail.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                if !reasoning.is_empty() {
+                    reasoning.push_str("\n\n");
+                }
+                reasoning.push_str(text);
+            }
+        } else {
+            process.push(event);
+        }
+    }
+    (process, reasoning)
 }
 
 /// Ask without the HTTP wrapper — see [`run_review`] for why.
@@ -722,6 +758,7 @@ pub async fn run_ask(
     let page_text = request.page_text.clone();
     let marks_prose = request.marks_prose.clone();
     let preset = request.preset.clone();
+    let want_reasoning = request.reasoning;
     let local_pad = surface.is_pad();
     let dataset = if local_pad {
         None
@@ -825,28 +862,32 @@ pub async fn run_ask(
                 images,
                 &ask_ctx,
                 &events,
+                want_reasoning,
             )?;
             events.stage("done", "");
             return Ok(AskEnvelope {
                 task_id: meta.task_id,
                 provider: provider.label(),
                 reply,
+                reasoning: String::new(),
                 proposed_annotations: proposed,
                 process_events: Vec::new(),
             });
         }
-        let reply = provider.chat_ex(&ChatRequest::new(vec![
-            ChatMessage::system(ASK_SYSTEM_PROMPT),
-            ChatMessage::user(prompt).with_images(images),
-        ]))?;
-        for step in crate::llm::reasoning::split_steps(&reply.reasoning) {
-            events.stage("reason", step);
-        }
+        let reply = provider.chat_ex(
+            &ChatRequest::new(vec![
+                ChatMessage::system(ASK_SYSTEM_PROMPT),
+                ChatMessage::user(prompt).with_images(images),
+            ])
+            .with_reasoning(want_reasoning),
+        )?;
+        events.emit_reasoning(&reply.reasoning);
         events.stage("done", "");
         Ok(AskEnvelope {
             task_id: meta.task_id,
             provider: provider.label(),
             reply: reply.content.trim().to_string(),
+            reasoning: String::new(),
             proposed_annotations: Vec::new(),
             process_events: Vec::new(),
         })

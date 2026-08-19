@@ -50,6 +50,8 @@ pub enum CoachEvent {
         summary: String,
         reason: Option<String>,
     },
+    /// Full chain-of-thought for the reasoning fold — not chopped into steps.
+    Reasoning { text: String },
 }
 
 type Handler = dyn Fn(CoachEvent) + Send + Sync;
@@ -140,6 +142,29 @@ impl EventSink {
             reason,
         });
     }
+
+    pub fn reasoning(&self, text: impl Into<String>) {
+        if self.handler.is_none() {
+            return;
+        }
+        let text = text.into();
+        if text.trim().is_empty() {
+            return;
+        }
+        self.emit(CoachEvent::Reasoning { text });
+    }
+
+    /// Full reasoning for the fold, then chopped `reason` steps for the process list.
+    pub fn emit_reasoning(&self, reasoning: &str) {
+        let text = reasoning.trim();
+        if text.is_empty() {
+            return;
+        }
+        self.reasoning(text);
+        for step in crate::llm::reasoning::split_steps(text) {
+            self.stage("reason", step);
+        }
+    }
 }
 
 /// Stage names the client knows how to label. Kept here so the server and the
@@ -187,6 +212,7 @@ mod tests {
                 CoachEvent::Tool { name, status, .. } => {
                     format!("tool:{name}:{}", status.as_str())
                 }
+                CoachEvent::Reasoning { .. } => "reasoning".into(),
             };
             recorder.lock().unwrap().push(line);
         });

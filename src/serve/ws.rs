@@ -138,6 +138,11 @@ pub enum ServerFrame {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// Full model thinking for the chat reasoning fold.
+    Reasoning {
+        request_id: String,
+        text: String,
+    },
     /// The finished run. `body` is the same envelope `POST /coach/<action>`
     /// returns, unchanged.
     Result {
@@ -469,6 +474,10 @@ fn run_event_sink(outgoing: UnboundedSender<ServerFrame>, request_id: String) ->
                 summary,
                 reason,
             },
+            CoachEvent::Reasoning { text } => ServerFrame::Reasoning {
+                request_id: request_id.clone(),
+                text,
+            },
         };
         // A closed receiver means the socket is gone; the cancel flag is what
         // actually stops the run, so dropping the frame here is right.
@@ -746,6 +755,13 @@ mod tests {
         });
         assert_eq!(tool["status"], "rejected");
         assert_eq!(tool["reason"], "no frames");
+
+        let thinking = json(&ServerFrame::Reasoning {
+            request_id: "r-1".into(),
+            text: "I look at the highlight.".into(),
+        });
+        assert_eq!(thinking["type"], "reasoning");
+        assert_eq!(thinking["text"], "I look at the highlight.");
 
         let result = json(&ServerFrame::Result {
             request_id: "r-1".into(),

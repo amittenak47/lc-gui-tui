@@ -76,7 +76,7 @@ import { AttemptDialog } from "./modes/AttemptDialog";
 import { WhiteboardDialog } from "./modes/WhiteboardDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { groupThreads, threadAnchorRef, visibleThreadMessages } from "./modes/coachThreads";
-import { loadTestForwardMode, type TestForwardMode } from "./util/agentPrefs";
+import { loadAgentReasoning, loadTestForwardMode, type TestForwardMode } from "./util/agentPrefs";
 import {
   AGENT_SHEET_LOCK_EVENT,
   loadAgentSheetLock,
@@ -3741,6 +3741,22 @@ export function Workspace({
     );
   }, []);
 
+  const appendReasoning = useCallback((messageId: string, chunk: string) => {
+    const text = chunk.trim();
+    if (!text) return;
+    setAgentMessages((current) =>
+      current.map((message) => {
+        if (message.id !== messageId) return message;
+        const prior = message.reasoning?.trim() ?? "";
+        if (prior === text || prior.endsWith(text)) return message;
+        return {
+          ...message,
+          reasoning: prior ? `${prior}\n\n${text}` : text,
+        };
+      }),
+    );
+  }, []);
+
   /**
    * Finish a placeholder turn.
    *
@@ -3766,7 +3782,12 @@ export function Workspace({
           role: "assistant",
           at: Date.now(),
           ...(placeholder.replyTo ? { replyTo: placeholder.replyTo } : {}),
-          ...(offset === 0 ? { processEvents: placeholder.processEvents } : {}),
+          ...(offset === 0
+            ? {
+                processEvents: placeholder.processEvents,
+                ...(placeholder.reasoning ? { reasoning: placeholder.reasoning } : {}),
+              }
+            : {}),
           ...part,
         }));
         const next = [...current.slice(0, index), ...built, ...current.slice(index + 1)];
@@ -3800,6 +3821,9 @@ export function Workspace({
           onProcess: (event) => {
             if (messageId && coachFlags.process_events_ui) appendProcessEvent(messageId, event);
           },
+          onReasoning: (text) => {
+            if (messageId) appendReasoning(messageId, text);
+          },
         });
       } catch (cause) {
         // A daemon that predates run frames, or a socket that dropped, should
@@ -3808,7 +3832,7 @@ export function Workspace({
         throw cause;
       }
     },
-    [coachFlags.ws_runs, coachFlags.process_events_ui, appendProcessEvent],
+    [coachFlags.ws_runs, coachFlags.process_events_ui, appendProcessEvent, appendReasoning],
   );
 
   const pushCoachMessage = useCallback(
@@ -4340,7 +4364,7 @@ export function Workspace({
       threadAnchor?: CoachReplyRef | null,
       photos?: CoachAttachment[],
       pendingAck?: CoachPendingAck,
-      docAsk?: { preset?: string | null; highlight?: string },
+      docAsk?: { preset?: string | null; highlight?: string; reasoning?: boolean },
     ) => {
       const note = question.trim();
       if (!problem || !note) {
@@ -4406,6 +4430,7 @@ export function Workspace({
                 dataset: problem.dataset,
                 question: asked,
                 ...(images.length > 0 ? { images } : {}),
+                ...(docAsk?.reasoning ? { reasoning: true } : {}),
               }
             : {
                 surface,
@@ -4413,9 +4438,11 @@ export function Workspace({
                 question: asked,
                 ...(images.length > 0 ? { images } : {}),
                 ...docExtras,
+                ...(docAsk?.reasoning ? { reasoning: true } : {}),
               };
         const result = await runCoachJob<{
           reply: string;
+          reasoning?: string;
           proposed_annotations?: ProposedAnnotation[];
           process_events?: Array<{
             kind: string;
@@ -4435,12 +4462,17 @@ export function Workspace({
               ...(surface === "problem" ? { dataset: problem.dataset } : {}),
               ...(images.length > 0 ? { images } : {}),
               ...docExtras,
+              ...(docAsk?.reasoning ? { reasoning: true } : {}),
             }),
         );
         if (coachRunGenRef.current !== genAtStart) return;
         finished = true;
         const reply = (result.reply ?? "").trim();
         for (const ev of result.process_events ?? []) {
+          if (ev.kind === "reasoning" || ev.label === "reasoning") {
+            appendReasoning(turnId, ev.detail ?? "");
+            continue;
+          }
           const status =
             ev.status === "proposed" || ev.status === "accepted" || ev.status === "rejected"
               ? ev.status
@@ -4454,7 +4486,10 @@ export function Workspace({
           });
         }
         finishCoachTurn(turnId, [
-          { content: reply || "The model returned an empty reply." },
+          {
+            content: reply || "The model returned an empty reply.",
+            ...(result.reasoning?.trim() ? { reasoning: result.reasoning.trim() } : {}),
+          },
         ]);
         applyProposedAnnotations(result.proposed_annotations ?? []);
       } catch (cause) {
@@ -4476,7 +4511,7 @@ export function Workspace({
         if (coachSendDepthRef.current === 0) drainCoachSendQueueRef.current();
       }
     },
-    [applyProposedAnnotations, client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob, appendProcessEvent],
+    [applyProposedAnnotations, client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob, appendProcessEvent, appendReasoning],
   );
 
   /** `runTests` fires this and is defined above it — see the auto-forward. */
@@ -4500,6 +4535,7 @@ export function Workspace({
             lazy: false,
             handwriting: requestedFlags.handwriting,
             annotations: requestedFlags.annotations,
+            reasoning: requestedFlags.reasoning,
             ...(requestedFlags.photos ? { photos: requestedFlags.photos } : {}),
             ...(requestedFlags.pageQuote ? { pageQuote: requestedFlags.pageQuote } : {}),
             ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}),
@@ -4517,6 +4553,7 @@ export function Workspace({
       flags.ask ? "Ask" : null,
       flags.handwriting ? "Handwriting" : null,
       flags.annotations ? "Annotations" : null,
+      flags.reasoning ? "Reasoning" : null,
       flags.reviewBoard ? "Review" : null,
       flags.draw ? "Draw" : null,
       flags.lazy ? "Lazy" : null,
@@ -4847,6 +4884,7 @@ export function Workspace({
             {
               preset: flags.askPreset,
               highlight: quotedPassage,
+              reasoning: flags.reasoning,
             },
           );
         }
@@ -5105,6 +5143,7 @@ export function Workspace({
         lazy: false,
         handwriting: false,
         annotations: false,
+        reasoning: loadAgentReasoning(),
         ...(footnote.excerpt ? { pageQuote: footnote.excerpt } : {}),
         ...(replyTo ? { replyTo } : {}),
         threadRootId,

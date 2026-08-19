@@ -66,7 +66,9 @@ export function ProcessBlock({
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [shownCount, setShownCount] = useState(0);
   const expanded = running || open;
-  const shown = events.filter((event) => event.label !== "done");
+  const shown = events.filter(
+    (event) => event.label !== "done" && event.kind !== "reasoning" && event.label !== "reasoning",
+  );
   useEffect(() => {
     if (running) {
       setShownCount(shown.length);

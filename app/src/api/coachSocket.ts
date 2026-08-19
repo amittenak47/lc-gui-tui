@@ -72,6 +72,7 @@ export function shouldAnalyze(
 /** Live progress for one interactive run, as its stages land. */
 export interface RunHandlers {
   onProcess?(event: CoachProcessEvent): void;
+  onReasoning?(text: string): void;
 }
 
 /** A run the client asked for and is still waiting on. */
@@ -451,6 +452,15 @@ export class AmbientCoach {
           status: frame.status,
           ts: Date.now(),
         });
+        return true;
+      }
+      case "reasoning": {
+        const run = this.pending.get(frame.request_id);
+        if (run) run.acked = true;
+        this.touch(frame.request_id);
+        if (frame.text?.trim()) {
+          this.pending.get(frame.request_id)?.handlers.onReasoning?.(frame.text);
+        }
         return true;
       }
       case "result": {
