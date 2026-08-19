@@ -5024,17 +5024,11 @@ body[data-lc-sash-drag="horizontal"] {
   overflow: hidden;
 }
 
-.lc-explore-canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
 .lc-explore-chrome {
   position: absolute;
   top: 12px;
   right: 12px;
-  z-index: 3;
+  z-index: 4;
 }
 
 .lc-explore-empty {
@@ -5048,133 +5042,239 @@ body[data-lc-sash-drag="horizontal"] {
   text-align: center;
 }
 
-.lc-explore-cluster-label {
-  fill: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+/*
+ * Edges are SVG because they are geometry. Nodes are HTML because they are
+ * cards, and drawing a card in SVG means reinventing border-radius, hairlines
+ * and type badly.
+ */
+.lc-explore-beams {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
+}
+
+.lc-explore-nodes {
+  position: absolute;
+  inset: 0;
+}
+
+/* A chip, not bare text: captions sit over beams and have to stay readable. */
+.lc-explore-cluster-label {
+  position: absolute;
+  z-index: 1;
+  transform: translate(-50%, -100%);
+  margin-top: -40px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ---- beams ---- */
+
+/*
+ * A link, drawn as a lit filament.
+ *
+ * Two passes over the same line: a coloured copy through one blur, then a
+ * thinner bright core over it, unblurred. Colour spills a little and the core
+ * stays sharp, so it reads as a lit wire rather than as a drawn stroke.
+ *
+ * Thin on purpose. A wide bloom turns a graph into a bundle of highlighter
+ * marks, and the thing being communicated is that two workspaces are
+ * connected, not how emphatically.
+ */
+.lc-explore-beam {
+  stroke-linecap: round;
   transition: opacity 200ms ease;
 }
 
+.lc-explore-beam-glow .lc-explore-beam {
+  stroke-width: 3.2;
+  opacity: 0.6;
+}
+
+.lc-explore-beam-core .lc-explore-beam {
+  stroke-width: 1;
+  opacity: 0.95;
+}
+
+.lc-explore-beam.is-dim {
+  opacity: 0.07;
+}
+
 /*
- * Each kind of edge draws differently, because they are different claims. A
- * line the reader typed and a line the app lifted off a footnote should not be
- * one stroke on the page that exists to explain the connections.
+ * Each kind gets a hue, and the core is that hue lifted most of the way to
+ * white. On a light theme a pure white core would vanish, so it keeps enough
+ * of its colour to stay a line.
  */
-.lc-explore-edge {
-  stroke: color-mix(in srgb, var(--chrome-edge) 90%, transparent);
-  stroke-width: 1.3;
-  transition: opacity 160ms ease;
+.lc-explore-beam-glow .is-wiki {
+  stroke: var(--accent);
+}
+.lc-explore-beam-core .is-wiki {
+  stroke: color-mix(in srgb, var(--accent) 34%, white);
 }
 
-.lc-explore-edge.is-wiki {
-  stroke: color-mix(in srgb, var(--accent) 62%, transparent);
+.lc-explore-beam-glow .is-picker {
+  stroke: #21a898;
+}
+.lc-explore-beam-core .is-picker {
+  stroke: color-mix(in srgb, #21a898 34%, white);
 }
 
-.lc-explore-edge.is-picker {
-  stroke: color-mix(in srgb, var(--accent) 48%, transparent);
-  stroke-dasharray: 4 4;
+.lc-explore-beam-glow .is-footnote-thread {
+  stroke: #8b5cf6;
+}
+.lc-explore-beam-core .is-footnote-thread {
+  stroke: color-mix(in srgb, #8b5cf6 34%, white);
 }
 
-.lc-explore-edge.is-footnote-thread {
-  stroke: color-mix(in srgb, #a78bfa 75%, transparent);
-  stroke-width: 2;
+.lc-explore-beam-glow .is-footnote-url {
+  stroke: #7c8798;
+}
+.lc-explore-beam-core .is-footnote-url {
+  stroke: color-mix(in srgb, #7c8798 34%, white);
 }
 
-.lc-explore-edge.is-footnote-url {
-  stroke: var(--muted);
-  stroke-dasharray: 2 5;
+.lc-explore-beam-glow .is-ink {
+  stroke: #ea8a2e;
+}
+.lc-explore-beam-core .is-ink {
+  stroke: color-mix(in srgb, #ea8a2e 34%, white);
 }
 
-.lc-explore-edge.is-ink {
-  stroke: color-mix(in srgb, #d98b3a 78%, transparent);
-  stroke-width: 1.9;
-  stroke-linecap: round;
-}
+/* ---- node dots ---- */
 
-.lc-explore-edge.is-dim {
-  opacity: 0.12;
-}
-
-/* ---- nodes ---- */
-
+/*
+ * A node is a dot with its name under it.
+ *
+ * The button is only a hit target and a layout anchor: it carries no border
+ * and no background, so the circle stays a circle at every zoom and the label
+ * can hang below without stretching it.
+ */
 .lc-explore-node {
-  transition: opacity 160ms ease;
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  /* The rAF loop owns `transform`; only paint properties transition. */
+  transition: opacity 200ms ease;
 }
 
 .lc-explore-node-dot {
-  fill: color-mix(in srgb, var(--surface) 92%, transparent);
-  stroke: var(--lc-node-tint, var(--muted));
-  stroke-width: 2;
-  cursor: pointer;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--lc-node-tint, var(--accent));
+  box-shadow:
+    0 0 0 3.5px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 16%, transparent),
+    0 0 10px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 45%, transparent);
   transition:
-    fill 140ms ease,
-    r 140ms ease,
-    stroke-width 140ms ease;
+    width 140ms ease,
+    height 140ms ease,
+    box-shadow 140ms ease;
 }
 
-.lc-explore-node:hover .lc-explore-node-dot {
-  r: 13;
-  fill: color-mix(in srgb, var(--lc-node-tint, var(--accent)) 18%, var(--surface));
+.lc-explore-node:hover .lc-explore-node-dot,
+.lc-explore-node:focus-visible .lc-explore-node-dot {
+  width: 16px;
+  height: 16px;
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 22%, transparent),
+    0 0 16px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 70%, transparent);
 }
 
-.lc-explore-node-dot:focus-visible {
+.lc-explore-node:focus-visible {
   outline: none;
-  stroke-width: 3.5;
-}
-
-/* A link points here and nothing answers. Dashed, so it does not read as real. */
-.lc-explore-node.is-missing .lc-explore-node-dot {
-  stroke-dasharray: 3 3;
-  opacity: 0.7;
 }
 
 .lc-explore-node.is-selected .lc-explore-node-dot {
-  fill: color-mix(in srgb, var(--lc-node-tint, var(--accent)) 34%, var(--surface));
-  stroke-width: 2.6;
+  width: 17px;
+  height: 17px;
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--surface) 90%, transparent),
+    0 0 0 6px var(--lc-node-tint, var(--accent)),
+    0 0 20px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 75%, transparent);
+}
+
+/* A link points here and nothing answers, so the dot is hollow. */
+.lc-explore-node.is-missing .lc-explore-node-dot {
+  background: transparent;
+  border: 1.5px dashed color-mix(in srgb, var(--muted) 75%, transparent);
+  box-shadow: none;
 }
 
 /* You are here: this node is a pad live in another pane. */
-.lc-explore-node-halo {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.4;
-  opacity: 0.5;
+.lc-explore-node.is-here .lc-explore-node-dot {
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent) 24%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .lc-explore-node-halo {
-    animation: lc-explore-halo 2.6s ease-in-out infinite;
+  .lc-explore-node.is-here .lc-explore-node-dot {
+    animation: lc-explore-here 2.8s ease-in-out infinite;
   }
 }
 
-@keyframes lc-explore-halo {
+@keyframes lc-explore-here {
   0%,
   100% {
-    opacity: 0.5;
-    stroke-width: 1.4;
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--accent) 24%, transparent),
+      0 0 18px color-mix(in srgb, var(--accent) 70%, transparent);
   }
   50% {
-    opacity: 0.16;
-    stroke-width: 2.6;
+    box-shadow:
+      0 0 0 9px color-mix(in srgb, var(--accent) 6%, transparent),
+      0 0 22px color-mix(in srgb, var(--accent) 40%, transparent);
   }
 }
 
 .lc-explore-node.is-dim {
-  opacity: 0.2;
+  opacity: 0.22;
 }
 
+/*
+ * The caption hangs below the dot rather than sitting in the button's flow,
+ * so a long title cannot stretch the circle or shift it off its position.
+ */
 .lc-explore-node-label {
-  fill: var(--muted);
-  font-size: 11.5px;
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 122px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   pointer-events: none;
 }
 
+.lc-explore-node:hover .lc-explore-node-label,
 .lc-explore-node.is-selected .lc-explore-node-label,
-.lc-explore-node.is-here .lc-explore-node-label,
-.lc-explore-node:hover .lc-explore-node-label {
-  fill: var(--ink);
+.lc-explore-node.is-here .lc-explore-node-label {
+  color: var(--ink);
 }
 
 /* ---- node sheet ---- */

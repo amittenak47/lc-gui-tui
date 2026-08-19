@@ -121,6 +121,18 @@ describe("step", () => {
     }
   });
 
+  it("gathers a kind tightly enough to read as a group", () => {
+    // Repulsion is sized for captions when loose. At that width it simply
+    // cancels the cluster pull and nothing visibly gathers, so clustering
+    // shrinks the gap it has to overcome.
+    const nodes = [note("a"), note("b"), note("c"), note("d")];
+    const tight = rest(nodes, true);
+    const cx = tight.reduce((sum, b) => sum + b.x, 0) / tight.length;
+    const cy = tight.reduce((sum, b) => sum + b.y, 0) / tight.length;
+    const furthest = Math.max(...tight.map((b) => Math.hypot(b.x - cx, b.y - cy)));
+    expect(furthest).toBeLessThan(0.22);
+  });
+
   it("gathers each kind when clustering is on", () => {
     const nodes = [note("a"), note("b"), note("c"), board("d"), board("e")];
     const loose = rest(nodes, false);
@@ -194,10 +206,25 @@ describe("clusterLabels", () => {
     expect(clusterLabels(list).map((row) => row.type)).toEqual(["annotate", "whiteboard"]);
   });
 
-  it("anchors a caption above its highest member", () => {
+  it("anchors a caption above its own members", () => {
     const list = rest([note("a"), note("b"), note("c")], true);
     const label = clusterLabels(list)[0]!;
-    expect(label.y).toBe(Math.min(...list.map((b) => b.y)));
+    expect(label.y).toBeLessThanOrEqual(Math.min(...list.map((b) => b.y)));
+  });
+
+  it("lifts a caption clear of another cluster's nodes", () => {
+    // "WEB" landed on top of a note that happened to sit there, which is worse
+    // than no caption. The caption walks up until its patch is free.
+    const list = rest([note("a"), note("b"), board("c"), board("d")], true);
+    for (const label of clusterLabels(list)) {
+      const clash = list.some(
+        (body) =>
+          body.node.type !== label.type &&
+          Math.abs(body.x - label.x) < 0.1 &&
+          Math.abs(body.y - label.y) < 0.045,
+      );
+      expect(clash).toBe(false);
+    }
   });
 
   it("has nothing to say about an empty canvas", () => {
