@@ -238,12 +238,15 @@ import {
   pullPads,
   flushPadSyncQueue,
   applyPadSyncPing,
+  PAD_HUB_WINDOW_EVENT,
   PAD_SYNC_PING_MS,
   pushAnnotatePad,
   pushDocBytes,
-  pushRecentSnapshots,
+  pushRolledSnapshots,
   pushWhiteboardPad,
-  restoreArchivedPad,
+  restoreTrashedPad,
+  sweepPadTrash,
+  type PadHubWindowDetail,
 } from "./util/padSync";
 import {
   chooseOfflineMerge,
@@ -559,6 +562,9 @@ export function Workspace({
   const [whiteboardPageIndex, setWhiteboardPageIndex] = useState(0);
   const [whiteboardPageCount, setWhiteboardPageCount] = useState(1);
   const [whiteboardNotebookId, setWhiteboardNotebookId] = useState<string | null>(null);
+  const whiteboardNotebookIdRef = useRef<string | null>(null);
+  whiteboardNotebookIdRef.current = whiteboardNotebookId;
+  const padHubApplyRef = useRef(false);
   const [whiteboardEntryOpen, setWhiteboardEntryOpen] = useState(false);
   /**
    * The pen owns the code page: the editor stops taking pointers so strokes
@@ -576,10 +582,6 @@ export function Workspace({
    */
   const [codeContentHeight, setCodeContentHeight] = useState<number | null>(null);
   const [whiteboardLibOpen, setWhiteboardLibOpen] = useState(false);
-  const [wbArchive, setWbArchive] = useState<
-    Array<{ id: string; title: string; updatedAt: number; pageCount: number }>
-  >([]);
-  const [anArchive, setAnArchive] = useState<AnnotateDocMeta[]>([]);
   const [offlineMergeAsk, setOfflineMergeAsk] = useState<{
     dataset: string;
     taskId: string;
@@ -837,6 +839,7 @@ export function Workspace({
    */
   useEffect(() => {
     void requestPersistentStorage();
+    void sweepPadTrash().catch(() => {});
     void drainDirtyInkArchives();
     /*
      * Bring hash-keyed ink and snapshots onto the sidecar id.
@@ -891,11 +894,11 @@ export function Workspace({
     let cancelled = false;
     void (async () => {
       try {
-        await flushPadSyncQueue(client);
+        await applyPadSyncPing(client).catch(() => {});
         if (cancelled) return;
         await pullPads(client);
         if (cancelled) return;
-        await applyPadSyncPing(client).catch(() => {});
+        await flushPadSyncQueue(client);
         if (cancelled) return;
         void ensureDevicePrefs(client).catch(() => {});
         const pending = await listOfflineBoards();
@@ -951,41 +954,6 @@ export function Workspace({
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [serverLink, client]);
-
-  useEffect(() => {
-    if (serverLink !== "online") return;
-    if (whiteboardEntryOpen) {
-      void client
-        .listWhiteboardArchive()
-        .then((rows) =>
-          setWbArchive(
-            rows.map((row) => ({
-              id: row.id,
-              title: row.title,
-              updatedAt: row.updated_at,
-              pageCount: row.page_count,
-            })),
-          ),
-        )
-        .catch(() => setWbArchive([]));
-    }
-    if (annotateEntryOpen) {
-      void client
-        .listAnnotateArchive()
-        .then((rows) =>
-          setAnArchive(
-            rows.map((row) => ({
-              id: row.id,
-              name: row.name,
-              hash: row.hash,
-              docType: (row.doc_type as AnnotateDocMeta["docType"]) || "markdown",
-              updatedAt: row.updated_at,
-            })),
-          ),
-        )
-        .catch(() => setAnArchive([]));
-    }
-  }, [serverLink, client, whiteboardEntryOpen, annotateEntryOpen]);
 
   /** Coach LLM reachability — separate from the harness router itself. */
 
@@ -1405,7 +1373,7 @@ export function Workspace({
     if (autosaveMs <= 0) return;
     const timer = window.setInterval(() => {
       const board = boardRef.current;
-      if (!board || boardSaveSuspendedRef.current) return;
+      if (!board || boardSaveSuspendedRef.current || padHubApplyRef.current) return;
       const elements = board.getElements();
       const inkOps = board.getInkOpCount();
       const hash = sceneFingerprint(elements, inkOps);
@@ -1500,16 +1468,18 @@ export function Workspace({
             });
             if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
             announceAutosave(tab.id, saved.name);
-            void pushAnnotatePad(client, saved);
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
-            void recordRollingSnapshots({
-              kind: "annotate",
-              key: saved.id,
-              name: saved.name,
-              board: snapBoard,
-              footnotes: saved.footnotes,
-              agent: saved.agent,
-            }).then(() => void pushRecentSnapshots(client, "annotate", saved.id));
+            void pushAnnotatePad(client, saved).then((ok) => {
+              if (!ok) return;
+              void recordRollingSnapshots({
+                kind: "annotate",
+                key: saved.id,
+                name: saved.name,
+                board: snapBoard,
+                footnotes: saved.footnotes,
+                agent: saved.agent,
+              }).then((written) => void pushRolledSnapshots(client, written));
+            });
           } catch (cause: unknown) {
             noteStorageFull(cause);
           }
@@ -1552,16 +1522,18 @@ export function Workspace({
             if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
             await flushDirtyInk(board, whiteboardDocKey(saved.id));
             announceAutosave(tab.id, saved.title);
-            void pushWhiteboardPad(client, saved);
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
-            void recordRollingSnapshots({
-              kind: "whiteboard",
-              key: saved.id,
-              name: saved.title,
-              board: snapBoard,
-              agent: saved.agent,
-              pageCount: saved.pageCount,
-            }).then(() => void pushRecentSnapshots(client, "whiteboard", saved.id));
+            void pushWhiteboardPad(client, saved).then((ok) => {
+              if (!ok) return;
+              void recordRollingSnapshots({
+                kind: "whiteboard",
+                key: saved.id,
+                name: saved.title,
+                board: snapBoard,
+                agent: saved.agent,
+                pageCount: saved.pageCount,
+              }).then((written) => void pushRolledSnapshots(client, written));
+            });
           } catch (cause: unknown) {
             if (cause instanceof WhiteboardLibraryFullError) {
               whiteboardLibResumeRef.current = null;
@@ -1940,6 +1912,7 @@ export function Workspace({
         setBoardPreparing(true);
       }
       try {
+        await applyPadSyncPing(client, { emit: false }).catch(() => {});
         await migrateLegacyWhiteboard(countWhiteboardPages);
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the coach sheet never paints mid-open.
@@ -2082,7 +2055,7 @@ export function Workspace({
         }
       }
     },
-    [beginPadOpen, busy, endPadOpen, finishLoadingTransition, openWorkspace, problem, setShellLoadActive, themeId],
+    [beginPadOpen, busy, client, endPadOpen, finishLoadingTransition, openWorkspace, problem, setShellLoadActive, themeId],
   );
 
   /**
@@ -2410,6 +2383,7 @@ export function Workspace({
       }
 
       try {
+        await applyPadSyncPing(client, { emit: false }).catch(() => {});
         const docType = input.docType ?? "markdown";
         const text = input.text ?? "";
         const bytes = input.bytes ?? null;
@@ -2801,6 +2775,47 @@ export function Workspace({
       themeId,
     ],
   );
+
+  useEffect(() => {
+    const onHub = (event: Event) => {
+      const detail = (event as CustomEvent<PadHubWindowDetail>).detail;
+      if (!detail) return;
+      if (detail.op === "close") {
+        if (detail.kind === "whiteboard" && whiteboardNotebookIdRef.current === detail.id) {
+          closeTab(tab.id);
+        }
+        if (detail.kind === "annotate" && annotateDocIdRef.current === detail.id) {
+          closeTab(tab.id);
+        }
+        return;
+      }
+      if (detail.kind === "whiteboard" && whiteboardNotebookIdRef.current !== detail.id) return;
+      if (detail.kind === "annotate" && annotateDocIdRef.current !== detail.id) return;
+      padHubApplyRef.current = true;
+      void (async () => {
+        try {
+          if (detail.kind === "whiteboard") {
+            await loadWhiteboard({ notebookId: detail.id, tabId: tab.id, userLoad: false });
+            return;
+          }
+          const doc = await getAnnotateDoc(detail.id);
+          if (!doc) return;
+          await loadAnnotate({
+            name: doc.name,
+            docType: doc.docType,
+            text: doc.source,
+            docId: doc.id,
+            tabId: tab.id,
+            userLoad: false,
+          });
+        } finally {
+          padHubApplyRef.current = false;
+        }
+      })();
+    };
+    window.addEventListener(PAD_HUB_WINDOW_EVENT, onHub);
+    return () => window.removeEventListener(PAD_HUB_WINDOW_EVENT, onHub);
+  }, [closeTab, loadAnnotate, loadWhiteboard, tab.id]);
 
   /**
    * Write the annotation set out as a file the writer can keep.
@@ -5570,16 +5585,18 @@ export function Workspace({
         await flushDirtyInk(board, whiteboardDocKey(saved.id));
         await rebaselineWhiteboardSession(saved.id);
         if (!opts?.quiet) setNotice(`Saved “${saved.title}”.`);
-        void pushWhiteboardPad(client, saved);
         const snapBoard = await boardWithAssembledInk(board, liveBoard);
-        void recordRollingSnapshots({
-          kind: "whiteboard",
-          key: saved.id,
-          name: saved.title,
-          board: snapBoard,
-          agent: saved.agent,
-          pageCount: saved.pageCount,
-        }).then(() => void pushRecentSnapshots(client, "whiteboard", saved.id));
+        void pushWhiteboardPad(client, saved).then((ok) => {
+          if (!ok) return;
+          void recordRollingSnapshots({
+            kind: "whiteboard",
+            key: saved.id,
+            name: saved.title,
+            board: snapBoard,
+            agent: saved.agent,
+            pageCount: saved.pageCount,
+          }).then((written) => void pushRolledSnapshots(client, written));
+        });
       } catch (cause) {
         if (cause instanceof WhiteboardLibraryFullError) {
           whiteboardLibResumeRef.current = onFull ?? null;
@@ -5716,16 +5733,18 @@ export function Workspace({
       );
       annotatePristineMarksRef.current = footnoteRevision(annotateFootnotes);
       annotatePristineAgentRef.current = JSON.stringify(persistableAgentMessages(agentMessages));
-      void pushAnnotatePad(client, saved);
       const snapBoard = await boardWithAssembledInk(board, blob);
-      void recordRollingSnapshots({
-        kind: "annotate",
-        key: saved.id,
-        name: saved.name,
-        board: snapBoard,
-        footnotes: saved.footnotes,
-        agent: saved.agent,
-      }).then(() => void pushRecentSnapshots(client, "annotate", saved.id));
+      void pushAnnotatePad(client, saved).then((ok) => {
+        if (!ok) return;
+        void recordRollingSnapshots({
+          kind: "annotate",
+          key: saved.id,
+          name: saved.name,
+          board: snapBoard,
+          footnotes: saved.footnotes,
+          agent: saved.agent,
+        }).then((written) => void pushRolledSnapshots(client, written));
+      });
       return saved;
     } catch (cause) {
       if (cause instanceof AnnotateLibraryFullError) {
@@ -5959,16 +5978,18 @@ export function Workspace({
                 setWhiteboardNotebookId(saved.id);
                 await flushDirtyInk(handle, whiteboardDocKey(saved.id));
                 await rebaselineWhiteboardSession(saved.id);
-                void pushWhiteboardPad(client, saved);
                 const snapBoard = await boardWithAssembledInk(handle, blob);
-                void recordRollingSnapshots({
-                  kind: "whiteboard",
-                  key: saved.id,
-                  name: saved.title,
-                  board: snapBoard,
-                  agent: saved.agent,
-                  pageCount: saved.pageCount,
-                }).then(() => void pushRecentSnapshots(client, "whiteboard", saved.id));
+                void pushWhiteboardPad(client, saved).then((ok) => {
+                  if (!ok) return;
+                  void recordRollingSnapshots({
+                    kind: "whiteboard",
+                    key: saved.id,
+                    name: saved.title,
+                    board: snapBoard,
+                    agent: saved.agent,
+                    pageCount: saved.pageCount,
+                  }).then((written) => void pushRolledSnapshots(client, written));
+                });
               } catch (cause) {
                 if (cause instanceof WhiteboardLibraryFullError) {
                   await dismissDialog();
@@ -7642,7 +7663,7 @@ export function Workspace({
           exiting={leavingPhase === "exit"}
           error={leavingError}
           onDelete={(id) =>
-            deletePadEverywhere(client, "whiteboard", id, () => deleteWhiteboardNotebook(id))
+            deletePadEverywhere(client, "whiteboard", id)
           }
           onChoose={(choice, notebookId) => {
             if (choice === "load" && notebookId) {
@@ -7670,7 +7691,7 @@ export function Workspace({
           exiting={leavingPhase === "exit"}
           error={leavingError}
           onDelete={(id) =>
-            deletePadEverywhere(client, "annotate", id, () => deleteAnnotateDoc(id))
+            deletePadEverywhere(client, "annotate", id)
           }
           onChoose={(choice) => void resolveLeave(choice === "save")}
           onCancel={() => {
@@ -7745,10 +7766,9 @@ export function Workspace({
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isAnnotate(problem))}
           snapshotKey={annotateDocId}
-          archived={anArchive}
-          onRestoreArchive={(id) => restoreArchivedPad(client, "annotate", id)}
+          onRestoreTrash={(id) => restoreTrashedPad(client, "annotate", id)}
           onDelete={(id) =>
-            deletePadEverywhere(client, "annotate", id, () => deleteAnnotateDoc(id))
+            deletePadEverywhere(client, "annotate", id)
           }
           onChoose={(choice, docId) => {
             if (choice === "save") {
@@ -7875,10 +7895,9 @@ export function Workspace({
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isWhiteboard(problem))}
           snapshotKey={whiteboardNotebookId}
-          archived={wbArchive}
-          onRestoreArchive={(id) => restoreArchivedPad(client, "whiteboard", id)}
+          onRestoreTrash={(id) => restoreTrashedPad(client, "whiteboard", id)}
           onDelete={(id) =>
-            deletePadEverywhere(client, "whiteboard", id, () => deleteWhiteboardNotebook(id))
+            deletePadEverywhere(client, "whiteboard", id)
           }
           onChoose={(choice, notebookId) => {
             if (choice === "save") {
@@ -7908,7 +7927,7 @@ export function Workspace({
       {whiteboardLibOpen && (
         <WhiteboardLibraryDialog
           onDelete={(id) =>
-            deletePadEverywhere(client, "whiteboard", id, () => deleteWhiteboardNotebook(id))
+            deletePadEverywhere(client, "whiteboard", id)
           }
           onFreed={() => {
             setWhiteboardLibOpen(false);

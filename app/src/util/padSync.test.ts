@@ -8,35 +8,58 @@ import {
   flushPadSyncQueue,
   peekPadSyncQueueForTests,
   pullPads,
+  PAD_TRASH_OP_QUEUE_CAP,
+  pushPadSnapshot,
+  pushWhiteboardPad,
   resetPadSyncQueueForTests,
+  restoreTrashedPad,
+  TrashQueueFullError,
 } from "./padSync";
 
 const restoreWhiteboardNotebook = vi.fn(async (_entry?: unknown) => {});
+const restoreWhiteboardFromTrash = vi.fn(async (_id?: string) => ({ id: "w1", syncSeq: 2 }));
 const deletePadSnapshots = vi.fn(async (_kind?: string, _key?: string) => {});
 const deleteDocBytes = vi.fn(async (_hash?: string) => {});
 const getWhiteboardNotebook = vi.fn(async (_id?: string): Promise<unknown> => null);
 const listWhiteboardNotebooks = vi.fn(() => [] as { id: string }[]);
+const listWhiteboardTrash = vi.fn(() => [] as { id: string; lastTouch?: number; deletedAt?: number }[]);
 const listAnnotateDocs = vi.fn(() => [] as { id: string }[]);
+const listAnnotateTrash = vi.fn(() => [] as { id: string; lastTouch?: number; deletedAt?: number }[]);
 const getAnnotateDoc = vi.fn(async (_id?: string) => null);
 const restoreAnnotateDoc = vi.fn(async (_entry?: unknown) => {});
+const restoreAnnotateFromTrash = vi.fn(async (_id?: string) => null);
 const deleteWhiteboardNotebook = vi.fn(async () => {});
 const deleteAnnotateDoc = vi.fn(async () => {});
+const trashWhiteboardNotebook = vi.fn(async () => 1);
+const trashAnnotateDoc = vi.fn(async () => 1);
+const markWhiteboardDeleteAcked = vi.fn();
+const markAnnotateDeleteAcked = vi.fn();
 const getDocBytes = vi.fn(async (_hash?: string) => null);
 const putDocBytes = vi.fn(async (_hash?: string, _bytes?: ArrayBuffer) => {});
 const getPadSnapshot = vi.fn(async (_kind?: string, _key?: string, _tier?: string) => null);
 
 vi.mock("./whiteboardStore", () => ({
   listWhiteboardNotebooks: () => listWhiteboardNotebooks(),
+  listWhiteboardTrash: () => listWhiteboardTrash(),
   getWhiteboardNotebook: (id: string) => getWhiteboardNotebook(id),
   restoreWhiteboardNotebook: (entry: unknown) => restoreWhiteboardNotebook(entry),
+  restoreWhiteboardFromTrash: (id: string) => restoreWhiteboardFromTrash(id),
   deleteWhiteboardNotebook: (id: string) => deleteWhiteboardNotebook(id),
+  trashWhiteboardNotebook: (id: string) => trashWhiteboardNotebook(id),
+  markWhiteboardDeleteAcked: (id: string, acked: boolean) => markWhiteboardDeleteAcked(id, acked),
+  markWhiteboardHubAck: () => {},
 }));
 
 vi.mock("./annotateStore", () => ({
   listAnnotateDocs: () => listAnnotateDocs(),
+  listAnnotateTrash: () => listAnnotateTrash(),
   getAnnotateDoc: (id: string) => getAnnotateDoc(id),
   restoreAnnotateDoc: (entry: unknown) => restoreAnnotateDoc(entry),
+  restoreAnnotateFromTrash: (id: string) => restoreAnnotateFromTrash(id),
   deleteAnnotateDoc: (id: string) => deleteAnnotateDoc(id),
+  trashAnnotateDoc: (id: string) => trashAnnotateDoc(id),
+  markAnnotateDeleteAcked: (id: string, acked: boolean) => markAnnotateDeleteAcked(id, acked),
+  markAnnotateHubAck: () => {},
 }));
 
 vi.mock("./docBytes", () => ({
@@ -52,6 +75,7 @@ vi.mock("./padSnapshotStore", () => ({
     { id: "7d", maxAgeMs: 1, label: "7 days" },
   ],
   getPadSnapshot: (kind: string, key: string, tier: string) => getPadSnapshot(kind, key, tier),
+  listPadSnapshots: async () => [],
   deletePadSnapshots: (kind: string, key: string) => deletePadSnapshots(kind, key),
 }));
 
@@ -61,8 +85,8 @@ function fakeClient(overrides: Partial<LcClient> = {}): LcClient {
     putAnnotatePad: vi.fn(async () => ({})),
     putPadSnapshot: vi.fn(async () => {}),
     putDocBytes: vi.fn(async () => {}),
-    tombstoneWhiteboardPad: vi.fn(async () => {}),
-    tombstoneAnnotatePad: vi.fn(async () => {}),
+    tombstoneWhiteboardPad: vi.fn(async () => ({ applied: true, seq: 1 })),
+    tombstoneAnnotatePad: vi.fn(async () => ({ applied: true, seq: 1 })),
     listWhiteboardPads: vi.fn(async () => []),
     listAnnotatePads: vi.fn(async () => []),
     listWhiteboardArchive: vi.fn(async () => []),
@@ -74,6 +98,7 @@ function fakeClient(overrides: Partial<LcClient> = {}): LcClient {
       whiteboard: [],
       annotate: [],
       snapshots: [],
+      gone: [],
     })),
     ...overrides,
   } as unknown as LcClient;
@@ -89,8 +114,17 @@ beforeEach(() => {
   deleteDocBytes.mockClear();
   getWhiteboardNotebook.mockReset();
   getWhiteboardNotebook.mockResolvedValue(null);
+  getPadSnapshot.mockReset();
+  getPadSnapshot.mockResolvedValue(null);
+  restoreWhiteboardFromTrash.mockReset();
+  restoreWhiteboardFromTrash.mockResolvedValue({ id: "w1", syncSeq: 2 });
   listWhiteboardNotebooks.mockReturnValue([]);
+  listWhiteboardTrash.mockReturnValue([]);
   listAnnotateDocs.mockReturnValue([]);
+  listAnnotateTrash.mockReturnValue([]);
+  trashWhiteboardNotebook.mockResolvedValue(1);
+  markWhiteboardDeleteAcked.mockClear();
+  markAnnotateDeleteAcked.mockClear();
   getAnnotateDoc.mockReset();
   getAnnotateDoc.mockResolvedValue(null);
 });
@@ -180,13 +214,12 @@ describe("padSync pull", () => {
 });
 
 describe("deletePadEverywhere", () => {
-  it("tombs the server copy and never issues HTTP DELETE", async () => {
-    const localDelete = vi.fn(async () => {});
+  it("trashes locally and ACKs hub delete with seq", async () => {
     const client = fakeClient();
-    await deletePadEverywhere(client, "whiteboard", "w1", localDelete);
-    expect(localDelete).toHaveBeenCalled();
-    expect(client.tombstoneWhiteboardPad).toHaveBeenCalledWith("w1");
-    expect(client).not.toHaveProperty("deleteWhiteboardPad");
+    await deletePadEverywhere(client, "whiteboard", "w1");
+    expect(trashWhiteboardNotebook).toHaveBeenCalledWith("w1");
+    expect(client.tombstoneWhiteboardPad).toHaveBeenCalledWith("w1", 1);
+    expect(markWhiteboardDeleteAcked).toHaveBeenCalledWith("w1", true);
   });
 });
 
@@ -229,6 +262,7 @@ describe("padSync ping", () => {
           },
         ],
         snapshots: [],
+        gone: [],
       })),
     });
     await applyPadSyncPing(client);
@@ -236,42 +270,316 @@ describe("padSync ping", () => {
     expect(restoreAnnotateDoc).not.toHaveBeenCalled();
   });
 
-  it("tombstones an unlocked pad and leaves a locked one", async () => {
-    listWhiteboardNotebooks.mockReturnValue([{ id: "locked", locked: true }]);
-    listAnnotateDocs.mockReturnValue([{ id: "gone" }]);
+  it("does not undelete local trash from a live hub row", async () => {
+    listWhiteboardTrash.mockReturnValue([{ id: "w1", deletedAt: 1 }]);
+    getWhiteboardNotebook.mockResolvedValue({
+      id: "w1",
+      updatedAt: 10,
+      deletedAt: 1,
+      board: { v: 1, elements: [] },
+    });
     const client = fakeClient({
       pingPadSync: vi.fn(async () => ({
         now: 100,
         whiteboard: [
           {
-            id: "locked",
+            id: "w1",
             title: "N",
-            updated_at: 1,
+            updated_at: 40,
             page_count: 1,
-            deleted_at: 50,
-            board: {},
+            board: { v: 1, elements: [{ id: "x" }] },
             agent: [],
           },
         ],
-        annotate: [
-          {
-            id: "gone",
-            name: "n.md",
-            hash: "h",
-            doc_type: "markdown",
-            updated_at: 1,
-            deleted_at: 50,
-            source: "",
-            footnotes: [],
-            board: {},
-            agent: [],
-          },
-        ],
+        annotate: [],
         snapshots: [],
+        gone: [],
       })),
     });
     await applyPadSyncPing(client);
-    expect(deleteWhiteboardNotebook).not.toHaveBeenCalled();
-    expect(deleteAnnotateDoc).toHaveBeenCalledWith("gone");
+    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
+  });
+
+  it("applies gone-id to a peer live copy and ACKs local trash", async () => {
+    listWhiteboardTrash.mockReturnValue([{ id: "trashed", deletedAt: 1 }]);
+    listAnnotateDocs.mockReturnValue([{ id: "peer" }]);
+    const client = fakeClient({
+      pingPadSync: vi.fn(async () => ({
+        now: 100,
+        whiteboard: [],
+        annotate: [],
+        snapshots: [],
+        gone: [
+          { kind: "whiteboard", id: "trashed", seq: 2, gone_at: 50 },
+          { kind: "annotate", id: "peer", seq: 1, gone_at: 50 },
+        ],
+      })),
+    });
+    await applyPadSyncPing(client);
+    expect(markWhiteboardDeleteAcked).toHaveBeenCalledWith("trashed", true);
+    expect(deleteAnnotateDoc).toHaveBeenCalledWith("peer");
+  });
+});
+
+describe("live PUT coalesce and 24h compact", () => {
+  it("keeps only the latest live PUT per id", async () => {
+    await enqueuePadSync({
+      op: "putWhiteboard",
+      body: {
+        id: "w1",
+        title: "One",
+        updated_at: 1,
+        page_count: 1,
+        board: { v: 1, elements: [] },
+        agent: [],
+      },
+    });
+    await enqueuePadSync({
+      op: "putWhiteboard",
+      body: {
+        id: "w1",
+        title: "One",
+        updated_at: 3,
+        page_count: 1,
+        board: { v: 1, elements: [] },
+        agent: [],
+      },
+    });
+    const queued = peekPadSyncQueueForTests();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ op: "putWhiteboard", body: { updated_at: 3 } });
+  });
+
+  it("drops queued live PUTs at or before a 24h ACK", async () => {
+    const client = fakeClient();
+    await enqueuePadSync({
+      op: "putWhiteboard",
+      body: {
+        id: "w1",
+        title: "One",
+        updated_at: 2,
+        page_count: 1,
+        board: { v: 1, elements: [] },
+        agent: [],
+      },
+    });
+    await pushPadSnapshot(client, {
+      kind: "whiteboard",
+      key: "w1",
+      tier: "24h",
+      writtenAt: 2,
+      name: "One",
+      board: { v: 1, elements: [] },
+    });
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+  });
+
+  it("keeps a live PUT newer than the 24h stamp", async () => {
+    const client = fakeClient();
+    await enqueuePadSync({
+      op: "putWhiteboard",
+      body: {
+        id: "w1",
+        title: "One",
+        updated_at: 3,
+        page_count: 1,
+        board: { v: 1, elements: [] },
+        agent: [],
+      },
+    });
+    await pushPadSnapshot(client, {
+      kind: "whiteboard",
+      key: "w1",
+      tier: "24h",
+      writtenAt: 2,
+      name: "One",
+      board: { v: 1, elements: [] },
+    });
+    expect(peekPadSyncQueueForTests()).toHaveLength(1);
+  });
+});
+
+describe("delete/restore queue", () => {
+  it("drops a stale delete ACK and does not retry", async () => {
+    const client = fakeClient({
+      tombstoneWhiteboardPad: vi.fn(async () => ({ applied: false, seq: 6 })),
+    });
+    await enqueuePadSync({ op: "deletePad", kind: "whiteboard", padId: "w1", seq: 5 });
+    await flushPadSyncQueue(client);
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+    expect(markWhiteboardDeleteAcked).not.toHaveBeenCalled();
+  });
+
+  it("evicts LRU other trash when a ninth delete/restore job would exceed the cap", async () => {
+    const client = fakeClient({
+      tombstoneWhiteboardPad: vi.fn(async () => {
+        throw new LcApiError("offline", 0);
+      }),
+    });
+    listWhiteboardTrash.mockReturnValue([]);
+    for (let i = 1; i <= PAD_TRASH_OP_QUEUE_CAP; i += 1) {
+      await deletePadEverywhere(client, "whiteboard", `w${i}`);
+    }
+    expect(peekPadSyncQueueForTests().filter((job) => job.op === "deletePad")).toHaveLength(
+      PAD_TRASH_OP_QUEUE_CAP,
+    );
+    listWhiteboardTrash.mockReturnValue(
+      Array.from({ length: PAD_TRASH_OP_QUEUE_CAP }, (_, i) => ({
+        id: `w${i + 1}`,
+        lastTouch: i + 1,
+        deletedAt: 1,
+      })),
+    );
+    (client.tombstoneWhiteboardPad as ReturnType<typeof vi.fn>).mockClear();
+    await deletePadEverywhere(client, "whiteboard", "w9");
+    expect(deleteWhiteboardNotebook).toHaveBeenCalledWith("w1");
+    expect(client.tombstoneWhiteboardPad).toHaveBeenCalledWith("w9", 1);
+    expect(client.tombstoneWhiteboardPad).not.toHaveBeenCalledWith("w1", expect.anything());
+    expect(peekPadSyncQueueForTests().some((job) => "padId" in job && job.padId === "w1")).toBe(
+      false,
+    );
+  });
+
+  it("refuses a new delete when the queue is full and there is no other trash", async () => {
+    const client = fakeClient({
+      tombstoneWhiteboardPad: vi.fn(async () => {
+        throw new LcApiError("offline", 0);
+      }),
+    });
+    listWhiteboardTrash.mockReturnValue([]);
+    for (let i = 1; i <= PAD_TRASH_OP_QUEUE_CAP; i += 1) {
+      await deletePadEverywhere(client, "whiteboard", `w${i}`);
+    }
+    trashWhiteboardNotebook.mockClear();
+    await expect(deletePadEverywhere(client, "whiteboard", "w9")).rejects.toBeInstanceOf(
+      TrashQueueFullError,
+    );
+    expect(trashWhiteboardNotebook).not.toHaveBeenCalled();
+  });
+
+  it("uploads live plus 2h/24h/7d on restore", async () => {
+    const client = fakeClient();
+    getWhiteboardNotebook.mockResolvedValue({
+      id: "w1",
+      title: "One",
+      updatedAt: 1,
+      pageCount: 1,
+      syncSeq: 6,
+      board: { v: 1, elements: [] },
+      agent: [],
+    });
+    restoreWhiteboardFromTrash.mockResolvedValue({
+      id: "w1",
+      title: "One",
+      updatedAt: 1,
+      pageCount: 1,
+      syncSeq: 6,
+      board: { v: 1, elements: [] },
+      agent: [],
+    });
+    getPadSnapshot.mockImplementation(async (_kind, _key, tier) => ({
+      kind: "whiteboard",
+      key: "w1",
+      tier,
+      writtenAt: 1,
+      name: "One",
+      board: { v: 1, elements: [] },
+    }));
+    await restoreTrashedPad(client, "whiteboard", "w1");
+    expect(client.putWhiteboardPad).toHaveBeenCalledWith(
+      "w1",
+      expect.objectContaining({ sync_seq: 6 }),
+    );
+    const tiers = (client.putPadSnapshot as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call) => call[0].tier,
+    );
+    expect(tiers.sort()).toEqual(["24h", "2h", "7d"]);
+  });
+});
+
+describe("live PUT CAS and gone", () => {
+  const notebook = {
+    id: "w1",
+    title: "One",
+    updatedAt: 999,
+    pageCount: 1,
+    hubAckUpdatedAt: 1,
+    syncSeq: 0,
+    board: { v: 1, elements: [] },
+    agent: [],
+  };
+
+  it("applies a 409 body and does not queue", async () => {
+    const hub = {
+      id: "w1",
+      title: "Hub",
+      updated_at: 40,
+      page_count: 1,
+      board: { v: 1, elements: [{ id: "hub" }] },
+      agent: [],
+    };
+    const client = fakeClient({
+      putWhiteboardPad: vi.fn(async () => {
+        throw new LcApiError("conflict", 409, JSON.stringify(hub), hub);
+      }),
+    });
+    await pushWhiteboardPad(client, notebook);
+    expect(restoreWhiteboardNotebook).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "w1", updatedAt: 40, hubAckUpdatedAt: 40 }),
+    );
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+  });
+
+  it("does not resurrect after 410 gone", async () => {
+    const client = fakeClient({
+      putWhiteboardPad: vi.fn(async () => {
+        throw new LcApiError("gone", 410, JSON.stringify({ gone: true, seq: 5 }), {
+          gone: true,
+          seq: 5,
+        });
+      }),
+    });
+    await pushWhiteboardPad(client, notebook);
+    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+  });
+
+  it("drops a queued live PUT when ping applies a newer hub row", async () => {
+    await enqueuePadSync({
+      op: "putWhiteboard",
+      body: {
+        id: "w1",
+        title: "One",
+        updated_at: 999,
+        page_count: 1,
+        board: { v: 1, elements: [] },
+        agent: [],
+      },
+    });
+    getWhiteboardNotebook.mockResolvedValue({
+      id: "w1",
+      updatedAt: 10,
+      board: { v: 1, elements: [] },
+    });
+    const client = fakeClient({
+      pingPadSync: vi.fn(async () => ({
+        now: 100,
+        whiteboard: [
+          {
+            id: "w1",
+            title: "N",
+            updated_at: 40,
+            page_count: 1,
+            board: { v: 1, elements: [{ id: "x" }] },
+            agent: [],
+          },
+        ],
+        annotate: [],
+        snapshots: [],
+        gone: [],
+      })),
+    });
+    await applyPadSyncPing(client);
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
 });

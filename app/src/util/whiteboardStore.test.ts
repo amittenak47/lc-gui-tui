@@ -4,11 +4,16 @@ import {
   deleteWhiteboardNotebook,
   getWhiteboardNotebook,
   listWhiteboardNotebooks,
+  listWhiteboardTrash,
+  restoreWhiteboardFromTrash,
   restoreWhiteboardNotebook,
   saveWhiteboardNotebook,
   setWhiteboardNotebookLocked,
+  sweepWhiteboardTrash,
+  trashWhiteboardNotebook,
   WhiteboardLibraryFullError,
   WHITEBOARD_LIBRARY_LIMIT,
+  PAD_TRASH_TTL_MS,
   type WhiteboardBoardBlob,
   type WhiteboardNotebook,
 } from "./whiteboardStore";
@@ -151,5 +156,51 @@ describe("deleteWhiteboardNotebook", () => {
     expect(listWhiteboardNotebooks()).toHaveLength(1);
     await saveWhiteboardNotebook({ id: row.id, board: board("b"), pageCount: 1 });
     expect(listWhiteboardNotebooks()[0]?.locked).toBe(true);
+  });
+});
+
+describe("whiteboard trash", () => {
+  it("hides the pad from live and restores it", async () => {
+    const row = await saveWhiteboardNotebook({ board: board("a"), pageCount: 1, title: "N" });
+    const seq = await trashWhiteboardNotebook(row.id);
+    expect(seq).toBe(1);
+    expect(listWhiteboardNotebooks()).toHaveLength(0);
+    expect(listWhiteboardTrash()).toHaveLength(1);
+    const back = await restoreWhiteboardFromTrash(row.id);
+    expect(back?.id).toBe(row.id);
+    expect(listWhiteboardNotebooks()).toHaveLength(1);
+    expect(listWhiteboardTrash()).toHaveLength(0);
+  });
+
+  it("is a no-op when locked", async () => {
+    const row = await saveWhiteboardNotebook({ board: board("a"), pageCount: 1, title: "Keep" });
+    setWhiteboardNotebookLocked(row.id, true);
+    expect(await trashWhiteboardNotebook(row.id)).toBeNull();
+    expect(listWhiteboardNotebooks()).toHaveLength(1);
+    expect(listWhiteboardTrash()).toHaveLength(0);
+  });
+
+  it("refuses restore when live library is full", async () => {
+    const first = await saveWhiteboardNotebook({ board: board("a"), pageCount: 1, title: "First" });
+    await trashWhiteboardNotebook(first.id);
+    for (let i = 0; i < WHITEBOARD_LIBRARY_LIMIT; i += 1) {
+      await saveWhiteboardNotebook({ board: board("x"), pageCount: 1, title: `N${i}` });
+    }
+    await expect(restoreWhiteboardFromTrash(first.id)).rejects.toBeInstanceOf(
+      WhiteboardLibraryFullError,
+    );
+    expect(listWhiteboardTrash().map((row) => row.id)).toContain(first.id);
+  });
+
+  it("sweeps only after ACK and TTL", async () => {
+    const row = await saveWhiteboardNotebook({ board: board("a"), pageCount: 1, title: "N" });
+    await trashWhiteboardNotebook(row.id, 1);
+    expect(await sweepWhiteboardTrash(1 + PAD_TRASH_TTL_MS)).toEqual([]);
+    expect(listWhiteboardTrash()).toHaveLength(1);
+    const { markWhiteboardDeleteAcked } = await import("./whiteboardStore");
+    markWhiteboardDeleteAcked(row.id, true);
+    expect(await sweepWhiteboardTrash(1 + PAD_TRASH_TTL_MS)).toEqual([row.id]);
+    expect(listWhiteboardTrash()).toHaveLength(0);
+    expect(await getWhiteboardNotebook(row.id)).toBeNull();
   });
 });

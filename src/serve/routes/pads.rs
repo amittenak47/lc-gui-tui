@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{blocking, AppError};
 use crate::pads::{
-    self, AnnotatePad, DevicePrefs, PadKind, PutOutcome, SnapshotRow, WhiteboardPad,
+    self, AnnotatePad, ApplyAck, DevicePrefs, GoneRow, PadKind, PutOutcome, SnapshotRow,
+    WhiteboardPad,
 };
 use crate::serve::MAX_BODY_BYTES;
 
@@ -18,6 +19,11 @@ fn map_put<T: serde::Serialize>(outcome: PutOutcome<T>) -> Result<Response, AppE
     match outcome {
         PutOutcome::Written(row) => Ok((StatusCode::OK, Json(row)).into_response()),
         PutOutcome::Conflict(row) => Ok((StatusCode::CONFLICT, Json(row)).into_response()),
+        PutOutcome::Gone { seq } => Ok((
+            StatusCode::GONE,
+            Json(serde_json::json!({ "gone": true, "seq": seq })),
+        )
+            .into_response()),
         PutOutcome::LiveCap { kind, limit } => Err(AppError::status(
             StatusCode::FORBIDDEN,
             anyhow::anyhow!("live {kind} library is full ({limit})"),
@@ -56,16 +62,17 @@ pub async fn put_whiteboard(
     map_put(outcome)
 }
 
-pub async fn tombstone_whiteboard(UrlPath(id): UrlPath<String>) -> Result<StatusCode, AppError> {
-    let found = blocking(move || {
-        let conn = pads::open(&pads::db_path()?)?;
-        pads::tombstone(&conn, PadKind::Whiteboard, &id)
-    })
-    .await?;
-    if !found {
-        return Err(AppError::not_found(anyhow::anyhow!("whiteboard pad not found")));
-    }
-    Ok(StatusCode::NO_CONTENT)
+#[derive(Debug, Deserialize, Default)]
+pub struct SeqBody {
+    #[serde(default)]
+    pub seq: i64,
+}
+
+pub async fn tombstone_whiteboard(
+    UrlPath(id): UrlPath<String>,
+    Json(body): Json<SeqBody>,
+) -> Result<Json<ApplyAck>, AppError> {
+    delete_kind(PadKind::Whiteboard, id, body.seq).await
 }
 
 pub async fn restore_whiteboard(UrlPath(id): UrlPath<String>) -> Result<StatusCode, AppError> {
@@ -103,20 +110,52 @@ pub async fn put_annotate(
     map_put(outcome)
 }
 
-pub async fn tombstone_annotate(UrlPath(id): UrlPath<String>) -> Result<StatusCode, AppError> {
-    let found = blocking(move || {
-        let conn = pads::open(&pads::db_path()?)?;
-        pads::tombstone(&conn, PadKind::Annotate, &id)
-    })
-    .await?;
-    if !found {
-        return Err(AppError::not_found(anyhow::anyhow!("annotate pad not found")));
-    }
-    Ok(StatusCode::NO_CONTENT)
+pub async fn tombstone_annotate(
+    UrlPath(id): UrlPath<String>,
+    Json(body): Json<SeqBody>,
+) -> Result<Json<ApplyAck>, AppError> {
+    delete_kind(PadKind::Annotate, id, body.seq).await
 }
 
 pub async fn restore_annotate(UrlPath(id): UrlPath<String>) -> Result<StatusCode, AppError> {
     restore_kind(PadKind::Annotate, id).await
+}
+
+async fn delete_kind(kind: PadKind, id: String, seq: i64) -> Result<Json<ApplyAck>, AppError> {
+    let (ack, hash) = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        let hash = if kind == PadKind::Annotate {
+            pads::get_annotate(&conn, &id)?.map(|row| row.hash)
+        } else {
+            None
+        };
+        let ack = if seq > 0 {
+            pads::delete_pad(&conn, kind, &id, seq)?
+        } else {
+            let applied = pads::tombstone(&conn, kind, &id)?;
+            pads::ApplyAck {
+                applied,
+                seq: 1,
+            }
+        };
+        Ok::<_, anyhow::Error>((ack, hash))
+    })
+    .await?;
+    if ack.applied {
+        if let Some(hash) = hash {
+            let _ = blocking(move || {
+                let conn = pads::open(&pads::db_path()?)?;
+                if !pads::annotate_hash_in_use(&conn, &hash)? {
+                    let dir = pads::blobs_dir()?;
+                    let path = pads::blob_path(&dir, &hash)?;
+                    let _ = std::fs::remove_file(path);
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+            .await;
+        }
+    }
+    Ok(Json(ack))
 }
 
 async fn restore_kind(kind: PadKind, id: String) -> Result<StatusCode, AppError> {
@@ -128,6 +167,7 @@ async fn restore_kind(kind: PadKind, id: String) -> Result<StatusCode, AppError>
     match outcome {
         PutOutcome::Written(()) => Ok(StatusCode::NO_CONTENT),
         PutOutcome::Conflict(()) => Err(AppError::not_found(anyhow::anyhow!("pad not found"))),
+        PutOutcome::Gone { .. } => Err(AppError::not_found(anyhow::anyhow!("pad not found"))),
         PutOutcome::LiveCap { kind, limit } => Err(AppError::status(
             StatusCode::FORBIDDEN,
             anyhow::anyhow!("live {kind} library is full ({limit})"),
@@ -147,6 +187,7 @@ pub struct PadSyncPing {
     pub whiteboard: Vec<WhiteboardPad>,
     pub annotate: Vec<AnnotatePad>,
     pub snapshots: Vec<SnapshotRow>,
+    pub gone: Vec<GoneRow>,
 }
 
 /// Periodic ping: saved whiteboards, annotated files, and rolling snapshots
@@ -157,12 +198,13 @@ pub async fn sync_pads(Query(query): Query<SyncQuery>) -> Result<Json<PadSyncPin
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    let (whiteboard, annotate, snapshots) = blocking(move || {
+    let (whiteboard, annotate, snapshots, gone) = blocking(move || {
         let conn = pads::open(&pads::db_path()?)?;
         Ok((
             pads::list_changed_whiteboard(&conn, since)?,
             pads::list_changed_annotate(&conn, since)?,
             pads::list_changed_snapshots(&conn, since)?,
+            pads::list_changed_gone(&conn, since)?,
         ))
     })
     .await?;
@@ -171,6 +213,7 @@ pub async fn sync_pads(Query(query): Query<SyncQuery>) -> Result<Json<PadSyncPin
         whiteboard,
         annotate,
         snapshots,
+        gone,
     }))
 }
 

@@ -84,10 +84,11 @@ export async function recordRollingSnapshots(input: {
   agent?: unknown[];
   pageCount?: number;
   now?: number;
-}): Promise<void> {
+}): Promise<PadSnapshot[]> {
   const now = input.now ?? Date.now();
   const key = input.key.trim();
-  if (!key) return;
+  if (!key) return [];
+  const written: PadSnapshot[] = [];
   for (const tier of PAD_SNAPSHOT_TIERS) {
     const id = recordKey(input.kind, key, tier.id);
     const existing = await getRecord(id);
@@ -105,10 +106,12 @@ export async function recordRollingSnapshots(input: {
     };
     try {
       await run(STORE_SNAPSHOTS, "readwrite", (store) => store.put(row, id));
+      written.push(row);
     } catch {
       /* quota / private browsing — live save already succeeded */
     }
   }
+  return written;
 }
 
 export async function listPadSnapshots(
@@ -176,6 +179,18 @@ export async function renamePadSnapshots(
     }
   }
   return moved;
+}
+
+export async function deletePadSnapshot(
+  kind: PadSnapshotKind,
+  key: string,
+  tier: PadSnapshotTier,
+): Promise<void> {
+  try {
+    await run(STORE_SNAPSHOTS, "readwrite", (store) => store.delete(recordKey(kind, key, tier)));
+  } catch {
+    /* ignore */
+  }
 }
 
 export async function deletePadSnapshots(kind: PadSnapshotKind, key: string): Promise<void> {
