@@ -109,6 +109,22 @@ export function listWhiteboardNotebooks(): WhiteboardNotebookMeta[] {
   return readIndex().sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+/**
+ * Rename one notebook, without touching its pages.
+ *
+ * Not a `saveWhiteboardNotebook` call: renaming is not drawing, and going
+ * through the save path would freshen `updatedAt` and push the notebook to the
+ * top of Recent for something nobody sketched. Same reasoning as
+ * `setAnnotateDocLabel`.
+ */
+export function renameWhiteboardNotebook(id: string, title: string): void {
+  const index = readIndex();
+  const meta = index.find((entry) => entry.id === id);
+  const trimmed = title.trim();
+  if (!meta || !trimmed || meta.title === trimmed) return;
+  writeIndex(index.map((entry) => (entry.id === id ? { ...entry, title: trimmed } : entry)));
+}
+
 export function whiteboardLibraryCount(): number {
   return readIndex().length;
 }
