@@ -4,10 +4,14 @@ import { describe, expect, it } from "vitest";
 import {
   MIN_BAND_PX,
   bandFromLocalPoints,
+  coversViewportBox,
   finalizeMarquee,
   hitRectsUnder,
+  localRectCoversHost,
   scaleOf,
+  tightClientRects,
   unionLocalRects,
+  unionViewportBoxes,
   viewportToLocal,
 } from "./docMarquee";
 
@@ -313,5 +317,132 @@ describe("docMarquee", () => {
     expect(hits).toHaveLength(2);
     expect(hits[0]).toEqual({ left: 10, top: 10, width: 60, height: 20 });
     expect(hits[1]).toEqual({ left: 10, top: 40, width: 70, height: 20 });
+  });
+
+  it("coversViewportBox treats a slot-sized rect as the host", () => {
+    const host = { left: 0, top: 0, right: 400, bottom: 800 };
+    expect(coversViewportBox({ left: 0, top: 0, right: 400, bottom: 800 }, host)).toBe(
+      true,
+    );
+    expect(coversViewportBox({ left: 10, top: 40, right: 300, bottom: 64 }, host)).toBe(
+      false,
+    );
+  });
+
+  it("unionViewportBoxes unions tight line boxes", () => {
+    expect(unionViewportBoxes([])).toBeNull();
+    const box = unionViewportBoxes([
+      { left: 10, top: 20, right: 40, bottom: 32 },
+      { left: 10, top: 34, right: 80, bottom: 46 },
+    ]);
+    expect(box).not.toBeNull();
+    expect(box!.left).toBe(10);
+    expect(box!.top).toBe(20);
+    expect(box!.width).toBe(70);
+    expect(box!.height).toBe(26);
+  });
+
+  it("localRectCoversHost is true only for a body-sized band", () => {
+    const body = document.createElement("div");
+    Object.defineProperty(body, "offsetWidth", { value: 400 });
+    body.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 800,
+        right: 400,
+        bottom: 800,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    expect(
+      localRectCoversHost(body, { left: 0, top: 0, width: 400, height: 800 }),
+    ).toBe(true);
+    expect(
+      localRectCoversHost(body, { left: 12, top: 40, width: 200, height: 24 }),
+    ).toBe(false);
+  });
+
+  it("hitRectsUnder skips a wrapper that covers the page", () => {
+    const body = document.createElement("div");
+    Object.defineProperty(body, "offsetWidth", { value: 400 });
+    body.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 800,
+        right: 400,
+        bottom: 800,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    const wrap = document.createElement("p");
+    wrap.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 800,
+        right: 400,
+        bottom: 800,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    body.append(wrap);
+    document.body.append(body);
+    const hits = hitRectsUnder(body, body, { left: 0, top: 0, width: 400, height: 80 });
+    expect(hits).toEqual([]);
+  });
+
+  it("tightClientRects falls back to the paragraph when getClientRects is the page", () => {
+    const host = document.createElement("div");
+    Object.defineProperty(host, "offsetWidth", { value: 400 });
+    const hostBox = {
+      left: 0,
+      top: 0,
+      width: 400,
+      height: 800,
+      right: 400,
+      bottom: 800,
+      x: 0,
+      y: 0,
+      toJSON() {},
+    } as DOMRect;
+    host.getBoundingClientRect = () => hostBox;
+    const p = document.createElement("p");
+    p.textContent = "hello world";
+    p.getBoundingClientRect = () =>
+      ({
+        left: 12,
+        top: 40,
+        width: 200,
+        height: 24,
+        right: 212,
+        bottom: 64,
+        x: 12,
+        y: 40,
+        toJSON() {},
+      }) as DOMRect;
+    host.append(p);
+    document.body.append(host);
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const prev = Range.prototype.getClientRects;
+    Range.prototype.getClientRects = function getClientRects() {
+      return [hostBox] as unknown as DOMRectList;
+    };
+    try {
+      const rects = tightClientRects(range, host);
+      expect(rects).toHaveLength(1);
+      expect(rects[0].width).toBe(200);
+      expect(rects[0].height).toBe(24);
+    } finally {
+      Range.prototype.getClientRects = prev;
+    }
   });
 });

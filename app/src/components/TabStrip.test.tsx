@@ -145,6 +145,16 @@ describe("TabStrip", () => {
     view.unmount();
   });
 
+  it("still reports Home focus when Home is already the active chip", () => {
+    const onFocus = vi.fn();
+    const view = mount({ tabs: [homeTab(), board("b1", "doodle")], onFocus });
+    act(() => {
+      view.chips()[0]?.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
+    });
+    expect(onFocus).toHaveBeenCalledWith(HOME_TAB_ID);
+    view.unmount();
+  });
+
   it("stops taking taps while a workspace is opening", () => {
     const onFocus = vi.fn();
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")], busy: true, onFocus });

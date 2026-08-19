@@ -30,6 +30,7 @@ import { LlmStatusDialog } from "./components/LlmStatusDialog";
 import { SettingsModal } from "./components/SettingsModal";
 import { StatusBanner } from "./components/StatusBanner";
 import { SmartTips } from "./components/SmartTips";
+import { SplitSash } from "./components/SplitSash";
 import { TabStrip } from "./components/TabStrip";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
 import { saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
@@ -51,7 +52,6 @@ import { useIsMobile } from "./util/mobile";
 import {
   HOME_TAB_ID,
   activeTab as activeTabOf,
-  clampSplitRatio,
   groupOf,
   liveOverflow,
   openedRecord,
@@ -59,7 +59,6 @@ import {
   promoteLive,
   tabsReducer,
   visibleTabIds,
-  type SplitAxis,
   type SplitEdge,
   type TabPatch,
   type TabRecord,
@@ -112,117 +111,6 @@ function waitMs(ms: number): Promise<void> {
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
-}
-
-/**
- * The bar between a split's two panes — the VS Code sash.
- *
- * At rest it is nothing: a few transparent pixels between two boards. Hover it
- * or drag it and a blue line lights up down the seam, which is the whole of the
- * affordance. The drag resizes live and tracks the pointer exactly — no easing,
- * no morph, no commit-on-release — because a sash that lags the finger feels
- * broken in a way a slightly expensive reflow does not.
- *
- * Two details that only matter once you actually drag one:
- *
- * - Pointer capture keeps the events coming when the pointer leaves the strip,
- *   but the *cursor* still belongs to whatever is underneath, so the resize
- *   cursor flickers into a text caret halfway across a document. A body class
- *   pins it for the length of the drag.
- * - Double-tap resets to an even split, because dragging back to exactly half
- *   by hand is a fiddle.
- */
-function SplitSash({
-  axis,
-  onRatio,
-}: {
-  axis: SplitAxis;
-  onRatio: (ratio: number) => void;
-}) {
-  const [dragging, setDragging] = useState(false);
-  const lastTapRef = useRef(0);
-
-  useEffect(() => {
-    if (!dragging) return;
-    const body = document.body;
-    body.dataset.lcSashDrag = axis;
-    return () => {
-      delete body.dataset.lcSashDrag;
-    };
-  }, [axis, dragging]);
-
-  /** Pointer position as a ratio of the split container, already clamped. */
-  const ratioAt = (sash: HTMLElement, x: number, y: number): number | null => {
-    const main = sash.parentElement;
-    if (!main) return null;
-    const box = main.getBoundingClientRect();
-    return clampSplitRatio(
-      axis === "vertical"
-        ? (x - box.left) / Math.max(1, box.width)
-        : (y - box.top) / Math.max(1, box.height),
-    );
-  };
-
-  return (
-    <button
-      type="button"
-      role="separator"
-      aria-orientation={axis === "vertical" ? "vertical" : "horizontal"}
-      aria-label="Resize split"
-      className={["lc-split-sash", `is-${axis}`, dragging ? "is-dragging" : ""]
-        .filter(Boolean)
-        .join(" ")}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return;
-        const now = Date.now();
-        if (now - lastTapRef.current < 320) {
-          lastTapRef.current = 0;
-          setDragging(false);
-          onRatio(0.5);
-          return;
-        }
-        lastTapRef.current = now;
-        event.currentTarget.setPointerCapture(event.pointerId);
-        setDragging(true);
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-      onPointerMove={(event) => {
-        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-        const ratio = ratioAt(event.currentTarget, event.clientX, event.clientY);
-        if (ratio !== null) onRatio(ratio);
-      }}
-      onPointerUp={(event) => {
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        }
-        setDragging(false);
-      }}
-      onPointerCancel={() => setDragging(false)}
-      // Keyboard resize, since a separator you can only reach with a pointer is
-      // not a control. Home puts it back to even.
-      onKeyDown={(event) => {
-        const main = event.currentTarget.parentElement;
-        if (!main) return;
-        const box = main.getBoundingClientRect();
-        const span = axis === "vertical" ? box.width : box.height;
-        const sash = event.currentTarget.getBoundingClientRect();
-        const here = clampSplitRatio(
-          axis === "vertical"
-            ? (sash.left + sash.width / 2 - box.left) / Math.max(1, box.width)
-            : (sash.top + sash.height / 2 - box.top) / Math.max(1, box.height),
-        );
-        const step = (event.shiftKey ? 40 : 12) / Math.max(1, span);
-        const back = axis === "vertical" ? "ArrowLeft" : "ArrowUp";
-        const forward = axis === "vertical" ? "ArrowRight" : "ArrowDown";
-        if (event.key === back) onRatio(clampSplitRatio(here - step));
-        else if (event.key === forward) onRatio(clampSplitRatio(here + step));
-        else if (event.key === "Home") onRatio(0.5);
-        else return;
-        event.preventDefault();
-      }}
-    />
-  );
 }
 
 /** Tauri's `invoke`, or null on plain web / `vite dev`. */
@@ -705,7 +593,11 @@ export function App() {
     (id: string) => {
       const state = tabsRef.current;
       const tab = state.tabs.find((entry) => entry.id === id);
-      if (!tab || id === state.activeId) return;
+      if (!tab) return;
+      // Practice lives on the Home workspace as an overlay. The chip is already
+      // selected, so a no-op here left the problem list up instead of the cards.
+      if (id === HOME_TAB_ID) apisRef.current.get(HOME_TAB_ID)?.showHomeChooser?.();
+      if (id === state.activeId) return;
       setMissingTab(null);
       setError(null);
       promote(id);

@@ -1042,30 +1042,29 @@ input[type="checkbox"] {
  */
 .lc-split-sash {
   order: 2;
-  flex: 0 0 6px;
+  flex: 0 0 8px;
   position: relative;
   padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
   touch-action: none;
-  /* Above the board-chrome slot (50). That overlay is pointer-events none
-   * but still ate tablet taps in the WebView, so the sash never started a drag. */
-  z-index: 60;
+  /* Above the board-chrome slot (50). Overlay used to eat the seam hit. */
+  z-index: 80;
   pointer-events: auto;
 }
 
 .lc-split-sash.is-vertical::before {
   content: "";
   position: absolute;
-  inset: 0 -11px;
+  inset: 0 -16px;
 }
 
 .lc-split-sash::after {
   content: "";
   position: absolute;
-  background: transparent;
-  transition: background 120ms ease;
+  background: color-mix(in srgb, var(--chrome-edge, #888) 70%, transparent);
+  transition: background 120ms ease, box-shadow 120ms ease, width 120ms ease, height 120ms ease;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1078,11 +1077,19 @@ input[type="checkbox"] {
 .lc-split-sash:focus-visible::after,
 .lc-split-sash.is-dragging::after {
   background: var(--accent);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent) 80%, transparent);
 }
 
 .lc-split-sash:focus-visible {
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lc-split-sash.is-dragging {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .lc-split-sash.is-vertical {
@@ -1096,6 +1103,13 @@ input[type="checkbox"] {
   margin-left: -1px;
 }
 
+.lc-split-sash.is-vertical:hover::after,
+.lc-split-sash.is-vertical:focus-visible::after,
+.lc-split-sash.is-vertical.is-dragging::after {
+  width: 4px;
+  margin-left: -2px;
+}
+
 .lc-split-sash.is-horizontal {
   cursor: row-resize;
   width: 100%;
@@ -1104,13 +1118,20 @@ input[type="checkbox"] {
 .lc-split-sash.is-horizontal::before {
   content: "";
   position: absolute;
-  inset: -11px 0;
+  inset: -16px 0;
 }
 
 .lc-split-sash.is-horizontal::after {
   inset: 50% 0 auto 0;
   height: 2px;
   margin-top: -1px;
+}
+
+.lc-split-sash.is-horizontal:hover::after,
+.lc-split-sash.is-horizontal:focus-visible::after,
+.lc-split-sash.is-horizontal.is-dragging::after {
+  height: 4px;
+  margin-top: -2px;
 }
 
 /*
@@ -1121,16 +1142,6 @@ input[type="checkbox"] {
  */
 body[data-lc-sash-drag] {
   user-select: none;
-}
-
-body[data-lc-sash-drag] * {
-  cursor: inherit !important;
-  pointer-events: none;
-}
-
-/* The sash keeps its own pointer events — it is holding the capture. */
-body[data-lc-sash-drag] .lc-split-sash.is-dragging {
-  pointer-events: auto;
 }
 
 body[data-lc-sash-drag="vertical"] {
@@ -11478,7 +11489,10 @@ button.lc-row-selected:hover:not(:disabled) {
  */
 .lc-doc-select-overlay {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  /* Sized from the document body (see DocSelectionLayer), not `inset: 0` on
+   * a zero-height marks slot — that made bands resolve against the board. */
   pointer-events: none;
   z-index: 2;
   overflow: visible;
@@ -13539,8 +13553,14 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-doc-footnote-pack {
+  /* Origin only — must not fill the overlay (`inset: 0` washed the page
+   * whenever `--lc-fn-color` leaked onto this box). Bands/chip are absolute
+   * from this 0×0 point, same as the document body's top-left. */
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
   pointer-events: none;
   overflow: visible;
 }
