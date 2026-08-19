@@ -172,6 +172,20 @@ pub async fn lc_llm_status(state: State<'_, Shared>) -> Result<LcResponse, Strin
 }
 
 #[tauri::command]
+pub async fn lc_llm_models(
+    state: State<'_, Shared>,
+    provider: Option<String>,
+) -> Result<LcResponse, String> {
+    go(
+        state,
+        "GET",
+        format!("/llm/models{}", qs(&[("provider", provider)])),
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn lc_llm_start(state: State<'_, Shared>) -> Result<LcResponse, String> {
     go(state, "POST", "/llm/start".into(), None).await
 }

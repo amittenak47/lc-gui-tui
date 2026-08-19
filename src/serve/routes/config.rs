@@ -1,6 +1,6 @@
 //! Config and local LLM lifecycle routes.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +58,9 @@ pub struct ConfigDto {
     #[serde(default)]
     pub stop_on_first_failure: bool,
     pub default_provider: String,
+    /// Folder of downloaded weights, scanned to offer a Local model list.
+    #[serde(default)]
+    pub models_dir: String,
     pub local: ProviderConfigDto,
     pub ollama: ProviderConfigDto,
     pub openai: ProviderConfigDto,
@@ -91,6 +94,7 @@ fn config_dto(cfg: &Config) -> ConfigDto {
         workspace_dir: cfg.workspace.dir.clone(),
         stop_on_first_failure: cfg.tests.stop_on_first_failure,
         default_provider: cfg.llm.default_provider.clone(),
+        models_dir: cfg.llm.local.models_dir.clone(),
         local: ProviderConfigDto {
             base_url: cfg.llm.local.base_url.clone(),
             model: cfg.llm.local.model.clone(),
@@ -191,6 +195,7 @@ fn apply_config_dto(cfg: &mut Config, dto: &ConfigDto) -> anyhow::Result<()> {
     if let Some(flag) = dto.ollama.vision {
         cfg.llm.ollama.vision = Some(flag);
     }
+    cfg.llm.local.models_dir = dto.models_dir.clone();
     cfg.llm.openai.base_url = dto.openai.base_url.clone();
     cfg.llm.openai.model = dto.openai.model.clone();
     cfg.llm.openai.vision_model = dto.openai.vision_model.clone();
@@ -247,6 +252,31 @@ pub async fn put_config(
 pub async fn llm_status(State(state): State<Shared>) -> Result<Json<crate::llm::lifecycle::LlmStatus>, AppError> {
     let cfg = state.cfg_snapshot();
     Ok(Json(blocking(move || Ok(crate::llm::lifecycle::status(&cfg))).await?))
+}
+
+/// What `?provider=` could be pointed at. Never changes config, and never
+/// sets the vision flag — see [`crate::llm::catalog`].
+pub async fn llm_models(
+    State(state): State<Shared>,
+    Query(query): Query<ModelsQuery>,
+) -> Result<Json<crate::llm::catalog::ModelCatalog>, AppError> {
+    let cfg = state.cfg_snapshot();
+    let provider = query.provider.unwrap_or_else(|| cfg.llm.default_provider.clone());
+    if !crate::config::LLM_PROVIDERS.contains(&provider.as_str()) {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "provider must be one of {}, got {provider:?}",
+            crate::config::LLM_PROVIDERS.join(", ")
+        )));
+    }
+    Ok(Json(
+        blocking(move || crate::llm::catalog::catalog(&cfg, &provider)).await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ModelsQuery {
+    #[serde(default)]
+    pub provider: Option<String>,
 }
 
 pub async fn llm_start(State(state): State<Shared>) -> Result<Json<crate::llm::lifecycle::LlmStatus>, AppError> {

@@ -15,31 +15,30 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "vitest";
 
-import type { Skeleton } from "../templates/skeleton";
 import { agentSlotOrigin } from "../templates/regions";
-import { parseVizProgram, type VizProgram } from "./schema";
+import { parseVizProgram } from "./schema";
 import { renderViz } from "./render/index";
 
 const IN = process.env.LC_VIZ_IN;
 const OUT = process.env.LC_VIZ_OUT ?? ".";
 
-const FONTS: Record<number, string> = {
+const FONTS = {
   1: "Segoe UI, sans-serif",
   2: "Comic Sans MS, cursive",
   3: "Cascadia Code, Consolas, monospace",
 };
 
-function esc(s: string): string {
+function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 /** One skeleton to SVG. Only the three shapes the renderers actually emit. */
-function toSvg(el: Skeleton): string {
+function toSvg(el) {
   const stroke = el.strokeColor ?? "#1e1e1e";
   const fill = el.backgroundColor && el.backgroundColor !== "transparent" ? el.backgroundColor : "none";
   const w = el.width ?? 0;
   const h = el.height ?? 0;
-  const parts: string[] = [];
+  const parts = [];
 
   if (el.type === "rectangle") {
     const r = el.roundness ? 6 : 0;
@@ -57,7 +56,7 @@ function toSvg(el: Skeleton): string {
     // Excalidraw anchors text top-left; SVG baselines from the bottom.
     const anchor = el.textAlign === "center" ? "middle" : el.textAlign === "right" ? "end" : "start";
     const x = el.textAlign === "center" ? el.x + w / 2 : el.textAlign === "right" ? el.x + w : el.x;
-    for (const [i, line] of el.text!.split("\n").entries()) {
+    for (const [i, line] of el.text.split("\n").entries()) {
       parts.push(
         `<text x="${x}" y="${el.y + size * (i + 1)}" font-family="${FONTS[el.fontFamily ?? 1]}" font-size="${size}" fill="${stroke}" text-anchor="${anchor}">${esc(line)}</text>`,
       );
@@ -77,7 +76,7 @@ function toSvg(el: Skeleton): string {
   return parts.join("\n  ");
 }
 
-function bounds(els: Skeleton[]) {
+function bounds(els) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const el of els) {
     const w = el.width ?? 0;
@@ -98,7 +97,7 @@ function bounds(els: Skeleton[]) {
 }
 
 /** Every frame of a program, stacked, so a trace reads as a filmstrip. */
-function filmstrip(program: VizProgram, title: string): string {
+function filmstrip(program, title) {
   const origin = agentSlotOrigin(0);
   const frames = program.frames.map((_, i) => renderViz(program, i, origin));
   const each = frames.map(bounds);
@@ -106,7 +105,7 @@ function filmstrip(program: VizProgram, title: string): string {
   const heights = each.map((b) => b.maxY - b.minY + 28);
 
   let y = 44;
-  const body: string[] = [];
+  const body = [];
   for (const [i, els] of frames.entries()) {
     const b = each[i];
     const dx = 20 - b.minX;
@@ -133,7 +132,7 @@ function filmstrip(program: VizProgram, title: string): string {
 
 describe.skipIf(!IN)("viz svg dump", () => {
   it("renders every collected program to an SVG filmstrip", () => {
-    const rows = JSON.parse(fs.readFileSync(IN!, "utf8")) as Array<{ ask: string; program: unknown }>;
+    const rows = JSON.parse(fs.readFileSync(IN, "utf8"));
     fs.mkdirSync(OUT, { recursive: true });
     for (const [i, row] of rows.entries()) {
       const program = parseVizProgram(row.program);

@@ -15,6 +15,7 @@ import type {
   LcConfigPut,
   LlmStatus,
   LoadResponse,
+  ModelCatalog,
   ProblemDetail,
   ProblemPage,
   ProblemSummary,
@@ -316,6 +317,14 @@ export class LcClient {
 
   async llmStatus(): Promise<LlmStatus> {
     return this.cmd("lc_llm_status");
+  }
+
+  /**
+   * What this provider could be pointed at: the server's own list, plus any
+   * `.gguf` under the models folder. Read-only — it never sets the vision flag.
+   */
+  async listModels(provider?: string): Promise<ModelCatalog> {
+    return this.cmd("lc_llm_models", { provider });
   }
 
   async llmStart(): Promise<LlmStatus> {

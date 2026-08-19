@@ -132,6 +132,7 @@ pub fn router(state: Shared) -> Router {
         .route("/session/random", post(routes::random_session))
         .route("/config", get(routes::get_config).put(routes::put_config))
         .route("/llm/status", get(routes::llm_status))
+        .route("/llm/models", get(routes::llm_models))
         .route("/llm/start", post(routes::llm_start))
         .route("/llm/stop", post(routes::llm_stop))
         .route("/problems/:id", get(routes::get_problem))

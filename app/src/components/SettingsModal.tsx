@@ -7,7 +7,16 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { createPortal } from "react-dom";
 
 import type { DevicePrefsDto, DlcStatus, LcClient } from "../api/client";
-import type { CoachFlags, DatasetInfo, LcConfig, LcConfigPut, LlmStatus, ProviderConfig } from "../api/types";
+import type {
+  CoachFlags,
+  DatasetInfo,
+  LcConfig,
+  LcConfigPut,
+  LlmStatus,
+  ModelCatalog,
+  ModelEntry,
+  ProviderConfig,
+} from "../api/types";
 import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { shouldDismissBackdrop } from "../util/backdropDismiss";
 import { MorphBar } from "./MorphBar";
@@ -235,6 +244,73 @@ const MODE_HINTS: Record<(typeof MODES)[number], string> = {
     "One call per problem that catalogs the approaches it admits. Point this at a frontier model to guide the local agent — it never sees or writes a solution.",
 };
 
+/**
+ * What the model list is offering, and why it might be short.
+ *
+ * A provider that will not list its models is ordinary — OpenAI and Groq want
+ * a key before they answer, and a local server that is not running answers
+ * nothing at all — so this reads as information, never as an error.
+ */
+function modelHint(
+  catalog: ModelCatalog | null,
+  busy: boolean,
+  typed: string,
+  selected: ModelEntry | undefined,
+): string {
+  if (busy) return "Reading the model list…";
+  if (!catalog) return "Could not read a model list. Type the model id by hand.";
+
+  const onServer = catalog.models.filter((entry) => entry.source === "server").length;
+  const onDisk = catalog.models.length - onServer;
+  const found: string[] = [];
+  if (onServer > 0) found.push(`${onServer} from the server`);
+  if (onDisk > 0) found.push(`${onDisk} in the models folder`);
+
+  const lines: string[] = [];
+  if (found.length > 0) lines.push(`${found.join(", ")}.`);
+  // A typed id the server has never heard of is the failure worth catching
+  // here rather than on the first Review, where it arrives as a bare 404.
+  if (typed.length > 0 && selected === undefined && onServer > 0) {
+    lines.push(`The server did not list “${typed}”, so a chat call may fail.`);
+  }
+  if (catalog.notes[0]) lines.push(catalog.notes[0]);
+  return lines.join(" ") || "No models listed — type the id by hand.";
+}
+
+/**
+ * What is actually known about images for the chosen model — and nothing more.
+ *
+ * Only a server that says `multimodal` counts as a yes. A projector file beside
+ * the weights is reported as what it is: evidence the model *can*, not proof
+ * the server was launched to. Everything else says plainly that nothing was
+ * reported, because the alternative is guessing from the name, and a wrong
+ * guess sends every Draw request a PNG the endpoint will refuse.
+ */
+function visionEvidence(
+  catalog: ModelCatalog | null,
+  selected: ModelEntry | undefined,
+  ticked: boolean,
+): string {
+  if (!catalog || !selected) {
+    return ticked
+      ? "Images will be sent. Nothing was read back about this endpoint, so this is your call."
+      : "Nothing was read back about this endpoint. Tick the box if you know it takes images.";
+  }
+  if (selected.advertises_vision === true) {
+    return ticked
+      ? "The server reports this model accepts images. ✓"
+      : "The server reports this model accepts images — tick the box to let Draw and board review use them.";
+  }
+  if (selected.has_mmproj) {
+    return ticked
+      ? "A projector file (mmproj) sits beside these weights, so images should work if the server was started with it."
+      : "A projector file (mmproj) sits beside these weights, so this model can read images if the server was started with it. The server does not advertise it, so ticking the box is your call.";
+  }
+  return ticked
+    ? "This endpoint does not report image support. Images will still be sent — untick if Draw starts failing."
+    : "This endpoint does not report image support. That is not the same as “no”: OpenAI and Groq never say. Tick the box only if you know the model reads images.";
+}
+
 function llmServerHint(provider: "local" | "ollama" | "openai" | "groq"): string {
   switch (provider) {
     case "local":
@@ -264,6 +340,7 @@ function emptyConfig(): LcConfig {
     workspace_dir: "~/lc-workspace",
     stop_on_first_failure: false,
     default_provider: "local",
+    models_dir: "",
     local: emptyProvider(),
     ollama: emptyProvider(),
     openai: emptyProvider(),
@@ -411,6 +488,8 @@ export function SettingsModal({
   const [subHost, setSubHost] = useState<HTMLDivElement | null>(null);
   const [draft, setDraft] = useState<LcConfig>(emptyConfig);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [catalogBusy, setCatalogBusy] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   /** Separate from `busy` so a slow/hung GET /config cannot leave Save stuck disabled. */
   const [saving, setSaving] = useState(false);
@@ -487,6 +566,33 @@ export function SettingsModal({
       setLlmStatus(null);
     }
   }, [client]);
+
+  /**
+   * What the focused provider could be pointed at. Read-only: it fills the
+   * model list and reports what the server says about images, but the vision
+   * flag stays the reader's to tick — a name is not a capability.
+   */
+  const refreshCatalog = useCallback(
+    async (provider: string) => {
+      setCatalogBusy(true);
+      try {
+        setCatalog(await client.listModels(provider));
+      } catch {
+        setCatalog(null);
+      } finally {
+        setCatalogBusy(false);
+      }
+    },
+    [client],
+  );
+
+  // The list is per provider, so a tab switch invalidates it. Clearing first
+  // stops the previous provider's models being offered for this one.
+  useEffect(() => {
+    if (tab !== "llm") return;
+    setCatalog(null);
+    void refreshCatalog(providerFocus);
+  }, [tab, providerFocus, refreshCatalog]);
 
   /** Re-read on each visit to Personalise, so it reflects the session just saved. */
   useEffect(() => {
@@ -835,6 +941,9 @@ export function SettingsModal({
   };
 
   const provider = draft[providerFocus];
+  const selectedModel = catalog?.models.find((entry) => entry.id === provider.model.trim());
+  const modelListHint = modelHint(catalog, catalogBusy, provider.model.trim(), selectedModel);
+  const visionHint = visionEvidence(catalog, selectedModel, provider.vision === true);
   const pageTitle =
     page === "root"
       ? "Settings"
@@ -1826,13 +1935,49 @@ export function SettingsModal({
                 />
                 <p className="lc-settings-hint">{llmServerHint(providerFocus)}</p>
               </label>
+              {(providerFocus === "local" || providerFocus === "ollama") && (
+                <label>
+                  <span>Models folder</span>
+                  <input
+                    value={draft.models_dir}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, models_dir: e.target.value }))
+                    }
+                    placeholder="C:\Users\you\Models"
+                  />
+                  <p className="lc-settings-hint">
+                    Optional. A folder of downloaded weights — one subfolder per model, or a
+                    flat pile of <code>.gguf</code> — offered in the list below even while the
+                    server is down. Save, then Refresh models.
+                  </p>
+                </label>
+              )}
               <label>
                 <span>Chat model</span>
                 <input
+                  list="lc-model-options"
                   value={provider.model}
                   onChange={(e) => patchProvider(providerFocus, { model: e.target.value })}
                 />
+                <datalist id="lc-model-options">
+                  {(catalog?.models ?? []).map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.source === "disk" ? "on disk" : "on the server"}
+                    </option>
+                  ))}
+                </datalist>
+                <p className="lc-settings-hint">{modelListHint}</p>
               </label>
+              <div className="lc-settings-actions-row">
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={catalogBusy}
+                  onClick={() => void refreshCatalog(providerFocus)}
+                >
+                  {catalogBusy ? "Reading…" : "Refresh models"}
+                </button>
+              </div>
               <label>
                 <span>Vision model</span>
                 <input
@@ -1860,6 +2005,7 @@ export function SettingsModal({
                 />
                 <span>Accepts images</span>
               </label>
+              <p className="lc-settings-hint">{visionHint}</p>
 
               {(providerFocus === "openai" || providerFocus === "groq") && (
                 <label>
