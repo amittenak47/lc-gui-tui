@@ -43,11 +43,24 @@ export const TOOLBAR_SIDE_HYSTERESIS_PX = 28;
 /** Extra left inset so a vertical island does not cover the annotate toggle. */
 export const TOOLBAR_LEFT_CHROME_INSET_PX = 52;
 /**
- * Board hole at or under this: docked island becomes a column so it does not
- * sit on the Recentre / theme / eye stack. Side stacks are ~56px; the row
- * island is ~280px of tools, so overlap starts well before this.
+ * Absolute floor: only a truly cramped hole (phone SE, squeezed window)
+ * forces a column. A full-screen tablet often reports 400–480 CSS px at high
+ * density; that is still a tablet, not this.
  */
-export const TOOLBAR_NARROW_COLUMN_PX = 480;
+export const TOOLBAR_NARROW_COLUMN_PX = 320;
+/**
+ * Split sliver: board is a minority of the window. Full-screen is ~1, so a
+ * tablet portrait never trips this. Half-or-thinner of a wide window does.
+ */
+export const TOOLBAR_SPLIT_COLUMN_RATIO = 0.45;
+
+/** Board hole is a sliver or a tiny window — not a full-screen tablet. */
+export function toolbarBoardIsNarrow(boardWidth: number, viewWidth: number): boolean {
+  if (!(boardWidth > 0)) return false;
+  if (boardWidth <= TOOLBAR_NARROW_COLUMN_PX) return true;
+  if (viewWidth > 0 && boardWidth / viewWidth <= TOOLBAR_SPLIT_COLUMN_RATIO) return true;
+  return false;
+}
 
 export function toolbarAxis(
   mode: "docked" | "floating",
@@ -58,7 +71,7 @@ export function toolbarAxis(
   previous: "row" | "column" = "row",
   boardWidth: number = viewWidth,
 ): "row" | "column" {
-  if (boardWidth <= TOOLBAR_NARROW_COLUMN_PX) return "column";
+  if (toolbarBoardIsNarrow(boardWidth, viewWidth)) return "column";
   if (mode === "docked" || dockNear) return "row";
   const cx = x + width / 2;
   const enter = TOOLBAR_SIDE_BAND_PX;

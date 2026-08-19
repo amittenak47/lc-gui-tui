@@ -17,7 +17,7 @@
  * they behave the same whether a pad is live or you are looking at the cards.
  */
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { LcClient } from "./api/client";
 import type { SearchOptions } from "./api/client";
@@ -505,6 +505,7 @@ export function App() {
   >("idle");
   const [holdBrowseOverlay, setHoldBrowseOverlay] = useState(false);
   const overlayTopRef = useRef<HTMLDivElement | null>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const node = overlayTopRef.current;
@@ -541,6 +542,36 @@ export function App() {
 
   const visibleIds = useMemo(() => visibleTabIds(tabState), [tabState]);
   const activeGroup = groupOf(tabState, tabState.activeId);
+  const groupHasExplore = Boolean(
+    activeGroup?.children.some(
+      (id) => tabState.tabs.find((tab) => tab.id === id)?.kind === "explore",
+    ),
+  );
+  const groupHasBoard = Boolean(
+    activeGroup?.children.some((id) => {
+      const kind = tabState.tabs.find((tab) => tab.id === id)?.kind;
+      return kind != null && kind !== "home" && kind !== "explore";
+    }),
+  );
+
+  /*
+   * Split widths live as CSS variables on `<main>`, not as React style.
+   * Writing them from render fights the sash: every App paint (ink, Excalidraw)
+   * stamped the stored 0.5 back over the drag. Sync from state only while the
+   * pointer is up; while it is down the sash owns the variables.
+   */
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    if (document.body.dataset.lcSashDrag) return;
+    if (!activeGroup) {
+      main.style.removeProperty("--lc-split-a");
+      main.style.removeProperty("--lc-split-b");
+      return;
+    }
+    main.style.setProperty("--lc-split-a", String(activeGroup.split.ratio));
+    main.style.setProperty("--lc-split-b", String(1 - activeGroup.split.ratio));
+  }, [activeGroup]);
 
   /*
    * Split panes occupy the live slots first. Without that, one half falls off
@@ -928,20 +959,13 @@ export function App() {
         <span className="lc-header-slot" ref={setHeaderChrome} />
 
         <main
+          ref={mainRef}
           className={[
             "lc-main",
             activeGroup ? "is-split-vertical" : "",
           ]
             .filter(Boolean)
             .join(" ")}
-          style={
-            activeGroup
-              ? {
-                  ["--lc-split-a" as string]: String(activeGroup.split.ratio),
-                  ["--lc-split-b" as string]: String(1 - activeGroup.split.ratio),
-                }
-              : undefined
-          }
         >
           <div className="lc-chrome-overlay-top" aria-live="polite" ref={overlayTopRef}>
             <StatusBanner text={error} variant="error" />
@@ -975,6 +999,8 @@ export function App() {
                 active={active}
                 showing
                 splitRole={splitRole}
+                splitKeepChrome={Boolean(splitRole && groupHasExplore)}
+                embedInBoardTray={Boolean(splitRole && groupHasBoard)}
               />
             );
           })}

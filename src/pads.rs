@@ -308,6 +308,72 @@ pub fn list_annotate(conn: &Connection, archived: bool) -> Result<Vec<AnnotatePa
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
 }
 
+/// Pads touched after `since` (live or tombstoned). Ping body, not the full library.
+pub fn list_changed_whiteboard(conn: &Connection, since: i64) -> Result<Vec<WhiteboardPad>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, updated_at, page_count, deleted_at, board_json, agent_json
+         FROM whiteboard
+         WHERE updated_at > ?1 OR ifnull(deleted_at, 0) > ?1
+         ORDER BY updated_at DESC",
+    )?;
+    let rows = stmt.query_map(params![since], |row| {
+        Ok(WhiteboardPad {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            updated_at: row.get(2)?,
+            page_count: row.get(3)?,
+            deleted_at: row.get(4)?,
+            board: parse_json(&row.get::<_, String>(5)?),
+            agent: parse_json(&row.get::<_, String>(6)?),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+pub fn list_changed_annotate(conn: &Connection, since: i64) -> Result<Vec<AnnotatePad>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, hash, doc_type, updated_at, deleted_at, source_text,
+                footnotes_json, board_json, agent_json
+         FROM annotate
+         WHERE updated_at > ?1 OR ifnull(deleted_at, 0) > ?1
+         ORDER BY updated_at DESC",
+    )?;
+    let rows = stmt.query_map(params![since], |row| {
+        Ok(AnnotatePad {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            hash: row.get(2)?,
+            doc_type: row.get(3)?,
+            updated_at: row.get(4)?,
+            deleted_at: row.get(5)?,
+            source: row.get(6)?,
+            footnotes: parse_json(&row.get::<_, String>(7)?),
+            board: parse_json(&row.get::<_, String>(8)?),
+            agent: parse_json(&row.get::<_, String>(9)?),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+pub fn list_changed_snapshots(conn: &Connection, since: i64) -> Result<Vec<SnapshotRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT kind, key, tier, written_at, payload_json
+         FROM snapshots
+         WHERE written_at > ?1
+         ORDER BY written_at DESC",
+    )?;
+    let rows = stmt.query_map(params![since], |row| {
+        Ok(SnapshotRow {
+            kind: row.get(0)?,
+            key: row.get(1)?,
+            tier: row.get(2)?,
+            written_at: row.get(3)?,
+            payload: parse_json(&row.get::<_, String>(4)?),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
 pub fn get_whiteboard(conn: &Connection, id: &str) -> Result<Option<WhiteboardPad>> {
     read_whiteboard(conn, id)
 }
@@ -781,6 +847,57 @@ mod tests {
             get_device(&conn, "desk").unwrap().unwrap().prefs["handedness"],
             "left"
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn ping_lists_whiteboard_annotate_snapshots_and_tombstones() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 10)).unwrap();
+        put_whiteboard(&conn, &wb("w2", 40)).unwrap();
+        put_annotate(&conn, &an("a1", 15)).unwrap();
+        put_annotate(&conn, &an("a2", 50)).unwrap();
+        put_snapshot(
+            &conn,
+            &SnapshotRow {
+                kind: "whiteboard".into(),
+                key: "w2".into(),
+                tier: "2h".into(),
+                written_at: 45,
+                payload: json!({"name": "n-w2"}),
+            },
+        )
+        .unwrap();
+        put_snapshot(
+            &conn,
+            &SnapshotRow {
+                kind: "annotate".into(),
+                key: "a1".into(),
+                tier: "2h".into(),
+                written_at: 12,
+                payload: json!({"name": "notes.md"}),
+            },
+        )
+        .unwrap();
+        tombstone(&conn, PadKind::Whiteboard, "w1").unwrap();
+
+        let changed_wb = list_changed_whiteboard(&conn, 20).unwrap();
+        assert_eq!(
+            changed_wb.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            vec!["w2", "w1"]
+        );
+        assert!(changed_wb.iter().any(|row| row.id == "w1" && row.deleted_at.is_some()));
+
+        let changed_an = list_changed_annotate(&conn, 20).unwrap();
+        assert_eq!(changed_an.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), vec!["a2"]);
+
+        let snaps = list_changed_snapshots(&conn, 20).unwrap();
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].key, "w2");
+
+        let all = list_changed_annotate(&conn, 0).unwrap();
+        assert_eq!(all.len(), 2);
         let _ = std::fs::remove_file(path);
     }
 

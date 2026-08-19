@@ -96,7 +96,10 @@ export interface AnnotateDocMeta {
    * Absent on everything opened through the file picker, and on every set made
    * before New file existed, so a missing value reads as "imported".
    */
-  owned?: boolean;
+  /**
+   * Blocks trash in the library. Local-only — a ping will not overwrite it.
+   */
+  locked?: boolean;
 }
 
 /**
@@ -511,6 +514,7 @@ export async function saveAnnotateDoc(input: {
     updatedAt: now,
     ...(label ? { label } : {}),
     ...(owned ? { owned: true } : {}),
+    ...(existing?.locked ? { locked: true } : {}),
   };
   writeIndex([meta, ...index.filter((entry) => entry.id !== id)]);
   await putContent(id, {
@@ -522,9 +526,20 @@ export async function saveAnnotateDoc(input: {
   return { ...meta, source: input.source, board: input.board, footnotes, agent };
 }
 
+export function setAnnotateDocLocked(id: string, locked: boolean): void {
+  const index = readIndex();
+  const existing = index.find((entry) => entry.id === id);
+  if (!existing) return;
+  const next: AnnotateDocMeta = { ...existing };
+  if (locked) next.locked = true;
+  else delete next.locked;
+  writeIndex([next, ...index.filter((entry) => entry.id !== id)]);
+}
+
 export async function deleteAnnotateDoc(id: string): Promise<void> {
   const index = readIndex();
   const going = index.find((entry) => entry.id === id) ?? null;
+  if (going?.locked) return;
   const kept = index.filter((entry) => entry.id !== id);
   writeIndex(kept);
   await deleteContent(id);

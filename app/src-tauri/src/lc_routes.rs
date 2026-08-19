@@ -682,6 +682,11 @@ pub async fn lc_get_snapshots(
 }
 
 #[tauri::command]
+pub async fn lc_pads_sync(state: State<'_, Shared>, since: i64) -> Result<LcResponse, String> {
+    go(state, "GET", format!("/pads/sync?since={since}"), None).await
+}
+
+#[tauri::command]
 pub async fn lc_list_devices(state: State<'_, Shared>) -> Result<LcResponse, String> {
     go(state, "GET", "/devices".into(), None).await
 }

@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, LayoutGroup, motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import type { AgentChatMessage } from "./AgentSidePanel";
 import {
   freshNoteId,
@@ -309,7 +309,7 @@ export function FootnoteOverview({
       const el = event.target instanceof Element ? event.target : null;
       if (
         el?.closest?.(
-          ".lc-footnote-overview, .lc-doc-sheet, .lc-doc-confirm, .lc-doc-selection-chrome, .lc-doc-submark-grip",
+          ".lc-footnote-overview, .lc-doc-sheet, .lc-doc-confirm, .lc-doc-selection-chrome, .lc-doc-submark-grip, .lc-split-sash",
         )
       ) {
         return;
@@ -352,11 +352,18 @@ export function FootnoteOverview({
   }, [anchorRect, task]);
   useLayoutEffect(() => {
     place();
+    const node = panelRef.current;
     const view = window.visualViewport;
     view?.addEventListener("resize", place);
     view?.addEventListener("scroll", place);
     window.addEventListener("resize", place);
+    const observer =
+      node && typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => place())
+        : null;
+    if (node && observer) observer.observe(node);
     return () => {
+      observer?.disconnect();
       view?.removeEventListener("resize", place);
       view?.removeEventListener("scroll", place);
       window.removeEventListener("resize", place);
@@ -457,7 +464,7 @@ export function FootnoteOverview({
         ? " is-task is-task-compact"
         : "";
   return createPortal(
-    <LayoutGroup id={`footnote-hub-${footnote.id}`}>
+    <>
       <button
         type="button"
         className="lc-doc-sheet-backdrop is-pass-through"
@@ -466,8 +473,6 @@ export function FootnoteOverview({
         style={{ zIndex: 232 }}
       />
       <motion.div
-        layout
-        layoutId="footnote-sheet"
         className={`lc-doc-sheet lc-footnote-overview${taskClass}`}
         ref={panelRef}
         role="dialog"
@@ -483,15 +488,12 @@ export function FootnoteOverview({
                 : "Footnote"
         }
         style={{ visibility: "hidden", zIndex: 233, ...tint }}
-        transition={{ layout: { duration: 0.22, ease: [0.22, 1, 0.36, 1] } }}
       >
-        <AnimatePresence mode="popLayout" initial={false}>
+        <AnimatePresence mode="wait" initial={false}>
           {task?.kind === "note" ? (
             <motion.div
               key="task-note"
               className="lc-footnote-overview-task lc-footnote-overview-task-compact"
-              layout
-              layoutId="footnote-hub-body"
               {...taskMotion}
             >
               <NoteTask
@@ -505,8 +507,6 @@ export function FootnoteOverview({
             <motion.div
               key="task-link"
               className="lc-footnote-overview-task lc-footnote-overview-task-compact"
-              layout
-              layoutId="footnote-hub-body"
               {...taskMotion}
             >
               <LinkTask
@@ -528,8 +528,6 @@ export function FootnoteOverview({
             <motion.div
               key={`task-thread-${task.rootId ?? "new"}`}
               className="lc-footnote-overview-task lc-footnote-overview-task-thread"
-              layout
-              layoutId="footnote-hub-body"
               {...taskMotion}
             >
               <div className="lc-footnote-task-head">
@@ -604,8 +602,6 @@ export function FootnoteOverview({
             <motion.div
               key="hub"
               className="lc-footnote-overview-hub"
-              layout
-              layoutId="footnote-hub-body"
               {...taskMotion}
             >
               <MarkTitle
@@ -828,7 +824,7 @@ export function FootnoteOverview({
           )}
         </AnimatePresence>
       </motion.div>
-    </LayoutGroup>,
+    </>,
     document.body,
   );
 }

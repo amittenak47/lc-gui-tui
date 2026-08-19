@@ -3,10 +3,12 @@ use colored::Colorize;
 use comfy_table::Table;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "leetcode")]
 use rustpython::{InterpreterBuilder, InterpreterBuilderExt};
+#[cfg(feature = "leetcode")]
+use std::time::Duration;
 
 /// Default Windows/debug stack overflows inside `Interpreter::build()`.
 #[cfg(feature = "leetcode")]

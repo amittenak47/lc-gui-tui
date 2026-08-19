@@ -259,6 +259,7 @@ body {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  --lc-header-height: 38px;
 }
 
 .lc-app-agent-open .lc-main {
@@ -278,7 +279,7 @@ body {
 }
 
 .lc-app-problem {
-  --lc-header-height: 64px;
+  --lc-header-height: 38px;
   --lc-agent-width: 520px;
   --lc-board-chrome-left: 0px;
   --lc-board-chrome-right: 0px;
@@ -311,9 +312,9 @@ body {
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   column-gap: 12px;
-  height: auto;
-  min-height: 38px;
-  max-height: none;
+  height: var(--lc-header-height);
+  min-height: var(--lc-header-height);
+  max-height: var(--lc-header-height);
   padding: 5px 12px;
   border-bottom: 1px solid var(--chrome-edge);
   background: var(--panel);
@@ -360,10 +361,16 @@ body {
 }
 
 .lc-header-left {
-  justify-self: start;
+  justify-self: stretch;
+  width: 100%;
   min-width: 0;
   overflow: hidden;
-  white-space: nowrap;
+  container-type: inline-size;
+  container-name: lc-header-left;
+}
+
+.lc-header-left > .lc-tip-target {
+  flex-shrink: 0;
 }
 
 .lc-header-right {
@@ -417,19 +424,25 @@ body {
 /*
  * Home plus every open workspace, in the header beside the brand.
  *
- * `flex: 0 1 auto` — wide enough for its chips, but the first thing to give
- * way. `.lc-header-left` is clamped to its grid track and clips, so a tenth
- * tab scrolls inside the strip rather than pushing Run / Submit off-centre.
+ * `flex: 1 1 0` — fills the header's left track up to the icon cluster.
+ * Chips inside share that width. `.lc-header-left` is stretched (not
+ * `justify-self: start`) so the 1fr grid column is actually usable. Extra
+ * chips then scroll inside the strip rather than pushing the icons.
  */
 .lc-tab-strip {
   display: flex;
   flex: 1 1 0;
-  align-items: center;
-  gap: 4px;
+  align-items: stretch;
+  align-self: stretch;
+  gap: 0;
+  width: 100%;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 7px 7px 0 0;
+  background: var(--panel, var(--bg));
 }
 
 .lc-tab-strip::-webkit-scrollbar {
@@ -438,26 +451,34 @@ body {
 
 .lc-tab {
   display: flex;
-  flex: 0 1 auto;
+  flex: 1 1 0;
   align-items: center;
-  max-width: 12rem;
   min-width: 44px;
+  max-width: none;
   overflow: hidden;
-  border: 1px solid var(--chrome-edge);
-  border-radius: 6px;
-  background: var(--bg);
+  border: 0;
+  border-radius: 0;
+  border-right: 1px solid var(--chrome-edge);
+  background: transparent;
+  box-shadow: none;
+  container-type: inline-size;
+  container-name: lc-tab;
+}
+
+.lc-tab:last-child {
+  border-right: 0;
 }
 
 .lc-tab.is-active {
-  /* The one whose name is worth the most room — it also carries the badge. */
-  max-width: 16rem;
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 /* Home wearing Cancel for the length of a load. Same chip, same slot, so the
    strip does not shift out from under whatever is being pointed at. */
 .lc-tab.is-cancelling {
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .lc-tab.is-cancelling .lc-tab-hit {
@@ -483,6 +504,8 @@ body {
    * is actually driven.
    */
   touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
   min-width: 0;
   flex: 1 1 0;
   overflow: hidden;
@@ -552,25 +575,20 @@ body {
 }
 
 /*
- * Collapse titles before the strip starts scrolling. Parked tabs go to icons
- * first — the one being looked at keeps its name longest, and the `[indexed]`
- * badge goes with the title it belongs to. 640px is where the brand already
- * gives up its width, so the strip inherits the same tier.
+ * Titles ellipsis inside the chip. Hide per-chip when that chip is too
+ * narrow — not at a viewport breakpoint, which used to collapse every
+ * parked tab at once and leave a hole before the icons.
  */
-@media (max-width: 900px) {
-  .lc-tab:not(.is-active) .lc-tab-title,
-  .lc-tab:not(.is-active) .lc-doc-index-chip {
-    display: none;
-  }
-}
-
-@media (max-width: 640px) {
+@container lc-tab (max-width: 72px) {
   .lc-tab-title,
   .lc-tab .lc-doc-index-chip {
     display: none;
   }
+}
 
-  .lc-tab:not(.is-active) .lc-tab-close {
+@container lc-header-left (max-width: 220px) {
+  .lc-brand,
+  .lc-browse-hint {
     display: none;
   }
 }
@@ -763,7 +781,6 @@ html[data-theme="dark"] .lc-web-doc {
 }
 
 @media (max-width: 640px) {
-  .lc-brand,
   .lc-browse-hint {
     display: none;
   }
@@ -1007,12 +1024,25 @@ input[type="checkbox"] {
   pointer-events: auto;
 }
 
+/* Once the sash owns the pointer, boards must not steal the move. */
+body[data-lc-sash-drag] .lc-canvas-wrap,
+body[data-lc-sash-drag] .lc-board-chrome-slot {
+  pointer-events: none !important;
+}
+
 .lc-main.is-split-horizontal {
   flex-direction: column;
 }
 
+.lc-canvas-wrap.is-split-a,
+.lc-canvas-wrap.is-split-b {
+  transition: none;
+}
+
 .lc-canvas-wrap.is-split-a {
-  flex: var(--lc-split-a, 0.5) 1 0;
+  flex-grow: var(--lc-split-a, 0.5);
+  flex-shrink: 1;
+  flex-basis: 0;
   min-width: 0;
   min-height: 0;
   order: 1;
@@ -1020,7 +1050,9 @@ input[type="checkbox"] {
 }
 
 .lc-canvas-wrap.is-split-b {
-  flex: var(--lc-split-b, 0.5) 1 0;
+  flex-grow: var(--lc-split-b, 0.5);
+  flex-shrink: 1;
+  flex-basis: 0;
   min-width: 0;
   min-height: 0;
   order: 3;
@@ -1033,6 +1065,27 @@ input[type="checkbox"] {
 }
 
 /*
+ * Overlay the seam. A 12px flex gap sat *between* the panes; Excalidraw and
+ * the board chrome slot still ate the pointer. Absolute on the split line
+ * paints the hit target on top of both wraps.
+ */
+.lc-main.is-split-vertical > .lc-split-sash.is-vertical {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  height: auto;
+  display: block;
+  left: calc(
+    100% * var(--lc-split-a, 0.5) /
+      (var(--lc-split-a, 0.5) + var(--lc-split-b, 0.5))
+  );
+  width: 24px;
+  margin-left: -12px;
+  flex: none;
+  z-index: 1000;
+}
+
+/*
  * The sash, VS Code's way: invisible at rest, a blue seam under the pointer.
  *
  * The button is a wide-enough hit target to actually grab; the line you see is
@@ -1042,16 +1095,23 @@ input[type="checkbox"] {
  */
 .lc-split-sash {
   order: 2;
-  flex: 0 0 8px;
+  flex: 0 0 12px;
   position: relative;
   padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
   touch-action: none;
-  /* Above the board-chrome slot (50). Overlay used to eat the seam hit. */
-  z-index: 80;
+  -webkit-touch-callout: none;
+  user-select: none;
+  /* Above the board-chrome slot (50) and capture overlays (80). A pane
+   * paints to its edge; without this the wrap eats the seam. */
+  z-index: 400;
   pointer-events: auto;
+  isolation: isolate;
 }
 
 .lc-split-sash.is-vertical::before {
@@ -1101,6 +1161,31 @@ input[type="checkbox"] {
   inset: 0 auto 0 50%;
   width: 2px;
   margin-left: -1px;
+  background: color-mix(in srgb, var(--ink, #333) 28%, var(--chrome-edge, #888));
+}
+
+.lc-split-sash-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.lc-split-sash-grip i {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ink, #333) 45%, transparent);
+}
+
+.lc-split-sash.is-horizontal .lc-split-sash-grip {
+  flex-direction: row;
 }
 
 .lc-split-sash.is-vertical:hover::after,
@@ -1134,6 +1219,22 @@ input[type="checkbox"] {
   margin-top: -2px;
 }
 
+@media (pointer: coarse) {
+  .lc-split-sash.is-vertical {
+    flex-basis: 20px;
+  }
+
+  .lc-split-sash.is-vertical::before {
+    inset: 0 -12px;
+  }
+
+  .lc-split-sash.is-vertical::after {
+    width: 3px;
+    margin-left: -1.5px;
+    background: color-mix(in srgb, var(--ink, #333) 35%, var(--chrome-edge, #888));
+  }
+}
+
 /*
  * Pointer capture keeps the *events* on the sash once the pointer wanders off
  * it, but not the cursor — that still comes from whatever is underneath, so a
@@ -1164,8 +1265,8 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-tab.is-drop-target {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 /*
@@ -1329,70 +1430,39 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 /*
- * A split's two chips, inside one frame.
- *
- * The frame is a separate element rather than a border on the row so it can
- * be animated on its own — it scales out from the pair as the group forms and
- * collapses back as it breaks, while the chips themselves travel to meet each
- * other. `display: contents` is not an option here: the row is the box the
- * frame is measured against.
+ * A split's two chips sit in one row. The whole strip already uses the
+ * compact grouped look, so the pair does not get a second frame.
  */
 .lc-tab-row {
   position: relative;
   display: flex;
-  flex: 0 0 auto;
+  flex: 1 1 0;
   align-items: center;
-  gap: 4px;
+  gap: 0;
+  min-width: 0;
 }
 
-.lc-tab-row.is-group {
-  gap: 0;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid var(--chrome-edge);
-  border-radius: 7px 7px 0 0;
-  background: var(--panel, var(--bg));
+.lc-tab-row .lc-tab:last-child {
+  border-right: 1px solid var(--chrome-edge);
+}
+
+.lc-tab-row:last-child .lc-tab:last-child {
+  border-right: 0;
 }
 
 .lc-tab-row.is-group .lc-tab-group-frame {
   display: none;
 }
 
-.lc-tab-row.is-group .lc-tab {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  border-right: 1px solid var(--chrome-edge);
-}
-
-.lc-tab-row.is-group .lc-tab:last-child {
-  border-right: 0;
-}
-
-.lc-tab-row.is-group .lc-tab.is-active {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
-
-.lc-tab-row.is-group .lc-tab.is-grouped {
-  box-shadow: none;
-}
-
-.lc-tab-row.is-group .lc-tab.is-active.is-grouped {
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
-
 .lc-tab-group-frame {
-  position: absolute;
-  inset: -2px 0;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  pointer-events: none;
+  display: none;
 }
 
 .lc-tab.is-grouped {
+  box-shadow: none;
+}
+
+.lc-tab.is-active.is-grouped {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
@@ -2566,11 +2636,11 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 /*
- * Skinny board hole: same column island as a docked `is-column`, plus a gutter
- * so the pager/dock cannot sit under Recentre / theme / eye (~56px) or the
- * annotate toggle (~56px). Matches TOOLBAR_NARROW_COLUMN_PX (480).
+ * Skinny split / tiny window: same column island as a docked `is-column`.
+ * JS `toolbarBoardIsNarrow` is the real switch (full-screen tablets at
+ * 400 CSS px must stay a row). This query is only the last-resort floor.
  */
-@container lc-board (max-width: 480px) {
+@container lc-board (max-width: 320px) {
   .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating) {
     max-width: 56px;
     overflow: visible;
@@ -3592,6 +3662,42 @@ body[data-lc-sash-drag="horizontal"] {
   opacity: 0.4;
 }
 
+.lc-tool.lc-reset-tool.is-locked {
+  opacity: 1;
+}
+
+.lc-reset-tool.is-locked .lc-tool-svg {
+  opacity: 0.4;
+}
+
+.lc-reset-tool {
+  position: relative;
+}
+
+.lc-reset-mode-dots {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  display: flex;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.lc-reset-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface, #fff) 70%, transparent);
+}
+
+.lc-reset-dot.is-ink {
+  background: #d97706;
+}
+
+.lc-reset-dot.is-annotations {
+  background: #0d9488;
+}
+
 .lc-tool-mini {
   width: 36px;
   min-height: 30px;
@@ -4256,15 +4362,15 @@ body[data-lc-sash-drag="horizontal"] {
   justify-content: flex-end;
   gap: 6px;
   padding-right: env(safe-area-inset-right, 0px);
+  overflow: visible;
 }
 
 /*
  * One card for Recentre / lined / theme / eye — not four floating tiles.
  *
- * Column by default so a narrow board keeps the dock's width. A short, wide
- * hole (resized desktop window) lays the same buttons in a row so the stack
- * does not climb the page. Wake-dot mode drops the card chrome: that control
- * is a corner, not a panel.
+ * Always a column. Explore search grows left off the icon, which only reads
+ * if the tray is a stack of squares, not a row. Wake-dot mode drops the card
+ * chrome: that control is a corner, not a panel.
  */
 .lc-map-chrome-stack {
   display: flex;
@@ -4273,6 +4379,7 @@ body[data-lc-sash-drag="horizontal"] {
   justify-content: flex-end;
   gap: 2px;
   padding: 3px;
+  overflow: visible;
   border: 1px solid var(--chrome-edge);
   border-radius: 10px;
   background: color-mix(in srgb, var(--surface) 96%, transparent);
@@ -4318,27 +4425,6 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-map-chrome-stack > .lc-lined-toggle.is-active {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-@media (max-height: 520px) and (min-width: 720px) {
-  .lc-map-chrome-stack:not(:has(> .lc-chrome-wake)) {
-    flex-direction: row;
-    align-items: center;
-  }
-}
-
-@container lc-board (max-height: 480px) and (min-width: 720px) {
-  .lc-map-chrome-stack:not(:has(> .lc-chrome-wake)) {
-    flex-direction: row;
-    align-items: center;
-  }
-}
-
-@media (max-width: 700px) {
-  .lc-map-chrome-stack:not(:has(> .lc-chrome-wake)) {
-    flex-direction: column;
-    align-items: stretch;
-  }
 }
 
 .lc-map-chrome-row {
@@ -5039,11 +5125,172 @@ body[data-lc-sash-drag="horizontal"] {
   overflow: hidden;
 }
 
+.lc-explore-chrome-slot:empty {
+  display: none;
+}
+
+.lc-morph-bar.lc-explore-chrome-morph {
+  min-width: 0;
+  overflow: visible;
+}
+
+.lc-explore-chrome-morph .lc-morph-panel {
+  transform: none;
+  filter: none;
+  overflow: visible;
+}
+
+.lc-explore-chrome-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.lc-explore-chrome-tools .lc-lined-toggle {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  border-radius: 7px;
+  min-height: 32px;
+}
+
+.lc-explore-chrome-tools .lc-lined-toggle:hover {
+  background: var(--panel);
+}
+
+.lc-explore-chrome-tools .lc-lined-toggle.is-active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
 .lc-explore-chrome {
   position: absolute;
-  top: 12px;
+  top: auto;
   right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  left: auto;
   z-index: 4;
+  overflow: visible;
+}
+
+.lc-explore-chrome .lc-map-chrome-stack {
+  flex-direction: inherit;
+  align-items: stretch;
+}
+
+.lc-explore-chrome .lc-palette-popover-map {
+  bottom: calc(100% + 6px);
+  left: auto;
+  right: 0;
+  top: auto;
+}
+
+.lc-explore-filter {
+  position: relative;
+}
+
+.lc-explore-filter-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 12rem;
+  padding: 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  z-index: 6;
+}
+
+.lc-explore-search-morph {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  width: 36px;
+  min-width: 36px;
+  height: 32px;
+  margin-inline: auto;
+  overflow: visible;
+  border-radius: 8px;
+}
+
+.lc-explore-search-morph.is-open {
+  z-index: 8;
+}
+
+.lc-explore-search-morph input {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  box-sizing: border-box;
+  width: 0;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  border: 1px solid transparent;
+  border-right: 0;
+  border-radius: 8px 0 0 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  transition:
+    width 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 180ms ease,
+    padding 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms ease;
+}
+
+.lc-explore-search-morph.is-open input {
+  width: 13.5rem;
+  padding: 0 28px 0 10px;
+  opacity: 1;
+  pointer-events: auto;
+  border-color: var(--chrome-edge);
+}
+
+.lc-explore-search-morph input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.lc-explore-search-morph .lc-explore-search-clear {
+  position: absolute;
+  top: 8px;
+  right: calc(100% + 6px);
+  z-index: 1;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lc-explore-search-morph.is-open .lc-explore-search-clear {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.lc-explore-search-morph .lc-lined-toggle {
+  flex: 0 0 auto;
+  width: 36px;
+}
+
+.lc-explore-search-morph.is-open .lc-lined-toggle {
+  border: 1px solid var(--chrome-edge);
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  background: var(--surface);
 }
 
 .lc-explore-empty {
@@ -5091,6 +5338,29 @@ body[data-lc-sash-drag="horizontal"] {
   text-transform: uppercase;
   white-space: nowrap;
   pointer-events: none;
+  animation: lc-explore-label-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes lc-explore-label-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -100%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-explore-cluster-label,
+  .lc-explore-search-morph,
+  .lc-explore-search-morph input,
+  .lc-node-sheet.is-open,
+  .lc-node-sheet.is-closing {
+    animation: none;
+    transition: none;
+  }
 }
 
 /* ---- beams ---- */
@@ -5189,9 +5459,17 @@ body[data-lc-sash-drag="horizontal"] {
   background: transparent;
   color: var(--ink);
   font: inherit;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
   /* The rAF loop owns `transform`; only paint properties transition. */
   transition: opacity 200ms ease;
+}
+
+.lc-explore-node:active {
+  cursor: grabbing;
+  z-index: 2;
 }
 
 .lc-explore-node-dot {
@@ -5302,8 +5580,58 @@ body[data-lc-sash-drag="horizontal"] {
  * open/close animation come from `.lc-preset-sheet` unchanged.
  */
 .lc-node-sheet {
-  width: min(460px, calc(100% - 24px));
-  max-height: min(70%, 560px);
+  left: 0;
+  top: 0;
+  transform: none;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(72vh, 520px);
+}
+
+.lc-node-sheet.is-open {
+  animation: lc-node-sheet-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-node-sheet.is-closing {
+  animation: lc-node-sheet-out 180ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes lc-node-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lc-node-sheet-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+.lc-node-sheet .lc-preset-sheet-head {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  padding: 10px 12px;
+}
+
+.lc-node-sheet .lc-preset-sheet-name {
+  font-size: 17px;
+  min-width: 0;
+  flex: 1 1 8rem;
+}
+
+.lc-node-sheet .lc-preset-sheet-meta {
+  flex: 1 0 100%;
+  padding-left: 0;
 }
 
 .lc-node-sheet-tabs {
@@ -9768,7 +10096,9 @@ button.lc-row-selected:hover:not(:disabled) {
   column-gap: 4px;
   padding: calc(2px + var(--lc-safe-top)) calc(4px + var(--lc-safe-right)) 3px
     calc(4px + var(--lc-safe-left));
-  min-height: 0;
+  height: calc(var(--lc-header-height) + var(--lc-safe-top, 0px));
+  min-height: calc(var(--lc-header-height) + var(--lc-safe-top, 0px));
+  max-height: calc(var(--lc-header-height) + var(--lc-safe-top, 0px));
 }
 
 .lc-mobile .lc-header-left,
@@ -9778,7 +10108,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-header-left {
-  justify-self: start;
+  justify-self: stretch;
 }
 
 .lc-mobile .lc-header-right {
@@ -9809,15 +10139,11 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile.lc-app-problem .lc-header {
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
 .lc-mobile.lc-app-problem .lc-header-center {
   justify-self: center;
-}
-
-.lc-mobile.lc-app-problem .lc-header-left {
-  max-width: 40vw;
 }
 
 .lc-mobile .lc-header-center .lc-actions {
@@ -9858,10 +10184,6 @@ button.lc-row-selected:hover:not(:disabled) {
   min-height: 22px;
   padding: 0 6px;
   font-size: 11px;
-}
-
-.lc-mobile .lc-tab {
-  max-width: 9rem;
 }
 
 .lc-mobile .lc-header .lc-tab-close {
@@ -11066,6 +11388,40 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-scratch-load-trash:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.lc-scratch-load-lock {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 46px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-left: 1px solid var(--border, rgb(127 127 127 / 25%));
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--ink) 55%, transparent);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.lc-scratch-load-lock:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--fg);
+}
+
+.lc-scratch-load-lock.is-locked {
+  color: var(--accent);
+}
+
+.lc-scratch-load-lock:disabled {
   opacity: 0.4;
   cursor: default;
 }
@@ -12312,6 +12668,8 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 6px;
   overflow: hidden;
   padding: 8px;
+  /* clampPanel sets left/top. Sheet pop uses transform — it would shove the card. */
+  animation: none;
 }
 
 .lc-footnote-overview.is-task {

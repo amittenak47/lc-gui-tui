@@ -23,13 +23,36 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             match harness::config::Config::load() {
-                Ok(mut cfg) => {
+                Ok(cfg) => {
                     #[cfg(feature = "leetcode")]
-                    if let Err(err) = seed::ensure_corpus_root(&mut cfg, app) {
-                        eprintln!("corpus root: {err}");
+                    let cfg = {
+                        let mut cfg = cfg;
+                        if let Err(err) = seed::ensure_corpus_root(&mut cfg, app) {
+                            eprintln!("corpus root: {err}");
+                        }
+                        cfg
+                    };
+                    #[allow(unused_mut)]
+                    let mut cfg = cfg;
+                    #[cfg(not(target_os = "android"))]
+                    if let Err(err) = cfg.ensure_serve_token() {
+                        eprintln!("pad-sync token: {err:#}");
                     }
-                    let state = harness::serve::new_state(cfg);
-                    app.manage(state);
+                    let gui_state = harness::serve::new_state(cfg.clone());
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        let port = cfg.serve.port;
+                        let token = cfg.serve.token.clone();
+                        let lan_state = harness::serve::new_state_with_token(cfg, token);
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(err) = harness::serve::listen_lan(lan_state, port).await {
+                                eprintln!("pad-sync listener: {err:#}");
+                            }
+                        });
+                    }
+                    app.manage(gui_state);
+                    #[cfg(target_os = "android")]
+                    let _ = cfg;
                     app.manage(lc_client::CoachHub::new());
                     app.manage(dlc::DlcHub::new());
                 }
@@ -97,6 +120,7 @@ pub fn run() {
         lc_routes::lc_restore_annotate,
         lc_routes::lc_put_snapshot,
         lc_routes::lc_get_snapshots,
+        lc_routes::lc_pads_sync,
         lc_routes::lc_list_devices,
         lc_routes::lc_get_device_prefs,
         lc_routes::lc_put_device_prefs,

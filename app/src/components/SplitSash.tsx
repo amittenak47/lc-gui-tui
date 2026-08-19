@@ -1,14 +1,29 @@
 /**
  * The bar between a split's two panes — the VS Code sash.
  *
- * Drag resizes live. Window-level pointer listeners, not button capture:
- * a parent re-render from `set-ratio` used to drop capture, so the seam
- * looked selected and the panes never moved.
+ * Live resize writes CSS variables on `<main>` only. React learns the ratio
+ * on pointerup. Mid-drag `set-ratio` used to re-render App and stamp the old
+ * 0.5 back over the drag.
+ *
+ * Listeners go on `window` in the *capture* phase, from pointerdown, not from
+ * a `dragging` effect. Two things that used to eat the gesture:
+ *
+ * 1. A parent `set-ratio` re-render dropped button pointer capture.
+ * 2. Bubble-only `window` listeners never saw the move: Excalidraw (and the
+ *    Android WebView) stop the event on the canvas under the finger.
  */
 
 import { useEffect, useRef, useState } from "react";
 
 import { clampSplitRatio, type SplitAxis } from "../util/tabs";
+
+const MOVE_OPTS: AddEventListenerOptions = { capture: true, passive: false };
+
+function writeRatio(main: HTMLElement | null, ratio: number) {
+  if (!main) return;
+  main.style.setProperty("--lc-split-a", String(ratio));
+  main.style.setProperty("--lc-split-b", String(1 - ratio));
+}
 
 export function SplitSash({
   axis,
@@ -20,9 +35,11 @@ export function SplitSash({
   const [dragging, setDragging] = useState(false);
   const sashRef = useRef<HTMLButtonElement>(null);
   const dragRef = useRef(false);
+  const ratioRef = useRef<number | null>(null);
   const onRatioRef = useRef(onRatio);
   onRatioRef.current = onRatio;
   const lastTapRef = useRef(0);
+  const unbindRef = useRef<(() => void) | null>(null);
 
   const ratioAt = (x: number, y: number): number | null => {
     const sash = sashRef.current;
@@ -36,39 +53,53 @@ export function SplitSash({
     );
   };
 
-  const applyRatio = (x: number, y: number) => {
+  const applyCss = (x: number, y: number) => {
     const ratio = ratioAt(x, y);
     if (ratio === null) return;
-    const main = sashRef.current?.parentElement;
-    if (main) {
-      main.style.setProperty("--lc-split-a", String(ratio));
-      main.style.setProperty("--lc-split-b", String(1 - ratio));
-    }
-    onRatioRef.current(ratio);
+    ratioRef.current = ratio;
+    writeRatio(sashRef.current?.parentElement ?? null, ratio);
   };
 
-  useEffect(() => {
-    if (!dragging) return;
+  const unbind = () => {
+    unbindRef.current?.();
+    unbindRef.current = null;
+    dragRef.current = false;
+    setDragging(false);
+    delete document.body.dataset.lcSashDrag;
+  };
+
+  useEffect(() => () => unbindRef.current?.(), []);
+
+  const bindDrag = () => {
+    unbindRef.current?.();
     const onMove = (event: PointerEvent) => {
       if (!dragRef.current) return;
       event.preventDefault();
-      applyRatio(event.clientX, event.clientY);
+      applyCss(event.clientX, event.clientY);
     };
-    const onUp = () => {
-      dragRef.current = false;
-      setDragging(false);
+    const onUp = (event: PointerEvent) => {
+      if (!dragRef.current) return;
+      applyCss(event.clientX, event.clientY);
+      const ratio = ratioRef.current;
+      unbind();
+      if (ratio != null) onRatioRef.current(ratio);
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("pointermove", onMove, MOVE_OPTS);
+    document.addEventListener("pointermove", onMove, MOVE_OPTS);
+    window.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onUp, true);
+    document.addEventListener("pointercancel", onUp, true);
     document.body.dataset.lcSashDrag = axis;
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      delete document.body.dataset.lcSashDrag;
+    unbindRef.current = () => {
+      window.removeEventListener("pointermove", onMove, MOVE_OPTS);
+      document.removeEventListener("pointermove", onMove, MOVE_OPTS);
+      window.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onUp, true);
+      document.removeEventListener("pointercancel", onUp, true);
     };
-  }, [axis, dragging]);
+  };
 
   return (
     <button
@@ -76,7 +107,7 @@ export function SplitSash({
       type="button"
       role="separator"
       aria-orientation={axis === "vertical" ? "vertical" : "horizontal"}
-      aria-label="Resize split"
+      aria-label="Drag to resize the two panes"
       aria-pressed={dragging}
       className={["lc-split-sash", `is-${axis}`, dragging ? "is-dragging" : ""]
         .filter(Boolean)
@@ -86,22 +117,20 @@ export function SplitSash({
         const now = Date.now();
         if (now - lastTapRef.current < 320) {
           lastTapRef.current = 0;
-          dragRef.current = false;
-          setDragging(false);
-          const main = sashRef.current?.parentElement;
-          if (main) {
-            main.style.setProperty("--lc-split-a", "0.5");
-            main.style.setProperty("--lc-split-b", "0.5");
-          }
+          unbind();
+          writeRatio(sashRef.current?.parentElement ?? null, 0.5);
           onRatioRef.current(0.5);
           return;
         }
         lastTapRef.current = now;
-        dragRef.current = true;
-        setDragging(true);
         event.preventDefault();
         event.stopPropagation();
-        applyRatio(event.clientX, event.clientY);
+        event.nativeEvent.stopImmediatePropagation();
+        dragRef.current = true;
+        setDragging(true);
+        event.currentTarget.setPointerCapture(event.pointerId);
+        bindDrag();
+        applyCss(event.clientX, event.clientY);
       }}
       onKeyDown={(event) => {
         const main = event.currentTarget.parentElement;
@@ -117,12 +146,21 @@ export function SplitSash({
         const step = (event.shiftKey ? 40 : 12) / Math.max(1, span);
         const back = axis === "vertical" ? "ArrowLeft" : "ArrowUp";
         const forward = axis === "vertical" ? "ArrowRight" : "ArrowDown";
-        if (event.key === back) onRatio(clampSplitRatio(here - step));
-        else if (event.key === forward) onRatio(clampSplitRatio(here + step));
-        else if (event.key === "Home") onRatio(0.5);
+        let next: number | null = null;
+        if (event.key === back) next = clampSplitRatio(here - step);
+        else if (event.key === forward) next = clampSplitRatio(here + step);
+        else if (event.key === "Home") next = 0.5;
         else return;
         event.preventDefault();
+        writeRatio(main, next);
+        onRatio(next);
       }}
-    />
+    >
+      <span className="lc-split-sash-grip" aria-hidden>
+        <i />
+        <i />
+        <i />
+      </span>
+    </button>
   );
 }

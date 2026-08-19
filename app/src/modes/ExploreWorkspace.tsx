@@ -23,17 +23,22 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { BackgroundPalette } from "../components/BackgroundPalette";
+import { MorphBar } from "../components/MorphBar";
+import { useShell } from "../shellContext";
 import { NodeSheet, type NodeSheetNeighbour } from "./NodeSheet";
 import {
   CLUSTERS,
   clusterCentres,
   clusterLabels,
+  clusterSettled,
   makeBodies,
   sagOf,
   settle,
   step,
+  EDGE_PAD,
   type Body,
   type Link,
 } from "./exploreLayout";
@@ -61,6 +66,12 @@ export interface ExploreWorkspaceProps {
   canOpenInNewTab: (node: NodeRef) => boolean;
   onUnlink?: (edgeId: string) => void;
   onRename?: (node: NodeRef, title: string) => void;
+  /** Tools join the board tray only while this tab is the one on screen. */
+  active?: boolean;
+  /** Parked Explore must not keep a portal in the board tray. */
+  showing?: boolean;
+  /** Wait for the board's tray slot rather than filling the shell slot. */
+  embedInBoardTray?: boolean;
 }
 
 const EDGE_LABEL: Record<EdgeKind, string> = {
@@ -98,13 +109,24 @@ export function ExploreWorkspace({
   canOpenInNewTab,
   onUnlink,
   onRename,
+  active = true,
+  showing = true,
+  embedInBoardTray = false,
 }: ExploreWorkspaceProps) {
+  const { headerSlots } = useShell();
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selected, setSelected] = useState<NodeRef | null>(null);
   const [sheetFrom, setSheetFrom] = useState<DOMRect | null>(null);
-  const [filter, setFilter] = useState<NodeType | "all">("all");
+  const [kinds, setKinds] = useState<NodeType[]>([]);
   const [query, setQuery] = useState("");
+  const [queryDraft, setQueryDraft] = useState("");
   const [clustered, setClustered] = useState(false);
+  const [clusterReady, setClusterReady] = useState(false);
+  const [frozenLabels, setFrozenLabels] = useState<
+    Array<{ type: NodeType; label: string; x: number; y: number }>
+  >([]);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   /** Bumped when the loop wants the labels redrawn, which is not every frame. */
   const [labelTick, setLabelTick] = useState(0);
 
@@ -121,8 +143,23 @@ export function ExploreWorkspace({
   const boxRef = useRef({ w: 0, h: 0 });
   const clusteredRef = useRef(clustered);
   clusteredRef.current = clustered;
+  const clusterReadyRef = useRef(clustered);
+  clusterReadyRef.current = clusterReady;
+  const chromeRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const [chromeHost, setChromeHost] = useState<HTMLElement | null>(null);
+  const [inBoardStack, setInBoardStack] = useState(false);
   /** So the seeding effect can repaint without depending on the painter. */
   const paintRef = useRef<() => void>(() => {});
+  const pinnedKeyRef = useRef<string | null>(null);
+  const skipNodeClickRef = useRef(false);
+  const dragNodeRef = useRef<{
+    key: string;
+    pointerId: number;
+    x: number;
+    y: number;
+    moved: boolean;
+  } | null>(null);
 
   useEffect(() => {
     edgeIndexRef.current = new Map(edges.map((edge) => [edge.id, edge]));
@@ -147,11 +184,11 @@ export function ExploreWorkspace({
   const shown = useMemo(() => {
     const wanted = query.trim().toLowerCase();
     return nodes.filter((node) => {
-      if (filter !== "all" && node.type !== filter) return false;
+      if (kinds.length > 0 && !kinds.includes(node.type)) return false;
       if (!wanted) return true;
       return (node.title ?? node.id).toLowerCase().includes(wanted);
     });
-  }, [filter, nodes, query]);
+  }, [kinds, nodes, query]);
 
   const shownKeys = useMemo(() => shown.map(nodeKey).join("|"), [shown]);
 
@@ -293,6 +330,14 @@ export function ExploreWorkspace({
       );
       paint();
       setLabelTick((tick) => tick + 1);
+      if (clustered) {
+        const centres = clusterCentres(bodiesRef.current.map((body) => body.node.type));
+        const aspect = box.h > 0 ? box.w / box.h : 1.6;
+        if (clusterSettled(bodiesRef.current, centres, aspect)) {
+          setFrozenLabels(clusterLabels(bodiesRef.current));
+          setClusterReady(true);
+        }
+      }
       return;
     }
     let frame = 0;
@@ -307,16 +352,26 @@ export function ExploreWorkspace({
       elapsed += dt;
       sinceLabels += dt;
       const box = boxRef.current;
-      step(bodiesRef.current, clusterCentres(bodiesRef.current.map((body) => body.node.type)), {
+      const centres = clusterCentres(bodiesRef.current.map((body) => body.node.type));
+      const aspect = box.h > 0 ? box.w / box.h : 1.6;
+      step(bodiesRef.current, centres, {
         clustered: clusteredRef.current,
         dt,
         time: elapsed,
-        aspect: box.h > 0 ? box.w / box.h : 1.6,
+        aspect,
         links: linksRef.current,
+        pinnedKey: pinnedKeyRef.current,
       });
       paint();
-      // Cluster captions follow their members, but at four frames a second:
-      // they are text, and text that moves every frame is unreadable.
+      if (clusteredRef.current) {
+        const ready = clusterSettled(bodiesRef.current, centres, aspect);
+        if (ready && !clusterReadyRef.current) {
+          clusterReadyRef.current = true;
+          setFrozenLabels(clusterLabels(bodiesRef.current));
+          setClusterReady(true);
+        }
+      }
+      // Edges follow node identity, not every frame. Captions wait on settle.
       if (sinceLabels > 0.25) {
         sinceLabels = 0;
         setLabelTick((value) => value + 1);
@@ -353,10 +408,79 @@ export function ExploreWorkspace({
     return new Set(neighboursOf(selected).map((row) => nodeKey(row.node)));
   }, [neighboursOf, selected]);
 
-  const labels = useMemo(
-    () => (clustered ? clusterLabels(bodiesRef.current) : []),
-    [clustered, labelTick],
-  );
+  useEffect(() => {
+    clusterReadyRef.current = false;
+    setClusterReady(false);
+  }, [clustered]);
+
+  useEffect(() => {
+    if (!filterOpen && !searchOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!chromeRef.current?.contains(event.target as Node)) {
+        setFilterOpen(false);
+        setSearchOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointer);
+    return () => document.removeEventListener("pointerdown", onPointer);
+  }, [filterOpen, searchOpen]);
+
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (active) return;
+    setFilterOpen(false);
+    setSearchOpen(false);
+  }, [active]);
+
+  useEffect(() => {
+    if (!showing) {
+      setChromeHost(null);
+      setInBoardStack(false);
+      return;
+    }
+    const find = () => {
+      const slot = document.querySelector("[data-lc-explore-chrome]") as HTMLElement | null;
+      if (slot) {
+        setChromeHost(slot);
+        setInBoardStack(true);
+        return;
+      }
+      if (embedInBoardTray) {
+        setChromeHost(null);
+        setInBoardStack(false);
+        return;
+      }
+      setChromeHost(headerSlots.boardChrome);
+      setInBoardStack(false);
+    };
+    find();
+    const root = headerSlots.boardChrome;
+    if (!root) return;
+    const observer = new MutationObserver(find);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [showing, embedInBoardTray, headerSlots.boardChrome]);
+
+  const toggleKind = (type: NodeType) => {
+    setKinds((was) => (was.includes(type) ? was.filter((row) => row !== type) : [...was, type]));
+  };
+
+  const toggleCluster = () => {
+    if (clustered) {
+      for (const body of bodiesRef.current) {
+        body.parkedX = body.x;
+        body.parkedY = body.y;
+      }
+      setClustered(false);
+      return;
+    }
+    setClustered(true);
+  };
+
+  const labels = clustered && clusterReady ? frozenLabels : [];
 
   const counts = useMemo(() => {
     const out = new Map<NodeType, number>();
@@ -369,88 +493,169 @@ export function ExploreWorkspace({
     setSelected(node);
   };
 
-  return (
-    <div className="lc-explore">
-      <header className="lc-explore-bar">
-        <div className="lc-explore-filters" role="tablist" aria-label="Filter by kind">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={filter === "all"}
-            className={filter === "all" ? "lc-explore-chip is-active" : "lc-explore-chip"}
-            onClick={() => setFilter("all")}
+  const placeDragged = (key: string, clientX: number, clientY: number) => {
+    const host = hostRef.current;
+    const body = bodiesRef.current.find((entry) => entry.key === key);
+    if (!host || !body) return;
+    const box = host.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) return;
+    body.x = Math.min(1 - EDGE_PAD, Math.max(EDGE_PAD, (clientX - box.left) / box.width));
+    body.y = Math.min(1 - EDGE_PAD, Math.max(EDGE_PAD, (clientY - box.top) / box.height));
+    body.vx = 0;
+    body.vy = 0;
+    paint();
+  };
+
+  const exploreTools = (
+    <MorphBar
+      active={active ? "tools" : "idle"}
+      axis="height"
+      className="lc-explore-chrome-morph"
+    >
+      <div data-morph-id="idle" />
+      <div data-morph-id="tools">
+        <div className="lc-explore-chrome-tools" ref={chromeRef}>
+          <form
+            className={searchOpen ? "lc-explore-search-morph is-open" : "lc-explore-search-morph"}
+            onSubmit={(event) => {
+              event.preventDefault();
+              setQuery(queryDraft.trim());
+              setSearchOpen(false);
+            }}
           >
-            All
-            <span className="lc-explore-chip-count">{nodes.length}</span>
-          </button>
-          {CLUSTERS.filter((cluster) => (counts.get(cluster.type) ?? 0) > 0).map((cluster) => (
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={queryDraft}
+              placeholder="Find by title"
+              aria-label="Find a workspace by title"
+              tabIndex={searchOpen ? 0 : -1}
+              onChange={(event) => {
+                setQueryDraft(event.target.value);
+                setQuery(event.target.value);
+              }}
+            />
+            {queryDraft ? (
+              <button
+                type="button"
+                className="lc-explore-search-clear"
+                aria-label="Clear the search"
+                onClick={() => {
+                  setQueryDraft("");
+                  setQuery("");
+                  searchInputRef.current?.focus();
+                }}
+              >
+                ×
+              </button>
+            ) : null}
             <button
-              key={cluster.type}
-              type="button"
-              role="tab"
-              aria-selected={filter === cluster.type}
-              className={
-                filter === cluster.type ? "lc-explore-chip is-active" : "lc-explore-chip"
-              }
-              onClick={() => setFilter(cluster.type)}
+              type={searchOpen ? "submit" : "button"}
+              className="lc-lined-toggle lc-tip-target"
+              aria-label={searchOpen ? "Search" : "Find a workspace"}
+              data-tip={searchOpen ? "Search" : "Find"}
+              data-tip-placement="top"
+              onClick={() => {
+                if (searchOpen) return;
+                setFilterOpen(false);
+                setSearchOpen(true);
+              }}
             >
-              <span className="lc-explore-chip-dot" style={{ background: TINT[cluster.type] }} />
-              {cluster.label}
-              <span className="lc-explore-chip-count">{counts.get(cluster.type)}</span>
+              <SearchIcon />
             </button>
-          ))}
-        </div>
+          </form>
 
-        <div className="lc-explore-search">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden>
-            <circle cx="11" cy="11" r="6.5" />
-            <path d="m16 16 4.5 4.5" />
-          </svg>
-          <input
-            type="search"
-            value={query}
-            placeholder="Find by title"
-            aria-label="Find a workspace by title"
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          {query && (
-            <button
-              type="button"
-              className="lc-explore-search-clear"
-              aria-label="Clear the filter"
-              onClick={() => setQuery("")}
-            >
-              ×
-            </button>
-          )}
-        </div>
-      </header>
-
-      <div className="lc-explore-stage" ref={hostRef}>
-        {/*
-          Same card and button shapes as the board's view controls, cut down to
-          what an atlas has: no pen, no paper, no page to recentre.
-        */}
-        <div className="lc-explore-chrome">
-          <div className="lc-map-chrome-stack" role="toolbar" aria-label="Atlas view">
+          <div className="lc-explore-filter">
             <button
               type="button"
               className={
-                clustered
+                filterOpen || kinds.length > 0
                   ? "lc-lined-toggle lc-tip-target is-active"
                   : "lc-lined-toggle lc-tip-target"
               }
-              aria-pressed={clustered}
-              aria-label={clustered ? "Let the nodes drift apart" : "Gather nodes by kind"}
-              data-tip={clustered ? "Drifting" : "Cluster by kind"}
-              data-tip-placement="left"
-              onClick={() => setClustered((on) => !on)}
+              aria-expanded={filterOpen}
+              aria-label="Filter by kind"
+              data-tip="Kinds"
+              data-tip-placement="top"
+              onClick={() => {
+                setSearchOpen(false);
+                setFilterOpen((on) => !on);
+              }}
             >
-              <ClusterIcon on={clustered} />
+              <FilterIcon />
             </button>
-            <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
+            {filterOpen ? (
+              <div className="lc-explore-filter-pop" role="listbox" aria-label="Kinds" aria-multiselectable="true">
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={kinds.length === 0}
+                  className={kinds.length === 0 ? "lc-explore-chip is-active" : "lc-explore-chip"}
+                  onClick={() => setKinds([])}
+                >
+                  All
+                  <span className="lc-explore-chip-count">{nodes.length}</span>
+                </button>
+                {CLUSTERS.filter((cluster) => (counts.get(cluster.type) ?? 0) > 0).map((cluster) => {
+                  const on = kinds.includes(cluster.type);
+                  return (
+                    <button
+                      key={cluster.type}
+                      type="button"
+                      role="option"
+                      aria-selected={on}
+                      className={on ? "lc-explore-chip is-active" : "lc-explore-chip"}
+                      onClick={() => toggleKind(cluster.type)}
+                    >
+                      <span className="lc-explore-chip-dot" style={{ background: TINT[cluster.type] }} />
+                      {cluster.label}
+                      <span className="lc-explore-chip-count">{counts.get(cluster.type)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
+
+          <button
+            type="button"
+            className={
+              clustered
+                ? "lc-lined-toggle lc-tip-target is-active"
+                : "lc-lined-toggle lc-tip-target"
+            }
+            aria-pressed={clustered}
+            aria-label={clustered ? "Let the nodes drift apart" : "Gather nodes by kind"}
+            data-tip={clustered ? "Drifting" : "Cluster by kind"}
+            data-tip-placement="top"
+            onClick={toggleCluster}
+          >
+            <ClusterIcon on={clustered} />
+          </button>
         </div>
+      </div>
+    </MorphBar>
+  );
+
+  const exploreChrome = inBoardStack ? (
+    exploreTools
+  ) : (
+    <div className="lc-map-controls lc-map-controls-paged">
+      <div className="lc-map-chrome-right">
+        <div className="lc-map-chrome-stack" role="toolbar" aria-label="Atlas view">
+          {exploreTools}
+          <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="lc-explore">
+      <div className="lc-explore-stage" ref={hostRef}>
+        {showing && chromeHost && (active || inBoardStack)
+          ? createPortal(exploreChrome, chromeHost)
+          : null}
 
         {bodiesRef.current.length === 0 ? (
           <p className="lc-explore-empty">
@@ -514,8 +719,7 @@ export function ExploreWorkspace({
               </g>
             </svg>
 
-            {clustered &&
-              labels.map((spot) => (
+            {labels.map((spot) => (
                 <span
                   key={spot.type}
                   className="lc-explore-cluster-label"
@@ -551,7 +755,53 @@ export function ExploreWorkspace({
                       .join(" ")}
                     style={{ ["--lc-node-tint" as string]: TINT[body.node.type] }}
                     aria-pressed={isSelected}
-                    onClick={(event) => select(body.node, event.currentTarget)}
+                    onContextMenu={(event) => event.preventDefault()}
+                    onPointerDown={(event) => {
+                      if (event.button !== 0) return;
+                      dragNodeRef.current = {
+                        key,
+                        pointerId: event.pointerId,
+                        x: event.clientX,
+                        y: event.clientY,
+                        moved: false,
+                      };
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                    }}
+                    onPointerMove={(event) => {
+                      const drag = dragNodeRef.current;
+                      if (!drag || drag.pointerId !== event.pointerId || drag.key !== key) return;
+                      const dx = event.clientX - drag.x;
+                      const dy = event.clientY - drag.y;
+                      if (!drag.moved && dx * dx + dy * dy < 100) return;
+                      drag.moved = true;
+                      skipNodeClickRef.current = true;
+                      pinnedKeyRef.current = key;
+                      placeDragged(key, event.clientX, event.clientY);
+                    }}
+                    onPointerUp={(event) => {
+                      const drag = dragNodeRef.current;
+                      if (!drag || drag.pointerId !== event.pointerId || drag.key !== key) return;
+                      const body = bodiesRef.current.find((entry) => entry.key === key);
+                      if (body && drag.moved) {
+                        body.parkedX = body.x;
+                        body.parkedY = body.y;
+                      }
+                      pinnedKeyRef.current = null;
+                      dragNodeRef.current = null;
+                    }}
+                    onPointerCancel={() => {
+                      if (dragNodeRef.current?.key !== key) return;
+                      pinnedKeyRef.current = null;
+                      dragNodeRef.current = null;
+                      skipNodeClickRef.current = false;
+                    }}
+                    onClick={(event) => {
+                      if (skipNodeClickRef.current) {
+                        skipNodeClickRef.current = false;
+                        return;
+                      }
+                      select(body.node, event.currentTarget);
+                    }}
                   >
                     <span className="lc-explore-node-dot" />
                     <span className="lc-explore-node-label">
@@ -633,6 +883,23 @@ function specOf(node: NodeRef, links: number): Array<[string, string]> {
   }
   rows.push(["Links", String(links)]);
   return rows;
+}
+
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m16 16 4.5 4.5" />
+    </svg>
+  );
+}
+
+function FilterIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4 6h16M7 12h10M10 18h4" />
+    </svg>
+  );
 }
 
 /** Four satellites, drawn loose or gathered. */

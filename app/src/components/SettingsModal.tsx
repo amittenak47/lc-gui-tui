@@ -100,6 +100,7 @@ import {
   saveThisDevicePrefs,
 } from "../util/devicePrefs";
 import { FEATURE_LEETCODE } from "../featureFlags";
+import { loadPadHub, savePadHub } from "../util/padHub";
 
 type TabId = "workspace" | "personalise" | "ai" | "llm";
 
@@ -275,6 +276,7 @@ function emptyConfig(): LcConfig {
       planner: "local",
     },
     serve_port: 7878,
+    serve_token: null,
     coach: { ...DEFAULT_COACH_FLAGS },
     token_set: false,
     openai_key_set: false,
@@ -429,6 +431,10 @@ export function SettingsModal({
    */
   const [storage, setStorage] = useState<(StorageUsage & { persisted: boolean }) | null>(null);
   const [siblingDevices, setSiblingDevices] = useState<DevicePrefsDto[]>([]);
+  const [hubUrl, setHubUrl] = useState("");
+  const [hubToken, setHubToken] = useState("");
+  const [baselineHubUrl, setBaselineHubUrl] = useState("");
+  const [baselineHubToken, setBaselineHubToken] = useState("");
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [colorWheelOnToolbar, setColorWheelOnToolbar] = useState(
     () => loadInkToolPresets().colorWheelOnToolbar,
@@ -606,6 +612,11 @@ export function SettingsModal({
     setChromeWake(prefs.chromeWake);
     setChromeWakeTint(prefs.chromeWakeTint);
     setBaselinePrefs(prefs);
+    const hub = loadPadHub();
+    setHubUrl(hub?.url ?? "");
+    setHubToken(hub?.token ?? "");
+    setBaselineHubUrl(hub?.url ?? "");
+    setBaselineHubToken(hub?.token ?? "");
     if (initialTab) setTab(initialTab);
     setPage("root");
     void (async () => {
@@ -690,7 +701,11 @@ export function SettingsModal({
     clearOpenaiKey ||
     clearGroqKey;
   const dirty =
-    !configEqual(draft, baselineConfig) || !prefsEqual(draftPrefs, baselinePrefs) || keysDirty;
+    !configEqual(draft, baselineConfig) ||
+    !prefsEqual(draftPrefs, baselinePrefs) ||
+    keysDirty ||
+    hubUrl.trim() !== baselineHubUrl ||
+    hubToken.trim() !== baselineHubToken;
 
   const patchProvider = (key: "local" | "ollama" | "openai" | "groq", patch: Partial<ProviderConfig>) => {
     setDraft((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
@@ -759,6 +774,15 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent(ERASER_PARTIAL_EVENT));
         window.dispatchEvent(new CustomEvent(AUTOSAVE_EVENT));
         window.dispatchEvent(new CustomEvent(CHROME_WAKE_EVENT));
+      }
+      const hubDirty =
+        hubUrl.trim() !== baselineHubUrl || hubToken.trim() !== baselineHubToken;
+      if (hubDirty) {
+        const url = hubUrl.trim();
+        const token = hubToken.trim();
+        savePadHub(url && token ? { url, token } : null);
+        setBaselineHubUrl(url);
+        setBaselineHubToken(token);
       }
       if (configDirty) {
         const payload: LcConfigPut = { ...draft };
@@ -1439,6 +1463,41 @@ export function SettingsModal({
                     </li>
                   ))}
               </ul>
+              <div className="lc-settings-subhead">Pad hub</div>
+              <p className="lc-settings-hint">
+                A tablet pings this PC on the LAN and pulls every saved file that
+                changed: whiteboards, annotated documents, rolling snapshots, and
+                PDF/EPUB bytes. Ink pages stay on the device that drew them.
+              </p>
+              {draft.serve_token ? (
+                <p className="lc-settings-hint">
+                  This PC listens on port {draft.serve_port}. Token:{" "}
+                  <code>{draft.serve_token}</code>
+                </p>
+              ) : (
+                <p className="lc-settings-hint">
+                  Open Settings on the desktop app to see the listen port and token.
+                </p>
+              )}
+              <label className="lc-md-new-title">
+                <span className="lc-muted">Connect to a PC — URL</span>
+                <input
+                  type="url"
+                  value={hubUrl}
+                  placeholder="http://192.168.1.10:7878"
+                  onChange={(event) => setHubUrl(event.target.value)}
+                />
+              </label>
+              <label className="lc-md-new-title">
+                <span className="lc-muted">Token</span>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={hubToken}
+                  onChange={(event) => setHubToken(event.target.value)}
+                />
+              </label>
               <div className="lc-settings-subhead">Autosave</div>
               <p className="lc-settings-hint">
                 How often the board writes itself down, so a crash or a closed lid

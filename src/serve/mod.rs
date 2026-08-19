@@ -56,13 +56,33 @@ pub type Shared = Arc<AppState>;
 
 /// Shared state for the embedded router — no LAN token or pair code.
 pub fn new_state(cfg: Config) -> Shared {
+    new_state_with_token(cfg, None)
+}
+
+/// Same router, with a pairing token — used only by the LAN pad-sync listener.
+pub fn new_state_with_token(cfg: Config, token: Option<String>) -> Shared {
     Arc::new(AppState {
         cfg: RwLock::new(cfg),
-        token: None,
+        token,
         sessions: tokio::sync::Mutex::new(SessionStore::default()),
         board_sessions: tokio::sync::Mutex::new(board_session::BoardSessionStore::default()),
         test_lock: tokio::sync::Mutex::new(()),
     })
+}
+
+/// Bind the pad-sync ping (and the rest of the router) on LAN. GUI invoke stays token-free.
+pub async fn listen_lan(state: Shared, port: u16) -> Result<()> {
+    use tokio::net::TcpListener;
+    use tower_http::cors::CorsLayer;
+
+    let app = router(state).layer(CorsLayer::permissive());
+    let listener = TcpListener::bind(("0.0.0.0", port))
+        .await
+        .with_context(|| format!("cannot bind pad-sync listener on 0.0.0.0:{port}"))?;
+    axum::serve(listener, app)
+        .await
+        .context("pad-sync listener stopped")?;
+    Ok(())
 }
 
 /// Dispatch one HTTP request through the router without binding a port.
@@ -152,6 +172,7 @@ pub fn router(state: Shared) -> Router {
         .route("/pads/annotate/:id/restore", post(routes::restore_annotate))
         .route("/pads/snapshots", put(routes::put_snapshot))
         .route("/pads/snapshots/:kind/:key", get(routes::get_snapshots))
+        .route("/pads/sync", get(routes::sync_pads))
         .route("/devices", get(routes::list_devices))
         .route(
             "/devices/:id/prefs",

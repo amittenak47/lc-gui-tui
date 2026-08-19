@@ -170,6 +170,7 @@ import {
   setDrawingImmersive,
 } from "../util/gestureExclusion";
 import { BoardToolbar } from "./BoardToolbar";
+import type { ResetClearMode } from "./resetClearMode";
 import { InkPresetEditor } from "./InkPresetEditor";
 import { InkToolWheel } from "./InkToolWheel";
 import { ScrollBackHold } from "./ScrollBackHold";
@@ -1131,6 +1132,8 @@ export interface BoardProps {
   /** Edit is on. Owned by the workspace, since it owns the buffer. */
   editing?: boolean;
   onToggleEdit?: () => void;
+  /** Wipe document footnote marks when Reset includes annotations. */
+  onClearDocMarks?: () => void;
   /**
    * Offer the Link tool — circle a mark / image / drawing, then stroke to connect.
    *
@@ -1232,6 +1235,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     linkToggle = false,
     linking = false,
     onToggleLink,
+    onClearDocMarks,
     onAnnotateCodeChange,
     linedPaperToggle = false,
     coachFold = null,
@@ -3530,7 +3534,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         el.closest(
           ".lc-toolbar, .lc-map-controls, .lc-pager, .lc-stamp-trash, .lc-capture-overlay," +
             " .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview" +
-            ", .lc-footnote-bubble, .lc-scroll-back-hold, .lc-hold-reveal",
+            ", .lc-footnote-bubble, .lc-scroll-back-hold, .lc-hold-reveal, .lc-split-sash",
         )
       ) {
         return false;
@@ -5704,7 +5708,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       maybeGrowDrawFrame();
       runFit(null, "keepY");
       lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
-      if (boxChanged) window.dispatchEvent(new Event("resize"));
+      if (boxChanged) {
+        window.dispatchEvent(new Event("resize"));
+        const content = contentSlotNodeRef.current;
+        if (content) syncMarksSlotFrom(content);
+      }
       return true;
     },
     [maybeGrowDrawFrame, runFit],
@@ -6195,67 +6203,73 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => clearTimeout(timer);
   }, [activeTool, ensureReadingHand]);
 
-  const resetTemplate = useCallback(() => {
-    const skeletons = seedSkeletonsRef.current;
-    if (skeletons.length === 0) return;
-    // Handwriting lives on the raster layer, not in the scene, so replacing the
-    // elements leaves every stroke on screen. Reset is now the only board-wide
-    // control — it has to clear both halves, which is what its dialog promises.
-    rasterInkRef.current?.clear();
-    const dark = isDarkTheme(themeId);
-    const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
-    const recolored = recolorTemplateElements(converted, dark) ?? converted;
-    const sized = applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M"));
-    templateRef.current = sized;
-    /*
-     * Keep the camera. Clearing marks is not "jump back to the top of the
-     * page" — the student was reading mid-document and Reset only promised
-     * a clean board. `refitToViewport` / `scheduleFitView` used to wipe
-     * scrollX/Y (and markdown slot) back to the start.
-     */
-    const api = apiRef.current;
-    const prior = api?.getAppState() as
-      | { scrollX?: number; scrollY?: number; zoom?: { value?: number } }
-      | undefined;
-    api?.updateScene({
-      elements: sized as unknown[],
-      appState: {
-        scrollX: prior?.scrollX,
-        scrollY: prior?.scrollY,
-        zoom: prior?.zoom,
-        selectedElementIds: {},
-      },
-      captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-    });
-    // Reseeding undoes frame growth. Re-apply measured paper height before
-    // the clip/pan refresh — otherwise a kept scrollY maps the nib outside
-    // the short seed frame and new ink is invisible until a toggle re-grows it.
-    applyDocumentFrameHeight();
-    maybeGrowDrawFrame();
-    syncPageVisibility();
-    const cam = api?.getAppState() as
-      | { scrollX?: number; scrollY?: number; zoom?: { value?: number } }
-      | undefined;
-    if (api && cam) {
-      const zoom = cam.zoom?.value ?? 1;
-      const next = clampPanScroll(cam.scrollX ?? 0, cam.scrollY ?? 0, zoom);
-      if (next.scrollX !== (cam.scrollX ?? 0) || next.scrollY !== (cam.scrollY ?? 0)) {
-        api.updateScene({
-          appState: { scrollX: next.scrollX, scrollY: next.scrollY, zoom: cam.zoom },
-          captureUpdate: CaptureUpdateAction.NEVER,
-        });
+  const resetBoard = useCallback(
+    (mode: ResetClearMode = "all") => {
+      const clearInk = mode === "ink" || mode === "all";
+      const clearMarks = mode === "annotations" || mode === "all";
+      if (clearInk) rasterInkRef.current?.clear();
+      if (clearMarks) onClearDocMarks?.();
+      if (!clearMarks) return;
+      const skeletons = seedSkeletonsRef.current;
+      if (skeletons.length === 0) return;
+      const dark = isDarkTheme(themeId);
+      const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
+      const recolored = recolorTemplateElements(converted, dark) ?? converted;
+      const sized = applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M"));
+      templateRef.current = sized;
+      /*
+       * Keep the camera. Clearing marks is not "jump back to the top of the
+       * page" — the student was reading mid-document and Reset only promised
+       * a clean board. `refitToViewport` / `scheduleFitView` used to wipe
+       * scrollX/Y (and markdown slot) back to the start.
+       */
+      const api = apiRef.current;
+      const prior = api?.getAppState() as
+        | { scrollX?: number; scrollY?: number; zoom?: { value?: number } }
+        | undefined;
+      api?.updateScene({
+        elements: sized as unknown[],
+        appState: {
+          scrollX: prior?.scrollX,
+          scrollY: prior?.scrollY,
+          zoom: prior?.zoom,
+          selectedElementIds: {},
+        },
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+      // Reseeding undoes frame growth. Re-apply measured paper height before
+      // the clip/pan refresh — otherwise a kept scrollY maps the nib outside
+      // the short seed frame and new ink is invisible until a toggle re-grows it.
+      applyDocumentFrameHeight();
+      maybeGrowDrawFrame();
+      syncPageVisibility();
+      const cam = api?.getAppState() as
+        | { scrollX?: number; scrollY?: number; zoom?: { value?: number } }
+        | undefined;
+      if (api && cam) {
+        const zoom = cam.zoom?.value ?? 1;
+        const next = clampPanScroll(cam.scrollX ?? 0, cam.scrollY ?? 0, zoom);
+        if (next.scrollX !== (cam.scrollX ?? 0) || next.scrollY !== (cam.scrollY ?? 0)) {
+          api.updateScene({
+            appState: { scrollX: next.scrollX, scrollY: next.scrollY, zoom: cam.zoom },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+        }
       }
-    }
-    scheduleSlotReports();
-  }, [
-    applyDocumentFrameHeight,
-    clampPanScroll,
-    convert,
-    maybeGrowDrawFrame,
-    scheduleSlotReports,
-    syncPageVisibility,
-    themeId,
-  ]);
+      scheduleSlotReports();
+    },
+    [
+      applyDocumentFrameHeight,
+      clampPanScroll,
+      convert,
+      maybeGrowDrawFrame,
+      onClearDocMarks,
+      scheduleSlotReports,
+      syncPageVisibility,
+      themeId,
+    ],
+  );
+  const resetTemplate = useCallback(() => resetBoard("all"), [resetBoard]);
 
   const applyRegionLayout = useCallback(() => {
     const api = apiRef.current;
@@ -7798,7 +7812,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 }}
                 onCaptureEntire={captureEntireBoard}
                 onCaptureRegion={beginRegionCapture}
-                onReset={resetTemplate}
+                onReset={resetBoard}
                 straightInk={straightInk}
                 onStraightInk={setStraightInkOn}
                 onUndo={undoBoard}
@@ -7858,6 +7872,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     : undefined
                 }
               >
+                {/*
+                  Explore portals search / filter / cluster into this slot so
+                  the tray grows in place instead of painting a second island.
+                */}
+                <div className="lc-explore-chrome-slot" data-lc-explore-chrome />
                 {/*
                   Recentre: width-fit the page to the hole and center X, keep
                   the reading line. A full fitView jumped to page 1 / the top

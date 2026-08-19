@@ -237,6 +237,8 @@ import {
   deletePadEverywhere,
   pullPads,
   flushPadSyncQueue,
+  applyPadSyncPing,
+  PAD_SYNC_PING_MS,
   pushAnnotatePad,
   pushDocBytes,
   pushRecentSnapshots,
@@ -470,9 +472,25 @@ export interface WorkspaceProps {
   showing: boolean;
   /** Which half of a split this wrap is, or null when it owns the whole main. */
   splitRole?: "a" | "b" | null;
+  /**
+   * Keep this board's map chrome mounted even when the other pane is focused.
+   *
+   * Explore adds its tools onto that same stack rather than painting a second
+   * island. The partner board has to keep the stack alive for the slot to exist.
+   */
+  splitKeepChrome?: boolean;
+  /** Explore should wait for the board tray slot instead of painting its own. */
+  embedInBoardTray?: boolean;
 }
 
-export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceProps) {
+export function Workspace({
+  tab,
+  active,
+  showing,
+  splitRole = null,
+  splitKeepChrome = false,
+  embedInBoardTray = false,
+}: WorkspaceProps) {
   const {
     client,
     mobile,
@@ -877,6 +895,8 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         if (cancelled) return;
         await pullPads(client);
         if (cancelled) return;
+        await applyPadSyncPing(client).catch(() => {});
+        if (cancelled) return;
         void ensureDevicePrefs(client).catch(() => {});
         const pending = await listOfflineBoards();
         const policy = loadOfflineMergePolicy();
@@ -909,6 +929,26 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     })();
     return () => {
       cancelled = true;
+    };
+  }, [serverLink, client]);
+
+  useEffect(() => {
+    if (serverLink !== "online") return;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      if (document.visibilityState === "hidden") return;
+      void applyPadSyncPing(client).catch(() => {});
+    };
+    const timer = window.setInterval(tick, PAD_SYNC_PING_MS);
+    const onVis = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVis);
     };
   }, [serverLink, client]);
 
@@ -6329,6 +6369,18 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     browseMotion === "done" ||
     (holdBrowseOverlay && boardPreparing);
 
+  /*
+   * Tab switch uses `.lc-switching` on the canvas. Putting that on
+   * `chrome.loading` also stamped `.lc-app-loading`, which blurs the header
+   * for the length of the swap.
+   */
+  const shellLoading =
+    boardPreparing ||
+    browseMotion === "busy" ||
+    browseMotion === "exit" ||
+    browseMotion === "done" ||
+    (holdBrowseOverlay && boardPreparing);
+
   const groupedCoachThreads = useMemo(() => groupThreads(agentMessages), [agentMessages]);
   const openFootnote = useMemo(
     () => annotateFootnotes.find((entry) => entry.id === openFootnoteId) ?? null,
@@ -6496,7 +6548,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       problem: Boolean(problem),
       pad: Boolean(problem && isLocalPad(problem)),
       agentOpen: coachOpen && Boolean(problem),
-      loading: canvasLoading,
+      loading: shellLoading,
       busy: busy !== null,
       loadActive: workspaceLoadActive,
       docIndex: { status: docIndexStatus, meta: docIndexMeta, error: docIndexError },
@@ -6504,7 +6556,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
   }, [
     active,
     busy,
-    canvasLoading,
+    shellLoading,
     coachOpen,
     docIndexError,
     docIndexMeta,
@@ -6982,7 +7034,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                 browseMotion !== "exit" &&
                 browseMotion !== "done",
             )}
-            chromeEnabled={active}
+            chromeEnabled={active || splitKeepChrome}
             chromeHost={headerSlots.boardChrome}
             onCodeSlot={onCodeSlot}
             transparentCanvas={Boolean(
@@ -7009,6 +7061,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               setHighlighting(false);
               setLinkMode((on) => !on);
             }}
+            onClearDocMarks={() => setAnnotateFootnotes([])}
             onAnnotateCodeChange={setAnnotateCode}
             // Ruled lines under somebody else's typography would be noise.
             linedPaperToggle={Boolean(problem) && !isAnnotate(problem)}
@@ -7235,6 +7288,9 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                     onRename={(node, title) => renameGraphNode(node, title)}
                     onOpen={openLinkedNode}
                     onOpenInNewTab={openLinkedNode}
+                    active={active}
+                    showing={showing}
+                    embedInBoardTray={embedInBoardTray}
                     // Practice is one tab, so a second chip for a problem is
                     // refused rather than hidden — the reason is worth saying.
                     canOpenInNewTab={(node) => node.type !== "practice"}

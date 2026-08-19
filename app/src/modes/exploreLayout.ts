@@ -29,6 +29,9 @@ export interface Body {
   /** Phase offsets so no two nodes bob in step. */
   driftX: number;
   driftY: number;
+  /** After a user drag, home pull aims here instead of the seeded R2 spot. */
+  parkedX?: number;
+  parkedY?: number;
 }
 
 /** Cluster order, and where each one gathers when clustering is on. */
@@ -174,6 +177,8 @@ export interface StepOptions {
   aspect: number;
   /** Links, which pull their ends toward a rest length. */
   links?: readonly Link[];
+  /** Node the reader is dragging — no forces, so the finger is the layout. */
+  pinnedKey?: string | null;
 }
 
 /**
@@ -204,23 +209,22 @@ const LINK_REST = 0.34;
 const LINK_SPRING = 1.15;
 /** Past this the spring stops getting stronger, so one long edge cannot fling a node. */
 const LINK_MAX_STRETCH = 0.45;
-const HOME_PULL = 0.75;
-const CLUSTER_PULL = 3.4;
-const DRIFT = 0.014;
-const DAMPING = 0.9;
-const EDGE_PAD = 0.07;
+const HOME_PULL = 0.4;
+const CLUSTER_PULL = 10;
+const DRIFT = 0.048;
+const DAMPING = 0.88;
+export const EDGE_PAD = 0.07;
 
 /**
  * Advance the simulation one frame, in place.
  *
- * Deliberately not a general force-directed layout. Edges do not pull, because
- * a reader looking for one note should not have the map rearrange itself around
- * whatever else that note happens to link to. What moves things is: a gentle
- * pull home, mutual repulsion so labels stay readable, and a slow drift that
- * keeps the page from looking frozen.
+ * Deliberately not a general force-directed layout. Springs are weak against
+ * the home anchor at long range. What moves things is: a gentle pull home (or
+ * a parked drop), mutual repulsion so labels stay readable, a slow drift, and
+ * a finger that pins one node while it is down.
  */
 export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: number }>, opts: StepOptions): void {
-  const { clustered, dt, time, aspect, links } = opts;
+  const { clustered, dt, time, aspect, links, pinnedKey } = opts;
   /*
    * Clustering shrinks the spacing it has to overcome.
    *
@@ -232,7 +236,16 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
   // One map per frame, not one per body: the ranking is over the whole set.
   const spots = homes(bodies.map((body) => body.key));
   for (const body of bodies) {
-    const home = spots.get(body.key) ?? { x: 0.5, y: 0.5 };
+    if (pinnedKey && body.key === pinnedKey) {
+      body.vx = 0;
+      body.vy = 0;
+      continue;
+    }
+    const seeded = spots.get(body.key) ?? { x: 0.5, y: 0.5 };
+    const home =
+      body.parkedX != null && body.parkedY != null
+        ? { x: body.parkedX, y: body.parkedY }
+        : seeded;
     const target = clustered ? centres.get(body.node.type) ?? home : home;
     const pull = clustered ? CLUSTER_PULL : HOME_PULL;
 
@@ -293,7 +306,7 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
     }
   }
 
-  if (links && links.length > 0) applySprings(bodies, links, dt, aspect);
+  if (links && links.length > 0) applySprings(bodies, links, dt, aspect, pinnedKey);
 }
 
 /**
@@ -303,7 +316,13 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
  * acts on *two* bodies and the loop is written per body. Equal and opposite,
  * so a pair drifts as a pair instead of one end towing the other.
  */
-function applySprings(bodies: Body[], links: readonly Link[], dt: number, aspect: number): void {
+function applySprings(
+  bodies: Body[],
+  links: readonly Link[],
+  dt: number,
+  aspect: number,
+  pinnedKey?: string | null,
+): void {
   const byKey = new Map(bodies.map((body) => [body.key, body]));
   for (const link of links) {
     const a = byKey.get(link.a);
@@ -318,10 +337,14 @@ function applySprings(bodies: Body[], links: readonly Link[], dt: number, aspect
     const force = LINK_SPRING * stretch * dt * 0.5;
     const ux = (dx / dist) * force;
     const uy = (dy / dist) * force;
-    a.vx += ux / aspect;
-    a.vy += uy;
-    b.vx -= ux / aspect;
-    b.vy -= uy;
+    if (a.key !== pinnedKey) {
+      a.vx += ux / aspect;
+      a.vy += uy;
+    }
+    if (b.key !== pinnedKey) {
+      b.vx -= ux / aspect;
+      b.vy -= uy;
+    }
   }
 }
 
@@ -392,4 +415,27 @@ export function clusterLabels(
     out.push({ type: cluster.type, label: cluster.label, x, y });
   }
   return out;
+}
+
+/**
+ * True once every body is in its kind's pack and no longer flying toward it.
+ *
+ * Cluster captions wait on this: painting them while members are still
+ * crossing the page is what made the labels hop every few frames.
+ */
+export function clusterSettled(
+  bodies: readonly Body[],
+  centres: Map<NodeType, { x: number; y: number }>,
+  aspect = 1.6,
+): boolean {
+  if (bodies.length === 0) return true;
+  for (const body of bodies) {
+    const target = centres.get(body.node.type);
+    if (!target) continue;
+    const dx = (body.x - target.x) * aspect;
+    const dy = body.y - target.y;
+    if (Math.hypot(dx, dy) > 0.16) return false;
+    if (Math.hypot(body.vx, body.vy) > 0.18) return false;
+  }
+  return true;
 }

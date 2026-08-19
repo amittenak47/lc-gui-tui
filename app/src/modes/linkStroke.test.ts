@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { describe, expect, it } from "vitest";
 
-import { intersectionArea, pickBestHit, type LinkHit } from "./linkHitTest";
+import { intersectionArea, pickBestHit, pickLoopTarget, type LinkHit } from "./linkHitTest";
 import { classifyStroke, spanOf, type StrokePoint } from "./linkStroke";
 
 const hit = (
@@ -83,5 +83,47 @@ describe("pickBestHit", () => {
     expect(
       intersectionArea({ left: 0, top: 0, width: 10, height: 10 }, { left: 20, top: 20, width: 10, height: 10 }),
     ).toBe(0);
+  });
+});
+
+describe("pickLoopTarget", () => {
+  const loop = { left: 0, top: 0, width: 200, height: 200 };
+
+  it("groups drawings whose boxes sit inside the loop", () => {
+    const picked = pickLoopTarget(
+      [
+        hit("a", "drawing", { left: 20, top: 20, width: 40, height: 40 }),
+        hit("b", "drawing", { left: 90, top: 90, width: 50, height: 40 }),
+        hit("outside", "drawing", { left: 400, top: 400, width: 40, height: 40 }),
+      ],
+      loop,
+    );
+    expect(picked?.kind).toBe("snippet");
+    expect(picked?.label).toBe("2 drawings");
+    expect(picked?.id).toContain("drawing:a");
+    expect(picked?.id).toContain("b");
+    expect(picked?.width).toBe(120);
+    expect(picked?.height).toBe(110);
+  });
+
+  it("does not group a lone drawing", () => {
+    const picked = pickLoopTarget(
+      [hit("a", "drawing", { left: 20, top: 20, width: 40, height: 40 })],
+      loop,
+    );
+    expect(picked?.id).toBe("a");
+    expect(picked?.kind).toBe("drawing");
+  });
+
+  it("keeps a mark when drawings share the loop", () => {
+    const picked = pickLoopTarget(
+      [
+        hit("fn", "mark", { left: 30, top: 30, width: 24, height: 24 }),
+        hit("a", "drawing", { left: 20, top: 20, width: 40, height: 40 }),
+        hit("b", "drawing", { left: 90, top: 90, width: 50, height: 40 }),
+      ],
+      loop,
+    );
+    expect(picked?.id).toBe("fn");
   });
 });

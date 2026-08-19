@@ -13,15 +13,16 @@ import type {
 import { LcApiError as ApiError } from "../api/client";
 import type { BoardBlob } from "../canvas/BoardHandle";
 import {
+  deleteAnnotateDoc,
   getAnnotateDoc,
   listAnnotateDocs,
   restoreAnnotateDoc,
-  type AnnotateDoc,
   type DocType,
 } from "./annotateStore";
 import { getDocBytes, putDocBytes } from "./docBytes";
 import type { DocFootnote } from "./docFootnotes";
 import { run, STORE_SYNC_QUEUE } from "./idb";
+import { loadPadSyncSince, savePadSyncSince } from "./padHub";
 import {
   getPadSnapshot,
   PAD_SNAPSHOT_TIERS,
@@ -29,14 +30,17 @@ import {
   type PadSnapshotKind,
 } from "./padSnapshotStore";
 import {
+  deleteWhiteboardNotebook,
   getWhiteboardNotebook,
   listWhiteboardNotebooks,
   restoreWhiteboardNotebook,
-  type WhiteboardNotebook,
 } from "./whiteboardStore";
 
 export const TOMBSTONE_COPY =
   "This removes it from the library on all devices. A copy stays on the PC and can be restored.";
+
+/** How often a device asks the hub (or local pads.db) what changed. */
+export const PAD_SYNC_PING_MS = 15_000;
 
 export type PadSyncJobInput =
   | { op: "putWhiteboard"; body: WhiteboardPadDto }
@@ -310,6 +314,79 @@ export async function pullPads(client: LcClient): Promise<void> {
   }
 }
 
+/**
+ * Periodic ping: apply every saved file that changed after `since`.
+ *
+ * Whiteboards, annotated documents (plus PDF/EPUB bytes), and rolling
+ * snapshots. Newer remote wins. A local padlock blocks tombstones only.
+ */
+export async function applyPadSyncPing(client: LcClient): Promise<void> {
+  const since = loadPadSyncSince();
+  const ping = await client.pingPadSync(since);
+
+  for (const row of ping.whiteboard) {
+    if (row.deleted_at) {
+      if (listWhiteboardNotebooks().find((entry) => entry.id === row.id)?.locked) continue;
+      await deleteWhiteboardNotebook(row.id).catch(() => {});
+      continue;
+    }
+    const local = await getWhiteboardNotebook(row.id);
+    const stale =
+      !local ||
+      boardLooksCorrupt(local.board) ||
+      row.updated_at > local.updatedAt;
+    if (!stale) continue;
+    await restoreWhiteboardNotebook({
+      id: row.id,
+      title: row.title,
+      updatedAt: row.updated_at,
+      pageCount: row.page_count,
+      board: row.board as BoardBlob,
+      agent: Array.isArray(row.agent) ? row.agent : [],
+      ...(local?.locked ? { locked: true } : {}),
+    });
+  }
+
+  for (const row of ping.annotate) {
+    if (row.deleted_at) {
+      if (listAnnotateDocs().find((entry) => entry.id === row.id)?.locked) continue;
+      await deleteAnnotateDoc(row.id).catch(() => {});
+      continue;
+    }
+    const local = await getAnnotateDoc(row.id);
+    const stale =
+      !local ||
+      boardLooksCorrupt(local.board) ||
+      row.updated_at > local.updatedAt;
+    if (!stale) continue;
+    await restoreAnnotateDoc({
+      id: row.id,
+      name: row.name,
+      hash: row.hash,
+      docType: (row.doc_type as DocType) || "markdown",
+      updatedAt: row.updated_at,
+      source: row.source ?? "",
+      board: row.board as BoardBlob,
+      footnotes: Array.isArray(row.footnotes) ? (row.footnotes as DocFootnote[]) : [],
+      agent: Array.isArray(row.agent) ? row.agent : [],
+      ...(local?.locked ? { locked: true } : {}),
+    });
+    if (row.hash) {
+      const have = await getDocBytes(row.hash);
+      if (!have) {
+        const bytes = await client.getDocBytes(row.hash);
+        if (bytes && bytes.byteLength > 0) await putDocBytes(row.hash, bytes);
+      }
+    }
+  }
+
+  for (const row of ping.snapshots) {
+    await writeSnapshotIfNewer(row);
+  }
+
+  savePadSyncSince(ping.now);
+}
+
 async function fillMissingSnapshots(
   client: LcClient,
   kind: PadSnapshotKind,
@@ -321,29 +398,42 @@ async function fillMissingSnapshots(
   } catch {
     return;
   }
-  const { run: idbRun, STORE_SNAPSHOTS } = await import("./idb");
   for (const row of remote) {
-    const local = await getPadSnapshot(kind, key, row.tier as PadSnapshot["tier"]);
-    if (local) continue;
-    const payload = (row.payload ?? {}) as Partial<PadSnapshot>;
-    const snap: PadSnapshot = {
-      kind,
-      key,
-      tier: row.tier as PadSnapshot["tier"],
-      writtenAt: row.written_at,
-      name: payload.name ?? key,
-      board: payload.board as BoardBlob,
-      footnotes: payload.footnotes,
-      agent: payload.agent,
-      pageCount: payload.pageCount,
-    };
-    try {
-      await idbRun(STORE_SNAPSHOTS, "readwrite", (store) =>
-        store.put(snap, `${kind}:${key}:${row.tier}`),
-      );
-    } catch {
-      /* ignore */
-    }
+    await writeSnapshotIfNewer(row, { skipIfLocal: true });
+  }
+}
+
+async function writeSnapshotIfNewer(
+  row: PadSnapshotDto,
+  opts?: { skipIfLocal?: boolean },
+): Promise<void> {
+  const kind = row.kind as PadSnapshotKind;
+  if (kind !== "whiteboard" && kind !== "annotate") return;
+  const key = row.key;
+  const tier = row.tier as PadSnapshot["tier"];
+  if (!PAD_SNAPSHOT_TIERS.some((entry) => entry.id === tier)) return;
+  const local = await getPadSnapshot(kind, key, tier);
+  if (opts?.skipIfLocal && local) return;
+  if (local && local.writtenAt >= row.written_at) return;
+  const payload = (row.payload ?? {}) as Partial<PadSnapshot>;
+  const snap: PadSnapshot = {
+    kind,
+    key,
+    tier,
+    writtenAt: row.written_at,
+    name: payload.name ?? key,
+    board: payload.board as BoardBlob,
+    footnotes: payload.footnotes,
+    agent: payload.agent,
+    pageCount: payload.pageCount,
+  };
+  try {
+    const { run: idbRun, STORE_SNAPSHOTS } = await import("./idb");
+    await idbRun(STORE_SNAPSHOTS, "readwrite", (store) =>
+      store.put(snap, `${kind}:${key}:${row.tier}`),
+    );
+  } catch {
+    /* ignore */
   }
 }
 

@@ -17,6 +17,7 @@ import {
   AnnotateLibraryFullError,
   restoreAnnotateDoc,
   saveAnnotateDoc,
+  setAnnotateDocLocked,
   type AnnotateDoc,
 } from "./annotateStore";
 
@@ -218,6 +219,21 @@ describe("deleteAnnotateDoc", () => {
     await deleteAnnotateDoc(saved.id);
     expect(await getAnnotateDoc(saved.id)).toBeNull();
     expect(listAnnotateDocs()).toHaveLength(0);
+  });
+
+  it("refuses to delete a locked set, and a later save keeps the lock", async () => {
+    const saved = await saveAnnotateDoc({ name: "a.md", hash: "h", source: "# src", board: board() });
+    setAnnotateDocLocked(saved.id, true);
+    await deleteAnnotateDoc(saved.id);
+    expect(listAnnotateDocs()).toHaveLength(1);
+    await saveAnnotateDoc({
+      id: saved.id,
+      name: "a.md",
+      hash: "h",
+      source: "# src",
+      board: board("more"),
+    });
+    expect(listAnnotateDocs()[0]?.locked).toBe(true);
   });
 });
 

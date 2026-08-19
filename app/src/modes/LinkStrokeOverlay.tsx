@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { hitToChip, nearestHit, pickBestHit, type LinkHit } from "./linkHitTest";
+import { hitToChip, nearestHit, pickBestHit, pickLoopTarget, type LinkHit } from "./linkHitTest";
 import {
   CHIP_HIT_RADIUS,
   MIN_LINK_SPAN,
@@ -184,7 +184,7 @@ export function LinkStrokeOverlay({
         if (kind === "loop" || kind === "scribble") {
           const box = pathBox(path);
           if (!box) return;
-          const hit = pickBestHit(onResolve(box, hostRef.current), box);
+          const hit = pickLoopTarget(onResolve(box, hostRef.current), box);
           if (!hit) {
             onNotice("Circle a mark, image, or drawing.");
             return;

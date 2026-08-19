@@ -10,9 +10,11 @@ import { useLibraryDeleteArm } from "../util/armedDelete";
 import {
   deleteWhiteboardNotebook,
   listWhiteboardNotebooks,
+  setWhiteboardNotebookLocked,
   WHITEBOARD_LIBRARY_LIMIT,
   type WhiteboardNotebookMeta,
 } from "../util/whiteboardStore";
+import { LibraryPadlock } from "./LibraryPadlock";
 import { TOMBSTONE_COPY } from "../util/padSync";
 
 export interface WhiteboardLibraryDialogProps {
@@ -96,27 +98,42 @@ export function WhiteboardLibraryDialog({
         <div className="lc-settings-body">
           <div className="lc-settings-choice">
             {notebooks.map((entry) => (
-              <HoldButton
-                key={entry.id}
-                label={`Delete ${entry.title}`}
-                className="lc-hold-choice lc-hold-danger"
-                ariaLabel={
-                  tapArmed
-                    ? `Delete ${entry.title} — tap to delete`
-                    : `Delete ${entry.title} — hold to delete`
-                }
-                onTap={tapArmed ? () => void remove(entry.id) : undefined}
-                onConfirm={() => {
-                  if (tapArmed) void remove(entry.id);
-                  else setPendingId(entry.id);
-                }}
-              >
-                <strong>Delete · {entry.title}</strong>
-                <span className="lc-muted">
-                  {entry.pageCount} page{entry.pageCount === 1 ? "" : "s"} ·{" "}
-                  {new Date(entry.updatedAt).toLocaleString()}
-                </span>
-              </HoldButton>
+              <div key={entry.id} className="lc-scratch-load-entry">
+                <HoldButton
+                  label={`Delete ${entry.title}`}
+                  className="lc-hold-choice lc-hold-danger lc-scratch-load-hold"
+                  disabled={Boolean(entry.locked)}
+                  ariaLabel={
+                    entry.locked
+                      ? `${entry.title} is locked`
+                      : tapArmed
+                        ? `Delete ${entry.title} — tap to delete`
+                        : `Delete ${entry.title} — hold to delete`
+                  }
+                  onTap={
+                    !entry.locked && tapArmed ? () => void remove(entry.id) : undefined
+                  }
+                  onConfirm={() => {
+                    if (entry.locked) return;
+                    if (tapArmed) void remove(entry.id);
+                    else setPendingId(entry.id);
+                  }}
+                >
+                  <strong>Delete · {entry.title}</strong>
+                  <span className="lc-muted">
+                    {entry.pageCount} page{entry.pageCount === 1 ? "" : "s"} ·{" "}
+                    {new Date(entry.updatedAt).toLocaleString()}
+                  </span>
+                </HoldButton>
+                <LibraryPadlock
+                  name={entry.title}
+                  locked={Boolean(entry.locked)}
+                  onToggle={() => {
+                    setWhiteboardNotebookLocked(entry.id, !entry.locked);
+                    setNotebooks(listWhiteboardNotebooks());
+                  }}
+                />
+              </div>
             ))}
           </div>
         </div>

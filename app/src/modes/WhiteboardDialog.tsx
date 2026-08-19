@@ -10,8 +10,10 @@ import { useLibraryDeleteArm } from "../util/armedDelete";
 import {
   deleteWhiteboardNotebook,
   listWhiteboardNotebooks,
+  setWhiteboardNotebookLocked,
   type WhiteboardNotebookMeta,
 } from "../util/whiteboardStore";
+import { LibraryPadlock } from "./LibraryPadlock";
 import { TOMBSTONE_COPY } from "../util/padSync";
 import {
   listPadSnapshots,
@@ -211,11 +213,16 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                       {new Date(entry.updatedAt).toLocaleString()}
                     </span>
                   </HoldButton>
-                  {/*
-                    First delete in a while: hold the bin, then hold Delete in
-                    the confirm dialog. After that, tap the bin for
-                    LIBRARY_DELETE_ARM_MS.
-                  */}
+                  <LibraryPadlock
+                    name={entry.title}
+                    locked={Boolean(entry.locked)}
+                    disabled={locked}
+                    onToggle={() => {
+                      setWhiteboardNotebookLocked(entry.id, !entry.locked);
+                      refreshList();
+                    }}
+                  />
+                  {!entry.locked && (
                   <HoldButton
                     label={`Delete ${entry.title}`}
                     className="lc-scratch-load-trash"
@@ -249,6 +256,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                       <path d="M10 10v7M14 10v7" />
                     </svg>
                   </HoldButton>
+                  )}
                 </div>
               ))}
               {archived.length > 0 && (
