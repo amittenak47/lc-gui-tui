@@ -26,7 +26,7 @@ import {
   type AnnotateDoc,
 } from "./annotateStore";
 
-const deleteDocBytes = vi.fn(async () => {});
+const deleteDocBytes = vi.fn(async (_hash?: string) => {});
 vi.mock("./docBytes", () => ({
   deleteDocBytes: (hash: string) => deleteDocBytes(hash),
 }));

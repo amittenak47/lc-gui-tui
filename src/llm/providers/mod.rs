@@ -126,6 +126,9 @@ pub struct ChatRequest {
     /// OpenAI and Groq cloud URLs skip the extra keys — they 400 on unknowns.
     /// Those hosts still return `reasoning_content` when the model thinks.
     pub reasoning: bool,
+    /// How hard to think when [`Self::reasoning`] is on. Local llama.cpp / Qwen
+    /// get a token budget; unknown servers ignore the extra keys.
+    pub reasoning_effort: Option<crate::llm::reasoning::ReasoningEffort>,
 }
 
 impl ChatRequest {
@@ -137,6 +140,7 @@ impl ChatRequest {
             temperature: 0.2,
             max_tokens: None,
             reasoning: false,
+            reasoning_effort: None,
         }
     }
 
@@ -162,6 +166,17 @@ impl ChatRequest {
 
     pub fn with_reasoning(mut self, on: bool) -> Self {
         self.reasoning = on;
+        self
+    }
+
+    pub fn with_reasoning_effort(
+        mut self,
+        effort: Option<crate::llm::reasoning::ReasoningEffort>,
+    ) -> Self {
+        if effort.is_some() {
+            self.reasoning = true;
+        }
+        self.reasoning_effort = effort;
         self
     }
 }

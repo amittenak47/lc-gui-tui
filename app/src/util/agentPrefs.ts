@@ -8,6 +8,24 @@ const FORWARD_MODE_KEY = "whiteboard.agent.testForward.v1";
 const FORWARD_FAILURES_KEY = "whiteboard.agent.forwardFailures.v1";
 const LEGACY_FORWARD_FAILURES_KEYS = ["whiteboard.coach.forwardFailures.v1"];
 const REASONING_KEY = "whiteboard.agent.reasoning.v1";
+const REASONING_LEVEL_KEY = "whiteboard.agent.reasoningLevel.v1";
+
+export type AgentReasoningLevel = "off" | "low" | "medium" | "high";
+
+const REASONING_LEVELS: AgentReasoningLevel[] = ["off", "low", "medium", "high"];
+
+export function cycleAgentReasoning(current: AgentReasoningLevel): AgentReasoningLevel {
+  const index = REASONING_LEVELS.indexOf(current);
+  return REASONING_LEVELS[(index + 1) % REASONING_LEVELS.length] ?? "off";
+}
+
+export function reasoningAskFields(level: AgentReasoningLevel): {
+  reasoning?: true;
+  reasoning_effort?: "low" | "medium" | "high";
+} {
+  if (level === "off") return {};
+  return { reasoning: true, reasoning_effort: level };
+}
 
 export type TestForwardMode = "wait" | "whole-run" | "per-case";
 
@@ -55,19 +73,33 @@ export function saveForwardFailures(on: boolean): void {
 
 /** Sticky composer flag: ask the model to think out loud. Default on. */
 export function loadAgentReasoning(): boolean {
-  try {
-    const value = localStorage.getItem(REASONING_KEY);
-    if (value === "0") return false;
-    if (value === "1") return true;
-  } catch {
-    return true;
-  }
-  return true;
+  return loadAgentReasoningLevel() !== "off";
 }
 
 export function saveAgentReasoning(on: boolean): void {
+  saveAgentReasoningLevel(on ? "medium" : "off");
+}
+
+/** Off / low / medium / high. Default medium (old on). */
+export function loadAgentReasoningLevel(): AgentReasoningLevel {
   try {
-    localStorage.setItem(REASONING_KEY, on ? "1" : "0");
+    const level = localStorage.getItem(REASONING_LEVEL_KEY);
+    if (level === "off" || level === "low" || level === "medium" || level === "high") {
+      return level;
+    }
+    const legacy = localStorage.getItem(REASONING_KEY);
+    if (legacy === "0") return "off";
+    if (legacy === "1") return "medium";
+  } catch {
+    return "medium";
+  }
+  return "medium";
+}
+
+export function saveAgentReasoningLevel(level: AgentReasoningLevel): void {
+  try {
+    localStorage.setItem(REASONING_LEVEL_KEY, level);
+    localStorage.setItem(REASONING_KEY, level === "off" ? "0" : "1");
   } catch {
     /* private browsing */
   }

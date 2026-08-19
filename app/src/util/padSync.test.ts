@@ -17,7 +17,9 @@ import {
 } from "./padSync";
 
 const restoreWhiteboardNotebook = vi.fn(async (_entry?: unknown) => {});
-const restoreWhiteboardFromTrash = vi.fn(async (_id?: string) => ({ id: "w1", syncSeq: 2 }));
+const restoreWhiteboardFromTrash = vi.fn(
+  async (_id?: string): Promise<unknown> => ({ id: "w1", syncSeq: 2 }),
+);
 const deletePadSnapshots = vi.fn(async (_kind?: string, _key?: string) => {});
 const deleteDocBytes = vi.fn(async (_hash?: string) => {});
 const getWhiteboardNotebook = vi.fn(async (_id?: string): Promise<unknown> => null);
@@ -25,18 +27,26 @@ const listWhiteboardNotebooks = vi.fn(() => [] as { id: string }[]);
 const listWhiteboardTrash = vi.fn(() => [] as { id: string; lastTouch?: number; deletedAt?: number }[]);
 const listAnnotateDocs = vi.fn(() => [] as { id: string }[]);
 const listAnnotateTrash = vi.fn(() => [] as { id: string; lastTouch?: number; deletedAt?: number }[]);
-const getAnnotateDoc = vi.fn(async (_id?: string) => null);
+const getAnnotateDoc = vi.fn(async (_id?: string): Promise<unknown> => null);
 const restoreAnnotateDoc = vi.fn(async (_entry?: unknown) => {});
-const restoreAnnotateFromTrash = vi.fn(async (_id?: string) => null);
-const deleteWhiteboardNotebook = vi.fn(async () => {});
-const deleteAnnotateDoc = vi.fn(async () => {});
-const trashWhiteboardNotebook = vi.fn(async () => 1);
-const trashAnnotateDoc = vi.fn(async () => 1);
+const restoreAnnotateFromTrash = vi.fn(async (_id?: string): Promise<unknown> => null);
+const deleteWhiteboardNotebook = vi.fn(async (_id?: string) => {});
+const deleteAnnotateDoc = vi.fn(async (_id?: string) => {});
+const trashWhiteboardNotebook = vi.fn(async (_id?: string) => 1);
+const trashAnnotateDoc = vi.fn(async (_id?: string) => 1);
 const markWhiteboardDeleteAcked = vi.fn();
 const markAnnotateDeleteAcked = vi.fn();
 const getDocBytes = vi.fn(async (_hash?: string) => null);
 const putDocBytes = vi.fn(async (_hash?: string, _bytes?: ArrayBuffer) => {});
-const getPadSnapshot = vi.fn(async (_kind?: string, _key?: string, _tier?: string) => null);
+const getPadSnapshot = vi.fn(
+  async (_kind?: string, _key?: string, _tier?: string): Promise<unknown> => null,
+);
+
+const emptyBoard = {
+  v: 1 as const,
+  elements: [] as unknown[],
+  appState: { scrollX: 0, scrollY: 0, zoom: 1 },
+};
 
 vi.mock("./whiteboardStore", () => ({
   listWhiteboardNotebooks: () => listWhiteboardNotebooks(),
@@ -369,7 +379,7 @@ describe("live PUT coalesce and 24h compact", () => {
       tier: "24h",
       writtenAt: 2,
       name: "One",
-      board: { v: 1, elements: [] },
+      board: emptyBoard,
     });
     expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
@@ -393,7 +403,7 @@ describe("live PUT coalesce and 24h compact", () => {
       tier: "24h",
       writtenAt: 2,
       name: "One",
-      board: { v: 1, elements: [] },
+      board: emptyBoard,
     });
     expect(peekPadSyncQueueForTests()).toHaveLength(1);
   });
@@ -505,7 +515,7 @@ describe("live PUT CAS and gone", () => {
     pageCount: 1,
     hubAckUpdatedAt: 1,
     syncSeq: 0,
-    board: { v: 1, elements: [] },
+    board: emptyBoard,
     agent: [],
   };
 

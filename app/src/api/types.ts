@@ -466,7 +466,7 @@ export const STAGE_LABELS: Record<string, string> = {
 
 /** One line in a chat turn's process block. */
 export interface CoachProcessEvent {
-  kind: "stage" | "tool";
+  kind: "stage" | "tool" | "reasoning";
   /** Stage name, or tool name for a tool event. */
   label: string;
   detail?: string;
