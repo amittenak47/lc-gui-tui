@@ -166,6 +166,16 @@ export interface DocFootnoteSubMark {
   end: number;
   /** Live page anchor when the sub-mark was made on the document. */
   anchor?: TextAnchor;
+  /**
+   * This underline's picked swatch. Absent on older sub-marks that still
+   * inherit the parent mark's colour.
+   */
+  color?: string;
+  /**
+   * Wheel this underline owns. Snapshotted so cycling one line does not
+   * retint the others. Absent = inherit the parent mark until first cycle.
+   */
+  palette?: string[];
 }
 
 /** `#rgb` or `#rrggbb`, which is all a palette ever produces. */
@@ -568,6 +578,8 @@ function sanitizeSubMarks(value: unknown): DocFootnoteSubMark[] | undefined {
     const excerpt = typeof mark.excerpt === "string" ? mark.excerpt : "";
     const anchor = normalizeAnchor(mark.anchor);
     const textAnchor = anchor && isTextAnchor(anchor) ? anchor : undefined;
+    const color = isHexColor(mark.color) ? mark.color.trim() : undefined;
+    const palette = normalizePalette(mark.palette) ?? undefined;
     out.push({
       id: mark.id,
       kind: mark.kind as DocFootnoteSubMarkKind,
@@ -575,6 +587,8 @@ function sanitizeSubMarks(value: unknown): DocFootnoteSubMark[] | undefined {
       start,
       end,
       ...(textAnchor ? { anchor: textAnchor } : {}),
+      ...(color ? { color } : {}),
+      ...(palette ? { palette } : {}),
     });
   }
   return out.length > 0 ? out : undefined;

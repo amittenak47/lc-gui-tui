@@ -129,6 +129,17 @@ describe("sanitizeFootnotes", () => {
             start: 25,
             end: 29,
             anchor: { kind: "text", start: 30, end: 34, scope: "ch-1" },
+            color: "#3ec8ac",
+            palette: ["#83e4b5", "#3ec8ac", "#4e90a4", "#6e60a0"],
+          },
+          {
+            id: "sm-bad-color",
+            kind: "underline",
+            excerpt: "x",
+            start: 0,
+            end: 1,
+            color: "red",
+            palette: ["not-a-color"],
           },
           {
             id: "sm-bad-anchor",
@@ -155,7 +166,10 @@ describe("sanitizeFootnotes", () => {
         start: 25,
         end: 29,
         anchor: { kind: "text", start: 30, end: 34, scope: "ch-1" },
+        color: "#3ec8ac",
+        palette: ["#83e4b5", "#3ec8ac", "#4e90a4", "#6e60a0"],
       },
+      { id: "sm-bad-color", kind: "underline", excerpt: "x", start: 0, end: 1 },
       { id: "sm-bad-anchor", kind: "underline", excerpt: "x", start: 0, end: 1 },
     ]);
   });

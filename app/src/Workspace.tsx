@@ -700,6 +700,13 @@ export function Workspace({
   const [footnoteAnchorRect, setFootnoteAnchorRect] = useState<DOMRect | null>(null);
   const [subMarkMode, setSubMarkMode] = useState<DocFootnoteSubMarkKind | null>(null);
   const [hoveredSubMarkId, setHoveredSubMarkId] = useState<string | null>(null);
+  const [activeSubMarkId, setActiveSubMarkId] = useState<string | null>(null);
+  const [subMarkPaintTheme, setSubMarkPaintTheme] = useState<{
+    color: string;
+    palette: string[];
+  } | null>(null);
+  const subMarkPaintThemeRef = useRef(subMarkPaintTheme);
+  subMarkPaintThemeRef.current = subMarkPaintTheme;
   const [coachQuoteSeed, setCoachQuoteSeed] = useState<{
     token: number;
     text: string;
@@ -5851,18 +5858,31 @@ export function Workspace({
   const onAddSubMark = useCallback(
     (mark: DocFootnoteSubMark) => {
       if (!openFootnoteId) return;
+      const theme = subMarkPaintThemeRef.current;
+      let minted = "";
       setAnnotateFootnotes((current) =>
         current.map((entry) => {
           if (entry.id !== openFootnoteId) return entry;
           const existing = entry.subMarks ?? [];
-          const next = { ...mark, id: freshSubMarkId(existing) };
+          minted = freshSubMarkId(existing);
+          const next = {
+            ...mark,
+            id: minted,
+            ...(theme ? { color: theme.color, palette: theme.palette } : {}),
+          };
           return { ...entry, subMarks: [...existing, next] };
         }),
       );
-      setSubMarkMode(null);
+      if (minted) setActiveSubMarkId(minted);
     },
     [openFootnoteId],
   );
+
+  useEffect(() => {
+    if (subMarkMode === "underline") return;
+    setActiveSubMarkId(null);
+    setSubMarkPaintTheme(null);
+  }, [subMarkMode]);
 
   /** The highlighter's plain outcome: a mark, pointing at nothing but itself. */
   const onDocMark = useCallback((selection: DocSelectionResult) => {
@@ -7216,6 +7236,8 @@ export function Workspace({
                   subMarkParent={openFootnote}
                   onAddSubMark={onAddSubMark}
                   hoveredSubMarkId={hoveredSubMarkId}
+                  subMarkPaintTheme={subMarkMode === "underline" ? subMarkPaintTheme : null}
+                  onSubMarkLiveStart={() => setActiveSubMarkId(null)}
                 >
                   {annotateSource.docType === "pdf" && annotateSource.bytes ? (
                     <PdfDocument
@@ -7278,6 +7300,8 @@ export function Workspace({
                   subMarkParent={openFootnote}
                   onAddSubMark={onAddSubMark}
                   hoveredSubMarkId={hoveredSubMarkId}
+                  subMarkPaintTheme={subMarkMode === "underline" ? subMarkPaintTheme : null}
+                  onSubMarkLiveStart={() => setActiveSubMarkId(null)}
                 >
                   <StatementDocument
                     title={titleFromSlug(problem.task_id, problem.question_id)}
@@ -7556,11 +7580,17 @@ export function Workspace({
             subMarkMode={subMarkMode}
             onSubMarkModeChange={setSubMarkMode}
             onHoverSubMark={setHoveredSubMarkId}
+            subMarkPaintTheme={subMarkPaintTheme}
+            onSubMarkPaintTheme={setSubMarkPaintTheme}
+            activeSubMarkId={activeSubMarkId}
+            onActiveSubMarkIdChange={setActiveSubMarkId}
             onClose={() => {
               setOpenFootnoteId(null);
               setFootnoteAnchorRect(null);
               setSubMarkMode(null);
               setHoveredSubMarkId(null);
+              setActiveSubMarkId(null);
+              setSubMarkPaintTheme(null);
               setFootnoteOpenThreadId(null);
             }}
             openThreadRootId={footnoteOpenThreadId}

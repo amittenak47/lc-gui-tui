@@ -53,6 +53,15 @@ export interface FootnoteOverviewProps {
   /** Hub-row hover — page paints that sub-mark's span. */
   onHoverSubMark?: (id: string | null) => void;
   /**
+   * Underline tool on: the hub wheel paints this theme, not the panel's.
+   * Null until the first seed after arming.
+   */
+  subMarkPaintTheme?: { color: string; palette: string[] } | null;
+  onSubMarkPaintTheme?: (theme: { color: string; palette: string[] }) => void;
+  /** Committed underline the wheel currently retints. Null = live / next line. */
+  activeSubMarkId?: string | null;
+  onActiveSubMarkIdChange?: (id: string | null) => void;
+  /**
    * Links to other workspaces, as opposed to the external URLs above.
    *
    * Kept as a separate list on purpose: "link to my DP notebook" is not a
@@ -234,6 +243,10 @@ export function FootnoteOverview({
   onSubMarkModeChange,
   openThreadRootId = null,
   onHoverSubMark,
+  subMarkPaintTheme = null,
+  onSubMarkPaintTheme,
+  activeSubMarkId = null,
+  onActiveSubMarkIdChange,
 }: FootnoteOverviewProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
@@ -261,10 +274,45 @@ export function FootnoteOverview({
     const current = footnoteRef.current;
     onChange({ ...current, palette: nextPalette, color: nextColor });
   };
-  const cycleMarkPalette = (delta: 1 | -1) => {
-    const next = stepFallbackPalette(palette, delta);
-    persistMarkPalette(next, remapColorToPalette(markColor, palette, next));
+  const underlineArmed = subMarkMode === "underline";
+  const wheelPalette = underlineArmed
+    ? (subMarkPaintTheme?.palette ?? stepFallbackPalette(palette, 1))
+    : palette;
+  const wheelColor = underlineArmed
+    ? (subMarkPaintTheme?.color ?? wheelPalette[0] ?? "#0d9488")
+    : markColor;
+  const persistWheel = (nextPalette: string[], nextColor: string) => {
+    if (underlineArmed) {
+      onSubMarkPaintTheme?.({ palette: nextPalette, color: nextColor });
+      if (activeSubMarkId) {
+        const current = footnoteRef.current;
+        onChange({
+          ...current,
+          subMarks: (current.subMarks ?? []).map((mark) =>
+            mark.id === activeSubMarkId
+              ? { ...mark, palette: nextPalette, color: nextColor }
+              : mark,
+          ),
+        });
+      }
+      return;
+    }
+    persistMarkPalette(nextPalette, nextColor);
   };
+  const cycleMarkPalette = (delta: 1 | -1) => {
+    const next = stepFallbackPalette(wheelPalette, delta);
+    persistWheel(next, remapColorToPalette(wheelColor, wheelPalette, next));
+  };
+
+  const prevSubMarkModeRef = useRef<DocFootnoteSubMarkKind | null>(null);
+  useEffect(() => {
+    const prev = prevSubMarkModeRef.current;
+    prevSubMarkModeRef.current = subMarkMode;
+    if (subMarkMode !== "underline" || prev === "underline") return;
+    const next = stepFallbackPalette(palette, 1);
+    onSubMarkPaintTheme?.({ palette: next, color: next[0] ?? "#0d9488" });
+    onActiveSubMarkIdChange?.(null);
+  }, [subMarkMode, palette, onSubMarkPaintTheme, onActiveSubMarkIdChange]);
 
   useLayoutEffect(() => {
     if (task?.kind !== "thread") return;
@@ -443,8 +491,17 @@ export function FootnoteOverview({
   };
   const removeSubMark = (id: string) => {
     onHoverSubMark?.(null);
+    if (activeSubMarkId === id) onActiveSubMarkIdChange?.(null);
     const next = subMarks.filter((mark) => mark.id !== id);
     onChange({ ...footnote, subMarks: next.length > 0 ? next : undefined });
+  };
+  const selectSubMark = (mark: (typeof subMarks)[number]) => {
+    if (subMarkMode !== "underline") return;
+    const nextPalette =
+      normalizePalette(mark.palette) ?? subMarkPaintTheme?.palette ?? stepFallbackPalette(palette, 1);
+    const nextColor = mark.color ?? nextPalette[0] ?? "#0d9488";
+    onActiveSubMarkIdChange?.(mark.id);
+    onSubMarkPaintTheme?.({ palette: nextPalette, color: nextColor });
   };
   const editingNote =
     task?.kind === "note" ? notes.find((note) => note.id === task.id) ?? null : null;
@@ -647,18 +704,17 @@ export function FootnoteOverview({
                 </div>
                 <div className="lc-footnote-overview-color">
                   <ColorRadial
-                    colors={palette}
-                    value={markColor}
-                    onPick={(color) =>
-                      onChange({ ...footnote, color, palette: footnote.palette ?? palette })
-                    }
+                    colors={wheelPalette}
+                    value={wheelColor}
+                    onPick={(color) => persistWheel(wheelPalette, color)}
                     onCycleNext={() => cycleMarkPalette(1)}
                     onCyclePrev={() => cycleMarkPalette(-1)}
                     onEditColor={(index, color) => {
-                      const next = palette.map((swatch, i) => (i === index ? color : swatch));
+                      const next = wheelPalette.map((swatch, i) => (i === index ? color : swatch));
                       const selected =
-                        palette[index]?.trim().toLowerCase() === markColor.trim().toLowerCase();
-                      persistMarkPalette(next, selected ? color : markColor);
+                        wheelPalette[index]?.trim().toLowerCase() ===
+                        wheelColor.trim().toLowerCase();
+                      persistWheel(next, selected ? color : wheelColor);
                     }}
                     handedness={handedness}
                     compact
@@ -685,13 +741,27 @@ export function FootnoteOverview({
                   {subMarks.map((mark) => (
                     <li
                       key={mark.id}
-                      className="lc-footnote-overview-link-row"
+                      className={`lc-footnote-overview-link-row${
+                        activeSubMarkId === mark.id ? " is-selected" : ""
+                      }`}
+                      style={
+                        mark.color
+                          ? footnoteThemeVars(
+                              mark.color,
+                              normalizePalette(mark.palette) ?? palette,
+                            )
+                          : undefined
+                      }
                       onPointerEnter={() => onHoverSubMark?.(mark.id)}
                       onPointerLeave={() => onHoverSubMark?.(null)}
                     >
-                      <span className="lc-agent-scope-option">
+                      <button
+                        type="button"
+                        className="lc-agent-scope-option"
+                        onClick={() => selectSubMark(mark)}
+                      >
                         <span className="lc-footnote-overview-entry-text">{mark.excerpt}</span>
-                      </span>
+                      </button>
                       <button
                         type="button"
                         className="lc-footnote-overview-add lc-footnote-overview-row-remove"

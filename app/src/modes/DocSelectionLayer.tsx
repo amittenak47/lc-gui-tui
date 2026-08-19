@@ -197,6 +197,10 @@ export interface DocSelectionLayerProps {
   onAddSubMark?: (mark: DocFootnoteSubMark) => void;
   /** Hub-row hover — wash this committed sub-mark on the page. */
   hoveredSubMarkId?: string | null;
+  /** Live / next underline colour while the tool is armed. */
+  subMarkPaintTheme?: { color: string; palette: string[] } | null;
+  /** New live drag — stop retinting the last committed underline. */
+  onSubMarkLiveStart?: () => void;
 }
 
 /**
@@ -246,6 +250,8 @@ export function DocSelectionLayer({
   subMarkParent = null,
   onAddSubMark,
   hoveredSubMarkId = null,
+  subMarkPaintTheme = null,
+  onSubMarkLiveStart,
 }: DocSelectionLayerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   /**
@@ -315,6 +321,8 @@ export function DocSelectionLayer({
   } | null>(null);
   const subMarkLiveRef = useRef(subMarkLive);
   subMarkLiveRef.current = subMarkLive;
+  const onSubMarkLiveStartRef = useRef(onSubMarkLiveStart);
+  onSubMarkLiveStartRef.current = onSubMarkLiveStart;
   const bandFadeTimerRef = useRef<number | null>(null);
   /**
    * Where each ribbon is on screen, so the card it opens can hang off it.
@@ -495,6 +503,11 @@ export function DocSelectionLayer({
       /* ignore */
     }
   }, [subMarkArmed, subMarkMode, subMarkParent?.id]);
+
+  useEffect(() => {
+    if (!subMarkLive) return;
+    onSubMarkLiveStartRef.current?.();
+  }, [subMarkLive]);
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -1715,7 +1728,13 @@ export function DocSelectionLayer({
   const paintedSubMarks = useMemo(() => {
     const body = bodyRef.current;
     if (!body || !subMarkParent?.subMarks?.length) return [];
-    const out: Array<{ id: string; kind: DocFootnoteSubMarkKind; rects: LocalRect[] }> = [];
+    const out: Array<{
+      id: string;
+      kind: DocFootnoteSubMarkKind;
+      rects: LocalRect[];
+      color?: string;
+      palette?: string[];
+    }> = [];
     for (const mark of subMarkParent.subMarks) {
       const anchor = resolveSubMarkAnchor(subMarkParent, mark);
       if (!anchor) continue;
@@ -1723,7 +1742,13 @@ export function DocSelectionLayer({
       if (!root) continue;
       const range = rangeFromAnchor(root, anchor);
       if (!range) continue;
-      out.push({ id: mark.id, kind: mark.kind, rects: localRects(body, range) });
+      out.push({
+        id: mark.id,
+        kind: mark.kind,
+        rects: localRects(body, range),
+        color: mark.color,
+        palette: mark.palette,
+      });
     }
     return out;
   }, [subMarkParent, footnotes, children]);
@@ -1744,6 +1769,9 @@ export function DocSelectionLayer({
   const subMarkTint = subMarkParent
     ? footnoteThemeVars(subMarkParent.color ?? inkPalette[0], inkPalette)
     : undefined;
+  const subMarkLiveTint = subMarkPaintTheme
+    ? footnoteThemeVars(subMarkPaintTheme.color, subMarkPaintTheme.palette)
+    : subMarkTint;
 
   const aiTabTops = useMemo(
     () =>
@@ -1938,7 +1966,9 @@ export function DocSelectionLayer({
                   top: rect.top,
                   width: rect.width,
                   height: rect.height,
-                  ...subMarkTint,
+                  ...(entry.color
+                    ? footnoteThemeVars(entry.color, entry.palette ?? inkPalette)
+                    : subMarkTint),
                 }}
               />
             )),
@@ -1952,7 +1982,7 @@ export function DocSelectionLayer({
                 top: rect.top,
                 width: rect.width,
                 height: rect.height,
-                ...subMarkTint,
+                ...subMarkLiveTint,
               }}
             />
           ))}
@@ -1976,7 +2006,7 @@ export function DocSelectionLayer({
                         left: startRect.left - hit / 2,
                         top: startRect.top + startRect.height - hit / 2,
                         ["--lc-grip-stem" as string]: `${startStem}px`,
-                        ...subMarkTint,
+                        ...subMarkLiveTint,
                       }}
                       aria-label="Adjust selection start"
                     />
@@ -1988,7 +2018,7 @@ export function DocSelectionLayer({
                         left: endRect.left + endRect.width - hit / 2,
                         top: endRect.top + endRect.height - hit / 2,
                         ["--lc-grip-stem" as string]: `${endStem}px`,
-                        ...subMarkTint,
+                        ...subMarkLiveTint,
                       }}
                       aria-label="Adjust selection end"
                     />
