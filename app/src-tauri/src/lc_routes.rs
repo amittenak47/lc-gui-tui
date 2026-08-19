@@ -581,12 +581,13 @@ pub async fn lc_put_whiteboard(
 pub async fn lc_tombstone_whiteboard(
     state: State<'_, Shared>,
     id: String,
+    seq: Option<i64>,
 ) -> Result<LcResponse, String> {
     go(
         state,
         "POST",
         format!("/pads/whiteboard/{}/tombstone", enc(&id)),
-        None,
+        Some(json!({ "seq": seq.unwrap_or(0) })),
     )
     .await
 }
@@ -634,12 +635,13 @@ pub async fn lc_put_annotate(
 pub async fn lc_tombstone_annotate(
     state: State<'_, Shared>,
     id: String,
+    seq: Option<i64>,
 ) -> Result<LcResponse, String> {
     go(
         state,
         "POST",
         format!("/pads/annotate/{}/tombstone", enc(&id)),
-        None,
+        Some(json!({ "seq": seq.unwrap_or(0) })),
     )
     .await
 }

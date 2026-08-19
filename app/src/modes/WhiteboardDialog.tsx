@@ -10,6 +10,7 @@ import { useLibraryDeleteArm } from "../util/armedDelete";
 import {
   deleteWhiteboardNotebook,
   listWhiteboardNotebooks,
+  listWhiteboardTrash,
   setWhiteboardNotebookLocked,
   type WhiteboardNotebookMeta,
 } from "../util/whiteboardStore";
@@ -52,8 +53,7 @@ interface EntryProps {
   onChoose: (choice: ScratchEntryChoice, notebookId?: string) => void;
   onCancel: () => void;
   onDelete?: (id: string) => void | Promise<void>;
-  archived?: WhiteboardNotebookMeta[];
-  onRestoreArchive?: (id: string) => void | Promise<void>;
+  onRestoreTrash?: (id: string) => void | Promise<void>;
 }
 
 export type WhiteboardDialogProps = LeaveProps | EntryProps;
@@ -62,6 +62,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const [notebooks, setNotebooks] = useState<WhiteboardNotebookMeta[]>(() =>
     listWhiteboardNotebooks(),
   );
+  const [trash, setTrash] = useState<WhiteboardNotebookMeta[]>(() => listWhiteboardTrash());
   const [pickingLoad, setPickingLoad] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
@@ -70,6 +71,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
 
   useEffect(() => {
     setNotebooks(listWhiteboardNotebooks());
+    setTrash(listWhiteboardTrash());
     setPickingLoad(false);
     setPickingSnapshots(false);
   }, [props.mode]);
@@ -91,7 +93,10 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const dirty = props.mode !== "leave" || props.dirty !== false;
   const locked = pending || exiting;
 
-  const refreshList = () => setNotebooks(listWhiteboardNotebooks());
+  const refreshList = () => {
+    setNotebooks(listWhiteboardNotebooks());
+    setTrash(listWhiteboardTrash());
+  };
 
   const openSnapshots = () => {
     setPickingSnapshots(true);
@@ -118,7 +123,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
     refreshList();
   };
 
-  const archived = props.mode === "entry" ? props.archived ?? [] : [];
+  const archived = props.mode === "entry" ? trash : [];
 
   return (
     <div
@@ -261,7 +266,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
               ))}
               {archived.length > 0 && (
                 <>
-                  <p className="lc-muted">Archived on the PC — restore to the live library.</p>
+                  <p className="lc-muted">Trash on this device — three days, then gone.</p>
                   {archived.map((entry) => (
                     <HoldButton
                       key={`arch-${entry.id}`}
@@ -269,7 +274,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                       className="lc-hold-choice"
                       disabled={locked || !props.mode || props.mode !== "entry"}
                       onConfirm={() => {
-                        if (props.mode === "entry") void props.onRestoreArchive?.(entry.id);
+                        if (props.mode === "entry") void props.onRestoreTrash?.(entry.id);
                       }}
                       resetKey={error}
                     >
@@ -398,7 +403,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
       {pendingId && (
         <ConfirmDialog
           title="Remove this notebook?"
-          message="It leaves the library on every device that talks to this PC."
+          message="It leaves the live library."
           detail={TOMBSTONE_COPY}
           confirmLabel="Delete"
           onConfirm={() => void confirmRemove(pendingId)}

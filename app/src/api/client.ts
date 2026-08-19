@@ -47,6 +47,7 @@ export class LcApiError extends Error {
     message: string,
     readonly status: number,
     readonly bodyText?: string,
+    readonly json?: unknown,
   ) {
     super(message);
     this.name = "LcApiError";
@@ -105,10 +106,12 @@ async function hubFetch(
   }
   if (!res.ok) {
     const errBody =
-      json && typeof json === "object" && "error" in json
+      json && typeof json === "object" && json !== null && "error" in json
         ? String((json as { error: unknown }).error)
-        : new TextDecoder().decode(bytes).slice(0, 240);
-    throw new LcApiError(errBody || res.statusText, res.status, errBody);
+        : json != null
+          ? JSON.stringify(json)
+          : new TextDecoder().decode(bytes);
+    throw new LcApiError(errBody || res.statusText, res.status, errBody, json);
   }
   return { json, bytes };
 }
@@ -150,6 +153,8 @@ export interface WhiteboardPadDto {
   updated_at: number;
   page_count: number;
   deleted_at?: number | null;
+  sync_seq?: number;
+  base_updated_at?: number | null;
   board: unknown;
   agent: unknown;
 }
@@ -161,6 +166,8 @@ export interface AnnotatePadDto {
   doc_type: string;
   updated_at: number;
   deleted_at?: number | null;
+  sync_seq?: number;
+  base_updated_at?: number | null;
   source: string;
   footnotes: unknown;
   board: unknown;
@@ -175,11 +182,24 @@ export interface PadSnapshotDto {
   payload: unknown;
 }
 
+export interface PadGoneDto {
+  kind: string;
+  id: string;
+  seq: number;
+  gone_at: number;
+}
+
+export interface ApplyAckDto {
+  applied: boolean;
+  seq: number;
+}
+
 export interface PadSyncPingDto {
   now: number;
   whiteboard: WhiteboardPadDto[];
   annotate: AnnotatePadDto[];
   snapshots: PadSnapshotDto[];
+  gone?: PadGoneDto[];
 }
 
 export interface DevicePrefsDto {
@@ -620,6 +640,7 @@ export class LcClient {
       whiteboard: Array.isArray(body?.whiteboard) ? body.whiteboard : [],
       annotate: Array.isArray(body?.annotate) ? body.annotate : [],
       snapshots: Array.isArray(body?.snapshots) ? body.snapshots : [],
+      gone: Array.isArray(body?.gone) ? body.gone : [],
     };
   }
 
@@ -648,11 +669,12 @@ export class LcClient {
     );
   }
 
-  async tombstoneWhiteboardPad(id: string): Promise<void> {
-    await padInvokeOrHub(
-      () => this.cmd("lc_tombstone_whiteboard", { id }),
+  async tombstoneWhiteboardPad(id: string, seq = 0): Promise<ApplyAckDto> {
+    return padInvokeOrHub(
+      () => this.cmd("lc_tombstone_whiteboard", { id, seq }),
       "POST",
       `/pads/whiteboard/${encodeURIComponent(id)}/tombstone`,
+      { seq },
     );
   }
 
@@ -689,11 +711,12 @@ export class LcClient {
     );
   }
 
-  async tombstoneAnnotatePad(id: string): Promise<void> {
-    await padInvokeOrHub(
-      () => this.cmd("lc_tombstone_annotate", { id }),
+  async tombstoneAnnotatePad(id: string, seq = 0): Promise<ApplyAckDto> {
+    return padInvokeOrHub(
+      () => this.cmd("lc_tombstone_annotate", { id, seq }),
       "POST",
       `/pads/annotate/${encodeURIComponent(id)}/tombstone`,
+      { seq },
     );
   }
 
@@ -784,7 +807,7 @@ export class LcClient {
     const result = readInvokeResult<T>(raw);
     if (result.status >= 400) {
       const text = bodyText(result.body);
-      throw new LcApiError(errorMessage(text, result.status), result.status, text);
+      throw new LcApiError(errorMessage(text, result.status), result.status, text, result.body);
     }
     return result.body;
   }

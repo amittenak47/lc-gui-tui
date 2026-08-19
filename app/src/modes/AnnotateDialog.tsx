@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useLibraryDeleteArm } from "../util/armedDelete";
-import { deleteAnnotateDoc, listAnnotateDocs, setAnnotateDocLocked, type AnnotateDocMeta } from "../util/annotateStore";
+import { deleteAnnotateDoc, listAnnotateDocs, listAnnotateTrash, setAnnotateDocLocked, type AnnotateDocMeta } from "../util/annotateStore";
 import { LibraryPadlock } from "./LibraryPadlock";
 import { TOMBSTONE_COPY } from "../util/padSync";
 import {
@@ -60,19 +60,19 @@ interface EntryProps {
   error?: string | null;
   /** When a document is already open, offer Save alongside Open / Recent. */
   allowSave?: boolean;
-  /** Content hash of the open file — used to list rolling snapshots. */
+  /** Pad id of the open document — used to list rolling snapshots. */
   snapshotKey?: string | null;
   onChoose: (choice: MdInkEntryChoice, docId?: string) => void;
   onCancel: () => void;
   onDelete?: (id: string) => void | Promise<void>;
-  archived?: AnnotateDocMeta[];
-  onRestoreArchive?: (id: string) => void | Promise<void>;
+  onRestoreTrash?: (id: string) => void | Promise<void>;
 }
 
 export type AnnotateDialogProps = LeaveProps | EntryProps;
 
 export function AnnotateDialog(props: AnnotateDialogProps) {
   const [docs, setDocs] = useState<AnnotateDocMeta[]>(() => listAnnotateDocs());
+  const [trash, setTrash] = useState<AnnotateDocMeta[]>(() => listAnnotateTrash());
   const [pickingRecent, setPickingRecent] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   /** Naming a new note. Null when the dialog is not on that step. */
@@ -83,6 +83,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
 
   useEffect(() => {
     setDocs(listAnnotateDocs());
+    setTrash(listAnnotateTrash());
     setPickingRecent(false);
     setPickingSnapshots(false);
   }, [props.mode]);
@@ -129,9 +130,10 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
     }
     setPendingId(null);
     setDocs(listAnnotateDocs());
+    setTrash(listAnnotateTrash());
   };
 
-  const archived = props.mode === "entry" ? props.archived ?? [] : [];
+  const archived = props.mode === "entry" ? trash : [];
 
   return (
     <div
@@ -251,6 +253,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     onToggle={() => {
                       setAnnotateDocLocked(doc.id, !doc.locked);
                       setDocs(listAnnotateDocs());
+    setTrash(listAnnotateTrash());
                     }}
                   />
                   {!doc.locked && (
@@ -292,7 +295,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
               ))}
               {archived.length > 0 && (
                 <>
-                  <p className="lc-muted">Archived on the PC — restore to the live library.</p>
+                  <p className="lc-muted">Trash on this device — three days, then gone.</p>
                   {archived.map((doc) => (
                     <HoldButton
                       key={`arch-${doc.id}`}
@@ -300,7 +303,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                       className="lc-hold-choice"
                       disabled={locked}
                       onConfirm={() => {
-                        if (props.mode === "entry") void props.onRestoreArchive?.(doc.id);
+                        if (props.mode === "entry") void props.onRestoreTrash?.(doc.id);
                       }}
                       resetKey={error}
                     >
@@ -468,7 +471,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
       {pendingId && (
         <ConfirmDialog
           title="Remove this document?"
-          message="It leaves the library on every device that talks to this PC."
+          message="It leaves the live library."
           detail={TOMBSTONE_COPY}
           confirmLabel="Delete"
           onConfirm={() => void confirmRemove(pendingId)}

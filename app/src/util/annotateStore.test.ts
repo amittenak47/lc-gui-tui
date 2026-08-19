@@ -13,13 +13,23 @@ import {
   getAnnotateDoc,
   hashMarkdown,
   listAnnotateDocs,
+  listAnnotateTrash,
   ANNOTATE_LIBRARY_LIMIT,
+  ANNOTATE_TRASH_TTL_MS,
   AnnotateLibraryFullError,
   restoreAnnotateDoc,
+  restoreAnnotateFromTrash,
   saveAnnotateDoc,
   setAnnotateDocLocked,
+  sweepAnnotateTrash,
+  trashAnnotateDoc,
   type AnnotateDoc,
 } from "./annotateStore";
+
+const deleteDocBytes = vi.fn(async () => {});
+vi.mock("./docBytes", () => ({
+  deleteDocBytes: (hash: string) => deleteDocBytes(hash),
+}));
 
 function board(mark = "a"): BoardBlob {
   return {
@@ -31,6 +41,7 @@ function board(mark = "a"): BoardBlob {
 }
 
 beforeEach(() => {
+  deleteDocBytes.mockClear();
   const store = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => store.get(key) ?? null,
@@ -548,5 +559,63 @@ describe("coach thread on an entry", () => {
   it("reads an entry written before a thread existed as having none", async () => {
     const saved = await saveAnnotateDoc({ name: "old.md", hash: "h", source: "# src", board: board() });
     expect((await getAnnotateDoc(saved.id))?.agent).toEqual([]);
+  });
+});
+
+describe("annotate trash", () => {
+  it("hides the pad from live and from hash forks", async () => {
+    const hash = "pdf-shared";
+    const first = await saveAnnotateDoc({
+      name: "dp.pdf",
+      hash,
+      docType: "pdf",
+      source: "",
+      board: board("one"),
+    });
+    const second = await saveAnnotateDoc({
+      name: "dp.pdf",
+      hash,
+      docType: "pdf",
+      source: "",
+      board: board("two"),
+    });
+    await trashAnnotateDoc(first.id);
+    expect(listAnnotateDocs().map((row) => row.id)).toEqual([second.id]);
+    expect(listAnnotateDocsByHash(hash).map((row) => row.id)).toEqual([second.id]);
+    expect(listAnnotateTrash().map((row) => row.id)).toEqual([first.id]);
+    await restoreAnnotateFromTrash(first.id);
+    expect(listAnnotateDocsByHash(hash)).toHaveLength(2);
+  });
+
+  it("GCs the blob only after the last id that shares the hash is gone", async () => {
+    const hash = "pdf-shared";
+    const first = await saveAnnotateDoc({
+      name: "dp.pdf",
+      hash,
+      docType: "pdf",
+      source: "",
+      board: board("one"),
+    });
+    const second = await saveAnnotateDoc({
+      name: "dp.pdf",
+      hash,
+      docType: "pdf",
+      source: "",
+      board: board("two"),
+    });
+    await deleteAnnotateDoc(first.id);
+    expect(deleteDocBytes).not.toHaveBeenCalled();
+    await deleteAnnotateDoc(second.id);
+    expect(deleteDocBytes).toHaveBeenCalledWith(hash);
+  });
+
+  it("sweeps only after ACK and TTL", async () => {
+    const saved = await saveAnnotateDoc({ name: "a.md", hash: "h", source: "#", board: board() });
+    await trashAnnotateDoc(saved.id, 1);
+    const { markAnnotateDeleteAcked } = await import("./annotateStore");
+    expect(await sweepAnnotateTrash(1 + ANNOTATE_TRASH_TTL_MS)).toEqual([]);
+    markAnnotateDeleteAcked(saved.id, true);
+    expect(await sweepAnnotateTrash(1 + ANNOTATE_TRASH_TTL_MS)).toEqual([saved.id]);
+    expect(listAnnotateTrash()).toHaveLength(0);
   });
 });

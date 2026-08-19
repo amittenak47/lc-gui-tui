@@ -92,7 +92,7 @@ export function WhiteboardLibraryDialog({
             {tapArmed
               ? "Tap a notebook to delete it."
               : "Hold to delete one."}{" "}
-            A copy stays on the PC.
+            Trash on this device lasts three days.
           </p>
         </div>
         <div className="lc-settings-body">
@@ -146,7 +146,7 @@ export function WhiteboardLibraryDialog({
       {pendingId && (
         <ConfirmDialog
           title="Remove this notebook?"
-          message="It leaves the library on every device that talks to this PC."
+          message="It leaves the live library."
           detail={TOMBSTONE_COPY}
           confirmLabel="Delete"
           onConfirm={() => void remove(pendingId)}

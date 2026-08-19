@@ -36,6 +36,7 @@ import { deleteInkPages, annotateDocKey, renameInkPages } from "./inkPageStore";
 import { setStorageItem } from "./storageQuota";
 
 export const ANNOTATE_LIBRARY_LIMIT = 30;
+export const ANNOTATE_TRASH_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 
 /**
  * What kind of document an entry was drawn over.
@@ -100,6 +101,11 @@ export interface AnnotateDocMeta {
    * Blocks trash in the library. Local-only — a ping will not overwrite it.
    */
   locked?: boolean;
+  deletedAt?: number;
+  syncSeq?: number;
+  deleteAcked?: boolean;
+  lastTouch?: number;
+  hubAckUpdatedAt?: number;
 }
 
 /**
@@ -270,7 +276,19 @@ function writeIndex(entries: AnnotateDocMeta[]): void {
  * the store to show their file names.
  */
 export function listAnnotateDocs(): AnnotateDocMeta[] {
-  return readIndex().sort((a, b) => b.updatedAt - a.updatedAt);
+  return readIndex()
+    .filter((entry) => !entry.deletedAt)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export function listAnnotateTrash(): AnnotateDocMeta[] {
+  return readIndex()
+    .filter((entry) => entry.deletedAt)
+    .sort((a, b) => (b.lastTouch ?? b.deletedAt ?? 0) - (a.lastTouch ?? a.deletedAt ?? 0));
+}
+
+function liveAnnotateCount(): number {
+  return readIndex().filter((entry) => !entry.deletedAt).length;
 }
 
 /**
@@ -332,7 +350,7 @@ export async function getAnnotateDoc(id: string): Promise<AnnotateDoc | null> {
  */
 export function listAnnotateDocsByHash(hash: string): AnnotateDocMeta[] {
   return readIndex()
-    .filter((entry) => entry.hash === hash)
+    .filter((entry) => !entry.deletedAt && entry.hash === hash)
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -371,7 +389,10 @@ export function freshAnnotateId(): string {
  * lets the writer be told what happened.
  */
 export function findStaleAnnotateDoc(name: string, hash: string): AnnotateDocMeta | null {
-  return readIndex().find((entry) => entry.name === name && entry.hash !== hash) ?? null;
+  return (
+    readIndex().find((entry) => !entry.deletedAt && entry.name === name && entry.hash !== hash) ??
+    null
+  );
 }
 
 /** See the note on `freshId` in `whiteboardStore` — same millisecond, same trap. */
@@ -489,8 +510,8 @@ export async function saveAnnotateDoc(input: {
    * now carry as many sets as the library holds.
    */
   const existing = input.id ? index.find((entry) => entry.id === input.id) ?? null : null;
-  const id = input.id ?? freshId(index, now);
-  if (!existing && index.length >= ANNOTATE_LIBRARY_LIMIT) {
+  const id = input.id ?? freshId(index.filter((entry) => !entry.deletedAt), now);
+  if (!existing && liveAnnotateCount() >= ANNOTATE_LIBRARY_LIMIT) {
     throw new AnnotateLibraryFullError(
       `At most ${ANNOTATE_LIBRARY_LIMIT} annotated documents — delete one to keep another.`,
     );
@@ -515,6 +536,9 @@ export async function saveAnnotateDoc(input: {
     ...(label ? { label } : {}),
     ...(owned ? { owned: true } : {}),
     ...(existing?.locked ? { locked: true } : {}),
+    syncSeq: existing?.syncSeq ?? 0,
+    lastTouch: now,
+    ...(existing?.hubAckUpdatedAt != null ? { hubAckUpdatedAt: existing.hubAckUpdatedAt } : {}),
   };
   writeIndex([meta, ...index.filter((entry) => entry.id !== id)]);
   await putContent(id, {
@@ -526,6 +550,15 @@ export async function saveAnnotateDoc(input: {
   return { ...meta, source: input.source, board: input.board, footnotes, agent };
 }
 
+export function markAnnotateHubAck(id: string, updatedAt: number): void {
+  const existing = readIndex().find((entry) => entry.id === id);
+  if (!existing) return;
+  writeIndex([
+    { ...existing, hubAckUpdatedAt: updatedAt },
+    ...readIndex().filter((entry) => entry.id !== id),
+  ]);
+}
+
 export function setAnnotateDocLocked(id: string, locked: boolean): void {
   const index = readIndex();
   const existing = index.find((entry) => entry.id === id);
@@ -534,6 +567,61 @@ export function setAnnotateDocLocked(id: string, locked: boolean): void {
   if (locked) next.locked = true;
   else delete next.locked;
   writeIndex([next, ...index.filter((entry) => entry.id !== id)]);
+}
+
+export async function trashAnnotateDoc(id: string, now = Date.now()): Promise<number | null> {
+  const existing = readIndex().find((entry) => entry.id === id);
+  if (!existing || existing.locked) return null;
+  const seq = (existing.syncSeq ?? 0) + 1;
+  const next: AnnotateDocMeta = {
+    ...existing,
+    deletedAt: now,
+    syncSeq: seq,
+    deleteAcked: false,
+    lastTouch: now,
+  };
+  writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
+  return seq;
+}
+
+export function markAnnotateDeleteAcked(id: string, acked: boolean): void {
+  const existing = readIndex().find((entry) => entry.id === id);
+  if (!existing?.deletedAt) return;
+  writeIndex([
+    { ...existing, deleteAcked: acked },
+    ...readIndex().filter((entry) => entry.id !== id),
+  ]);
+}
+
+export async function restoreAnnotateFromTrash(id: string): Promise<AnnotateDoc | null> {
+  const existing = readIndex().find((entry) => entry.id === id);
+  if (!existing?.deletedAt) return null;
+  if (liveAnnotateCount() >= ANNOTATE_LIBRARY_LIMIT) {
+    throw new AnnotateLibraryFullError(
+      `At most ${ANNOTATE_LIBRARY_LIMIT} annotated documents — delete one to restore another.`,
+    );
+  }
+  const seq = (existing.syncSeq ?? 0) + 1;
+  const next: AnnotateDocMeta = { ...existing, syncSeq: seq, lastTouch: Date.now() };
+  delete next.deletedAt;
+  delete next.deleteAcked;
+  writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
+  return readContent(next);
+}
+
+export async function sweepAnnotateTrash(now = Date.now()): Promise<string[]> {
+  const expired = readIndex().filter(
+    (entry) =>
+      entry.deletedAt &&
+      entry.deleteAcked &&
+      now - entry.deletedAt >= ANNOTATE_TRASH_TTL_MS,
+  );
+  const ids: string[] = [];
+  for (const entry of expired) {
+    await deleteAnnotateDoc(entry.id);
+    ids.push(entry.id);
+  }
+  return ids;
 }
 
 export async function deleteAnnotateDoc(id: string): Promise<void> {

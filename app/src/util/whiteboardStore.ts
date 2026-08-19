@@ -10,6 +10,7 @@ import { setStorageItem } from "./storageQuota";
 
 export const WHITEBOARD_LIBRARY_LIMIT = 50;
 export const WHITEBOARD_PAGE_LIMIT = 10;
+export const PAD_TRASH_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 
 export class WhiteboardLibraryFullError extends Error {
   readonly code = "scratchpad-library-full" as const;
@@ -28,6 +29,12 @@ export interface WhiteboardNotebookMeta {
   pageCount: number;
   /** Blocks trash. Local-only — not part of pads.db. */
   locked?: boolean;
+  deletedAt?: number;
+  syncSeq?: number;
+  deleteAcked?: boolean;
+  lastTouch?: number;
+  /** Last hub `updated_at` this device ACK'd. CAS base for the next live PUT. */
+  hubAckUpdatedAt?: number;
 }
 
 export interface WhiteboardNotebook extends WhiteboardNotebookMeta {
@@ -108,7 +115,19 @@ function writeIndex(entries: WhiteboardNotebookMeta[]): void {
 
 /** Synchronous on purpose — the library dialog renders names, not boards. */
 export function listWhiteboardNotebooks(): WhiteboardNotebookMeta[] {
-  return readIndex().sort((a, b) => b.updatedAt - a.updatedAt);
+  return readIndex()
+    .filter((entry) => !entry.deletedAt)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export function listWhiteboardTrash(): WhiteboardNotebookMeta[] {
+  return readIndex()
+    .filter((entry) => entry.deletedAt)
+    .sort((a, b) => (b.lastTouch ?? b.deletedAt ?? 0) - (a.lastTouch ?? a.deletedAt ?? 0));
+}
+
+function liveCount(): number {
+  return readIndex().filter((entry) => !entry.deletedAt).length;
 }
 
 /**
@@ -128,7 +147,7 @@ export function renameWhiteboardNotebook(id: string, title: string): void {
 }
 
 export function whiteboardLibraryCount(): number {
-  return readIndex().length;
+  return liveCount();
 }
 
 export async function getWhiteboardNotebook(id: string): Promise<WhiteboardNotebook | null> {
@@ -172,7 +191,7 @@ export async function saveWhiteboardNotebook(input: {
   const now = Date.now();
   const id = input.id ?? freshId(library, now);
   const existing = library.find((entry) => entry.id === id);
-  if (!existing && library.length >= WHITEBOARD_LIBRARY_LIMIT) {
+  if (!existing && liveCount() >= WHITEBOARD_LIBRARY_LIMIT) {
     throw new WhiteboardLibraryFullError(
       `At most ${WHITEBOARD_LIBRARY_LIMIT} whiteboard notebooks — delete one to save another.`,
     );
@@ -197,10 +216,22 @@ export async function saveWhiteboardNotebook(input: {
     updatedAt: now,
     pageCount: Math.min(WHITEBOARD_PAGE_LIMIT, Math.max(1, input.pageCount)),
     ...(existing?.locked ? { locked: true } : {}),
+    syncSeq: existing?.syncSeq ?? 0,
+    lastTouch: now,
+    ...(existing?.hubAckUpdatedAt != null ? { hubAckUpdatedAt: existing.hubAckUpdatedAt } : {}),
   };
   writeIndex([meta, ...library.filter((entry) => entry.id !== id)]);
   await putContent(id, { board: input.board, agent } satisfies WhiteboardContent);
   return { ...meta, board: input.board, agent };
+}
+
+export function markWhiteboardHubAck(id: string, updatedAt: number): void {
+  const existing = readIndex().find((entry) => entry.id === id);
+  if (!existing) return;
+  writeIndex([
+    { ...existing, hubAckUpdatedAt: updatedAt },
+    ...readIndex().filter((entry) => entry.id !== id),
+  ]);
 }
 
 export function setWhiteboardNotebookLocked(id: string, locked: boolean): void {
@@ -211,6 +242,78 @@ export function setWhiteboardNotebookLocked(id: string, locked: boolean): void {
     ? { ...existing, locked: true }
     : { id: existing.id, title: existing.title, updatedAt: existing.updatedAt, pageCount: existing.pageCount };
   writeIndex([next, ...library.filter((entry) => entry.id !== id)]);
+}
+
+export async function trashWhiteboardNotebook(id: string, now = Date.now()): Promise<number | null> {
+  const existing = readIndex().find((entry) => entry.id === id);
+  if (!existing || existing.locked) return null;
+  const seq = (existing.syncSeq ?? 0) + 1;
+  const next: WhiteboardNotebookMeta = {
+    ...existing,
+    deletedAt: now,
+    syncSeq: seq,
+    deleteAcked: false,
+    lastTouch: now,
+  };
+  writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
+  return seq;
+}
+
+export function markWhiteboardDeleteAcked(id: string, acked: boolean): void {
+  const existing = readIndex().find((entry) => entry.id === id);
+  if (!existing?.deletedAt) return;
+  writeIndex([
+    { ...existing, deleteAcked: acked },
+    ...readIndex().filter((entry) => entry.id !== id),
+  ]);
+}
+
+export function bumpWhiteboardSyncSeq(id: string): number {
+  const existing = readIndex().find((entry) => entry.id === id);
+  if (!existing) return 0;
+  const seq = (existing.syncSeq ?? 0) + 1;
+  const next = { ...existing, syncSeq: seq, lastTouch: Date.now() };
+  writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
+  return seq;
+}
+
+export async function restoreWhiteboardFromTrash(id: string): Promise<WhiteboardNotebook | null> {
+  const existing = readIndex().find((entry) => entry.id === id);
+  if (!existing?.deletedAt) return null;
+  if (liveCount() >= WHITEBOARD_LIBRARY_LIMIT) {
+    throw new WhiteboardLibraryFullError(
+      `At most ${WHITEBOARD_LIBRARY_LIMIT} whiteboard notebooks — delete one to restore another.`,
+    );
+  }
+  const seq = (existing.syncSeq ?? 0) + 1;
+  const next: WhiteboardNotebookMeta = {
+    id: existing.id,
+    title: existing.title,
+    updatedAt: existing.updatedAt,
+    pageCount: existing.pageCount,
+    ...(existing.locked ? { locked: true } : {}),
+    syncSeq: seq,
+    lastTouch: Date.now(),
+  };
+  writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
+  const content = await getContent<WhiteboardContent>(id);
+  if (!content) return null;
+  return { ...next, board: content.board, agent: content.agent };
+}
+
+export async function sweepWhiteboardTrash(now = Date.now()): Promise<string[]> {
+  const expired = readIndex().filter(
+    (entry) =>
+      entry.deletedAt &&
+      entry.deleteAcked &&
+      now - entry.deletedAt >= PAD_TRASH_TTL_MS,
+  );
+  const ids: string[] = [];
+  for (const entry of expired) {
+    await deleteWhiteboardNotebook(entry.id);
+    ids.push(entry.id);
+  }
+  return ids;
 }
 
 export async function deleteWhiteboardNotebook(id: string): Promise<void> {
