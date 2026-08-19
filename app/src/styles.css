@@ -4669,6 +4669,71 @@ body[data-lc-sash-drag="horizontal"] {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
+/*
+ * The link gesture's own surface.
+ *
+ * Fixed to the viewport and above the board, because it takes the pointer for
+ * the whole drag — which is also how the pen is kept from recording underneath
+ * it. Nothing here is ink: the stroke is an SVG polyline that exists for the
+ * length of the gesture and is never written to a layer.
+ */
+.lc-link-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.lc-link-stroke {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.lc-link-stroke polyline {
+  fill: none;
+  stroke: color-mix(in srgb, #d98b3a 85%, transparent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/*
+ * A target under the pointer. Marks are certain — the reader can see them —
+ * and suggestions are guesses out of the document index, so they do not get to
+ * look the same.
+ */
+.lc-link-chip {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  z-index: 41;
+  max-width: 12rem;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--chrome-edge);
+  background: var(--panel-bg, var(--bg));
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.3);
+}
+
+.lc-link-chip.is-mark {
+  border-color: color-mix(in srgb, #d98b3a 65%, transparent);
+}
+
+.lc-link-chip.is-suggestion {
+  border-style: dashed;
+  color: var(--muted);
+}
+
 /* ------------------------------------------------------------- explore --- */
 
 /*

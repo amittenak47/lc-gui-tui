@@ -43,7 +43,9 @@ pub struct IndexStatus {
     pub embedded: bool,
 }
 
-#[derive(Debug, Clone)]
+/// One scored chunk. `Serialize` because `/docs/:hash/retrieve` returns these
+/// to the client; the coach used them in-process and never needed it.
+#[derive(Debug, Clone, Serialize)]
 pub struct RetrievedChunk {
     pub page: u32,
     pub heading: Option<String>,

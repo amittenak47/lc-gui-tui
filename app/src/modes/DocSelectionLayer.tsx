@@ -1827,6 +1827,7 @@ export function DocSelectionLayer({
                     isAiTab ? " lc-doc-footnote-tab" : ""
                   }`}
                   style={chipStyle}
+                  dataId={footnote.id}
                   ariaLabel={`${footnoteTitle(footnote, number)} — tap to open, hold to delete`}
                   onTap={() => {
                     const rect = ribbonRects.current.get(footnote.id) ?? null;

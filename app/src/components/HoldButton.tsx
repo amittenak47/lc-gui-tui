@@ -68,6 +68,15 @@ export interface HoldButtonProps {
   style?: CSSProperties;
   /** Reflected as a `data-region` attribute — a region mark is drawn as a box. */
   dataRegion?: boolean;
+  /**
+   * Reflected as `data-lc-id`, so an overlay above this button can tell which
+   * one it is over.
+   *
+   * The link tool hit-tests through its own surface with `elementFromPoint`
+   * and gets back a DOM node; without an id on it there is no way back to the
+   * footnote that node stands for.
+   */
+  dataId?: string;
   /** The rendered node, for a caller that needs to anchor something to it. */
   onMeasure?: (node: HTMLButtonElement | null) => void;
   /**
@@ -97,6 +106,7 @@ export function HoldButton({
   pressed,
   style,
   dataRegion,
+  dataId,
   onMeasure,
   holdThrough = false,
 }: HoldButtonProps) {
@@ -210,6 +220,7 @@ export function HoldButton({
       aria-busy={fillIndeterminate || (trackProgress > 0 && trackProgress < 1)}
       aria-pressed={pressed}
       data-tip={dataTip}
+      data-lc-id={dataId}
       data-tip-placement={dataTipPlacement}
       onPointerDown={(event) => {
         event.preventDefault();
