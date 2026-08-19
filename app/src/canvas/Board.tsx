@@ -1331,9 +1331,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // Mirror whatever the content slot is showing right now, so a remount does
     // not leave the marks a frame behind the page.
     const from = contentSlotNodeRef.current;
-    if (node && from) node.style.transform = from.style.transform;
+    if (node && from) {
+      node.style.transform = from.style.transform;
+      node.style.height = `${from.offsetHeight}px`;
+    }
     onMarksSlotRef.current?.(node);
   }, []);
+  const syncMarksSlotFrom = (content: HTMLElement) => {
+    const marks = marksSlotNodeRef.current;
+    if (!marks) return;
+    marks.style.transform = content.style.transform;
+    marks.style.height = `${content.offsetHeight}px`;
+  };
   const [contentSceneWidth, setContentSceneWidth] = useState(1);
   const lastContentSlotRef = useRef<{
     left: number;
@@ -2302,9 +2311,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * (long notes = thousands of nodes). Transform stays on the compositor.
        */
       node.style.transform = `translate(${next.left}px, ${next.top}px) scale(${next.zoom})`;
-      if (marksSlotNodeRef.current) {
-        marksSlotNodeRef.current.style.transform = node.style.transform;
-      }
+      syncMarksSlotFrom(node);
     }
     if (!last || Math.abs(last.sceneWidth - next.sceneWidth) >= 0.01) {
       setContentSceneWidth(next.sceneWidth);
@@ -3283,9 +3290,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const left = (bounds.minX + scrollX) * zoom;
       const top = (bounds.minY + scrollY) * zoom;
       node.style.transform = `translate(${left}px, ${top}px) scale(${zoom})`;
-      if (marksSlotNodeRef.current) {
-        marksSlotNodeRef.current.style.transform = node.style.transform;
-      }
+      syncMarksSlotFrom(node);
       lastContentSlotRef.current = {
         left,
         top,
@@ -3309,9 +3314,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const left = (fallback.minX + scrollX) * zoom;
         const top = (fallback.minY + scrollY) * zoom;
         node.style.transform = `translate(${left}px, ${top}px) scale(${zoom})`;
-        if (marksSlotNodeRef.current) {
-          marksSlotNodeRef.current.style.transform = node.style.transform;
-        }
+        syncMarksSlotFrom(node);
         lastContentSlotRef.current = {
           left,
           top,

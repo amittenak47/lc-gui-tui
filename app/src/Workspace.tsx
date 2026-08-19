@@ -6383,14 +6383,21 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     switchMotion,
   ]);
 
+  const showHomeChooser = useCallback(() => {
+    setPracticeOpen(false);
+    setWhiteboardEntryOpen(false);
+    setAnnotateEntryOpen(false);
+  }, []);
+
   useEffect(() => {
     setWorkspaceApi(tab.id, {
       park: () => new Promise<void>((resolve) => parkWorkspace(() => resolve())),
       leave: () => new Promise<boolean>((resolve) => leaveProblem(() => resolve(true))),
       abortLoad,
+      showHomeChooser: tab.kind === "home" ? showHomeChooser : undefined,
     });
     return () => setWorkspaceApi(tab.id, null);
-  }, [abortLoad, leaveProblem, parkWorkspace, setWorkspaceApi, tab.id]);
+  }, [abortLoad, leaveProblem, parkWorkspace, setWorkspaceApi, showHomeChooser, tab.id, tab.kind]);
 
   /*
    * Only the workspace on screen wears the app's chrome. The classes live on

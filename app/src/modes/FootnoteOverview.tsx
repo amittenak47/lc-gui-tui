@@ -81,18 +81,32 @@ function viewport() {
     originY: view?.offsetTop ?? 0,
   };
 }
-function settle(node: HTMLElement, left: number, top: number) {
+/** Board pane that contains the mark — split view must not clamp to the window. */
+function paneBox(anchorRect: DOMRect | null | undefined): DOMRect {
+  if (anchorRect) {
+    const cx = anchorRect.left + anchorRect.width / 2;
+    const cy = anchorRect.top + anchorRect.height / 2;
+    for (const board of document.querySelectorAll(".lc-board")) {
+      const box = board.getBoundingClientRect();
+      if (cx >= box.left && cx <= box.right && cy >= box.top && cy <= box.bottom) {
+        return box;
+      }
+    }
+  }
+  const view = viewport();
+  return new DOMRect(view.originX, view.originY, view.width, view.height);
+}
+function settle(node: HTMLElement, left: number, top: number, bounds: DOMRect) {
   const margin = 8;
-  const { width: viewWidth, height: viewHeight, originX, originY } = viewport();
-  const maxLeft = Math.max(margin, originX + viewWidth - node.offsetWidth - margin);
-  const maxTop = Math.max(margin, originY + viewHeight - node.offsetHeight - margin);
-  node.style.left = `${Math.round(Math.min(Math.max(originX + margin, left), maxLeft))}px`;
-  node.style.top = `${Math.round(Math.min(Math.max(originY + margin, top), maxTop))}px`;
+  const maxLeft = Math.max(bounds.left + margin, bounds.right - node.offsetWidth - margin);
+  const maxTop = Math.max(bounds.top + margin, bounds.bottom - node.offsetHeight - margin);
+  node.style.left = `${Math.round(Math.min(Math.max(bounds.left + margin, left), maxLeft))}px`;
+  node.style.top = `${Math.round(Math.min(Math.max(bounds.top + margin, top), maxTop))}px`;
   node.style.visibility = "visible";
 }
 function clampPanel(node: HTMLElement, anchorRect: DOMRect | null | undefined) {
   const margin = 8;
-  const { width: viewWidth, height: viewHeight, originX, originY } = viewport();
+  const pane = paneBox(anchorRect);
   const width = node.offsetWidth;
   const height = node.offsetHeight;
   let left: number;
@@ -100,12 +114,15 @@ function clampPanel(node: HTMLElement, anchorRect: DOMRect | null | undefined) {
   if (anchorRect) {
     left = anchorRect.left + anchorRect.width / 2 - width / 2;
     const below = anchorRect.bottom + 6;
-    top = below + height + margin > originY + viewHeight ? anchorRect.top - height - 6 : below;
+    top =
+      below + height + margin > pane.bottom
+        ? anchorRect.top - height - 6
+        : below;
   } else {
-    left = originX + viewWidth / 2 - width / 2;
-    top = originY + viewHeight / 2 - height / 2;
+    left = pane.left + pane.width / 2 - width / 2;
+    top = pane.top + pane.height / 2 - height / 2;
   }
-  settle(node, left, top);
+  settle(node, left, top, pane);
 }
 function applyViewportSize(node: HTMLElement, task: Task | null, compact = false) {
   const margin = 16;

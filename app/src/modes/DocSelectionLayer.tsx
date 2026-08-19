@@ -58,12 +58,17 @@ import {
   MIN_BAND_PX,
   type LocalRect,
   bandFromLocalPoints,
+  coversViewportBox,
   finalizeMarquee,
   hitRectsUnder,
+  localRectCoversHost,
+  localRects,
   scaleOf,
   scopeRootAtPoint,
   textUnder,
+  tightClientRects,
   unionLocalRects,
+  unionViewportBoxes,
   viewportToLocal,
 } from "../util/docMarquee";
 import { caretPointIn } from "../util/docSubMarkHit";
@@ -220,21 +225,7 @@ function rectForAnchor(
   }
   const range = rangeFromAnchor(root, anchor);
   if (!range) return null;
-  const [first] = localRects(body, range);
-  return first ?? null;
-}
-
-function localRects(host: HTMLElement, range: Range): LocalRect[] {
-  const origin = host.getBoundingClientRect();
-  const scale = scaleOf(host) || 1;
-  return Array.from(range.getClientRects())
-    .filter((rect) => rect.width > 0.5 && rect.height > 0.5)
-    .map((rect) => ({
-      left: (rect.left - origin.left) / scale,
-      top: (rect.top - origin.top) / scale,
-      width: rect.width / scale,
-      height: rect.height / scale,
-    }));
+  return unionLocalRects(localRects(body, range));
 }
 
 export function DocSelectionLayer({
@@ -264,6 +255,7 @@ export function DocSelectionLayer({
    * is therefore a sibling of this, not a child.
    */
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
   const [rects, setRects] = useState<LocalRect[]>([]);
   const [selection, setSelection] = useState<DocSelectionResult | null>(null);
   /**
@@ -291,6 +283,8 @@ export function DocSelectionLayer({
   const [copied, setCopied] = useState(false);
   /** Native text select vs hold-marquee — drives which actions sheet buttons show. */
   const [actionsVia, setActionsVia] = useState<"native" | "marquee">("native");
+  const actionsViaRef = useRef(actionsVia);
+  actionsViaRef.current = actionsVia;
   /** Screen box for the open selection — native path has no painted overlay rects. */
   const selectionScreenBoxRef = useRef<DOMRect | null>(null);
   /** The band being swept right now, in body coordinates. */
@@ -600,28 +594,8 @@ export function DocSelectionLayer({
 
       // Remember the DOM Selection's screen box — native path paints no overlay
       // rects, so highlightBox() must not fall back to the top of the window.
-      const clientRects = Array.from(range.getClientRects()).filter(
-        (rect) => rect.width >= 0.5 || rect.height >= 0.5,
-      );
-      if (clientRects.length > 0) {
-        let left = Infinity;
-        let top = Infinity;
-        let right = -Infinity;
-        let bottom = -Infinity;
-        for (const rect of clientRects) {
-          left = Math.min(left, rect.left);
-          top = Math.min(top, rect.top);
-          right = Math.max(right, rect.right);
-          bottom = Math.max(bottom, rect.bottom);
-        }
-        selectionScreenBoxRef.current = new DOMRect(left, top, right - left, bottom - top);
-      } else {
-        const box = range.getBoundingClientRect();
-        selectionScreenBoxRef.current =
-          box.width > 0 || box.height > 0
-            ? new DOMRect(box.left, box.top, box.width, box.height)
-            : null;
-      }
+      const clientRects = tightClientRects(range, body);
+      selectionScreenBoxRef.current = unionViewportBoxes(clientRects);
 
       // Sheet-only chrome for native path — no grey word boxes / confirm band.
       setHitRects([]);
@@ -1347,13 +1321,26 @@ export function DocSelectionLayer({
         const scope = footnote.anchor.scope;
         const root = scopeRootIn(body, scope) as HTMLElement | null;
         if (!root) continue;
-        const storedBands = footnote.bands && footnote.bands.length > 0 ? footnote.bands : null;
+        const storedBands =
+          footnote.bands && footnote.bands.length > 0
+            ? footnote.bands.filter((band) => !localRectCoversHost(body, band))
+            : null;
+        const live =
+          isTextAnchor(footnote.anchor)
+            ? (() => {
+                const range = rangeFromAnchor(root, footnote.anchor);
+                return range ? localRects(body, range) : [];
+              })()
+            : [];
         const bands =
-          storedBands ??
-          (() => {
-            const at = rectForAnchor(body, root, footnote.anchor);
-            return at ? [at] : [];
-          })();
+          live.length > 0
+            ? live
+            : storedBands && storedBands.length > 0
+              ? storedBands
+              : (() => {
+                  const at = rectForAnchor(body, root, footnote.anchor);
+                  return at && !localRectCoversHost(body, at) ? [at] : [];
+                })();
         if (bands.length === 0) continue;
         const at = unionLocalRects(bands);
         if (!at) continue;
@@ -1361,13 +1348,22 @@ export function DocSelectionLayer({
           footnote,
           at,
           bands,
-          useBands: storedBands != null && isRegionAnchor(footnote.anchor),
+          useBands: live.length > 0 || (storedBands != null && storedBands.length > 0),
           number: numbers.get(footnote.id) ?? 0,
         });
       }
       // Skip React commits when geometry is unchanged — mid-scroll place() used
       // to re-render the overlay every time even when nothing moved.
       setRibbons((prev) => (ribbonsPlacementEqual(prev, placed) ? prev : placed));
+      const overlayNode = overlayRef.current;
+      if (overlayNode) {
+        overlayNode.style.left = "0px";
+        overlayNode.style.top = "0px";
+        overlayNode.style.right = "auto";
+        overlayNode.style.bottom = "auto";
+        overlayNode.style.width = `${body.offsetWidth}px`;
+        overlayNode.style.height = `${body.offsetHeight}px`;
+      }
     };
     placeRef.current = place;
     // One-shot on deps: ribbons still ride marksSlot transform during pan.
@@ -1517,66 +1513,77 @@ export function DocSelectionLayer({
    * fixed-position control needs, and what converting page coordinates by hand
    * would have to reconstruct.
    */
-  const highlightBox = (): DOMRect | null => {
-    const painted = Array.from(
-      document.querySelectorAll(
-        ".lc-doc-select-rect, .lc-doc-highlight-band:not(.is-fading), .lc-doc-marquee-band:not(.is-fading), .lc-doc-marquee-hit, .lc-doc-submark-live",
-      ),
+  const paneBox = (): DOMRect => {
+    const board = bodyRef.current?.closest(".lc-board");
+    if (board instanceof HTMLElement) return board.getBoundingClientRect();
+    const view = window.visualViewport;
+    return new DOMRect(
+      0,
+      0,
+      view?.width ?? window.innerWidth,
+      view?.height ?? window.innerHeight,
     );
-    if (painted.length > 0) {
-      let left = Infinity;
-      let top = Infinity;
-      let right = -Infinity;
-      let bottom = -Infinity;
-      for (const node of painted) {
-        const box = node.getBoundingClientRect();
-        left = Math.min(left, box.left);
-        top = Math.min(top, box.top);
-        right = Math.max(right, box.right);
-        bottom = Math.max(bottom, box.bottom);
-      }
-      return new DOMRect(left, top, right - left, bottom - top);
-    }
+  };
 
-    // Native Selection: no painted rects. Prefer the box captured at commit,
-    // then the live Selection, so the sheet sits on the words not at (8,8).
-    if (selectionScreenBoxRef.current) {
-      const box = selectionScreenBoxRef.current;
-      return new DOMRect(box.left, box.top, box.width, box.height);
-    }
+  const tightBox = (box: DOMRect | null | undefined, hostBox: DOMRect): DOMRect | null => {
+    if (!box || (box.width <= 0 && box.height <= 0)) return null;
+    if (coversViewportBox(box, hostBox)) return null;
+    return box;
+  };
+
+  const liveSelectionBox = (host: HTMLElement): DOMRect | null => {
     try {
       const sel = window.getSelection();
-      if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
-        const range = sel.getRangeAt(0);
-        const clientRects = Array.from(range.getClientRects()).filter(
-          (rect) => rect.width >= 0.5 || rect.height >= 0.5,
-        );
-        if (clientRects.length > 0) {
-          let left = Infinity;
-          let top = Infinity;
-          let right = -Infinity;
-          let bottom = -Infinity;
-          for (const rect of clientRects) {
-            left = Math.min(left, rect.left);
-            top = Math.min(top, rect.top);
-            right = Math.max(right, rect.right);
-            bottom = Math.max(bottom, rect.bottom);
-          }
-          return new DOMRect(left, top, right - left, bottom - top);
-        }
-        const box = range.getBoundingClientRect();
-        if (box.width > 0 || box.height > 0) {
-          return new DOMRect(box.left, box.top, box.width, box.height);
-        }
+      if (!sel || sel.isCollapsed || sel.rangeCount < 1) return null;
+      const range = sel.getRangeAt(0);
+      if (!host.contains(range.commonAncestorContainer) &&
+          range.commonAncestorContainer !== host) {
+        return null;
       }
+      return unionViewportBoxes(tightClientRects(range, host));
     } catch {
-      /* Selection may be gone */
+      return null;
     }
-    return null;
   };
 
   /**
-   * Clamp a measured box into the window, with a margin.
+   * The highlight's box on screen.
+   *
+   * This layer's overlay only — never every `.lc-doc-marquee-hit` in the
+   * document (parked tabs / the other split pane used to union into a page
+   * box). Host-sized rects from `getClientRects` inside the transformed page
+   * slot are dropped so Copy / Google / Annotate hang off the quote, not the
+   * paper's corners.
+   */
+  const highlightBox = (): DOMRect | null => {
+    const host = bodyRef.current;
+    const hostBox = host?.getBoundingClientRect() ?? paneBox();
+    if (actionsViaRef.current === "native") {
+      const live = host ? liveSelectionBox(host) : null;
+      if (live) return live;
+      const captured = tightBox(selectionScreenBoxRef.current, hostBox);
+      if (captured) return captured;
+    }
+    const paintedRoot = overlayRef.current;
+    const painted = paintedRoot
+      ? Array.from(
+          paintedRoot.querySelectorAll(
+            ".lc-doc-select-rect, .lc-doc-highlight-band:not(.is-fading), .lc-doc-marquee-band:not(.is-fading), .lc-doc-marquee-hit, .lc-doc-submark-live",
+          ),
+        )
+      : [];
+    const paintedBoxes = painted
+      .map((node) => node.getBoundingClientRect())
+      .filter((box) => box.width > 0.5 && box.height > 0.5 && !coversViewportBox(box, hostBox));
+    const fromPaint = unionViewportBoxes(paintedBoxes);
+    if (fromPaint) return fromPaint;
+    const captured = tightBox(selectionScreenBoxRef.current, hostBox);
+    if (captured) return captured;
+    return host ? liveSelectionBox(host) : null;
+  };
+
+  /**
+   * Clamp a measured box into the board pane (split view), with a margin.
    *
    * `offsetWidth`/`offsetHeight` rather than `getBoundingClientRect()`: the
    * measurement happens in the ref callback, on the frame the pop animation
@@ -1584,23 +1591,21 @@ export function DocSelectionLayer({
    * width — so clamping against it leaves the element a little wider than the
    * space that was reserved for it. The layout size is what it will settle at.
    *
-   * Prefer the visual viewport size for max edges (keyboard / pinch), but do
-   * **not** add `visualViewport.offsetLeft/Top` onto `getBoundingClientRect`
-   * anchors — those rects are already in layout viewport coordinates. On
-   * Android WebView, adding the offset shoved the confirm chrome to the
-   * top-left off-screen.
+   * Anchors from `getBoundingClientRect` are layout-viewport coordinates. Do
+   * not add `visualViewport.offsetLeft/Top` onto them — that shoved chrome to
+   * the top-left off-screen on Android WebView.
    */
   const clampInto = (node: HTMLElement, left: number, top: number) => {
     const width = node.offsetWidth;
     const height = node.offsetHeight;
-    const view = window.visualViewport;
-    const viewWidth = view?.width ?? window.innerWidth;
-    const viewHeight = view?.height ?? window.innerHeight;
+    const pane = paneBox();
     const margin = 8;
-    const maxLeft = Math.max(margin, viewWidth - width - margin);
-    const maxTop = Math.max(margin, viewHeight - height - margin);
-    node.style.left = `${Math.round(Math.min(Math.max(margin, left), maxLeft))}px`;
-    node.style.top = `${Math.round(Math.min(Math.max(margin, top), maxTop))}px`;
+    const minLeft = pane.left + margin;
+    const minTop = pane.top + margin;
+    const maxLeft = Math.max(minLeft, pane.right - width - margin);
+    const maxTop = Math.max(minTop, pane.bottom - height - margin);
+    node.style.left = `${Math.round(Math.min(Math.max(minLeft, left), maxLeft))}px`;
+    node.style.top = `${Math.round(Math.min(Math.max(minTop, top), maxTop))}px`;
     node.style.visibility = "visible";
   };
 
@@ -1712,6 +1717,7 @@ export function DocSelectionLayer({
       {overlay(
         marksHost,
         <div
+          ref={overlayRef}
           className="lc-doc-select-overlay"
           aria-hidden={rects.length === 0 && hitRects.length === 0 && !band && ribbons.length === 0}
         >

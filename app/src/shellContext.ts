@@ -111,6 +111,11 @@ export interface WorkspaceApi {
    * The shell closes the chip after this returns.
    */
   abortLoad: () => Promise<void>;
+  /**
+   * Home chip while Practice (or an entry dialog) is up: back to the cards.
+   * Other workspaces omit this.
+   */
+  showHomeChooser?: () => void;
 }
 
 export interface ShellValue {

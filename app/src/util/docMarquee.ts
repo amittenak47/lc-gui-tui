@@ -86,6 +86,161 @@ export function scaleOf(node: HTMLElement): number {
   return rendered > 0 ? rendered / width : 1;
 }
 
+/** Viewport boxes treated as the same when they match within this many CSS px. */
+export const HOST_COVER_SLOP_PX = 4;
+
+export interface ViewportBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * True when `rect` is the host/slot box (or larger), not a line or block.
+ *
+ * `Range.getClientRects()` inside a transformed + `contain:paint` ancestor
+ * (the page content slot) can answer with that ancestor's border box. Painting
+ * that as a footnote band washes the whole page and shoves Copy/Google chrome
+ * to the paper's corners.
+ */
+export function coversViewportBox(
+  rect: ViewportBox,
+  box: ViewportBox,
+  slop = HOST_COVER_SLOP_PX,
+): boolean {
+  return (
+    rect.left <= box.left + slop &&
+    rect.top <= box.top + slop &&
+    rect.right >= box.right - slop &&
+    rect.bottom >= box.bottom - slop
+  );
+}
+
+export function unionViewportBoxes(
+  rects: readonly ViewportBox[],
+): DOMRect | null {
+  if (rects.length === 0) return null;
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const rect of rects) {
+    left = Math.min(left, rect.left);
+    top = Math.min(top, rect.top);
+    right = Math.max(right, rect.right);
+    bottom = Math.max(bottom, rect.bottom);
+  }
+  if (!Number.isFinite(left) || right <= left || bottom <= top) return null;
+  return new DOMRect(left, top, right - left, bottom - top);
+}
+
+function usableClientRect(rect: DOMRect): boolean {
+  return rect.width > 0.5 && rect.height > 0.5;
+}
+
+function textRectsInRange(range: Range): DOMRect[] {
+  const out: DOMRect[] = [];
+  const root = range.commonAncestorContainer;
+  const pushPiece = (node: Node) => {
+    if (node.nodeType !== Node.TEXT_NODE || !range.intersectsNode(node)) return;
+    const piece = node.ownerDocument?.createRange();
+    if (!piece) return;
+    try {
+      piece.selectNodeContents(node);
+      if (node === range.startContainer) piece.setStart(node, range.startOffset);
+      if (node === range.endContainer) piece.setEnd(node, range.endOffset);
+      if (piece.collapsed) return;
+      out.push(...Array.from(piece.getClientRects()));
+    } catch {
+      /* detached */
+    }
+  };
+  if (root.nodeType === Node.TEXT_NODE) {
+    pushPiece(root);
+    return out;
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE) {
+    const parent = root.parentElement;
+    if (!parent) return out;
+    for (const node of textNodesOf(parent)) pushPiece(node);
+    return out;
+  }
+  for (const node of textNodesOf(root)) pushPiece(node);
+  return out;
+}
+
+function blockBoxForRange(range: Range, host: HTMLElement): DOMRect[] {
+  const hostBox = host.getBoundingClientRect();
+  let node: Node | null = range.commonAncestorContainer;
+  if (node.nodeType !== Node.ELEMENT_NODE) node = node.parentElement;
+  while (node && node instanceof HTMLElement && host.contains(node)) {
+    const box = node.getBoundingClientRect();
+    if (usableClientRect(box) && !coversViewportBox(box, hostBox)) return [box];
+    if (node === host) break;
+    node = node.parentElement;
+  }
+  return [];
+}
+
+/**
+ * Viewport line boxes for a range, skipping the host/slot containment artifact.
+ *
+ * Falls back to per-glyph text rects, then the smallest block ancestor that
+ * is not the page itself.
+ */
+export function tightClientRects(range: Range, host: HTMLElement): DOMRect[] {
+  const hostBox = host.getBoundingClientRect();
+  const keep = (rects: readonly DOMRect[]) =>
+    rects.filter((rect) => usableClientRect(rect) && !coversViewportBox(rect, hostBox));
+  const fromRange = keep(Array.from(range.getClientRects()));
+  if (fromRange.length > 0) return fromRange;
+  const fromText = keep(textRectsInRange(range));
+  if (fromText.length > 0) return fromText;
+  return keep(blockBoxForRange(range, host));
+}
+
+/** Viewport rects → body-local layout coordinates (undo camera scale). */
+export function clientRectsToLocal(
+  host: HTMLElement,
+  clientRects: ArrayLike<DOMRect>,
+): LocalRect[] {
+  const origin = host.getBoundingClientRect();
+  const scale = scaleOf(host) || 1;
+  return Array.from(clientRects)
+    .filter(usableClientRect)
+    .map((rect) => ({
+      left: (rect.left - origin.left) / scale,
+      top: (rect.top - origin.top) / scale,
+      width: rect.width / scale,
+      height: rect.height / scale,
+    }));
+}
+
+/** Line / block boxes of a range, in the document body's layout coordinates. */
+export function localRects(host: HTMLElement, range: Range): LocalRect[] {
+  return clientRectsToLocal(host, tightClientRects(range, host));
+}
+
+export function localRectCoversHost(
+  host: HTMLElement,
+  rect: LocalRect,
+  slop = HOST_COVER_SLOP_PX,
+): boolean {
+  const origin = host.getBoundingClientRect();
+  const scale = scaleOf(host) || 1;
+  return coversViewportBox(
+    {
+      left: origin.left + rect.left * scale,
+      top: origin.top + rect.top * scale,
+      right: origin.left + (rect.left + rect.width) * scale,
+      bottom: origin.top + (rect.top + rect.height) * scale,
+    },
+    origin,
+    slop,
+  );
+}
+
 /** Viewport point → body-local layout coordinates. */
 export function viewportToLocal(
   body: HTMLElement,
@@ -267,6 +422,8 @@ export function hitRectsUnder(
     seen.add(node);
     const box = node.getBoundingClientRect();
     if (box.width < 2 || box.height < 2) continue;
+    // Page-sized wrappers used to become the "block" wash.
+    if (coversViewportBox(box, bodyBox)) continue;
     const overlaps =
       box.left < right && box.right > left && box.top < bottom && box.bottom > top;
     if (!overlaps) continue;
