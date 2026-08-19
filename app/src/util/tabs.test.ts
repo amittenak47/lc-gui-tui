@@ -93,13 +93,15 @@ describe("the mount budget", () => {
     expect(liveOverflow(["a", "b", "c", "d"], 2)).toEqual(["c", "d"]);
   });
 
-  it("keeps the one just left mounted, and drops the one before it", () => {
-    // Home → notebook → document: the notebook stays warm, Home falls off.
+  it("keeps Home mounted; oldest notebook falls off past the budget", () => {
+    // Home → notebook → document: both pads stay warm, Home stays too.
     let ids = ["home"];
     ids = promoteLive(ids, "b1");
     ids = promoteLive(ids, "d1");
     expect(ids.slice(0, 2)).toEqual(["d1", "b1"]);
-    expect(liveOverflow(ids, 2)).toEqual(["home"]);
+    expect(liveOverflow(ids, 2)).toEqual([]);
+    ids = promoteLive(ids, "e1");
+    expect(liveOverflow(ids, 2)).toEqual(["b1"]);
   });
 });
 
@@ -311,6 +313,16 @@ describe("split groups", () => {
     expect(splitChildren("a", "b", "top")).toEqual(["b", "a"]);
   });
 
+  it("keeps every split vertical even when asked for a horizontal axis", () => {
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: board("b1", "nb-1"), at: 1 },
+      { type: "open", tab: board("b2", "nb-2"), at: 2 },
+      { type: "split", a: "b1", b: "b2", axis: "horizontal", edge: "bottom", at: 3 },
+    );
+    expect(state.groups[0]?.split.axis).toBe("vertical");
+  });
+
   it("groups two workspaces and keeps the anchor focused", () => {
     const state = run(
       initialTabState(),
@@ -397,7 +409,8 @@ describe("split groups", () => {
   });
 
   it("needs a third live slot when two panes are on screen, so the parked tab stays", () => {
-    expect(liveOverflow(["b1", "b2", "home"], 2)).toEqual(["home"]);
+    expect(liveOverflow(["b1", "b2", "home"], 2)).toEqual([]);
+    expect(liveOverflow(["b1", "b2", "b3", "home"], 2)).toEqual(["b3"]);
     expect(liveOverflow(["b1", "b2", "home"], 3)).toEqual([]);
   });
 

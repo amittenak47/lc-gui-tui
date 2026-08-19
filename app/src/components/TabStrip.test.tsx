@@ -1,11 +1,11 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, expect, it, vi, beforeAll } from "vitest";
+import { describe, expect, it, vi, beforeAll, afterEach } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
-import { TabStrip } from "./TabStrip";
+import { TabStrip, CANCEL_HIT_MS } from "./TabStrip";
 import {
   HOME_TAB_ID,
   homeTab,
@@ -29,6 +29,10 @@ beforeAll(() => {
       return true;
     };
   }
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 /** A pointer event jsdom will carry — it has no PointerEvent of its own. */
@@ -172,6 +176,7 @@ describe("TabStrip", () => {
   });
 
   it("turns Home into Cancel in place while a workspace opens", () => {
+    vi.useFakeTimers();
     const onCancelLoad = vi.fn();
     const onFocus = vi.fn();
     const view = mount({
@@ -188,7 +193,12 @@ describe("TabStrip", () => {
     act(() => {
       home.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
     });
-    // Cancel stays live while everything else is disabled by the same load.
+    // Press registers on the chip first; the load abort waits the flash out.
+    expect(home.classList.contains("is-cancel-hit")).toBe(true);
+    expect(onCancelLoad).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(CANCEL_HIT_MS);
+    });
     expect(onCancelLoad).toHaveBeenCalledTimes(1);
     expect(onFocus).not.toHaveBeenCalled();
     view.unmount();
@@ -248,6 +258,38 @@ describe("TabStrip", () => {
         hit.click();
       });
       expect(onFocus).not.toHaveBeenCalled();
+      view.unmount();
+    });
+
+    it("groups when a chip is dropped onto another chip", () => {
+      const onTabDropOnTab = vi.fn();
+      const view = mount({
+        tabs: [homeTab(), board("b1", "doodle"), board("b2", "notes")],
+        onTabDropOnTab,
+      });
+      const doodle = grab(view, "doodle");
+      const notesChip = Array.from(view.host.querySelectorAll<HTMLElement>(".lc-tab")).find(
+        (chip) => chip.querySelector(".lc-tab-title")?.textContent === "notes",
+      )!;
+      vi.spyOn(notesChip, "getBoundingClientRect").mockReturnValue({
+        x: 200,
+        y: 0,
+        left: 200,
+        top: 0,
+        right: 280,
+        bottom: 32,
+        width: 80,
+        height: 32,
+        toJSON() {
+          return {};
+        },
+      });
+      act(() => {
+        doodle.dispatchEvent(pointer("pointerdown", { x: 100, y: 20 }));
+        doodle.dispatchEvent(pointer("pointermove", { x: 240, y: 16 }));
+        doodle.dispatchEvent(pointer("pointerup", { x: 240, y: 16 }));
+      });
+      expect(onTabDropOnTab).toHaveBeenCalledWith("b1", "b2");
       view.unmount();
     });
 
@@ -410,13 +452,13 @@ describe("TabStrip", () => {
       // Acting closes the menu — it is pinned to a point that is now stale.
       expect(view.menuItems()).toEqual([]);
 
-      // A loose tab can join the one on screen, in either direction.
+      // A loose tab can join the one on screen, side by side.
       view.rightClick("loose");
-      expect(view.menuItems()).toEqual(["Split right", "Split down", "Close"]);
+      expect(view.menuItems()).toEqual(["Split", "Close"]);
       act(() => {
-        view.menuItem("Split down")?.click();
+        view.menuItem("Split")?.click();
       });
-      expect(onSplitWithActive).toHaveBeenCalledWith("b3", "bottom");
+      expect(onSplitWithActive).toHaveBeenCalledWith("b3", "right");
       view.unmount();
     });
 
@@ -428,7 +470,7 @@ describe("TabStrip", () => {
       });
       view.rightClick("doodle");
       // Splitting needs two panes, and this tab is already the only one.
-      expect(view.menuItem("Split right")?.disabled).toBe(true);
+      expect(view.menuItem("Split")?.disabled).toBe(true);
       expect(view.menuItem("Close")?.disabled).toBe(false);
       view.unmount();
     });

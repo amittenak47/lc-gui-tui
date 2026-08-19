@@ -90,6 +90,12 @@ describe("liveBoardViewSize", () => {
     expect(size.viewHeight).toBe(1200);
   });
 
+  it("prefers a split pane box over a stale full-width appState", () => {
+    const size = liveBoardViewSize({ width: 390, height: 800 }, { width: 844, height: 800 });
+    expect(size.viewWidth).toBe(390);
+    expect(size.viewHeight).toBe(800);
+  });
+
   it("uses appState when the board box is not laid out yet", () => {
     const size = liveBoardViewSize({ width: 0, height: 0 }, { width: 390, height: 844 });
     expect(size.viewWidth).toBe(390);

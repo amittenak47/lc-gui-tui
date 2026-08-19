@@ -4,7 +4,7 @@
 
 import type { DevicePrefsDto, LcClient } from "../api/client";
 import { loadTestForwardMode, saveTestForwardMode } from "./agentPrefs";
-import { loadAutosaveInterval, saveAutosaveInterval } from "./autosavePref";
+import { loadAutosaveBanner, loadAutosaveInterval, saveAutosaveBanner, saveAutosaveInterval } from "./autosavePref";
 import {
   loadCaptureCountdown,
   loadCaptureDestination,
@@ -95,6 +95,7 @@ export function collectDevicePrefsBlob(): Record<string, unknown> {
     inkBoldness: loadInkBoldness(),
     eraserPartial: loadEraserPartial(),
     autosaveMs: loadAutosaveInterval(),
+    autosaveBanner: loadAutosaveBanner(),
     paletteTag: loadPaletteTag(),
     colorWheelOnToolbar: tools.colorWheelOnToolbar,
     tapOk: tools.tapOk,
@@ -128,6 +129,9 @@ export function applyDevicePrefsBlob(prefs: Record<string, unknown>): void {
   if (typeof prefs.inkBoldness === "number") saveInkBoldness(prefs.inkBoldness);
   if (typeof prefs.eraserPartial === "boolean") saveEraserPartial(prefs.eraserPartial);
   if (typeof prefs.autosaveMs === "number") saveAutosaveInterval(prefs.autosaveMs as never);
+  if (prefs.autosaveBanner === "on" || prefs.autosaveBanner === "off") {
+    saveAutosaveBanner(prefs.autosaveBanner);
+  }
   if (typeof prefs.paletteTag === "string") savePaletteTag(prefs.paletteTag as never);
   if (typeof prefs.colorWheelOnToolbar === "boolean" || typeof prefs.tapOk === "boolean") {
     saveInkToolPresets({

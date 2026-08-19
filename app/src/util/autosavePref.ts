@@ -54,3 +54,66 @@ export function saveAutosaveInterval(ms: AutosaveInterval): void {
     /* private browsing */
   }
 }
+
+const BANNER_KEY = "whiteboard.autosave.banner";
+
+/**
+ * Whether a successful autosave raises the chrome banner.
+ *
+ * The write always happens. This only answers whether the page should say so.
+ * Parked tabs (open, not on screen, not in the focused split) stay silent so
+ * a background notebook cannot flash “Saved” over the pad you are looking at.
+ * A split pair shares one banner: the second pane must not replace the first.
+ */
+export type AutosaveBanner = "on" | "off";
+
+export const AUTOSAVE_BANNER_DEFAULT: AutosaveBanner = "on";
+
+export const AUTOSAVE_BANNER_CHOICES: ReadonlyArray<[AutosaveBanner, string, string]> = [
+  [
+    "on",
+    "On screen",
+    "Show Saved on the focused pad. A split pair shares one banner. Parked tabs still write, silently.",
+  ],
+  ["off", "Hide", "Writes still happen. Nothing pops up."],
+];
+
+function isBanner(value: string): value is AutosaveBanner {
+  return value === "on" || value === "off";
+}
+
+export function loadAutosaveBanner(): AutosaveBanner {
+  try {
+    const raw = localStorage.getItem(BANNER_KEY);
+    if (raw == null) return AUTOSAVE_BANNER_DEFAULT;
+    return isBanner(raw) ? raw : AUTOSAVE_BANNER_DEFAULT;
+  } catch {
+    return AUTOSAVE_BANNER_DEFAULT;
+  }
+}
+
+export function saveAutosaveBanner(value: AutosaveBanner): void {
+  try {
+    localStorage.setItem(BANNER_KEY, value);
+  } catch {
+    /* private browsing */
+  }
+}
+
+/** Parked / off-screen chips never own the strip. Split partners share it. */
+export function autosaveBannerAllowed(tabId: string, visibleIds: string[]): boolean {
+  return visibleIds.includes(tabId);
+}
+
+/**
+ * One Saved banner per beat. A split pair saving on the same tick must not
+ * flip “Saved A” into “Saved B”.
+ */
+export function coalesceAutosaveNotice(
+  current: string | null,
+  title: string,
+  split: boolean,
+): string {
+  if (current && current.startsWith("Saved")) return current;
+  return split ? "Saved." : `Saved “${title}”.`;
+}

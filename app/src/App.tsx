@@ -37,6 +37,9 @@ import { loadPdfFilmPref } from "./modes/pdfFilm";
 import { applyAppTheme, loadThemeId, saveThemeId } from "./theme/appThemes";
 import {
   AUTOSAVE_EVENT,
+  autosaveBannerAllowed,
+  coalesceAutosaveNotice,
+  loadAutosaveBanner,
   loadAutosaveInterval,
   type AutosaveInterval,
 } from "./util/autosavePref";
@@ -48,14 +51,12 @@ import { useIsMobile } from "./util/mobile";
 import {
   HOME_TAB_ID,
   activeTab as activeTabOf,
-  axisOfEdge,
   clampSplitRatio,
   groupOf,
   liveOverflow,
   openedRecord,
   pinLive,
   promoteLive,
-  splitEdgeAt,
   tabsReducer,
   visibleTabIds,
   type SplitAxis,
@@ -82,7 +83,9 @@ import {
  * parked tabs are records and nothing else. Two is the floor worth paying
  * for: the one being looked at, and the one just left — which is the switch
  * people actually repeat, and the one that used to cost a full reload. Split
- * panes raise it, because both halves are being looked at.
+ * panes raise it, because both halves are being looked at. Home is outside
+ * this budget: it is cheap to keep and expensive to remount, so it stays
+ * mounted and never counts against the two.
  */
 const LIVE_LIMIT = 2;
 
@@ -181,6 +184,8 @@ function SplitSash({
         lastTapRef.current = now;
         event.currentTarget.setPointerCapture(event.pointerId);
         setDragging(true);
+        event.preventDefault();
+        event.stopPropagation();
       }}
       onPointerMove={(event) => {
         if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
@@ -252,6 +257,12 @@ export function App() {
   /** Something the reader should know, but which did not stop the request. */
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   const client = useMemo(() => new LcClient(), []);
   const [recognizer, setRecognizer] = useState<InkRecognizer>(() => new NoopRecognizer());
@@ -537,6 +548,13 @@ export function App() {
   const tabsRef = useRef(tabState);
   tabsRef.current = tabState;
 
+  const announceAutosave = useCallback((tabId: string, title: string) => {
+    if (loadAutosaveBanner() === "off") return;
+    const visible = visibleTabIds(tabsRef.current);
+    if (!autosaveBannerAllowed(tabId, visible)) return;
+    setNotice((current) => coalesceAutosaveNotice(current, title, visible.length > 1));
+  }, []);
+
   useEffect(() => {
     saveTabState(tabState);
   }, [tabState]);
@@ -568,6 +586,17 @@ export function App() {
         ? current
         : next,
     );
+  }, []);
+
+  const [shellLoadActive, setShellLoadActive] = useState(false);
+  const userLoadIdsRef = useRef(new Set<string>());
+  const markUserLoad = useCallback((id: string) => {
+    userLoadIdsRef.current.add(id);
+  }, []);
+  const takeUserLoad = useCallback((id: string) => {
+    if (!userLoadIdsRef.current.has(id)) return false;
+    userLoadIdsRef.current.delete(id);
+    return true;
   }, []);
 
   /** A tab whose content could not be found when it was opened. */
@@ -633,10 +662,11 @@ export function App() {
     const known = new Set(tabState.tabs.map((tab) => tab.id));
     setLiveIds((current) => {
       const trimmed = current.filter((id) => known.has(id));
+      const withHome = trimmed.includes(HOME_TAB_ID) ? trimmed : [...trimmed, HOME_TAB_ID];
       const base =
-        trimmed.length === current.length && trimmed.every((id, i) => id === current[i])
+        withHome.length === current.length && withHome.every((id, i) => id === current[i])
           ? current
-          : trimmed;
+          : withHome;
       return pinLive(base, visibleIds);
     });
   }, [tabState.tabs, visibleIds]);
@@ -690,13 +720,18 @@ export function App() {
       // same call it makes, so the answer here cannot disagree with it.
       const landed = openedRecord(tabsRef.current, proposed);
       if (landed.id === tabsRef.current.activeId) return landed;
+      const existed = tabsRef.current.tabs.some((tab) => tab.id === landed.id);
+      if (!existed) {
+        markUserLoad(landed.id);
+        setShellLoadActive(true);
+      }
       setMissingTab(null);
       setError(null);
       promote(landed.id);
       dispatchTabs({ type: "open", tab: proposed, at: Date.now() });
       return landed;
     },
-    [promote],
+    [markUserLoad, promote, setShellLoadActive],
   );
 
   const closeTab = useCallback((id: string) => {
@@ -734,21 +769,27 @@ export function App() {
   }, []);
 
   /**
-   * Cancel: stop the load, and take the chip with it.
+   * Cancel: play the load-complete hold, then drop the unfinished chip.
    *
-   * Unmounting is what aborts the load — the generation guard turns whatever
-   * is still in flight into a no-op, and the component it would have written
-   * to is gone. Nothing is asked on the way out because a workspace that never
-   * finished opening has nothing to save; that is the difference between this
-   * and closing a tab, which does ask.
+   * `abortLoad` bumps the generation guard (in-flight work becomes a no-op)
+   * and holds the spinner on its checkmark the same length a successful open
+   * would. Closing happens after that hold. Nothing is asked on the way out
+   * because a workspace that never finished opening has nothing to save.
    */
   const cancelLoad = useCallback(() => {
     const id = tabsRef.current.activeId;
-    if (id === HOME_TAB_ID) return;
-    dispatchTabs({ type: "close", id });
-    setLiveIds((current) => current.filter((entry) => entry !== id));
-    setMissingTab(null);
-    setError(null);
+    const target = apisRef.current.get(id) ?? apisRef.current.get(HOME_TAB_ID);
+    void (async () => {
+      await target?.abortLoad().catch(() => {});
+      const still = tabsRef.current.activeId;
+      if (still !== HOME_TAB_ID && still === id) {
+        dispatchTabs({ type: "close", id: still });
+        setLiveIds((current) => current.filter((entry) => entry !== still));
+      }
+      setMissingTab(null);
+      setError(null);
+      setShellLoadActive(false);
+    })();
   }, []);
 
   const patchTab = useCallback((id: string, patch: TabPatch) => {
@@ -767,7 +808,7 @@ export function App() {
       type: "split",
       a: anchor,
       b: incoming,
-      axis: axisOfEdge(edge),
+      axis: "vertical",
       edge,
       at: Date.now(),
     });
@@ -804,37 +845,13 @@ export function App() {
     dispatchTabs({ type: "set-ratio", groupId, ratio });
   }, []);
 
-  const mainRef = useRef<HTMLElement | null>(null);
-  const [dragTabId, setDragTabId] = useState<string | null>(null);
-  const [dragEdge, setDragEdge] = useState<SplitEdge | null>(null);
-
-  const onTabDrag = useCallback((id: string, x: number, y: number) => {
-    setDragTabId(id);
-    const box = mainRef.current?.getBoundingClientRect();
-    setDragEdge(box ? splitEdgeAt(box, x, y) : null);
-  }, []);
-
-  const onTabDrop = useCallback(
-    (id: string, x: number, y: number) => {
-      const box = mainRef.current?.getBoundingClientRect();
-      const edge = box ? splitEdgeAt(box, x, y) : null;
-      const anchor = tabsRef.current.activeId;
-      if (edge && anchor !== id) {
-        splitTabs(anchor, id, edge);
-      } else if (!edge && groupOf(tabsRef.current, id) && id === anchor) {
-        // Drag the focused pane off the board to dissolve the split.
-        unsplitTab(id);
-      }
-      setDragTabId(null);
-      setDragEdge(null);
+  const onTabDropOnTab = useCallback(
+    (dragId: string, ontoId: string) => {
+      if (ontoId === HOME_TAB_ID || dragId === ontoId) return;
+      splitTabs(ontoId, dragId, "right");
     },
-    [splitTabs, unsplitTab],
+    [splitTabs],
   );
-
-  const onTabDragEnd = useCallback(() => {
-    setDragTabId(null);
-    setDragEdge(null);
-  }, []);
 
   /*
    * The header's slots, as state rather than refs: a portal needs the element
@@ -844,6 +861,7 @@ export function App() {
   const [headerCenter, setHeaderCenter] = useState<HTMLElement | null>(null);
   const [headerRight, setHeaderRight] = useState<HTMLElement | null>(null);
   const [headerChrome, setHeaderChrome] = useState<HTMLElement | null>(null);
+  const [boardChrome, setBoardChrome] = useState<HTMLElement | null>(null);
   const [agentPanel, setAgentPanel] = useState<HTMLElement | null>(null);
   const headerSlots: HeaderSlots = useMemo(
     () => ({
@@ -851,9 +869,10 @@ export function App() {
       center: headerCenter,
       right: headerRight,
       chrome: headerChrome,
+      boardChrome,
       agentPanel,
     }),
-    [agentPanel, headerCenter, headerChrome, headerLeft, headerRight],
+    [agentPanel, boardChrome, headerCenter, headerChrome, headerLeft, headerRight],
   );
 
   const activeRecord = activeTabOf(tabState);
@@ -919,6 +938,7 @@ export function App() {
       setSettingsTab,
       notice,
       setNotice,
+      announceAutosave,
       error,
       setError,
       browseMotion,
@@ -942,14 +962,19 @@ export function App() {
       headerSlots,
       setChrome,
       setWorkspaceApi,
+      shellLoadActive,
+      setShellLoadActive,
+      markUserLoad,
+      takeUserLoad,
       onMissingContent,
     }),
     [
       autosaveMs, bankFilters, browseMotion, capabilities, client, closeTab, coachFlags, error,
       focusTab, headerSlots, holdBrowseOverlay, llmLink, mobile, navigateBySession, notice,
-      onMissingContent, openWorkspace, patchTab, pdfFilmOpen, readingSize, recognizer,
+      announceAutosave, onMissingContent, openWorkspace, patchTab, pdfFilmOpen, readingSize, recognizer,
       refreshCoachFlags, refreshSession, serverLink, session, setChrome, setWorkspaceApi,
-      settingsOpen, sheetDragLocked, testForward, themeId, webPush, webStep,
+      settingsOpen, setShellLoadActive, sheetDragLocked, shellLoadActive, markUserLoad, takeUserLoad, testForward, themeId,
+      webPush, webStep,
     ],
   );
 
@@ -962,7 +987,7 @@ export function App() {
           chrome.problem ? "lc-app-problem" : "",
           chrome.pad ? "lc-app-pad" : "",
           chrome.agentOpen ? "lc-app-agent-open" : "",
-          chrome.loading ? "lc-app-loading" : "",
+          chrome.loading || shellLoadActive ? "lc-app-loading" : "",
           bootPhase !== "gone" && bootPhase !== "exit" ? "lc-app-booting" : "",
         ]
           .filter(Boolean)
@@ -982,13 +1007,11 @@ export function App() {
             tabs={tabState.tabs}
             groups={tabState.groups}
             activeId={tabState.activeId}
-            busy={chrome.busy || chrome.loadActive}
+            busy={chrome.busy || shellLoadActive}
             onFocus={focusTab}
             onClose={closeTab}
-            onCancelLoad={chrome.loadActive ? cancelLoad : undefined}
-            onTabDrag={onTabDrag}
-            onTabDrop={onTabDrop}
-            onTabDragEnd={onTabDragEnd}
+            onCancelLoad={shellLoadActive ? cancelLoad : undefined}
+            onTabDropOnTab={onTabDropOnTab}
             onSplitWithActive={splitWithActive}
             onUnsplit={unsplitTab}
             groupedIds={groupedIds}
@@ -1013,11 +1036,9 @@ export function App() {
         <span className="lc-header-slot" ref={setHeaderChrome} />
 
         <main
-          ref={mainRef}
           className={[
             "lc-main",
-            activeGroup ? `is-split-${activeGroup.split.axis}` : "",
-            dragTabId ? "is-split-targeting" : "",
+            activeGroup ? "is-split-vertical" : "",
           ]
             .filter(Boolean)
             .join(" ")}
@@ -1035,7 +1056,12 @@ export function App() {
             <StatusBanner text={!error ? notice : null} variant="notice" />
           </div>
           {liveTabs
-            .filter((item) => !item.showing)
+            .filter((item) => {
+              const onScreen = activeGroup
+                ? activeGroup.children.includes(item.tab.id)
+                : visibleIds.includes(item.tab.id);
+              return !item.showing && !onScreen;
+            })
             .map(({ tab, active, showing }) => (
               <Workspace
                 key={`${tab.id}:${active ? retryToken : 0}`}
@@ -1046,21 +1072,23 @@ export function App() {
             ))}
           {(activeGroup ? activeGroup.children : visibleIds).map((id, index) => {
             const item = liveTabs.find((entry) => entry.tab.id === id);
-            if (!item) return null;
+            const tab = item?.tab ?? tabState.tabs.find((entry) => entry.id === id);
+            if (!tab) return null;
             const splitRole = activeGroup ? (index === 0 ? "a" : "b") : null;
+            const active = item ? item.active : tab.id === activeRecord.id;
             return (
               <Workspace
-                key={`${item.tab.id}:${item.active ? retryToken : 0}`}
-                tab={item.tab}
-                active={item.active}
-                showing={item.showing}
+                key={`${tab.id}:${active ? retryToken : 0}`}
+                tab={tab}
+                active={active}
+                showing
                 splitRole={splitRole}
               />
             );
           })}
           {activeGroup ? (
             <SplitSash
-              axis={activeGroup.split.axis}
+              axis="vertical"
               onRatio={(ratio) => setSplitRatio(activeGroup.id, ratio)}
             />
           ) : null}
@@ -1074,7 +1102,7 @@ export function App() {
                 showing={showing}
               />
             ))}
-          {dragEdge ? <div className={`lc-split-target is-${dragEdge}`} aria-hidden /> : null}
+          <span className="lc-board-chrome-slot" ref={setBoardChrome} />
         </main>
 
         <span className="lc-agent-slot" ref={setAgentPanel} />

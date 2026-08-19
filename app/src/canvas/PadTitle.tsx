@@ -4,13 +4,11 @@
  * Center `ModeIndicator` stays for Annotation / Scroll. Opening a notebook
  * should not steal the middle of the page; a brief corner title is enough.
  *
- * `show` waits for a top status banner's open motion (LLM offline, etc.) so
- * the title starts under a finished banner rather than racing it.
+ * Does not wait on status banners — those belong to first-open / Agent, not
+ * every tab switch.
  */
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-
-import { waitForTopBannersIdle } from "../components/StatusBanner";
 
 /** Hold long enough to read the notebook name, then fade. */
 export const PAD_TITLE_HOLD_MS = 1800;
@@ -41,19 +39,16 @@ export const PadTitle = forwardRef<PadTitleHandle, PadTitleProps>(
       (): PadTitleHandle => ({
         show(label, holdMs = PAD_TITLE_HOLD_MS) {
           const gen = ++showGenRef.current;
-          void (async () => {
-            await waitForTopBannersIdle();
+          const node = nodeRef.current;
+          if (!node) return;
+          node.textContent = label;
+          node.classList.add("is-visible");
+          if (timerRef.current) window.clearTimeout(timerRef.current);
+          timerRef.current = window.setTimeout(() => {
+            timerRef.current = 0;
             if (gen !== showGenRef.current) return;
-            const node = nodeRef.current;
-            if (!node) return;
-            node.textContent = label;
-            node.classList.add("is-visible");
-            if (timerRef.current) window.clearTimeout(timerRef.current);
-            timerRef.current = window.setTimeout(() => {
-              timerRef.current = 0;
-              nodeRef.current?.classList.remove("is-visible");
-            }, holdMs);
-          })();
+            nodeRef.current?.classList.remove("is-visible");
+          }, holdMs);
         },
       }),
       [],

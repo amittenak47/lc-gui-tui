@@ -8,6 +8,15 @@
 /** Default hold-to-confirm fill duration. */
 export const HOLD_MS = 333;
 
+/**
+ * How long a press with {@link HoldButton} `onTap` stays visually empty.
+ *
+ * Tap-through (header pads, armed bins) must not wash fill. Fill starts after
+ * this beat so a click never paints `--lc-hold`. Confirm still lands at
+ * {@link HOLD_MS} from pointer down.
+ */
+export const HOLD_TAP_FILL_DELAY_MS = 140;
+
 /** Longer hold for offline / reveal-solution consent. */
 export const HOLD_SENSITIVE_MS = 666;
 
