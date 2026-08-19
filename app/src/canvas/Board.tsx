@@ -1108,6 +1108,16 @@ export interface BoardProps {
   /** Edit is on. Owned by the workspace, since it owns the buffer. */
   editing?: boolean;
   onToggleEdit?: () => void;
+  /**
+   * Offer the Link tool — a stroke from a mark that commits a graph edge.
+   *
+   * Beside the annotate toggle rather than as an ink-wheel wedge: it draws no
+   * ink, so a slot among pen / highlighter / eraser would promise something it
+   * does not do.
+   */
+  linkToggle?: boolean;
+  linking?: boolean;
+  onToggleLink?: () => void;
   /** Annotation mode changed — the caller makes the dock stop taking pointers. */
   onAnnotateCodeChange?: (on: boolean) => void;
   /** Show lined-paper toggle in the map chrome. */
@@ -1185,6 +1195,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     editToggle = false,
     editing = false,
     onToggleEdit,
+    linkToggle = false,
+    linking = false,
+    onToggleLink,
     onAnnotateCodeChange,
     linedPaperToggle = false,
     coachFold = null,
@@ -2310,10 +2323,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
   }, [restoreHostScroll, snapshotHostScroll]);
 
-  // Leaving Annotate puts the pen down and the highlighter with it.
+  // Leaving Annotate puts the pen down, and the highlighter and Link with it.
   useEffect(() => {
     if (!annotateCode && highlighting) setHighlighting(false);
   }, [annotateCode, highlighting]);
+
+  useEffect(() => {
+    if (!annotateCode && linking) onToggleLink?.();
+  }, [annotateCode, linking, onToggleLink]);
 
   /*
    * Edit and the pen are mutually exclusive.
@@ -7505,6 +7522,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   >
                     <AnnotateIcon on={annotateCode} />
                   </button>
+                  {linkToggle && annotateCode && (
+                    <button
+                      type="button"
+                      className={
+                        linking
+                          ? "lc-lined-toggle lc-tip-target is-active"
+                          : "lc-lined-toggle lc-tip-target"
+                      }
+                      aria-pressed={linking}
+                      aria-label={linking ? "Stop linking" : "Link from a mark"}
+                      data-tip={
+                        linking ? "Drag from a mark to link it" : "Link — drag from a mark"
+                      }
+                      data-tip-placement="bottom"
+                      onClick={() => onToggleLink?.()}
+                    >
+                      <LinkToolIcon on={linking} />
+                    </button>
+                  )}
                   {editToggle && (
                     <button
                       type="button"
@@ -8310,6 +8346,27 @@ function PagesFilmIcon() {
 /**
  * A page with a nib on it — the toolbar toggle, same 24-grid as the eye.
  */
+/** Two links of a chain — the gesture, not a URL. */
+function LinkToolIcon({ on = false }: { on?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M10 13.5a3.5 3.5 0 0 0 5 0l3-3a3.5 3.5 0 0 0-5-5l-1.4 1.4" />
+      <path d="M14 10.5a3.5 3.5 0 0 0-5 0l-3 3a3.5 3.5 0 0 0 5 5l1.4-1.4" />
+      {on && <circle cx="12" cy="12" r="1.2" fill="currentColor" />}
+    </svg>
+  );
+}
+
 /** Same page outline as {@link AnnotateIcon}, with a caret instead of a nib. */
 function EditMarkdownIcon({ on = false }: { on?: boolean }) {
   return (

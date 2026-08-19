@@ -25,7 +25,9 @@ pub use config::{
     get_config, llm_start, llm_status, llm_stop, put_config, ConfigDto, ModesConfigDto,
     ProviderConfigDto,
 };
-pub use docs::{get_index as get_docs_index, put_index as put_docs_index};
+pub use docs::{
+    get_index as get_docs_index, put_index as put_docs_index, retrieve as retrieve_docs,
+};
 pub use pads::{
     archive_annotate, archive_whiteboard, clone_device_prefs, get_device_prefs, get_doc_bytes,
     get_snapshots, list_annotate, list_devices, list_whiteboard, put_annotate, put_device_prefs,

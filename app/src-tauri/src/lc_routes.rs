@@ -507,6 +507,27 @@ pub async fn lc_docs_put_index(
     .await
 }
 
+/// Nearest chunks of one document — link suggestions, and anything else that
+/// wants "what else in this file is about that".
+///
+/// Per **file hash**, like the index it reads: two annotation sets over one
+/// textbook suggest from the same text, because it is the same text.
+#[tauri::command]
+pub async fn lc_docs_retrieve(
+    state: State<'_, Shared>,
+    hash: String,
+    query: String,
+    k: Option<usize>,
+) -> Result<LcResponse, String> {
+    let path = format!(
+        "/docs/{}/retrieve?q={}&k={}",
+        enc(&hash),
+        enc(&query),
+        k.unwrap_or(4)
+    );
+    go(state, "POST", path, None).await
+}
+
 #[tauri::command]
 pub async fn lc_docs_get_bytes(
     state: State<'_, Shared>,

@@ -464,6 +464,42 @@ export class LcClient {
     return { indexed: result.indexed !== false, wrote: Boolean(result.wrote) };
   }
 
+  /**
+   * The chunks of one document nearest a query.
+   *
+   * The scoring has always existed — the coach uses it for document Ask — but
+   * the client had no way in, so link suggestions had nothing to suggest from.
+   * Returns `[]` rather than throwing when the document was never indexed or
+   * the harness is unreachable: suggestions are a convenience, and a link tool
+   * that errors because a hint is unavailable is worse than one that offers no
+   * hints.
+   */
+  async retrieveDoc(
+    hash: string,
+    query: string,
+    k = 4,
+  ): Promise<Array<{ page: number; heading?: string; text: string; score: number }>> {
+    try {
+      const body = await this.cmd<{
+        chunks?: Array<{ page?: number; heading?: string | null; text?: string; score?: number }>;
+      } | null>("lc_docs_retrieve", { hash, query, k });
+      return (body?.chunks ?? []).flatMap((chunk) =>
+        typeof chunk?.text === "string" && chunk.text.trim()
+          ? [
+              {
+                page: typeof chunk.page === "number" ? chunk.page : 0,
+                heading: chunk.heading ?? undefined,
+                text: chunk.text,
+                score: typeof chunk.score === "number" ? chunk.score : 0,
+              },
+            ]
+          : [],
+      );
+    } catch {
+      return [];
+    }
+  }
+
   async putDocBytes(hash: string, bytes: ArrayBuffer): Promise<void> {
     await this.cmd("lc_docs_put_bytes", {
       hash,

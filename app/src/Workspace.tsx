@@ -92,6 +92,7 @@ import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { HomeChooser } from "./modes/HomeChooser";
 import { ExploreWorkspace } from "./modes/ExploreWorkspace";
+import { LinkStrokeOverlay, type LinkChip } from "./modes/LinkStrokeOverlay";
 import { FEATURE_LEETCODE } from "./featureFlags";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { RevealDialog } from "./modes/RevealDialog";
@@ -667,6 +668,14 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
   const [marksSlot, setMarksSlot] = useState<HTMLElement | null>(null);
   /** Highlighter mode, owned by the board toolbar and read by the doc layer. */
   const [highlighting, setHighlighting] = useState(false);
+  /**
+   * The Link tool is armed — a stroke from a mark commits an edge.
+   *
+   * Annotate mode only, and mutually exclusive with the document highlighter:
+   * both want the pointer over the page, and a drag that sometimes marks and
+   * sometimes links is a coin toss.
+   */
+  const [linkMode, setLinkMode] = useState(false);
   const [annotateEntryOpen, setAnnotateEntryOpen] = useState(false);
   const [docIndexStatus, setDocIndexStatus] = useState<
     "idle" | "indexing" | "indexed" | "error"
@@ -2111,6 +2120,58 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     }
     return out;
   }, [hereNode, tabsRef]);
+
+  /**
+   * The marks on this page, positioned for the link overlay.
+   *
+   * Read from the DOM rather than from anchors: the ribbons are laid out by
+   * the selection layer in page coordinates and then ride the board camera, so
+   * where they *are* on screen is a question only the browser can answer.
+   */
+  const pageLinkChips = useCallback((): LinkChip[] => {
+    const out: LinkChip[] = [];
+    for (const node of document.querySelectorAll<HTMLElement>(".lc-doc-footnote[data-lc-id]")) {
+      const id = node.dataset.lcId;
+      if (!id) continue;
+      const box = node.getBoundingClientRect();
+      if (box.width === 0 && box.height === 0) continue;
+      const mark = annotateFootnotesRef.current.find((entry) => entry.id === id);
+      out.push({
+        id,
+        kind: "mark",
+        label: (mark?.excerpt ?? "mark").slice(0, 28),
+        x: box.left + box.width / 2,
+        y: box.top + box.height / 2,
+      });
+    }
+    return out;
+  }, []);
+
+  /**
+   * What else in this document is about the mark being dragged from.
+   *
+   * Retrieval is per file hash, so two sets of ink over one textbook suggest
+   * from the same text. Chips are laid out in a column down the right of the
+   * page — they have no position of their own, being passages rather than
+   * things on screen.
+   */
+  const suggestLinkChips = useCallback(
+    async (originId: string): Promise<LinkChip[]> => {
+      const source = annotateSourceRef.current;
+      const mark = annotateFootnotesRef.current.find((entry) => entry.id === originId);
+      if (!source || !mark?.excerpt) return [];
+      const hits = await client.retrieveDoc(source.hash, mark.excerpt, 4);
+      const right = window.innerWidth - 150;
+      return hits.map((hit, index) => ({
+        id: `chunk:${hit.page}:${index}`,
+        kind: "suggestion" as const,
+        label: (hit.heading ?? hit.text).slice(0, 32),
+        x: right,
+        y: 180 + index * 62,
+      }));
+    },
+    [client],
+  );
 
   const addWorkspaceLink = useCallback(
     (to: NodeRef) => {
@@ -6714,6 +6775,14 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             editToggle={annotateOwned}
             editing={editMarkdown}
             onToggleEdit={toggleEditMarkdown}
+            linkToggle={Boolean(problem) && isAnnotate(problem) && !editMarkdown}
+            linking={linkMode}
+            onToggleLink={() => {
+              // Mutually exclusive with the document highlighter: both take
+              // the pointer over the page.
+              setHighlighting(false);
+              setLinkMode((on) => !on);
+            }}
             onAnnotateCodeChange={setAnnotateCode}
             // Ruled lines under somebody else's typography would be noise.
             linedPaperToggle={Boolean(problem) && !isAnnotate(problem)}
@@ -7281,6 +7350,35 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         * an open that is waiting on this question cannot proceed until it is
         * answered, so nothing else on screen should be able to take the tap.
         */}
+      {linkMode && hereNode && problem && isAnnotate(problem) && (
+        <LinkStrokeOverlay
+          marks={pageLinkChips()}
+          onSuggest={suggestLinkChips}
+          onNotice={setNotice}
+          onCancel={() => {}}
+          onCommit={(originId, target) => {
+            const here = hereNode;
+            const mark = annotateFootnotesRef.current.find((entry) => entry.id === originId);
+            /*
+             * A suggestion is a passage, not a workspace — it has no node of
+             * its own to point at, so the edge lands on this pad's own text
+             * and the chip's label is what names it. A mark-to-mark link is
+             * two places in one document, which the graph draws as a self
+             * edge on that document.
+             */
+            void putEdge(
+              makeEdge(
+                { ...here, title: mark?.excerpt?.slice(0, 40) ?? here.title },
+                { ...here, title: target.label },
+                "ink",
+              ),
+            ).then(refreshHereEdges);
+            setNotice(`Linked “${target.label}”.`);
+            setLinkMode(false);
+          }}
+        />
+      )}
+
       {linkPickerOpen && hereNode && (
         <WorkspaceLinkPicker
           fromTitle={hereNode.title ?? "this workspace"}
