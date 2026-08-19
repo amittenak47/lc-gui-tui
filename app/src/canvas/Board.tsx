@@ -120,6 +120,7 @@ import {
   liveBoardViewSize,
   liveExcalidrawViewport,
 } from "./documentRotateCamera";
+import { paintExcalidrawCanvases } from "./excalidrawCanvasSize";
 import { encodeInkOps } from "./inkCodec";
 import { fallbackPageFrames, pageFramesFromPdfSlot, pageIdFromCamera } from "./inkPageIndex";
 import { eraserScreenRadius } from "./rasterInk";
@@ -5671,13 +5672,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const board = boardRef.current;
       const api = apiRef.current;
       if (!board || !api) return false;
+      void board.offsetWidth;
       const box = board.getBoundingClientRect();
       const live = liveExcalidrawViewport(box);
       if (!live) return false;
       const prev = lastFittedBoardBoxRef.current;
-      if (!force && live.width === prev.w && live.height === prev.h) {
+      const boxChanged = live.width !== prev.w || live.height !== prev.h;
+      if (!force && !boxChanged) {
         const state = api.getAppState() as { width?: number; height?: number };
         if (!excalidrawViewportNeedsSync(live, state)) return true;
+        paintExcalidrawCanvases(board, live.width, live.height);
+        api.updateScene({
+          appState: { width: live.width, height: live.height },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        return true;
       }
       if (excalidrawViewportNeedsSync(live, api.getAppState() as { width?: number; height?: number })) {
         api.updateScene({
@@ -5685,10 +5694,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           captureUpdate: CaptureUpdateAction.NEVER,
         });
       }
+      // View mode never attaches Excalidraw's window.resize. WebView2 often
+      // skips updateDOMRect until a pointer. Size the bitmaps here.
+      paintExcalidrawCanvases(board, live.width, live.height);
       api.refresh?.();
       maybeGrowDrawFrame();
       runFit(null, "keepY");
       lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
+      if (boxChanged) window.dispatchEvent(new Event("resize"));
       return true;
     },
     [maybeGrowDrawFrame, runFit],
@@ -5700,9 +5713,42 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     requestAnimationFrame(() => applyLiveBoxFit(true));
   }, [applyLiveBoxFit]);
 
+  /**
+   * OS window resize (Tauri / WebView2) often never reaches `window.resize`
+   * until the next pointer. Native `onResized` is the event that actually fires.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    const kick = () => {
+      lastFittedBoardBoxRef.current = { w: 0, h: 0 };
+      applyLiveBoxFit(true);
+      requestAnimationFrame(() => applyLiveBoxFit(true));
+    };
+    void import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => {
+        if (cancelled) return undefined;
+        return getCurrentWindow().onResized(() => {
+          kick();
+          window.setTimeout(kick, 50);
+          window.setTimeout(kick, 160);
+          window.setTimeout(kick, 320);
+        });
+      })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        /* vite / tests — window.resize + ResizeObserver still run */
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [applyLiveBoxFit]);
+
   /** Page-locked boards: grow the frame and refit width on every board resize. */
   useEffect(() => {
-    if (!interactive) return;
     const board = boardRef.current;
     if (!board || typeof ResizeObserver === "undefined") return;
     lastFittedBoardBoxRef.current = { w: 0, h: 0 };
@@ -5768,7 +5814,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (timer != null) window.clearTimeout(timer);
       for (const id of late) window.clearTimeout(id);
     };
-  }, [interactive, applyLiveBoxFit]);
+  }, [applyLiveBoxFit]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
