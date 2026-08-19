@@ -780,6 +780,9 @@ export function SettingsModal({
       if (hubDirty) {
         const url = hubUrl.trim();
         const token = hubToken.trim();
+        if (Boolean(url) !== Boolean(token) || (token && !/^\d{6}$/.test(token))) {
+          throw new Error("Pad hub needs both the PC URL and the 6-digit code.");
+        }
         savePadHub(url && token ? { url, token } : null);
         setBaselineHubUrl(url);
         setBaselineHubToken(token);
@@ -1471,12 +1474,12 @@ export function SettingsModal({
               </p>
               {draft.serve_token ? (
                 <p className="lc-settings-hint">
-                  This PC listens on port {draft.serve_port}. Token:{" "}
-                  <code>{draft.serve_token}</code>
+                  This PC listens on port {draft.serve_port}. Code:{" "}
+                  <code className="lc-pad-hub-code">{draft.serve_token}</code>
                 </p>
               ) : (
                 <p className="lc-settings-hint">
-                  Open Settings on the desktop app to see the listen port and token.
+                  Open Settings on the desktop app to see the listen port and 6-digit code.
                 </p>
               )}
               <label className="lc-md-new-title">
@@ -1489,13 +1492,17 @@ export function SettingsModal({
                 />
               </label>
               <label className="lc-md-new-title">
-                <span className="lc-muted">Token</span>
+                <span className="lc-muted">6-digit code</span>
                 <input
                   type="text"
+                  inputMode="numeric"
                   autoComplete="off"
                   spellCheck={false}
+                  maxLength={6}
+                  pattern="[0-9]{6}"
+                  placeholder="000000"
                   value={hubToken}
-                  onChange={(event) => setHubToken(event.target.value)}
+                  onChange={(event) => setHubToken(event.target.value.replace(/\D/g, "").slice(0, 6))}
                 />
               </label>
               <div className="lc-settings-subhead">Autosave</div>
