@@ -41,6 +41,33 @@ export function liveBoardViewSize(
   };
 }
 
+/**
+ * Size to write onto Excalidraw `appState`.
+ *
+ * `api.refresh()` only copies canvas offsets. Canvas CSS width/height stay
+ * `window.innerWidth` until `updateDOMRect` — which on Android WebView often
+ * waits for a pointer. Split/rotate then look full-width until a tap.
+ */
+export function liveExcalidrawViewport(
+  boardBox: { width: number; height: number } | null | undefined,
+): { width: number; height: number } | null {
+  if (!boardBox || boardBox.width < 8 || boardBox.height < 8) return null;
+  return {
+    width: Math.round(boardBox.width),
+    height: Math.round(boardBox.height),
+  };
+}
+
+export function excalidrawViewportNeedsSync(
+  live: { width: number; height: number },
+  state: { width?: number; height?: number },
+): boolean {
+  return (
+    Math.round(state.width ?? 0) !== live.width ||
+    Math.round(state.height ?? 0) !== live.height
+  );
+}
+
 export function documentCameraAfterViewportChange(input: {
   box: SceneBox;
   inset: ViewportInset;
