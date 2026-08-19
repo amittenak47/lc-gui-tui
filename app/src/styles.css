@@ -4669,6 +4669,281 @@ body[data-lc-sash-drag="horizontal"] {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
+/* ------------------------------------------------------------- explore --- */
+
+/*
+ * The atlas. Plain SVG on a plain surface — this is a view of the other pads,
+ * so it deliberately mounts no canvas engine of its own.
+ */
+.lc-explore {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 10px;
+  padding: 14px;
+  background: var(--bg);
+}
+
+.lc-explore-chrome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.lc-explore-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lc-explore-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--chrome-edge);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.lc-explore-chip.is-active {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.lc-explore-search {
+  flex: 1 1 12rem;
+  min-width: 0;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--chrome-edge);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.lc-explore-canvas {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.lc-explore-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  text-align: center;
+  padding: 0 24px;
+}
+
+.lc-explore-cluster-label {
+  fill: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/*
+ * Each kind of edge draws differently, because they are different claims.
+ * A line the reader typed and a line the app lifted off a footnote should not
+ * be indistinguishable on the page that exists to explain the connections.
+ */
+.lc-explore-edge {
+  stroke: var(--chrome-edge);
+  stroke-width: 1.4;
+  transition: opacity 140ms ease;
+}
+
+.lc-explore-edge.is-wiki {
+  stroke: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.lc-explore-edge.is-picker {
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke-dasharray: 4 4;
+}
+
+.lc-explore-edge.is-footnote-thread {
+  stroke: color-mix(in srgb, var(--accent) 85%, transparent);
+  stroke-width: 2.2;
+}
+
+.lc-explore-edge.is-footnote-url {
+  stroke: var(--muted);
+  stroke-dasharray: 2 5;
+}
+
+.lc-explore-edge.is-ink {
+  stroke: color-mix(in srgb, #d98b3a 80%, transparent);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.lc-explore-edge.is-dim {
+  opacity: 0.15;
+}
+
+.lc-explore-node circle {
+  fill: var(--panel-bg, var(--bg));
+  stroke: var(--muted);
+  stroke-width: 2;
+  cursor: pointer;
+  transition: opacity 140ms ease;
+}
+
+.lc-explore-node.is-annotate circle {
+  stroke: color-mix(in srgb, var(--accent) 80%, transparent);
+}
+
+.lc-explore-node.is-whiteboard circle {
+  stroke: color-mix(in srgb, var(--accent) 45%, var(--muted));
+}
+
+.lc-explore-node.is-practice circle {
+  stroke: #4aa36a;
+}
+
+.lc-explore-node.is-web circle {
+  stroke: #d98b3a;
+}
+
+/* A link points here and nothing answers — dashed, not drawn as real. */
+.lc-explore-node.is-missing circle {
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+}
+
+.lc-explore-node.is-selected circle {
+  fill: color-mix(in srgb, var(--accent) 30%, var(--panel-bg, var(--bg)));
+}
+
+/* You are here: this node is a pad live in another pane. */
+.lc-explore-node.is-here circle {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.lc-explore-node.is-dim {
+  opacity: 0.22;
+}
+
+.lc-explore-node-label {
+  fill: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.lc-explore-node.is-selected .lc-explore-node-label,
+.lc-explore-node.is-here .lc-explore-node-label {
+  fill: var(--ink);
+}
+
+.lc-explore-card {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 4;
+  width: min(20rem, calc(100% - 32px));
+  max-height: min(60%, 26rem);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--chrome-edge);
+  background: var(--panel-bg, var(--bg));
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.35);
+}
+
+.lc-explore-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lc-explore-card-head .lc-muted {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.lc-explore-spec {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.lc-explore-spec dt {
+  color: var(--muted);
+}
+
+.lc-explore-spec dd {
+  margin: 0;
+  color: var(--ink);
+}
+
+.lc-explore-neighbours {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lc-explore-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/*
+ * The Explore glyph's star field.
+ *
+ * Same 420ms steps(4) clock as the ink-wheel hub so the app has one pulse
+ * rather than two that nearly agree — but a sparse star field rather than the
+ * hub's checkerboard, and mono rather than tinted.
+ */
+.lc-home-card-stars {
+  position: relative;
+}
+
+.lc-home-card-stars::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.22;
+  background-image:
+    radial-gradient(currentColor 0.6px, transparent 0.7px),
+    radial-gradient(currentColor 0.5px, transparent 0.6px);
+  background-size: 6px 6px, 11px 11px;
+  background-position: 0 0, 3px 4px;
+  animation: lc-hub-pixel 420ms steps(4) infinite;
+}
+
+.lc-home-card:hover .lc-home-card-stars::after,
+.lc-home-card:focus-visible .lc-home-card-stars::after {
+  opacity: 0.72;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-home-card-stars::after {
+    animation: none;
+  }
+}
+
 .lc-page-content-slot {
   position: absolute;
   left: 0;

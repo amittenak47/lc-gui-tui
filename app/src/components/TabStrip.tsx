@@ -126,6 +126,19 @@ function TabIcon({ kind }: { kind: TabRecord["kind"] | "cancel" }) {
           <path d="m20.2 11.3-6.6 6.6-2.8.8.8-2.8 6.6-6.6z" />
         </Glyph>
       );
+    case "explore":
+      // Same hub-and-satellites as the Home card, at strip weight.
+      return (
+        <Glyph>
+          <circle cx="12" cy="12" r="2.4" />
+          <circle cx="5.2" cy="6.8" r="1.4" />
+          <circle cx="19" cy="7.6" r="1.4" />
+          <circle cx="6.6" cy="18" r="1.4" />
+          <path d="M6.4 7.7 10.1 10.7" />
+          <path d="M17.8 8.6 14.2 10.9" />
+          <path d="M7.7 17 10.4 13.9" />
+        </Glyph>
+      );
     case "web":
       return (
         <Glyph>

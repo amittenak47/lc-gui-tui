@@ -62,6 +62,10 @@ function persistable(tab: TabRecord): TabRecord | null {
       if (!tab.hash && !tab.docId && !source) return null;
       return { ...tab, dirty: false, indexed: asIndex(tab.indexed), source };
     }
+    case "explore":
+      // The chip only. Nodes and edges live in IndexedDB, so a restored atlas
+      // reads the graph as it is now rather than as it was when the app closed.
+      return { ...tab, dirty: false };
     case "web": {
       const entries = tab.entries
         .filter((entry) => typeof entry.url === "string" && entry.url.length > 0)
@@ -126,6 +130,9 @@ function parseTab(raw: unknown): TabRecord | null {
       indexed: asIndex(raw.indexed),
       source,
     });
+  }
+  if (kind === "explore") {
+    return persistable({ id, kind, title: "Explore", dirty, lastActive, group });
   }
   if (kind === "web") {
     const entriesRaw = Array.isArray(raw.entries) ? raw.entries : [];

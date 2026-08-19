@@ -91,6 +91,7 @@ import { formatTestReport, TestResultsModal } from "./modes/TestResultsModal";
 import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { HomeChooser } from "./modes/HomeChooser";
+import { ExploreWorkspace } from "./modes/ExploreWorkspace";
 import { FEATURE_LEETCODE } from "./featureFlags";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { RevealDialog } from "./modes/RevealDialog";
@@ -154,6 +155,7 @@ import {
   putEdge,
   makeEdge,
   isUnresolved,
+  listEdges,
   replaceWikiEdges,
   sameNode,
   type Edge,
@@ -3110,6 +3112,74 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     },
     [openAnnotate, openWhiteboard, pickProblem],
   );
+
+  const openExplore = useCallback(() => {
+    openWorkspace({
+      id: newTabId("explore"),
+      kind: "explore",
+      title: "Explore",
+      dirty: false,
+      lastActive: 0,
+    });
+  }, [openWorkspace]);
+
+  /**
+   * Every workspace the libraries know about, as graph nodes.
+   *
+   * Read from the stores rather than from the edges, so a note written five
+   * minutes ago and linked to nothing still shows up — Explore is the atlas of
+   * what exists, not of what happens to be connected.
+   */
+  const exploreNodes = useMemo((): NodeRef[] => {
+    if (tab.kind !== "explore") return [];
+    const out: NodeRef[] = [];
+    for (const doc of listAnnotateDocs()) {
+      out.push({
+        type: doc.docType === "web" ? "web" : "annotate",
+        id: doc.id,
+        title: annotateDocLabel(doc),
+      });
+    }
+    for (const notebook of listWhiteboardNotebooks()) {
+      out.push({ type: "whiteboard", id: notebook.id, title: notebook.title });
+    }
+    // Problems have no library of their own on the device — the open ones and
+    // the ones something links to are what the atlas can honestly name.
+    for (const open of tabsRef.current.tabs) {
+      if (open.kind !== "practice") continue;
+      out.push({
+        type: "practice",
+        id: `${open.dataset}/${open.taskId}`,
+        title: open.title,
+      });
+    }
+    return out;
+  }, [tab.kind, tabsRef]);
+
+  /** Unresolved nodes and linked problems, which no library lists. */
+  const [exploreExtra, setExploreExtra] = useState<NodeRef[]>([]);
+  useEffect(() => {
+    if (tab.kind !== "explore") return;
+    let live = true;
+    void listEdges()
+      .then((edges) => {
+        if (!live) return;
+        const known = new Set(exploreNodes.map((node) => `${node.type}:${node.id}`));
+        const extra = new Map<string, NodeRef>();
+        for (const edge of edges) {
+          for (const end of [edge.from, edge.to]) {
+            const key = `${end.type}:${end.id}`;
+            if (known.has(key) || extra.has(key)) continue;
+            extra.set(key, end);
+          }
+        }
+        setExploreExtra([...extra.values()]);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [exploreNodes, tab.kind]);
 
   const pickAndOpenAnnotate = useCallback(async () => {
     if (busy !== null) return;
@@ -6815,6 +6885,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
           )}
           {!problem &&
             (tab.kind === "home" ||
+              // Explore rides the same overlay as Home: both are surfaces the
+              // app draws itself rather than boards, so they share the layer
+              // that sits over a canvas which never mounts for them.
+              tab.kind === "explore" ||
               holdBrowseOverlay ||
               boardPreparing ||
               browseMotion !== "idle") && (
@@ -6855,6 +6929,16 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                     }}
                     onRandomSession={(filters) => void startRandomSession(filters)}
                   />
+                ) : tab.kind === "explore" ? (
+                  <ExploreWorkspace
+                    nodes={[...exploreNodes, ...exploreExtra]}
+                    here={hereNode}
+                    onOpen={openLinkedNode}
+                    onOpenInNewTab={openLinkedNode}
+                    // Practice is one tab, so a second chip for a problem is
+                    // refused rather than hidden — the reason is worth saying.
+                    canOpenInNewTab={(node) => node.type !== "practice"}
+                  />
                 ) : tab.kind === "home" && !holdBrowseOverlay ? (
                   <HomeChooser
                     busy={busy !== null || boardPreparing || workspaceLoadActive}
@@ -6862,6 +6946,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                     onWhiteboard={() => setWhiteboardEntryOpen(true)}
                     onAnnotate={() => setAnnotateEntryOpen(true)}
                     onBrowse={() => void openWebPage(WEB_HOME)}
+                    onExplore={openExplore}
                   />
                 ) : null}
               </div>
