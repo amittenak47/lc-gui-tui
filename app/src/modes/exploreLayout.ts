@@ -171,15 +171,16 @@ export interface StepOptions {
 /**
  * Tuned against a real library, not derived.
  *
- * The ratio that matters is repulsion against pull. Nodes have labels under
- * them, so they need roughly {@link MIN_GAP} of clear space or the captions
- * collide and the map becomes unreadable, which is worse than an uneven one.
- * Repulsion therefore has to win inside that radius and vanish outside it.
+ * The ratio that matters is repulsion against pull. A node is a card roughly a
+ * tenth of the canvas wide with a caption under it, so it needs about
+ * {@link MIN_GAP} of clear space or the cards overlap and the map becomes
+ * unreadable, which is worse than an uneven one. Repulsion therefore has to
+ * win inside that radius and vanish outside it.
  */
-const MIN_GAP = 0.18;
+const MIN_GAP = 0.26;
 const REPEL = 0.6;
 const HOME_PULL = 0.75;
-const CLUSTER_PULL = 2.2;
+const CLUSTER_PULL = 3.4;
 const DRIFT = 0.014;
 const DAMPING = 0.9;
 const EDGE_PAD = 0.07;
@@ -195,6 +196,14 @@ const EDGE_PAD = 0.07;
  */
 export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: number }>, opts: StepOptions): void {
   const { clustered, dt, time, aspect } = opts;
+  /*
+   * Clustering shrinks the spacing it has to overcome.
+   *
+   * The loose gap is sized for a caption; a gathered group does not need that
+   * much room, and at full width repulsion simply cancels the cluster pull and
+   * nothing visibly gathers.
+   */
+  const gap = clustered ? MIN_GAP * 0.42 : MIN_GAP;
   // One map per frame, not one per body: the ranking is over the whole set.
   const spots = homes(bodies.map((body) => body.key));
   for (const body of bodies) {
@@ -222,7 +231,7 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
       const dx = (body.x - other.x) * aspect;
       const dy = body.y - other.y;
       let dist = Math.hypot(dx, dy);
-      if (dist > MIN_GAP) continue;
+      if (dist > gap) continue;
       // Two nodes at exactly the same point have no direction to separate in.
       // Nudge along a fixed diagonal rather than picking a random one, which
       // would make the layout non-deterministic.
@@ -231,7 +240,7 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
       if (dist < 1e-5) dist = 1e-5;
       // Linear falloff to zero at MIN_GAP: strong when overlapping, absent
       // once they are comfortable, so it never fights the pull at long range.
-      const push = REPEL * (1 - dist / MIN_GAP);
+      const push = REPEL * (1 - dist / gap);
       fx += (ux * push) / aspect;
       fy += uy * push;
     }
@@ -278,21 +287,35 @@ export function settle(
   }
 }
 
-/** Label anchor for a cluster: above the highest of its members. */
+/**
+ * Where each cluster's caption goes.
+ *
+ * Above its own members, and clear of every *other* node on the canvas. The
+ * obvious placement, over the group's highest member, put "WEB" on top of a
+ * note that happened to sit there, which is worse than no caption at all.
+ */
 export function clusterLabels(
   bodies: readonly Body[],
 ): Array<{ type: NodeType; label: string; x: number; y: number }> {
-  return CLUSTERS.flatMap((cluster) => {
+  const out: Array<{ type: NodeType; label: string; x: number; y: number }> = [];
+  for (const cluster of CLUSTERS) {
     const members = bodies.filter((body) => body.node.type === cluster.type);
-    if (members.length === 0) return [];
+    if (members.length === 0) continue;
     const xs = members.map((body) => body.x);
-    return [
-      {
-        type: cluster.type,
-        label: cluster.label,
-        x: (Math.min(...xs) + Math.max(...xs)) / 2,
-        y: Math.min(...members.map((body) => body.y)),
-      },
-    ];
-  });
+    const x = (Math.min(...xs) + Math.max(...xs)) / 2;
+    let y = Math.min(...members.map((body) => body.y));
+    // Walk the caption up until nothing else is sitting where it wants to be.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const clash = bodies.some(
+        (body) =>
+          body.node.type !== cluster.type &&
+          Math.abs(body.x - x) < 0.1 &&
+          Math.abs(body.y - y) < 0.045,
+      );
+      if (!clash) break;
+      y -= 0.05;
+    }
+    out.push({ type: cluster.type, label: cluster.label, x, y });
+  }
+  return out;
 }

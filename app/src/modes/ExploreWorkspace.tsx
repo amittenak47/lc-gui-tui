@@ -107,12 +107,22 @@ export function ExploreWorkspace({
   const [labelTick, setLabelTick] = useState(0);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
+  /** Edges by id, for the paint loop, which must not depend on React state. */
+  const edgeIndexRef = useRef(new Map<string, Edge>());
   const bodiesRef = useRef<Body[]>([]);
-  const nodeElsRef = useRef(new Map<string, SVGGElement>());
+  const nodeElsRef = useRef(new Map<string, HTMLElement>());
   const edgeElsRef = useRef(new Map<string, SVGLineElement>());
+  /** The blurred copy of each edge, drawn under its core. */
+  const glowElsRef = useRef(new Map<string, SVGLineElement>());
   const boxRef = useRef({ w: 0, h: 0 });
   const clusteredRef = useRef(clustered);
   clusteredRef.current = clustered;
+  /** So the seeding effect can repaint without depending on the painter. */
+  const paintRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    edgeIndexRef.current = new Map(edges.map((edge) => [edge.id, edge]));
+  }, [edges]);
 
   useEffect(() => {
     let live = true;
@@ -161,6 +171,7 @@ export function ExploreWorkspace({
         clusteredRef.current,
         box.h > 0 ? box.w / box.h : 1.6,
       );
+      paintRef.current();
     }
     setLabelTick((tick) => tick + 1);
     // `shown` is rebuilt each render; its identity is not the signal.
@@ -178,7 +189,26 @@ export function ExploreWorkspace({
     if (!host) return;
     const read = () => {
       const box = host.getBoundingClientRect();
+      const first = boxRef.current.w === 0 || boxRef.current.h === 0;
       boxRef.current = { w: box.width, h: box.height };
+      /*
+       * Re-settle the first time the box is real.
+       *
+       * The bodies are built before this effect runs, so their first settle
+       * used a guessed aspect. On a wide pane that guess is wrong enough that
+       * cards start overlapping and the reader watches them shuffle apart for
+       * a second. Settling again with the measured box means the atlas is
+       * already at rest on the frame it appears.
+       */
+      if (first && box.width > 0 && box.height > 0) {
+        settle(
+          bodiesRef.current,
+          clusterCentres(bodiesRef.current.map((body) => body.node.type)),
+          clusteredRef.current,
+          box.width / box.height,
+        );
+        paint();
+      }
     };
     read();
     if (typeof ResizeObserver !== "function") return;
@@ -197,20 +227,35 @@ export function ExploreWorkspace({
       const y = body.y * h;
       at.set(body.key, { x, y });
       const el = nodeElsRef.current.get(body.key);
-      if (el) el.setAttribute("transform", `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
+      // `translate3d` rather than `left`/`top`: this runs every frame for every
+      // node, and only the transform stays off the layout path.
+      if (el) el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
     }
     for (const [id, line] of edgeElsRef.current) {
-      const edge = edges.find((row) => row.id === id);
+      const edge = edgeIndexRef.current.get(id);
       if (!edge) continue;
       const from = at.get(nodeKey(edge.from));
       const to = at.get(nodeKey(edge.to));
       if (!from || !to) continue;
-      line.setAttribute("x1", from.x.toFixed(1));
-      line.setAttribute("y1", from.y.toFixed(1));
-      line.setAttribute("x2", to.x.toFixed(1));
-      line.setAttribute("y2", to.y.toFixed(1));
+      const x1 = from.x.toFixed(1);
+      const y1 = from.y.toFixed(1);
+      const x2 = to.x.toFixed(1);
+      const y2 = to.y.toFixed(1);
+      line.setAttribute("x1", x1);
+      line.setAttribute("y1", y1);
+      line.setAttribute("x2", x2);
+      line.setAttribute("y2", y2);
+      const glow = glowElsRef.current.get(id);
+      if (glow) {
+        glow.setAttribute("x1", x1);
+        glow.setAttribute("y1", y1);
+        glow.setAttribute("x2", x2);
+        glow.setAttribute("y2", y2);
+      }
     }
-  }, [edges]);
+  }, []);
+
+  paintRef.current = paint;
 
   /*
    * The drift loop.
@@ -299,12 +344,10 @@ export function ExploreWorkspace({
     return out;
   }, [nodes]);
 
-  const select = (node: NodeRef, el: SVGGElement | null) => {
+  const select = (node: NodeRef, el: HTMLElement | null) => {
     setSheetFrom(el?.getBoundingClientRect() ?? null);
     setSelected(node);
   };
-
-  const { w, h } = boxRef.current;
 
   return (
     <div className="lc-explore">
@@ -396,80 +439,109 @@ export function ExploreWorkspace({
               : "Nothing matches that filter."}
           </p>
         ) : (
-          <svg className="lc-explore-canvas" role="group" aria-label="Workspace graph">
-            {labels.map((spot) => (
-              <text
-                key={spot.type}
-                className="lc-explore-cluster-label"
-                x={spot.x * w}
-                y={spot.y * h - 34}
-                textAnchor="middle"
-              >
-                {spot.label}
-              </text>
-            ))}
+          <>
+            {/*
+              Edges are SVG because they are geometry; nodes are HTML because
+              they are cards. Trying to draw a card in SVG means reinventing
+              border-radius, hairlines and type, and the result never quite
+              matches the ones the rest of the app already draws.
+            */}
+            <svg className="lc-explore-beams" aria-hidden>
+              <defs>
+                {/*
+                  The bloom. One blur, applied to a coloured copy of every edge,
+                  with a thinner bright core drawn over it unblurred. Colour
+                  spills a little, the core stays sharp, and the line still
+                  reads as a line rather than as a highlighter stroke.
+                */}
+                <filter id="lc-saber-glow" x="-40%" y="-40%" width="180%" height="180%">
+                  <feGaussianBlur stdDeviation="2.2" />
+                </filter>
+              </defs>
 
-            {drawnEdges.map((edge) => {
-              const touched =
-                !selected || sameNode(edge.from, selected) || sameNode(edge.to, selected);
-              return (
-                <line
-                  key={edge.id}
-                  ref={(el) => {
-                    if (el) edgeElsRef.current.set(edge.id, el);
-                    else edgeElsRef.current.delete(edge.id);
-                  }}
-                  className={`lc-explore-edge is-${edge.kind}${touched ? "" : " is-dim"}`}
-                />
-              );
-            })}
+              <g className="lc-explore-beam-glow" filter="url(#lc-saber-glow)">
+                {drawnEdges.map((edge) => {
+                  const touched =
+                    !selected || sameNode(edge.from, selected) || sameNode(edge.to, selected);
+                  return (
+                    <line
+                      key={edge.id}
+                      ref={(el) => {
+                        if (el) glowElsRef.current.set(edge.id, el);
+                        else glowElsRef.current.delete(edge.id);
+                      }}
+                      className={`lc-explore-beam is-${edge.kind}${touched ? "" : " is-dim"}`}
+                    />
+                  );
+                })}
+              </g>
 
-            {bodiesRef.current.map((body) => {
-              const key = body.key;
-              const isSelected = selected ? sameNode(body.node, selected) : false;
-              const dim = Boolean(selected) && !isSelected && !neighbourKeys.has(key);
-              const live = here ? sameNode(body.node, here) : false;
-              return (
-                <g
-                  key={key}
-                  ref={(el) => {
-                    if (el) nodeElsRef.current.set(key, el);
-                    else nodeElsRef.current.delete(key);
-                  }}
-                  className={[
-                    "lc-explore-node",
-                    `is-${body.node.type}`,
-                    isSelected ? "is-selected" : "",
-                    dim ? "is-dim" : "",
-                    live ? "is-here" : "",
-                    isUnresolved(body.node) ? "is-missing" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  style={{ ["--lc-node-tint" as string]: TINT[body.node.type] }}
+              <g className="lc-explore-beam-core">
+                {drawnEdges.map((edge) => {
+                  const touched =
+                    !selected || sameNode(edge.from, selected) || sameNode(edge.to, selected);
+                  return (
+                    <line
+                      key={edge.id}
+                      ref={(el) => {
+                        if (el) edgeElsRef.current.set(edge.id, el);
+                        else edgeElsRef.current.delete(edge.id);
+                      }}
+                      className={`lc-explore-beam is-${edge.kind}${touched ? "" : " is-dim"}`}
+                    />
+                  );
+                })}
+              </g>
+            </svg>
+
+            {clustered &&
+              labels.map((spot) => (
+                <span
+                  key={spot.type}
+                  className="lc-explore-cluster-label"
+                  style={{ left: `${spot.x * 100}%`, top: `${spot.y * 100}%` }}
                 >
-                  {live && <circle className="lc-explore-node-halo" r={18} />}
-                  <circle
-                    className="lc-explore-node-dot"
-                    r={11}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`${body.node.title ?? body.node.id}, ${body.node.type}`}
-                    aria-pressed={isSelected}
-                    onClick={(event) => select(body.node, event.currentTarget.ownerSVGElement ? (event.currentTarget.parentNode as SVGGElement) : null)}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" && event.key !== " ") return;
-                      event.preventDefault();
-                      select(body.node, event.currentTarget.parentNode as SVGGElement);
+                  {spot.label}
+                </span>
+              ))}
+
+            <div className="lc-explore-nodes">
+              {bodiesRef.current.map((body) => {
+                const key = body.key;
+                const isSelected = selected ? sameNode(body.node, selected) : false;
+                const dim = Boolean(selected) && !isSelected && !neighbourKeys.has(key);
+                const live = here ? sameNode(body.node, here) : false;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    ref={(el) => {
+                      if (el) nodeElsRef.current.set(key, el);
+                      else nodeElsRef.current.delete(key);
                     }}
-                  />
-                  <text className="lc-explore-node-label" y={28} textAnchor="middle">
-                    {truncate(body.node.title ?? body.node.id)}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
+                    className={[
+                      "lc-explore-node",
+                      `is-${body.node.type}`,
+                      isSelected ? "is-selected" : "",
+                      dim ? "is-dim" : "",
+                      live ? "is-here" : "",
+                      isUnresolved(body.node) ? "is-missing" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    style={{ ["--lc-node-tint" as string]: TINT[body.node.type] }}
+                    aria-pressed={isSelected}
+                    onClick={(event) => select(body.node, event.currentTarget)}
+                  >
+                    <span className="lc-explore-node-dot" />
+                    <span className="lc-explore-node-label">
+                      {truncate(body.node.title ?? body.node.id)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
 
