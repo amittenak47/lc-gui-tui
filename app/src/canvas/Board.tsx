@@ -1132,7 +1132,7 @@ export interface BoardProps {
   editing?: boolean;
   onToggleEdit?: () => void;
   /**
-   * Offer the Link tool — a stroke from a mark that commits a graph edge.
+   * Offer the Link tool — circle a mark / image / drawing, then stroke to connect.
    *
    * Beside the annotate toggle rather than as an ink-wheel wedge: it draws no
    * ink, so a slot among pen / highlighter / eraser would promise something it
@@ -7163,6 +7163,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       },
       getStrokes: () => captureStrokes(elements()),
       getInkStrokes: () => inkStrokesFromOps(rasterInkRef.current?.getOps() ?? []),
+      sceneToClient: (x, y) => {
+        const view = getViewport();
+        if (!view) return null;
+        return {
+          x: (x + view.scrollX) * view.zoom + view.offsetLeft,
+          y: (y + view.scrollY) * view.zoom + view.offsetTop,
+        };
+      },
       getInkOpCount: () => rasterInkRef.current?.getOpCount() ?? 0,
       isInking: () => rasterInkRef.current?.isDrawing() ?? false,
       dirtyInkPageCount: () => rasterInkRef.current?.dirtyInkPageCount() ?? 0,
@@ -7674,9 +7682,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                           : "lc-lined-toggle lc-tip-target"
                       }
                       aria-pressed={linking}
-                      aria-label={linking ? "Stop linking" : "Link from a mark"}
+                      aria-label={linking ? "Stop linking" : "Link two things on the page"}
                       data-tip={
-                        linking ? "Drag from a mark to link it" : "Link — drag from a mark"
+                        linking
+                          ? "Circle a mark, image, or drawing — then stroke to connect"
+                          : "Link — circle targets, then connect them"
                       }
                       data-tip-placement="bottom"
                       onClick={() => onToggleLink?.()}

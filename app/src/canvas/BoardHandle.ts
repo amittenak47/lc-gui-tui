@@ -110,6 +110,11 @@ export interface BoardHandle {
    * to the coach as writing while zoomed out.
    */
   getInkStrokes(): InkStroke[];
+  /**
+   * Scene point → layout viewport, using the live camera (split-pane offsets).
+   * Null when Excalidraw has no appState yet.
+   */
+  sceneToClient(x: number, y: number): { x: number; y: number } | null;
   /** Committed raster ink ops — for ambient/review fingerprints. */
   getInkOpCount(): number;
   /**

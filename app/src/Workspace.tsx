@@ -93,6 +93,8 @@ import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { HomeChooser } from "./modes/HomeChooser";
 import { ExploreWorkspace } from "./modes/ExploreWorkspace";
 import { LinkStrokeOverlay, type LinkChip } from "./modes/LinkStrokeOverlay";
+import { collectDomLinkHits, boxesOverlap, type LinkHit } from "./modes/linkHitTest";
+import type { StrokeBox } from "./modes/linkStroke";
 import { FEATURE_LEETCODE } from "./featureFlags";
 import { PseudocodeEditor } from "./modes/PseudocodeEditor";
 import { RevealDialog } from "./modes/RevealDialog";
@@ -2174,9 +2176,73 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         label: (mark?.excerpt ?? "mark").slice(0, 28),
         x: box.left + box.width / 2,
         y: box.top + box.height / 2,
+        hitKind: "mark",
+        box: { left: box.left, top: box.top, width: box.width, height: box.height },
       });
     }
     return out;
+  }, []);
+
+  const resolveLinkHits = useCallback((box: StrokeBox, overlay: HTMLElement | null): LinkHit[] => {
+    const hits = collectDomLinkHits(box, overlay);
+    const board = boardRef.current;
+    const toClient = board?.sceneToClient?.bind(board);
+    if (!board || !toClient) return hits;
+    const seen = new Set(hits.map((hit) => hit.id));
+    const push = (hit: LinkHit) => {
+      if (seen.has(hit.id) || !boxesOverlap(box, hit)) return;
+      seen.add(hit.id);
+      hits.push(hit);
+    };
+    for (const el of board.getElements()) {
+      if (el.isDeleted) continue;
+      if (el.customData?.lcRegion || el.customData?.lcVizId) continue;
+      const kind =
+        el.type === "image" || el.type === "embeddable"
+          ? "image"
+          : el.type === "freedraw" || el.type === "line" || el.type === "arrow"
+            ? "drawing"
+            : null;
+      if (!kind) continue;
+      const a = toClient(el.x, el.y);
+      const b = toClient(el.x + el.width, el.y + el.height);
+      if (!a || !b) continue;
+      push({
+        id: `${kind}:${el.id}`,
+        label: kind === "image" ? "image" : "drawing",
+        kind,
+        left: Math.min(a.x, b.x),
+        top: Math.min(a.y, b.y),
+        width: Math.max(1, Math.abs(b.x - a.x)),
+        height: Math.max(1, Math.abs(b.y - a.y)),
+      });
+    }
+    board.getInkStrokes().forEach((stroke, index) => {
+      if (stroke.points.length === 0) return;
+      let left = Infinity;
+      let top = Infinity;
+      let right = -Infinity;
+      let bottom = -Infinity;
+      for (const point of stroke.points) {
+        const client = toClient(point.x, point.y);
+        if (!client) continue;
+        left = Math.min(left, client.x);
+        top = Math.min(top, client.y);
+        right = Math.max(right, client.x);
+        bottom = Math.max(bottom, client.y);
+      }
+      if (!Number.isFinite(left)) return;
+      push({
+        id: `ink:${index}`,
+        label: "drawing",
+        kind: "drawing",
+        left,
+        top,
+        width: Math.max(1, right - left),
+        height: Math.max(1, bottom - top),
+      });
+    });
+    return hits;
   }, []);
 
   /**
@@ -6915,7 +6981,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             editToggle={annotateOwned}
             editing={editMarkdown}
             onToggleEdit={toggleEditMarkdown}
-            linkToggle={Boolean(problem) && isAnnotate(problem) && !editMarkdown}
+            linkToggle={Boolean(problem) && !editMarkdown}
             linking={linkMode}
             onToggleLink={() => {
               // Mutually exclusive with the document highlighter: both take
@@ -7491,12 +7557,13 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         * an open that is waiting on this question cannot proceed until it is
         * answered, so nothing else on screen should be able to take the tap.
         */}
-      {linkMode && hereNode && problem && isAnnotate(problem) && (
+      {linkMode && hereNode && (
         <LinkStrokeOverlay
           marks={pageLinkChips()}
           onSuggest={suggestLinkChips}
+          onResolve={resolveLinkHits}
           onNotice={setNotice}
-          onCancel={() => {}}
+          onCancel={() => setLinkMode(false)}
           onCommit={(originId, target) => {
             const here = hereNode;
             const mark = annotateFootnotesRef.current.find((entry) => entry.id === originId);
@@ -7509,12 +7576,12 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
              */
             void putEdge(
               makeEdge(
-                { ...here, title: mark?.excerpt?.slice(0, 40) ?? here.title },
+                { ...here, title: mark?.excerpt?.slice(0, 40) ?? target.label ?? here.title },
                 { ...here, title: target.label },
                 "ink",
               ),
             ).then(refreshHereEdges);
-            setNotice(`Linked “${target.label}”.`);
+            setNotice(`Linked “${mark?.excerpt?.slice(0, 40) ?? originId}” to “${target.label}”.`);
             setLinkMode(false);
           }}
         />

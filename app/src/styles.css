@@ -4825,10 +4825,25 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-link-stroke polyline {
   fill: none;
-  stroke: color-mix(in srgb, #d98b3a 85%, transparent);
-  stroke-width: 2.5;
+  stroke: #fff;
+  stroke-width: 7;
   stroke-linecap: round;
   stroke-linejoin: round;
+  paint-order: stroke;
+  /* Invert the paper under the nib — same trick as iOS hide-items. */
+  mix-blend-mode: difference;
+  filter: drop-shadow(0 0 0.5px #000) drop-shadow(0 0 1.5px #000);
+}
+
+.lc-link-pick {
+  position: fixed;
+  pointer-events: none;
+  z-index: 91;
+  border: 3px solid #fff;
+  outline: 2px solid #000;
+  border-radius: 5px;
+  box-sizing: border-box;
+  mix-blend-mode: difference;
 }
 
 /*

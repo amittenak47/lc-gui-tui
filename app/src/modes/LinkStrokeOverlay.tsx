@@ -1,23 +1,28 @@
 /**
  * Drawing a link with the pen.
  *
- * A stroke from a mark to a target, which commits an edge and then vanishes.
- * Deliberately *not* ink: nothing is written to `RasterInkLayer` and no
- * Excalidraw arrow is created, because the line is a gesture rather than
- * something the reader drew on the page. Deleting the link later must not
- * leave a stray squiggle behind, and it cannot if the squiggle never existed.
+ * Circle or scribble a mark / image / drawing (high-contrast stroke, not ink).
+ * Then draw a stroke connecting two picks. The polyline vanishes on lift —
+ * deleting the graph edge later must not leave a squiggle.
  *
- * The overlay takes the pointer for the whole gesture, which is also how the
- * pen is kept from recording underneath it — the ink layer simply never sees
- * the events.
- *
- * Two kinds of target. Marks already on this page are certain: the reader can
- * see them. Retrieval chips are guesses from `docs.db`, offered because a long
- * document's other mentions of a thing are the hard ones to find. A chip is a
- * magnet, never an edge on its own — committing is always a pointer-up on it.
+ * The overlay takes the pointer so RasterInkLayer never records the gesture.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+
+import { hitToChip, nearestHit, pickBestHit, type LinkHit } from "./linkHitTest";
+import {
+  CHIP_HIT_RADIUS,
+  MIN_LINK_SPAN,
+  classifyStroke,
+  pathBox,
+  pointNearBox,
+  spanOf,
+  type StrokeBox,
+  type StrokePoint,
+} from "./linkStroke";
+
+export type { LinkHitKind } from "./linkHitTest";
 
 export interface LinkChip {
   /** Stable within one drag — a footnote id, or `chunk:{page}:{index}`. */
@@ -28,6 +33,8 @@ export interface LinkChip {
   /** Viewport coordinates of the chip's anchor. */
   x: number;
   y: number;
+  hitKind?: "mark" | "image" | "drawing" | "snippet";
+  box?: StrokeBox;
 }
 
 export interface LinkStrokeOverlayProps {
@@ -35,19 +42,17 @@ export interface LinkStrokeOverlayProps {
   marks: readonly LinkChip[];
   /** Ask the harness what else in this document is about the origin. */
   onSuggest: (originId: string) => Promise<LinkChip[]>;
+  /** Resolve what a loop covers (marks, images, drawings, snippet). */
+  onResolve: (box: StrokeBox, overlay: HTMLElement | null) => LinkHit[];
   /** Pointer-up landed on a target. */
   onCommit: (originId: string, target: LinkChip) => void;
-  /** The gesture ended with nothing under it. */
+  /** Escape — leave the tool. Missed strokes stay armed. */
   onCancel: () => void;
   /** Say why a press did not start a link. */
   onNotice: (message: string) => void;
 }
 
-/** Below this, the gesture was a tap that wandered — not a link. */
-export const MIN_LINK_SPAN = 24;
-
-/** How near a chip's centre a pointer-up counts as landing on it. */
-export const CHIP_HIT_RADIUS = 34;
+export { CHIP_HIT_RADIUS, MIN_LINK_SPAN, spanOf };
 
 export function nearestChip(
   chips: readonly LinkChip[],
@@ -61,22 +66,12 @@ export function nearestChip(
     const dx = chip.x - x;
     const dy = chip.y - y;
     const distance = dx * dx + dy * dy;
-    // Strictly nearer to displace the incumbent, so a tie goes to whichever
-    // was listed first. That matters: marks are passed ahead of suggestions,
-    // and a mark the reader can see should beat a guess at the same distance.
     const better = best === null ? distance <= bestDistance : distance < bestDistance;
     if (!better) continue;
     best = chip;
     bestDistance = distance;
   }
   return best;
-}
-
-export function spanOf(points: ReadonlyArray<{ x: number; y: number }>): number {
-  if (points.length < 2) return 0;
-  const first = points[0]!;
-  const last = points[points.length - 1]!;
-  return Math.hypot(last.x - first.x, last.y - first.y);
 }
 
 /**
@@ -94,36 +89,72 @@ export function markUnder(x: number, y: number, overlay: HTMLElement | null): st
   return mark?.dataset.lcId ?? null;
 }
 
+function chipBox(chip: LinkChip): StrokeBox {
+  if (chip.box) return chip.box;
+  return { left: chip.x - 20, top: chip.y - 20, width: 40, height: 40 };
+}
+
 export function LinkStrokeOverlay({
   marks,
   onSuggest,
+  onResolve,
   onCommit,
   onCancel,
   onNotice,
 }: LinkStrokeOverlayProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const [origin, setOrigin] = useState<string | null>(null);
-  const [points, setPoints] = useState<Array<{ x: number; y: number }>>([]);
+  const [picks, setPicks] = useState<LinkChip[]>([]);
+  const [points, setPoints] = useState<StrokePoint[]>([]);
+  const [drawing, setDrawing] = useState(false);
   const [chips, setChips] = useState<LinkChip[]>([]);
 
-  const reset = useCallback(() => {
-    setOrigin(null);
+  const resetStroke = useCallback(() => {
     setPoints([]);
-    setChips([]);
+    setDrawing(false);
   }, []);
 
-  // Escape means "never mind" — the same as letting go over empty paper.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      reset();
+      setPicks([]);
+      setChips([]);
+      resetStroke();
       onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel, reset]);
+  }, [onCancel, resetStroke]);
 
-  const targets = chips.filter((chip) => chip.id !== origin);
+  const hostOrigin = (): StrokePoint => {
+    const box = hostRef.current?.getBoundingClientRect();
+    return { x: box?.left ?? 0, y: box?.top ?? 0 };
+  };
+
+  const commitPair = (from: LinkChip, to: LinkChip) => {
+    if (from.id === to.id) {
+      onNotice("Circle a second target, then stroke between them.");
+      return;
+    }
+    onCommit(from.id, to);
+    setPicks([]);
+    setChips([]);
+  };
+
+  const addPick = (chip: LinkChip) => {
+    setPicks((current) => {
+      if (current.some((entry) => entry.id === chip.id)) return current;
+      const next = [...current, chip].slice(-2);
+      if (next.length === 1) {
+        setChips(marks.filter((mark) => mark.id !== chip.id));
+        void onSuggest(chip.id)
+          .then((extra) => {
+            setChips((live) => [...live, ...extra]);
+          })
+          .catch(() => {});
+      }
+      return next;
+    });
+  };
 
   return (
     <div
@@ -132,63 +163,168 @@ export function LinkStrokeOverlay({
       role="presentation"
       onPointerDown={(event) => {
         if (event.button !== 0) return;
-        const from = markUnder(event.clientX, event.clientY, hostRef.current);
-        if (!from) {
-          onNotice("Start a link on a mark.");
-          return;
-        }
         event.currentTarget.setPointerCapture(event.pointerId);
-        setOrigin(from);
+        setDrawing(true);
         setPoints([{ x: event.clientX, y: event.clientY }]);
-        // Marks are certain and instant; suggestions arrive when they arrive.
-        setChips(marks.filter((mark) => mark.id !== from));
-        void onSuggest(from)
-          .then((extra) => {
-            setChips((current) => (current.length === 0 ? current : [...current, ...extra]));
-          })
-          .catch(() => {});
       }}
       onPointerMove={(event) => {
-        if (!origin) return;
+        if (!drawing) return;
         setPoints((current) => [...current, { x: event.clientX, y: event.clientY }]);
       }}
       onPointerUp={(event) => {
         if (event.currentTarget.hasPointerCapture(event.pointerId)) {
           event.currentTarget.releasePointerCapture(event.pointerId);
         }
-        const from = origin;
         const path = [...points, { x: event.clientX, y: event.clientY }];
-        const landed = nearestChip(targets, event.clientX, event.clientY);
-        reset();
-        // A short path is a tap that wandered, not a link — and a landing on
-        // nothing is a link the reader started and thought better of.
-        if (!from || spanOf(path) < MIN_LINK_SPAN || !landed) {
-          onCancel();
+        resetStroke();
+        const kind = classifyStroke(path);
+        const start = path[0]!;
+        const end = path[path.length - 1]!;
+
+        if (kind === "loop" || kind === "scribble") {
+          const box = pathBox(path);
+          if (!box) return;
+          const hit = pickBestHit(onResolve(box, hostRef.current), box);
+          if (!hit) {
+            onNotice("Circle a mark, image, or drawing.");
+            return;
+          }
+          addPick(hitToChip(hit));
           return;
         }
-        onCommit(from, landed);
+
+        if (kind === "tap") {
+          const fromMark = markUnder(end.x, end.y, hostRef.current);
+          if (fromMark) {
+            const chip =
+              marks.find((entry) => entry.id === fromMark) ??
+              ({
+                id: fromMark,
+                label: "mark",
+                kind: "mark" as const,
+                x: end.x,
+                y: end.y,
+                hitKind: "mark" as const,
+              } satisfies LinkChip);
+            addPick(chip);
+            return;
+          }
+          if (picks.length === 0) {
+            onNotice("Circle a mark, image, or drawing — then stroke to connect.");
+          }
+          return;
+        }
+
+        // Connector.
+        const suggestionHits: LinkHit[] = chips.map((chip) => ({
+          id: chip.id,
+          label: chip.label,
+          kind: chip.hitKind ?? (chip.kind === "mark" ? "mark" : "snippet"),
+          left: chipBox(chip).left,
+          top: chipBox(chip).top,
+          width: chipBox(chip).width,
+          height: chipBox(chip).height,
+        }));
+        const pickHits: LinkHit[] = picks.map((chip) => ({
+          id: chip.id,
+          label: chip.label,
+          kind: chip.hitKind ?? "mark",
+          ...chipBox(chip),
+        }));
+
+        if (picks.length >= 2) {
+          const a = picks[0]!;
+          const b = picks[1]!;
+          const startOnA = pointNearBox(start, chipBox(a));
+          const startOnB = pointNearBox(start, chipBox(b));
+          const endOnA = pointNearBox(end, chipBox(a));
+          const endOnB = pointNearBox(end, chipBox(b));
+          if ((startOnA && endOnB) || (startOnB && endOnA)) {
+            commitPair(a, b);
+            return;
+          }
+        }
+
+        if (picks.length === 1) {
+          const origin = picks[0]!;
+          if (!pointNearBox(start, chipBox(origin), 52)) {
+            onNotice("Start the connecting stroke on the circled target.");
+            return;
+          }
+          const landed =
+            nearestChip(chips, end.x, end.y) ??
+            (() => {
+              const hit = nearestHit([...pickHits, ...suggestionHits], end);
+              return hit ? hitToChip(hit) : null;
+            })();
+          const resolved =
+            landed ??
+            (() => {
+              const box = { left: end.x - 24, top: end.y - 24, width: 48, height: 48 };
+              const hit = pickBestHit(onResolve(box, hostRef.current), box);
+              return hit && hit.id !== origin.id ? hitToChip(hit) : null;
+            })();
+          if (!resolved) {
+            onNotice("Land on a second circled target, mark, or suggestion.");
+            return;
+          }
+          commitPair(origin, resolved);
+          return;
+        }
+
+        const startHit = nearestHit(onResolve({ left: start.x - 20, top: start.y - 20, width: 40, height: 40 }, hostRef.current), start);
+        const endHit = nearestHit(onResolve({ left: end.x - 20, top: end.y - 20, width: 40, height: 40 }, hostRef.current), end);
+        if (startHit && endHit && startHit.id !== endHit.id) {
+          commitPair(hitToChip(startHit), hitToChip(endHit));
+          return;
+        }
+        onNotice("Circle two targets, then stroke between them.");
       }}
       onPointerCancel={() => {
-        reset();
-        onCancel();
+        resetStroke();
       }}
     >
-      {origin && points.length > 1 && (
-        <svg className="lc-link-stroke" aria-hidden>
-          <polyline points={points.map((point) => `${point.x},${point.y}`).join(" ")} />
-        </svg>
-      )}
-      {origin &&
-        targets.map((chip) => (
+      {picks.map((chip) => {
+        const box = chipBox(chip);
+        return (
           <span
-            key={chip.id}
-            className={`lc-link-chip is-${chip.kind}`}
-            style={{ left: chip.x, top: chip.y }}
+            key={`pick-${chip.id}`}
+            className={`lc-link-pick is-${chip.hitKind ?? chip.kind}`}
+            style={{
+              left: box.left,
+              top: box.top,
+              width: box.width,
+              height: box.height,
+            }}
             aria-hidden
-          >
-            {chip.label}
-          </span>
-        ))}
+          />
+        );
+      })}
+      {drawing && points.length > 1 && (() => {
+        const origin = hostOrigin();
+        return (
+          <svg className="lc-link-stroke" aria-hidden>
+            <polyline
+              points={points
+                .map((point) => `${point.x - origin.x},${point.y - origin.y}`)
+                .join(" ")}
+            />
+          </svg>
+        );
+      })()}
+      {picks.length > 0 &&
+        chips
+          .filter((chip) => !picks.some((pick) => pick.id === chip.id))
+          .map((chip) => (
+            <span
+              key={chip.id}
+              className={`lc-link-chip is-${chip.kind}`}
+              style={{ left: chip.x, top: chip.y }}
+              aria-hidden
+            >
+              {chip.label}
+            </span>
+          ))}
     </div>
   );
 }
