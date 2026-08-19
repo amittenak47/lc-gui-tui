@@ -300,8 +300,8 @@ impl LlmConfig {
 #[serde(default)]
 pub struct ServeConfig {
     pub port: u16,
-    /// Pairing token for a future LAN sync hub. Unused by the in-process GUI.
-    /// Generated on first use and shown as a QR code when that mode ships.
+    /// 6-digit LAN pad-hub pairing code. Desktop generates it; the tablet sends
+    /// it as `x-lc-token`.
     pub token: Option<String>,
     /// Optional SearXNG JSON endpoint for the document Ask `search_web` tool.
     /// Empty = the tool is not offered.
@@ -731,10 +731,10 @@ impl Config {
             .filter(|dir| !dir.is_empty())
     }
 
-    /// Pairing token for a future LAN sync hub, generated and persisted on first use
-    /// so a tablet only ever has to scan one QR code when that mode ships.
+    /// 6-digit LAN pad-hub code, generated and persisted on first desktop launch
+    /// (and again if an old 32-char token is still in config).
     pub fn ensure_serve_token(&mut self) -> Result<String> {
-        if let Some(token) = self.serve.token.as_deref().filter(|t| !t.trim().is_empty()) {
+        if let Some(token) = self.serve.token.as_deref().filter(|t| is_pair_code(t)) {
             return Ok(token.to_string());
         }
         let token = random_token();
@@ -744,13 +744,15 @@ impl Config {
     }
 }
 
+fn is_pair_code(token: &str) -> bool {
+    let t = token.trim();
+    t.len() == 6 && t.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn random_token() -> String {
     use rand::Rng as _;
-    const ALPHABET: &[u8] = b"abcdefghijkmnopqrstuvwxyz23456789";
-    let mut rng = rand::thread_rng();
-    (0..32)
-        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
-        .collect()
+    let n: u32 = rand::thread_rng().gen_range(0..1_000_000);
+    format!("{n:06}")
 }
 
 #[cfg(test)]
@@ -880,6 +882,19 @@ mod tests {
         assert_eq!(cfg.serve.port, 9000);
         assert!(cfg.set("serve.port", "not-a-port").is_err());
         assert!(cfg.set("serve.port", "70000").is_err(), "must not overflow u16");
+    }
+
+    #[test]
+    fn pair_code_is_six_digits() {
+        for _ in 0..20 {
+            let token = random_token();
+            assert!(is_pair_code(&token), "{token}");
+        }
+        assert!(is_pair_code("000000"));
+        assert!(is_pair_code("849201"));
+        assert!(!is_pair_code("84920"));
+        assert!(!is_pair_code("8492010"));
+        assert!(!is_pair_code("abc123"));
     }
 
     #[test]

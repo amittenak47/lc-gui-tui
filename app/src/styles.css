@@ -9537,6 +9537,12 @@ button.lc-row-selected:hover:not(:disabled) {
   color: var(--muted);
 }
 
+.lc-pad-hub-code {
+  font-size: 1.35em;
+  font-weight: 600;
+  letter-spacing: 0.28em;
+}
+
 .lc-settings-actions-row {
   display: flex;
   flex-wrap: wrap;
