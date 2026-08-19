@@ -1622,6 +1622,39 @@ mod tests {
     }
 
     #[test]
+    fn problem_put_is_visible_to_a_peer_ping() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        match put_problem(&conn, &pb("leetcode/two-sum", 100)).unwrap() {
+            PutOutcome::Written(_) => {}
+            other => panic!("{other:?}"),
+        }
+        let changed = list_changed_problem(&conn, 0).unwrap();
+        assert!(
+            changed.iter().any(|row| row.id == "leetcode/two-sum"
+                && row.board["elements"][0]["id"] == "ink"),
+            "{changed:?}"
+        );
+        assert!(list_changed_problem(&conn, 100).unwrap().is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn problem_seq_zero_put_after_delete_does_not_restore() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_problem(&conn, &pb("leetcode/two-sum", 1)).unwrap();
+        delete_pad(&conn, PadKind::Problem, "leetcode/two-sum", 5).unwrap();
+        assert!(get_problem(&conn, "leetcode/two-sum").unwrap().is_none());
+        match put_problem(&conn, &pb("leetcode/two-sum", 999)).unwrap() {
+            PutOutcome::Gone { seq } => assert_eq!(seq, 5),
+            other => panic!("{other:?}"),
+        }
+        assert!(get_problem(&conn, "leetcode/two-sum").unwrap().is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn cas_match_writes_even_when_wall_clock_is_behind() {
         let path = tmp();
         let conn = open(&path).unwrap();

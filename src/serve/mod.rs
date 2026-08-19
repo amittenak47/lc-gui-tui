@@ -354,4 +354,84 @@ mod tests {
         assert_eq!(json["ok"], true);
         assert_eq!(json["service"], "whiteboard");
     }
+
+    #[tokio::test]
+    async fn live_review_and_draw_review_if_llm_up() {
+        if std::env::var("LC_LIVE_COACH").ok().as_deref() != Some("1") {
+            return;
+        }
+        let mut cfg = match Config::load() {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                eprintln!("skip live coach: cannot load config: {err:#}");
+                return;
+            }
+        };
+        let probe_url = cfg.llm.local.base_url.clone();
+        let reachable = tokio::task::spawn_blocking(move || {
+            crate::llm::lifecycle::probe_reachable(&probe_url)
+        })
+        .await
+        .expect("probe join");
+        if !reachable {
+            eprintln!(
+                "skip live coach: {} not reachable",
+                cfg.llm.local.base_url
+            );
+            return;
+        }
+        cfg.coach.draw_review_enabled = true;
+        cfg.llm.local.vision = Some(true);
+        let state = new_state(cfg);
+        let review_body = serde_json::json!({
+            "task_id": "two-sum",
+            "dataset": "leetcode",
+            "recognized_text": "hash map from value to index",
+            "pseudocode": "for i, x in enumerate(nums):\n    if target - x in seen: return\n    seen[x] = i",
+        });
+        let (status, body, _) = dispatch(
+            state.clone(),
+            "POST",
+            "/coach/review",
+            serde_json::to_vec(&review_body).unwrap(),
+            Some("application/json"),
+        )
+        .await
+        .expect("review dispatch");
+        let review_text = String::from_utf8_lossy(&body);
+        eprintln!("POST /coach/review -> {status} {review_text}");
+        assert_ne!(status, 500, "review 500: {review_text}");
+
+        let draw_body = serde_json::json!({
+            "task_id": "two-sum",
+            "dataset": "leetcode",
+            "ask": "show nums",
+            "program": {
+                "viz": "array",
+                "id": "p1",
+                "title": "nums",
+                "frames": [{
+                    "label": "start",
+                    "cells": [2, 7, 11],
+                    "pointers": {},
+                    "highlight": [],
+                    "entries": [],
+                    "note": ""
+                }]
+            },
+            "png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        });
+        let (status, body, _) = dispatch(
+            state,
+            "POST",
+            "/coach/draw_review",
+            serde_json::to_vec(&draw_body).unwrap(),
+            Some("application/json"),
+        )
+        .await
+        .expect("draw_review dispatch");
+        let draw_text = String::from_utf8_lossy(&body);
+        eprintln!("POST /coach/draw_review -> {status} {draw_text}");
+        assert_ne!(status, 500, "draw_review 500: {draw_text}");
+    }
 }

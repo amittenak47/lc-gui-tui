@@ -254,7 +254,7 @@ function formatDlcBytes(n: number): string {
 }
 
 function emptyProvider(): ProviderConfig {
-  return { base_url: "", model: "", vision_model: "" };
+  return { base_url: "", model: "", vision_model: "", vision: null };
 }
 
 function emptyConfig(): LcConfig {
@@ -1843,8 +1843,22 @@ export function SettingsModal({
                   placeholder="(same as chat model)"
                 />
                 <p className="lc-settings-hint">
-                  Separate vision model for PNG board captures. Leave empty to reuse the chat model.
+                  Optional other model id for PNG requests. Leave empty to reuse the chat model.
+                  Tick Accepts images or Draw will not send pictures — the name is not a
+                  capability check.
                 </p>
+              </label>
+              <label className="lc-settings-check">
+                <input
+                  type="checkbox"
+                  checked={provider.vision === true}
+                  onChange={(e) =>
+                    patchProvider(providerFocus, {
+                      vision: e.target.checked,
+                    })
+                  }
+                />
+                <span>Accepts images</span>
               </label>
 
               {(providerFocus === "openai" || providerFocus === "groq") && (

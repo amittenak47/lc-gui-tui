@@ -606,6 +606,52 @@ describe("live PUT CAS and gone", () => {
     expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
 
+  it("peer ping applies a problem row the other device saved", async () => {
+    getProblemBoard.mockResolvedValue(null);
+    const client = fakeClient({
+      pingPadSync: vi.fn(async () => ({
+        now: 100,
+        whiteboard: [],
+        annotate: [],
+        problem: [
+          {
+            id: "leetcode/two-sum",
+            dataset: "leetcode",
+            task_id: "two-sum",
+            updated_at: 40,
+            board: { v: 1, elements: [{ id: "peer" }] },
+            agent: [],
+          },
+        ],
+        snapshots: [],
+        gone: [],
+      })),
+    });
+    await applyPadSyncPing(client);
+    expect(putProblemBoard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "leetcode/two-sum",
+        updatedAt: 40,
+        hubAckUpdatedAt: 40,
+      }),
+    );
+  });
+
+  it("gone problem ping deletes local live ink so it cannot restore", async () => {
+    const client = fakeClient({
+      pingPadSync: vi.fn(async () => ({
+        now: 100,
+        whiteboard: [],
+        annotate: [],
+        problem: [],
+        snapshots: [],
+        gone: [{ kind: "problem", id: "leetcode/two-sum", seq: 5, gone_at: 90 }],
+      })),
+    });
+    await applyPadSyncPing(client);
+    expect(deleteProblemBoard).toHaveBeenCalledWith("leetcode/two-sum");
+  });
+
   it("drops a queued live PUT when ping applies a newer hub row", async () => {
     await enqueuePadSync({
       op: "putWhiteboard",

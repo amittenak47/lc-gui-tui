@@ -193,12 +193,11 @@ impl LlmModes {
         for mode in COACH_MODES {
             let provider = self.get(mode)?;
             let endpoint = llm.endpoint(provider);
-            let vision_name = endpoint.vision_model_name();
             out.push(ModeCapability {
                 mode: mode.to_string(),
                 provider: provider.to_string(),
                 model: endpoint.model.to_string(),
-                vision: model_supports_vision(endpoint.vision, vision_name),
+                vision: endpoint.vision == Some(true),
             });
         }
         Ok(out)
@@ -250,6 +249,7 @@ pub struct LlmEndpoint<'a> {
     pub model: &'a str,
     /// Optional dedicated vision model; empty means reuse [`Self::model`].
     pub vision_model: &'a str,
+    /// `Some(true)` = this endpoint accepts images. Name is ignored.
     pub vision: Option<bool>,
 }
 
@@ -328,7 +328,8 @@ pub struct LocalLlmConfig {
     /// Dedicated vision model. Empty → reuse [`Self::model`].
     #[serde(default)]
     pub vision_model: String,
-    /// Whether the model accepts images. `None` → infer from the model name.
+    /// Whether this endpoint accepts image inputs. `None` / `false` = do not
+    /// send PNGs. Never inferred from the model name.
     #[serde(default)]
     pub vision: Option<bool>,
     /// Small embedding model. Empty → hashed bag-of-words fallback (no extra VRAM).
@@ -360,6 +361,7 @@ pub struct OllamaLlmConfig {
     pub model: String,
     #[serde(default)]
     pub vision_model: String,
+    /// Same gate as Local / OpenAI / Groq. `None` / `false` = no PNGs.
     #[serde(default)]
     pub vision: Option<bool>,
 }
@@ -407,6 +409,7 @@ pub struct OpenAiLlmConfig {
     pub model: String,
     #[serde(default)]
     pub vision_model: String,
+    /// Same gate as Local / Ollama / Groq. `None` / `false` = no PNGs.
     #[serde(default)]
     pub vision: Option<bool>,
     /// Fallback when `OPENAI_API_KEY` is unset. Never sent on GET /config.
@@ -433,7 +436,7 @@ pub struct GroqLlmConfig {
     pub model: String,
     #[serde(default)]
     pub vision_model: String,
-    /// Whether the model accepts images. `None` → infer from the model name.
+    /// Same gate as Local / Ollama / OpenAI. `None` / `false` = no PNGs.
     #[serde(default)]
     pub vision: Option<bool>,
     /// Fallback when `GROQ_API_KEY` is unset. Never sent on GET /config.
@@ -453,27 +456,6 @@ impl Default for GroqLlmConfig {
     }
 }
 
-/// Explicit config wins; otherwise guess from common vision model name markers.
-pub fn model_supports_vision(explicit: Option<bool>, model: &str) -> bool {
-    if let Some(flag) = explicit {
-        return flag;
-    }
-    let lower = model.to_ascii_lowercase();
-    [
-        "llava",
-        "-vl",
-        "vision",
-        "minicpm-v",
-        "moondream",
-        "gpt-4o",
-        "gpt-4-turbo",
-        "gemini",
-        "claude-3",
-        "claude-4",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
-}
 
 pub fn config_dir() -> Result<PathBuf> {
     let dirs = ProjectDirs::from("", "", "lc")
@@ -579,18 +561,22 @@ impl Config {
             "llm.local.base_url" => self.llm.local.base_url = value.to_string(),
             "llm.local.model" => self.llm.local.model = value.to_string(),
             "llm.local.vision_model" => self.llm.local.vision_model = value.to_string(),
+            "llm.local.vision" => self.llm.local.vision = Some(parse_bool(value)?),
             "llm.local.embed_model" => self.llm.local.embed_model = value.to_string(),
             "llm.local.embed_base_url" => self.llm.local.embed_base_url = value.to_string(),
             "llm.ollama.base_url" => self.llm.ollama.base_url = value.to_string(),
             "llm.ollama.model" => self.llm.ollama.model = value.to_string(),
             "llm.ollama.vision_model" => self.llm.ollama.vision_model = value.to_string(),
+            "llm.ollama.vision" => self.llm.ollama.vision = Some(parse_bool(value)?),
             "llm.openai.base_url" => self.llm.openai.base_url = value.to_string(),
             "llm.openai.model" => self.llm.openai.model = value.to_string(),
             "llm.openai.vision_model" => self.llm.openai.vision_model = value.to_string(),
+            "llm.openai.vision" => self.llm.openai.vision = Some(parse_bool(value)?),
             "llm.openai.api_key" => self.llm.openai.api_key = stored_api_key(value),
             "llm.groq.base_url" => self.llm.groq.base_url = value.to_string(),
             "llm.groq.model" => self.llm.groq.model = value.to_string(),
             "llm.groq.vision_model" => self.llm.groq.vision_model = value.to_string(),
+            "llm.groq.vision" => self.llm.groq.vision = Some(parse_bool(value)?),
             "llm.groq.api_key" => self.llm.groq.api_key = stored_api_key(value),
             "serve.port" => {
                 self.serve.port = value
@@ -611,10 +597,10 @@ impl Config {
             other => bail!(
                 "unknown config key {other:?}; known keys: data-dir, workspace, python, \
                  data.datasets.<{}>, tests.stop_on_first_failure, \
-                 llm.provider, llm.local.{{base_url,model,vision_model,embed_model,embed_base_url}}, \
-                 llm.ollama.{{base_url,model,vision_model}}, \
-                 llm.openai.{{base_url,model,vision_model,api_key}}, \
-                 llm.groq.{{base_url,model,vision_model,api_key}}, llm.modes.<{}>, serve.port, serve.token, serve.searxng_url, \
+                 llm.provider, llm.local.{{base_url,model,vision_model,vision,embed_model,embed_base_url}}, \
+                 llm.ollama.{{base_url,model,vision_model,vision}}, \
+                 llm.openai.{{base_url,model,vision_model,vision,api_key}}, \
+                 llm.groq.{{base_url,model,vision_model,vision,api_key}}, llm.modes.<{}>, serve.port, serve.token, serve.searxng_url, \
                  coach.{{ws_runs,process_events_ui,planner_enabled,draw_review_enabled,approach_commitment}}",
                 crate::dataset::DATASETS
                     .iter()
@@ -647,14 +633,32 @@ impl Config {
             "llm.local.base_url" => self.llm.local.base_url.clone(),
             "llm.local.model" => self.llm.local.model.clone(),
             "llm.local.vision_model" => self.llm.local.vision_model.clone(),
+            "llm.local.vision" => self
+                .llm
+                .local
+                .vision
+                .map(|flag| flag.to_string())
+                .unwrap_or_default(),
             "llm.local.embed_model" => self.llm.local.embed_model.clone(),
             "llm.local.embed_base_url" => self.llm.local.embed_base_url.clone(),
             "llm.ollama.base_url" => self.llm.ollama.base_url.clone(),
             "llm.ollama.model" => self.llm.ollama.model.clone(),
             "llm.ollama.vision_model" => self.llm.ollama.vision_model.clone(),
+            "llm.ollama.vision" => self
+                .llm
+                .ollama
+                .vision
+                .map(|flag| flag.to_string())
+                .unwrap_or_default(),
             "llm.openai.base_url" => self.llm.openai.base_url.clone(),
             "llm.openai.model" => self.llm.openai.model.clone(),
             "llm.openai.vision_model" => self.llm.openai.vision_model.clone(),
+            "llm.openai.vision" => self
+                .llm
+                .openai
+                .vision
+                .map(|flag| flag.to_string())
+                .unwrap_or_default(),
             "llm.openai.api_key" => self
                 .llm
                 .openai
@@ -665,6 +669,12 @@ impl Config {
             "llm.groq.base_url" => self.llm.groq.base_url.clone(),
             "llm.groq.model" => self.llm.groq.model.clone(),
             "llm.groq.vision_model" => self.llm.groq.vision_model.clone(),
+            "llm.groq.vision" => self
+                .llm
+                .groq
+                .vision
+                .map(|flag| flag.to_string())
+                .unwrap_or_default(),
             "llm.groq.api_key" => self
                 .llm
                 .groq
@@ -958,5 +968,52 @@ mod tests {
         assert_eq!(cfg.llm.modes.planner, "local");
         assert!(cfg.coach.ws_runs, "a config written before the flags existed gets the defaults");
         assert!(!cfg.coach.planner_enabled);
+    }
+
+    #[test]
+    fn vision_flag_is_the_only_gate() {
+        let mut cfg = Config::default();
+        cfg.llm.modes.viz = "local".into();
+        cfg.llm.local.model = "Dirk-Qwen3.8-27B-UD-Q4_K_XL.gguf".into();
+        cfg.llm.local.vision = None;
+        let viz = |cfg: &Config| {
+            cfg.llm
+                .modes
+                .capabilities(&cfg.llm)
+                .unwrap()
+                .into_iter()
+                .find(|row| row.mode == "viz")
+                .expect("viz")
+                .vision
+        };
+        assert!(!viz(&cfg), "unset flag means no images");
+        cfg.llm.local.model = "llava".into();
+        assert!(!viz(&cfg), "model name is not a capability");
+        cfg.llm.local.vision = Some(true);
+        cfg.llm.local.model = "Dirk-Qwen3.8-27B-UD-Q4_K_XL.gguf".into();
+        assert!(viz(&cfg), "explicit true sends images regardless of name");
+        cfg.llm.local.vision = Some(false);
+        assert!(!viz(&cfg));
+
+        cfg.llm.modes.viz = "openai".into();
+        cfg.llm.openai.model = "gpt-4o-mini".into();
+        cfg.llm.openai.vision = None;
+        assert!(!viz(&cfg), "OpenAI id is not a capability either");
+        cfg.llm.openai.vision = Some(true);
+        assert!(viz(&cfg));
+
+        cfg.llm.modes.viz = "ollama".into();
+        cfg.llm.ollama.model = "llava".into();
+        cfg.llm.ollama.vision = None;
+        assert!(!viz(&cfg));
+        cfg.llm.ollama.vision = Some(true);
+        assert!(viz(&cfg));
+
+        cfg.llm.modes.viz = "groq".into();
+        cfg.llm.groq.model = "llama-4-scout".into();
+        cfg.llm.groq.vision = None;
+        assert!(!viz(&cfg));
+        cfg.llm.groq.vision = Some(true);
+        assert!(viz(&cfg));
     }
 }
