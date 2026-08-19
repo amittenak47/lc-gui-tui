@@ -6852,6 +6852,27 @@ body[data-lc-sash-drag="horizontal"] {
   text-decoration-thickness: 1px;
 }
 
+.lc-agent-reasoning {
+  margin: 0 0 6px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted-ink, var(--muted));
+}
+
+.lc-agent-reasoning-body {
+  margin: 6px 0 0 7px;
+  padding: 0 0 0 10px;
+  border-left: 1px solid color-mix(in srgb, var(--chrome-edge) 85%, transparent);
+  max-height: min(40vh, 280px);
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink);
+  opacity: 0.88;
+}
+
 .lc-agent-drawing {
   margin-top: 8px;
   border-top: 1px solid var(--chrome-edge);

@@ -7,6 +7,7 @@
 const FORWARD_MODE_KEY = "whiteboard.agent.testForward.v1";
 const FORWARD_FAILURES_KEY = "whiteboard.agent.forwardFailures.v1";
 const LEGACY_FORWARD_FAILURES_KEYS = ["whiteboard.coach.forwardFailures.v1"];
+const REASONING_KEY = "whiteboard.agent.reasoning.v1";
 
 export type TestForwardMode = "wait" | "whole-run" | "per-case";
 
@@ -50,4 +51,24 @@ export function loadForwardFailures(): boolean {
 /** @deprecated use saveTestForwardMode */
 export function saveForwardFailures(on: boolean): void {
   saveTestForwardMode(on ? "whole-run" : "wait");
+}
+
+/** Sticky composer flag: ask the model to think out loud. Default on. */
+export function loadAgentReasoning(): boolean {
+  try {
+    const value = localStorage.getItem(REASONING_KEY);
+    if (value === "0") return false;
+    if (value === "1") return true;
+  } catch {
+    return true;
+  }
+  return true;
+}
+
+export function saveAgentReasoning(on: boolean): void {
+  try {
+    localStorage.setItem(REASONING_KEY, on ? "1" : "0");
+  } catch {
+    /* private browsing */
+  }
 }

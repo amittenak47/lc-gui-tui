@@ -17,6 +17,8 @@ import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
 import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
 import { ProcessBlock } from "./ProcessBlock";
+import { ReasoningBlock } from "./ReasoningBlock";
+import { loadAgentReasoning, saveAgentReasoning } from "../util/agentPrefs";
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { useIsMobile } from "../util/mobile";
 import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
@@ -119,6 +121,7 @@ function coachScrollSignature(messages: AgentChatMessage[]): string {
         message.content,
         message.pending ? "1" : "0",
         message.processEvents?.length ?? 0,
+        message.reasoning?.length ?? 0,
         message.flags?.join(",") ?? "",
         message.drawing?.program.id ?? "",
         message.drawing?.expanded ? "1" : "0",
@@ -243,6 +246,10 @@ export interface AgentSendFlags {
    */
   annotations: boolean;
   /**
+   * Ask the model to think out loud. Sticky across sends.
+   */
+  reasoning: boolean;
+  /**
    * Images the writer attached with (+), as base64 PNGs.
    *
    * Not the same thing as {@link handwriting}: those thumbnails are the board
@@ -321,6 +328,8 @@ export interface AgentChatMessage {
    * about a specific answer, asked after the fact.
    */
   processEvents?: CoachProcessEvent[];
+  /** Full chain-of-thought, uncut. Separate from {@link processEvents} steps. */
+  reasoning?: string;
   /** The request is still in flight — this turn is a placeholder. */
   pending?: boolean;
   /** While {@link pending} — local ack before the daemon's first stage frame. */
@@ -499,6 +508,7 @@ export function AgentSidePanel({
         ? "Lazy — fill the solution from the board. Hold to cycle."
         : "Board modes off. Hold to cycle Draw, Review, Lazy.";
   const [handwriting, setHandwriting] = useState(false);
+  const [reasoning, setReasoning] = useState(loadAgentReasoning);
   const [annotations, setAnnotations] = useState(false);
   const [askPreset, setAskPreset] = useState<AskPresetId | null>(null);
   const attachedCount = attachedMarks?.length ?? 0;
@@ -1179,6 +1189,7 @@ export function AgentSidePanel({
         reviewBoard,
         lazy,
         handwriting,
+        reasoning,
         annotations: allowAnnotations && annotations,
         ...(photos.length > 0 ? { photos } : {}),
         ...(pageQuote ? { pageQuote: pageQuote.text } : {}),
@@ -1387,6 +1398,9 @@ export function AgentSidePanel({
               {message.processEvents && message.processEvents.length > 0 && (
                 <ProcessBlock events={message.processEvents} running={Boolean(message.pending)} />
               )}
+              {message.reasoning?.trim() ? (
+                <ReasoningBlock text={message.reasoning} running={Boolean(message.pending)} />
+              ) : null}
               {showsReplyStub(message, openThreadId) && (
                 /*
                  * The quoted turn, above the reply that answers it.
@@ -1805,6 +1819,30 @@ export function AgentSidePanel({
                   </button>
                 </Tip>
               )}
+              <Tip
+                tip="Ask the model to think out loud. Full text folds under the answer, separate from steps."
+                placement="top"
+              >
+                <button
+                  type="button"
+                  className={`lc-flag${reasoning ? " lc-flag-active" : ""}`}
+                  aria-pressed={reasoning}
+                  disabled={busy}
+                  onClick={() => {
+                    setReasoning((current) => {
+                      const next = !current;
+                      saveAgentReasoning(next);
+                      return next;
+                    });
+                  }}
+                  aria-label="Reasoning"
+                >
+                  <span className="lc-label-long">Reasoning</span>
+                  <span className="lc-label-short" aria-hidden>
+                    R
+                  </span>
+                </button>
+              </Tip>
             </div>
             <div className="lc-agent-composer-actions">
               {!padSurface && (

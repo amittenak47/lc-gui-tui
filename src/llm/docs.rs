@@ -177,6 +177,7 @@ pub fn run_document_ask(
     images: Vec<String>,
     ctx: &AskContext,
     events: &EventSink,
+    reasoning: bool,
 ) -> Result<(String, Vec<ProposedAnnotation>)> {
     let tools = document_tools(cfg);
     let mut messages = vec![
@@ -184,7 +185,11 @@ pub fn run_document_ask(
         ChatMessage::user(user.clone()).with_images(images),
     ];
     let mut proposed = Vec::new();
-    let mut reply = match provider.chat_ex(&ChatRequest::new(messages.clone()).with_tools(tools.clone())) {
+    let mut reply = match provider.chat_ex(
+        &ChatRequest::new(messages.clone())
+            .with_tools(tools.clone())
+            .with_reasoning(reasoning),
+    ) {
         Ok(reply) => reply,
         Err(err) if is_tool_calling_unsupported(&err) => {
             let fallback = format!("{}\n\n{}", tools_as_prompt(&tools), user);
@@ -192,11 +197,12 @@ pub fn run_document_ask(
                 ChatMessage::system(system),
                 ChatMessage::user(fallback),
             ];
-            let mut parsed = provider.chat_ex(&ChatRequest::new(fb_messages.clone()))?;
+            let mut parsed =
+                provider.chat_ex(&ChatRequest::new(fb_messages.clone()).with_reasoning(reasoning))?;
             if parsed.tool_calls.is_empty() {
                 parsed.tool_calls = parse_tool_calls(&parsed.content);
             }
-            emit_reasoning(events, &parsed.reasoning);
+            events.emit_reasoning(&parsed.reasoning);
             if parsed.tool_calls.is_empty() {
                 return Ok((parsed.content.trim().to_string(), proposed));
             }
@@ -205,7 +211,7 @@ pub fn run_document_ask(
         }
         Err(err) => return Err(err),
     };
-    emit_reasoning(events, &reply.reasoning);
+    events.emit_reasoning(&reply.reasoning);
 
     for _ in 0..MAX_TOOL_ITERS {
         if reply.tool_calls.is_empty() {
@@ -243,8 +249,12 @@ pub fn run_document_ask(
             "Tool results:\n{}\n\nContinue. Call another tool only if needed, otherwise answer.",
             results.join("\n")
         )));
-        reply = provider.chat_ex(&ChatRequest::new(messages.clone()).with_tools(tools.clone()))?;
-        emit_reasoning(events, &reply.reasoning);
+        reply = provider.chat_ex(
+            &ChatRequest::new(messages.clone())
+                .with_tools(tools.clone())
+                .with_reasoning(reasoning),
+        )?;
+        events.emit_reasoning(&reply.reasoning);
         if reply.tool_calls.is_empty() {
             reply.tool_calls = parse_tool_calls(&reply.content);
         }
@@ -253,16 +263,10 @@ pub fn run_document_ask(
         messages.push(ChatMessage::user(
             "Answer the question now in plain text. Do not call tools.",
         ));
-        reply = provider.chat_ex(&ChatRequest::new(messages))?;
-        emit_reasoning(events, &reply.reasoning);
+        reply = provider.chat_ex(&ChatRequest::new(messages).with_reasoning(reasoning))?;
+        events.emit_reasoning(&reply.reasoning);
     }
     Ok((reply.content.trim().to_string(), proposed))
-}
-
-fn emit_reasoning(events: &EventSink, reasoning: &str) {
-    for step in crate::llm::reasoning::split_steps(reasoning) {
-        events.stage("reason", step);
-    }
 }
 
 fn tool_summary(name: &str) -> &'static str {
@@ -543,6 +547,7 @@ mod tests {
             vec![],
             &ctx(),
             &EventSink::none(),
+            false,
         )
         .unwrap();
         assert!(reply.contains("SGD"));
@@ -566,6 +571,7 @@ mod tests {
             vec![],
             &ctx(),
             &EventSink::none(),
+            false,
         )
         .unwrap();
         assert!(reply.contains("SGD"));
@@ -629,6 +635,9 @@ mod tests {
                 CoachEvent::Stage { stage, detail } => {
                     log.lock().unwrap().push(format!("stage:{stage}:{detail}"));
                 }
+                CoachEvent::Reasoning { text } => {
+                    log.lock().unwrap().push(format!("reasoning:{text}"));
+                }
             }
         });
         let provider = Scripted {
@@ -645,6 +654,7 @@ mod tests {
             vec![],
             &ctx(),
             &events,
+            true,
         )
         .unwrap();
         let lines = log.lock().unwrap().clone();
@@ -658,6 +668,10 @@ mod tests {
         );
         assert!(
             lines.iter().any(|l| l.starts_with("stage:reason:")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("reasoning:First I look")),
             "{lines:?}"
         );
     }

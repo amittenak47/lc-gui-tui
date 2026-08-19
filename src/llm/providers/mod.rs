@@ -121,6 +121,11 @@ pub struct ChatRequest {
     pub json_object: bool,
     pub temperature: f32,
     pub max_tokens: Option<u32>,
+    /// Ask the server to emit chain-of-thought (Qwen / Ollama / vLLM think flags).
+    ///
+    /// OpenAI and Groq cloud URLs skip the extra keys — they 400 on unknowns.
+    /// Those hosts still return `reasoning_content` when the model thinks.
+    pub reasoning: bool,
 }
 
 impl ChatRequest {
@@ -131,6 +136,7 @@ impl ChatRequest {
             json_object: false,
             temperature: 0.2,
             max_tokens: None,
+            reasoning: false,
         }
     }
 
@@ -151,6 +157,11 @@ impl ChatRequest {
 
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    pub fn with_reasoning(mut self, on: bool) -> Self {
+        self.reasoning = on;
         self
     }
 }

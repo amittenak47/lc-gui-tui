@@ -496,6 +496,7 @@ export type ServerFrame =
       summary: string;
       reason?: string | null;
     }
+  | { type: "reasoning"; request_id: string; text: string }
   | { type: "result"; request_id: string; action: RunAction; body: unknown }
   /**
    * `request_id` is what routes a failure: present means it belongs to a chat

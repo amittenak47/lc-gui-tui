@@ -126,6 +126,32 @@ fn split_paragraphs(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether extra think-mode JSON keys would 400 this host.
+pub fn thinking_params_unsafe(base_url: &str) -> bool {
+    let host = base_url.to_ascii_lowercase();
+    host.contains("api.openai.com")
+        || host.contains("openai.azure.com")
+        || host.contains("api.groq.com")
+}
+
+/// Local OpenAI-compat servers (Ollama, vLLM, llama.cpp) honour these.
+/// Cloud OpenAI / Groq reject unknown fields — skip them there.
+pub fn apply_thinking_request(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    base_url: &str,
+    enabled: bool,
+) {
+    if thinking_params_unsafe(base_url) {
+        return;
+    }
+    map.insert("enable_thinking".into(), serde_json::json!(enabled));
+    map.insert("think".into(), serde_json::json!(enabled));
+    map.insert(
+        "chat_template_kwargs".into(),
+        serde_json::json!({ "enable_thinking": enabled }),
+    );
+}
+
 /// First clause, short enough for a process chip.
 pub fn step_title(step: &str) -> String {
     let line = step.lines().next().unwrap_or(step).trim();
@@ -187,5 +213,18 @@ mod tests {
         let steps = split_steps(&blob);
         assert_eq!(steps.len(), REASON_STEP_CAP);
         assert!(steps.last().unwrap().contains("Paragraph 19"));
+    }
+
+    #[test]
+    fn thinking_params_skip_openai_and_groq() {
+        assert!(thinking_params_unsafe("https://api.openai.com/v1"));
+        assert!(thinking_params_unsafe("https://api.groq.com/openai/v1"));
+        assert!(!thinking_params_unsafe("http://127.0.0.1:11434/v1"));
+        let mut map = serde_json::Map::new();
+        apply_thinking_request(&mut map, "http://localhost:8000/v1", true);
+        assert_eq!(map.get("think").and_then(|v| v.as_bool()), Some(true));
+        map.clear();
+        apply_thinking_request(&mut map, "https://api.openai.com/v1", true);
+        assert!(map.is_empty());
     }
 }

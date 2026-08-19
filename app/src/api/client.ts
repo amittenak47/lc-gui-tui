@@ -474,11 +474,13 @@ export class LcClient {
       page_text?: string;
       marks_prose?: string;
       preset?: string;
+      reasoning?: boolean;
     },
   ): Promise<{
     task_id: string;
     provider: string;
     reply: string;
+    reasoning?: string;
     proposed_annotations?: ProposedAnnotation[];
     process_events?: Array<{
       kind: string;
@@ -502,6 +504,7 @@ export class LcClient {
     if (opts.page_text) body.page_text = opts.page_text;
     if (opts.marks_prose) body.marks_prose = opts.marks_prose;
     if (opts.preset) body.preset = opts.preset;
+    if (opts.reasoning) body.reasoning = true;
     try {
       return await this.cmd("lc_coach_ask", { body }, timeoutMs ?? COACH_HTTP_TIMEOUT_MS);
     } catch (cause) {
