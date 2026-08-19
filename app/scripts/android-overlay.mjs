@@ -14,6 +14,8 @@
  *   2. point the manifest's `<application>` at it, and
  *   3. rewrite generated `BuildTask.kt` so it uses `ExecOperations` instead of
  *      deprecated `Project.exec` (Gradle 8.11+ warning, gone in 9).
+ *   4. pin `buildSrc` Kotlin compile to JVM 17 so a JDK 23 Gradle does not
+ *      emit "Kotlin does not yet support 23 JDK target".
  *
  * Without (1)+(2) Android 9+ blocks the WebView's cleartext HTTP fetches to
  * external http:// pages (Annotate mode). The harness router itself is in-process.
@@ -95,6 +97,29 @@ export function withExecOperations(source) {
   return next.replace(/\bproject\.exec\s*\{/g, "execOperations.exec {");
 }
 
+const BUILD_SRC_JVM17 = `
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+`;
+
+/**
+ * Stop Kotlin from targeting the JDK that is running Gradle.
+ *
+ * `buildSrc` uses `kotlin-dsl` and inherits that JDK as `jvmTarget`. Kotlin
+ * 1.9 cannot emit 23, so it warns and falls back to 22. Pin 17 to match the
+ * plugin modules and ANDROID_SETUP.
+ *
+ * @param {string} source raw buildSrc/build.gradle.kts
+ * @returns {string}
+ */
+export function withBuildSrcJvm17(source) {
+  if (source.includes("JvmTarget.JVM_17")) return source;
+  return `${source.trimEnd()}\n${BUILD_SRC_JVM17}`;
+}
+
 /**
  * Locate generated BuildTask.kt under buildSrc (package path varies).
  *
@@ -161,6 +186,16 @@ async function main() {
   if (kotlinPatched !== kotlin) {
     await writeFile(buildTask, kotlinPatched);
     console.log("android overlay: BuildTask.kt uses ExecOperations");
+  }
+
+  const buildSrcGradle = join(PROJECT, "buildSrc", "build.gradle.kts");
+  if (existsSync(buildSrcGradle)) {
+    const raw = await readFile(buildSrcGradle, "utf8");
+    const next = withBuildSrcJvm17(raw);
+    if (next !== raw) {
+      await writeFile(buildSrcGradle, next);
+      console.log("android overlay: buildSrc Kotlin jvmTarget 17");
+    }
   }
 }
 
