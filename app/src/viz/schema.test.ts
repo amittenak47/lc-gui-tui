@@ -100,8 +100,25 @@ describe("cellText", () => {
     expect(cellText(undefined)).toBe("·");
   });
 
+  /**
+   * Verbatim from Dirk-Qwen3.8-27B: it wrapped every scalar it was asked to
+   * give bare, and the board drew four boxes reading `{"text":"2"}`.
+   */
+  it("unwraps a scalar a model wrapped in an object", () => {
+    expect(cellText({ text: "2" })).toBe("2");
+    expect(cellText({ value: 11 })).toBe("11");
+    expect(cellText({ val: 0 })).toBe("0");
+    expect(cellText({ label: "head" })).toBe("head");
+    // A single unknown key is still a wrapper; there is nothing else it can be.
+    expect(cellText({ digit: 8 })).toBe("8");
+  });
+
   it("falls back to JSON for anything structured", () => {
     expect(cellText([1, 2])).toBe("[1,2]");
+    // Two keys and no value-shaped name: a real structure, not a wrapper.
+    expect(cellText({ x: 1, y: 2 })).toBe('{"x":1,"y":2}');
+    // A nested object under a value key is not a scalar either.
+    expect(cellText({ value: { a: 1 } })).toBe('{"value":{"a":1}}');
   });
 });
 
@@ -111,6 +128,21 @@ describe("entryPair", () => {
     expect(entryPair({ key: "a", value: 1 })).toEqual(["a", "1"]);
     expect(entryPair({ from: 0, to: 3 })).toEqual(["0", "3"]);
     expect(entryPair("0 -> 1")).toEqual(["0", "1"]);
+  });
+
+  /**
+   * The observed failure: nine hashmap frames all carried
+   * `[{"text": "1 -> 0"}]`, every row was dropped as unreadable, and the
+   * student watched an "(empty map)" placeholder scrub past nine times.
+   */
+  it("reads a pair a model wrapped in an object", () => {
+    expect(entryPair({ text: "1 -> 0" })).toEqual(["1", "0"]);
+    expect(entryPair({ value: "7 => 2" })).toEqual(["7", "2"]);
+  });
+
+  it("reads the other arrows models write", () => {
+    expect(entryPair("2 → 0")).toEqual(["2", "0"]);
+    expect(entryPair("2: 0")).toEqual(["2", "0"]);
   });
 
   it("returns null for anything it cannot read", () => {

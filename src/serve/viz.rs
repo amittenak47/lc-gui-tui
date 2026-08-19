@@ -50,6 +50,17 @@ pub struct VizEnvelope {
     pub rejected: Vec<String>,
 }
 
+impl VizEnvelope {
+    /// Whether anything reached the board. Prose does not count: the ask was
+    /// for a picture.
+    fn drew_anything(&self) -> bool {
+        !self.programs.is_empty()
+            || !self.annotations.is_empty()
+            || !self.citations.is_empty()
+            || !self.highlights.is_empty()
+    }
+}
+
 pub async fn viz(
     State(state): State<Shared>,
     Json(request): Json<VizRequest>,
@@ -127,26 +138,25 @@ pub async fn run_viz(
             &events,
         );
 
-        let drawable_rejected = !envelope.programs.is_empty()
-            || !envelope.annotations.is_empty()
-            || !envelope.citations.is_empty()
-            || !envelope.highlights.is_empty();
-
-        // One corrective retry when every drawable call failed but we have reasons.
-        if !drawable_rejected
-            && envelope.message.trim().is_empty()
-            && !envelope.rejected.is_empty()
-            && !reply.tool_calls.is_empty()
+        // One corrective retry when every drawable call was dropped and there
+        // are reasons to hand back. Prose alongside the calls is not a
+        // substitute: a model that describes the diagram it failed to draw has
+        // still drawn nothing, and "here is the trace" over an empty board is
+        // the failure this retry exists to fix.
+        if !envelope.drew_anything() && !envelope.rejected.is_empty() && !reply.tool_calls.is_empty()
         {
-            events.stage("draw_fix", "every call was dropped — asking once more with the reasons");
+            events.stage("draw_fix", "every call was dropped, asking once more with the reasons");
             messages.push(assistant_with_tools(&reply));
             messages.push(ChatMessage::user(format!(
                 "Your previous tool calls were rejected:\n- {}\n\n\
-                 Fix the mistakes named above and call the tools again.",
+                 Fix the mistakes named above and call the tools again. If a frame was empty, \
+                 the fix is to move the data into `cells` (or `entries` for a hashmap) — \
+                 {{\"label\": \"i=1\", \"cells\": [2,7,11,15], \"pointers\": {{\"i\": 1}}}} draws; \
+                 {{\"label\": \"i=1\", \"pointers\": {{\"num\": 7}}}} draws nothing.",
                 envelope.rejected.join("\n- ")
             )));
             if let Ok(retry) = provider.chat_ex(&ChatRequest::new(messages).with_tools(viz_tools())) {
-                let retried = collect_envelope(
+                let mut retried = collect_envelope(
                     &meta.task_id,
                     provider.label(),
                     &retry,
@@ -154,29 +164,38 @@ pub async fn run_viz(
                     &request.board,
                     &events,
                 );
-                if retried.programs.is_empty()
-                    && retried.annotations.is_empty()
-                    && retried.citations.is_empty()
-                    && retried.highlights.is_empty()
-                    && retried.message.trim().is_empty()
-                {
+                if retried.drew_anything() {
+                    // The first attempt's prose was written about a diagram
+                    // that never rendered; keep it only if the retry is silent.
+                    if retried.message.trim().is_empty() {
+                        retried.message = std::mem::take(&mut envelope.message);
+                    }
+                    envelope = retried;
+                } else {
                     envelope.rejected = envelope
                         .rejected
                         .into_iter()
                         .map(|reason| format!("after a retry: {reason}"))
                         .collect();
-                } else {
-                    envelope = retried;
+                    envelope.rejected.extend(retried.rejected);
+                    if envelope.message.trim().is_empty() {
+                        envelope.message = retried.message;
+                    }
                 }
             }
         }
 
-        if envelope.programs.is_empty()
-            && envelope.annotations.is_empty()
-            && envelope.citations.is_empty()
-            && envelope.highlights.is_empty()
-            && envelope.message.trim().is_empty()
-        {
+        if !envelope.drew_anything() && envelope.message.trim().is_empty() {
+            // The rejection reasons are the whole diagnosis. "Try a stronger
+            // model" is the wrong advice for a model that called the tools and
+            // got the schema wrong in a way the reason already names.
+            if !envelope.rejected.is_empty() {
+                return Err(anyhow!(
+                    "every diagram the {} model proposed was dropped:\n- {}",
+                    provider.label(),
+                    envelope.rejected.join("\n- ")
+                ));
+            }
             return Err(anyhow!(
                 "the {} model produced nothing drawable, with or without tool calls — \
                  try pointing `llm.modes.viz` at a stronger model",

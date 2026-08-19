@@ -33,8 +33,12 @@ describe("granite-4.1-8b hashmap output", () => {
 
   it("renders the map's real contents, not an empty box", () => {
     const elements = renderViz(program!, 1, ORIGIN);
+    // Cell contents are bound labels on the box, not sibling text elements —
+    // `cellBox` moved to `label` when free text started clipping inside the
+    // rectangle. Read both, or this asserts against captions alone and passes
+    // or fails for reasons unrelated to the map.
     const texts = elements
-      .map((element) => element.text)
+      .flatMap((element) => [element.text, element.label?.text])
       .filter((text): text is string => typeof text === "string");
 
     // Frame 1 holds {2: 0, 7: 1}, so both keys and both values must appear.
