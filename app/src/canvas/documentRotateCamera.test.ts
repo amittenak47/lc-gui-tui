@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { documentCameraAfterViewportChange, liveBoardViewSize } from "./documentRotateCamera";
+import {
+  documentCameraAfterViewportChange,
+  excalidrawViewportNeedsSync,
+  liveBoardViewSize,
+  liveExcalidrawViewport,
+} from "./documentRotateCamera";
 
 const inset = { top: 6, left: 2, right: 2, bottom: 12 };
 const box = { minX: 0, minY: 0, maxX: 342, maxY: 4000 };
@@ -100,5 +105,26 @@ describe("liveBoardViewSize", () => {
     const size = liveBoardViewSize({ width: 0, height: 0 }, { width: 390, height: 844 });
     expect(size.viewWidth).toBe(390);
     expect(size.viewHeight).toBe(844);
+  });
+});
+
+describe("liveExcalidrawViewport", () => {
+  it("returns null until the board has a real box", () => {
+    expect(liveExcalidrawViewport(null)).toBeNull();
+    expect(liveExcalidrawViewport({ width: 0, height: 800 })).toBeNull();
+  });
+
+  it("rounds the live board box", () => {
+    expect(liveExcalidrawViewport({ width: 389.6, height: 800.2 })).toEqual({
+      width: 390,
+      height: 800,
+    });
+  });
+
+  it("needs a sync when appState is still the full window", () => {
+    const live = liveExcalidrawViewport({ width: 390, height: 800 });
+    expect(live).not.toBeNull();
+    expect(excalidrawViewportNeedsSync(live!, { width: 844, height: 800 })).toBe(true);
+    expect(excalidrawViewportNeedsSync(live!, { width: 390, height: 800 })).toBe(false);
   });
 });

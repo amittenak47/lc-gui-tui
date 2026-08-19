@@ -6307,7 +6307,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     // Same settle ladder as rotate: the first frame is often still full-width.
     const delays = [0, 80, 200, 400, 700];
     const ids = delays.map((ms) =>
-      window.setTimeout(() => window.dispatchEvent(new Event("resize")), ms),
+      window.setTimeout(() => {
+        boardRef.current?.nudgeViewportFit();
+        window.dispatchEvent(new Event("resize"));
+      }, ms),
     );
     return () => {
       for (const id of ids) window.clearTimeout(id);

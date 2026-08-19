@@ -114,7 +114,12 @@ import {
   viewportBand,
   type PageableElement,
 } from "./pageView";
-import { documentCameraAfterViewportChange, liveBoardViewSize } from "./documentRotateCamera";
+import {
+  documentCameraAfterViewportChange,
+  excalidrawViewportNeedsSync,
+  liveBoardViewSize,
+  liveExcalidrawViewport,
+} from "./documentRotateCamera";
 import { encodeInkOps } from "./inkCodec";
 import { fallbackPageFrames, pageFramesFromPdfSlot, pageIdFromCamera } from "./inkPageIndex";
 import { eraserScreenRadius } from "./rasterInk";
@@ -5423,6 +5428,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             zoom: { value: zoom },
             scrollX: nextScrollX,
             scrollY: nextScrollY,
+            // refresh() does not set these — canvas stays window-sized until a tap
+            // unless we write the live hole here.
+            width: viewWidth,
+            height: viewHeight,
           },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
@@ -5651,6 +5660,46 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     );
   }, [mobileRegion, interactive]);
 
+  /**
+   * Write the live `.lc-board` box onto Excalidraw, then keepY-fit.
+   *
+   * `api.refresh()` only copies offsets. Without this, split/rotate leave the
+   * canvas at `window.innerWidth` until a pointer runs `updateDOMRect`.
+   */
+  const applyLiveBoxFit = useCallback(
+    (force: boolean): boolean => {
+      const board = boardRef.current;
+      const api = apiRef.current;
+      if (!board || !api) return false;
+      const box = board.getBoundingClientRect();
+      const live = liveExcalidrawViewport(box);
+      if (!live) return false;
+      const prev = lastFittedBoardBoxRef.current;
+      if (!force && live.width === prev.w && live.height === prev.h) {
+        const state = api.getAppState() as { width?: number; height?: number };
+        if (!excalidrawViewportNeedsSync(live, state)) return true;
+      }
+      if (excalidrawViewportNeedsSync(live, api.getAppState() as { width?: number; height?: number })) {
+        api.updateScene({
+          appState: { width: live.width, height: live.height },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+      }
+      api.refresh?.();
+      maybeGrowDrawFrame();
+      runFit(null, "keepY");
+      lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
+      return true;
+    },
+    [maybeGrowDrawFrame, runFit],
+  );
+
+  const nudgeViewportFit = useCallback(() => {
+    lastFittedBoardBoxRef.current = { w: 0, h: 0 };
+    applyLiveBoxFit(true);
+    requestAnimationFrame(() => applyLiveBoxFit(true));
+  }, [applyLiveBoxFit]);
+
   /** Page-locked boards: grow the frame and refit width on every board resize. */
   useEffect(() => {
     if (!interactive) return;
@@ -5659,6 +5708,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     lastFittedBoardBoxRef.current = { w: 0, h: 0 };
     let timer: number | null = null;
     const late: number[] = [];
+    let apiWaits = 0;
     const ORIENT_RETRIES_MS = [0, 80, 200, 400, 700];
     const run = (force: boolean) => {
       const box = boardRef.current?.getBoundingClientRect();
@@ -5666,18 +5716,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const h = Math.round(box?.height ?? 0);
       if (w < 8 || h < 8) return;
       const prev = lastFittedBoardBoxRef.current;
-      if (!force && w === prev.w && h === prev.h) {
-        return;
-      }
       // Split sash / rotate: layout settles a few frames after the first box.
       // Same retry ladder as orientationchange — one keepY on a half-laid-out
       // pane left the camera on the old full-width hole, content off to the right.
       const jumped =
         !force && prev.w >= 8 && (Math.abs(w - prev.w) > 40 || Math.abs(h - prev.h) > 40);
-      apiRef.current?.refresh?.();
-      maybeGrowDrawFrame();
-      runFit(null, "keepY");
-      lastFittedBoardBoxRef.current = { w, h };
+      if (!applyLiveBoxFit(force)) {
+        // API not live yet — do not stamp lastFitted; retry until it is.
+        if (apiWaits < 12) {
+          apiWaits += 1;
+          late.push(window.setTimeout(() => run(true), 80));
+        }
+        return;
+      }
       if (jumped) {
         for (const id of late) window.clearTimeout(id);
         late.length = 0;
@@ -5717,7 +5768,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (timer != null) window.clearTimeout(timer);
       for (const id of late) window.clearTimeout(id);
     };
-  }, [interactive, maybeGrowDrawFrame, runFit]);
+  }, [interactive, applyLiveBoxFit]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
@@ -7230,6 +7281,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return Math.max(0, maxPage);
       },
       settleFitView,
+      nudgeViewportFit,
       waitForTemplate,
       fitCodeToSource,
       hasRasterInk: () => rasterInkRef.current?.hasInk() ?? false,
@@ -7404,7 +7456,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       },
       armReadingScroll,
     }),
-    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, maybeGrowDrawFrame, refitToViewport, scheduleSlotReports, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll],
+    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, maybeGrowDrawFrame, nudgeViewportFit, refitToViewport, scheduleSlotReports, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];

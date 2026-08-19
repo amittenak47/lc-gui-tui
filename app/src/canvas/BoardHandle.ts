@@ -151,6 +151,13 @@ export interface BoardHandle {
   fitFrame(): void;
   /** Resize the page frame and refit zoom/scroll to fill the board (window resize). */
   refitToViewport(): void;
+  /**
+   * Write the live board box onto Excalidraw and keepY-fit.
+   *
+   * Split / sash / unpark — `refresh()` does not resize the canvas, so a
+   * pointer used to be required before the pane looked right.
+   */
+  nudgeViewportFit(): void;
   /** Fit one template region to the viewport — the mobile "page turn". */
   fitRegion(regionId: RegionId | string): void;
   /**
