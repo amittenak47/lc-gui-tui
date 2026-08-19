@@ -26,10 +26,14 @@ import {
   type InkSmoothingMode,
 } from "../util/inkSmoothingPref";
 import {
+  AUTOSAVE_BANNER_CHOICES,
   AUTOSAVE_CHOICES,
   AUTOSAVE_EVENT,
+  loadAutosaveBanner,
   loadAutosaveInterval,
+  saveAutosaveBanner,
   saveAutosaveInterval,
+  type AutosaveBanner,
   type AutosaveInterval,
 } from "../util/autosavePref";
 import {
@@ -307,6 +311,8 @@ interface DevicePrefs {
   eraserPartial: boolean;
   /** Milliseconds between board autosaves; 0 is off. */
   autosaveMs: AutosaveInterval;
+  /** Whether a successful autosave raises the chrome banner. */
+  autosaveBanner: AutosaveBanner;
   /** ColourHunt tag the ink wheel asks for. */
   paletteTag: PaletteTag;
   /** Show ColorRadial on the drawing island (temporary colour until 1D Save). */
@@ -336,6 +342,7 @@ function loadDevicePrefs(): DevicePrefs {
     inkBoldness: loadInkBoldness(),
     eraserPartial: loadEraserPartial(),
     autosaveMs: loadAutosaveInterval(),
+    autosaveBanner: loadAutosaveBanner(),
     paletteTag: loadPaletteTag(),
     colorWheelOnToolbar: loadInkToolPresets().colorWheelOnToolbar,
     tapOk: loadInkToolPresets().tapOk,
@@ -361,6 +368,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.inkBoldness === b.inkBoldness &&
     a.eraserPartial === b.eraserPartial &&
     a.autosaveMs === b.autosaveMs &&
+    a.autosaveBanner === b.autosaveBanner &&
     a.paletteTag === b.paletteTag &&
     a.colorWheelOnToolbar === b.colorWheelOnToolbar &&
     a.tapOk === b.tapOk &&
@@ -455,6 +463,9 @@ export function SettingsModal({
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
   const [autosaveMs, setAutosaveMs] = useState<AutosaveInterval>(() =>
     loadAutosaveInterval(),
+  );
+  const [autosaveBanner, setAutosaveBanner] = useState<AutosaveBanner>(() =>
+    loadAutosaveBanner(),
   );
   /* Draft until Save — dirty detection includes this so Save enables. */
   const [paletteTag, setPaletteTag] = useState<PaletteTag>(() => loadPaletteTag());
@@ -588,6 +599,7 @@ export function SettingsModal({
     setInkBoldness(prefs.inkBoldness);
     setEraserPartial(prefs.eraserPartial);
     setAutosaveMs(prefs.autosaveMs);
+    setAutosaveBanner(prefs.autosaveBanner);
     setPaletteTag(prefs.paletteTag);
     setColorWheelOnToolbar(prefs.colorWheelOnToolbar);
     setTapOk(prefs.tapOk);
@@ -665,6 +677,7 @@ export function SettingsModal({
     inkBoldness,
     eraserPartial,
     autosaveMs,
+    autosaveBanner,
     paletteTag,
     colorWheelOnToolbar,
     tapOk,
@@ -719,6 +732,7 @@ export function SettingsModal({
         saveInkBoldness(inkBoldness);
         saveEraserPartial(eraserPartial);
         saveAutosaveInterval(autosaveMs);
+        saveAutosaveBanner(autosaveBanner);
         savePaletteTag(paletteTag);
         saveInkToolPresets({
           ...loadInkToolPresets(),
@@ -1451,6 +1465,33 @@ export function SettingsModal({
                     onClick={() => setAutosaveMs(ms)}
                   >
                     <strong>{label}</strong>
+                  </button>
+                ))}
+              </div>
+              <p className="lc-settings-hint">
+                The write is independent of the banner. Parked tabs still save;
+                they just do not flash Saved over the pad you are looking at.
+              </p>
+              <div
+                className="lc-settings-choice"
+                role="radiogroup"
+                aria-label="Autosave banners"
+              >
+                {AUTOSAVE_BANNER_CHOICES.map(([id, label, hint]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={autosaveBanner === id}
+                    className={
+                      autosaveBanner === id
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setAutosaveBanner(id)}
+                  >
+                    <strong>{label}</strong>
+                    <span className="lc-muted">{hint}</span>
                   </button>
                 ))}
               </div>

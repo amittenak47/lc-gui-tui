@@ -57,6 +57,11 @@ export interface HeaderSlots {
   /** Under the header: the web omnibox. */
   chrome: HTMLElement | null;
   /**
+   * Pen island + map chrome. Lives over `.lc-main` so a split still has one
+   * toolbar across the page; the focused pane fills it.
+   */
+  boardChrome: HTMLElement | null;
+  /**
    * The coach column.
    *
    * `.lc-side` is `position: absolute; top: 38px`, so its containing block has
@@ -101,6 +106,11 @@ export interface WorkspaceApi {
   park: () => Promise<void>;
   /** The save / discard / cancel dialog. Resolves only if it went through. */
   leave: () => Promise<boolean>;
+  /**
+   * Abort an in-flight open: generation bump, spinner → check, then idle.
+   * The shell closes the chip after this returns.
+   */
+  abortLoad: () => Promise<void>;
 }
 
 export interface ShellValue {
@@ -139,6 +149,11 @@ export interface ShellValue {
   /** Banner text. The shell paints them; a workspace is usually what writes. */
   notice: string | null;
   setNotice: Dispatch<SetStateAction<string | null>>;
+  /**
+   * Autosave finished. The write already happened; this only decides whether
+   * the chrome says so — on-screen pads share one banner, parked pads stay quiet.
+   */
+  announceAutosave: (tabId: string, title: string) => void;
   error: string | null;
   setError: Dispatch<SetStateAction<string | null>>;
 
@@ -182,8 +197,18 @@ export interface ShellValue {
   headerSlots: HeaderSlots;
   /** The active workspace reports the wrapper classes it needs. */
   setChrome: (chrome: WorkspaceChrome) => void;
-  /** Registers `park` / `leave`, and null on the way out. */
+  /** Registers `park` / `leave` / `abortLoad`, and null on the way out. */
   setWorkspaceApi: (id: string, api: WorkspaceApi | null) => void;
+  /**
+   * Home ↔ Cancel. True from the moment a user-started open begins until
+   * the spinner-complete beat finishes (or cancel does). Survives the
+   * Home → new-tab handoff, so the chip does not flicker.
+   */
+  shellLoadActive: boolean;
+  setShellLoadActive: Dispatch<SetStateAction<boolean>>;
+  /** Mark a newly created chip so its first mount is a user load, not a remount. */
+  markUserLoad: (id: string) => void;
+  takeUserLoad: (id: string) => boolean;
   /** The load found nothing to open; the shell keeps the chip and prompts. */
   onMissingContent: (tabId: string, title: string, detail: string) => void;
 }

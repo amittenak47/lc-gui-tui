@@ -5,8 +5,9 @@
  * wrapper is Electron — so it mounts straight into the Tauri WebView.
  *
  * Excalidraw's own chrome is hidden (see `.lc-board` in styles.css) and replaced
- * by {@link BoardToolbar} — one floating island at the bottom of the canvas
- * holding the tools, shapes, undo/redo, reset and the ink colour. A stylus
+ * by {@link BoardToolbar} — one floating island at the bottom of the workspace
+ * (the shell's `.lc-board-chrome-slot` over `.lc-main`, so a split still has
+ * one bar). Tools, shapes, undo/redo, reset and ink colour live there. A stylus
  * session should never need a menu.
  */
 
@@ -30,6 +31,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 
 import {
   resolveShapeMods,
@@ -286,6 +288,8 @@ interface ExcalidrawApi {
     callback: (scrollX: number, scrollY: number, zoom: { value: number }) => void,
   ): () => void;
   history?: { clear(): void };
+  /** Re-read the container box. Split / rotate leave appState width stale otherwise. */
+  refresh?(): void;
 }
 
 /** Margin around the composite, so ink at the edge isn't flush with it. */
@@ -985,6 +989,19 @@ export interface BoardProps {
   onThemePick?: (id: string) => void;
   /** False on the problem browser — canvas is read-only and tools are hidden. */
   interactive?: boolean;
+  /**
+   * Map chrome / pen island. Off on the unfocused half of a split so there is
+   * one set of controls; tapping that pane focuses it and restores them.
+   */
+  chromeEnabled?: boolean;
+  /**
+   * Where the map chrome / pen island lands.
+   *
+   * The shell hosts this over `.lc-main` so a split pair still has one toolbar
+   * spanning the page, the way a single tab does. Absent: paint inside the
+   * board (tests, or a host that has not mounted yet).
+   */
+  chromeHost?: HTMLElement | null;
   /** Screen rect of the solution-code region, updated as you pan/zoom/resize. */
   onCodeSlot?: (rect: ScreenRect | null) => void;
   /** Shared reading size for problem statement + code (locked to Medium). */
@@ -1170,12 +1187,23 @@ function sameCodeSlot(a: ScreenRect | null, b: ScreenRect | null): boolean {
   );
 }
 
+function paintBoardChrome(
+  node: ReactNode,
+  host: HTMLElement | null,
+  enabled: boolean,
+): ReactNode {
+  if (!enabled) return null;
+  return host ? createPortal(node, host) : node;
+}
+
 export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   {
     onChange,
     themeId,
     onThemePick,
     interactive = true,
+    chromeEnabled = true,
+    chromeHost = null,
     onCodeSlot,
     readingSize: readingSizeProp,
     mobileRegion = null,
@@ -1473,10 +1501,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [chromeWakeTint, setChromeWakeTint] =
     useState<ChromeWakeTint>(loadChromeWakeTint);
   const [chromeAwake, setChromeAwake] = useState(true);
-  const chromeShown = chromeVisibility(chromeMode, {
-    awake: chromeAwake,
-    annotating: annotateCode,
-  });
+  const chromeShown = chromeEnabled
+    ? chromeVisibility(chromeMode, {
+        awake: chromeAwake,
+        annotating: annotateCode,
+      })
+    : { chrome: false, eye: false };
   /** Everything downstream still asks the one question it always asked. */
   const mapChromeHidden = !chromeShown.chrome;
   const mapChromeHiddenRef = useRef(mapChromeHidden);
@@ -5626,6 +5656,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!interactive) return;
     const board = boardRef.current;
     if (!board || typeof ResizeObserver === "undefined") return;
+    lastFittedBoardBoxRef.current = { w: 0, h: 0 };
     let timer: number | null = null;
     const late: number[] = [];
     const ORIENT_RETRIES_MS = [0, 80, 200, 400, 700];
@@ -5634,19 +5665,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const w = Math.round(box?.width ?? 0);
       const h = Math.round(box?.height ?? 0);
       if (w < 8 || h < 8) return;
-      if (
-        !force &&
-        w === lastFittedBoardBoxRef.current.w &&
-        h === lastFittedBoardBoxRef.current.h
-      ) {
+      const prev = lastFittedBoardBoxRef.current;
+      if (!force && w === prev.w && h === prev.h) {
         return;
       }
-      // Documents *and* whiteboard: width-fit + center X, keep the reading
-      // line. The old split (keepY only if pageContent; else fitFrame after a
-      // pan) left portrait zoom in a landscape hole — black bar on the right.
-      // A full refitToViewport jumped back to page 1 / the top of the pad.
+      // Split sash / rotate: layout settles a few frames after the first box.
+      // Same retry ladder as orientationchange — one keepY on a half-laid-out
+      // pane left the camera on the old full-width hole, content off to the right.
+      const jumped =
+        !force && prev.w >= 8 && (Math.abs(w - prev.w) > 40 || Math.abs(h - prev.h) > 40);
+      apiRef.current?.refresh?.();
+      maybeGrowDrawFrame();
       runFit(null, "keepY");
       lastFittedBoardBoxRef.current = { w, h };
+      if (jumped) {
+        for (const id of late) window.clearTimeout(id);
+        late.length = 0;
+        for (const ms of [80, 200, 400, 700]) {
+          late.push(window.setTimeout(() => run(true), ms));
+        }
+      }
     };
     const schedule = () => {
       if (timer != null) window.clearTimeout(timer);
@@ -5654,8 +5692,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     const observer = new ResizeObserver(schedule);
     observer.observe(board);
+    const wrap = board.parentElement;
+    if (wrap && wrap !== board) observer.observe(wrap);
     window.addEventListener("resize", schedule);
     window.visualViewport?.addEventListener("resize", schedule);
+    requestAnimationFrame(() => run(true));
     const onOrient = () => {
       lastFittedBoardBoxRef.current = { w: 0, h: 0 };
       for (const id of late) window.clearTimeout(id);
@@ -5676,7 +5717,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (timer != null) window.clearTimeout(timer);
       for (const id of late) window.clearTimeout(id);
     };
-  }, [interactive, runFit]);
+  }, [interactive, maybeGrowDrawFrame, runFit]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
@@ -7489,7 +7530,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               void onImageFileChosen(file);
             }}
           />
-          <div
+            {paintBoardChrome(
+            <div
             className={[
               "lc-map-controls lc-map-controls-paged",
               mapChromeHidden ? "lc-map-controls-collapsed" : "",
@@ -7851,7 +7893,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               </div>
             </div>
             {coachFold}
-          </div>
+          </div>,
+            chromeHost,
+            chromeEnabled,
+            )}
         </>
       )}
       {interactive && activeTool === "eraser" && <EraserBrush ref={eraserBrushRef} />}

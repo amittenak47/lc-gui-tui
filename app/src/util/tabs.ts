@@ -341,7 +341,11 @@ export function promoteLive(ids: string[], id: string): string[] {
  * rather than doing the trimming itself.
  */
 export function liveOverflow(ids: string[], limit: number): string[] {
-  return ids.length <= limit ? [] : ids.slice(limit);
+  // Home is always kept: the chooser is cheap to hold and a full Workspace
+  // remount (idle Excalidraw included) is what made tapping Home feel like a
+  // load. The budget applies to every other chip.
+  const working = ids.filter((id) => id !== HOME_TAB_ID);
+  return working.length <= limit ? [] : working.slice(limit);
 }
 
 /** Hostnames, not page titles — `google.com`, not `Google`. */
@@ -563,7 +567,7 @@ export function tabsReducer(state: TabState, action: TabAction): TabState {
           activeId: action.a,
           groups: state.groups.map((group) =>
             group.id === existing.id
-              ? { ...group, children, split: { ...group.split, axis: action.axis } }
+              ? { ...group, children, split: { ...group.split, axis: "vertical" } }
               : group,
           ),
         };
@@ -574,7 +578,8 @@ export function tabsReducer(state: TabState, action: TabAction): TabState {
       const group: TabGroup = {
         id,
         children,
-        split: { axis: action.axis, ratio: 0.5 },
+        // Side-by-side only. A horizontal split fights the existing chrome.
+        split: { axis: "vertical", ratio: 0.5 },
       };
       return {
         ...next,

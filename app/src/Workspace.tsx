@@ -133,7 +133,7 @@ import {
 import type { DocAnchor } from "./util/docAnchors";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { openExternalUrl } from "./util/openExternal";
-import { WEB_HOME, fetchWebPage, hostLabelFromUrl, titleFromHtml, webPageWidthForViewport, type WebHtmlSource } from "./util/webPage";
+import { WEB_HOME, fetchWebPage, hostLabelFromUrl, webPageWidthForViewport, type WebHtmlSource } from "./util/webPage";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { CodeDocument } from "./modes/CodeDocument";
 import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelectionLayer";
@@ -322,6 +322,19 @@ function isWhiteboard(problem: ProblemDetail | null | undefined): boolean {
   );
 }
 
+/**
+ * Boot theatre (spinner, LLM banners, "Whiteboard" title wait) runs once per
+ * JS session — the first workspace. Tab switches remount under the live
+ * budget; those must not replay startup.
+ */
+let sessionColdWorkspace = true;
+
+function consumeSessionColdWorkspace(): boolean {
+  if (!sessionColdWorkspace) return false;
+  sessionColdWorkspace = false;
+  return true;
+}
+
 async function flushDirtyInk(board: BoardHandle, docKey: string | null): Promise<void> {
   if (!docKey || board.isInking()) return;
   const dirty = board.takeDirtyInkPages();
@@ -477,10 +490,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     coachFlags,
     llmLink,
     setSettingsOpen,
-    notice,
     setNotice,
     error,
     setError,
+    announceAutosave,
     browseMotion,
     setBrowseMotion,
     holdBrowseOverlay,
@@ -502,6 +515,8 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     headerSlots,
     setChrome,
     setWorkspaceApi,
+    setShellLoadActive,
+    takeUserLoad,
     onMissingContent,
   } = useShell();
 
@@ -946,12 +961,6 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     return () => window.clearTimeout(timer);
   }, [error]);
 
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 5000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-
   const [pseudocode, setPseudocode] = useState("");
   /** Drives the fade between the browser and the board. */
   const [entering, setEntering] = useState(false);
@@ -1002,27 +1011,20 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
   const finishLoadingTransition = useCallback(
     async (fromBrowse: boolean, switching: boolean, loadGen: number) => {
       if (workspaceLoadGenRef.current !== loadGen) return;
-      // Board is fitted — stop preparing so the checkmark gate can open.
-      setBoardPreparing(false);
-      // Let React commit preparing=false while we are still on busy/exit
-      // (spinner), then flip to done so the spinner→check transition plays.
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      );
-      if (workspaceLoadGenRef.current !== loadGen) return;
-
+      // Keep the board hidden through the checkmark hold. Clearing preparing
+      // first used to paint the page under a spinner that had not finished.
       if (fromBrowse) {
-        // Ready: keep the spinner, slide the browser away under the blur.
         setBrowseMotion("exit");
         await waitMs(slideDurationMs());
         if (workspaceLoadGenRef.current !== loadGen) return;
-        // Spinner → checkmark, then a short beat before the board.
         setBrowseMotion("done");
         await waitMs(doneHoldMs());
       } else if (switching) {
         setSwitchMotion("done");
         await waitMs(doneHoldMs());
       }
+      if (workspaceLoadGenRef.current !== loadGen) return;
+      setBoardPreparing(false);
     },
     [],
   );
@@ -1453,7 +1455,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               agent: persistableAgentMessages(agentMessages),
             });
             if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
-            setNotice(`Saved “${saved.name}”.`);
+            announceAutosave(tab.id, saved.name);
             void pushAnnotatePad(client, saved);
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void recordRollingSnapshots({
@@ -1505,7 +1507,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             });
             if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
             await flushDirtyInk(board, whiteboardDocKey(saved.id));
-            setNotice(`Saved “${saved.title}”.`);
+            announceAutosave(tab.id, saved.title);
             void pushWhiteboardPad(client, saved);
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void recordRollingSnapshots({
@@ -1552,10 +1554,12 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     }, autosaveMs);
     return () => window.clearInterval(timer);
   }, [
+    announceAutosave,
     autosaveMs,
     client,
     patchTab,
     problem,
+    tab.id,
     whiteboardNotebookId,
     whiteboardPageCount,
     agentMessages,
@@ -1586,7 +1590,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
     async (
       taskId: string,
       bank: SearchOptions | undefined,
-      opts: { keepSessionNav?: boolean; tabId: string },
+      opts: { keepSessionNav?: boolean; tabId: string; userLoad?: boolean },
     ) => {
       if (
         browsePickBlocked(padOpenLockRef.current > 0, browsePickQuietUntilRef.current)
@@ -1599,12 +1603,15 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       const loadGen = ++workspaceLoadGenRef.current;
       const offline = serverLinkRef.current !== "online";
       const datasetId = bank?.dataset ?? DEFAULT_DATASET;
-      const fromBrowse = !problem;
-      const switching = Boolean(problem);
-      setWorkspaceLoadActive(true);
+      const userLoad = opts.userLoad === true;
+      const cold = userLoad && consumeSessionColdWorkspace();
+      const fromBrowse = userLoad && !problem;
+      const switching = userLoad && Boolean(problem);
+      setWorkspaceLoadActive(userLoad);
+      if (userLoad) setShellLoadActive(true);
       setActiveRegion("constraints");
       setStatementHeight(null);
-      setBusy(offline ? "opening offline…" : "loading the workspace…");
+      if (cold) setBusy(offline ? "opening offline…" : "loading the workspace…");
       setError(null);
       setTests(null);
       setNudges([]);
@@ -1780,8 +1787,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         }
         await boardRef.current?.settleFitView();
 
-        await finishLoadingTransition(fromBrowse, switching, loadGen);
-        if (workspaceLoadGenRef.current !== loadGen) return true;
+        if (userLoad) {
+          await finishLoadingTransition(fromBrowse, switching, loadGen);
+          if (workspaceLoadGenRef.current !== loadGen) return true;
+        }
 
         setBrowseMotion("idle");
         setSwitchMotion("idle");
@@ -1791,6 +1800,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
         setWorkspaceLoadActive(false);
+        setShellLoadActive(false);
         setEntering(true);
         window.setTimeout(() => {
           setEntering(false);
@@ -1803,12 +1813,14 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         setHoldBrowseOverlay(false);
         setBoardPreparing(false);
         setWorkspaceLoadActive(false);
+        setShellLoadActive(false);
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
         if (workspaceLoadGenRef.current === loadGen) {
           setBusy(null);
           setWorkspaceLoadActive(false);
+          setShellLoadActive(false);
         }
       }
       return opened;
@@ -1820,13 +1832,19 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       openWorkspace,
       problem,
       refreshSession,
+      setShellLoadActive,
       syncDrawingsToBoard,
       themeId,
     ],
   );
 
   const loadWhiteboard = useCallback(
-    async (opts: { notebookId?: string | null; fresh?: boolean; tabId: string }) => {
+    async (opts: {
+      notebookId?: string | null;
+      fresh?: boolean;
+      tabId: string;
+      userLoad?: boolean;
+    }) => {
       if (busy !== null) return;
       beginPadOpen();
       const loadGen = ++workspaceLoadGenRef.current;
@@ -1838,6 +1856,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
           void openWhiteboardRef.current({ fresh: true });
         };
         setWhiteboardLibOpen(true);
+        setShellLoadActive(false);
         return;
       }
       /*
@@ -1848,11 +1867,16 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
        *
        * fromBrowse: browser overlay spinner → slide → checkmark → board under
        * preparing → reveal. switching: WorkspaceLoadStatus blur spinner → check.
+       * User-started opens pay the spinner. Tab remounts skip it. Boot banners
+       * and the "Whiteboard" title wait stay first-open only.
        */
-      const fromBrowse = !problem;
-      const switching = Boolean(problem);
-      setWorkspaceLoadActive(true);
-      setBusy("opening whiteboard…");
+      const userLoad = opts.userLoad === true;
+      const cold = userLoad && consumeSessionColdWorkspace();
+      const fromBrowse = userLoad && !problem;
+      const switching = userLoad && Boolean(problem);
+      setWorkspaceLoadActive(userLoad);
+      if (userLoad) setShellLoadActive(true);
+      if (cold) setBusy("opening whiteboard…");
       setError(null);
       setTests(null);
       setNudges([]);
@@ -1966,8 +1990,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
 
         // Complete the loading transition (same beats and teardown as
         // pickProblem / openAnnotate). Coach stays closed through the reveal.
-        await finishLoadingTransition(fromBrowse, switching, loadGen);
-        if (workspaceLoadGenRef.current !== loadGen) return;
+        if (userLoad) {
+          await finishLoadingTransition(fromBrowse, switching, loadGen);
+          if (workspaceLoadGenRef.current !== loadGen) return;
+        }
 
         setBrowseMotion("idle");
         setSwitchMotion("idle");
@@ -1976,18 +2002,22 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
         setWorkspaceLoadActive(false);
+        setShellLoadActive(false);
         setCoachOpen(false);
-        // Banner first (LLM offline, etc.), then the board fade and title.
-        await waitForTopBannersIdle();
-        if (workspaceLoadGenRef.current !== loadGen) return;
-        setEntering(true);
-        const fadeMs = boardFadeMs() || 1;
-        window.setTimeout(() => {
-          setEntering(false);
-          boardRef.current?.showPadTitle(
-            restored && notebook ? notebook.title : "Whiteboard",
-          );
-        }, fadeMs);
+        const title = restored && notebook ? notebook.title : "Whiteboard";
+        if (cold) {
+          // Banner first (LLM offline, etc.), then the board fade and title.
+          await waitForTopBannersIdle();
+          if (workspaceLoadGenRef.current !== loadGen) return;
+          setEntering(true);
+          const fadeMs = boardFadeMs() || 1;
+          window.setTimeout(() => {
+            setEntering(false);
+            boardRef.current?.showPadTitle(title);
+          }, fadeMs);
+        } else if (userLoad) {
+          boardRef.current?.showPadTitle(title);
+        }
       } catch (cause) {
         if (workspaceLoadGenRef.current !== loadGen) return;
         setError(messageOf(cause));
@@ -1996,6 +2026,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         setHoldBrowseOverlay(false);
         setBoardPreparing(false);
         setWorkspaceLoadActive(false);
+        setShellLoadActive(false);
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
@@ -2003,10 +2034,11 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         if (workspaceLoadGenRef.current === loadGen) {
           setBusy(null);
           setWorkspaceLoadActive(false);
+          setShellLoadActive(false);
         }
       }
     },
-    [beginPadOpen, busy, endPadOpen, finishLoadingTransition, openWorkspace, problem, themeId],
+    [beginPadOpen, busy, endPadOpen, finishLoadingTransition, openWorkspace, problem, setShellLoadActive, themeId],
   );
 
   /**
@@ -2212,6 +2244,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       tabId: string;
       /** Already computed by the caller that had to key the record on it. */
       hash?: string;
+      userLoad?: boolean;
     }) => {
       if (busy !== null) return;
       beginPadOpen();
@@ -2220,11 +2253,16 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
        * Same loading transition as pickProblem — do not invent a parallel path.
        * fromBrowse: browser overlay spinner → slide → checkmark → board under
        * preparing → reveal. switching: WorkspaceLoadStatus blur spinner → check.
+       * User-started opens pay the spinner; remounts skip it. Boot banners
+       * stay first-open only.
        */
-      const fromBrowse = !problem;
-      const switching = Boolean(problem);
-      setWorkspaceLoadActive(true);
-      setBusy("opening document…");
+      const userLoad = input.userLoad === true;
+      const cold = userLoad && consumeSessionColdWorkspace();
+      const fromBrowse = userLoad && !problem;
+      const switching = userLoad && Boolean(problem);
+      setWorkspaceLoadActive(userLoad);
+      if (userLoad) setShellLoadActive(true);
+      if (cold) setBusy("opening document…");
       setError(null);
       setDocIndexStatus("idle");
       setDocIndexError(null);
@@ -2507,8 +2545,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
 
         // Complete the loading transition (same beats and teardown as
         // pickProblem). Do NOT arm scroll here — interactive is still false.
-        await finishLoadingTransition(fromBrowse, switching, loadGen);
-        if (workspaceLoadGenRef.current !== loadGen) return;
+        if (userLoad) {
+          await finishLoadingTransition(fromBrowse, switching, loadGen);
+          if (workspaceLoadGenRef.current !== loadGen) return;
+        }
 
         setBrowseMotion("idle");
         setSwitchMotion("idle");
@@ -2517,8 +2557,11 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
         setWorkspaceLoadActive(false);
-        setEntering(true);
-        window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
+        setShellLoadActive(false);
+        if (cold) {
+          setEntering(true);
+          window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
+        }
         setCoachOpen(false);
 
         // Arm AFTER interactive flips true (Excalidraw left view mode).
@@ -2608,6 +2651,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         setHoldBrowseOverlay(false);
         setBoardPreparing(false);
         setWorkspaceLoadActive(false);
+        setShellLoadActive(false);
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
@@ -2615,6 +2659,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
         if (workspaceLoadGenRef.current === loadGen) {
           setBusy(null);
           setWorkspaceLoadActive(false);
+          setShellLoadActive(false);
         }
       }
     },
@@ -2626,6 +2671,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       finishLoadingTransition,
       openWorkspace,
       problem,
+      setShellLoadActive,
       themeId,
     ],
   );
@@ -2790,7 +2836,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
    * same call the reducer makes, so a repeat open cannot load one tab while
    * the strip focuses another.
    */
-  /** A page is a web tab with a one-entry history, whichever door it came in. */
+  /** Globe / address-bar opens only. Library snapshots stay annotate tabs. */
   const webTabRecord = useCallback(
     (entry: WebPadEntry): WebTab => ({
       id: newTabId("web"),
@@ -2848,17 +2894,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       }
       const docType = input.docType ?? "markdown";
       /*
-       * A captured page is a *web* tab wherever it came from, including out of
-       * the annotate library — it gets the saved HTML as a one-entry history,
-       * so Back is simply empty rather than the chip being a different kind of
-       * thing depending on which door it came through.
+       * Library / file opens are annotate tabs, even when the sidecar is a
+       * captured page. A web *tab* is only the globe / address bar path —
+       * otherwise an indexed snapshot from Recent also spawned a browser chip.
        *
-       * Otherwise: the hash is not known yet, being of bytes this function
-       * does not read, so the record opens without one and `loadAnnotate`
-       * patches it in. That is why `sameEntity` treats a null hash as matching
-       * nothing — a record mid-open must not collapse onto another document.
-       */
-      /*
        * The hash has to be known here, not inside the load. It is what
        * `sameEntity` matches annotate tabs on, so a record opened without one
        * matches nothing — and opening the same document twice would grow a
@@ -2880,7 +2919,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
        * alternative is ink arriving before the session has anywhere to put it.
        */
       let sidecarId = input.docId ?? null;
-      if (!sidecarId && docType !== "web") {
+      if (!sidecarId) {
         const matches = listAnnotateDocsByHash(hash);
         if (matches.length === 1) {
           sidecarId = matches[0]!.id;
@@ -2902,25 +2941,18 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
        */
       const newSet = !sidecarId || !getAnnotateDocMeta(sidecarId);
 
-      const proposed: TabRecord =
-        docType === "web"
-          ? webTabRecord({
-              url: input.name,
-              title: titleFromHtml(input.text ?? "") || hostLabelFromUrl(input.name),
-              html: input.text ?? "",
-            })
-          : {
-              id: newTabId("annotate"),
-              kind: "annotate",
-              title: input.name,
-              dirty: false,
-              lastActive: 0,
-              docId: sidecarId,
-              hash,
-              docType,
-              indexed: "idle",
-              source: null,
-            };
+      const proposed: TabRecord = {
+        id: newTabId("annotate"),
+        kind: "annotate",
+        title: input.name,
+        dirty: false,
+        lastActive: 0,
+        docId: sidecarId,
+        hash,
+        docType,
+        indexed: "idle",
+        source: null,
+      };
       /*
        * A document with no library entry has nowhere else to be read back
        * from, so its text rides on the record — that is what the mounting
@@ -2931,7 +2963,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       }
       openWorkspace(proposed);
     },
-    [askSidecarChoice, openWorkspace, webTabRecord],
+    [askSidecarChoice, openWorkspace],
   );
 
   const pickProblem = useCallback(
@@ -3245,6 +3277,8 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
   const pickAndOpenAnnotate = useCallback(async () => {
     if (busy !== null) return;
     beginPadOpen();
+    setShellLoadActive(true);
+    setWorkspaceLoadActive(true);
     const fromBrowse = !problem;
     if (fromBrowse) {
       setHoldBrowseOverlay(true);
@@ -3266,25 +3300,55 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       setError(messageOf(cause));
     } finally {
       endPadOpen();
-      if (!handedOff && fromBrowse) {
-        setBrowseMotion("idle");
+      if (!handedOff) {
+        setBusy(null);
+        setWorkspaceLoadActive(false);
+        setShellLoadActive(false);
+        setBoardPreparing(false);
+        if (fromBrowse) {
+          setBrowseMotion("idle");
+          setHoldBrowseOverlay(false);
+        }
+      } else {
+        // Load lives on the new chip. Home must not stay preparing/busy or
+        // focusing it later would keep the chooser disabled.
+        setBusy(null);
+        setWorkspaceLoadActive(false);
         setBoardPreparing(false);
       }
     }
-  }, [beginPadOpen, busy, endPadOpen, openAnnotate, problem]);
+  }, [beginPadOpen, busy, endPadOpen, openAnnotate, problem, setBrowseMotion, setHoldBrowseOverlay, setShellLoadActive]);
+
+  const showWebEntry = useCallback(
+    async (tab: WebTab, userLoad = false) => {
+      const entry = currentEntry(tab);
+      if (!entry || busy !== null) return;
+      await loadAnnotate({
+        name: entry.url,
+        docType: "web",
+        text: entry.html,
+        tabId: tab.id,
+        userLoad,
+      });
+    },
+    [busy, loadAnnotate],
+  );
 
   /**
-   * Fetch a page, sanitise it, then open it on the same pad as markdown.
+   * Fetch a page, sanitise it, then open it as a web tab (globe / address bar).
    *
-   * `busy` must be cleared before {@link openAnnotate} — that path bails when
-   * another load is already marked in flight. The fetch is the wait; opening
-   * is the same transition as a file pick.
+   * Library files that happen to be captured HTML stay annotate tabs.
+   * `loadAnnotate` bails while `busy` is set, so in-place navigation clears
+   * that flag first. A new tab loads on mount — this instance must not.
    */
   const openWebPage = useCallback(
     async (raw: string, opts?: { newTab?: boolean }) => {
       if (busy !== null) return;
       beginPadOpen();
+      const loadGen = ++workspaceLoadGenRef.current;
       const fromBrowse = !problem;
+      setShellLoadActive(true);
+      setWorkspaceLoadActive(true);
       if (fromBrowse) {
         setHoldBrowseOverlay(true);
         setBrowseMotion("busy");
@@ -3293,8 +3357,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       setBusy("loading page…");
       setError(null);
       let handedOff = false;
+      let sameWorkspace = false;
       try {
         const page = await fetchWebPage(raw);
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setWebHtmlSource(page.source);
         setWebHtmlNote(page.note ?? null);
         const entry = {
@@ -3307,53 +3373,56 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
          * history; anything else — the globe, the strip's `+`, a link opened
          * deliberately in a new tab — is a new tab, and the reducer holds the
          * cap of two.
+         *
+         * The new workspace loads on mount. Do not loadAnnotate here: this
+         * instance is Home (or the previous pad) and would double-open.
          */
         const current = activeTabOf(tabsRef.current);
         const inPlace = opts?.newTab !== true && current.kind === "web" ? current : null;
-        let tabId: string;
         if (inPlace) {
-          tabId = inPlace.id;
+          sameWorkspace = true;
+          setBusy(null);
           webPush(inPlace.id, entry);
+          handedOff = true;
+          await showWebEntry(inPlace, true);
         } else {
-          tabId = openWorkspace(webTabRecord(entry)).id;
+          openWorkspace(webTabRecord(entry));
+          handedOff = true;
         }
-        setBusy(null);
-        handedOff = true;
-        await loadAnnotate({
-          name: page.url,
-          docType: "web",
-          text: page.html,
-          tabId,
-        });
       } catch (cause) {
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setError(messageOf(cause));
       } finally {
         endPadOpen();
         if (!handedOff) {
           setBusy(null);
+          setWorkspaceLoadActive(false);
+          setShellLoadActive(false);
           if (fromBrowse) {
             setHoldBrowseOverlay(false);
             setBrowseMotion("idle");
             setBoardPreparing(false);
           }
+        } else if (!sameWorkspace) {
+          setBusy(null);
+          setWorkspaceLoadActive(false);
+          setBoardPreparing(false);
         }
       }
     },
-    [beginPadOpen, busy, endPadOpen, loadAnnotate, openWorkspace, problem, webTabRecord],
-  );
-
-  const showWebEntry = useCallback(
-    async (tab: WebTab) => {
-      const entry = currentEntry(tab);
-      if (!entry || busy !== null) return;
-      await loadAnnotate({
-        name: entry.url,
-        docType: "web",
-        text: entry.html,
-        tabId: tab.id,
-      });
-    },
-    [busy, loadAnnotate],
+    [
+      beginPadOpen,
+      busy,
+      endPadOpen,
+      openWorkspace,
+      problem,
+      setBrowseMotion,
+      setHoldBrowseOverlay,
+      setShellLoadActive,
+      showWebEntry,
+      webPush,
+      webTabRecord,
+    ],
   );
 
   const stepWebTab = useCallback(
@@ -5886,13 +5955,14 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       setHoldBrowseOverlay(false);
       setBrowseMotion("idle");
       setWorkspaceLoadActive(false);
+      setShellLoadActive(false);
       setBusy(null);
       setError(null);
       // The chip and the prompt are the shell's. This workspace stays mounted
       // and empty underneath it, which is what the reader asked to land on.
       onMissingContent(missing.id, missing.title, detail);
     },
-    [onMissingContent, setBrowseMotion, setError, setHoldBrowseOverlay],
+    [onMissingContent, setBrowseMotion, setError, setHoldBrowseOverlay, setShellLoadActive],
   );
 
   /**
@@ -5905,9 +5975,13 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
    */
   const openTabWorkspace = useCallback(
     async (tab: TabRecord) => {
+      const userLoad = takeUserLoad(tab.id);
       switch (tab.kind) {
         case "home":
           // Home has no board to read back; the chooser is the whole of it.
+          setBusy(null);
+          setWorkspaceLoadActive(false);
+          setBoardPreparing(false);
           return;
         case "practice": {
           /*
@@ -5919,7 +5993,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
           const opened = await loadProblem(
             tab.taskId,
             { ...bankFilters, dataset: tab.dataset },
-            { tabId: tab.id },
+            { tabId: tab.id, userLoad },
           );
           if (!opened) {
             reportMissingTab(tab, `“${tab.taskId}” could not be loaded from ${tab.dataset}.`);
@@ -5940,7 +6014,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
           // The loader, not the request wrapper: a blank notebook has no id to
           // be recognised by, so asking to "open" one would grow a second chip
           // rather than refill the one being focused.
-          await loadWhiteboard({ notebookId: tab.notebookId, tabId: tab.id });
+          await loadWhiteboard({ notebookId: tab.notebookId, tabId: tab.id, userLoad });
           return;
         }
         case "web": {
@@ -5950,8 +6024,10 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             return;
           }
           if (!entry.html) {
+            const fetchGen = workspaceLoadGenRef.current;
             try {
               const page = await fetchWebPage(entry.url);
+              if (workspaceLoadGenRef.current !== fetchGen) return;
               webPush(tab.id, {
                 url: page.url,
                 title: page.title || hostLabelFromUrl(page.url),
@@ -5962,13 +6038,15 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                 docType: "web",
                 text: page.html,
                 tabId: tab.id,
+                userLoad,
               });
             } catch {
+              if (workspaceLoadGenRef.current !== fetchGen) return;
               reportMissingTab(tab, "The page could not be fetched again.");
             }
             return;
           }
-          await showWebEntry(tab);
+          await showWebEntry(tab, userLoad);
           return;
         }
         case "annotate": {
@@ -6000,7 +6078,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
             const hash = entry?.hash ?? tab.hash;
             const bytes = hash ? await getDocBytes(hash).catch(() => null) : null;
             if (bytes) {
-              await loadAnnotate({ name, docType, bytes, docId: restoreDocId, tabId: tab.id });
+              await loadAnnotate({ name, docType, bytes, docId: restoreDocId, tabId: tab.id, userLoad });
               return;
             }
             reportMissingTab(
@@ -6011,7 +6089,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
           }
           const text = entry?.source ?? tab.source;
           if (text !== null && text !== undefined) {
-            await loadAnnotate({ name, docType, text, docId: restoreDocId, tabId: tab.id });
+            await loadAnnotate({ name, docType, text, docId: restoreDocId, tabId: tab.id, userLoad });
             return;
           }
           reportMissingTab(tab, "The document is not in the library and its file is not on this device.");
@@ -6026,6 +6104,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
       loadWhiteboard,
       reportMissingTab,
       showWebEntry,
+      takeUserLoad,
       webPush,
     ],
   );
@@ -6151,8 +6230,8 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
   const activeWebTab = activeTabRecord.kind === "web" ? activeTabRecord : undefined;
 
   /* Which header icon is the live workspace, and so wears the pressed form. */
-  const webPadLive = Boolean(problem && isAnnotate(problem) && annotateSource?.docType === "web");
-  const docPadLive = Boolean(problem && isAnnotate(problem) && annotateSource?.docType !== "web");
+  const webPadLive = tab.kind === "web";
+  const docPadLive = Boolean(problem && isAnnotate(problem) && annotateSource?.docType !== "web" && tab.kind !== "web");
   const boardPadLive = Boolean(problem && isWhiteboard(problem));
 
 
@@ -6218,15 +6297,35 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
    * back exactly where it was left.
    */
   const wasShowingRef = useRef(showing);
+  const wasSplitRoleRef = useRef(splitRole);
   useEffect(() => {
     const returning = showing && !wasShowingRef.current;
+    const splitChanged = showing && splitRole !== wasSplitRoleRef.current;
     wasShowingRef.current = showing;
-    if (!returning) return;
-    const frame = window.requestAnimationFrame(() => {
-      window.dispatchEvent(new Event("resize"));
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [showing]);
+    wasSplitRoleRef.current = splitRole;
+    if (!returning && !splitChanged) return;
+    // Same settle ladder as rotate: the first frame is often still full-width.
+    const delays = [0, 80, 200, 400, 700];
+    const ids = delays.map((ms) =>
+      window.setTimeout(() => window.dispatchEvent(new Event("resize")), ms),
+    );
+    return () => {
+      for (const id of ids) window.clearTimeout(id);
+    };
+  }, [showing, splitRole]);
+
+  /*
+   * A parked save used to leave switchMotion busy / preparing on. Focusing the
+   * partner in a split then replayed the load theatre over a board that was
+   * already there. Skip that when nothing is actually loading.
+   */
+  useEffect(() => {
+    if (!showing) return;
+    if (!problem) return;
+    if (workspaceLoadActive) return;
+    setSwitchMotion((motion) => (motion === "idle" ? motion : "idle"));
+    setBoardPreparing((on) => (on ? false : on));
+  }, [problem, showing, workspaceLoadActive]);
 
   /*
    * Mounting *is* opening.
@@ -6254,13 +6353,41 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
    * commits quietly; `leave` is the save / discard / cancel dialog and answers
    * whether it may proceed.
    */
+  const abortLoad = useCallback(async () => {
+    workspaceLoadGenRef.current += 1;
+    setBusy(null);
+    setWorkspaceLoadActive(false);
+    const browseOverlay = holdBrowseOverlay || browseMotion !== "idle";
+    const switchOverlay = switchMotion !== "idle" || boardPreparing;
+    if (browseOverlay) setBrowseMotion("done");
+    if (switchOverlay && !browseOverlay) setSwitchMotion("done");
+    if (browseOverlay || switchOverlay) setBoardPreparing(true);
+    // Same check-hold as a finished load, even if the spinner had not painted
+    // yet — Cancel must not snap Home in one frame.
+    await waitMs(doneHoldMs());
+    setBrowseMotion("idle");
+    setSwitchMotion("idle");
+    setHoldBrowseOverlay(false);
+    setBoardPreparing(false);
+    setShellLoadActive(false);
+  }, [
+    boardPreparing,
+    browseMotion,
+    holdBrowseOverlay,
+    setBrowseMotion,
+    setHoldBrowseOverlay,
+    setShellLoadActive,
+    switchMotion,
+  ]);
+
   useEffect(() => {
     setWorkspaceApi(tab.id, {
       park: () => new Promise<void>((resolve) => parkWorkspace(() => resolve())),
       leave: () => new Promise<boolean>((resolve) => leaveProblem(() => resolve(true))),
+      abortLoad,
     });
     return () => setWorkspaceApi(tab.id, null);
-  }, [leaveProblem, parkWorkspace, setWorkspaceApi, tab.id]);
+  }, [abortLoad, leaveProblem, parkWorkspace, setWorkspaceApi, tab.id]);
 
   /*
    * Only the workspace on screen wears the app's chrome. The classes live on
@@ -6342,7 +6469,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                 type="button"
                 className="lc-secondary"
                 onClick={() => void runTests()}
-                disabled={busy !== null}
+                disabled={busy !== null || canvasLoading}
                 title="Run the sample tests"
                 aria-label="Run tests"
               >
@@ -6355,7 +6482,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                 type="button"
                 className="lc-secondary"
                 onClick={() => void submitSolution()}
-                disabled={busy !== null}
+                disabled={busy !== null || canvasLoading}
                 title="Sync solution, run all tests, and continue if they pass"
                 aria-label="Submit"
               >
@@ -6367,7 +6494,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               <button
                 type="button"
                 className="lc-secondary lc-desktop-only"
-                disabled={busy !== null}
+                disabled={busy !== null || canvasLoading}
                 onClick={() => void openInIde()}
                 title="Open solution.py in Cursor / VS Code"
               >
@@ -6392,7 +6519,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               className="lc-icon lc-tip-target lc-hold-icon"
               dataTip="Web — tap to open google.com, hold for recent"
               dataTipPlacement="bottom"
-              disabled={busy !== null}
+              disabled={busy !== null || canvasLoading}
               onTap={() => void openWebPage(WEB_HOME, { newTab: true })}
               onConfirm={() => setAnnotateEntryOpen(true)}
             >
@@ -6425,7 +6552,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               className="lc-icon lc-tip-target lc-hold-icon"
               dataTip="Document — tap to open a .md, source file, .pdf or .epub, hold for recent"
               dataTipPlacement="bottom"
-              disabled={busy !== null}
+              disabled={busy !== null || canvasLoading}
               onTap={() => void pickAndOpenAnnotate()}
               onConfirm={() => setAnnotateEntryOpen(true)}
             >
@@ -6457,7 +6584,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               dataTip="Web — tap to save, hold for menu"
               dataTipPlacement="bottom"
               pressed
-              disabled={busy !== null}
+              disabled={busy !== null || canvasLoading}
               onTap={() => {
                 void saveAnnotateSession().then((saved) => {
                   if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
@@ -6492,7 +6619,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               dataTip="Markdown — tap to save, hold for menu"
               dataTipPlacement="bottom"
               pressed
-              disabled={busy !== null}
+              disabled={busy !== null || canvasLoading}
               onTap={() => {
                 void saveAnnotateSession().then((saved) => {
                   if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
@@ -6529,7 +6656,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               className="lc-icon lc-tip-target lc-hold-icon"
               dataTip="Whiteboard — tap for new, hold to load"
               dataTipPlacement="bottom"
-              disabled={busy !== null}
+              disabled={busy !== null || canvasLoading}
               onTap={() => void openWhiteboard({ fresh: true })}
               onConfirm={() => setWhiteboardEntryOpen(true)}
             >
@@ -6567,7 +6694,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
               dataTip="Whiteboard — tap to save, hold for menu"
               dataTipPlacement="bottom"
               pressed
-              disabled={busy !== null}
+              disabled={busy !== null || canvasLoading}
               onTap={() => void saveWhiteboardNow()}
               onConfirm={() => setWhiteboardEntryOpen(true)}
             >
@@ -6696,7 +6823,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                 className="lc-web-go"
                 aria-label="Go"
                 title="Go"
-                disabled={busy !== null}
+                disabled={busy !== null || canvasLoading}
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -6739,10 +6866,11 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
           ]
             .filter(Boolean)
             .join(" ")}
-          onPointerDown={() => {
+          onPointerDownCapture={() => {
             if (!active && showing) focusTab(tab.id);
           }}
         >
+          {tab.kind !== "home" && tab.kind !== "explore" ? (
           <Board
             ref={boardRef}
             themeId={themeId}
@@ -6758,6 +6886,8 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                 browseMotion !== "exit" &&
                 browseMotion !== "done",
             )}
+            chromeEnabled={active}
+            chromeHost={headerSlots.boardChrome}
             onCodeSlot={onCodeSlot}
             transparentCanvas={Boolean(
               problem &&
@@ -6943,6 +7073,7 @@ export function Workspace({ tab, active, showing, splitRole = null }: WorkspaceP
                 : null
             }
           />
+          ) : null}
           {pdfFilmOpen && pdfNav && pdfNav.count >= 2 && (
             <PdfPageRail
               count={pdfNav.count}

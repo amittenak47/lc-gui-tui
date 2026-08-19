@@ -75,4 +75,69 @@ describe("HoldButton", () => {
     });
     host.remove();
   });
+
+  it("does not wash fill on a tap when onTap is set", async () => {
+    const onTap = vi.fn();
+    const onConfirm = vi.fn();
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(
+        <HoldButton label="Test" onConfirm={onConfirm} onTap={onTap} holdMs={10_000} />,
+      );
+    });
+
+    const button = host.querySelector("button")!;
+
+    await act(async () => {
+      button.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0 }),
+      );
+    });
+    expect(button.style.getPropertyValue("--lc-hold") || "0").toBe("0");
+
+    await act(async () => {
+      button.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1 }));
+    });
+
+    expect(onTap).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(button.style.getPropertyValue("--lc-hold") || "0").toBe("0");
+
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+  });
+
+  it("starts fill immediately when there is no onTap", async () => {
+    const onConfirm = vi.fn();
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(<HoldButton label="Test" onConfirm={onConfirm} holdMs={10_000} />);
+    });
+
+    const button = host.querySelector("button")!;
+    await act(async () => {
+      button.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0 }),
+      );
+    });
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
+    const hold = Number(button.style.getPropertyValue("--lc-hold") || "0");
+    expect(hold).toBeGreaterThan(0);
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+  });
 });

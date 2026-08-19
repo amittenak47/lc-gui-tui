@@ -25,6 +25,9 @@ import {
   type TabRecord,
 } from "../util/tabs";
 
+/** Press flash on Home-as-Cancel before the load-complete hold starts. */
+export const CANCEL_HIT_MS = 160;
+
 export interface TabStripProps {
   tabs: TabRecord[];
   /** Splits, so the strip can draw the pair inside one frame. */
@@ -45,7 +48,7 @@ export interface TabStripProps {
    */
   onCancelLoad?: () => void;
   /**
-   * Drag a chip onto the board to split. Home does not drag.
+   * Drag a chip onto another chip to split them side by side. Home does not drag.
    *
    * Pointer coords, not HTML5 drag — Android WebView drops that on the floor.
    */
@@ -53,11 +56,14 @@ export interface TabStripProps {
   onTabDrop?: (id: string, x: number, y: number) => void;
   onTabDragEnd?: () => void;
   /**
+   * Dropped onto another workspace chip — those two become a vertical split.
+   */
+  onTabDropOnTab?: (dragId: string, ontoId: string) => void;
+  /**
    * Split from the chip's menu, for readers who never find the drag.
    *
-   * A gesture nobody is told about is a feature nobody has, so the same two
-   * outcomes the drag reaches — join this tab to the open one, break the pair
-   * apart — are also plain menu items on a right-click or a long press.
+   * Joins this tab to the one already on screen, side by side. Horizontal
+   * split is not offered — it fights the existing chrome.
    */
   onSplitWithActive?: (id: string, edge: SplitEdge) => void;
   onUnsplit?: (id: string) => void;
@@ -156,6 +162,24 @@ function indexStateOf(tab: TabRecord): TabIndexState | null {
   return tab.indexed;
 }
 
+function chipIdAt(
+  strip: HTMLElement | null,
+  x: number,
+  y: number,
+  skipId: string,
+): string | null {
+  if (!strip) return null;
+  const chips = strip.querySelectorAll<HTMLElement>(".lc-tab[data-tab-id]");
+  for (const chip of chips) {
+    const id = chip.dataset.tabId;
+    if (!id || id === skipId || id === HOME_TAB_ID) continue;
+    if (chip.dataset.tabKind === "cancel") continue;
+    const box = chip.getBoundingClientRect();
+    if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) return id;
+  }
+  return null;
+}
+
 export function TabStrip({
   tabs,
   groups = [],
@@ -168,6 +192,7 @@ export function TabStrip({
   onTabDrag,
   onTabDrop,
   onTabDragEnd,
+  onTabDropOnTab,
   onSplitWithActive,
   onUnsplit,
   groupedIds = [],
@@ -188,7 +213,12 @@ export function TabStrip({
     null,
   );
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [cancelHit, setCancelHit] = useState(false);
   const holdRef = useRef<{ id: string; timer: number } | null>(null);
+  const cancelTimerRef = useRef<number | null>(null);
+  const onCancelLoadRef = useRef(onCancelLoad);
+  onCancelLoadRef.current = onCancelLoad;
 
   const clearHold = useCallback(() => {
     if (holdRef.current) window.clearTimeout(holdRef.current.timer);
@@ -213,6 +243,17 @@ export function TabStrip({
     };
   }, [menu]);
 
+  useEffect(() => {
+    if (!onCancelLoad) setCancelHit(false);
+  }, [onCancelLoad]);
+
+  useEffect(
+    () => () => {
+      if (cancelTimerRef.current != null) window.clearTimeout(cancelTimerRef.current);
+    },
+    [],
+  );
+
   // A tab focused from anywhere other than the strip — an icon spawning one,
   // a close landing on its neighbour — can be scrolled out of sight.
   useEffect(() => {
@@ -231,7 +272,7 @@ export function TabStrip({
    * A split's two halves are drawn side by side, in the group's own order.
    *
    * They can be anywhere in `tabs` — the pair is made by dragging one chip
-   * onto the other's board, not by them happening to be neighbours — so the
+   * onto the other, not by them happening to be neighbours — so the
    * render order is rebuilt here. The chips travel to meet each other, which
    * is what makes forming a group read as forming a group.
    */
@@ -296,11 +337,14 @@ export function TabStrip({
             aria-selected={selected}
             data-tab-active={selected ? "true" : "false"}
             data-tab-kind={cancelling ? "cancel" : tab.kind}
+            data-tab-id={tab.id}
             data-tab-group={tab.group ?? undefined}
             className={[
               cancelling ? "lc-tab is-cancelling" : selected ? "lc-tab is-active" : "lc-tab",
               grouped ? "is-grouped" : "",
               carry?.id === tab.id ? "is-carrying" : "",
+              dropTargetId === tab.id ? "is-drop-target" : "",
+              cancelling && cancelHit ? "is-cancel-hit" : "",
             ]
               .filter(Boolean)
               .join(" ")}
@@ -314,7 +358,7 @@ export function TabStrip({
                   ? "Cancel loading"
                   : tab.id === HOME_TAB_ID
                     ? tab.title
-                    : `${tab.title}\nDrag onto the board to split · right-click for more`
+                    : `${tab.title}\nDrag onto another tab to split · right-click for more`
               }
               aria-label={label}
               onClick={() => {
@@ -322,7 +366,20 @@ export function TabStrip({
                   skipClickRef.current = false;
                   return;
                 }
-                cancelling ? onCancelLoad?.() : onFocus(tab.id);
+                if (!cancelling) {
+                  onFocus(tab.id);
+                  return;
+                }
+                if (cancelHit || cancelTimerRef.current != null) return;
+                setCancelHit(true);
+                if (still) {
+                  onCancelLoadRef.current?.();
+                  return;
+                }
+                cancelTimerRef.current = window.setTimeout(() => {
+                  cancelTimerRef.current = null;
+                  onCancelLoadRef.current?.();
+                }, CANCEL_HIT_MS);
               }}
               onContextMenu={(event) => {
                 if (cancelling || tab.id === HOME_TAB_ID) return;
@@ -357,6 +414,8 @@ export function TabStrip({
                 if (!drag.moved && dx * dx + dy * dy < 100) return;
                 drag.moved = true;
                 clearHold();
+                const onto = chipIdAt(stripRef.current, event.clientX, event.clientY, tab.id);
+                setDropTargetId(onto);
                 setCarry({ id: tab.id, title: tab.title, x: event.clientX, y: event.clientY });
                 onTabDrag?.(tab.id, event.clientX, event.clientY);
               }}
@@ -366,21 +425,36 @@ export function TabStrip({
                 if (!drag || drag.id !== tab.id) return;
                 if (drag.moved) {
                   skipClickRef.current = true;
+                  const onto = chipIdAt(stripRef.current, event.clientX, event.clientY, tab.id);
+                  if (onto) onTabDropOnTab?.(tab.id, onto);
                   onTabDrop?.(tab.id, event.clientX, event.clientY);
                 }
                 dragRef.current = null;
                 setCarry(null);
+                setDropTargetId(null);
                 onTabDragEnd?.();
               }}
               onPointerCancel={() => {
                 clearHold();
                 dragRef.current = null;
                 setCarry(null);
+                setDropTargetId(null);
                 onTabDragEnd?.();
               }}
             >
               <TabIcon kind={cancelling ? "cancel" : tab.kind} />
-              <span className="lc-tab-title">{label}</span>
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={label}
+                  className="lc-tab-title"
+                  initial={still ? false : { opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={still ? { opacity: 0 } : { opacity: 0, y: -4 }}
+                  transition={{ duration: still ? 0 : 0.16 }}
+                >
+                  {label}
+                </motion.span>
+              </AnimatePresence>
               {tab.dirty ? (
                 <span className="lc-tab-dot" aria-label="Unsaved changes" title="Unsaved changes" />
               ) : null}
@@ -471,18 +545,7 @@ export function TabStrip({
                         setMenu(null);
                       }}
                     >
-                      Split right
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={menu.id === activeId}
-                      onClick={() => {
-                        onSplitWithActive?.(menu.id, "bottom");
-                        setMenu(null);
-                      }}
-                    >
-                      Split down
+                      Split
                     </button>
                   </>
                 )}

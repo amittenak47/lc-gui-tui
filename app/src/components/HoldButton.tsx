@@ -20,7 +20,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 
 import type { CSSProperties } from "react";
 
-import { HOLD_MS } from "../util/gesture";
+import { HOLD_MS, HOLD_TAP_FILL_DELAY_MS } from "../util/gesture";
 
 /** @deprecated Prefer {@link HOLD_MS} from `util/gesture`. */
 export const DEFAULT_HOLD_MS = HOLD_MS;
@@ -113,6 +113,7 @@ export function HoldButton({
   const [holdProgress, setHoldProgress] = useState(0);
   const holdingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
+  const fillDelayRef = useRef<number | null>(null);
   const startRef = useRef(0);
   const confirmedRef = useRef(false);
   const onConfirmRef = useRef(onConfirm);
@@ -122,10 +123,17 @@ export function HoldButton({
   /** True between setPointerCapture and the matching up/cancel. */
   const capturingRef = useRef(false);
 
+  const clearFillDelay = useCallback(() => {
+    if (fillDelayRef.current == null) return;
+    window.clearTimeout(fillDelayRef.current);
+    fillDelayRef.current = null;
+  }, []);
+
   const stopHold = useCallback((opts: { reset: boolean; release?: boolean }) => {
     const wasHolding = holdingRef.current;
     const wasConfirmed = confirmedRef.current;
     holdingRef.current = false;
+    clearFillDelay();
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
@@ -144,7 +152,7 @@ export function HoldButton({
       confirmedRef.current = false;
       setHoldProgress(0);
     }
-  }, []);
+  }, [clearFillDelay]);
 
   const displayProgress =
     holdProgress > 0
@@ -153,9 +161,17 @@ export function HoldButton({
 
   const tick = useCallback(() => {
     if (!holdingRef.current) return;
-    const next = Math.min(1, (performance.now() - startRef.current) / holdMs);
+    const elapsed = performance.now() - startRef.current;
+    const delay = onTapRef.current ? HOLD_TAP_FILL_DELAY_MS : 0;
+    if (elapsed < delay) {
+      setHoldProgress(0);
+      rafRef.current = requestAnimationFrame(tick);
+      return;
+    }
+    const span = Math.max(1, holdMs - delay);
+    const next = Math.min(1, (elapsed - delay) / span);
     setHoldProgress(next);
-    if (next >= 1) {
+    if (elapsed >= holdMs || next >= 1) {
       holdingRef.current = false;
       confirmedRef.current = true;
       setHoldProgress(1);
@@ -176,8 +192,18 @@ export function HoldButton({
     holdingRef.current = true;
     startRef.current = performance.now();
     setHoldProgress(0);
+    clearFillDelay();
+    if (onTapRef.current) {
+      // Keep `--lc-hold` at 0 until this is clearly a hold, not a tap.
+      fillDelayRef.current = window.setTimeout(() => {
+        fillDelayRef.current = null;
+        if (!holdingRef.current || confirmedRef.current) return;
+        rafRef.current = requestAnimationFrame(tick);
+      }, HOLD_TAP_FILL_DELAY_MS);
+      return;
+    }
     rafRef.current = requestAnimationFrame(tick);
-  }, [disabled, tick]);
+  }, [clearFillDelay, disabled, tick]);
 
   useEffect(() => () => stopHold({ reset: false }), [stopHold]);
 
