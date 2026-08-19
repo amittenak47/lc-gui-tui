@@ -10,7 +10,7 @@
 # version tags instead, that URL would have to change on every release and
 # every already-installed tablet would stop finding its datasets. Repack the
 # corpus zips with `python scripts/pack_seed_corpora.py` and upload them to
-# `corpora-v1` by hand when the data changes — which is rarely, and on a
+# `corpora-v1` by hand when the data changes, which is rare and happens on a
 # schedule unrelated to app releases.
 
 name: Release APKs
@@ -127,7 +127,7 @@ jobs:
             if [ -f "$candidate" ]; then APK="$candidate"; break; fi
           done
           if [ -z "$APK" ]; then
-            echo "No APK at either expected path — searching $OUT …"
+            echo "No APK at either expected path. Searching $OUT"
             find "$OUT" -name '*.apk' -print || true
             exit 1
           fi
@@ -167,13 +167,13 @@ jobs:
             dist/whiteboard-practice-debug.apk
             dist/whiteboard-only-debug.apk
           body: |
-            Two debug APKs. Pick one — they share the app id
+            Two debug APKs. Pick one. They share the app id
             `dev.lc.whiteboard`, so run `adb uninstall dev.lc.whiteboard`
             before switching from one to the other.
 
             | Build | Has | Missing |
             | --- | --- | --- |
-            | `whiteboard-practice-debug.apk` | Whiteboard, Annotate, Browse, Agent, **Practice + tests** | — |
+            | `whiteboard-practice-debug.apk` | Whiteboard, Annotate, Browse, Agent, **Practice + tests** | nothing |
             | `whiteboard-only-debug.apk` | Whiteboard, Annotate, Browse, Agent | Practice, RustPython |
 
             Problem corpora are **not** in this release, and not inside the
