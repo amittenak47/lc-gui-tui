@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  LINK_REST,
   clusterCentres,
   clusterLabels,
   makeBodies,
   makeBody,
+  sagOf,
   settle,
   step,
   type Body,
+  type Link,
 } from "./exploreLayout";
 import type { NodeRef } from "../util/noteLinks";
 
@@ -18,11 +21,13 @@ function bodies(nodes: NodeRef[]): Body[] {
   return makeBodies(nodes, (node) => `${node.type}:${node.id}`);
 }
 
-function rest(nodes: NodeRef[], clustered = false): Body[] {
+function rest(nodes: NodeRef[], clustered = false, links: Link[] = []): Body[] {
   const list = bodies(nodes);
-  settle(list, clusterCentres(list.map((b) => b.node.type)), clustered);
+  settle(list, clusterCentres(list.map((b) => b.node.type)), clustered, 1.6, 240, links);
   return list;
 }
+
+const key = (node: NodeRef) => `${node.type}:${node.id}`;
 
 describe("makeBodies", () => {
   it("is stable for a set, so opening Explore twice looks the same", () => {
@@ -229,5 +234,74 @@ describe("clusterLabels", () => {
 
   it("has nothing to say about an empty canvas", () => {
     expect(clusterLabels([])).toEqual([]);
+  });
+});
+
+describe("link springs", () => {
+  it("pulls two linked nodes toward the rest length", () => {
+    // Edges used to exert no force, which left the graph inert: nothing
+    // connected behaved as though it were.
+    const a = note("a");
+    const b = note("b");
+    const loose = rest([a, b]);
+    const sprung = rest([a, b], false, [{ a: key(a), b: key(b) }]);
+    const gap = (list: Body[]) => Math.hypot(list[0]!.x - list[1]!.x, list[0]!.y - list[1]!.y);
+    expect(Math.abs(gap(sprung) - LINK_REST)).toBeLessThan(Math.abs(gap(loose) - LINK_REST));
+  });
+
+  it("stays finite and on the page under a dense mesh", () => {
+    // Every node linked to every other is the worst case for a spring network.
+    const nodes = Array.from({ length: 7 }, (_, i) => note(`n${i}`));
+    const links: Link[] = [];
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        links.push({ a: key(nodes[i]!), b: key(nodes[j]!) });
+      }
+    }
+    for (const body of rest(nodes, false, links)) {
+      expect(Number.isFinite(body.x)).toBe(true);
+      expect(Number.isFinite(body.y)).toBe(true);
+      expect(body.x).toBeGreaterThanOrEqual(0.05);
+      expect(body.x).toBeLessThanOrEqual(0.95);
+    }
+  });
+
+  it("ignores a link naming a node that is not on screen", () => {
+    // Filtering hides nodes but the edge list is not refiltered with them.
+    const a = note("a");
+    const list = bodies([a]);
+    expect(() =>
+      settle(list, clusterCentres(["annotate"]), false, 1.6, 60, [
+        { a: key(a), b: "annotate:gone" },
+        { a: "annotate:gone", b: "annotate:also-gone" },
+      ]),
+    ).not.toThrow();
+    expect(Number.isFinite(list[0]!.x)).toBe(true);
+  });
+
+  it("ignores a link from a node to itself", () => {
+    const a = note("a");
+    const list = bodies([a]);
+    settle(list, clusterCentres(["annotate"]), false, 1.6, 60, [{ a: key(a), b: key(a) }]);
+    expect(Number.isFinite(list[0]!.x)).toBe(true);
+  });
+});
+
+describe("sagOf", () => {
+  it("bows a slack link more than a stretched one", () => {
+    // The curve is the spring's extension made visible, not decoration.
+    expect(sagOf(LINK_REST - 0.2)).toBeGreaterThan(sagOf(LINK_REST + 0.2));
+  });
+
+  it("keeps a little bow even at rest, so links read as cable", () => {
+    expect(sagOf(LINK_REST)).toBeGreaterThan(0);
+  });
+
+  it("clamps, so a very long or very short link stays drawable", () => {
+    for (const d of [0, 0.001, 1, 4, 50]) {
+      const sag = sagOf(d);
+      expect(sag).toBeGreaterThanOrEqual(0.012);
+      expect(sag).toBeLessThanOrEqual(0.16);
+    }
   });
 });
