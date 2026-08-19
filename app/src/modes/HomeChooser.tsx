@@ -1,15 +1,15 @@
 /**
- * Landing screen — Practice, Whiteboard, Annotate, Browse.
+ * Landing screen — Practice, Whiteboard, Annotate, Browse, Explore.
  *
  * There is no longer a "What do you want to do?" banner over the cards. The
  * header already says `choose a mode to start`, and the question was asking
  * something the four cards answer by existing.
  *
  * The grid is symmetric at every size rather than reflowing into an orphan
- * row: four modes go 4-across, then 2×2, then a rail of icon tiles. Three
- * modes (LeetCode compiled out) stay 3-across and drop straight to the rail —
- * `homeModeColumns` is what keeps the middle tier from leaving one card
- * hanging on its own line.
+ * row: an even count halves cleanly, an odd one keeps its full width and skips
+ * the middle tier — `homeModeColumns` is what keeps that tier from leaving one
+ * card hanging on its own line. With LeetCode compiled in that is five modes
+ * (odd, so 5-across then the rail); without it, four (4, then 2×2).
  *
  * Sizing is driven by a container query on the chooser itself, not the
  * viewport, so the same collapse happens when something else takes the width.
@@ -25,6 +25,8 @@ export interface HomeChooserProps {
   onAnnotate: () => void;
   /** Opens google.com as a snapshot pad — same entry as the header globe. */
   onBrowse: () => void;
+  /** The notes graph — one tab, see `EXPLORE_TAB_LIMIT`. */
+  onExplore: () => void;
   /** Something is already opening; the cards stop taking taps. */
   busy?: boolean;
 }
@@ -72,6 +74,7 @@ export function HomeChooser({
   onWhiteboard,
   onAnnotate,
   onBrowse,
+  onExplore,
   busy = false,
 }: HomeChooserProps) {
   const modes: HomeMode[] = [
@@ -137,6 +140,29 @@ export function HomeChooser({
       ),
       onOpen: onBrowse,
     },
+    {
+      id: "explore",
+      kicker: "Notes",
+      title: "Explore",
+      blurb: "See how files, notebooks, and problems connect.",
+      icon: (
+        // A hub with satellites — the same idea as the graph it opens, drawn
+        // at the weight of the other four glyphs. The star field that animates
+        // on it is CSS (`.lc-home-card-stars`), not more paths here.
+        <Glyph>
+          <circle cx="12" cy="12" r="2.6" />
+          <circle cx="5" cy="6.5" r="1.5" />
+          <circle cx="19.2" cy="7.5" r="1.5" />
+          <circle cx="6.5" cy="18.5" r="1.5" />
+          <circle cx="18" cy="17.5" r="1.5" />
+          <path d="M6.2 7.5 10 10.6" />
+          <path d="M18 8.6 14.2 10.9" />
+          <path d="M7.6 17.4 10.4 13.9" />
+          <path d="M16.9 16.5 13.9 13.6" />
+        </Glyph>
+      ),
+      onOpen: onExplore,
+    },
   ];
 
   return (
@@ -159,7 +185,14 @@ export function HomeChooser({
             disabled={busy}
             onClick={mode.onOpen}
           >
-            <span className="lc-home-card-icon" aria-hidden>
+            <span
+              className={
+                mode.id === "explore"
+                  ? "lc-home-card-icon lc-home-card-stars"
+                  : "lc-home-card-icon"
+              }
+              aria-hidden
+            >
               {mode.icon}
             </span>
             <span className="lc-home-card-text">

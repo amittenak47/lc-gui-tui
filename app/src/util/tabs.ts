@@ -22,7 +22,7 @@ import type { DocType } from "./annotateStore";
 import { hostLabelFromUrl } from "./webPage";
 import { type WebHistory, type WebPadEntry, currentEntry, pushWeb, stepWeb } from "./webPadSession";
 
-export type TabKind = "home" | "practice" | "whiteboard" | "annotate" | "web";
+export type TabKind = "home" | "practice" | "whiteboard" | "annotate" | "web" | "explore";
 
 /** Mirrors `DocIndexChipStatus` without pulling a component into the model. */
 export type TabIndexState = "idle" | "indexing" | "indexed" | "error";
@@ -43,6 +43,16 @@ export const WEB_TAB_LIMIT = 2;
  */
 export const PRACTICE_TAB_LIMIT = 1;
 
+/**
+ * One atlas.
+ *
+ * Explore is a view *of* the other tabs, so a second copy would show the same
+ * thing twice and disagree with itself the moment one of them was filtered.
+ * Unlike Practice, opening it again focuses the existing chip rather than
+ * replacing it — there is no second Explore to switch to.
+ */
+export const EXPLORE_TAB_LIMIT = 1;
+
 interface TabBase {
   id: string;
   title: string;
@@ -51,6 +61,10 @@ interface TabBase {
   /** Split group id. Both children of a group stay live — see the mount budget. */
   group?: string;
   lastActive: number;
+}
+
+export interface ExploreTab extends TabBase {
+  kind: "explore";
 }
 
 export interface HomeTab extends TabBase {
@@ -93,7 +107,13 @@ export interface WebTab extends TabBase, WebHistory {
   indexed: TabIndexState;
 }
 
-export type TabRecord = HomeTab | PracticeTab | WhiteboardTab | AnnotateTab | WebTab;
+export type TabRecord =
+  | HomeTab
+  | PracticeTab
+  | WhiteboardTab
+  | AnnotateTab
+  | WebTab
+  | ExploreTab;
 
 /** Vertical sash = left | right panes. Horizontal sash = top | bottom. */
 export type SplitAxis = "vertical" | "horizontal";
@@ -346,6 +366,9 @@ export function sameEntity(a: TabRecord, b: TabRecord): boolean {
       return a.dataset === (b as PracticeTab).dataset && a.taskId === (b as PracticeTab).taskId;
     case "whiteboard":
       return a.notebookId !== null && a.notebookId === (b as WhiteboardTab).notebookId;
+    case "explore":
+      // There is only ever one, so any two explore records are the same one.
+      return true;
     case "annotate":
       /*
        * The annotation set, not the file it was drawn over.
