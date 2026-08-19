@@ -5092,6 +5092,8 @@ body[data-lc-sash-drag="horizontal"] {
  * connected, not how emphatically.
  */
 .lc-explore-beam {
+  /* Paths, not lines: a curve with a fill is a blob. */
+  fill: none;
   stroke-linecap: round;
   transition: opacity 200ms ease;
 }

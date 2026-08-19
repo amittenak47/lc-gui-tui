@@ -31,9 +31,11 @@ import {
   clusterCentres,
   clusterLabels,
   makeBodies,
+  sagOf,
   settle,
   step,
   type Body,
+  type Link,
 } from "./exploreLayout";
 import {
   isUnresolved,
@@ -109,11 +111,13 @@ export function ExploreWorkspace({
   const hostRef = useRef<HTMLDivElement | null>(null);
   /** Edges by id, for the paint loop, which must not depend on React state. */
   const edgeIndexRef = useRef(new Map<string, Edge>());
+  /** The same edges as springs, for the simulation. */
+  const linksRef = useRef<Link[]>([]);
   const bodiesRef = useRef<Body[]>([]);
   const nodeElsRef = useRef(new Map<string, HTMLElement>());
-  const edgeElsRef = useRef(new Map<string, SVGLineElement>());
+  const edgeElsRef = useRef(new Map<string, SVGPathElement>());
   /** The blurred copy of each edge, drawn under its core. */
-  const glowElsRef = useRef(new Map<string, SVGLineElement>());
+  const glowElsRef = useRef(new Map<string, SVGPathElement>());
   const boxRef = useRef({ w: 0, h: 0 });
   const clusteredRef = useRef(clustered);
   clusteredRef.current = clustered;
@@ -122,6 +126,10 @@ export function ExploreWorkspace({
 
   useEffect(() => {
     edgeIndexRef.current = new Map(edges.map((edge) => [edge.id, edge]));
+    linksRef.current = edges.map((edge) => ({
+      a: nodeKey(edge.from),
+      b: nodeKey(edge.to),
+    }));
   }, [edges]);
 
   useEffect(() => {
@@ -170,6 +178,8 @@ export function ExploreWorkspace({
         clusterCentres(next.map((body) => body.node.type)),
         clusteredRef.current,
         box.h > 0 ? box.w / box.h : 1.6,
+        240,
+        linksRef.current,
       );
       paintRef.current();
     }
@@ -206,6 +216,8 @@ export function ExploreWorkspace({
           clusterCentres(bodiesRef.current.map((body) => body.node.type)),
           clusteredRef.current,
           box.width / box.height,
+          240,
+          linksRef.current,
         );
         paint();
       }
@@ -231,27 +243,32 @@ export function ExploreWorkspace({
       // node, and only the transform stays off the layout path.
       if (el) el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
     }
+    const aspect = h > 0 ? w / h : 1.6;
     for (const [id, line] of edgeElsRef.current) {
       const edge = edgeIndexRef.current.get(id);
       if (!edge) continue;
       const from = at.get(nodeKey(edge.from));
       const to = at.get(nodeKey(edge.to));
       if (!from || !to) continue;
-      const x1 = from.x.toFixed(1);
-      const y1 = from.y.toFixed(1);
-      const x2 = to.x.toFixed(1);
-      const y2 = to.y.toFixed(1);
-      line.setAttribute("x1", x1);
-      line.setAttribute("y1", y1);
-      line.setAttribute("x2", x2);
-      line.setAttribute("y2", y2);
-      const glow = glowElsRef.current.get(id);
-      if (glow) {
-        glow.setAttribute("x1", x1);
-        glow.setAttribute("y1", y1);
-        glow.setAttribute("x2", x2);
-        glow.setAttribute("y2", y2);
-      }
+      /*
+       * A quadratic whose control point is pushed off the chord.
+       *
+       * How far is `sagOf`, which reads the spring's extension, so a slack
+       * link hangs and a stretched one pulls straight. The side is seeded from
+       * the edge id, or every link in a bundle would bow the same way and the
+       * whole thing would look combed.
+       */
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const pixels = Math.hypot(dx, dy) || 1;
+      // Back into normalized, aspect-corrected units to ask about the spring.
+      const normalized = Math.hypot((dx / Math.max(w, 1)) * aspect, dy / Math.max(h, 1));
+      const bow = sagOf(normalized) * pixels * sideOf(id);
+      const midX = (from.x + to.x) / 2 - (dy / pixels) * bow;
+      const midY = (from.y + to.y) / 2 + (dx / pixels) * bow;
+      const d = `M${from.x.toFixed(1)} ${from.y.toFixed(1)} Q${midX.toFixed(1)} ${midY.toFixed(1)} ${to.x.toFixed(1)} ${to.y.toFixed(1)}`;
+      line.setAttribute("d", d);
+      glowElsRef.current.get(id)?.setAttribute("d", d);
     }
   }, []);
 
@@ -271,6 +288,8 @@ export function ExploreWorkspace({
         clusterCentres(bodiesRef.current.map((body) => body.node.type)),
         clustered,
         box.h > 0 ? box.w / box.h : 1.6,
+        240,
+        linksRef.current,
       );
       paint();
       setLabelTick((tick) => tick + 1);
@@ -293,6 +312,7 @@ export function ExploreWorkspace({
         dt,
         time: elapsed,
         aspect: box.h > 0 ? box.w / box.h : 1.6,
+        links: linksRef.current,
       });
       paint();
       // Cluster captions follow their members, but at four frames a second:
@@ -464,7 +484,7 @@ export function ExploreWorkspace({
                   const touched =
                     !selected || sameNode(edge.from, selected) || sameNode(edge.to, selected);
                   return (
-                    <line
+                    <path
                       key={edge.id}
                       ref={(el) => {
                         if (el) glowElsRef.current.set(edge.id, el);
@@ -481,7 +501,7 @@ export function ExploreWorkspace({
                   const touched =
                     !selected || sameNode(edge.from, selected) || sameNode(edge.to, selected);
                   return (
-                    <line
+                    <path
                       key={edge.id}
                       ref={(el) => {
                         if (el) edgeElsRef.current.set(edge.id, el);
@@ -578,6 +598,16 @@ export function ExploreWorkspace({
       )}
     </div>
   );
+}
+
+/** Which way an edge bows. Seeded from its id so a bundle is not combed flat. */
+function sideOf(id: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i += 1) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return (hash & 1) === 0 ? 1 : -1;
 }
 
 function innerWidthSafe(): number {

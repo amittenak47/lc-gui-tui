@@ -157,6 +157,12 @@ export function clusterCentres(
   return out;
 }
 
+/** One edge, as the simulation needs it: two body keys. */
+export interface Link {
+  a: string;
+  b: string;
+}
+
 export interface StepOptions {
   /** Pull each node toward its kind's centre instead of letting it roam. */
   clustered: boolean;
@@ -166,6 +172,8 @@ export interface StepOptions {
   time: number;
   /** Box aspect (w/h), so repulsion is round on screen and not on paper. */
   aspect: number;
+  /** Links, which pull their ends toward a rest length. */
+  links?: readonly Link[];
 }
 
 /**
@@ -179,6 +187,23 @@ export interface StepOptions {
  */
 const MIN_GAP = 0.26;
 const REPEL = 0.6;
+/**
+ * How long a link wants to be, and how hard it insists.
+ *
+ * Edges used to exert no force at all, on the reasoning that a reader looking
+ * for one note should not have the map rearrange around whatever it links to.
+ * That holds for *layout*, and it made the graph inert: nothing connected ever
+ * behaved as though it were connected. A soft spring gets the behaviour without
+ * the rearrangement, because it is weak against the home anchor at long range
+ * and only really speaks up when a link is stretched or crushed.
+ *
+ * Rest length sits above {@link MIN_GAP} so a spring and the spacing that keeps
+ * captions apart are not permanently fighting each other.
+ */
+const LINK_REST = 0.34;
+const LINK_SPRING = 1.15;
+/** Past this the spring stops getting stronger, so one long edge cannot fling a node. */
+const LINK_MAX_STRETCH = 0.45;
 const HOME_PULL = 0.75;
 const CLUSTER_PULL = 3.4;
 const DRIFT = 0.014;
@@ -195,7 +220,7 @@ const EDGE_PAD = 0.07;
  * keeps the page from looking frozen.
  */
 export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: number }>, opts: StepOptions): void {
-  const { clustered, dt, time, aspect } = opts;
+  const { clustered, dt, time, aspect, links } = opts;
   /*
    * Clustering shrinks the spacing it has to overcome.
    *
@@ -267,7 +292,55 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
       body.vy = -Math.abs(body.vy) * 0.4;
     }
   }
+
+  if (links && links.length > 0) applySprings(bodies, links, dt, aspect);
 }
+
+/**
+ * Pull each link's ends toward the rest length.
+ *
+ * A second pass rather than another term in the loop above, because a spring
+ * acts on *two* bodies and the loop is written per body. Equal and opposite,
+ * so a pair drifts as a pair instead of one end towing the other.
+ */
+function applySprings(bodies: Body[], links: readonly Link[], dt: number, aspect: number): void {
+  const byKey = new Map(bodies.map((body) => [body.key, body]));
+  for (const link of links) {
+    const a = byKey.get(link.a);
+    const b = byKey.get(link.b);
+    if (!a || !b || a === b) continue;
+    const dx = (b.x - a.x) * aspect;
+    const dy = b.y - a.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 1e-5) continue;
+    // Clamped, so one very long edge cannot fling its ends across the canvas.
+    const stretch = Math.max(-LINK_MAX_STRETCH, Math.min(LINK_MAX_STRETCH, dist - LINK_REST));
+    const force = LINK_SPRING * stretch * dt * 0.5;
+    const ux = (dx / dist) * force;
+    const uy = (dy / dist) * force;
+    a.vx += ux / aspect;
+    a.vy += uy;
+    b.vx -= ux / aspect;
+    b.vy -= uy;
+  }
+}
+
+/**
+ * How far a link bows, given how long it currently is.
+ *
+ * Slack bows; stretched pulls straight. That is the whole of the elastic read:
+ * the curve is not decoration, it is the spring's extension made visible, so a
+ * node dragged away from its neighbour visibly tightens the line between them.
+ */
+export function sagOf(dist: number): number {
+  const slack = LINK_REST - dist;
+  // A little bow even at rest, so a graph sitting still still looks like cable
+  // rather than like wireframe.
+  const base = 0.055;
+  return Math.max(0.012, Math.min(0.16, base + slack * 0.85));
+}
+
+export { LINK_REST };
 
 /**
  * Run the simulation to a resting state without painting it.
@@ -281,9 +354,10 @@ export function settle(
   clustered: boolean,
   aspect = 1.6,
   frames = 240,
+  links: readonly Link[] = [],
 ): void {
   for (let i = 0; i < frames; i += 1) {
-    step(bodies, centres, { clustered, dt: 1 / 60, time: 0, aspect });
+    step(bodies, centres, { clustered, dt: 1 / 60, time: 0, aspect, links });
   }
 }
 
