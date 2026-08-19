@@ -4867,108 +4867,219 @@ body[data-lc-sash-drag="horizontal"] {
 /* ------------------------------------------------------------- explore --- */
 
 /*
- * The atlas. Plain SVG on a plain surface — this is a view of the other pads,
- * so it deliberately mounts no canvas engine of its own.
+ * The atlas. Plain SVG on a plain surface, because this is a view of the other
+ * pads and mounting a canvas engine to draw circles would be the wrong trade.
+ *
+ * Everything here is sized from the element rather than the viewport. Explore
+ * can be half a split pane with a sash moving beside it, so `100%` and `flex`
+ * do the work and no rule reads `vw` or `vh`.
  */
 .lc-explore {
-  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
-  gap: 10px;
-  padding: 14px;
   background: var(--bg);
 }
 
-.lc-explore-chrome {
+/* ---- top bar ---- */
+
+.lc-explore-bar {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  flex: 0 0 auto;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--chrome-edge) 60%, transparent);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
 }
 
+/*
+ * Filters scroll rather than wrap. A wrapping row changes the bar's height,
+ * which moves the canvas under the reader's finger every time they narrow the
+ * view; in a split pane it would do that constantly.
+ */
 .lc-explore-filters {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.lc-explore-filters::-webkit-scrollbar {
+  display: none;
 }
 
 .lc-explore-chip {
-  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
   border-radius: 999px;
   border: 1px solid var(--chrome-edge);
   background: transparent;
   color: var(--muted);
   font: inherit;
   font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.lc-explore-chip:hover {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--chrome-edge));
 }
 
 .lc-explore-chip.is-active {
   color: var(--ink);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.lc-explore-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.lc-explore-chip-count {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lc-explore-chip.is-active .lc-explore-chip-count {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 
 .lc-explore-search {
-  flex: 1 1 12rem;
-  min-width: 0;
-  padding: 5px 10px;
-  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  flex: 0 1 15rem;
+  gap: 6px;
+  min-width: 7rem;
+  margin-left: auto;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
   border: 1px solid var(--chrome-edge);
+  background: transparent;
+  color: var(--muted);
+}
+
+.lc-explore-search:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  color: var(--ink);
+}
+
+.lc-explore-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
   background: transparent;
   color: var(--ink);
   font: inherit;
   font-size: 12px;
+  outline: none;
+}
+
+.lc-explore-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.lc-explore-search-clear {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* ---- stage ---- */
+
+.lc-explore-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .lc-explore-canvas {
-  flex: 1;
-  min-height: 0;
+  display: block;
   width: 100%;
+  height: 100%;
+}
+
+.lc-explore-chrome {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
 }
 
 .lc-explore-empty {
-  flex: 1;
+  position: absolute;
+  inset: 0;
   display: grid;
   place-items: center;
+  margin: 0;
+  padding: 0 24px;
   color: var(--muted);
   text-align: center;
-  padding: 0 24px;
 }
 
 .lc-explore-cluster-label {
   fill: var(--muted);
-  font-size: 13px;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  pointer-events: none;
+  transition: opacity 200ms ease;
 }
 
 /*
- * Each kind of edge draws differently, because they are different claims.
- * A line the reader typed and a line the app lifted off a footnote should not
- * be indistinguishable on the page that exists to explain the connections.
+ * Each kind of edge draws differently, because they are different claims. A
+ * line the reader typed and a line the app lifted off a footnote should not be
+ * one stroke on the page that exists to explain the connections.
  */
 .lc-explore-edge {
-  stroke: var(--chrome-edge);
-  stroke-width: 1.4;
-  transition: opacity 140ms ease;
+  stroke: color-mix(in srgb, var(--chrome-edge) 90%, transparent);
+  stroke-width: 1.3;
+  transition: opacity 160ms ease;
 }
 
 .lc-explore-edge.is-wiki {
-  stroke: color-mix(in srgb, var(--accent) 70%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 62%, transparent);
 }
 
 .lc-explore-edge.is-picker {
-  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 48%, transparent);
   stroke-dasharray: 4 4;
 }
 
 .lc-explore-edge.is-footnote-thread {
-  stroke: color-mix(in srgb, var(--accent) 85%, transparent);
-  stroke-width: 2.2;
+  stroke: color-mix(in srgb, #a78bfa 75%, transparent);
+  stroke-width: 2;
 }
 
 .lc-explore-edge.is-footnote-url {
@@ -4977,129 +5088,283 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-explore-edge.is-ink {
-  stroke: color-mix(in srgb, #d98b3a 80%, transparent);
-  stroke-width: 2;
+  stroke: color-mix(in srgb, #d98b3a 78%, transparent);
+  stroke-width: 1.9;
   stroke-linecap: round;
 }
 
 .lc-explore-edge.is-dim {
-  opacity: 0.15;
+  opacity: 0.12;
 }
 
-.lc-explore-node circle {
-  fill: var(--panel-bg, var(--bg));
-  stroke: var(--muted);
+/* ---- nodes ---- */
+
+.lc-explore-node {
+  transition: opacity 160ms ease;
+}
+
+.lc-explore-node-dot {
+  fill: color-mix(in srgb, var(--surface) 92%, transparent);
+  stroke: var(--lc-node-tint, var(--muted));
   stroke-width: 2;
   cursor: pointer;
-  transition: opacity 140ms ease;
+  transition:
+    fill 140ms ease,
+    r 140ms ease,
+    stroke-width 140ms ease;
 }
 
-.lc-explore-node.is-annotate circle {
-  stroke: color-mix(in srgb, var(--accent) 80%, transparent);
+.lc-explore-node:hover .lc-explore-node-dot {
+  r: 13;
+  fill: color-mix(in srgb, var(--lc-node-tint, var(--accent)) 18%, var(--surface));
 }
 
-.lc-explore-node.is-whiteboard circle {
-  stroke: color-mix(in srgb, var(--accent) 45%, var(--muted));
+.lc-explore-node-dot:focus-visible {
+  outline: none;
+  stroke-width: 3.5;
 }
 
-.lc-explore-node.is-practice circle {
-  stroke: #4aa36a;
-}
-
-.lc-explore-node.is-web circle {
-  stroke: #d98b3a;
-}
-
-/* A link points here and nothing answers — dashed, not drawn as real. */
-.lc-explore-node.is-missing circle {
+/* A link points here and nothing answers. Dashed, so it does not read as real. */
+.lc-explore-node.is-missing .lc-explore-node-dot {
   stroke-dasharray: 3 3;
   opacity: 0.7;
 }
 
-.lc-explore-node.is-selected circle {
-  fill: color-mix(in srgb, var(--accent) 30%, var(--panel-bg, var(--bg)));
+.lc-explore-node.is-selected .lc-explore-node-dot {
+  fill: color-mix(in srgb, var(--lc-node-tint, var(--accent)) 34%, var(--surface));
+  stroke-width: 2.6;
 }
 
 /* You are here: this node is a pad live in another pane. */
-.lc-explore-node.is-here circle {
+.lc-explore-node-halo {
+  fill: none;
   stroke: var(--accent);
-  stroke-width: 3;
+  stroke-width: 1.4;
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lc-explore-node-halo {
+    animation: lc-explore-halo 2.6s ease-in-out infinite;
+  }
+}
+
+@keyframes lc-explore-halo {
+  0%,
+  100% {
+    opacity: 0.5;
+    stroke-width: 1.4;
+  }
+  50% {
+    opacity: 0.16;
+    stroke-width: 2.6;
+  }
 }
 
 .lc-explore-node.is-dim {
-  opacity: 0.22;
+  opacity: 0.2;
 }
 
 .lc-explore-node-label {
   fill: var(--muted);
-  font-size: 12px;
+  font-size: 11.5px;
   pointer-events: none;
 }
 
 .lc-explore-node.is-selected .lc-explore-node-label,
-.lc-explore-node.is-here .lc-explore-node-label {
+.lc-explore-node.is-here .lc-explore-node-label,
+.lc-explore-node:hover .lc-explore-node-label {
   fill: var(--ink);
 }
 
-.lc-explore-card {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-  z-index: 4;
-  width: min(20rem, calc(100% - 32px));
-  max-height: min(60%, 26rem);
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 10px;
-  border: 1px solid var(--chrome-edge);
-  background: var(--panel-bg, var(--bg));
-  box-shadow: 0 12px 30px rgb(0 0 0 / 0.35);
+/* ---- node sheet ---- */
+
+/*
+ * The same panel the ink wheel uses to explain a nib, pointed at a graph node.
+ * Only the parts a node actually has are restyled; the shell, the morph and the
+ * open/close animation come from `.lc-preset-sheet` unchanged.
+ */
+.lc-node-sheet {
+  width: min(460px, calc(100% - 24px));
+  max-height: min(70%, 560px);
 }
 
-.lc-explore-card-head {
+.lc-node-sheet-tabs {
   display: flex;
-  flex-direction: column;
+  flex: 0 0 auto;
   gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--chrome-edge) 60%, transparent);
 }
 
-.lc-explore-card-head .lc-muted {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-}
-
-.lc-explore-spec {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 2px 12px;
-  margin: 0;
+.lc-node-sheet-tab {
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
   font-size: 12px;
+  cursor: pointer;
 }
 
-.lc-explore-spec dt {
+.lc-node-sheet-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.lc-node-sheet-panel {
+  padding: 12px 16px 14px;
+}
+
+.lc-node-sheet-spec {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+}
+
+.lc-node-sheet-spec-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--chrome-edge) 45%, transparent);
+  font-size: 12.5px;
+}
+
+.lc-node-sheet-spec-row:last-child {
+  border-bottom: 0;
+}
+
+.lc-node-sheet-spec dt {
   color: var(--muted);
 }
 
-.lc-explore-spec dd {
+.lc-node-sheet-spec dd {
   margin: 0;
   color: var(--ink);
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
-.lc-explore-neighbours {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.lc-node-sheet-links {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.lc-explore-card-actions {
+.lc-node-sheet-links li {
   display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.lc-node-sheet-link {
+  display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 6px;
+  gap: 1px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lc-node-sheet-link:hover,
+.lc-node-sheet-link:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.lc-node-sheet-link strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-node-sheet-link .lc-muted {
+  font-size: 11px;
+}
+
+/* Removes the link, never the thing on the other end of it. */
+.lc-node-sheet-unlink {
+  flex: 0 0 auto;
+  width: 30px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.lc-node-sheet-unlink:hover,
+.lc-node-sheet-unlink:focus-visible {
+  outline: none;
+  color: #e06c75;
+  border-color: color-mix(in srgb, #e06c75 45%, transparent);
+  background: color-mix(in srgb, #e06c75 12%, transparent);
+}
+
+.lc-node-sheet-foot {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 10px 16px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--chrome-edge) 60%, transparent);
+}
+
+/*
+ * The sheet's own buttons. HoldButton is right for a preset, where a mistap
+ * overwrites something; opening a workspace is reversible, so it is a tap.
+ */
+.lc-node-btn {
+  flex: 1 1 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--chrome-edge);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.lc-node-btn:hover:not(:disabled),
+.lc-node-btn:focus-visible:not(:disabled) {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.lc-node-btn.is-primary {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.lc-node-btn.is-primary:hover,
+.lc-node-btn.is-primary:focus-visible {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.lc-node-btn:disabled {
+  opacity: 0.42;
+  cursor: default;
 }
 
 /*
