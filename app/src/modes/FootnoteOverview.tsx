@@ -679,7 +679,7 @@ export function FootnoteOverview({
               </header>
               {subMarks.length > 0 && (
                 <ul
-                  className="lc-footnote-overview-link-list lc-scroll-pane"
+                  className={listClass(subMarks.length)}
                   aria-label="Sub-marks"
                 >
                   {subMarks.map((mark) => (
@@ -709,7 +709,7 @@ export function FootnoteOverview({
                 onAdd={() => openTask({ kind: "link", index: null })}
               >
                 {(searchLink || userLinks.length > 0) && (
-                  <ul className="lc-footnote-overview-link-list">
+                  <ul className={listClass(userLinks.length + (searchLink ? 1 : 0))}>
                     {searchLink && (
                       <li>
                         <button
@@ -740,7 +740,7 @@ export function FootnoteOverview({
               {onAddWorkspaceLink && (
                 <HubSection title="Workspace links" onAdd={onAddWorkspaceLink}>
                   {workspaceLinks.length > 0 && (
-                    <ul className="lc-footnote-overview-link-list">
+                    <ul className={listClass(workspaceLinks.length)}>
                       {workspaceLinks.map((link) => (
                         <li key={link.edgeId}>
                           <HoldButton
@@ -767,7 +767,7 @@ export function FootnoteOverview({
               {isAiTab ? (
                 notes.length > 0 ? (
                   <HubSection title="Notes">
-                    <ul className="lc-footnote-overview-link-list lc-footnote-overview-scroll-list lc-scroll-pane">
+                    <ul className={listClass(notes.length)}>
                       {notes.map((note) => (
                         <li key={note.id}>
                           <span className="lc-agent-scope-option">
@@ -781,7 +781,7 @@ export function FootnoteOverview({
               ) : (
               <HubSection title="Notes" onAdd={() => openTask({ kind: "note", id: null })}>
                 {notes.length > 0 && (
-                  <ul className="lc-footnote-overview-link-list lc-footnote-overview-scroll-list lc-scroll-pane">
+                  <ul className={listClass(notes.length)}>
                     {notes.map((note) => (
                       <li key={note.id}>
                         <HoldButton
@@ -805,7 +805,7 @@ export function FootnoteOverview({
               )}
               <HubSection title="Threads">
                 {threads.length > 0 && (
-                  <ul className="lc-footnote-overview-link-list lc-footnote-overview-scroll-list lc-scroll-pane">
+                  <ul className={listClass(threads.length)}>
                     {threads.map((thread) => (
                       <li key={thread.rootId}>
                         <button
@@ -828,6 +828,21 @@ export function FootnoteOverview({
     document.body,
   );
 }
+/**
+ * A hub list only becomes a scroller once it has a third row.
+ *
+ * Two rows always fit inside `max-height`, so turning the pane on for them
+ * bought nothing and cost a scrollbar — which Windows Chromium decorates with
+ * ↑↓ stepper tips however hard the stylesheet asks it not to.
+ */
+const SCROLL_AT = 3;
+
+function listClass(count: number): string {
+  return count >= SCROLL_AT
+    ? "lc-footnote-overview-link-list lc-footnote-overview-scroll-list is-scrolling lc-scroll-pane"
+    : "lc-footnote-overview-link-list";
+}
+
 function HubSection({
   title,
   onAdd,

@@ -1613,16 +1613,19 @@ export function DocSelectionLayer({
         if (host) return !isPageCoverRect(box, host);
         return !coversViewportBox(box, hostBox);
       });
+    /*
+     * The whole block, not its first line.
+     *
+     * Every box in `paintedBoxes` has already been through the page-cover
+     * filter, so their union is the selection's own extent — a paragraph is
+     * still a paragraph when it happens to run the full width of its column.
+     * Testing the union again and falling back to the topmost box is what put
+     * ✓/✕, Copy / Google and the ribbon on the right edge of the *first line*:
+     * take a heading plus the paragraph under it and the chip landed on the
+     * heading, halfway across the selection it belonged to.
+     */
     const fromPaint = unionViewportBoxes(paintedBoxes);
-    if (fromPaint && !(host ? isPageCoverRect(fromPaint, host) : coversViewportBox(fromPaint, hostBox))) {
-      return fromPaint;
-    }
-    // Union of many line boxes can still fill the paper. Hang chrome off the
-    // topmost tight box instead of the paper's top-right corner.
-    if (paintedBoxes.length > 0) {
-      const top = paintedBoxes.reduce((best, box) => (box.top < best.top ? box : best));
-      return new DOMRect(top.left, top.top, top.right - top.left, top.bottom - top.top);
-    }
+    if (fromPaint) return fromPaint;
     const captured = tightBox(selectionScreenBoxRef.current, host, hostBox);
     if (captured) return captured;
     return host ? liveSelectionBox(host) : null;
@@ -1817,9 +1820,12 @@ export function DocSelectionLayer({
             /*
              * Tap opens the mark; hold fills left→right and deletes.
              *
-             * User marks: number chip inset in the top-right of the topmost
-             * band. AI marks: a book tab on the page's right edge, half on
-             * the paper and half hanging off.
+             * User marks: number chip inset in the top-right corner of the
+             * whole mark — the union of its bands, not the topmost one. A
+             * heading followed by its paragraph put the ribbon at the end of
+             * the heading, mid-selection, because that band happened to be
+             * first and short. AI marks: a book tab on the page's right edge,
+             * half on the paper and half hanging off.
              */
             const tint = footnoteThemeVars(
               footnote.color ?? inkPalette[0],
@@ -1832,26 +1838,28 @@ export function DocSelectionLayer({
                 !bodyRef.current || !localRectCoversHost(bodyRef.current, bandRect),
             );
             if (paintBands.length === 0) return null;
-            const topBand =
-              paintBands.length > 0
-                ? paintBands.reduce((best, bandRect) =>
-                    bandRect.top < best.top ||
-                    (bandRect.top === best.top && bandRect.left < best.left)
-                      ? bandRect
-                      : best,
-                  )
-                : at;
-            const host = topBand ?? at;
+            const block = paintBands.reduce(
+              (best, bandRect) => ({
+                left: Math.min(best.left, bandRect.left),
+                top: Math.min(best.top, bandRect.top),
+                right: Math.max(best.right, bandRect.left + bandRect.width),
+              }),
+              {
+                left: paintBands[0]!.left,
+                top: paintBands[0]!.top,
+                right: paintBands[0]!.left + paintBands[0]!.width,
+              },
+            );
             const isAiTab = footnote.kind === "ai";
             const chipPad = 3;
             const chipW = isAiTab ? AI_TAB_WIDTH : 16;
             const pageWidth = bodyRef.current?.offsetWidth ?? 0;
             const chipLeft = isAiTab
               ? aiBookTabLeft(pageWidth)
-              : host.left + Math.max(chipPad, host.width - chipW - chipPad);
+              : Math.max(block.left + chipPad, block.right - chipW - chipPad);
             const chipTop = isAiTab
-              ? (aiTabTops.get(footnote.id) ?? host.top)
-              : host.top + chipPad;
+              ? (aiTabTops.get(footnote.id) ?? block.top)
+              : block.top + chipPad;
             const chipStyle = {
               left: chipLeft,
               top: chipTop,

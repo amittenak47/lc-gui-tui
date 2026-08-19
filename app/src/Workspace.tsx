@@ -6926,34 +6926,46 @@ export function Workspace({
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
             </svg>
           </button>
-          {problem && (
-            <button
-              type="button"
-              className={[
-                coachOpen
-                  ? "lc-secondary lc-agent-toggle lc-agent-toggle-open lc-tip-target"
-                  : "lc-secondary lc-agent-toggle lc-tip-target",
-                llmLink === "online" && "lc-agent-toggle-llm-on",
-                llmLink === "offline" && "lc-agent-toggle-llm-off",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-              aria-expanded={coachOpen}
-              aria-controls="lc-agent-panel"
-              data-tip={
-                llmLink === "online"
+          {/*
+            Always in the header, even with nothing to talk to.
+
+            Home has no problem, so the chip used to unmount there and take its
+            width with it — every tab chip in the strip resized on the way in
+            and out, which reads as the strip flickering rather than as one
+            button leaving. It keeps its slot and goes invisible instead.
+          */}
+          <button
+            type="button"
+            className={[
+              coachOpen
+                ? "lc-secondary lc-agent-toggle lc-agent-toggle-open lc-tip-target"
+                : "lc-secondary lc-agent-toggle lc-tip-target",
+              problem ? "" : "is-vacant",
+              llmLink === "online" && "lc-agent-toggle-llm-on",
+              llmLink === "offline" && "lc-agent-toggle-llm-off",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            aria-expanded={problem ? coachOpen : undefined}
+            aria-controls={problem ? "lc-agent-panel" : undefined}
+            aria-hidden={problem ? undefined : true}
+            tabIndex={problem ? undefined : -1}
+            disabled={!problem}
+            data-tip={
+              !problem
+                ? undefined
+                : llmLink === "online"
                   ? "Agent — LLM online"
                   : llmLink === "offline"
                     ? "Agent — LLM offline"
                     : "Agent"
-              }
-              data-tip-placement="bottom"
-              onClick={() => setCoachOpen((current) => !current)}
-            >
-              <span className="lc-agent-live-dot" aria-hidden />
-              Agent
-            </button>
-          )}
+            }
+            data-tip-placement="bottom"
+            onClick={() => setCoachOpen((current) => !current)}
+          >
+            <span className="lc-agent-live-dot" aria-hidden />
+            Agent
+          </button>
       </>, headerSlots.right) : null}
       {active && headerSlots.chrome ? createPortal(<>
       {/*

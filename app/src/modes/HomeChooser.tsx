@@ -176,31 +176,39 @@ export function HomeChooser({
     >
       <div className="lc-home-chooser-grid">
         {modes.map((mode) => (
-          <button
-            key={mode.id}
-            type="button"
-            className="lc-home-card"
-            data-mode={mode.id}
-            aria-label={`${mode.title} — ${mode.blurb}`}
-            disabled={busy}
-            onClick={mode.onOpen}
-          >
-            <span
-              className={
-                mode.id === "explore"
-                  ? "lc-home-card-icon lc-home-card-stars"
-                  : "lc-home-card-icon"
-              }
-              aria-hidden
+          /*
+            The cell, not the card, is the query container.
+            A container's own rules cannot answer its own query — an element is
+            never its own container — so the card would have been able to drop
+            its prose at a width it could not itself lay out differently. One
+            wrapper and the card can read the width it has been given.
+          */
+          <span key={mode.id} className="lc-home-cell">
+            <button
+              type="button"
+              className="lc-home-card"
+              data-mode={mode.id}
+              aria-label={`${mode.title} — ${mode.blurb}`}
+              disabled={busy}
+              onClick={mode.onOpen}
             >
-              {mode.icon}
-            </span>
-            <span className="lc-home-card-text">
-              <span className="lc-home-card-kicker">{mode.kicker}</span>
-              <strong className="lc-home-card-title">{mode.title}</strong>
-              <span className="lc-home-card-blurb">{mode.blurb}</span>
-            </span>
-          </button>
+              <span
+                className={
+                  mode.id === "explore"
+                    ? "lc-home-card-icon lc-home-card-stars"
+                    : "lc-home-card-icon"
+                }
+                aria-hidden
+              >
+                {mode.icon}
+              </span>
+              <span className="lc-home-card-text">
+                <span className="lc-home-card-kicker">{mode.kicker}</span>
+                <strong className="lc-home-card-title">{mode.title}</strong>
+                <span className="lc-home-card-blurb">{mode.blurb}</span>
+              </span>
+            </button>
+          </span>
         ))}
       </div>
     </nav>
