@@ -18,7 +18,12 @@ import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
 import { ProcessBlock } from "./ProcessBlock";
 import { ReasoningBlock } from "./ReasoningBlock";
-import { loadAgentReasoning, saveAgentReasoning } from "../util/agentPrefs";
+import {
+  cycleAgentReasoning,
+  loadAgentReasoningLevel,
+  saveAgentReasoningLevel,
+  type AgentReasoningLevel,
+} from "../util/agentPrefs";
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { useIsMobile } from "../util/mobile";
 import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
@@ -246,9 +251,9 @@ export interface AgentSendFlags {
    */
   annotations: boolean;
   /**
-   * Ask the model to think out loud. Sticky across sends.
+   * Ask the model to think out loud. Sticky across sends. Off / low / medium / high.
    */
-  reasoning: boolean;
+  reasoning: AgentReasoningLevel;
   /**
    * Images the writer attached with (+), as base64 PNGs.
    *
@@ -508,7 +513,7 @@ export function AgentSidePanel({
         ? "Lazy — fill the solution from the board. Hold to cycle."
         : "Board modes off. Hold to cycle Draw, Review, Lazy.";
   const [handwriting, setHandwriting] = useState(false);
-  const [reasoning, setReasoning] = useState(loadAgentReasoning);
+  const [reasoning, setReasoning] = useState(loadAgentReasoningLevel);
   const [annotations, setAnnotations] = useState(false);
   const [askPreset, setAskPreset] = useState<AskPresetId | null>(null);
   const attachedCount = attachedMarks?.length ?? 0;
@@ -1820,26 +1825,34 @@ export function AgentSidePanel({
                 </Tip>
               )}
               <Tip
-                tip="Ask the model to think out loud. Full text folds under the answer, separate from steps."
+                tip="Click to cycle off, low, medium, high. Low 1k tokens, medium 4k, high unlimited. Full text folds under the answer."
                 placement="top"
               >
                 <button
                   type="button"
-                  className={`lc-flag${reasoning ? " lc-flag-active" : ""}`}
-                  aria-pressed={reasoning}
+                  className={`lc-flag${reasoning !== "off" ? " lc-flag-active" : ""}`}
+                  aria-pressed={reasoning !== "off"}
                   disabled={busy}
                   onClick={() => {
                     setReasoning((current) => {
-                      const next = !current;
-                      saveAgentReasoning(next);
+                      const next = cycleAgentReasoning(current);
+                      saveAgentReasoningLevel(next);
                       return next;
                     });
                   }}
-                  aria-label="Reasoning"
+                  aria-label={reasoning === "off" ? "Reasoning off" : `Reasoning ${reasoning}`}
                 >
-                  <span className="lc-label-long">Reasoning</span>
+                  <span className="lc-label-long">
+                    {reasoning === "off" ? "Reasoning" : `Reasoning · ${reasoning}`}
+                  </span>
                   <span className="lc-label-short" aria-hidden>
-                    R
+                    {reasoning === "off"
+                      ? "R"
+                      : reasoning === "low"
+                        ? "Lo"
+                        : reasoning === "medium"
+                          ? "Md"
+                          : "Hi"}
                   </span>
                 </button>
               </Tip>

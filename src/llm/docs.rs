@@ -8,6 +8,7 @@ use crate::docs_index;
 use crate::llm::coach::{EventSink, ToolStatus};
 use crate::llm::viz::parse_tool_calls;
 use crate::llm::{is_tool_calling_unsupported, ChatMessage, ChatRequest, LlmProvider};
+use crate::llm::reasoning::ReasoningEffort;
 
 pub const DOCUMENT_ASK_SYSTEM: &str = "You are a technical tutor sitting with the reader of a \
 document (paper, textbook, or source file). Explain the highlighted passage using the retrieved \
@@ -178,6 +179,7 @@ pub fn run_document_ask(
     ctx: &AskContext,
     events: &EventSink,
     reasoning: bool,
+    effort: Option<ReasoningEffort>,
 ) -> Result<(String, Vec<ProposedAnnotation>)> {
     let tools = document_tools(cfg);
     let mut messages = vec![
@@ -188,7 +190,8 @@ pub fn run_document_ask(
     let mut reply = match provider.chat_ex(
         &ChatRequest::new(messages.clone())
             .with_tools(tools.clone())
-            .with_reasoning(reasoning),
+            .with_reasoning(reasoning)
+            .with_reasoning_effort(effort),
     ) {
         Ok(reply) => reply,
         Err(err) if is_tool_calling_unsupported(&err) => {
@@ -198,7 +201,11 @@ pub fn run_document_ask(
                 ChatMessage::user(fallback),
             ];
             let mut parsed =
-                provider.chat_ex(&ChatRequest::new(fb_messages.clone()).with_reasoning(reasoning))?;
+                provider.chat_ex(
+                    &ChatRequest::new(fb_messages.clone())
+                        .with_reasoning(reasoning)
+                        .with_reasoning_effort(effort),
+                )?;
             if parsed.tool_calls.is_empty() {
                 parsed.tool_calls = parse_tool_calls(&parsed.content);
             }
@@ -252,7 +259,8 @@ pub fn run_document_ask(
         reply = provider.chat_ex(
             &ChatRequest::new(messages.clone())
                 .with_tools(tools.clone())
-                .with_reasoning(reasoning),
+                .with_reasoning(reasoning)
+                .with_reasoning_effort(effort),
         )?;
         events.emit_reasoning(&reply.reasoning);
         if reply.tool_calls.is_empty() {
@@ -263,7 +271,11 @@ pub fn run_document_ask(
         messages.push(ChatMessage::user(
             "Answer the question now in plain text. Do not call tools.",
         ));
-        reply = provider.chat_ex(&ChatRequest::new(messages).with_reasoning(reasoning))?;
+        reply = provider.chat_ex(
+            &ChatRequest::new(messages)
+                .with_reasoning(reasoning)
+                .with_reasoning_effort(effort),
+        )?;
         events.emit_reasoning(&reply.reasoning);
     }
     Ok((reply.content.trim().to_string(), proposed))
@@ -548,6 +560,7 @@ mod tests {
             &ctx(),
             &EventSink::none(),
             false,
+            None,
         )
         .unwrap();
         assert!(reply.contains("SGD"));
@@ -572,6 +585,7 @@ mod tests {
             &ctx(),
             &EventSink::none(),
             false,
+            None,
         )
         .unwrap();
         assert!(reply.contains("SGD"));
@@ -655,6 +669,7 @@ mod tests {
             &ctx(),
             &events,
             true,
+            None,
         )
         .unwrap();
         let lines = log.lock().unwrap().clone();

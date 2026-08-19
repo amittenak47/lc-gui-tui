@@ -97,6 +97,7 @@ export interface AnnotateDocMeta {
    * Absent on everything opened through the file picker, and on every set made
    * before New file existed, so a missing value reads as "imported".
    */
+  owned?: boolean;
   /**
    * Blocks trash in the library. Local-only — a ping will not overwrite it.
    */

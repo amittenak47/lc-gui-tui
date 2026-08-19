@@ -26,6 +26,7 @@ use crate::llm::coach::{
 };
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
 use crate::llm::docs::{preset_system, run_document_ask, AskContext};
+use crate::llm::reasoning::ReasoningEffort;
 use crate::llm::helpers::clip;
 use crate::pad::AgentSurface;
 use crate::reveal::{SolutionReveal, UserConsent};
@@ -620,6 +621,9 @@ pub struct AskRequest {
     /// the full text lands in [`AskEnvelope::reasoning`] and a WS `reasoning` frame.
     #[serde(default)]
     pub reasoning: bool,
+    /// `low` / `medium` / `high`. Absent with `reasoning: true` means on, no budget.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -758,7 +762,11 @@ pub async fn run_ask(
     let page_text = request.page_text.clone();
     let marks_prose = request.marks_prose.clone();
     let preset = request.preset.clone();
-    let want_reasoning = request.reasoning;
+    let effort = request
+        .reasoning_effort
+        .as_deref()
+        .and_then(ReasoningEffort::parse);
+    let want_reasoning = request.reasoning || effort.is_some();
     let local_pad = surface.is_pad();
     let dataset = if local_pad {
         None
@@ -863,6 +871,7 @@ pub async fn run_ask(
                 &ask_ctx,
                 &events,
                 want_reasoning,
+                effort,
             )?;
             events.stage("done", "");
             return Ok(AskEnvelope {
@@ -879,7 +888,8 @@ pub async fn run_ask(
                 ChatMessage::system(ASK_SYSTEM_PROMPT),
                 ChatMessage::user(prompt).with_images(images),
             ])
-            .with_reasoning(want_reasoning),
+            .with_reasoning(want_reasoning)
+            .with_reasoning_effort(effort),
         )?;
         events.emit_reasoning(&reply.reasoning);
         events.stage("done", "");

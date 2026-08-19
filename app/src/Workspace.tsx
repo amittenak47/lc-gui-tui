@@ -76,7 +76,13 @@ import { AttemptDialog } from "./modes/AttemptDialog";
 import { WhiteboardDialog } from "./modes/WhiteboardDialog";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { groupThreads, threadAnchorRef, visibleThreadMessages } from "./modes/coachThreads";
-import { loadAgentReasoning, loadTestForwardMode, type TestForwardMode } from "./util/agentPrefs";
+import {
+  loadAgentReasoningLevel,
+  loadTestForwardMode,
+  reasoningAskFields,
+  type AgentReasoningLevel,
+  type TestForwardMode,
+} from "./util/agentPrefs";
 import {
   AGENT_SHEET_LOCK_EVENT,
   loadAgentSheetLock,
@@ -4379,7 +4385,7 @@ export function Workspace({
       threadAnchor?: CoachReplyRef | null,
       photos?: CoachAttachment[],
       pendingAck?: CoachPendingAck,
-      docAsk?: { preset?: string | null; highlight?: string; reasoning?: boolean },
+      docAsk?: { preset?: string | null; highlight?: string; reasoning?: AgentReasoningLevel },
     ) => {
       const note = question.trim();
       if (!problem || !note) {
@@ -4445,7 +4451,7 @@ export function Workspace({
                 dataset: problem.dataset,
                 question: asked,
                 ...(images.length > 0 ? { images } : {}),
-                ...(docAsk?.reasoning ? { reasoning: true } : {}),
+                ...reasoningAskFields(docAsk?.reasoning ?? "off"),
               }
             : {
                 surface,
@@ -4453,7 +4459,7 @@ export function Workspace({
                 question: asked,
                 ...(images.length > 0 ? { images } : {}),
                 ...docExtras,
-                ...(docAsk?.reasoning ? { reasoning: true } : {}),
+                ...reasoningAskFields(docAsk?.reasoning ?? "off"),
               };
         const result = await runCoachJob<{
           reply: string;
@@ -4477,7 +4483,7 @@ export function Workspace({
               ...(surface === "problem" ? { dataset: problem.dataset } : {}),
               ...(images.length > 0 ? { images } : {}),
               ...docExtras,
-              ...(docAsk?.reasoning ? { reasoning: true } : {}),
+              ...reasoningAskFields(docAsk?.reasoning ?? "off"),
             }),
         );
         if (coachRunGenRef.current !== genAtStart) return;
@@ -4568,7 +4574,7 @@ export function Workspace({
       flags.ask ? "Ask" : null,
       flags.handwriting ? "Handwriting" : null,
       flags.annotations ? "Annotations" : null,
-      flags.reasoning ? "Reasoning" : null,
+      flags.reasoning !== "off" ? `Reasoning · ${flags.reasoning}` : null,
       flags.reviewBoard ? "Review" : null,
       flags.draw ? "Draw" : null,
       flags.lazy ? "Lazy" : null,
@@ -5158,7 +5164,7 @@ export function Workspace({
         lazy: false,
         handwriting: false,
         annotations: false,
-        reasoning: loadAgentReasoning(),
+        reasoning: loadAgentReasoningLevel(),
         ...(footnote.excerpt ? { pageQuote: footnote.excerpt } : {}),
         ...(replyTo ? { replyTo } : {}),
         threadRootId,

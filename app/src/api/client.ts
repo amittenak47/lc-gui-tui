@@ -495,6 +495,7 @@ export class LcClient {
       marks_prose?: string;
       preset?: string;
       reasoning?: boolean;
+      reasoning_effort?: "low" | "medium" | "high";
     },
   ): Promise<{
     task_id: string;
@@ -525,6 +526,7 @@ export class LcClient {
     if (opts.marks_prose) body.marks_prose = opts.marks_prose;
     if (opts.preset) body.preset = opts.preset;
     if (opts.reasoning) body.reasoning = true;
+    if (opts.reasoning_effort) body.reasoning_effort = opts.reasoning_effort;
     try {
       return await this.cmd("lc_coach_ask", { body }, timeoutMs ?? COACH_HTTP_TIMEOUT_MS);
     } catch (cause) {

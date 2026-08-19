@@ -32,6 +32,12 @@
   --lc-sub-fill: #f4f4f4;
   --lc-sub-muted: #c4c4c4;
   --lc-sub-emph: #ffcc00;
+  /* Home modes — same five hues at every card size, and the wordmark. */
+  --lc-mode-practice: #a78bfa;
+  --lc-mode-whiteboard: #60a5fa;
+  --lc-mode-annotate: #f0a33a;
+  --lc-mode-browse: #34d399;
+  --lc-mode-explore: #f472b6;
   --ink: #111827;
   --muted: #4b5563;
   --hint: #6b7280;
@@ -779,7 +785,7 @@ html[data-theme="dark"] .lc-web-doc {
 }
 
 .lc-brand strong {
-  color: var(--lc-sub-emph);
+  color: var(--lc-mode-whiteboard);
   font-weight: 700;
   -webkit-text-stroke: var(--lc-sub-stroke) var(--lc-sub-edge);
   paint-order: stroke fill;
@@ -4108,7 +4114,7 @@ body[data-lc-sash-drag="horizontal"] {
    */
   min-height: clamp(120px, 85cqi, 210px);
   padding: clamp(12px, 8cqi, 22px);
-  border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lc-home-mode, var(--ink)) 28%, transparent);
   border-radius: 16px;
   background: color-mix(in srgb, var(--paper) 92%, var(--ink) 8%);
   color: var(--ink);
@@ -4123,21 +4129,21 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-home-card:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--paper) 88%, var(--accent) 12%);
+  border-color: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 45%, transparent);
+  background: color-mix(in srgb, var(--paper) 88%, var(--lc-home-mode, var(--accent)) 12%);
   box-shadow: 0 6px 20px rgb(0 0 0 / 10%);
   transform: translateY(-2px);
 }
 
 .lc-home-card:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--lc-home-mode, var(--accent));
   outline-offset: 2px;
 }
 
 .lc-home-card:active:not(:disabled) {
   transform: scale(0.985);
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-  background: color-mix(in srgb, var(--paper) 86%, var(--accent) 14%);
+  border-color: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 55%, transparent);
+  background: color-mix(in srgb, var(--paper) 86%, var(--lc-home-mode, var(--accent)) 14%);
   box-shadow: none;
 }
 
@@ -4154,8 +4160,8 @@ body[data-lc-sash-drag="horizontal"] {
   width: clamp(34px, 24cqi, 46px);
   height: clamp(34px, 24cqi, 46px);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--ink) 7%, transparent);
-  color: color-mix(in srgb, var(--ink) 78%, transparent);
+  background: color-mix(in srgb, var(--lc-home-mode, var(--ink)) 14%, transparent);
+  color: var(--lc-home-mode, color-mix(in srgb, var(--ink) 78%, transparent));
   transition:
     background 140ms ease,
     color 140ms ease;
@@ -4167,8 +4173,8 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-home-card:hover:not(:disabled) .lc-home-card-icon {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--ink);
+  background: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 22%, transparent);
+  color: var(--lc-home-mode, var(--ink));
 }
 
 .lc-home-card-text {
@@ -4183,7 +4189,7 @@ body[data-lc-sash-drag="horizontal"] {
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--ink) 55%, transparent);
+  color: var(--lc-home-mode, color-mix(in srgb, var(--ink) 55%, transparent));
 }
 
 .lc-home-card-title {
@@ -4231,12 +4237,14 @@ body[data-lc-sash-drag="horizontal"] {
     min-height: 0;
     padding: 8px;
     gap: 0;
+    border-color: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 40%, transparent);
   }
 
   .lc-home-card-icon {
     width: min(44px, 62%);
     height: min(44px, 62%);
-    background: none;
+    background: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 18%, transparent);
+    color: var(--lc-home-mode, var(--ink));
   }
 
   .lc-home-card-text {
@@ -4265,26 +4273,25 @@ body[data-lc-sash-drag="horizontal"] {
  * short-window rule above.
  */
 
-/* One mode, one colour — the only thing left to tell them apart once the
- * prose goes. Kept off the full card, where the words already do that job. */
+/* One mode, one colour — glyph, kicker, hover, and the squeezed tiles. */
 .lc-home-card[data-mode="practice"] {
-  --lc-home-mode: #a78bfa;
+  --lc-home-mode: var(--lc-mode-practice);
 }
 
 .lc-home-card[data-mode="whiteboard"] {
-  --lc-home-mode: #60a5fa;
+  --lc-home-mode: var(--lc-mode-whiteboard);
 }
 
 .lc-home-card[data-mode="annotate"] {
-  --lc-home-mode: #f0a33a;
+  --lc-home-mode: var(--lc-mode-annotate);
 }
 
 .lc-home-card[data-mode="browse"] {
-  --lc-home-mode: #34d399;
+  --lc-home-mode: var(--lc-mode-browse);
 }
 
 .lc-home-card[data-mode="explore"] {
-  --lc-home-mode: #f472b6;
+  --lc-home-mode: var(--lc-mode-explore);
 }
 
 /* Squeezed: the blurb goes, the name stays beside the glyph. */

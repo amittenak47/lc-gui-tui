@@ -136,20 +136,69 @@ pub fn thinking_params_unsafe(base_url: &str) -> bool {
 
 /// Local OpenAI-compat servers (Ollama, vLLM, llama.cpp) honour these.
 /// Cloud OpenAI / Groq reject unknown fields — skip them there.
+/// Local OpenAI-compat servers (Ollama, vLLM, llama.cpp) honour these.
+/// Cloud OpenAI / Groq reject unknown fields — skip them there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+
+    /// llama.cpp `reasoning_budget` / Qwen `thinking_budget`. High is unlimited.
+    pub fn budget_tokens(self) -> i64 {
+        match self {
+            Self::Low => 1024,
+            Self::Medium => 4096,
+            Self::High => -1,
+        }
+    }
+}
+
 pub fn apply_thinking_request(
     map: &mut serde_json::Map<String, serde_json::Value>,
     base_url: &str,
     enabled: bool,
+    effort: Option<ReasoningEffort>,
 ) {
     if thinking_params_unsafe(base_url) {
         return;
     }
     map.insert("enable_thinking".into(), serde_json::json!(enabled));
     map.insert("think".into(), serde_json::json!(enabled));
-    map.insert(
-        "chat_template_kwargs".into(),
-        serde_json::json!({ "enable_thinking": enabled }),
-    );
+    let mut kwargs = serde_json::json!({ "enable_thinking": enabled });
+    if enabled {
+        if let Some(effort) = effort {
+            map.insert(
+                "reasoning_effort".into(),
+                serde_json::json!(effort.as_str()),
+            );
+            map.insert(
+                "reasoning_budget".into(),
+                serde_json::json!(effort.budget_tokens()),
+            );
+            kwargs["thinking_budget"] = serde_json::json!(effort.budget_tokens());
+        }
+    }
+    map.insert("chat_template_kwargs".into(), kwargs);
 }
 
 /// First clause, short enough for a process chip.
@@ -221,10 +270,25 @@ mod tests {
         assert!(thinking_params_unsafe("https://api.groq.com/openai/v1"));
         assert!(!thinking_params_unsafe("http://127.0.0.1:11434/v1"));
         let mut map = serde_json::Map::new();
-        apply_thinking_request(&mut map, "http://localhost:8000/v1", true);
+        apply_thinking_request(&mut map, "http://localhost:8000/v1", true, None);
         assert_eq!(map.get("think").and_then(|v| v.as_bool()), Some(true));
         map.clear();
-        apply_thinking_request(&mut map, "https://api.openai.com/v1", true);
+        apply_thinking_request(&mut map, "https://api.openai.com/v1", true, None);
         assert!(map.is_empty());
+        map.clear();
+        apply_thinking_request(
+            &mut map,
+            "http://localhost:8000/v1",
+            true,
+            Some(ReasoningEffort::Low),
+        );
+        assert_eq!(
+            map.get("reasoning_budget").and_then(|v| v.as_i64()),
+            Some(1024)
+        );
+        assert_eq!(
+            map.get("reasoning_effort").and_then(|v| v.as_str()),
+            Some("low")
+        );
     }
 }
