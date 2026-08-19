@@ -1,4 +1,4 @@
-# Android tablet setup — Whiteboard
+# Android tablet setup
 
 Guide for installing the APK on an Android tablet and fixing PATH on Windows.
 
@@ -41,22 +41,22 @@ npm run android:init
 
 `src-tauri/gen/android/` is **generated** by `tauri android init` and is not in git. Android 9+ blocks cleartext HTTP in WebViews by default.
 
-The harness router is in-process (named invoke) — the overlay is **not** for LAN daemon pairing. It allows the WebView to fetch cleartext `http://` pages in **Annotate** mode (external document URLs). Without it, those fetches fail even though coach and corpus traffic never leaves the app.
+The harness router is in-process, over named invoke, so the overlay is not for LAN daemon pairing. It lets the WebView fetch cleartext `http://` pages in Annotate mode, meaning external document URLs. Without it those fetches fail, even though coach and corpus traffic never leaves the app.
 
 `scripts/android-overlay.mjs` re-applies two edits after every init or regen:
 
 1. Copy `src-tauri/android-overlay/network_security_config.xml` into the generated `res/xml/`.
 2. Add `android:networkSecurityConfig="@xml/network_security_config"` on `<application>` in `AndroidManifest.xml`.
 
-`android:dev`, `android:apk:practice`, `android:apk:whiteboard`, `android-dev.cmd`, `android-install-practice.cmd`, and `android-install-whiteboard.cmd` run this automatically before every build. Idempotent — safe to run twice.
+`android:dev`, `android:apk:practice`, `android:apk:whiteboard`, `android-dev.cmd`, `android-install-practice.cmd`, and `android-install-whiteboard.cmd` run this automatically before every build. Idempotent, so running it twice is safe.
 
 ---
 
 ## 3. Permanent PATH on Windows (cmd)
 
-**Do not use `setx PATH`** — Windows truncates PATH to 1024 characters and can break your profile.
+Do not use `setx PATH`. Windows truncates PATH to 1024 characters and can break your profile.
 
-### Add Android tools permanently (GUI — safest)
+### Add Android tools permanently, via the GUI
 
 1. **Settings → System → About → Advanced system settings**
 2. **Environment Variables**
@@ -101,11 +101,11 @@ for %P in ("%PATH:;=";"%") do @echo %~P
 
 ## 4. Build and install the APK
 
-The two flavors are **Practice** (default, everything) and **Whiteboard-only**
-(no Practice, no RustPython). Options A and B below build Practice; Option C
-builds Whiteboard-only.
+The two flavors are Practice, which is the default and has everything, and
+Whiteboard-only, which drops Practice and RustPython. Options A and B build
+Practice. Option C builds Whiteboard-only.
 
-### Option A — USB dev loop (build + install + hot reload)
+### Option A. USB dev loop, with build, install and hot reload
 
 All npm commands below run from **`app\`** (not the repo root).
 
@@ -115,7 +115,7 @@ adb devices
 npm run android:dev
 ```
 
-With a specific tablet, use the cmd wrapper. Pass the USB serial only so the script can verify `adb` sees it — Tauri itself auto-picks the connected device (its `DEVICE` arg matches the Bluetooth name, not the serial, so we do not forward the serial to Tauri):
+With a specific tablet, use the cmd wrapper. Pass the USB serial only so the script can check that `adb` sees it. Tauri picks the connected device itself, and its `DEVICE` argument matches the Bluetooth name rather than the serial, so the serial is not forwarded:
 
 ```cmd
 app\scripts\android-dev.cmd <your-device-serial>
@@ -128,20 +128,20 @@ cd <repo>\app
 npm run android:dev
 ```
 
-**Common error:** `Port 1420 is already in use` — a previous `android:dev` is still running. Ctrl+C it, or:
+Common error: `Port 1420 is already in use`. A previous `android:dev` is still running. Ctrl+C it, or:
 
 ```cmd
 netstat -ano | findstr :1420
 taskkill /PID <pid> /F
 ```
 
-**Common error:** `Opening Android Studio` / file not found — often `adb` missing from PATH, or no device connected. Fix PATH, open a **new** cmd, `adb devices`, retry.
+Common error: `Opening Android Studio`, or file not found. Usually `adb` is missing from PATH, or no device is connected. Fix PATH, open a new cmd, run `adb devices`, retry.
 
-### Option B — APK file (simpler)
+### Option B. APK file, which is simpler
 
 From the repo root (builds, then `adb install -r`).
 
-**Windows** (this machine): use the `.cmd` wrappers. They put Git `usr\bin` on PATH so bundled `libffi-sys` can find Unix `cp`/`make`. Do not call `npm run android:apk:practice` from a shell that lacks those tools. (Whiteboard-only has no RustPython, so it needs none of this.)
+On Windows, use the `.cmd` wrappers. They put Git `usr\bin` on PATH so bundled `libffi-sys` can find Unix `cp` and `make`. Do not call `npm run android:apk:practice` from a shell without those tools. Whiteboard-only has no RustPython and needs none of this.
 
 ```cmd
 app\scripts\android-install-practice.cmd
@@ -163,21 +163,22 @@ npm run android:apk:practice
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
 ```
 
-**No USB cable:** copy `app-universal-debug.apk` to the tablet → open in **Files** → allow “Install unknown apps” when prompted.
+**No USB cable:** copy `app-universal-debug.apk` to the tablet → open in **Files** → allow "Install unknown apps" when prompted.
 
-**“App not installed”:** old signing key still on device:
+**"App not installed":** old signing key still on device:
 
 ```cmd
 adb uninstall dev.lc.whiteboard
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
 ```
 
-### Option C — Whiteboard-only APK (no Practice)
+### Option C. Whiteboard-only APK, no Practice
 
-The default APK is the **Practice** build: everything, including RustPython.
-**Whiteboard-only** hides Practice in the frontend (`VITE_FEATURE_LEETCODE=0`)
-and omits the `leetcode` Cargo feature (`--no-default-features`, so no
-RustPython). Both flags must stay together — the wrapper scripts set both.
+The default APK is the Practice build, which includes RustPython.
+Whiteboard-only hides Practice in the frontend with `VITE_FEATURE_LEETCODE=0`
+and omits the `leetcode` Cargo feature with `--no-default-features`, so no
+RustPython. Both flags have to stay together, and the wrapper scripts set
+both.
 
 From the repo root:
 
@@ -198,22 +199,22 @@ adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-u
 
 Release: `npm run android:apk:whiteboard:release`.
 
-**Both flavors write the same APK path and share the app id
-`dev.lc.whiteboard`**, so nothing on disk or on the device tells you which one
-you have. Before switching:
+Both flavors write the same APK path and share the app id
+`dev.lc.whiteboard`, so nothing on disk or on the device tells you which one you
+have. Before switching:
 
 ```cmd
 adb uninstall dev.lc.whiteboard
 ```
 
 The old `android-install-pads.*` scripts and `android:apk:pads` npm targets
-still work — they forward to the names above — but they will be removed.
+still work. They forward to the names above, and will be removed.
 
 ---
 
 ## 5. Running on the tablet
 
-The APK bundles the harness — RustPython tests, pad library, and coach — inside the app process. Problem corpora are DLC (Settings → Datasets → Install from GitHub `corpora-v1`). First launch Practice is an empty table until you install a set. Nothing on your PC needs to be running for the tablet to work.
+The APK bundles the harness inside the app process: RustPython tests, the pad library, and the coach. Problem corpora are a separate download, under Settings → Datasets → Install, from the GitHub `corpora-v1` release. On first launch Practice is an empty table until you install a set. Nothing on your PC needs to be running for the tablet to work.
 
 ### Architecture
 
@@ -222,12 +223,12 @@ Tablet APK  ──in-process──►  axum router (named invoke)  ──►  LL
 ```
 
 - Coach answers stream over Tauri events (`lc-coach-frame`), not a session WebSocket to a PC.
-- Configure the model under **Settings → LLM** on the device (`localhost` there means the tablet). Paste Groq/OpenAI keys there — the APK has no `GROQ_API_KEY` / `OPENAI_API_KEY` environment.
+- Configure the model under Settings → LLM on the device, where `localhost` means the tablet. Paste Groq or OpenAI keys there. The APK has no `GROQ_API_KEY` or `OPENAI_API_KEY` environment.
 - For a local model, run Ollama or llama.cpp on the tablet itself, or point at a URL the tablet can reach (Tailscale, LAN IP, Groq, OpenAI, etc.).
 
 ### Tablet as a second display (optional)
 
-**spacedesk** mirrors the desktop window to the tablet (pixels only). No network pairing, no separate APK backend — useful when you want the desktop harness on a bigger screen with pen input on the tablet.
+spacedesk mirrors the desktop window to the tablet, sending pixels only. There is no network pairing and no separate APK backend. It suits wanting the desktop harness on a bigger screen with pen input on the tablet.
 
 ---
 
@@ -242,7 +243,7 @@ npm run android:apk:practice
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
 ```
 
-If it still feels tight on your device, the constant lives in `app/src/styles.css` under `.lc-mobile { --lc-safe-bottom: max(..., 48px) }` — try `56px`.
+If it still feels tight on your device, the constant lives in `app/src/styles.css` under `.lc-mobile { --lc-safe-bottom: max(..., 48px) }`. Try `56px`.
 
 ---
 
@@ -250,10 +251,10 @@ If it still feels tight on your device, the constant lives in `app/src/styles.cs
 
 | Symptom | Fix |
 | --- | --- |
-| `'adb' is not recognized` | PATH missing platform-tools — fix via GUI (§3), **new cmd** |
-| `cargo` works, `adb` does not | Old cmd window — close all cmd, reopen |
-| Tauri opens Android Studio | No device/emulator seen — fix `adb` PATH, `adb devices` |
-| Coach offline / LLM unreachable | **Settings → LLM** on the tablet — check provider, API key env, and that the model URL is reachable **from the tablet** |
+| `'adb' is not recognized` | PATH is missing platform-tools. Fix it via the GUI (§3), then open a new cmd |
+| `cargo` works, `adb` does not | Stale cmd window. Close every cmd and reopen |
+| Tauri opens Android Studio | No device or emulator seen. Fix `adb` PATH, run `adb devices` |
+| Coach offline, LLM unreachable | Settings → LLM on the tablet. Check the provider, the API key, and that the model URL is reachable from the tablet |
 | `no src-tauri/gen/android` / init failed | Overlay now runs `tauri android init` itself. If that fails: SDK, NDK, JDK 17+, then `cd app && npm run android:init` |
 | Annotate cannot load `http://` pages | Rebuild after overlay (`npm run android:overlay` then `android:apk:practice`) |
 | Palette under system bar | Reinstall APK after safe-area fix (§6) |

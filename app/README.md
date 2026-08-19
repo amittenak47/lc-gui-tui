@@ -1,6 +1,6 @@
 # Whiteboard
 
-**Tested on:** XPPen Magic Note Pad (MNP1095), Android 14 (API 34). APK built with Android NDK **29.0.13846066**. Bugs: [open an issue](https://github.com/amittenak47/lc-gui-tui/issues) — I want compatibility reports across devices.
+**Tested on:** XPPen Magic Note Pad (MNP1095), Android 14 (API 34). APK built with Android NDK **29.0.13846066**. Bugs: [open an issue](https://github.com/amittenak47/lc-gui-tui/issues). I want compatibility reports across devices.
 
 Practice LeetCode by *whiteboarding*: sketch an approach by hand while an agent
 watches, grills you, and points at the specific test case your approach breaks
@@ -21,17 +21,17 @@ the RustPython judge. There is no LAN pairing UI (no Host/Port/Code header).
   APK size is a later pass). Tablet-as-display: spacedesk.
 ```
 
-How the layers split (canvas UI vs in-process router vs LLM), flags, and the
-stripped Ask-only sibling: [ARCHITECTURE.md](../ARCHITECTURE.md).
+[ARCHITECTURE.md](../ARCHITECTURE.md) covers how the layers split (canvas UI,
+in-process router, LLM), the feature flags, and the stripped Ask-only sibling.
 
-The Magic Note Pad is a standalone Android tablet, not a pen display — Drawing
+The Magic Note Pad is a standalone Android tablet, not a pen display. Drawing
 Display Mode needs DP-IN and only exists on the Magic *Drawing* Pad. Hence
 spacedesk (mirror the desktop window) rather than screen-mirroring a separate
 PC daemon.
 
 ## Getting started
 
-Start the Tauri app — the router is already inside it. Vite-only preview in a
+Start the Tauri app. The router is already inside it. Vite-only preview in a
 browser is not supported.
 
 ```bash
@@ -39,18 +39,18 @@ npm install
 npm run tauri dev
 ```
 
-Opens on **Home**: four cards — Practice, Whiteboard, Annotate, Browse. Each
-opens in its own tab, and Home stays as the first tab rather than being
-something you navigate back to.
+Opens on Home, with cards for Practice, Whiteboard, Annotate, Browse and
+Explore. Each opens in its own tab. Home stays as the first tab rather than
+being somewhere you navigate back to.
 
 ### Whiteboard-only (no Practice)
 
-Two build flavors, one flag pair. **Practice** is the default and has
-everything. **Whiteboard-only** hides the Practice card
-(`VITE_FEATURE_LEETCODE=0`) and omits the `leetcode` Cargo feature
-(`--no-default-features`, so no RustPython). Both flags must stay together —
-dropping the Cargo feature alone leaves a Practice card pointing at a judge
-that is not in the binary.
+Two build flavors, one flag pair. Practice is the default and has everything.
+Whiteboard-only hides the Practice card with `VITE_FEATURE_LEETCODE=0` and omits
+the `leetcode` Cargo feature with `--no-default-features`, so no RustPython.
+
+Both flags have to stay together. Dropping the Cargo feature on its own leaves a
+Practice card pointing at a judge that is not in the binary.
 
 From the repo root:
 
@@ -66,8 +66,8 @@ Release: `npm run android:apk:whiteboard:release`. Details: [`docs/ANDROID_SETUP
 Both flavors write the same APK path and share the app id `dev.lc.whiteboard`,
 so run `adb uninstall dev.lc.whiteboard` before switching between them.
 
-The old `*-pads*` script and npm names still work — they forward to these — but
-they are on their way out.
+The old `*-pads*` script and npm names still work. They forward to these, and
+they will be removed once nobody is typing them.
 
 Desktop window (PowerShell):
 
@@ -83,35 +83,36 @@ keys there on the APK (no process env). Tests: **Settings
 
 ## Modes
 
-**Review** — draw, tap **Submit**. The agent returns a verdict, ratings,
-strengths, gaps, a Socratic question, and — when your approach is wrong — a
+**Review.** Draw, then tap Submit. The agent returns a verdict, ratings,
+strengths, gaps, a Socratic question, and, when your approach is wrong, a
 counterexample citing one of the problem's real sample cases.
 
-**Ambient** — *off.* The agent used to glance at the board every 60 seconds,
+**Ambient.** Off. The agent used to glance at the board every 60 seconds,
 escalating rather than repeating itself. In practice it re-asked the same
 question on a board that changes slowly and blocked the pen while a local model
-thought. The button stays in the composer, greyed, behind one flag —
+thought. The button stays in the composer, greyed, behind one flag:
 `AMBIENT_ENABLED` in `src/modes/AgentSidePanel.tsx`. Turning it back on restores
 the coach session, the escalation ladder, and the side panel; nothing else was
 removed.
 
-**Draw it** — the agent answers with a diagram instead of prose. Multi-frame
+**Draw it.** The agent answers with a diagram instead of prose. Multi-frame
 traces become *one* diagram with a scrubber, not five copies of the same array.
 
-**Reveal** — an explicit, confirmed opt-in that produces a stepwise path from
+**Reveal.** An explicit, confirmed opt-in that produces a stepwise path from
 your approach to a working one. It is never a solution dump, and it is logged so
 `whiteboard stats` shows how often you tapped out.
 
 ## Problem sets
 
 Home's **Practice** card opens the problem table. A tab strip
-above that table switches between the five corpora `whiteboard` indexes. Everything under it — search, filters, paging, session
-Start / Reset / Select / Random — works the same on any tab: the dataset is one
-more parameter on the same queries. Filters do reset on a switch, since a tag
+above that table switches between the five corpora `whiteboard` indexes.
+Search, filters, paging, and session Start / Reset / Select / Random all work
+the same on any tab, because the dataset is one more parameter on the same
+queries. Filters do reset on a switch, since a tag
 from one corpus matches nothing in another's tables.
 
 A tab whose corpus is not on this device still appears, showing `0`. Nothing
-ships in the APK — Settings → Datasets → Install downloads GitHub
+ships in the APK. Settings → Datasets → Install downloads GitHub
 `corpora-v1`. Pass/fail badges survive Remove and reinstall (`dataset/task_id`
 in `session.json`). Empty tabs also name the Hugging Face repo for a desktop
 `whiteboard index --dataset …` checkout.
@@ -121,7 +122,7 @@ identically-named problem in another.
 
 ## Test results
 
-**Run tests** and **Submit** open a modal over the board — same shell as
+**Run tests** and **Submit** open a modal over the board, the same shell as
 Settings. The same run also lands in the agent thread as an `app` turn and rides
 along with your next question on its own channel, so the agent can answer *"why
 did case 3 fail?"* without you pasting anything. Closing the modal loses
@@ -145,7 +146,7 @@ whether the problem is solved:
 
 Two rules are not symmetric, and both are deliberate: the agent session is
 always saved once a problem is solved, and re-attempting a solved problem always
-starts from a fresh board and a fresh session — re-solving while looking at the
+starts from a fresh board and a fresh session. Re-solving while looking at the
 answer you already drew is not practice. The router owns the rules
 (`src/attempt.rs`); the dialog only asks.
 
@@ -166,14 +167,14 @@ touch and stylus input back, so the tablet becomes a second display driving the
 *desktop* app. Install the spacedesk driver on the PC and the viewer app on the
 tablet, extend the display, then drag the whiteboard window onto it.
 
-That means full desktop behaviour with no network pairing — pixels cross the
+That means full desktop behaviour with no network pairing. Pixels cross the
 link, not API calls. Pen strokes make a round trip to the PC and back before
 they are drawn; try a page of handwriting before committing to this path.
 
-**Browser-only (`npm run dev`) is not supported** — use `npm run tauri dev` or
+Browser-only (`npm run dev`) is not supported. Use `npm run tauri dev` or
 the APK.
 
-## Android — sideloading the APK (no Play Store)
+## Android sideloading, no Play Store
 
 See [`docs/ANDROID_SETUP.md`](docs/ANDROID_SETUP.md) for prerequisites, build
 commands, and install steps. The APK uses the same in-process router as desktop;
@@ -188,7 +189,7 @@ there is no Host/Port/Code pairing UI.
 | `src/templates/` | Board regions and the pre-seeded problem layout |
 | `src/viz/` | Viz schema, the nine renderers, applier, frame scrubber |
 | `src/modes/` | Home, Review, reveal, test results, attempt dialog, problem picker |
-| `src/util/datasetKey.ts` | `dataset/task_id` keys — how per-problem state is addressed |
+| `src/util/datasetKey.ts` | `dataset/task_id` keys, which is how per-problem state is addressed |
 | `src-tauri/` | Tauri shell, in-process harness router, coach events, ML Kit plugin |
 
 ## Tests
@@ -210,7 +211,7 @@ npm run build
 
 **The model never emits coordinates.** LLMs are unreliable at coordinate
 geometry and reliable at structured semantic state, so the agent emits a *viz
-program* — full state per frame — and `viz/render/<kind>.ts` lays it out
+program*, full state per frame, and `viz/render/<kind>.ts` lays it out
 deterministically into a reserved agent lane on the right of the board.
 
 **The agent never reads its own output back.** Injected diagrams are tagged and
