@@ -74,6 +74,9 @@ coverage/
 htmlcov/
 .coverage
 audit-*.jsonl
+# `audit_tests --resume` writes a sidecar beside the report; the pattern above
+# anchors to the end of the name and never matched it.
+audit-*.jsonl.progress.json
 
 # --- Misc tooling ---
 .mimicflow/
