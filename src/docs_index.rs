@@ -118,19 +118,40 @@ pub fn status(conn: &Connection, hash: &str) -> Result<IndexStatus> {
 }
 
 /// Idempotent upsert. Same hash + same page count → no rewrite.
-pub fn upsert(conn: &mut Connection, hash: &str, body: &IndexBody, cfg: &Config) -> Result<IndexStatus> {
+///
+/// `force` rewrites anyway. Turning an embedding model on does not change a
+/// document's page count, so without it the one case that most needs redoing —
+/// vectors written as word-counts, now that real ones are available — is
+/// exactly the case the guard skips.
+pub fn upsert(
+    conn: &mut Connection,
+    hash: &str,
+    body: &IndexBody,
+    cfg: &Config,
+    force: bool,
+) -> Result<IndexStatus> {
     let existing = status(conn, hash)?;
-    if existing.indexed && existing.page_count == body.pages.len() as u32 {
+    if !force && existing.indexed && existing.page_count == body.pages.len() as u32 {
         return Ok(existing);
     }
 
     let chunks = chunk_pages(&body.pages);
-    let embeddings = embed_texts(cfg, &chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>())?;
+    let (embeddings, kind) =
+        embed_texts(cfg, &chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let used_http = cfg.embed_model().map(|m| !m.is_empty()).unwrap_or(false);
+    /*
+     * What happened, not what was configured.
+     *
+     * This used to read `cfg.embed_model()` — so a configured model with an
+     * unreachable server stored hashed word-counts and reported them as
+     * embeddings. `embed_texts` swallows the failure by design (an index that
+     * exists beats one that errored), which is precisely why the flag has to
+     * come back from it rather than be inferred alongside it.
+     */
+    let used_http = matches!(kind, EmbedKind::Http);
 
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM chunks WHERE hash = ?1", params![hash])?;
@@ -171,12 +192,34 @@ pub fn retrieve(conn: &Connection, hash: &str, query: &str, k: usize, cfg: &Conf
             row.get::<_, Option<Vec<u8>>>(3)?,
         ))
     })?;
-    let query_vec = embed_texts(cfg, &[query])?.into_iter().next().unwrap_or_default();
+    let (query_vecs, _) = embed_texts(cfg, &[query])?;
+    let query_vec = query_vecs.into_iter().next().unwrap_or_default();
+    let loaded: Vec<(u32, Option<String>, String, Vec<f32>)> = rows
+        .map(|row| {
+            row.map(|(page, heading, text, blob)| {
+                (page, heading, text, blob.as_deref().map(decode_f32).unwrap_or_default())
+            })
+        })
+        .collect::<std::result::Result<_, _>>()?;
+    /*
+     * One scale for the whole list.
+     *
+     * A document indexed before an embedding model was configured holds 64-dim
+     * word-counts; the query now comes back at the model's dimension. Deciding
+     * per chunk meant cosine scores and lexical scores were sorted against each
+     * other in the same ranking — two different number lines, one ordering, and
+     * whichever happened to run larger won regardless of relevance.
+     *
+     * So the document answers as a whole: comparable vectors, or lexical
+     * throughout. Being consistently coarse beats being incomparably mixed.
+     */
+    let comparable = !query_vec.is_empty()
+        && loaded
+            .iter()
+            .all(|(_, _, _, vec)| vec.len() == query_vec.len() && !vec.is_empty());
     let mut scored = Vec::new();
-    for row in rows {
-        let (page, heading, text, blob) = row?;
-        let vec = blob.as_deref().map(decode_f32).unwrap_or_default();
-        let score = if vec.len() == query_vec.len() && !vec.is_empty() {
+    for (page, heading, text, vec) in loaded {
+        let score = if comparable {
             cosine(&query_vec, &vec)
         } else {
             lexical_score(query, &text)
@@ -338,19 +381,33 @@ fn first_heading(text: &str) -> Option<String> {
     None
 }
 
-fn embed_texts(cfg: &Config, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+/// Which scheme actually produced a set of vectors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedKind {
+    /// A real model answered over HTTP — cosine means what it looks like.
+    Http,
+    /// The 64-bucket word-count fallback. Cosine here is word overlap.
+    Hashed,
+}
+
+fn embed_texts(cfg: &Config, texts: &[&str]) -> Result<(Vec<Vec<f32>>, EmbedKind)> {
     const HTTP_EMBED_MAX_CHARS: usize = 24_000;
     let total: usize = texts.iter().map(|t| t.len()).sum();
     if total <= HTTP_EMBED_MAX_CHARS {
         if let Some(model) = cfg.embed_model().filter(|m| !m.is_empty()) {
             match http_embed(cfg.embed_base_url(), model, texts) {
-                Ok(vectors) if vectors.len() == texts.len() => return Ok(vectors),
+                Ok(vectors) if vectors.len() == texts.len() => {
+                    return Ok((vectors, EmbedKind::Http))
+                }
                 Ok(_) => {}
                 Err(_) => {}
             }
         }
     }
-    Ok(texts.iter().map(|t| hashed_embedding(t)).collect())
+    Ok((
+        texts.iter().map(|t| hashed_embedding(t)).collect(),
+        EmbedKind::Hashed,
+    ))
 }
 
 fn http_embed(base_url: &str, model: &str, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
@@ -485,8 +542,8 @@ mod tests {
                 heading: Some("Method".into()),
             }],
         };
-        let first = upsert(&mut conn, "abc", &body, &cfg()).unwrap();
-        let second = upsert(&mut conn, "abc", &body, &cfg()).unwrap();
+        let first = upsert(&mut conn, "abc", &body, &cfg(), false).unwrap();
+        let second = upsert(&mut conn, "abc", &body, &cfg(), false).unwrap();
         assert!(first.indexed);
         assert_eq!(first.chunk_count, second.chunk_count);
         let _ = std::fs::remove_file(path);
@@ -512,7 +569,7 @@ mod tests {
                 },
             ],
         };
-        upsert(&mut conn, "book", &body, &cfg()).unwrap();
+        upsert(&mut conn, "book", &body, &cfg(), false).unwrap();
         let hits = retrieve(&conn, "book", "what is SGD", 2, &cfg()).unwrap();
         assert!(!hits.is_empty());
         assert_eq!(hits[0].page, 2);
@@ -550,7 +607,7 @@ mod tests {
                 heading: None,
             }],
         };
-        let status = upsert(&mut conn, "h1", &body, &cfg()).unwrap();
+        let status = upsert(&mut conn, "h1", &body, &cfg(), false).unwrap();
         assert!(status.indexed);
         assert!(!status.embedded);
         let blob: Vec<u8> = conn
@@ -580,9 +637,12 @@ mod tests {
                 heading: None,
             }],
         };
-        let status = upsert(&mut conn, "h2", &body, &cfg).unwrap();
+        let status = upsert(&mut conn, "h2", &body, &cfg, false).unwrap();
         assert!(status.indexed);
-        assert!(status.embedded);
+        // The flag reports what happened, not what was asked for. A configured
+        // model with nothing answering on the other end stores word-counts, and
+        // saying otherwise made the UI promise semantic search it did not have.
+        assert!(!status.embedded);
         let blob: Vec<u8> = conn
             .query_row(
                 "SELECT embedding FROM chunks WHERE hash = ?1",
@@ -591,6 +651,96 @@ mod tests {
             )
             .unwrap();
         assert_eq!(decode_f32(&blob).len(), HASH_DIM);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn force_rewrites_what_idempotence_would_skip() {
+        // Turning an embedding model on changes no page count, so the guard
+        // would skip the one document that most needs its vectors redone.
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.md".into(),
+            doc_type: "markdown".into(),
+            pages: vec![IndexPage {
+                page: 1,
+                text: "alpha beta gamma".into(),
+                heading: None,
+            }],
+        };
+        upsert(&mut conn, "h3", &body, &cfg(), false).unwrap();
+        let first: i64 = conn
+            .query_row(
+                "SELECT id FROM chunks WHERE hash = ?1",
+                rusqlite::params!["h3"],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        // Same pages again: skipped, so the row is untouched.
+        upsert(&mut conn, "h3", &body, &cfg(), false).unwrap();
+        let same: i64 = conn
+            .query_row(
+                "SELECT id FROM chunks WHERE hash = ?1",
+                rusqlite::params!["h3"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(first, same);
+
+        // Forced: deleted and rewritten, so the row is a new one.
+        upsert(&mut conn, "h3", &body, &cfg(), true).unwrap();
+        let rewritten: i64 = conn
+            .query_row(
+                "SELECT id FROM chunks WHERE hash = ?1",
+                rusqlite::params!["h3"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(first, rewritten);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_document_is_scored_on_one_scale() {
+        /*
+         * Chunks stored under an old scheme cannot be compared with a query
+         * vector from a new one. Scoring per chunk sorted cosine against
+         * lexical in the same list — two number lines, one ordering.
+         */
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.md".into(),
+            doc_type: "markdown".into(),
+            pages: vec![
+                IndexPage {
+                    page: 1,
+                    text: "stochastic gradient descent updates weights".into(),
+                    heading: None,
+                },
+                IndexPage {
+                    page: 2,
+                    text: "unrelated chapter about kitchen plumbing".into(),
+                    heading: None,
+                },
+            ],
+        };
+        upsert(&mut conn, "h4", &body, &cfg(), false).unwrap();
+        // Widen one chunk's vector so the document no longer matches the query's
+        // dimension — the shape a stale re-index leaves behind.
+        conn.execute(
+            "UPDATE chunks SET embedding = ?1 WHERE hash = ?2 AND page = 1",
+            rusqlite::params![encode_f32(&vec![0.5f32; 768]), "h4"],
+        )
+        .unwrap();
+        let hits = retrieve(&conn, "h4", "gradient descent", 2, &cfg()).unwrap();
+        assert_eq!(hits.len(), 2);
+        // Lexical throughout: the page that shares the words wins, and nothing
+        // was scored by a cosine it could not be compared with.
+        assert_eq!(hits[0].page, 1);
+        assert!(hits[0].score > hits[1].score);
         let _ = std::fs::remove_file(path);
     }
 

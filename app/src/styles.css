@@ -561,6 +561,37 @@ body {
  * asked read as the same kind of thing — the difference is that this one is a
  * button.
  */
+/*
+ * Indexed, but matching words rather than meaning.
+ *
+ * Not an error — retrieval works, it is just coarse — so it is toned as a
+ * caution rather than a failure. The word after the dot is what makes it worth
+ * pressing: "indexed" alone gave no reason to look.
+ */
+.lc-doc-index-chip.is-words {
+  color: color-mix(in srgb, var(--accent) 70%, var(--hint));
+  cursor: pointer;
+}
+
+.lc-doc-index-redo {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lc-doc-index-redo:hover,
+.lc-doc-index-redo:focus-visible {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 .lc-doc-index-chip.is-offer {
   cursor: pointer;
   color: var(--hint);
@@ -10173,6 +10204,63 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 1.35em;
   font-weight: 600;
   letter-spacing: 0.28em;
+}
+
+/* The URL is read and retyped on another device, so it wants to be legible
+   rather than spaced out like a code. */
+.lc-pad-hub-url {
+  font-size: 1.05em;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* What to type, set apart from the prose about it — this is the one block
+   somebody copies across to a tablet. */
+.lc-pad-hub-card {
+  display: grid;
+  gap: 10px;
+  margin: 8px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.lc-pad-hub-card > div {
+  display: grid;
+  gap: 2px;
+}
+
+.lc-pad-hub-card dt {
+  font-size: 0.82em;
+  opacity: 0.66;
+}
+
+.lc-pad-hub-card dd {
+  margin: 0;
+}
+
+.lc-pad-hub-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.lc-pad-hub-verdict {
+  margin: 0;
+  flex: 1 1 12rem;
+  font-size: 0.88em;
+  line-height: 1.4;
+}
+
+.lc-pad-hub-verdict.is-ok {
+  color: var(--ok);
+}
+
+.lc-pad-hub-verdict.is-bad {
+  color: var(--bad);
 }
 
 .lc-settings-actions-row {

@@ -779,11 +779,24 @@ export function Workspace({
             if (workspaceLoadGenRef.current === loadGen) setDocIndexStatus("idle");
             return;
           }
-          const result = await client.putDocIndex(job.hash, {
-            name: job.name,
-            doc_type: job.docType,
-            pages,
-          });
+          /*
+           * Always a rewrite when asked by hand.
+           *
+           * Indexing is idempotent on page count, which is right for reopening
+           * the same file. But the reason to press this a second time is that
+           * the *vectors* should be different now — a model was configured —
+           * and that moves no page counts, so the guard would skip exactly the
+           * case the button exists for.
+           */
+          const result = await client.putDocIndex(
+            job.hash,
+            {
+              name: job.name,
+              doc_type: job.docType,
+              pages,
+            },
+            { force: true },
+          );
           if (workspaceLoadGenRef.current !== loadGen) return;
           if (!result.indexed) {
             setDocIndexStatus("error");

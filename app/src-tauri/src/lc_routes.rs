@@ -511,14 +511,16 @@ pub async fn lc_docs_put_index(
     state: State<'_, Shared>,
     hash: String,
     body: serde_json::Value,
+    force: Option<bool>,
 ) -> Result<LcResponse, String> {
-    go(
-        state,
-        "PUT",
-        format!("/docs/{}/index", enc(&hash)),
-        Some(body),
-    )
-    .await
+    // `force` rewrites vectors for a document whose page count has not changed —
+    // the shape of "I just turned an embedding model on".
+    let path = if force.unwrap_or(false) {
+        format!("/docs/{}/index?force=true", enc(&hash))
+    } else {
+        format!("/docs/{}/index", enc(&hash))
+    };
+    go(state, "PUT", path, Some(body)).await
 }
 
 /// Nearest chunks of one document — link suggestions, and anything else that

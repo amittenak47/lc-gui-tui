@@ -34,9 +34,22 @@ pub async fn get_index(
     Ok(Json(status))
 }
 
+/// Query for `PUT /docs/{hash}/index`.
+#[derive(serde::Deserialize, Default)]
+pub struct PutIndexQuery {
+    /// Rewrite even when the page count is unchanged.
+    ///
+    /// Turning an embedding model on leaves every page count exactly where it
+    /// was, so the idempotence guard skips the one document that most needs
+    /// redoing. This is how the reader says "do it anyway".
+    #[serde(default)]
+    pub force: bool,
+}
+
 pub async fn put_index(
     State(state): State<Shared>,
     UrlPath(hash): UrlPath<String>,
+    Query(query): Query<PutIndexQuery>,
     Json(body): Json<IndexBody>,
 ) -> Result<Response, AppError> {
     let hash = hash.trim().to_string();
@@ -51,7 +64,7 @@ pub async fn put_index(
         let path = docs_index::db_path()?;
         let mut conn = docs_index::open(&path)?;
         let before = docs_index::status(&conn, &hash)?;
-        let after = docs_index::upsert(&mut conn, &hash, &body, &cfg)?;
+        let after = docs_index::upsert(&mut conn, &hash, &body, &cfg, query.force)?;
         Ok::<_, anyhow::Error>(IndexResponse {
             wrote: !before.indexed || before.chunk_count != after.chunk_count,
             status: after,

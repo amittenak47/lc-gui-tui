@@ -67,6 +67,8 @@ export function DocIndexChip({ status, meta, error, onIndex }: DocIndexChipProps
       </button>
     );
   }
+  // `onIndex` is also the re-index action once a document is already in — the
+  // work is identical, `upsert` deletes and rewrites.
   if (status === "indexing") {
     return <span className="lc-doc-index-chip">indexing…</span>;
   }
@@ -80,13 +82,23 @@ export function DocIndexChip({ status, meta, error, onIndex }: DocIndexChipProps
 
   const chunks = meta?.chunk_count ?? 0;
   const pages = meta?.page_count ?? 0;
+  /*
+   * Indexed is not the same as searchable-by-meaning.
+   *
+   * Every chunk carries a vector — that column is never empty. `embedded` says
+   * what the vector is *made of*: a real model's, or the 64-bucket word-count
+   * fallback that stands in when no embedding model is configured. Cosine over
+   * word-counts finds chunks that share your words, not your question, and
+   * nothing on screen said so.
+   */
+  const wordsOnly = meta != null && meta.embedded === false;
 
   return (
     <>
       <button
         ref={buttonRef}
         type="button"
-        className="lc-doc-index-chip is-ok"
+        className={wordsOnly ? "lc-doc-index-chip is-words" : "lc-doc-index-chip is-ok"}
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => {
@@ -95,7 +107,7 @@ export function DocIndexChip({ status, meta, error, onIndex }: DocIndexChipProps
           setOpen((current) => !current);
         }}
       >
-        indexed
+        {wordsOnly ? "indexed · words" : "indexed"}
       </button>
       {typeof document !== "undefined" &&
         createPortal(
@@ -131,10 +143,31 @@ export function DocIndexChip({ status, meta, error, onIndex }: DocIndexChipProps
                     <dd>{pages || 1}</dd>
                   </div>
                   <div>
-                    <dt>Vectors</dt>
-                    <dd>{meta?.embedded ? "embedded" : "hashed only"}</dd>
+                    <dt>Matching</dt>
+                    <dd>{meta?.embedded ? "by meaning" : "by words"}</dd>
                   </div>
                 </dl>
+                {wordsOnly && (
+                  <>
+                    <p className="lc-doc-index-lead">
+                      No embedding model is set, so chunks are matched on the
+                      words they share with your question rather than what it
+                      means. Set one under Settings → LLM, then re-index.
+                    </p>
+                    {onIndex && (
+                      <button
+                        type="button"
+                        className="lc-doc-index-redo"
+                        onClick={() => {
+                          setOpen(false);
+                          onIndex();
+                        }}
+                      >
+                        Re-index this document
+                      </button>
+                    )}
+                  </>
+                )}
               </aside>
             </MorphBar>
           </div>,

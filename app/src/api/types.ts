@@ -132,6 +132,15 @@ export interface ProviderConfig {
   vision_model: string;
   /** Explicit image support. Omit to use the provider default. */
   vision?: boolean | null;
+  /**
+   * Small embedding model for the document index.
+   *
+   * Empty is valid and means the hashed word-count fallback: retrieval still
+   * works, but it matches the words you typed rather than what you meant.
+   */
+  embed_model?: string;
+  /** OpenAI-compatible `/embeddings` base. Empty reuses {@link base_url}. */
+  embed_base_url?: string;
 }
 
 export interface LcConfig {
