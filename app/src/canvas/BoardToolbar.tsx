@@ -42,6 +42,7 @@ import {
   toolbarWindowIsNarrow,
   type ToolbarLayout,
 } from "../util/toolbarLayout";
+import type { MdFormatKind } from "../modes/AnnotateMarkdownEditor";
 import type { ToolName } from "./BoardHandle";
 import { ColorRadial } from "./ColorRadial";
 import {
@@ -190,6 +191,58 @@ export interface BoardToolbarProps {
   wheelLocked?: boolean;
   onToggleWheelLock?: () => void;
   onOpenInkWheel?: () => void;
+  /**
+   * Markdown mode: the same island, a different set of tools in it.
+   *
+   * Not a second toolbar. Everything that makes this thing usable — the grip,
+   * the drag, the dock snap, turning into a column when the window runs out of
+   * room, shrinking with the rail — is behaviour of the island, not of the pen.
+   * Writing a note wants all of it and none of the pen's buttons, so the row's
+   * contents swap and the island stays.
+   */
+  markdown?: boolean;
+  onMdFormat?: (kind: MdFormatKind) => void;
+}
+
+/**
+ * What the island holds while a note is being written.
+ *
+ * Every one of these inserts markdown at the caret rather than styling a
+ * selection, because the document *is* the markdown — there is no rich-text
+ * layer to be out of step with, and a reader who knows the syntax can always
+ * type it instead.
+ */
+const MD_TOOLS: Array<{ kind: MdFormatKind; glyph: string; label: string; tip: string }> = [
+  { kind: "heading", glyph: "H", label: "Heading", tip: "Heading — # at the line start" },
+  { kind: "bold", glyph: "B", label: "Bold", tip: "Bold — **around the words**" },
+  { kind: "italic", glyph: "I", label: "Italic", tip: "Italic — *around the words*" },
+  { kind: "list", glyph: "•", label: "List", tip: "List — a dash at the line start" },
+  { kind: "quote", glyph: "❝", label: "Quote", tip: "Quote — > at the line start" },
+  { kind: "task", glyph: "☑", label: "Task", tip: "Task — a checkbox you can tick" },
+  { kind: "link", glyph: "🔗", label: "Link", tip: "Link — [text](url)" },
+  { kind: "fence", glyph: "</>", label: "Code block", tip: "Code block — a fenced ``` block" },
+];
+
+function MarkdownTools({ onFormat }: { onFormat?: (kind: MdFormatKind) => void }) {
+  return (
+    <>
+      {MD_TOOLS.map((tool) => (
+        <button
+          key={tool.kind}
+          type="button"
+          className="lc-tool lc-tip-target"
+          aria-label={tool.label}
+          data-tip={tool.tip}
+          data-tip-placement="bottom"
+          onClick={() => onFormat?.(tool.kind)}
+        >
+          <span className="lc-tool-emoji" aria-hidden>
+            {tool.glyph}
+          </span>
+        </button>
+      ))}
+    </>
+  );
 }
 
 export function BoardToolbar({
@@ -236,6 +289,8 @@ export function BoardToolbar({
   wheelLocked = true,
   onToggleWheelLock,
   onOpenInkWheel,
+  markdown = false,
+  onMdFormat,
 }: BoardToolbarProps) {
   // Ink nib / fullness / pressure live on presets. Text still has a size wheel.
   const showStrokeSizes = false;
@@ -753,6 +808,20 @@ export function BoardToolbar({
     if (shapesOpen) onToggleShapes();
     if (captureMenuOpen) onToggleCaptureMenu();
     setShapeMenuOpen(false);
+    /*
+     * Select is a detour, so tapping it again comes back.
+     *
+     * Every other tool on this strip is somewhere you stay: you pick the pen
+     * and you write. Select is somewhere you go to move one thing and then
+     * want out of, and there was no "out" — the only way back to the pen was to
+     * find the pen, which is a different button in a different place from the
+     * one your finger is already on. Pressing the lit button to leave the mode
+     * it lit is what a toggle means.
+     */
+    if (tool === "selection" && active === "selection" && !shapesUiActive) {
+      onPick("freedraw");
+      return;
+    }
     if (tool === "text") onTextMode("plain");
     onPick(tool);
   };
@@ -872,6 +941,10 @@ export function BoardToolbar({
           <span className="lc-toolbar-grip-dots" aria-hidden />
         </button>
 
+        {markdown ? (
+          <MarkdownTools onFormat={onMdFormat} />
+        ) : (
+        <>
         <div className="lc-color-wrap">
           <ColorRadial
             colors={inkPalette ?? inkSwatches(themeId)}
@@ -1167,6 +1240,8 @@ export function BoardToolbar({
           <div className="lc-stroke-controls">
             <FontSizeSlider value={fontSize} onChange={onFontSize} />
           </div>
+        )}
+        </>
         )}
       </div>
 

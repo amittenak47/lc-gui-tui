@@ -148,7 +148,7 @@ import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelection
 import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
 import { WebDocument } from "./modes/WebDocument";
-import { canStepWeb, currentEntry, stepWeb, type WebPadEntry } from "./util/webPadSession";
+import { canStepWeb, currentEntry, pushWeb, stepWeb, type WebPadEntry } from "./util/webPadSession";
 import {
   HOME_TAB_ID,
   activeTab as activeTabOf,
@@ -175,10 +175,11 @@ import { resolveWikiLinks } from "./util/wikiLinks";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
 import { savePdfFilmPref } from "./modes/pdfFilm";
-import { AnnotateDialog } from "./modes/AnnotateDialog";
+import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
-import { AnnotateMarkdownEditor } from "./modes/AnnotateMarkdownEditor";
+import { AnnotateMarkdownEditor, isFreshOwnedNote, type AnnotateMarkdownEditorHandle } from "./modes/AnnotateMarkdownEditor";
+import { LiveWebPane } from "./modes/LiveWebPane";
 import { StatementDocument } from "./modes/StatementDocument";
 import {
   buildAnnotateTemplate,
@@ -549,6 +550,7 @@ export function Workspace({
     setChrome,
     setWorkspaceApi,
     setShellLoadActive,
+    shellLoadActive,
     takeUserLoad,
     onMissingContent,
   } = useShell();
@@ -634,7 +636,9 @@ export function Workspace({
     bytes?: ArrayBuffer | null;
   } | null>(null);
   /** Address bar for a web snapshot — kept outside the camera-scaled page. */
+  const webUrlRef = useRef("");
   const [webUrl, setWebUrl] = useState(WEB_HOME);
+  webUrlRef.current = webUrl;
   const [webHtmlSource, setWebHtmlSource] = useState<WebHtmlSource | null>(null);
   /* Read by the open path, which runs before the state it just set has landed. */
   const webHtmlSourceRef = useRef<WebHtmlSource | null>(null);
@@ -659,6 +663,7 @@ export function Workspace({
   const [editBuffer, setEditBuffer] = useState("");
   const editBufferRef = useRef("");
   editBufferRef.current = editBuffer;
+  const mdEditorRef = useRef<AnnotateMarkdownEditorHandle | null>(null);
   /*
    * The open is parked on a question: which of this file's annotation sets?
    *
@@ -728,6 +733,14 @@ export function Workspace({
    */
   const [linkMode, setLinkMode] = useState(false);
   const [annotateEntryOpen, setAnnotateEntryOpen] = useState(false);
+  /*
+   * Which library the entry dialog is about.
+   *
+   * One dialog: a web pad *is* an annotate document, so Save, Recent, Export
+   * and Import already act on it correctly. Only the words differ, and they
+   * differed badly — holding the globe offered to open a .pdf.
+   */
+  const [entryKind, setEntryKind] = useState<AnnotateDialogKind>("document");
   const [docIndexStatus, setDocIndexStatus] = useState<
     "idle" | "indexing" | "indexed" | "error"
   >("idle");
@@ -2435,7 +2448,7 @@ export function Workspace({
       hash?: string;
       userLoad?: boolean;
     }) => {
-      if (busy !== null) return;
+      if (busyRef.current !== null) return;
       beginPadOpen();
       const loadGen = ++workspaceLoadGenRef.current;
       /*
@@ -2568,7 +2581,23 @@ export function Workspace({
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
         setAnnotateSource({ name: input.name, text, hash, docType, bytes });
-        if (docType === "web") setWebUrl(input.name);
+        if (docType === "web") {
+          setWebUrl(input.name);
+          /*
+           * A page you have not written on is one you are still browsing.
+           *
+           * So: live unless it carries marks. Reopening something you annotated
+           * gives you the document back, because the marks are the thing you
+           * came for and they only exist on the frozen copy.
+           *
+           * Deliberately not keyed to `userLoad` — that is load bookkeeping,
+           * true or false for reasons that have nothing to do with what the
+           * reader wants, and it left pages frozen on open with no way to tell
+           * why. Whether a page has been marked is a fact about the page.
+           */
+          const neverMarked = (existing?.footnotes?.length ?? 0) === 0;
+          setWebLive(isTauriRuntime() && neverMarked);
+        }
         /*
          * Give this document a tab, or claim the one it arrived on.
          *
@@ -2692,7 +2721,7 @@ export function Workspace({
          * a blank sheet with no obvious way off it. Empty and yours means the
          * only thing you can be here to do is write.
          */
-        setEditMarkdown(owned && text.trim().length === 0);
+        setEditMarkdown(owned && isFreshOwnedNote(text));
         setEditBuffer(text);
         // Footnotes belong to the entry, so a fresh open of the same file gets
         // its marks back and an unrelated document starts clean.
@@ -2893,7 +2922,6 @@ export function Workspace({
     },
     [
       beginPadOpen,
-      busy,
       client,
       endPadOpen,
       finishLoadingTransition,
@@ -3437,7 +3465,10 @@ export function Workspace({
     if (!annotateOwned) return;
     if (editMarkdown) {
       void saveEditBuffer({ reindex: docIndexStatus === "indexed" }).then((ok) => {
-        if (ok) setEditMarkdown(false);
+        if (!ok) {
+          setError((current) => current ?? "The note could not be saved.");
+        }
+        setEditMarkdown(false);
       });
       return;
     }
@@ -3623,7 +3654,7 @@ export function Workspace({
   const showWebEntry = useCallback(
     async (tab: WebTab, userLoad = false) => {
       const entry = currentEntry(tab);
-      if (!entry || busy !== null) return;
+      if (!entry || busyRef.current !== null) return;
       await loadAnnotate({
         name: entry.url,
         docType: "web",
@@ -3632,8 +3663,41 @@ export function Workspace({
         userLoad,
       });
     },
-    [busy, loadAnnotate],
+    [loadAnnotate],
   );
+
+  /**
+   * Stop browsing and keep what is on screen.
+   *
+   * Reads the live view's own DOM rather than fetching the address again: you
+   * may have clicked three links, filled a form, or expanded something, and the
+   * page you are looking at is the one you meant to write on. A re-fetch would
+   * freeze a different page and call it the same one.
+   */
+  const freezeLivePage = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    setBusy("Freezing this page…");
+    try {
+      const { serializeLiveWebview } = await import("./util/webPageCapture");
+      const live = await serializeLiveWebview();
+      const { pageFromCapturedHtml } = await import("./util/webPage");
+      const page = await pageFromCapturedHtml(live.html, live.url || webUrlRef.current);
+      setWebHtmlSource(page.source);
+      setWebHtmlNote(page.note ?? null);
+      setWebLive(false);
+      setBusy(null);
+      await loadAnnotate({
+        name: page.url,
+        docType: "web",
+        text: page.html,
+        tabId: tab.id,
+        userLoad: true,
+      });
+    } catch (cause) {
+      setBusy(null);
+      setError(messageOf(cause));
+    }
+  }, [loadAnnotate, tab.id]);
 
   /**
    * Fetch a page, sanitise it, then open it as a web tab (globe / address bar).
@@ -3644,7 +3708,11 @@ export function Workspace({
    */
   const openWebPage = useCallback(
     async (raw: string, opts?: { newTab?: boolean }) => {
-      if (busy !== null) return;
+      /*
+       * A new address replaces whatever was loading. Enter-while-busy used to
+       * no-op, then the in-flight Google capture painted over the typed URL.
+       * Bumping the gen makes that fetch see a mismatch and bail.
+       */
       beginPadOpen();
       const loadGen = ++workspaceLoadGenRef.current;
       const fromBrowse = !problem;
@@ -3678,14 +3746,30 @@ export function Workspace({
          * The new workspace loads on mount. Do not loadAnnotate here: this
          * instance is Home (or the previous pad) and would double-open.
          */
-        const current = activeTabOf(tabsRef.current);
+        /*
+         * This pane's tab, not whichever tab has focus.
+         *
+         * `activeTabOf` is the wrong question in a split: each pane is its own
+         * workspace, and Reload belongs to the pane whose button was pressed.
+         * Asking the shell instead meant that with the *other* pane focused,
+         * this one's Reload found no web tab to reuse and opened a third.
+         */
+        const own = tabsRef.current.tabs.find((entry) => entry.id === tab.id) ?? null;
+        const current = own?.kind === "web" ? own : activeTabOf(tabsRef.current);
         const inPlace = opts?.newTab !== true && current.kind === "web" ? current : null;
         if (inPlace) {
           sameWorkspace = true;
+          busyRef.current = null;
           setBusy(null);
+          /*
+           * `webPush` is a React dispatch — tabsRef still holds the old
+           * snapshot until the next render. Show the pushed tab, not `inPlace`,
+           * or loadAnnotate paints Google and setWebUrl overwrites the omnibox.
+           */
+          const nextTab = pushWeb(inPlace, entry);
           webPush(inPlace.id, entry);
           handedOff = true;
-          await showWebEntry(inPlace, true);
+          await showWebEntry(nextTab, true);
         } else {
           openWorkspace(webTabRecord(entry));
           handedOff = true;
@@ -3695,6 +3779,7 @@ export function Workspace({
         setError(messageOf(cause));
       } finally {
         endPadOpen();
+        if (workspaceLoadGenRef.current !== loadGen) return;
         if (!handedOff) {
           setBusy(null);
           setWorkspaceLoadActive(false);
@@ -3713,7 +3798,6 @@ export function Workspace({
     },
     [
       beginPadOpen,
-      busy,
       endPadOpen,
       openWorkspace,
       problem,
@@ -6051,6 +6135,21 @@ export function Workspace({
     setAnnotateFootnotes((current) => removeFootnote(current, footnote.id));
   }, []);
 
+  /*
+   * Which header icon is waiting on a tab it just asked for.
+   *
+   * Spawning a tab hands the load to a *different* workspace, so nothing here
+   * changes and the icon gave no sign it had heard the tap — meanwhile every
+   * spawn icon greys out, which reads as the app having gone unresponsive
+   * rather than as work in progress. `shellLoadActive` is the shell's own
+   * "a tab is loading" flag and is documented to survive the Home → new-tab
+   * handoff, so it is the one signal that spans the gap.
+   */
+  const [spawning, setSpawning] = useState<"web" | "doc" | "board" | null>(null);
+  useEffect(() => {
+    if (!shellLoadActive) setSpawning(null);
+  }, [shellLoadActive]);
+
   const leaveProblem = useCallback(
     (next: () => void) => {
       if (!problem) {
@@ -6595,6 +6694,20 @@ export function Workspace({
 
   /* Which header icon is the live workspace, and so wears the pressed form. */
   const webPadLive = tab.kind === "web";
+  /*
+   * Browsing or annotating — a web tab is one or the other, never both.
+   *
+   * Live is a native webview over the pane: the real page, its own JavaScript,
+   * its own CSS. Nothing of ours can be drawn on top of a native surface and
+   * nothing can reach into it for a text range, so ink and marks are impossible
+   * while it is showing. Freezing serialises it into a document, which is what
+   * makes those possible and what costs the fidelity. Keeping them as two
+   * states is the only honest way to have both.
+   *
+   * Desktop only: Android has no child webview, so those tabs stay frozen.
+   */
+  const [webLive, setWebLive] = useState(false);
+  const canBrowseLive = webPadLive && isTauriRuntime();
   const docPadLive = Boolean(problem && isAnnotate(problem) && annotateSource?.docType !== "web" && tab.kind !== "web");
   const boardPadLive = Boolean(problem && isWhiteboard(problem));
 
@@ -6910,13 +7023,20 @@ export function Workspace({
           {!webPadLive && (
             <HoldButton
               label="Web"
-              ariaLabel="Web pad: tap to open Google, hold for recent documents"
+              ariaLabel="Web pad: tap for a new page, hold for recent pages"
               className="lc-icon lc-tip-target lc-hold-icon"
-              dataTip="Web — tap to open google.com, hold for recent"
+              dataTip="Web — tap for a new page, hold for recent"
               dataTipPlacement="bottom"
               disabled={busy !== null || canvasLoading}
-              onTap={() => void openWebPage(WEB_HOME, { newTab: true })}
-              onConfirm={() => setAnnotateEntryOpen(true)}
+              fillIndeterminate={spawning === "web"}
+              onTap={() => {
+                setSpawning("web");
+                void openWebPage(WEB_HOME, { newTab: true });
+              }}
+              onConfirm={() => {
+                setEntryKind("web");
+                setAnnotateEntryOpen(true);
+              }}
             >
               <svg
                 className="lc-icon-svg"
@@ -6949,7 +7069,10 @@ export function Workspace({
               dataTipPlacement="bottom"
               disabled={busy !== null || canvasLoading}
               onTap={() => void pickAndOpenAnnotate()}
-              onConfirm={() => setAnnotateEntryOpen(true)}
+              onConfirm={() => {
+                setEntryKind("document");
+                setAnnotateEntryOpen(true);
+              }}
             >
               <svg
                 className="lc-icon-svg"
@@ -6985,7 +7108,10 @@ export function Workspace({
                   if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
                 });
               }}
-              onConfirm={() => setAnnotateEntryOpen(true)}
+              onConfirm={() => {
+                setEntryKind("web");
+                setAnnotateEntryOpen(true);
+              }}
             >
               <svg
                 className="lc-icon-svg"
@@ -7235,6 +7361,57 @@ export function Workspace({
               text rather than beside it as a button the width of a word.
             */}
             <div className="lc-web-address">
+              {/*
+                Reader, on the address — where Safari puts it, and where it
+                belongs: it is a statement about *this URL*, not a mode of the
+                app. It used to be two chips further along the bar saying "full
+                page" or "raw page", which describe an implementation and read
+                as error badges.
+
+                Lit means you are reading the extracted article. Dim means the
+                page is not one, or extraction failed; pressing it tries again.
+              */}
+              {webHtmlSource && (
+                <button
+                  type="button"
+                  className={
+                    webHtmlSource === "reader"
+                      ? "lc-web-reader-toggle is-on"
+                      : "lc-web-reader-toggle"
+                  }
+                  aria-pressed={webHtmlSource === "reader"}
+                  aria-label={
+                    webHtmlSource === "reader" ? "Reader view" : "Try reader view"
+                  }
+                  title={
+                    webHtmlSource === "reader"
+                      ? "Reader view — the article, without the page around it"
+                      : webHtmlSource === "fetch"
+                        ? `${
+                            webHtmlNote
+                              ? `The live capture failed — ${webHtmlNote}. `
+                              : "The live capture was unavailable. "
+                          }This is the raw HTML. Tap to try again.`
+                        : "Not an article, so the whole page was kept. Tap to try reader view."
+                  }
+                  onClick={() => void openWebPage(webUrl)}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M4 6h7M4 10h7M4 14h5" />
+                    <path d="M14 6h6M14 10h6M14 14h6M14 18h6" />
+                  </svg>
+                </button>
+              )}
               <input
                 type="text"
                 inputMode="url"
@@ -7269,32 +7446,52 @@ export function Workspace({
               </button>
             </div>
             {/*
-              Which paper you are reading, and a way out of the bad one.
-              
-              This used to be a muted paragraph at the top of the page itself,
-              which scrolled away and read as part of the site's own content —
-              so a page that had silently degraded looked simply broken. Chrome
-              belongs in chrome: it cannot scroll off, it cannot be mistaken for
-              the page, and it sits beside the reload button you would reach for.
+              Live page, or a copy you can write on. One button, an icon like
+              its neighbours rather than a word in a pill — the pen says which
+              of the two you are in, because only one of them accepts ink.
             */}
-            {webHtmlSource && webHtmlSource !== "reader" ? (
+            {canBrowseLive && (
               <button
                 type="button"
-                className="lc-web-source-chip"
+                className={webLive ? "lc-icon lc-web-live-toggle is-live" : "lc-icon lc-web-live-toggle"}
+                aria-pressed={webLive}
+                aria-label={webLive ? "Freeze this page" : "Browse the live page"}
                 title={
-                  webHtmlSource === "fetch"
-                    ? `${
-                        webHtmlNote
-                          ? `Rendered capture failed — ${webHtmlNote}. `
-                          : "Rendered capture was unavailable. "
-                      }This is the raw HTML, so anything the page builds with JavaScript is missing. Tap to try again.`
-                    : "This page is not an article, so the whole page was kept instead. Tap to load it again."
+                  webLive
+                    ? "Live page. Freeze it to write on it."
+                    : "A frozen copy you can write on. Tap to go back to the live page."
                 }
-                onClick={() => void openWebPage(webUrl)}
+                onClick={() => {
+                  if (webLive) void freezeLivePage();
+                  else setWebLive(true);
+                }}
               >
-                {webHtmlSource === "fetch" ? "raw page" : "full page"}
+                <svg
+                  viewBox="0 0 24 24"
+                  width="15"
+                  height="15"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  {webLive ? (
+                    // Snowflake-ish: freeze what is on screen.
+                    <>
+                      <path d="M12 3v18M5 7l14 10M19 7L5 17" />
+                    </>
+                  ) : (
+                    // Globe: go back to the live page.
+                    <>
+                      <circle cx="12" cy="12" r="8" />
+                      <path d="M4 12h16M12 4a14 14 0 0 1 0 16a14 14 0 0 1 0-16" />
+                    </>
+                  )}
+                </svg>
               </button>
-            ) : null}
+            )}
             {/*
               Indexing a page is a decision, not a side effect of having looked
               at it — see the open path. This is where the decision is made.
@@ -7348,6 +7545,7 @@ export function Workspace({
             // Lifts the ink layer over the dock — see the rule in styles.css.
             annotateCode && "lc-annotating-code",
             pdfFilmOpen && pdfNav && pdfNav.count >= 2 && "lc-has-pdf-film",
+            canBrowseLive && webLive && "lc-canvas-live-web",
           ]
             .filter(Boolean)
             .join(" ")}
@@ -7355,6 +7553,24 @@ export function Workspace({
             if (!active && showing) focusTab(tab.id);
           }}
         >
+          {/*
+            The live page sits in front of the board, not instead of it.
+
+            The board stays mounted underneath with its ink and marks intact, so
+            freezing is a state change rather than a reload. A native webview
+            paints above all HTML regardless of z-index, so the placeholder's
+            only job is to say where.
+          */}
+          {canBrowseLive && webLive && annotateSource?.docType === "web" && (
+            <LiveWebPane
+              url={annotateSource.name}
+              visible={Boolean(showing && active)}
+              onError={(message) => {
+                setError(message);
+                setWebLive(false);
+              }}
+            />
+          )}
           {tab.kind !== "home" && tab.kind !== "explore" ? (
           <Board
             ref={boardRef}
@@ -7390,6 +7606,7 @@ export function Workspace({
             editToggle={annotateOwned}
             editing={editMarkdown}
             onToggleEdit={toggleEditMarkdown}
+            onMdFormat={(kind) => mdEditorRef.current?.format(kind)}
             linkToggle={Boolean(problem) && !editMarkdown}
             linking={linkMode}
             onToggleLink={() => {
@@ -7453,9 +7670,9 @@ export function Workspace({
             pageContent={
               problem && isAnnotate(problem) && annotateSource && editMarkdown ? (
                 <AnnotateMarkdownEditor
+                  ref={mdEditorRef}
                   value={editBuffer}
                   onChange={setEditBuffer}
-                  themeId={themeId}
                   readingSize={readingSize}
                   onMeasure={onMdInkMeasure}
                 />
@@ -7907,52 +8124,7 @@ export function Workspace({
         canNext={canStepNext}
       />
 
-      {leaving && problem && isWhiteboard(problem) && (
-        <WhiteboardDialog
-          mode="leave"
-          dirty={!whiteboardUntouched()}
-          pending={leavingPending}
-          exiting={leavingPhase === "exit"}
-          error={leavingError}
-          onDelete={(id) =>
-            deletePadEverywhere(client, "whiteboard", id)
-          }
-          onChoose={(choice, notebookId) => {
-            if (choice === "load" && notebookId) {
-              setLeaving(null);
-              setLeavingPhase("open");
-              void openWhiteboard({ notebookId });
-              return;
-            }
-            void resolveLeave(choice === "save");
-          }}
-          onCancel={() => {
-            if (leavingPending || leavingPhase === "exit") return;
-            setLeaving(null);
-            setLeavingError(null);
-          }}
-        />
-      )}
 
-      {leaving && problem && isAnnotate(problem) && (
-        <AnnotateDialog
-          mode="leave"
-          dirty={!annotateUntouched()}
-          docName={annotateSource?.name ?? "this document"}
-          pending={leavingPending}
-          exiting={leavingPhase === "exit"}
-          error={leavingError}
-          onDelete={(id) =>
-            deletePadEverywhere(client, "annotate", id)
-          }
-          onChoose={(choice) => void resolveLeave(choice === "save")}
-          onCancel={() => {
-            if (leavingPending || leavingPhase === "exit") return;
-            setLeaving(null);
-            setLeavingError(null);
-          }}
-        />
-      )}
 
       {/*
         * Which annotation set — asked over the loading board, mid-open.
@@ -8015,6 +8187,7 @@ export function Workspace({
       {annotateEntryOpen && (
         <AnnotateDialog
           mode="entry"
+          kind={entryKind}
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isAnnotate(problem))}
           snapshotKey={annotateDocId}
@@ -8046,6 +8219,12 @@ export function Workspace({
               // each keep their own 2h/24h/7d, and the hash names neither.
               const setId = annotateDocIdRef.current;
               if (setId) void restorePadSnapshot("annotate", setId, docId as PadSnapshotTier);
+              return;
+            }
+            if (choice === "page") {
+              setAnnotateEntryOpen(false);
+              setSpawning("web");
+              void openWebPage(WEB_HOME, { newTab: true });
               return;
             }
             if (choice === "new") {
@@ -8125,21 +8304,6 @@ export function Workspace({
         />
       )}
 
-      {leaving && problem && !isLocalPad(problem) && (
-        <AttemptDialog
-          taskId={problem.task_id}
-          solved={attemptState?.solved ?? tests?.all_passed ?? false}
-          pending={leavingPending}
-          exiting={leavingPhase === "exit"}
-          error={leavingError}
-          onChoose={(save) => void resolveLeave(save)}
-          onCancel={() => {
-            if (leavingPending || leavingPhase === "exit") return;
-            setLeaving(null);
-            setLeavingError(null);
-          }}
-        />
-      )}
 
       {whiteboardEntryOpen && (
         <WhiteboardDialog
@@ -8195,6 +8359,80 @@ export function Workspace({
       )}
         </>
       ) : null}
+
+      {/*
+        Leaving is asked wherever you are, not only on the tab being left.
+
+        These used to sit inside the `active` gate, so closing a tab you were
+        not looking at set the state, rendered nothing, and left `leave()`
+        unresolved — the close silently did nothing, and the only way to find
+        out why was to switch to that tab and watch the prompt appear there. A
+        question about a document is still a question when the document is in
+        another tab; more so, because otherwise the close looks broken rather
+        than blocked.
+      */}
+      {leaving && problem && isWhiteboard(problem) && (
+        <WhiteboardDialog
+          mode="leave"
+          dirty={!whiteboardUntouched()}
+          pending={leavingPending}
+          exiting={leavingPhase === "exit"}
+          error={leavingError}
+          onDelete={(id) =>
+            deletePadEverywhere(client, "whiteboard", id)
+          }
+          onChoose={(choice, notebookId) => {
+            if (choice === "load" && notebookId) {
+              setLeaving(null);
+              setLeavingPhase("open");
+              void openWhiteboard({ notebookId });
+              return;
+            }
+            void resolveLeave(choice === "save");
+          }}
+          onCancel={() => {
+            if (leavingPending || leavingPhase === "exit") return;
+            setLeaving(null);
+            setLeavingError(null);
+          }}
+        />
+      )}
+
+      {leaving && problem && isAnnotate(problem) && (
+        <AnnotateDialog
+          mode="leave"
+          dirty={!annotateUntouched()}
+          docName={annotateSource?.name ?? "this document"}
+          pending={leavingPending}
+          exiting={leavingPhase === "exit"}
+          error={leavingError}
+          onDelete={(id) =>
+            deletePadEverywhere(client, "annotate", id)
+          }
+          onChoose={(choice) => void resolveLeave(choice === "save")}
+          onCancel={() => {
+            if (leavingPending || leavingPhase === "exit") return;
+            setLeaving(null);
+            setLeavingError(null);
+          }}
+        />
+      )}
+
+      {leaving && problem && !isLocalPad(problem) && (
+        <AttemptDialog
+          taskId={problem.task_id}
+          solved={attemptState?.solved ?? tests?.all_passed ?? false}
+          pending={leavingPending}
+          exiting={leavingPhase === "exit"}
+          error={leavingError}
+          onChoose={(save) => void resolveLeave(save)}
+          onCancel={() => {
+            if (leavingPending || leavingPhase === "exit") return;
+            setLeaving(null);
+            setLeavingError(null);
+          }}
+        />
+      )}
     </>
   );
 }

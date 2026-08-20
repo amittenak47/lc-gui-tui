@@ -137,12 +137,29 @@ function specRows(
 /** Nib coords, or the drawable hole (canvas wrap minus the docked island). */
 export type InkWheelAnchor = { x: number; y: number } | "canvas";
 
-function measureCanvasDial(): { x: number; y: number } {
+/**
+ * Middle of the page the reader is on.
+ *
+ * `host` is the board that asked for the wheel. Without it this fell back to
+ * `document.querySelector(".lc-canvas-wrap")`, which is the *first* pane in the
+ * DOM — the left half of a split, or worse, a parked tab. A parked wrap is
+ * `display: none`, so its rect is 0×0 and the centre of it is the origin: the
+ * wheel appeared in the top-left corner of the window, half off screen, nowhere
+ * near the page it belonged to.
+ */
+function measureCanvasDial(host?: HTMLElement | null): { x: number; y: number } {
+  const owned = host?.closest(".lc-canvas-wrap") ?? host ?? null;
+  const ownedBox = owned instanceof HTMLElement ? owned.getBoundingClientRect() : null;
+  // A hidden pane measures zero. Fall back rather than centre on nothing.
+  const usable = ownedBox && ownedBox.width > 8 && ownedBox.height > 8 ? owned : null;
   const wrap =
-    document.querySelector(".lc-canvas-wrap") ?? document.querySelector(".lc-board");
+    usable ??
+    document.querySelector(".lc-canvas-wrap:not(.lc-canvas-parked)") ??
+    document.querySelector(".lc-board");
+  const raw = wrap instanceof HTMLElement ? wrap.getBoundingClientRect() : null;
   const box =
-    wrap instanceof HTMLElement
-      ? wrap.getBoundingClientRect()
+    raw && raw.width > 8 && raw.height > 8
+      ? raw
       : {
           left: 0,
           top: 0,
@@ -174,6 +191,13 @@ export interface InkToolWheelProps {
   open: boolean;
   /** Pointer/nib point, or `"canvas"` for chip-hold (never over the island). */
   anchor: InkWheelAnchor;
+  /**
+   * The board that opened it, so `"canvas"` means *this* page.
+   *
+   * Split panes and parked tabs are both `.lc-canvas-wrap`; asking the document
+   * for one picks whichever is first, which is neither.
+   */
+  host?: HTMLElement | null;
   handedness: InkHandedness;
   store: InkToolPresetStore;
   liveKind: InkPresetKind;
@@ -187,6 +211,7 @@ export interface InkToolWheelProps {
 export function InkToolWheel({
   open,
   anchor,
+  host,
   handedness,
   store,
   liveKind,
@@ -369,7 +394,7 @@ export function InkToolWheel({
 
   const [placed, setPlaced] = useState(() =>
     anchor === "canvas"
-      ? measureCanvasDial()
+      ? measureCanvasDial(host)
       : clampWheelAnchor(
           anchor.x,
           anchor.y,
@@ -383,7 +408,7 @@ export function InkToolWheel({
   );
   useLayoutEffect(() => {
     if (anchor === "canvas") {
-      setPlaced(measureCanvasDial());
+      setPlaced(measureCanvasDial(host));
       return;
     }
     setPlaced(
@@ -398,7 +423,7 @@ export function InkToolWheel({
         VIEW_PAD,
       ),
     );
-  }, [anchor, open]);
+  }, [anchor, host, open]);
 
   const toolSlices = useMemo(() => buildSlices(3, handedness), [handedness]);
   const wedgeSlices = useMemo(() => buildSlices(6, handedness), [handedness]);

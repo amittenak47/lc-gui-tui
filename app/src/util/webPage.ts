@@ -344,6 +344,17 @@ async function fetchViaViteProxyText(url: string): Promise<string> {
   return response.text();
 }
 
+async function fetchViaViteProxy(url: string): Promise<{ url: string; html: string }> {
+  const response = await fetch(`./__lc-web-fetch?url=${encodeURIComponent(url)}`);
+  if (!response.ok) {
+    const detail = (await response.text()).trim();
+    throw new Error(detail || `the page returned HTTP ${response.status}`);
+  }
+  const finalUrl = response.headers.get("x-lc-final-url") || url;
+  const html = await response.text();
+  return { url: finalUrl, html };
+}
+
 const FLATTEN_ONCE = new Set(["HTML", "BODY", "DIV", "SPAN", "CENTER", "MAIN", "ARTICLE"]);
 
 /** Unwrap single generic shells so `.lc-md-ink-doc > *` are real blocks. */
@@ -357,15 +368,89 @@ export function flattenWebSnapshot(holder: HTMLElement): void {
   }
 }
 
-async function fetchViaViteProxy(url: string): Promise<{ url: string; html: string }> {
-  const response = await fetch(`./__lc-web-fetch?url=${encodeURIComponent(url)}`);
-  if (!response.ok) {
-    const detail = (await response.text()).trim();
-    throw new Error(detail || `the page returned HTTP ${response.status}`);
+async function fetchHtmlCheap(url: string): Promise<{ url: string; html: string }> {
+  const invoke = await loadInvoke();
+  if (invoke) {
+    return invoke<{ url: string; html: string }>("fetch_html", { url });
   }
-  const finalUrl = response.headers.get("x-lc-final-url") || url;
-  const html = await response.text();
-  return { url: finalUrl, html };
+  return fetchViaViteProxy(url);
+}
+
+/**
+ * Reader HTML from a GET body, or null if this is not an article.
+ *
+ * Cheap path: skip the capture webview when the server already shipped the
+ * prose (Wikipedia). Dashboards and search pages return null so the caller
+ * can still snapshot / capture.
+ */
+export async function readerPageFromHtml(
+  html: string,
+  url: string,
+  note?: string,
+): Promise<FetchedWebPage | null> {
+  if (html.length > PAGE_MAX_BYTES) {
+    throw new Error("this page is too large to annotate here");
+  }
+  const { extractArticle } = await import("./webReader");
+  const article = extractArticle(html, url);
+  if (!article) return null;
+  console.debug("[lc-web]", "reader", {
+    htmlBytes: html.length,
+    articleBytes: article.html.length,
+  });
+  return {
+    url,
+    title: article.title || titleFromHtml(html) || url,
+    html: article.html,
+    source: "reader",
+    note,
+  };
+}
+
+/**
+ * Turn a live view's DOM into the document the pad paints.
+ *
+ * The same decision `fetchWebPage` makes at the end — article if it is one,
+ * whole page if it is not — but from HTML someone already has, so freezing what
+ * you were just looking at does not re-fetch it. Whatever you browsed to is
+ * what gets frozen.
+ */
+export async function pageFromCapturedHtml(
+  html: string,
+  url: string,
+): Promise<FetchedWebPage> {
+  const article = await readerPageFromHtml(html, url);
+  if (article) return article;
+  return snapshotPage({ url, html }, "capture");
+}
+
+async function snapshotPage(
+  fetched: { url: string; html: string },
+  source: WebHtmlSource,
+  note?: string,
+): Promise<FetchedWebPage> {
+  if (fetched.html.length > PAGE_MAX_BYTES) {
+    throw new Error("this page is too large to annotate here");
+  }
+  const before = styleTagStats(fetched.html);
+  const html = await isolateWebCss(
+    sanitizeWebHtml(fetched.html, fetched.url, source),
+    fetched.url,
+    source,
+  );
+  const after = styleTagStats(html);
+  console.debug("[lc-web]", source, {
+    htmlBytes: fetched.html.length,
+    styleBefore: before,
+    styleAfter: after,
+  });
+  return {
+    url: fetched.url,
+    title: titleFromHtml(fetched.html) || fetched.url,
+    html,
+    source,
+    note,
+  };
 }
 
 export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
@@ -374,9 +459,25 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
     throw new Error("that does not look like an http(s) address");
   }
 
+  /*
+   * Cheap GET first. Wikipedia (and any server-rendered article) is already
+   * in that HTML, so Readability can finish without spinning a hidden
+   * webview or waiting SETTLE_MS. Capture stays for JS shells (Google).
+   */
+  let cheap: { url: string; html: string } | null = null;
+  let cheapError: string | undefined;
+  try {
+    cheap = await fetchHtmlCheap(url);
+    const article = await readerPageFromHtml(cheap.html, cheap.url);
+    if (article) return article;
+  } catch (cause) {
+    cheapError = cause instanceof Error ? cause.message : String(cause);
+  }
+
   let fetched: { url: string; html: string };
   let source: WebHtmlSource = "fetch";
   let note: string | undefined;
+
   if (isTauriRuntime()) {
     try {
       const { captureRenderedPage } = await import("./webPageCapture");
@@ -391,57 +492,21 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
     } catch (cause) {
       note = cause instanceof Error ? cause.message : String(cause);
       console.warn("[lc-web] capture failed, falling back", cause);
-      const invoke = await loadInvoke();
-      if (invoke) {
-        fetched = await invoke<{ url: string; html: string }>("fetch_html", { url });
+      if (cheap) {
+        fetched = cheap;
+        source = "fetch";
       } else {
-        fetched = await fetchViaViteProxy(url);
+        fetched = await fetchHtmlCheap(url);
       }
+      if (!note) note = cheapError;
     }
+  } else if (cheap) {
+    fetched = cheap;
   } else {
-    fetched = await fetchViaViteProxy(url);
+    fetched = await fetchHtmlCheap(url);
   }
 
-  if (fetched.html.length > PAGE_MAX_BYTES) {
-    throw new Error("this page is too large to annotate here");
-  }
-
-  /*
-   * The article first, the page only if it is not one.
-   *
-   * Extraction runs on the captured DOM, so it sees whatever the page's own
-   * JavaScript built. It runs *here*, once, and the result is what gets stored —
-   * reopening re-renders that HTML rather than re-extracting, so a reader's
-   * marks cannot be moved by a site redesign.
-   */
-  const { extractArticle } = await import("./webReader");
-  const article = extractArticle(fetched.html, fetched.url);
-  if (article) {
-    console.debug("[lc-web]", "reader", {
-      htmlBytes: fetched.html.length,
-      articleBytes: article.html.length,
-    });
-    return {
-      url: fetched.url,
-      title: article.title || titleFromHtml(fetched.html) || fetched.url,
-      html: article.html,
-      source: "reader",
-      note,
-    };
-  }
-
-  const before = styleTagStats(fetched.html);
-  const html = await isolateWebCss(
-    sanitizeWebHtml(fetched.html, fetched.url, source),
-    fetched.url,
-    source,
-  );
-  const after = styleTagStats(html);
-  console.debug("[lc-web]", source, {
-    htmlBytes: fetched.html.length,
-    styleBefore: before,
-    styleAfter: after,
-  });
-  const title = titleFromHtml(fetched.html) || fetched.url;
-  return { url: fetched.url, title, html, source, note };
+  const capturedArticle = await readerPageFromHtml(fetched.html, fetched.url, note);
+  if (capturedArticle) return capturedArticle;
+  return snapshotPage(fetched, source, note);
 }

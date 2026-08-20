@@ -31,6 +31,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { MdFormatKind } from "../modes/AnnotateMarkdownEditor";
 import { createPortal } from "react-dom";
 
 import {
@@ -1145,6 +1146,8 @@ export interface BoardProps {
   /** Edit is on. Owned by the workspace, since it owns the buffer. */
   editing?: boolean;
   onToggleEdit?: () => void;
+  /** Insert markdown around the caret while Edit is on. */
+  onMdFormat?: (kind: MdFormatKind) => void;
   /** Wipe document footnote marks when Reset includes annotations. */
   onClearDocMarks?: () => void;
   /**
@@ -1245,6 +1248,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     editToggle = false,
     editing = false,
     onToggleEdit,
+    onMdFormat,
     linkToggle = false,
     linking = false,
     onToggleLink,
@@ -2281,6 +2285,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
     }
     if (!bounds) {
+      /*
+       * No page frame in the scene yet — but the slot still has to be a usable
+       * width, because `contentSceneWidth` starts at 1 and only this function
+       * ever changes it.
+       *
+       * One pixel is not a small error here, it is a trap that cannot escape
+       * itself. The paper and the note editor are both `width: 100%` with
+       * `box-sizing: border-box` and 28px of side padding, so a 1px box gives
+       * them zero content width and every glyph lands on its own line. Both
+       * then report *that* column's height back through `onMeasure`, which
+       * grows the page frame and zooms the camera out to fit it — so the next
+       * frame is no wider, and the note reads as a vertical ribbon of letters
+       * down the left edge however long you wait.
+       *
+       * The board's own box is always available and is the pane itself, so it
+       * is right in a split and right after a resize. Scale is 1 while there is
+       * no frame to transform against, so its CSS width is its scene width.
+       */
+      const box = boardRef.current?.getBoundingClientRect();
+      const fallback = box && box.width > 8 ? Math.round(box.width) : 0;
+      if (fallback > 0) {
+        setContentSceneWidth((current) =>
+          Math.abs(current - fallback) < 0.5 ? current : fallback,
+        );
+      }
       lastContentSlotRef.current = null;
       return;
     }
@@ -2395,10 +2424,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /*
    * Edit and the pen are mutually exclusive.
    *
-   * Monaco wants the pointer for a caret and the ink layer wants it for a
-   * stroke; a surface where a drag sometimes does either is worse than either
-   * mode alone. Entering Edit therefore puts both down rather than leaving the
-   * reader to notice.
+   * The paper editor wants the pointer for a caret and the ink layer wants it
+   * for a stroke; a surface where a drag sometimes does either is worse than
+   * either mode alone. Entering Edit therefore puts both down rather than
+   * leaving the reader to notice.
    */
   useEffect(() => {
     if (!editing) return;
@@ -2915,6 +2944,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // One tool at a time: picking a drawing / select tool drops Ask-area (🔍).
     // `hand` is the parked tool while 🔍 owns the page — do not clear it here.
     if (tool !== "hand") setHighlighting(false);
+    /*
+     * Picking up the pen puts down whatever was selected.
+     *
+     * A selected element keeps Excalidraw's handles and its linear editor up,
+     * and both sit over the page waiting for pointers the ink tool is about to
+     * take — so the reader was left with a tool that looked active and a
+     * selection that would not go, and the only way out was a mode cycle
+     * through Scroll. Choosing a drawing tool *is* the intention to stop
+     * editing that element.
+     */
+    if (tool === "freedraw" || tool === "highlighter" || tool === "eraser") {
+      apiRef.current?.updateScene({
+        appState: {
+          selectedElementIds: {},
+          selectedGroupIds: {},
+          selectedLinearElement: null,
+          editingLinearElement: null,
+        },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    }
     if (tool === "freedraw" || tool === "highlighter") {
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcInk", locked: false });
       apiRef.current?.resetCursor?.();
@@ -4380,6 +4430,94 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     triggerRedo();
   }, []);
 
+  /*
+   * Ctrl/Cmd+Z, and Shift for redo.
+   *
+   * Excalidraw binds these itself, and that is the bug: its handler only knows
+   * about *its* elements, so a real Ctrl+Z sailed past every stroke on the page
+   * and undid whatever Excalidraw happened to be holding — usually nothing, and
+   * occasionally the wrong thing. `undoBoard` is the composite the toolbar
+   * buttons already use: ink first, scene second. Taking the key here and
+   * stopping it means there is one undo, and it is that one.
+   */
+  useEffect(() => {
+    if (!interactive) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "z" && event.key !== "Z") return;
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      // Typing in a note, a text box or the address bar is not drawing.
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.shiftKey) redoBoard();
+      else undoBoard();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [interactive, redoBoard, undoBoard]);
+
+  /*
+   * Drawing on the page dismisses whatever was selected.
+   *
+   * Tapping empty canvas is how every editor drops a selection, and here it did
+   * nothing: in annotate mode Excalidraw's canvas is `pointer-events: none`, so
+   * the tap never reached the thing that owns the selection. The handles stayed
+   * up over the page and there was no gesture that would put them away — the
+   * reader had to switch to the selection tool, click, and then find their way
+   * back to the pen.
+   *
+   * Capture phase, so this runs before the ink layer starts its stroke; the
+   * same press both clears the selection and begins drawing.
+   */
+  useEffect(() => {
+    if (!interactive) return;
+    const board = boardRef.current;
+    if (!board) return;
+    const drawing =
+      activeTool === "freedraw" || activeTool === "highlighter" || activeTool === "eraser";
+    if (!drawing) return;
+    const onDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest(
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
+        )
+      ) {
+        return;
+      }
+      const api = apiRef.current;
+      if (!api) return;
+      const state = api.getAppState() as {
+        selectedElementIds?: Record<string, boolean>;
+        selectedLinearElement?: unknown;
+      };
+      const hasSelection =
+        Object.keys(state.selectedElementIds ?? {}).length > 0 ||
+        Boolean(state.selectedLinearElement);
+      if (!hasSelection) return;
+      api.updateScene({
+        appState: {
+          selectedElementIds: {},
+          selectedGroupIds: {},
+          selectedLinearElement: null,
+          editingLinearElement: null,
+        },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    };
+    board.addEventListener("pointerdown", onDown, true);
+    return () => board.removeEventListener("pointerdown", onDown, true);
+  }, [activeTool, interactive]);
+
   /**
    * Turn skeletons into elements, then stamp the metadata back on — bound
    * labels get generated ids and would otherwise lose their region/viz tag.
@@ -4397,52 +4535,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [],
   );
 
-  const commitStraightLine = useCallback(
-    (stroke: {
-      start: { x: number; y: number };
-      end: { x: number; y: number };
-      color: string;
-      width: number;
-      opacity: number;
-    }) => {
-      const api = apiRef.current;
-      if (!api) return false;
-      const dx = stroke.end.x - stroke.start.x;
-      const dy = stroke.end.y - stroke.start.y;
-      if (Math.hypot(dx, dy) < 4) return false;
-      const pieces = convert([
-        {
-          type: "line",
-          x: stroke.start.x,
-          y: stroke.start.y,
-          points: [
-            [0, 0],
-            [dx, dy],
-          ],
-          strokeColor: stroke.color,
-          strokeWidth: Math.max(1, stroke.width),
-          roughness: 0,
-          opacity: Math.max(20, Math.min(100, Math.round(stroke.opacity * 100))),
-          roundness: null,
-        },
-      ]) as Array<{ id: string; elbowed?: boolean }>;
-      const line = pieces[0];
-      if (!line?.id) return false;
-      api.updateScene({
-        elements: [...(api.getSceneElements() as unknown[]), line],
-        appState: {
-          selectedElementIds: { [line.id]: true },
-          selectedGroupIds: {},
-          multiElement: null,
-          editingLinearElement: null,
-          selectedLinearElement: linearEditorState(line),
-        },
-        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-      });
-      return true;
-    },
-    [convert],
-  );
 
   /**
    * Text placement — our gesture, Excalidraw's editor.
@@ -5816,7 +5908,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     const schedule = () => {
       if (timer != null) window.clearTimeout(timer);
-      timer = window.setTimeout(() => run(false), 60);
+      timer = window.setTimeout(() => {
+        /*
+         * Place the paper first, and never behind the fit.
+         *
+         * `run` goes through `runFit`, which returns early when the scene has
+         * no focus frame — and which can throw on a half-built one. That is
+         * exactly the state the slot's fallback width exists for, so putting
+         * placement after it meant a resize or a sash drag left the page laid
+         * out for the pane it used to be in. Placement is a transform and a
+         * width; it does not need the fit to have worked.
+         */
+        reportContentSlot();
+        run(false);
+      }, 60);
     };
     const observer = new ResizeObserver(schedule);
     observer.observe(board);
@@ -5845,7 +5950,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (timer != null) window.clearTimeout(timer);
       for (const id of late) window.clearTimeout(id);
     };
-  }, [applyLiveBoxFit]);
+  }, [applyLiveBoxFit, reportContentSlot]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
@@ -7612,15 +7717,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         <div
           ref={contentSlotNodeRef}
           className={
-            selectableContent && (!annotateCode || highlighting || textMarkSelecting)
-              ? "lc-page-content-slot lc-page-content-selectable"
+            editing ||
+            (selectableContent && (!annotateCode || highlighting || textMarkSelecting))
+              ? `lc-page-content-slot lc-page-content-selectable${
+                  editing ? " lc-page-content-editing" : ""
+                }`
               : "lc-page-content-slot"
           }
           // Selectable prose is content, not decoration: hiding it from the
           // accessibility tree while the reader can pick quotes out of it would
           // be a lie. Annotate mode goes back to being paper under the pen.
           aria-hidden={
-            selectableContent && (!annotateCode || highlighting || textMarkSelecting)
+            editing ||
+            (selectableContent && (!annotateCode || highlighting || textMarkSelecting))
               ? undefined
               : true
           }
@@ -7762,7 +7871,57 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               */}
               {!mapChromeHidden && bottomCenter}
               <div className="lc-toolbar-dock-anchor" aria-hidden />
-              {!mapChromeHidden && annotateCode && (
+              {/*
+                Writing a note gets the island too, with markdown in it.
+
+                Same component, so it is the same island: same grip, same drag,
+                same dock snap, same flip to a column when the window narrows,
+                same shrink in the rail. A second toolbar would have had to
+                re-earn all of that and would have drifted from it by the first
+                change to either.
+              */}
+              {!mapChromeHidden && editing && onMdFormat && (
+                <div
+                  className="lc-toolbar-md-dock"
+                  onPointerDownCapture={() => {
+                    wakeChromeRef.current();
+                  }}
+                >
+                  <BoardToolbar
+                    markdown
+                    onMdFormat={onMdFormat}
+                    active={activeTool}
+                    onPick={setTool}
+                    themeId={themeId}
+                    inkColor={inkColor}
+                    onInk={setInk}
+                    handedness={inkHandedness}
+                    strokeWidth={strokeWidth}
+                    onStrokeWidth={setStrokeWidth}
+                    inkFullness={inkFullness}
+                    onInkFullness={setInkFullness}
+                    pressureSensitive={pressureSensitive}
+                    onPressureSensitive={setPressureSensitive}
+                    fontSize={fontSize}
+                    onFontSize={setFontSize}
+                    textMode={textMode}
+                    onTextMode={pickTextMode}
+                    shapesOpen={false}
+                    onToggleShapes={() => {}}
+                    onStamp={stamp}
+                    onPickImage={pickImageFile}
+                    captureMenuOpen={false}
+                    onToggleCaptureMenu={() => {}}
+                    onCaptureEntire={captureEntireBoard}
+                    onCaptureRegion={beginRegionCapture}
+                    onReset={resetBoard}
+                    onUndo={undoBoard}
+                    onRedo={redoBoard}
+                    mobile={mobile}
+                  />
+                </div>
+              )}
+              {!mapChromeHidden && annotateCode && !editing && (
               <div
                 onPointerDownCapture={() => {
                   wakeChromeRef.current();
@@ -7893,16 +8052,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     type="button"
                     className={
                       editing
-                        ? "lc-lined-toggle lc-tip-target is-active"
-                        : "lc-lined-toggle lc-tip-target"
+                        ? "lc-lined-toggle lc-tip-target lc-md-view is-active"
+                        : "lc-lined-toggle lc-tip-target lc-md-view"
                     }
                     aria-pressed={editing}
-                    aria-label={editing ? "Done editing" : "Edit markdown"}
-                    data-tip={editing ? "Done editing — back to the page" : "Edit this note"}
+                    aria-label={editing ? "Editing — switch to preview" : "Preview — switch to edit"}
+                    data-tip={editing ? "Editing — tap to preview" : "Preview — tap to edit"}
                     data-tip-placement="bottom"
                     onClick={() => onToggleEdit?.()}
                   >
-                    <EditMarkdownIcon on={editing} />
+                    {/*
+                      One button, one letter: the mode you are in. Two labelled
+                      buttons said the same thing twice and took the width of a
+                      word each in a rail of icons.
+                    */}
+                    <span className="lc-tool-emoji" aria-hidden>
+                      {editing ? "E" : "P"}
+                    </span>
                   </button>
                 )}
                 {/*
@@ -8104,7 +8270,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         getPageFrames={getPageFrames}
         clip={inkClip}
         onChange={handleInkChange}
-        onStraightLine={commitStraightLine}
         onStylusAccessory={interactive ? handleStylusAccessory : undefined}
         wheelHoldEnabled={
           interactive && inkToolActive && !presetStore.wheelLocked
@@ -8116,6 +8281,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           open
           locked={!!presetEditor}
           anchor={inkWheel}
+          host={boardRef.current}
           handedness={inkHandedness}
           store={presetStore}
           liveKind={kindFromTool(activeTool) ?? "pen"}
@@ -8574,29 +8740,6 @@ function LinkToolIcon({ on = false }: { on?: boolean }) {
       <path d="M10 13.5a3.5 3.5 0 0 0 5 0l3-3a3.5 3.5 0 0 0-5-5l-1.4 1.4" />
       <path d="M14 10.5a3.5 3.5 0 0 0-5 0l-3 3a3.5 3.5 0 0 0 5 5l1.4-1.4" />
       {on && <circle cx="12" cy="12" r="1.2" fill="currentColor" />}
-    </svg>
-  );
-}
-
-/** Same page outline as {@link AnnotateIcon}, with a caret instead of a nib. */
-function EditMarkdownIcon({ on = false }: { on?: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      aria-hidden
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M5 3h9l4 4v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
-      <path d="M11 10v8" />
-      <path d="M9.4 10h3.2" />
-      <path d="M9.4 18h3.2" />
-      {on && <path d="M7 7h4" />}
     </svg>
   );
 }

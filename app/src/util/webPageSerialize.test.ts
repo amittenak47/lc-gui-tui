@@ -79,3 +79,85 @@ describe("serializeCurrentDocument", () => {
     ).toHaveLength(0);
   });
 });
+
+describe("shadow DOM", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.head.innerHTML = "";
+    document.body.innerHTML = "";
+  });
+
+  it("lifts an open shadow root into the serialised HTML", async () => {
+    /*
+     * The payload is `documentElement.outerHTML`, and `outerHTML` does not
+     * descend into a shadow root — so a page built from web components came out
+     * with every custom element empty. Not mangled: absent. This is the guard
+     * for that, and it fails without the flatten pass.
+     */
+    const host = document.createElement("div");
+    host.attachShadow({ mode: "open" }).innerHTML =
+      "<p>inside the shadow</p><style>p { color: rebeccapurple }</style>";
+    document.body.append(host);
+
+    const { html } = await serializeCurrentDocument();
+    expect(html).toContain("inside the shadow");
+    expect(html).toContain("rebeccapurple");
+  });
+
+  it("lifts roots nested inside roots, deepest first", async () => {
+    const outer = document.createElement("div");
+    const outerRoot = outer.attachShadow({ mode: "open" });
+    const inner = document.createElement("div");
+    inner.attachShadow({ mode: "open" }).innerHTML = "<span>two levels down</span>";
+    outerRoot.append(inner);
+    document.body.append(outer);
+
+    const { html } = await serializeCurrentDocument();
+    expect(html).toContain("two levels down");
+  });
+
+  it("keeps slotted light-DOM children and drops the slot itself", async () => {
+    const host = document.createElement("div");
+    host.attachShadow({ mode: "open" }).innerHTML = "<slot><em>fallback text</em></slot>";
+    document.body.append(host);
+
+    const { html } = await serializeCurrentDocument();
+    expect(html).toContain("fallback text");
+    expect(html).not.toContain("<slot");
+  });
+
+  it("leaves a closed root alone rather than throwing", async () => {
+    // Page script cannot reach a closed root, so it stays invisible. The only
+    // requirement is that meeting one does not break the whole capture.
+    const host = document.createElement("div");
+    host.attachShadow({ mode: "closed" }).innerHTML = "<p>unreachable</p>";
+    document.body.append(host);
+    host.append(document.createTextNode("light dom survives"));
+
+    const { html } = await serializeCurrentDocument();
+    expect(html).toContain("light dom survives");
+  });
+});
+
+describe("constructable stylesheets", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.head.innerHTML = "";
+    document.body.innerHTML = "";
+  });
+
+  it("captures adoptedStyleSheets, which document.styleSheets leaves out", async () => {
+    /*
+     * `document.styleSheets` is a different list from `adoptedStyleSheets`, so
+     * a framework that builds its CSS at runtime had all of it dropped without
+     * a word. Skipped where the DOM implementation has no constructable sheets.
+     */
+    if (typeof CSSStyleSheet === "undefined" || !("replaceSync" in CSSStyleSheet.prototype)) return;
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(".adopted { color: seagreen }");
+    (document as unknown as { adoptedStyleSheets: CSSStyleSheet[] }).adoptedStyleSheets = [sheet];
+
+    const { html } = await serializeCurrentDocument();
+    expect(html).toContain("seagreen");
+  });
+});

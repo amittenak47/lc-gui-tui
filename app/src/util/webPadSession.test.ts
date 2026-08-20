@@ -31,4 +31,17 @@ describe("webPadSession", () => {
     expect(stepWeb(tab, -1)).toMatchObject({ id: "w1", kind: "web", index: 0 });
     expect(pushWeb(tab, { url: "https://a.test/", title: "A", html: "<p>a</p>" }).id).toBe("w1");
   });
+
+  it("in-place show target is the pushed page, not the old snapshot", () => {
+    const tab = { id: "w1", kind: "web" as const, ...history(home) };
+    const wiki = {
+      url: "https://en.wikipedia.org/wiki/Single_source_of_truth",
+      title: "Single source of truth",
+      html: "<p>article</p>",
+    };
+    const nextTab = pushWeb(tab, wiki);
+    expect(currentEntry(tab)?.url).toBe(home.url);
+    expect(currentEntry(nextTab)?.url).toBe(wiki.url);
+    expect(currentEntry(nextTab)?.html).toBe(wiki.html);
+  });
 });

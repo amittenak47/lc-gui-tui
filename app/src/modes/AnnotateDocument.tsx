@@ -57,6 +57,16 @@ export function renderMarkdown(source: string): string {
   });
 }
 
+/**
+ * Narrower than this and the box is not laid out yet, whatever it measures.
+ *
+ * A `width: 100%` document inside a collapsed slot puts one glyph per line, so
+ * its height is enormous and meaningless. Reporting it grows the page frame and
+ * zooms the camera out, which keeps the slot narrow — the measurement causes the
+ * condition it was measured under. Say nothing until there is a real column.
+ */
+export const MIN_MEASURABLE_WIDTH_PX = 80;
+
 export function AnnotateDocument({ source, onMeasure, selectable = false }: AnnotateDocumentProps) {
   const nodeRef = useRef<HTMLDivElement | null>(null);
   const html = useMemo(() => renderMarkdown(source), [source]);
@@ -80,6 +90,7 @@ export function AnnotateDocument({ source, onMeasure, selectable = false }: Anno
      * with nothing in it.
      */
     const report = () => {
+      if (node.clientWidth > 0 && node.clientWidth < MIN_MEASURABLE_WIDTH_PX) return;
       onMeasureRef.current?.(node.scrollHeight);
     };
     report();

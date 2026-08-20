@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_FENCE_LANGUAGE, insertFence } from "./AnnotateMarkdownEditor";
+import { DEFAULT_FENCE_LANGUAGE, applyMdFormat, insertFence, isFreshOwnedNote } from "./AnnotateMarkdownEditor";
 
 describe("insertFence", () => {
   it("opens a fence and puts the cursor inside it", () => {
@@ -36,5 +36,35 @@ describe("insertFence", () => {
   it("clamps a cursor that is outside the text", () => {
     expect(insertFence("abc", 99).source.startsWith("abc\n\n```")).toBe(true);
     expect(insertFence("abc", -5).source.startsWith("```python")).toBe(true);
+  });
+});
+
+describe("isFreshOwnedNote", () => {
+  it("treats an empty buffer as a new note", () => {
+    expect(isFreshOwnedNote("")).toBe(true);
+    expect(isFreshOwnedNote("  \n")).toBe(true);
+  });
+
+  it("treats a lone heading as a new note", () => {
+    expect(isFreshOwnedNote("# Untitled\n\n")).toBe(true);
+  });
+
+  it("leaves a written note in preview", () => {
+    expect(isFreshOwnedNote("# Untitled\n\nhello")).toBe(false);
+  });
+});
+
+describe("applyMdFormat", () => {
+  it("wraps a selection in bold marks", () => {
+    const next = applyMdFormat("say hello there", 4, 9, "bold");
+    expect(next.source).toBe("say **hello** there");
+  });
+
+  it("prefixes the current line as a heading", () => {
+    expect(applyMdFormat("Title", 0, 0, "heading").source).toBe("# Title");
+  });
+
+  it("prefixes the current line as a list item", () => {
+    expect(applyMdFormat("item", 0, 4, "list").source).toBe("- item");
   });
 });
