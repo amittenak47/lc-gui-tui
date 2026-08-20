@@ -18,7 +18,7 @@ export interface WebDocumentProps {
   onNavigate?: (url: string) => void;
   /** Vite / fetch_html GET — page JS never ran. */
   source?: WebHtmlSource;
-  /** Why the rendered capture was not used — shown instead of a redirect. */
+  /** Why the rendered capture was not used. Surfaced in the address bar. */
   note?: string;
 }
 
@@ -29,7 +29,6 @@ export function WebDocument({
   selectable = false,
   onNavigate,
   source,
-  note,
 }: WebDocumentProps) {
   const nodeRef = useRef<HTMLDivElement | null>(null);
   const onMeasureRef = useRef(onMeasure);
@@ -69,25 +68,18 @@ export function WebDocument({
     return () => node.removeEventListener("click", onClick);
   }, [html]);
 
+  /*
+   * Which of the three kinds of paper this is — see `WebHtmlSource`.
+   *
+   * The note that used to sit here as a paragraph has moved to the address bar.
+   * It was rendered inside the scrolling page, so it scrolled away and read as
+   * part of the site's own content, which is why nobody saw it.
+   */
   return (
     <div className="lc-web-doc-wrap">
-      {source === "fetch" ? (
-        <p className="lc-web-shell-note">
-          {/*
-            The rendered capture is the plan, not an upgrade: it runs the
-            page's JS in a hidden view and snapshots what that produced, which
-            is why a script-built page has anything on it at all. Landing here
-            means that failed, so this says what failed rather than sending you
-            somewhere else to read the page.
-          */}
-          {note
-            ? `Rendered capture failed — ${note}. Showing the raw HTML, so anything the page builds with JavaScript is missing.`
-            : "Rendered capture is unavailable here, so anything the page builds with JavaScript is missing."}
-        </p>
-      ) : null}
       <div
         ref={nodeRef}
-        className="lc-web-doc"
+        className={source === "reader" ? "lc-web-doc is-reader" : "lc-web-doc"}
         data-doc-scope={url}
         aria-hidden={selectable ? undefined : true}
         // eslint-disable-next-line react/no-danger -- sanitised in fetchWebPage

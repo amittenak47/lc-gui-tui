@@ -30,7 +30,15 @@ export function webPageWidthForViewport(cssWidth: number): number {
 /** Fetch/Vite path only. Capture-inlined CSS is the payload and must survive. */
 export const FETCH_STYLE_CAP = 80_000;
 
-export type WebHtmlSource = "capture" | "fetch";
+/**
+ * How the paper under the ink was made.
+ *
+ * `reader` — the article, extracted from the captured DOM. The good case.
+ * `capture` — the whole page, post-JavaScript, with its CSS scoped and inlined.
+ *   Reached when the page is not an article.
+ * `fetch` — raw GET, the page's JS never ran. Reached when capture failed.
+ */
+export type WebHtmlSource = "capture" | "fetch" | "reader";
 
 export function styleTagStats(html: string): { count: number; max: number; total: number } {
   const tags = html.match(/<style\b[^>]*>[\s\S]*?<\/style>/gi) ?? [];
@@ -396,6 +404,30 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
 
   if (fetched.html.length > PAGE_MAX_BYTES) {
     throw new Error("this page is too large to annotate here");
+  }
+
+  /*
+   * The article first, the page only if it is not one.
+   *
+   * Extraction runs on the captured DOM, so it sees whatever the page's own
+   * JavaScript built. It runs *here*, once, and the result is what gets stored —
+   * reopening re-renders that HTML rather than re-extracting, so a reader's
+   * marks cannot be moved by a site redesign.
+   */
+  const { extractArticle } = await import("./webReader");
+  const article = extractArticle(fetched.html, fetched.url);
+  if (article) {
+    console.debug("[lc-web]", "reader", {
+      htmlBytes: fetched.html.length,
+      articleBytes: article.html.length,
+    });
+    return {
+      url: fetched.url,
+      title: article.title || titleFromHtml(fetched.html) || fetched.url,
+      html: article.html,
+      source: "reader",
+      note,
+    };
   }
 
   const before = styleTagStats(fetched.html);
