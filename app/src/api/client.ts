@@ -117,6 +117,80 @@ async function hubFetch(
   return { json, bytes };
 }
 
+/**
+ * What a pad hub answered when asked, in the two ways it can go wrong.
+ *
+ * `unreachable` is the address: nothing at that host and port, or the PC is on
+ * another network. `code` is the six digits: something answered, and refused.
+ * Saving the pair alone cannot tell those apart, which is how a wrong address
+ * and a wrong code look like the same silence.
+ */
+export type PadHubCheck =
+  | { ok: true; version: string }
+  | { ok: false; reason: "unreachable" | "code"; detail: string };
+
+const PAD_HUB_CHECK_TIMEOUT_MS = 6_000;
+
+async function probe(url: string, headers?: Record<string, string>): Promise<Response> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), PAD_HUB_CHECK_TIMEOUT_MS);
+  try {
+    return await fetch(url, { method: "GET", headers, signal: abort.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Ask a pad hub whether this device can actually reach it.
+ *
+ * Deliberately not routed through {@link hubFetch}: this is a test the reader
+ * asked for, so a failure belongs in the answer rather than in the app-wide
+ * "server unreachable" banner.
+ */
+export async function checkPadHub(hub: PadHub): Promise<PadHubCheck> {
+  const base = hub.url.replace(/\/+$/, "");
+  let health: Response;
+  try {
+    health = await probe(`${base}/health`);
+  } catch (cause) {
+    const detail = cause instanceof Error && cause.name === "AbortError"
+      ? "no answer within six seconds"
+      : cause instanceof Error
+        ? cause.message
+        : String(cause);
+    return { ok: false, reason: "unreachable", detail };
+  }
+  if (!health.ok) {
+    return { ok: false, reason: "unreachable", detail: `the PC answered ${health.status}` };
+  }
+  let version = "";
+  try {
+    const body = (await health.json()) as { version?: unknown };
+    if (typeof body.version === "string") version = body.version;
+  } catch {
+    // A hub that answers /health without JSON is still a hub.
+  }
+
+  // `/health` sits outside the token check on purpose, so reaching it proves
+  // the address and says nothing about the code. One authenticated call is what
+  // separates them.
+  let auth: Response;
+  try {
+    auth = await probe(`${base}/config`, { "x-lc-token": hub.token });
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    return { ok: false, reason: "unreachable", detail };
+  }
+  if (auth.status === 401 || auth.status === 403) {
+    return { ok: false, reason: "code", detail: "the PC refused this code" };
+  }
+  if (!auth.ok) {
+    return { ok: false, reason: "unreachable", detail: `the PC answered ${auth.status}` };
+  }
+  return { ok: true, version };
+}
+
 async function padInvokeOrHub<T>(
   invoke: () => Promise<T>,
   method: string,
@@ -309,6 +383,26 @@ export class LcClient {
 
   async getConfig(): Promise<LcConfig> {
     return this.cmd("lc_get_config");
+  }
+
+  /** Why config fell back to defaults at startup, or null if it did not. */
+  async bootNotice(): Promise<string | null> {
+    try {
+      return await this.cmd<string | null>("boot_notice");
+    } catch {
+      // An older shell has no such command. Nothing to report is the right
+      // answer there, and it is not worth a banner of its own.
+      return null;
+    }
+  }
+
+  /** The address a tablet should type to reach this PC. Null on the tablet. */
+  async lanBaseUrl(port: number): Promise<string | null> {
+    try {
+      return await this.cmd<string | null>("lan_base_url", { port });
+    } catch {
+      return null;
+    }
   }
 
   async putConfig(config: LcConfigPut, opts?: { timeoutMs?: number }): Promise<LcConfig> {
@@ -562,6 +656,14 @@ export class LcClient {
     return this.cmd("lc_docs_get_index", { hash });
   }
 
+  /**
+   * `force` rewrites a document whose page count has not changed.
+   *
+   * Indexing is idempotent on page count, which is right for reopening the same
+   * file and wrong for the one case that matters here: turning an embedding
+   * model on moves no page counts, so the vectors that most need redoing are
+   * exactly the ones the guard skips.
+   */
   async putDocIndex(
     hash: string,
     body: {
@@ -569,12 +671,13 @@ export class LcClient {
       doc_type: string;
       pages: Array<{ page: number; text: string; heading?: string }>;
     },
+    opts?: { force?: boolean },
   ): Promise<{ indexed: boolean; wrote: boolean }> {
     const result = await this.cmd<{
       hash?: string;
       indexed?: boolean;
       wrote?: boolean;
-    } | null>("lc_docs_put_index", { hash, body }, 180_000);
+    } | null>("lc_docs_put_index", { hash, body, force: opts?.force ?? false }, 180_000);
     if (!result) return { indexed: true, wrote: false };
     return { indexed: result.indexed !== false, wrote: Boolean(result.wrote) };
   }

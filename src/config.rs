@@ -3,6 +3,7 @@ use directories::{ProjectDirs, UserDirs};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -462,7 +463,27 @@ impl Default for GroqLlmConfig {
 }
 
 
+static CONFIG_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Point config at a directory the host has actually given us.
+///
+/// `ProjectDirs` routes every non-Windows, non-Apple target through the XDG
+/// rules, which resolve against `$HOME`. An Android app process has no `$HOME`,
+/// so the lookup returns `None`, [`config_dir`] fails, and — because the Tauri
+/// shell only manages router state on a successful load — every `lc_*` command
+/// on the device answers "state not managed for field `state`". The shell knows
+/// the app's own config directory and sets it here before the first read.
+///
+/// First call wins: the path is chosen once at startup, and a later caller
+/// changing it would leave the two halves of the app reading different files.
+pub fn set_config_dir(dir: PathBuf) {
+    let _ = CONFIG_DIR_OVERRIDE.set(dir);
+}
+
 pub fn config_dir() -> Result<PathBuf> {
+    if let Some(dir) = CONFIG_DIR_OVERRIDE.get() {
+        return Ok(dir.clone());
+    }
     let dirs = ProjectDirs::from("", "", "lc")
         .context("cannot determine an OS config directory for lc")?;
     Ok(dirs.config_dir().to_path_buf())

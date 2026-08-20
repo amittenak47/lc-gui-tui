@@ -22,44 +22,61 @@ pub fn run() {
         // surface it is supposed to be a detour from.
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            match harness::config::Config::load() {
-                Ok(cfg) => {
-                    #[cfg(feature = "leetcode")]
-                    let cfg = {
-                        let mut cfg = cfg;
-                        if let Err(err) = seed::ensure_corpus_root(&mut cfg, app) {
-                            eprintln!("corpus root: {err}");
-                        }
-                        cfg
-                    };
-                    #[allow(unused_mut)]
-                    let mut cfg = cfg;
-                    #[cfg(not(target_os = "android"))]
-                    if let Err(err) = cfg.ensure_serve_token() {
-                        eprintln!("pad-sync token: {err:#}");
-                    }
-                    let gui_state = harness::serve::new_state(cfg.clone());
-                    #[cfg(not(target_os = "android"))]
-                    {
-                        let port = cfg.serve.port;
-                        let token = cfg.serve.token.clone();
-                        let lan_state = harness::serve::new_state_with_token(cfg, token);
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(err) = harness::serve::listen_lan(lan_state, port).await {
-                                eprintln!("pad-sync listener: {err:#}");
-                            }
-                        });
-                    }
-                    app.manage(gui_state);
-                    #[cfg(target_os = "android")]
-                    let _ = cfg;
-                    app.manage(lc_client::CoachHub::new());
-                    app.manage(dlc::DlcHub::new());
-                }
-                Err(err) => {
-                    eprintln!("cannot load config for embedded router: {err:#}");
-                }
+            // Android reaches `config_dir` through the XDG rules, which resolve
+            // against `$HOME` — and an Android app process has none. Left alone
+            // the lookup fails, config never loads, and the whole router goes
+            // with it. Tauri knows where this app may write; say so first.
+            #[cfg(target_os = "android")]
+            match app.path().app_config_dir() {
+                Ok(dir) => harness::config::set_config_dir(dir),
+                Err(err) => eprintln!("android config dir: {err}"),
             }
+
+            // A config that will not load is a reason to start on defaults, not
+            // a reason to start with no router at all. Skipping `.manage` left
+            // every `lc_*` command answering with Tauri's generic "state not
+            // managed for field `state`", which names the wrong thing in the
+            // one place the reader would look for the right one. Carry the real
+            // cause instead and let the UI say it.
+            let loaded = harness::config::Config::load();
+            let boot_error = loaded.as_ref().err().map(|err| format!("{err:#}"));
+            if let Some(err) = &boot_error {
+                eprintln!("cannot load config for embedded router: {err}");
+            }
+            let cfg = loaded.unwrap_or_default();
+
+            #[cfg(feature = "leetcode")]
+            let cfg = {
+                let mut cfg = cfg;
+                if let Err(err) = seed::ensure_corpus_root(&mut cfg, app) {
+                    eprintln!("corpus root: {err}");
+                }
+                cfg
+            };
+            #[allow(unused_mut)]
+            let mut cfg = cfg;
+            #[cfg(not(target_os = "android"))]
+            if let Err(err) = cfg.ensure_serve_token() {
+                eprintln!("pad-sync token: {err:#}");
+            }
+            let gui_state = harness::serve::new_state(cfg.clone());
+            #[cfg(not(target_os = "android"))]
+            {
+                let port = cfg.serve.port;
+                let token = cfg.serve.token.clone();
+                let lan_state = harness::serve::new_state_with_token(cfg, token);
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = harness::serve::listen_lan(lan_state, port).await {
+                        eprintln!("pad-sync listener: {err:#}");
+                    }
+                });
+            }
+            app.manage(gui_state);
+            #[cfg(target_os = "android")]
+            let _ = cfg;
+            app.manage(lc_client::CoachHub::new());
+            app.manage(dlc::DlcHub::new());
+            app.manage(BootNotice(boot_error));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -137,6 +154,8 @@ pub fn run() {
         capture_save::save_png_bytes,
         capture_save::share_png_bytes,
         ink_available,
+        boot_notice,
+        lan_base_url,
         set_gesture_exclusions,
         set_drawing_immersive,
     ]);
@@ -158,6 +177,41 @@ pub fn run() {
 #[tauri::command]
 fn ink_available() -> bool {
     cfg!(target_os = "android")
+}
+
+/// Why config did not load, when it did not.
+///
+/// `None` on a normal start. It matters most at the moment someone opens
+/// Settings on an app that fell back to defaults: pressing Save there would
+/// write those defaults over the file that failed to parse.
+pub struct BootNotice(pub Option<String>);
+
+#[tauri::command]
+fn boot_notice(state: tauri::State<'_, BootNotice>) -> Option<String> {
+    state.0.clone()
+}
+
+/// The address a tablet should type to reach this PC's pad hub.
+///
+/// The listener binds `0.0.0.0`, so the app knows its port but not which of the
+/// machine's addresses a tablet can reach — and leaving someone to find their
+/// own LAN address is most of why a device ends up unpaired. Connecting a UDP
+/// socket sends no packets: it only asks the OS which interface it would route
+/// from, and that interface's local address is the reachable one. `None` on
+/// Android, which is the side doing the typing.
+#[tauri::command]
+fn lan_base_url(port: u16) -> Option<String> {
+    if cfg!(target_os = "android") {
+        return None;
+    }
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    // TEST-NET-3: reserved for documentation and never routed anywhere.
+    socket.connect("203.0.113.1:80").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    if ip.is_unspecified() || ip.is_loopback() {
+        return None;
+    }
+    Some(format!("http://{ip}:{port}"))
 }
 
 #[cfg(target_os = "android")]

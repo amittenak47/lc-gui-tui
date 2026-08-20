@@ -6,6 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
+import { checkPadHub, type PadHubCheck } from "../api/client";
 import type { DevicePrefsDto, DlcStatus, LcClient } from "../api/client";
 import type {
   CoachFlags,
@@ -330,7 +331,14 @@ function formatDlcBytes(n: number): string {
 }
 
 function emptyProvider(): ProviderConfig {
-  return { base_url: "", model: "", vision_model: "", vision: null };
+  return {
+    base_url: "",
+    model: "",
+    vision_model: "",
+    vision: null,
+    embed_model: "",
+    embed_base_url: "",
+  };
 }
 
 function emptyConfig(): LcConfig {
@@ -472,6 +480,20 @@ export interface SettingsModalProps {
   coachDetail?: string | null;
 }
 
+/**
+ * Say which half of the pairing is wrong.
+ *
+ * The address and the code fail in the same place and used to read the same
+ * way, so a tablet that could not sync gave no clue whether to check the Wi-Fi
+ * or check six digits.
+ */
+function padHubProblem(result: Extract<PadHubCheck, { ok: false }>): string {
+  if (result.reason === "code") {
+    return "The PC refused this code. Read the 6-digit code off Settings → Pad hub on the desktop.";
+  }
+  return `Nothing answered (${result.detail}). Check the URL, and that both devices are on the same Wi-Fi.`;
+}
+
 export function SettingsModal({
   open,
   client,
@@ -514,6 +536,15 @@ export function SettingsModal({
   const [hubToken, setHubToken] = useState("");
   const [baselineHubUrl, setBaselineHubUrl] = useState("");
   const [baselineHubToken, setBaselineHubToken] = useState("");
+  const [hubCheck, setHubCheck] = useState<
+    | { kind: "idle" }
+    | { kind: "busy" }
+    | { kind: "ok"; message: string }
+    | { kind: "bad"; message: string }
+  >({ kind: "idle" });
+  /** This PC's address on the LAN — the thing a tablet has to be told. */
+  const [lanUrl, setLanUrl] = useState<string | null>(null);
+  const [bootNotice, setBootNotice] = useState<string | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [colorWheelOnToolbar, setColorWheelOnToolbar] = useState(
     () => loadInkToolPresets().colorWheelOnToolbar,
@@ -723,6 +754,7 @@ export function SettingsModal({
     setHubToken(hub?.token ?? "");
     setBaselineHubUrl(hub?.url ?? "");
     setBaselineHubToken(hub?.token ?? "");
+    setHubCheck({ kind: "idle" });
     if (initialTab) setTab(initialTab);
     setPage("root");
     void (async () => {
@@ -736,8 +768,16 @@ export function SettingsModal({
           setClearOpenaiKey(false);
           setClearGroqKey(false);
           setBusy(null);
+          const url = await client.lanBaseUrl(cfg.serve_port);
+          if (!cancelled) setLanUrl(url);
         }
         await refreshLlm();
+        try {
+          const notice = await client.bootNotice();
+          if (!cancelled) setBootNotice(notice);
+        } catch {
+          if (!cancelled) setBootNotice(null);
+        }
         try {
           const all = await client.datasets();
           if (!cancelled) setDatasets(all);
@@ -892,6 +932,17 @@ export function SettingsModal({
         savePadHub(url && token ? { url, token } : null);
         setBaselineHubUrl(url);
         setBaselineHubToken(token);
+        if (url && token) {
+          // Store first, then ask. Saving a pair that turns out not to work is
+          // still worth keeping — the reader is one digit away from a fix and
+          // should not have to retype the address to try it. But it must not
+          // pass in silence: a hub that was never reached looks exactly like a
+          // hub that was, until the day a file fails to arrive.
+          const result = await runHubCheck({ url, token });
+          if (!result.ok) throw new Error(`Saved, but not connected. ${padHubProblem(result)}`);
+        } else {
+          setHubCheck({ kind: "idle" });
+        }
       }
       if (configDirty) {
         const payload: LcConfigPut = { ...draft };
@@ -914,6 +965,22 @@ export function SettingsModal({
     } finally {
       setSaving(false);
     }
+  };
+
+  const runHubCheck = async (hub: { url: string; token: string }): Promise<PadHubCheck> => {
+    setHubCheck({ kind: "busy" });
+    const result = await checkPadHub(hub);
+    setHubCheck(
+      result.ok
+        ? {
+            kind: "ok",
+            message: result.version
+              ? `Connected — this PC is running whiteboard ${result.version}.`
+              : "Connected.",
+          }
+        : { kind: "bad", message: padHubProblem(result) },
+    );
+    return result;
   };
 
   const startLlm = async () => {
@@ -1012,6 +1079,12 @@ export function SettingsModal({
         </div>
 
         <div className="lc-settings-body lc-scroll-pane">
+          {bootNotice && (
+            <div className="lc-warning">
+              Running on built-in defaults — this device’s config file did not
+              load ({bootNotice}). Saving here writes the defaults over it.
+            </div>
+          )}
           {error && <div className="lc-warning">{error}</div>}
           {busy && <div className="lc-muted">{busy}</div>}
 
@@ -1582,13 +1655,35 @@ export function SettingsModal({
                 PDF/EPUB bytes. Ink pages stay on the device that drew them.
               </p>
               {draft.serve_token ? (
-                <p className="lc-settings-hint">
-                  This PC listens on port {draft.serve_port}. Code:{" "}
-                  <code className="lc-pad-hub-code">{draft.serve_token}</code>
-                </p>
+                <>
+                  <p className="lc-settings-hint">
+                    This PC is the hub. Type both of these into Settings → Pad hub
+                    on the tablet.
+                  </p>
+                  <dl className="lc-pad-hub-card">
+                    <div>
+                      <dt>PC URL</dt>
+                      <dd>
+                        {lanUrl ? (
+                          <code className="lc-pad-hub-url">{lanUrl}</code>
+                        ) : (
+                          <span className="lc-muted">
+                            this PC’s address on the network, port {draft.serve_port}
+                          </span>
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>6-digit code</dt>
+                      <dd>
+                        <code className="lc-pad-hub-code">{draft.serve_token}</code>
+                      </dd>
+                    </div>
+                  </dl>
+                </>
               ) : (
                 <p className="lc-settings-hint">
-                  Open Settings on the desktop app to see the listen port and 6-digit code.
+                  Open Settings on the desktop app to see the URL and 6-digit code.
                 </p>
               )}
               <label className="lc-md-new-title">
@@ -1596,8 +1691,17 @@ export function SettingsModal({
                 <input
                   type="url"
                   value={hubUrl}
-                  placeholder="http://192.168.1.10:7878"
-                  onChange={(event) => setHubUrl(event.target.value)}
+                  /*
+                   * Spelled as an example, because it did not used to be.
+                   * A bare address here reads as a value already filled in —
+                   * so the code went in, the URL stayed empty, and Save
+                   * answered with a complaint about a field that looked full.
+                   */
+                  placeholder="e.g. http://192.168.1.10:7878"
+                  onChange={(event) => {
+                    setHubUrl(event.target.value);
+                    setHubCheck({ kind: "idle" });
+                  }}
                 />
               </label>
               <label className="lc-md-new-title">
@@ -1609,11 +1713,36 @@ export function SettingsModal({
                   spellCheck={false}
                   maxLength={6}
                   pattern="[0-9]{6}"
-                  placeholder="000000"
+                  placeholder="e.g. 000000"
                   value={hubToken}
-                  onChange={(event) => setHubToken(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  onChange={(event) => {
+                    setHubToken(event.target.value.replace(/\D/g, "").slice(0, 6));
+                    setHubCheck({ kind: "idle" });
+                  }}
                 />
               </label>
+              <div className="lc-pad-hub-check">
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={
+                    hubCheck.kind === "busy" ||
+                    !hubUrl.trim() ||
+                    !/^\d{6}$/.test(hubToken.trim())
+                  }
+                  onClick={() => {
+                    void runHubCheck({ url: hubUrl.trim(), token: hubToken.trim() });
+                  }}
+                >
+                  {hubCheck.kind === "busy" ? "Checking…" : "Check connection"}
+                </button>
+                {hubCheck.kind === "ok" && (
+                  <p className="lc-pad-hub-verdict is-ok">{hubCheck.message}</p>
+                )}
+                {hubCheck.kind === "bad" && (
+                  <p className="lc-pad-hub-verdict is-bad">{hubCheck.message}</p>
+                )}
+              </div>
               <div className="lc-settings-subhead">Autosave</div>
               <p className="lc-settings-hint">
                 How often the board writes itself down, so a crash or a closed lid
@@ -1993,6 +2122,52 @@ export function SettingsModal({
                   capability check.
                 </p>
               </label>
+              {/*
+                Embeddings, for the document index.
+                
+                Local-only: the index is a local SQLite file beside the corpus,
+                and shipping every page of every document to a hosted embedding
+                endpoint is not a decision to make quietly in a settings row.
+              */}
+              {providerFocus === "local" && (
+                <>
+                  <label>
+                    <span>Embedding model</span>
+                    <input
+                      value={provider.embed_model ?? ""}
+                      onChange={(e) =>
+                        patchProvider(providerFocus, { embed_model: e.target.value })
+                      }
+                      list="lc-model-options"
+                      placeholder="(none — match on words)"
+                    />
+                    <p className="lc-settings-hint">
+                      What Ask searches your documents with. Empty means chunks are
+                      matched on the words they share with your question rather than
+                      what it means — so “which record wins” will not find “the master
+                      data is never copied”. <code>nomic-embed-text</code> is small
+                      enough to sit beside the chat model. Documents already indexed
+                      keep their old vectors until you re-index them from the chip in
+                      the tab strip.
+                    </p>
+                  </label>
+                  <label>
+                    <span>Embedding endpoint</span>
+                    <input
+                      value={provider.embed_base_url ?? ""}
+                      onChange={(e) =>
+                        patchProvider(providerFocus, { embed_base_url: e.target.value })
+                      }
+                      placeholder="(same as base URL)"
+                    />
+                    <p className="lc-settings-hint">
+                      Optional OpenAI-compatible <code>/embeddings</code> base. Leave
+                      empty to reuse the base URL above.
+                    </p>
+                  </label>
+                </>
+              )}
+
               <label className="lc-settings-check">
                 <input
                   type="checkbox"
