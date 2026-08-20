@@ -30,6 +30,7 @@ import {
 } from "../util/docAnchors";
 import {
   footnoteAtSamePlace,
+  markChipLeft,
   numberFootnotes,
   orderScopes,
   overlappingFootnotes,
@@ -48,6 +49,7 @@ import {
 import {
   claimSelectionGesture,
   isDocCameraLive,
+  isDocChromeTarget,
   requestDocScroll,
   onDocCameraLiveChange,
   releaseSelectionGesture,
@@ -80,24 +82,6 @@ import {
 } from "../canvas/inkPaletteBridge";
 import { currentInkPalette } from "../util/inkPaletteHistory";
 import { footnoteThemeVars } from "../util/footnoteTheme";
-
-/**
- * Controls painted over the page that own their own taps.
- *
- * The host's `pointerdown` listener is native and sits inside the React tree,
- * so it runs *before* React's synthetic handlers — a `stopPropagation` on the
- * control itself is too late, and the selection would already have been thrown
- * away by the time its own click arrived. Everything the overlay draws on top
- * of the words has to be named here.
- */
-function isOverlayControl(target: EventTarget | null): boolean {
-  const element = target as Element | null;
-  return Boolean(
-    element?.closest?.(
-      ".lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-doc-sheet-backdrop, .lc-doc-selection-chrome, .lc-footnote-overview, .lc-doc-submark-grip, .lc-split-sash",
-    ),
-  );
-}
 
 /** How far into the edge a drag has to reach before the page starts moving. */
 const SELECT_EDGE_PX = 36;
@@ -588,7 +572,7 @@ export function DocSelectionLayer({
     const commitNative = (event?: Event) => {
       if (holdRef.current?.held) return;
       if (subMarkDragRef.current) return;
-      if (event && isOverlayControl(event.target)) return;
+      if (event && isDocChromeTarget(event.target)) return;
       // Already showing actions — don't bounce back to a new sheet on chrome clicks.
       if (phaseRef.current === "actions" || phaseRef.current === "confirm") return;
 
@@ -766,7 +750,7 @@ export function DocSelectionLayer({
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
-      if (isOverlayControl(event.target)) return;
+      if (isDocChromeTarget(event.target)) return;
       // Unsaved confirm (✓/✕, not yet Annotate) dies on tap-off. A new hold
       // on this same pointer can replace it. Actions stay on the backdrop.
       if (phaseRef.current === "confirm") dismiss();
@@ -895,7 +879,7 @@ export function DocSelectionLayer({
     const onDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
       if (phaseRef.current !== "confirm") return;
-      if (isOverlayControl(event.target)) return;
+      if (isDocChromeTarget(event.target)) return;
       dismiss();
     };
     window.addEventListener("pointerdown", onDown, true);
@@ -1034,7 +1018,7 @@ export function DocSelectionLayer({
         .elementFromPoint(event.clientX, event.clientY)
         ?.closest?.(".lc-doc-submark-grip") as Element | null;
       const grip = fromTarget ?? fromPoint;
-      if (!grip && isOverlayControl(event.target)) return;
+      if (!grip && isDocChromeTarget(event.target)) return;
       const region = parentRegion();
       if (!region) return;
       if (
@@ -1345,6 +1329,15 @@ export function DocSelectionLayer({
         const scope = footnote.anchor.scope;
         const root = scopeRootIn(body, scope) as HTMLElement | null;
         if (!root) continue;
+        /*
+         * Drop washes over *this page*, not only over the document.
+         *
+         * `tightLocalRects` measures against the paper slot and the board, and
+         * for a PDF forty pages long a rect covering one page is a couple of
+         * percent of either — so it passed as a line box and painted the page.
+         * A marquee mark is the one that produces such a rect. The scope root
+         * is the page, so it is the box that can answer the question.
+         */
         const storedBands =
           footnote.bands && footnote.bands.length > 0
             ? tightLocalRects(body, footnote.bands)
@@ -1848,12 +1841,13 @@ export function DocSelectionLayer({
             /*
              * Tap opens the mark; hold fills left→right and deletes.
              *
-             * User marks: number chip inset in the top-right corner of the
+             * User marks: number chip in the gutter beside the top of the
              * whole mark — the union of its bands, not the topmost one. A
              * heading followed by its paragraph put the ribbon at the end of
              * the heading, mid-selection, because that band happened to be
-             * first and short. AI marks: a book tab on the page's right edge,
-             * half on the paper and half hanging off.
+             * first and short. See `markChipLeft` for why beside and not
+             * inside. AI marks: a book tab on the page's right edge, half on
+             * the paper and half hanging off.
              */
             const tint = footnoteThemeVars(
               footnote.color ?? inkPalette[0],
@@ -1884,7 +1878,13 @@ export function DocSelectionLayer({
             const pageWidth = bodyRef.current?.offsetWidth ?? 0;
             const chipLeft = isAiTab
               ? aiBookTabLeft(pageWidth)
-              : Math.max(block.left + chipPad, block.right - chipW - chipPad);
+              : markChipLeft({
+                  blockLeft: block.left,
+                  blockRight: block.right,
+                  pageWidth,
+                  chipWidth: chipW,
+                  pad: chipPad,
+                });
             const chipTop = isAiTab
               ? (aiTabTops.get(footnote.id) ?? block.top)
               : block.top + chipPad;
@@ -2150,8 +2150,18 @@ export function DocSelectionLayer({
                                 onOpenFootnote?.(footnote, rect);
                               }}
                             >
+                              {/*
+                                The number, not the words.
+                                
+                                The excerpt used to sit under the heading, and it
+                                is a whole sentence of the page you are already
+                                looking at — at any window size it either wrapped
+                                the sheet into a paragraph or ran off the end of
+                                it clipped mid-word. The row's job is to let you
+                                pick between marks stacked on the same words, and
+                                the number does that.
+                              */}
                               <strong>{`Open ${footnoteNumbers.get(footnote.id) ?? ""}`.trim()}</strong>
-                              <span className="lc-muted">{footnote.excerpt || "this area"}</span>
                             </button>
                           </li>
                         ))}

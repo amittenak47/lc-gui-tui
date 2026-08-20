@@ -581,3 +581,66 @@ describe("docMarquee", () => {
     }
   });
 });
+
+describe("a wash over one page of many", () => {
+  const box = (left: number, top: number, width: number, height: number) =>
+    ({
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+      x: left,
+      y: top,
+      toJSON() {},
+    }) as DOMRect;
+
+  /*
+   * A PDF open on page 2 of forty: the selectable body is the whole book, and
+   * one page is a sliver of it. A rect covering that page used to fill ~2.5% of
+   * every box the cover test compared against, so it read as line-sized — and
+   * then went wrong four ways at once, because four pieces of chrome ask this
+   * question and each does something different with the answer.
+   */
+  function book() {
+    const host = document.createElement("div");
+    host.className = "lc-doc-selectable-body";
+    Object.defineProperty(host, "offsetWidth", { value: 800 });
+    host.getBoundingClientRect = () => box(0, 0, 800, 40000);
+    const page = document.createElement("div");
+    page.dataset.docScope = "page-2";
+    page.getBoundingClientRect = () => box(0, 1000, 800, 1000);
+    host.append(page);
+    document.body.append(host);
+    return { host, page };
+  }
+
+  it("counts the page itself as something a rect must not cover", () => {
+    const { host } = book();
+    expect(localRectCoversHost(host, { left: 0, top: 1000, width: 800, height: 1000 })).toBe(
+      true,
+    );
+    expect(isPageCoverRect({ left: 0, top: 1000, right: 800, bottom: 2000 }, host)).toBe(
+      true,
+    );
+  });
+
+  it("leaves the line boxes on that page alone", () => {
+    const { host } = book();
+    expect(
+      localRectCoversHost(host, { left: 96, top: 1240, width: 420, height: 22 }),
+    ).toBe(false);
+  });
+
+  it("drops the wash and keeps the lines in one pass", () => {
+    const { host } = book();
+    const kept = tightLocalRects(host, [
+      { left: 0, top: 1000, width: 800, height: 1000 },
+      { left: 96, top: 1240, width: 420, height: 22 },
+      { left: 96, top: 1266, width: 380, height: 22 },
+    ]);
+    expect(kept).toHaveLength(2);
+    expect(kept.every((rect) => rect.height === 22)).toBe(true);
+  });
+});

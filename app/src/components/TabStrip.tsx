@@ -162,6 +162,10 @@ function indexStateOf(tab: TabRecord): TabIndexState | null {
   return tab.indexed;
 }
 
+function pointInBox(box: DOMRect, x: number, y: number): boolean {
+  return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+}
+
 function chipIdAt(
   strip: HTMLElement | null,
   x: number,
@@ -174,8 +178,7 @@ function chipIdAt(
     const id = chip.dataset.tabId;
     if (!id || id === skipId || id === HOME_TAB_ID) continue;
     if (chip.dataset.tabKind === "cancel") continue;
-    const box = chip.getBoundingClientRect();
-    if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) return id;
+    if (pointInBox(chip.getBoundingClientRect(), x, y)) return id;
   }
   return null;
 }
@@ -214,6 +217,8 @@ export function TabStrip({
   );
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  /** Dragging a grouped chip clear of its pair — dropping here breaks the split. */
+  const [detaching, setDetaching] = useState(false);
   const [cancelHit, setCancelHit] = useState(false);
   /** Last down's pointer type, so a touch long-press `contextmenu` is not a menu. */
   const lastPointerTypeRef = useRef<string>("mouse");
@@ -295,12 +300,36 @@ export function TabStrip({
 
   const still = useReducedMotion();
 
+  /*
+   * Would dropping here take the chip out of its split?
+   *
+   * Dragging one chip onto another makes a pair, so dragging one off its pair
+   * should break it — the same gesture, run backwards, which is the only reason
+   * anyone would guess it works. Right-click → Unsplit stays, but it was the
+   * *only* way, and a right-click is not something you have on a tablet.
+   *
+   * Only inside the strip. Out over the board, a drag already means "split into
+   * that edge", and one drop cannot mean both.
+   */
+  const wouldDetach = (tabId: string, groupId: string | undefined, x: number, y: number) => {
+    if (!groupId) return false;
+    const strip = stripRef.current;
+    if (!strip) return false;
+    const inStrip = pointInBox(strip.getBoundingClientRect(), x, y);
+    if (!inStrip) return false;
+    if (chipIdAt(strip, x, y, tabId)) return false;
+    const row = strip.querySelector(`[data-tab-row-group="${CSS.escape(groupId)}"]`);
+    if (!(row instanceof HTMLElement)) return false;
+    return !pointInBox(row.getBoundingClientRect(), x, y);
+  };
+
   return (
     <div className="lc-tab-strip" role="tablist" aria-label="Open workspaces" ref={stripRef}>
       {rows.map((row) => (
         <div
           key={row.group ? row.group.id : row.members[0]!.id}
           className={row.group ? "lc-tab-row is-group" : "lc-tab-row"}
+          data-tab-row-group={row.group?.id ?? undefined}
         >
           {row.group ? <span className="lc-tab-group-frame" aria-hidden /> : null}
           {row.members.map((tab) => {
@@ -332,7 +361,6 @@ export function TabStrip({
             <button
               type="button"
               className="lc-tab-hit"
-              disabled={busy && !cancelling}
               title={
                 cancelling
                   ? "Cancel loading"
@@ -369,6 +397,15 @@ export function TabStrip({
                 if (lastPointerTypeRef.current !== "mouse") return;
                 setMenu({ id: tab.id, x: event.clientX, y: event.clientY });
               }}
+              /*
+                No `disabled` while busy.
+                
+                A tab you are waiting for is exactly the one you want to leave
+                for a minute, and the workspaces stay mounted — the load is
+                still running when you come back. Dragging stays blocked below,
+                because re-arranging tabs under a load is how a split ends up
+                half-built.
+              */
               onPointerDown={(event) => {
                 lastPointerTypeRef.current = event.pointerType;
                 if (cancelling || tab.id === HOME_TAB_ID || busy) return;
@@ -385,6 +422,9 @@ export function TabStrip({
                 drag.moved = true;
                 const onto = chipIdAt(stripRef.current, event.clientX, event.clientY, tab.id);
                 setDropTargetId(onto);
+                setDetaching(
+                  wouldDetach(tab.id, tab.group, event.clientX, event.clientY),
+                );
                 setCarry({ id: tab.id, title: tab.title, x: event.clientX, y: event.clientY });
                 onTabDrag?.(tab.id, event.clientX, event.clientY);
               }}
@@ -395,17 +435,22 @@ export function TabStrip({
                   skipClickRef.current = true;
                   const onto = chipIdAt(stripRef.current, event.clientX, event.clientY, tab.id);
                   if (onto) onTabDropOnTab?.(tab.id, onto);
+                  else if (wouldDetach(tab.id, tab.group, event.clientX, event.clientY)) {
+                    onUnsplit?.(tab.id);
+                  }
                   onTabDrop?.(tab.id, event.clientX, event.clientY);
                 }
                 dragRef.current = null;
                 setCarry(null);
                 setDropTargetId(null);
+                setDetaching(false);
                 onTabDragEnd?.();
               }}
               onPointerCancel={() => {
                 dragRef.current = null;
                 setCarry(null);
                 setDropTargetId(null);
+                setDetaching(false);
                 onTabDragEnd?.();
               }}
             >
@@ -446,11 +491,11 @@ export function TabStrip({
       {carry
         ? createPortal(
             <div
-              className="lc-tab-ghost"
+              className={detaching ? "lc-tab-ghost is-detach" : "lc-tab-ghost"}
               aria-hidden
               style={{ transform: `translate3d(${carry.x}px, ${carry.y}px, 0)` }}
             >
-              {carry.title}
+              {detaching ? "Unsplit" : carry.title}
             </div>,
             document.body,
           )

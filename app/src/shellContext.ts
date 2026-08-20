@@ -87,7 +87,13 @@ export interface WorkspaceChrome {
   loading: boolean;
   busy: boolean;
   loadActive: boolean;
-  docIndex: { status: "idle" | "indexing" | "indexed" | "error"; meta: unknown; error: string | null };
+  docIndex: {
+    status: "idle" | "indexing" | "indexed" | "error";
+    meta: unknown;
+    error: string | null;
+    /** Present when this workspace holds something indexable that is not indexed. */
+    onIndex?: (() => void) | null;
+  };
 }
 
 export const NO_CHROME: WorkspaceChrome = {
@@ -97,7 +103,7 @@ export const NO_CHROME: WorkspaceChrome = {
   loading: false,
   busy: false,
   loadActive: false,
-  docIndex: { status: "idle", meta: null, error: null },
+  docIndex: { status: "idle", meta: null, error: null, onIndex: null },
 };
 
 /** What the shell may ask of a workspace before it unmounts it. */

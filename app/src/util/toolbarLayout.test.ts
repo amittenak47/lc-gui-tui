@@ -7,8 +7,10 @@ import {
   loadToolbarLayout,
   saveToolbarLayout,
   TOOLBAR_DOCK_SNAP_PX,
+  isNearDock,
+  rectGap,
   toolbarAxis,
-  toolbarBoardIsNarrow,
+  toolbarWindowIsNarrow,
 } from "./toolbarLayout";
 
 const KEY = "whiteboard.toolbar.layout.v1";
@@ -44,6 +46,39 @@ describe("toolbarLayout", () => {
   });
 });
 
+describe("isNearDock", () => {
+  const rect = (left: number, top: number, w: number, h: number) => ({
+    left,
+    top,
+    right: left + w,
+    bottom: top + h,
+  });
+
+  it("is zero gap when the boxes overlap", () => {
+    expect(rectGap(rect(0, 0, 100, 100), rect(50, 50, 100, 100))).toBe(0);
+  });
+
+  it("measures the gap between edges, not centres", () => {
+    expect(rectGap(rect(0, 0, 10, 10), rect(40, 0, 10, 10))).toBe(30);
+  });
+
+  it("lets a tall column dock on a slot it is already covering", () => {
+    /*
+     * The bug this replaced: a 200px column overlapping a 240px slot still had
+     * its centre 90px from the slot's centre, so centre-to-centre said "not
+     * near" and the island could not be put back — in a short window the clamp
+     * would not let it fall far enough to close that gap.
+     */
+    const island = rect(300, 200, 36, 200);
+    const slot = rect(304, 280, 36, 240);
+    expect(isNearDock(island, slot)).toBe(true);
+  });
+
+  it("still says no when the island is nowhere near", () => {
+    expect(isNearDock(rect(20, 20, 36, 200), rect(400, 300, 36, 240))).toBe(false);
+  });
+});
+
 describe("clampToBox", () => {
   const board = { left: 0, top: 0, right: 2000, bottom: 1000 };
 
@@ -61,43 +96,73 @@ describe("clampToBox", () => {
 
 describe("toolbarAxis", () => {
   it("stays a row when docked or near the dock snap", () => {
-    expect(toolbarAxis("docked", 0, 400, 1280, false)).toBe("row");
-    expect(toolbarAxis("floating", 10, 48, 1280, true)).toBe("row");
+    expect(toolbarAxis("docked", 0, 400, 1280, false, "row", 400)).toBe("row");
+    expect(toolbarAxis("floating", 10, 48, 1280, true, "row", 400)).toBe("row");
   });
 
-  it("becomes a column when the board hole is a split sliver or a tiny window", () => {
-    expect(toolbarAxis("docked", 0, 400, 1280, false, "row", 400)).toBe("column");
-    expect(toolbarAxis("docked", 0, 400, 1280, false, "row", 250)).toBe("column");
-    expect(toolbarAxis("docked", 0, 400, 300, false)).toBe("column");
+  it("becomes a column only when the window itself runs out of room", () => {
+    expect(toolbarAxis("docked", 0, 400, 380, false, "row", 400)).toBe("column");
+    expect(toolbarAxis("docked", 0, 400, 300, false, "row", 250)).toBe("column");
   });
 
-  it("stays a row on a full-screen tablet whose CSS width sits under 480", () => {
-    expect(toolbarAxis("docked", 0, 400, 400, false)).toBe("row");
-    expect(toolbarAxis("floating", 200, 48, 400, true, "row", 400)).toBe("row");
-    expect(toolbarAxis("floating", 120, 280, 800, false, "row", 800)).toBe("row");
+  it("ignores the pane the island is drawn over", () => {
+    // The thin half of a split in a roomy window: the row still fits the window,
+    // so it stays a row. Passing the board width here is what used to flip it.
+    expect(toolbarAxis("docked", 0, 400, 1280, false, "row", 400)).toBe("row");
+    expect(toolbarAxis("docked", 0, 400, 900, false, "row", 400)).toBe("row");
+  });
+
+  it("stays a row once the window can hold the row and both rails", () => {
+    expect(toolbarAxis("docked", 0, 400, 800, false, "row", 380)).toBe("row");
+    expect(toolbarAxis("floating", 200, 48, 800, true, "row", 380)).toBe("row");
+    expect(toolbarAxis("floating", 120, 280, 1024, false, "row", 380)).toBe("row");
   });
 
   it("becomes a column in a left or right edge band", () => {
-    expect(toolbarAxis("floating", 8, 48, 1280, false)).toBe("column");
-    expect(toolbarAxis("floating", 1280 - 56, 48, 1280, false)).toBe("column");
-    expect(toolbarAxis("floating", 400, 400, 1280, false)).toBe("row");
+    expect(toolbarAxis("floating", 8, 48, 1280, false, "row", 400)).toBe("column");
+    expect(toolbarAxis("floating", 1280 - 56, 48, 1280, false, "row", 400)).toBe(
+      "column",
+    );
+    expect(toolbarAxis("floating", 400, 400, 1280, false, "row", 400)).toBe("row");
   });
 
   it("uses hysteresis so the axis does not flicker at the band", () => {
-    expect(toolbarAxis("floating", 100, 48, 1280, false, "column")).toBe("column");
-    expect(toolbarAxis("floating", 200, 48, 1280, false, "column")).toBe("row");
+    expect(toolbarAxis("floating", 100, 48, 1280, false, "column", 400)).toBe(
+      "column",
+    );
+    expect(toolbarAxis("floating", 200, 48, 1280, false, "column", 400)).toBe("row");
   });
 });
 
-describe("toolbarBoardIsNarrow", () => {
-  it("treats a full-screen tablet as wide even when CSS px sit under 480", () => {
-    expect(toolbarBoardIsNarrow(400, 400)).toBe(false);
-    expect(toolbarBoardIsNarrow(800, 800)).toBe(false);
+describe("toolbarWindowIsNarrow", () => {
+  it("stays wide on a full-screen tablet", () => {
+    expect(toolbarWindowIsNarrow(768, 380)).toBe(false);
+    expect(toolbarWindowIsNarrow(1024, 380)).toBe(false);
   });
 
-  it("treats a split sliver or a squeezed window as narrow", () => {
-    expect(toolbarBoardIsNarrow(400, 1280)).toBe(true);
-    expect(toolbarBoardIsNarrow(250, 800)).toBe(true);
-    expect(toolbarBoardIsNarrow(300, 300)).toBe(true);
+  it("counts the rails either side of the row, not just the row", () => {
+    /*
+     * The window off the phone-sized report: 450 CSS px holding a 350 px row.
+     * The row *fits* — and still ran under the view stack, because the stack
+     * and the annotate toggle each own a rail the row is laid out between.
+     */
+    expect(toolbarWindowIsNarrow(450, 350)).toBe(true);
+    expect(toolbarWindowIsNarrow(484, 350)).toBe(true);
+    expect(toolbarWindowIsNarrow(560, 350)).toBe(false);
+  });
+
+  it("keeps a longer row upright for longer", () => {
+    expect(toolbarWindowIsNarrow(700, 380)).toBe(false);
+    expect(toolbarWindowIsNarrow(700, 600)).toBe(true);
+  });
+
+  it("falls back to a nominal row before anything has been measured", () => {
+    expect(toolbarWindowIsNarrow(1280, 0)).toBe(false);
+    expect(toolbarWindowIsNarrow(400, 0)).toBe(true);
+  });
+
+  it("holds the column until the window clears the flip width", () => {
+    expect(toolbarWindowIsNarrow(530, 380, "column")).toBe(true);
+    expect(toolbarWindowIsNarrow(530, 380, "row")).toBe(false);
   });
 });

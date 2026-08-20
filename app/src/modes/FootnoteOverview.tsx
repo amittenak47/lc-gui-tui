@@ -20,7 +20,7 @@ import {
 import { ColorRadial } from "../canvas/ColorRadial";
 import { HoldButton } from "../components/HoldButton";
 import { UnderlineIcon } from "../components/MarkToolIcons";
-import { pointerInSubMark } from "../canvas/docSelectionGesture";
+import { isDocChromeTarget, pointerInSubMark } from "../canvas/docSelectionGesture";
 import { copyTextToClipboard } from "../util/clipboard";
 import { loadInkHandedness } from "../util/inkHandedness";
 import {
@@ -90,20 +90,57 @@ function viewport() {
     originY: view?.offsetTop ?? 0,
   };
 }
-/** Board pane that contains the mark — split view must not clamp to the window. */
+/** Elements whose box is "the paper", in the order we would rather have one. */
+const PAPER_SELECTORS = [".lc-page-content-slot", ".lc-page-marks-slot"] as const;
+
+function boxHolds(box: DOMRect, x: number, y: number): boolean {
+  return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+}
+
+/**
+ * The box the card is allowed to sit in.
+ *
+ * The pane, horizontally narrowed to the paper. A split pane is barely wider
+ * than the page it holds, so clamping to the pane looked correct there and
+ * hid what the rule actually says — on a full-screen 4K window the same pane
+ * is most of a metre of empty desk either side of a reading column, and a card
+ * centred in *that* lands nowhere near the mark it belongs to. The page is what
+ * the reader is looking at, so the page is what the card is placed against.
+ *
+ * Vertically it stays the pane's: a document is taller than the window, and
+ * clamping to the paper's full height would let the card settle off-screen.
+ */
 function paneBox(anchorRect: DOMRect | null | undefined): DOMRect {
+  let pane: DOMRect | null = null;
   if (anchorRect) {
     const cx = anchorRect.left + anchorRect.width / 2;
     const cy = anchorRect.top + anchorRect.height / 2;
     for (const board of document.querySelectorAll(".lc-board")) {
       const box = board.getBoundingClientRect();
-      if (cx >= box.left && cx <= box.right && cy >= box.top && cy <= box.bottom) {
-        return box;
+      if (boxHolds(box, cx, cy)) {
+        pane = box;
+        break;
       }
     }
   }
-  const view = viewport();
-  return new DOMRect(view.originX, view.originY, view.width, view.height);
+  if (!pane) {
+    const view = viewport();
+    pane = new DOMRect(view.originX, view.originY, view.width, view.height);
+  }
+  if (!anchorRect) return pane;
+  const cx = anchorRect.left + anchorRect.width / 2;
+  const cy = anchorRect.top + anchorRect.height / 2;
+  for (const selector of PAPER_SELECTORS) {
+    for (const node of document.querySelectorAll(selector)) {
+      const paper = node.getBoundingClientRect();
+      if (paper.width <= 1 || !boxHolds(paper, cx, cy)) continue;
+      const left = Math.max(pane.left, paper.left);
+      const right = Math.min(pane.right, paper.right);
+      if (right - left < 120) continue;
+      return new DOMRect(left, pane.top, right - left, pane.height);
+    }
+  }
+  return pane;
 }
 function settle(node: HTMLElement, left: number, top: number, bounds: DOMRect) {
   const margin = 8;
@@ -122,11 +159,27 @@ function clampPanel(node: HTMLElement, anchorRect: DOMRect | null | undefined) {
   let top: number;
   if (anchorRect) {
     left = anchorRect.left + anchorRect.width / 2 - width / 2;
+    /*
+     * Below the mark, above it, or level with it — in that order.
+     *
+     * The old rule had only the first two, and a tall card fits neither: below
+     * runs off the bottom, so it flipped to above, which runs off the top, and
+     * `settle` then clamped it to the top of the pane. In a split that is a few
+     * pixels of travel and reads as "just above the mark". Full-screen it is the
+     * top of a 4K window — the card left the page entirely and parked in the
+     * dark margin, which is what makes it look like it belongs to nothing.
+     *
+     * Level with the mark is the honest third answer: the card cannot be clear
+     * of it, so it is centred on it and stays beside the words it is about.
+     */
     const below = anchorRect.bottom + 6;
+    const above = anchorRect.top - height - 6;
     top =
-      below + height + margin > pane.bottom
-        ? anchorRect.top - height - 6
-        : below;
+      below + height + margin <= pane.bottom
+        ? below
+        : above >= pane.top + margin
+          ? above
+          : anchorRect.top + anchorRect.height / 2 - height / 2;
   } else {
     left = pane.left + pane.width / 2 - width / 2;
     top = pane.top + pane.height / 2 - height / 2;
@@ -354,14 +407,7 @@ export function FootnoteOverview({
   useEffect(() => {
     const onDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
-      const el = event.target instanceof Element ? event.target : null;
-      if (
-        el?.closest?.(
-          ".lc-footnote-overview, .lc-doc-sheet, .lc-doc-confirm, .lc-doc-selection-chrome, .lc-doc-submark-grip, .lc-split-sash",
-        )
-      ) {
-        return;
-      }
+      if (isDocChromeTarget(event.target)) return;
       if (pointerInSubMark(event.clientX, event.clientY)) return;
       if (task) {
         setTask(null);

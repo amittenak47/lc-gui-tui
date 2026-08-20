@@ -384,32 +384,27 @@ body {
 }
 
 /*
- * New-tab load: spinner owns the page. Header chrome is blurred and inert
- * except Home / Cancel on the strip.
+ * A load owns the page, not the header.
+ *
+ * The header used to blur out and go inert for the length of one — five pixels
+ * of blur over every other tab, so the only thing you could do while a page was
+ * coming was cancel it. But a tab that is loading is a tab you are *waiting*
+ * for, and waiting is exactly when you want to go and read something else; the
+ * workspaces stay mounted, so coming back finds the load where you left it. The
+ * only thing the blur bought was stopping a second load from being started on
+ * top of the first, and the address bar's own controls handle that.
+ *
+ * The rest of the header dims a little, because something *is* happening and
+ * the page underneath is a spinner. Dim is not the same as unusable.
  */
 .lc-app-loading .lc-header-center,
-.lc-app-loading .lc-header-right {
-  filter: blur(5px);
-  opacity: 0.38;
-  pointer-events: none;
-}
-
+.lc-app-loading .lc-header-right,
 .lc-app-loading .lc-header-left > :not(.lc-brand):not(.lc-tab-strip) {
-  filter: blur(5px);
-  opacity: 0.38;
-  pointer-events: none;
+  opacity: 0.72;
 }
 
 .lc-app-loading .lc-tab:not(.is-cancelling):not([data-tab-kind="home"]) {
-  filter: blur(5px);
-  opacity: 0.38;
-  pointer-events: none;
-}
-
-.lc-app-loading .lc-web-omnibox {
-  filter: blur(5px);
-  opacity: 0.38;
-  pointer-events: none;
+  opacity: 0.72;
 }
 
 /*
@@ -559,7 +554,30 @@ body {
   background: var(--accent);
 }
 
-.lc-tab .lc-doc-index-chip {
+.lc-tab /*
+ * The chip you press to index, rather than the one that tells you it happened.
+ *
+ * Same slot, same size, so a document that indexed itself and one waiting to be
+ * asked read as the same kind of thing — the difference is that this one is a
+ * button.
+ */
+.lc-doc-index-chip.is-offer {
+  cursor: pointer;
+  color: var(--hint);
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-underline-offset: 2px;
+  opacity: 0.7;
+}
+
+.lc-doc-index-chip.is-offer:hover,
+.lc-doc-index-chip.is-offer:focus-visible {
+  color: var(--accent);
+  text-decoration-style: solid;
+  opacity: 1;
+}
+
+.lc-doc-index-chip {
   margin-left: 0;
   margin-right: 6px;
   white-space: nowrap;
@@ -1120,6 +1138,116 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 }
 
 /*
+ * "You are here" for a split, in place of a toolbar that re-animates.
+ *
+ * Focus moving between two panes used to be announced by the one pen island
+ * re-mounting under the other half — which replayed its open animation on every
+ * switch even though the pen had never been put down. The island holds still
+ * now (see MorphBar `animateOnMount`), so something has to say which half took
+ * focus. A pill, on that half, for about a second.
+ *
+ * The width maths is the sash's, so the pill is centred on the pane rather than
+ * on the window; `bottom` clears the dock so it never lands on the toolbar.
+ */
+.lc-split-focus-toast {
+  position: absolute;
+  bottom: 76px;
+  z-index: 96;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 220ms ease-out,
+    transform 220ms ease-out;
+}
+
+.lc-split-focus-toast.is-a {
+  left: 0;
+  width: calc(
+    100% * var(--lc-split-a, 0.5) /
+      (var(--lc-split-a, 0.5) + var(--lc-split-b, 0.5))
+  );
+}
+
+.lc-split-focus-toast.is-b {
+  right: 0;
+  width: calc(
+    100% * var(--lc-split-b, 0.5) /
+      (var(--lc-split-a, 0.5) + var(--lc-split-b, 0.5))
+  );
+}
+
+.lc-split-focus-toast.is-visible {
+  opacity: 1;
+  transform: none;
+  transition-duration: 110ms;
+}
+
+.lc-split-focus-toast span {
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  padding: 4px 11px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+  color: var(--muted);
+  font-family: var(--lc-sans);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-split-focus-toast {
+    transition: none;
+    transform: none;
+  }
+}
+
+/*
+ * The seam stops above the coach when the coach is a bottom sheet.
+ *
+ * The sash paints at z-90 and the sheet sits at z-40, so a split ran its line
+ * straight down through the parked peek strip — and through the open sheet —
+ * as if the chat were part of the board. Desktop is unaffected: there the coach
+ * is a side panel that `.lc-main` is already inset from, so nothing overlaps.
+ *
+ * `--lc-agent-open` is written every frame of the sheet drag (it is what fades
+ * the pen island), so the seam's end follows the sheet rather than snapping at
+ * the two ends of the gesture. Guarded on `.lc-side-sheet` so a build with no
+ * coach at all does not lose 84px of seam to a strip that is not there.
+ */
+.lc-mobile.lc-app:has(.lc-side-sheet)
+  .lc-main.is-split-vertical
+  > .lc-split-sash.is-vertical {
+  bottom: calc(
+    6px + var(--lc-safe-bottom) + var(--lc-agent-sheet-lift) + var(--lc-agent-peek) +
+      (var(--lc-agent-sheet) - var(--lc-agent-peek)) * var(--lc-agent-open, 0)
+  );
+}
+
+/*
+ * Same sum, opposite default. The property is only written *during* a drag —
+ * settled at either end it is removed — so the end state has to come from the
+ * class: open means the sheet is all the way up, absent means parked.
+ */
+.lc-mobile.lc-app.lc-app-agent-open:has(.lc-side-sheet)
+  .lc-main.is-split-vertical
+  > .lc-split-sash.is-vertical {
+  bottom: calc(
+    6px + var(--lc-safe-bottom) + var(--lc-agent-sheet-lift) + var(--lc-agent-peek) +
+      (var(--lc-agent-sheet) - var(--lc-agent-peek)) * var(--lc-agent-open, 1)
+  );
+}
+
+/*
  * The sash, VS Code's way: invisible at rest, a blue seam under the pointer.
  *
  * The button is a wide-enough hit target to actually grab; the line you see is
@@ -1313,6 +1441,21 @@ body[data-lc-sash-drag="horizontal"] {
  * inline per frame; the offset here keeps it just under the cursor rather than
  * centred on it, where it would hide the very edge you are aiming at.
  */
+/*
+ * The ghost says what letting go will do.
+ *
+ * Dragging a chip off its pair breaks the split, and there is nothing on screen
+ * to suggest that — the gesture is the reverse of the one that made the pair,
+ * which is the only reason it is guessable at all. The label changing to
+ * "Unsplit" is the confirmation that the guess was right.
+ */
+.lc-tab-ghost.is-detach {
+  border-color: color-mix(in srgb, var(--bad) 60%, transparent);
+  color: color-mix(in srgb, var(--bad) 85%, var(--text));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .lc-tab-ghost {
   position: fixed;
   top: 0;
@@ -2679,8 +2822,292 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 /*
- * Skinny split / tiny window: same column island as a docked `is-column`.
- * JS `toolbarBoardIsNarrow` is the real switch (full-screen tablets at
+ * Narrow window: one right-hand rail, at about 60% size.
+ *
+ * `data-lc-chrome-narrow` is written on the root by BoardToolbar from
+ * `toolbarWindowIsNarrow` — the same answer that turns the island sideways, so
+ * the pen column and the view stack can never disagree about which layout they
+ * are in. Board renders the map chrome and knows nothing about the island, so
+ * a flag on the root is the only thing both can read.
+ *
+ * The controls become one rail down the right edge: pen island on top, view
+ * stack under it, with the annotate toggle left in the bottom corner it already
+ * lived in. Everything in the rail is scaled to roughly 60% — at phone width a
+ * 44px stack plus a 44px island is most of the board.
+ */
+[data-lc-chrome-narrow] .lc-map-controls {
+  /* The baseline every button here reads — but see the boxes below. */
+  --touch: 27px;
+  /* Pulls the whole rail nearer the bottom edge — the column needs the height. */
+  --lc-color-wheel-r: 48px;
+  /*
+   * One width for both islands in the rail. They read as a single edge of
+   * chrome, and two boxes a few px apart in width reads as a mistake rather
+   * than as two things.
+   */
+  --lc-rail-w: 34px;
+}
+
+/*
+ * The strip is a grid, not a flex row — `.lc-map-controls-paged` makes it one,
+ * parks the dock in the middle with `justify-self: center`, and pins the two
+ * chrome clusters into the bottom corners absolutely. So the rail is built by
+ * giving the grid a second column and taking the view stack out of its corner
+ * to sit under the dock in it.
+ *
+ * Specificity has to clear `.lc-mobile .lc-map-controls.lc-map-controls-paged`,
+ * which is (0,3,0) and lands later in the file — a narrow window is a mobile
+ * viewport too, so these two are always read together.
+ */
+[data-lc-chrome-narrow] .lc-map-controls.lc-map-controls-paged {
+  grid-template-columns: 1fr auto;
+  grid-template-rows: 1fr auto;
+  column-gap: 0;
+  row-gap: 6px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls.lc-map-controls-paged .lc-board-dock {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  align-self: end;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls.lc-map-controls-paged .lc-map-chrome-right {
+  position: static;
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: end;
+  align-self: end;
+}
+
+/*
+ * The annotate toggle is not part of the rail — it keeps the bottom-left corner
+ * it already had, out from under a column that now reaches up the board.
+ */
+[data-lc-chrome-narrow] .lc-map-controls.lc-map-controls-paged .lc-map-chrome-left {
+  gap: 4px;
+}
+
+/*
+ * Left-handed: the rail changes sides with everything else.
+ *
+ * The annotate toggle is pinned to the *right* corner for a left-hander, so a
+ * right-hand rail would be built straight on top of it.
+ */
+[data-handedness="left"][data-lc-chrome-narrow]
+  .lc-map-controls.lc-map-controls-paged {
+  grid-template-columns: auto 1fr;
+}
+
+[data-handedness="left"][data-lc-chrome-narrow]
+  .lc-map-controls.lc-map-controls-paged
+  .lc-board-dock,
+[data-handedness="left"][data-lc-chrome-narrow]
+  .lc-map-controls.lc-map-controls-paged
+  .lc-map-chrome-right {
+  grid-column: 1;
+  justify-self: start;
+}
+
+/* --- the pen island, scaled --- */
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-toolbar {
+  padding: 2px 3px;
+  border-radius: 10px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-toolbar.is-column {
+  width: var(--lc-rail-w);
+  max-width: var(--lc-rail-w);
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-toolbar-row {
+  gap: 2px;
+}
+
+/*
+ * Boxes, not just glyphs.
+ *
+ * `--touch` is the knob every button here is *supposed* to read, but a window
+ * this narrow is also a mobile viewport, which turns on `.lc-toolbar-compact` —
+ * and that hardcodes 28px width and height. Overriding the variable shrank the
+ * icons and left the buttons the size they were, so the sizes are written out
+ * at a specificity that clears it.
+ */
+[data-lc-chrome-narrow] .lc-map-controls .lc-tool {
+  width: 26px;
+  height: 20px;
+  min-height: 20px;
+  font-size: 11px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-tool-emoji {
+  font-size: 11px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-tool-mini {
+  width: 22px;
+  min-height: 15px;
+  font-size: 8px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-number-wheel {
+  width: 32px;
+  height: 26px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-tool svg {
+  width: 15px;
+  height: 15px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-color-dot {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  border-radius: 6px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-toolbar-grip {
+  width: 14px;
+  min-height: 18px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-toolbar-grip-dots {
+  width: 6px;
+  height: 10px;
+  background-size: 3px 3px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-tool-sep {
+  height: 13px;
+  margin: 0 2px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-toolbar.is-column .lc-tool-sep {
+  width: 18px;
+  height: 1px;
+  margin: 2px 0;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-preset-chip,
+[data-lc-chrome-narrow] .lc-map-controls .lc-hold-reveal.lc-preset-chip {
+  height: 20px;
+  min-height: 20px !important;
+  padding: 0 5px;
+  font-size: 9px;
+  border-radius: 7px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-hold-reveal.lc-preset-chip
+  .lc-hold-reveal-label {
+  min-height: 20px;
+}
+
+[data-lc-chrome-narrow]
+  .lc-map-controls
+  .lc-toolbar.is-column
+  .lc-hold-reveal.lc-preset-chip {
+  max-width: 30px;
+  height: auto;
+  min-height: 0 !important;
+  padding: 5px 2px;
+}
+
+/* --- the view stack, scaled to match --- */
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack {
+  width: var(--lc-rail-w);
+  min-width: var(--lc-rail-w);
+  min-height: 92px;
+  padding: 2px;
+  gap: 1px;
+  border-radius: 8px;
+}
+
+/*
+ * Only the stack shrinks, not every toggle in the strip.
+ *
+ * The annotate / link pair in the bottom-left corner is the same
+ * `.lc-lined-toggle` as the buttons in the stack, and scoping the shrink to the
+ * class alone took them with it — leaving the corner's *on* state noticeably
+ * smaller than the *off* state next to it, which is a 36px wake button. That
+ * corner is not part of the rail and keeps its size.
+ */
+[data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack .lc-lined-toggle,
+[data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack .lc-chrome-eye {
+  width: 26px;
+  min-width: 26px;
+  min-height: 20px;
+  font-size: 10px;
+  border-radius: 6px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack .lc-lined-toggle svg,
+[data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack .lc-chrome-eye svg {
+  width: 14px;
+  height: 14px;
+}
+
+/*
+ * The dock slot takes the island's shape.
+ *
+ * A 280×36 landing strip in the middle of the board is the wrong target for a
+ * tall island that docks into the right rail — you cannot drop on a slot that
+ * is not where the thing will end up. Sized and placed like the column, the
+ * drag has somewhere to aim.
+ */
+[data-lc-chrome-narrow] .lc-board-dock:has(.lc-toolbar-floating) .lc-toolbar-dock-anchor,
+[data-lc-chrome-narrow] .lc-board-dock:has(.lc-toolbar-dragging) .lc-toolbar-dock-anchor,
+[data-lc-chrome-narrow] .lc-board-dock:has(.lc-toolbar-docking) .lc-toolbar-dock-anchor {
+  width: 36px;
+  height: min(52vh, 240px);
+}
+
+/*
+ * Flyouts off a column open sideways.
+ *
+ * `bottom: 100%` puts a panel above its button, which is the whole length of
+ * the island when the island runs vertically — the menu covered the tools it
+ * was launched from. `is-flyout-left` / `-right` is set by BoardToolbar from
+ * which edge the column is parked against, so the panel always opens into the
+ * canvas rather than off the window.
+ */
+.lc-toolbar.is-column .lc-shape-flyout,
+.lc-toolbar.is-column .lc-text-flyout,
+.lc-toolbar.is-column .lc-shapes {
+  bottom: auto;
+  top: 50%;
+  transform: translateY(-50%);
+  /* Sideways there is a whole island in the way — leave room for it. */
+  max-width: calc(100vw - 96px);
+}
+
+.lc-toolbar.is-column .lc-shapes {
+  width: min(260px, calc(100vw - 96px));
+  max-height: min(50vh, calc(100vh - 120px));
+}
+
+.lc-toolbar.is-column.is-flyout-left .lc-shape-flyout,
+.lc-toolbar.is-column.is-flyout-left .lc-text-flyout,
+.lc-toolbar.is-column.is-flyout-left .lc-shapes {
+  left: auto;
+  right: calc(100% + 10px);
+}
+
+.lc-toolbar.is-column.is-flyout-right .lc-shape-flyout,
+.lc-toolbar.is-column.is-flyout-right .lc-text-flyout,
+.lc-toolbar.is-column.is-flyout-right .lc-shapes {
+  left: calc(100% + 10px);
+  right: auto;
+}
+
+/*
+ * Skinny window: same column island as a docked `is-column`.
+ * JS `toolbarWindowIsNarrow` is the real switch (full-screen tablets at
  * 400 CSS px must stay a row). This query is only the last-resort floor.
  */
 @container lc-board (max-width: 320px) {

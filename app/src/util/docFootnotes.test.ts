@@ -8,6 +8,7 @@ import {
   freshNoteId,
   footnoteRevision,
   footnoteChipLabel,
+  markChipLeft,
   threadTitleFrom,
   googleSearchUrl,
   removeFootnote,
@@ -530,5 +531,54 @@ describe("sanitizeFootnotes title and palette", () => {
     ]);
     expect(kept.title).toBeUndefined();
     expect(kept.palette).toBeUndefined();
+  });
+});
+
+describe("markChipLeft", () => {
+  /* The two-column paper from the report: 1065px page, columns at 96..744 and 547..972. */
+  const page = 1065;
+  const chip = 16;
+
+  it("puts a left-column mark in the left margin", () => {
+    // The gutter between the columns is about 11px. A 16px chip cannot go there
+    // without landing on the first letter of the right column — which is what it
+    // did. The 96px left margin is the only reliably empty space on that side.
+    expect(markChipLeft({ blockLeft: 96, blockRight: 744, pageWidth: page, chipWidth: chip }))
+      .toBe(3);
+  });
+
+  it("puts a right-column mark in the right margin", () => {
+    const left = markChipLeft({
+      blockLeft: 547,
+      blockRight: 972,
+      pageWidth: page,
+      chipWidth: chip,
+    });
+    expect(left).toBe(1046);
+    expect(left).toBeGreaterThanOrEqual(972);
+    expect(left + chip).toBeLessThanOrEqual(page);
+  });
+
+  it("takes the other margin when its own side has none", () => {
+    // A block running to the left edge: nothing fits before it, so the chip goes
+    // to the right margin rather than on top of the first word.
+    expect(markChipLeft({ blockLeft: 2, blockRight: 500, pageWidth: page, chipWidth: chip }))
+      .toBe(1046);
+  });
+
+  it("falls back beside the mark when the page has no margins at all", () => {
+    expect(markChipLeft({ blockLeft: 2, blockRight: 800, pageWidth: 820, chipWidth: chip }))
+      .toBe(803);
+  });
+
+  it("insets only when the mark is as wide as the paper", () => {
+    // Nowhere is off the mark, so the old corner is the least-bad answer.
+    expect(markChipLeft({ blockLeft: 2, blockRight: 1063, pageWidth: page, chipWidth: chip }))
+      .toBe(1044);
+  });
+
+  it("does not fight a page whose width is not known yet", () => {
+    expect(markChipLeft({ blockLeft: 96, blockRight: 386, pageWidth: 0, chipWidth: chip }))
+      .toBe(389);
   });
 });

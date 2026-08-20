@@ -158,11 +158,23 @@ export function isCoverRect(
 }
 
 /**
- * Boxes a quote rect must not match: the body, the paper slot, the marks slot.
+ * Boxes a quote rect must not match: the body, the paper slot, the marks slot,
+ * and — the one that was missing — the page.
  *
  * Compare against the visible paper, not only the selectable body. A long
  * document's body is taller than the page; a slot-sized artifact then survives
  * an edge-cover test and paints as a whole-page wash.
+ *
+ * The pages themselves belong here for the same reason, one step further down.
+ * A forty-page PDF has a paper slot forty pages tall, so a rect covering the
+ * single page under the pointer fills about 2.5% of every other box in this
+ * list and reads as line-sized. That one rect then went wrong four different
+ * ways, because four pieces of chrome ask this question and each does something
+ * else with the answer: the mark painted its whole page, the mark card could not
+ * be dismissed because every click counted as "inside" it, and ✓/✕ and the
+ * Copy/Google pill flew to the corner of the window — "just right of and above
+ * the selection" is the page's own corner when the selection *is* the page.
+ * Catching it here is what stops the next piece of chrome inheriting it.
  */
 export function coverReferenceBoxes(host: HTMLElement): ViewportBox[] {
   const boxes: ViewportBox[] = [];
@@ -191,6 +203,7 @@ export function coverReferenceBoxes(host: HTMLElement): ViewportBox[] {
     }
   }
   push(host.parentElement?.querySelector(".lc-doc-select-overlay"));
+  for (const page of host.querySelectorAll(`[${SCOPE_ATTR}]`)) push(page);
   return boxes;
 }
 

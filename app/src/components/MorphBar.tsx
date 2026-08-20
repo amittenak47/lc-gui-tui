@@ -25,6 +25,15 @@ export interface MorphBarProps extends HTMLAttributes<HTMLDivElement> {
   active: string;
   /** `height` for flyouts that grow upward; `width` for pill toolbars. */
   axis?: MorphBarAxis;
+  /**
+   * Play the shell's grow-from-nothing on the first commit.
+   *
+   * On by default — a bar that appears because you opened it should look like
+   * it opened. Off when the mount is a handover rather than an opening: a
+   * split swapping which pane owns the one toolbar re-mounts this, and
+   * replaying the morph on every tab switch reads as a glitch, not an entrance.
+   */
+  animateOnMount?: boolean;
   children: ReactNode;
 }
 
@@ -40,12 +49,16 @@ function prefersReducedMotion(): boolean {
 export function MorphBar({
   active,
   axis = "height",
+  animateOnMount = true,
   className,
   children,
   ...shellProps
 }: MorphBarProps) {
   const measureRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState(0);
+  const firstReadRef = useRef(true);
+  /* Held for exactly the commit that writes the first size, then released. */
+  const [snap, setSnap] = useState(!animateOnMount);
 
   const panels = Children.toArray(children).filter(
     (child): child is ReactElement<{ "data-morph-id"?: string; children?: ReactNode }> =>
@@ -71,18 +84,25 @@ export function MorphBar({
     };
 
     read();
+    if (firstReadRef.current) {
+      firstReadRef.current = false;
+      // The size lands with `transition: none` on; drop it next frame so every
+      // change after this one animates normally.
+      if (!animateOnMount) requestAnimationFrame(() => setSnap(false));
+    }
     if (prefersReducedMotion()) return;
     if (typeof ResizeObserver !== "function") return;
     const observer = new ResizeObserver(read);
     observer.observe(measure);
     return () => observer.disconnect();
-  }, [active, axis, children]);
+  }, [active, animateOnMount, axis, children]);
 
   const shellStyle: CSSProperties = {
     ...(typeof shellProps.style === "object" && shellProps.style
       ? shellProps.style
       : {}),
     ...(axis === "height" ? { height: size } : { width: size }),
+    ...(snap ? { transition: "none" } : {}),
   };
 
   return (

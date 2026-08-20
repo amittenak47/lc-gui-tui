@@ -30,6 +30,7 @@ import { LlmStatusDialog } from "./components/LlmStatusDialog";
 import { SettingsModal } from "./components/SettingsModal";
 import { StatusBanner } from "./components/StatusBanner";
 import { SmartTips } from "./components/SmartTips";
+import { SplitFocusToast } from "./components/SplitFocusToast";
 import { SplitSash } from "./components/SplitSash";
 import { TabStrip } from "./components/TabStrip";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
@@ -470,7 +471,8 @@ export function App() {
       current.loadActive === next.loadActive &&
       current.docIndex.status === next.docIndex.status &&
       current.docIndex.meta === next.docIndex.meta &&
-      current.docIndex.error === next.docIndex.error
+      current.docIndex.error === next.docIndex.error &&
+      current.docIndex.onIndex === next.docIndex.onIndex
         ? current
         : next,
     );
@@ -499,6 +501,20 @@ export function App() {
 
   /** Bumped by Try again; it joins the mount key, so the workspace reloads. */
   const [retryToken, setRetryToken] = useState(0);
+
+  /*
+   * A failure belongs to the tab it happened in.
+   *
+   * The banner is the shell's — one strip across the top, shared by every
+   * workspace — so a note that would not open left "This document did not
+   * finish opening" standing over the *browser* tab you switched to next. The
+   * page under it had loaded perfectly well; the only broken thing on screen
+   * was a sentence about a different document. Switching tabs takes it down.
+   */
+  useEffect(() => {
+    setError(null);
+    setNotice(null);
+  }, [tabState.activeId]);
 
   const [browseMotion, setBrowseMotion] = useState<
     "enter" | "idle" | "busy" | "exit" | "done"
@@ -939,11 +955,12 @@ export function App() {
             onUnsplit={unsplitTab}
             groupedIds={groupedIds}
             activeIndexChip={
-              chrome.docIndex.status === "idle" ? undefined : (
+              chrome.docIndex.status === "idle" && !chrome.docIndex.onIndex ? undefined : (
                 <DocIndexChip
                   status={chrome.docIndex.status}
                   meta={chrome.docIndex.meta as never}
                   error={chrome.docIndex.error}
+                  onIndex={chrome.docIndex.onIndex}
                 />
               )
             }
@@ -1005,10 +1022,24 @@ export function App() {
             );
           })}
           {activeGroup ? (
-            <SplitSash
-              axis="vertical"
-              onRatio={(ratio) => setSplitRatio(activeGroup.id, ratio)}
-            />
+            <>
+              <SplitSash
+                axis="vertical"
+                onRatio={(ratio) => setSplitRatio(activeGroup.id, ratio)}
+              />
+              {/*
+                Keyed on the group so re-splitting starts silent again — the
+                toast is for focus moving *within* a split, not for one opening.
+              */}
+              <SplitFocusToast
+                key={activeGroup.id}
+                side={activeGroup.children[0] === activeRecord.id ? "a" : "b"}
+                label={
+                  tabState.tabs.find((tab) => tab.id === activeRecord.id)?.title ??
+                  "Tab"
+                }
+              />
+            </>
           ) : null}
           {liveTabs
             .filter((item) => item.showing && !visibleIds.includes(item.tab.id))

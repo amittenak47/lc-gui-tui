@@ -155,13 +155,18 @@ describe("TabStrip", () => {
     view.unmount();
   });
 
-  it("stops taking taps while a workspace is opening", () => {
+  it("still takes taps while a workspace is opening", () => {
+    /*
+     * Waiting for a page is the moment you most want to go and read something
+     * else. Workspaces stay mounted, so the load is still running when you come
+     * back — there is nothing to protect by locking the strip.
+     */
     const onFocus = vi.fn();
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")], busy: true, onFocus });
     act(() => {
       view.chips()[1]?.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
     });
-    expect(onFocus).not.toHaveBeenCalled();
+    expect(onFocus).toHaveBeenCalledWith("b1");
     view.unmount();
   });
 

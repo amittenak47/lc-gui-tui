@@ -282,6 +282,36 @@ export function listAnnotateDocs(): AnnotateDocMeta[] {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+/**
+ * A note name nothing else in the library is already using.
+ *
+ * Two notes called `Untitled.md` are two rows a reader cannot tell apart, in
+ * the one list — Recent — whose whole job is telling them apart. Naming is also
+ * the last thing anyone wants to be made to do at the moment they are trying to
+ * start writing, so "Untitled" has to stay an acceptable answer, and the app
+ * has to make it unambiguous on the reader's behalf.
+ *
+ * The suffix goes before the extension (`Untitled (1).md`), the way a file
+ * manager does it — a reader who exports these will find them sorted together,
+ * and `Untitled.md (1)` would not open as markdown anywhere else.
+ */
+export function uniqueAnnotateName(name: string): string {
+  const taken = new Set(
+    readIndex()
+      .filter((entry) => !entry.deletedAt)
+      .map((entry) => entry.name.trim().toLowerCase()),
+  );
+  if (!taken.has(name.trim().toLowerCase())) return name;
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  for (let n = 1; n < 1000; n += 1) {
+    const candidate = `${stem} (${n})${ext}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return `${stem} (${Date.now()})${ext}`;
+}
+
 export function listAnnotateTrash(): AnnotateDocMeta[] {
   return readIndex()
     .filter((entry) => entry.deletedAt)

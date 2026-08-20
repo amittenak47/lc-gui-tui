@@ -138,8 +138,9 @@ export function sanitizeWebHtml(
   } else {
     holder.innerHTML = cleaned;
   }
-  // Stylesheets stay. modulepreload / preload-as-script would fetch remote
-  // JS from our origin and CORS-fail (WordPress interactivity modules).
+  // Stylesheets stay *here* — `isolateWebCss` fetches and scopes them next.
+  // modulepreload / preload-as-script would fetch remote JS from our origin and
+  // CORS-fail (WordPress interactivity modules).
   for (const link of Array.from(holder.querySelectorAll("link"))) {
     const rel = (link.getAttribute("rel") || "").toLowerCase().split(/\s+/);
     if (rel.includes("stylesheet")) continue;
@@ -237,7 +238,18 @@ function absolutizeSrcset(srcset: string, baseUrl: string): string {
 }
 
 /**
- * Drop `<link rel=stylesheet>` (they style the whole app).
+ * Bring `<link rel=stylesheet>` in as scoped `<style>`, or drop it.
+ *
+ * A left-alone link is worse than either: cross-origin sheets are not readable
+ * through the CSSOM, so nothing here can scope them, and an unscoped sheet
+ * paints the *app* — Wikipedia's `body` rule over our header. Dropping them
+ * outright was the safe answer and it is what made a captured page look like
+ * 1994: Wikipedia keeps almost none of its appearance in inline `<style>`, so
+ * cutting the links cut the page's whole design and left raw HTML behind.
+ *
+ * Fetching them puts the design back with the text still intact, which is the
+ * point — the words are already perfect, so nothing here should ever be
+ * re-derived from pixels.
  *
  * Capture: `<style>` is the inlined payload — keep and scope it, no size cap.
  * Fetch: drop huge inline sheets so GET HTML cannot freeze the UI thread.
@@ -263,7 +275,7 @@ export async function isolateWebCss(
   } else {
     holder.innerHTML = html;
   }
-  for (const link of Array.from(holder.querySelectorAll("link"))) link.remove();
+  await inlineLinkedStyles(holder, baseUrl);
   for (const style of Array.from(holder.querySelectorAll("style"))) {
     const raw = style.textContent || "";
     if (source === "fetch" && raw.length > FETCH_STYLE_CAP) {
@@ -273,6 +285,55 @@ export async function isolateWebCss(
     style.textContent = scopeCss(absolutizeCssUrls(raw, baseUrl));
   }
   return holder.innerHTML;
+}
+
+/** Total inlined stylesheet budget for one page. */
+export const LINKED_CSS_BUDGET = 400_000;
+
+/**
+ * Replace every stylesheet link with the scoped text of the sheet.
+ *
+ * Sequential, not parallel: this runs on the UI thread and a page with twenty
+ * sheets firing at once is a stall the reader feels. Each one that fails or
+ * runs past the budget is simply dropped — a page with some of its design is
+ * the thing we are trying to get to, so partial success is success.
+ */
+async function inlineLinkedStyles(holder: HTMLElement, baseUrl: string): Promise<void> {
+  const links = Array.from(holder.querySelectorAll("link")).filter((link) => {
+    const rel = (link.getAttribute("rel") || "").toLowerCase().split(/\s+/);
+    return rel.includes("stylesheet");
+  });
+  let budget = LINKED_CSS_BUDGET;
+  for (const link of links) {
+    const href = link.getAttribute("href");
+    link.remove();
+    if (!href || budget <= 0) continue;
+    let absolute: string;
+    try {
+      absolute = new URL(href, baseUrl).href;
+    } catch {
+      continue;
+    }
+    if (!/^https?:/i.test(absolute)) continue;
+    let css: string;
+    try {
+      css = await fetchViaViteProxyText(absolute);
+    } catch {
+      continue;
+    }
+    if (css.length > budget) continue;
+    budget -= css.length;
+    const style = holder.ownerDocument.createElement("style");
+    style.textContent = scopeCss(absolutizeCssUrls(css, absolute));
+    holder.insertBefore(style, holder.firstChild);
+  }
+}
+
+/** Anything the page needs, through the same proxy the HTML came from. */
+async function fetchViaViteProxyText(url: string): Promise<string> {
+  const response = await fetch(`./__lc-web-fetch?url=${encodeURIComponent(url)}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.text();
 }
 
 const FLATTEN_ONCE = new Set(["HTML", "BODY", "DIV", "SPAN", "CENTER", "MAIN", "ARTICLE"]);

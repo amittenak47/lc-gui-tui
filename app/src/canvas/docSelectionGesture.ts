@@ -92,6 +92,27 @@ export function requestDocScroll(dy: number): number {
   return onScrollRequest?.(dy) ?? 0;
 }
 
+/* ------------------------------------------------ overlay chrome hits --- */
+
+/**
+ * Controls painted over the page that own their own taps.
+ *
+ * Capture-phase listeners on the selection host / window run before React
+ * handlers on the control, so `stopPropagation` on the chip itself is too
+ * late. Name every overlay that sits on top of the words.
+ *
+ * `.lc-color-wheel` is portaled to `document.body` from ColorRadial — it is
+ * not inside `.lc-footnote-overview`. Without it, underline capture steals
+ * the hub tap and the footnote closer dismisses the card.
+ */
+const DOC_CHROME_SELECTOR =
+  ".lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-doc-sheet-backdrop, .lc-doc-selection-chrome, .lc-footnote-overview, .lc-doc-submark-grip, .lc-split-sash, .lc-color-wheel";
+
+export function isDocChromeTarget(target: EventTarget | null): boolean {
+  const element = target as Element | null;
+  return Boolean(element?.closest?.(DOC_CHROME_SELECTOR));
+}
+
 /* ----------------------------------------------- sub-mark pointer hit --- */
 
 /**
