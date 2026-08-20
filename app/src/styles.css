@@ -724,6 +724,86 @@ body {
  * Not `.lc-md-ink-doc`: that set 17px type, 36px padding, and underlined links
  * on Google's 13px header/footer and squeezed a 1280 capture into a reading column.
  */
+/*
+ * A reader page is a document, so it reads like the other documents.
+ *
+ * It carries no site CSS at all — extraction dropped it — which is the whole
+ * reason the layout bugs go away: semantic HTML in a full-width column reflows
+ * to whatever the pane is, so there is no captured width to strand in a corner
+ * and nothing to run edge to edge on a 4K screen. Borrowing `.lc-md-ink-doc`'s
+ * measurements rather than inventing new ones means a web article, a note and a
+ * PDF are the same reading experience, and one reading-size control moves all
+ * three.
+ */
+/*
+ * "You are not reading the article." Warning-toned because it means something
+ * was lost — the page's JavaScript never ran, or it was not an article to begin
+ * with — and it is a button because the useful response is to try again.
+ */
+.lc-web-source-chip {
+  flex: 0 0 auto;
+  margin: 0 4px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  color: color-mix(in srgb, var(--bad) 85%, var(--ink));
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lc-web-source-chip:hover,
+.lc-web-source-chip:focus-visible {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 20%, transparent);
+}
+
+.lc-web-doc.is-reader {
+  padding: 36px 28px 64px;
+  color: var(--ink);
+  font-family: var(--lc-sans);
+  font-size: 17px;
+  line-height: 1.65;
+  overflow-wrap: break-word;
+  letter-spacing: 0.01em;
+  background: transparent;
+}
+
+.lc-web-doc.is-reader img,
+.lc-web-doc.is-reader figure,
+.lc-web-doc.is-reader table {
+  /* Inline figures survive extraction; they must not carry a capture width. */
+  max-width: 100%;
+  height: auto;
+  margin-inline: 0;
+}
+
+.lc-web-doc.is-reader figcaption {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.lc-web-doc.is-reader h1,
+.lc-web-doc.is-reader h2,
+.lc-web-doc.is-reader h3 {
+  line-height: 1.25;
+  margin: 1.4em 0 0.5em;
+}
+
+.lc-web-doc.is-reader pre {
+  overflow-x: auto;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  font-size: 14px;
+}
+
 .lc-web-doc {
   position: relative;
   width: 100%;

@@ -28,6 +28,7 @@
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
     "@monaco-editor/react": "^4.7.0",
+    "@mozilla/readability": "^0.6.0",
     "@tauri-apps/api": "^2",
     "@types/dompurify": "^3.0.5",
     "dompurify": "^3.4.13",

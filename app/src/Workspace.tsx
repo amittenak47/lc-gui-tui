@@ -636,6 +636,9 @@ export function Workspace({
   /** Address bar for a web snapshot — kept outside the camera-scaled page. */
   const [webUrl, setWebUrl] = useState(WEB_HOME);
   const [webHtmlSource, setWebHtmlSource] = useState<WebHtmlSource | null>(null);
+  /* Read by the open path, which runs before the state it just set has landed. */
+  const webHtmlSourceRef = useRef<WebHtmlSource | null>(null);
+  webHtmlSourceRef.current = webHtmlSource;
   /** Why the rendered capture was skipped, when it was. */
   const [webHtmlNote, setWebHtmlNote] = useState<string | null>(null);
   /** Library entry this session is writing to, once it has one. */
@@ -2620,10 +2623,18 @@ export function Workspace({
          */
         const pageWidth =
           docType === "web"
-            ? (savedWidth ??
-              webPageWidthForViewport(
-                typeof window !== "undefined" ? window.innerWidth : 1280,
-              ))
+            ? // A reader page reflows, so it takes the window like any document.
+              // A capture does not: its layout happened at capture width, and
+              // re-deriving that from the window put the snapshot in the corner
+              // of a wider sheet.
+              (webHtmlSourceRef.current === "reader"
+                ? webPageWidthForViewport(
+                    typeof window !== "undefined" ? window.innerWidth : 1280,
+                  )
+                : (savedWidth ??
+                  webPageWidthForViewport(
+                    typeof window !== "undefined" ? window.innerWidth : 1280,
+                  )))
             : annotatePageWidthForOpen(
                 typeof window !== "undefined" ? window.innerWidth : ANNOTATE_PAGE_W,
                 savedElements ? { elements: savedElements } : null,
@@ -7257,6 +7268,33 @@ export function Workspace({
                 </svg>
               </button>
             </div>
+            {/*
+              Which paper you are reading, and a way out of the bad one.
+              
+              This used to be a muted paragraph at the top of the page itself,
+              which scrolled away and read as part of the site's own content —
+              so a page that had silently degraded looked simply broken. Chrome
+              belongs in chrome: it cannot scroll off, it cannot be mistaken for
+              the page, and it sits beside the reload button you would reach for.
+            */}
+            {webHtmlSource && webHtmlSource !== "reader" ? (
+              <button
+                type="button"
+                className="lc-web-source-chip"
+                title={
+                  webHtmlSource === "fetch"
+                    ? `${
+                        webHtmlNote
+                          ? `Rendered capture failed — ${webHtmlNote}. `
+                          : "Rendered capture was unavailable. "
+                      }This is the raw HTML, so anything the page builds with JavaScript is missing. Tap to try again.`
+                    : "This page is not an article, so the whole page was kept instead. Tap to load it again."
+                }
+                onClick={() => void openWebPage(webUrl)}
+              >
+                {webHtmlSource === "fetch" ? "raw page" : "full page"}
+              </button>
+            ) : null}
             {/*
               Indexing a page is a decision, not a side effect of having looked
               at it — see the open path. This is where the decision is made.
