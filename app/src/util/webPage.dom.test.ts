@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   FETCH_STYLE_CAP,
@@ -144,5 +144,56 @@ describe("promoteLazyImages", () => {
     );
     expect(img?.classList.contains("lazyload")).toBe(false);
     expect(img?.getAttribute("src") ?? "").not.toMatch(/__lc-web-fetch/);
+  });
+});
+
+describe("linked stylesheets", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("fetches a linked sheet and scopes it, instead of dropping the design", async () => {
+    /*
+     * Wikipedia keeps almost none of its appearance in inline <style>. Dropping
+     * the links — the old safe answer — is what left raw HTML on the page.
+     */
+    globalThis.fetch = (async () =>
+      new Response("body { background: #fff } .mw-body { max-width: 60em }", {
+        status: 200,
+      })) as typeof fetch;
+    const html = await isolateWebCss(
+      '<link rel="stylesheet" href="/w/load.php?m=site"><p>Hello</p>',
+      "https://en.wikipedia.org/wiki/Thing",
+      "fetch",
+    );
+    expect(html).not.toContain("<link");
+    expect(html).toContain("Hello");
+    // Scoped, so the sheet cannot repaint the app's own header.
+    expect(html).toContain(".lc-web-doc");
+    expect(html).toMatch(/max-width:\s*60em/);
+  });
+
+  it("drops a sheet that will not load and keeps the page", async () => {
+    globalThis.fetch = (async () => new Response("no", { status: 404 })) as typeof fetch;
+    const html = await isolateWebCss(
+      '<link rel="stylesheet" href="https://example.com/a.css"><p>Hello</p>',
+      "https://example.com/",
+      "fetch",
+    );
+    expect(html).not.toContain("<link");
+    expect(html).toContain("Hello");
+  });
+
+  it("never leaves a link behind for the app to be styled by", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("offline");
+    }) as typeof fetch;
+    const html = await isolateWebCss(
+      '<link rel="stylesheet" href="https://example.com/a.css"><p>Hi</p>',
+      "https://example.com/",
+      "fetch",
+    );
+    expect(html).not.toContain("<link");
   });
 });

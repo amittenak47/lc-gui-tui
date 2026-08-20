@@ -221,6 +221,7 @@ import {
   AnnotateLibraryFullError,
   restoreAnnotateDoc,
   saveAnnotateDoc,
+  uniqueAnnotateName,
   type DocType,
   type AnnotateDoc,
   type AnnotateDocMeta,
@@ -729,6 +730,64 @@ export function Workspace({
   >("idle");
   const [docIndexError, setDocIndexError] = useState<string | null>(null);
   const [docIndexMeta, setDocIndexMeta] = useState<DocIndexStatus | null>(null);
+  /**
+   * What it would take to index whatever is open, kept so the work can be asked
+   * for later rather than only at open time (see the web pad's Index button).
+   */
+  const indexInputsRef = useRef<{
+    hash: string;
+    name: string;
+    docType: DocType;
+    text: string;
+    bytes: ArrayBuffer | null;
+    delayMs: number;
+  } | null>(null);
+  const indexOpenDocument = useCallback(() => {
+    const job = indexInputsRef.current;
+    if (!job) return;
+    const loadGen = workspaceLoadGenRef.current;
+    setDocIndexStatus("indexing");
+    setDocIndexError(null);
+    window.setTimeout(() => {
+      if (workspaceLoadGenRef.current !== loadGen) return;
+      void (async () => {
+        try {
+          const pages = await extractDocumentPages({
+            docType: job.docType,
+            name: job.name,
+            text: job.text,
+            bytes: job.bytes,
+          });
+          rememberExtractedPages(job.hash, pages);
+          if (pages.length === 0) {
+            if (workspaceLoadGenRef.current === loadGen) setDocIndexStatus("idle");
+            return;
+          }
+          const result = await client.putDocIndex(job.hash, {
+            name: job.name,
+            doc_type: job.docType,
+            pages,
+          });
+          if (workspaceLoadGenRef.current !== loadGen) return;
+          if (!result.indexed) {
+            setDocIndexStatus("error");
+            setDocIndexError("the harness did not keep the index");
+            return;
+          }
+          try {
+            setDocIndexMeta(await client.getDocIndex(job.hash));
+          } catch {
+            setDocIndexMeta(null);
+          }
+          setDocIndexStatus("indexed");
+        } catch (cause) {
+          if (workspaceLoadGenRef.current !== loadGen) return;
+          setDocIndexStatus("error");
+          setDocIndexError(messageOf(cause));
+        }
+      })();
+    }, job.delayMs);
+  }, [client]);
   // Read from the autosave interval, which must not be torn down and rebuilt
   // every time one of these changes — a restarted timer is a skipped save.
   const annotateSourceRef = useRef<{
@@ -2547,11 +2606,24 @@ export function Workspace({
         const savedWidth = savedElements
           ? annotateFrameWidthFromElements(savedElements)
           : null;
+        /*
+         * A snapshot keeps the width it was taken at.
+         *
+         * The capture renders the real page at `webPageWidthForViewport` and
+         * serialises the result, so the DOM that comes back is laid out for
+         * *that* width. Re-deriving the paper from the window on every open
+         * meant reopening a page captured on a small window inside a big one
+         * put the snapshot in the top-left corner of a sheet three times its
+         * size, with black around it — the layout could not reflow, because it
+         * had already happened. Documents have always recovered their saved
+         * frame width; there was never a reason for a page not to.
+         */
         const pageWidth =
           docType === "web"
-            ? webPageWidthForViewport(
+            ? (savedWidth ??
+              webPageWidthForViewport(
                 typeof window !== "undefined" ? window.innerWidth : 1280,
-              )
+              ))
             : annotatePageWidthForOpen(
                 typeof window !== "undefined" ? window.innerWidth : ANNOTATE_PAGE_W,
                 savedElements ? { elements: savedElements } : null,
@@ -2598,8 +2670,18 @@ export function Workspace({
         annotateDocIdRef.current = sessionDocId;
         // Owned notes get the Edit toggle; imported files never do, because
         // editing one would write over a copy of somebody else's document.
-        setAnnotateOwned(Boolean(existing?.owned) && docType === "markdown");
-        setEditMarkdown(false);
+        const owned = Boolean(existing?.owned) && docType === "markdown";
+        setAnnotateOwned(owned);
+        /*
+         * Preview by default — except for a note with nothing in it.
+         *
+         * Reading is what you do with a document you already have, so preview
+         * is the right landing for one. A note you have just made is not a
+         * document yet: there is nothing to read, and landing in preview shows
+         * a blank sheet with no obvious way off it. Empty and yours means the
+         * only thing you can be here to do is write.
+         */
+        setEditMarkdown(owned && text.trim().length === 0);
         setEditBuffer(text);
         // Footnotes belong to the entry, so a fresh open of the same file gets
         // its marks back and an unrelated document starts clean.
@@ -2648,11 +2730,30 @@ export function Workspace({
         // Document must finish laying out (measure stable) before reveal.
         // PDFs can take longer than markdown; a soft timeout used to clear the
         // loading overlay while PdfDocument still showed "Opening…".
+        /*
+         * Failing to settle is only fatal for a file that has to be *rendered*.
+         *
+         * This gate exists so the board never reveals on a half-drawn PDF —
+         * pages arrive one at a time, and showing the paper before they land
+         * gives the reader a blank sheet to annotate. That reasoning stops at
+         * the file boundary. Markdown is a string; there is no decoder, nothing
+         * to stream, nothing that can be half-done. When its height failed to
+         * settle it was never because the document was too big — it was because
+         * whichever component was measuring it that moment had not answered yet.
+         * A new note measured zero and the reporter swallowed the reading; in
+         * Edit the paper is replaced by four megabytes of Monaco, which can miss
+         * an eight-second window on a cold start. Both ended in the same place:
+         * a spinner, then "pick a smaller file", about a note with one heading
+         * in it.
+         *
+         * So the throw now needs `bytes` — a real file that renders. Text opens,
+         * and its page grows when the measurement arrives.
+         */
         let laidOut = await waitForAnnotateLaidOut(() => annotateHeightRef.current);
         if (!laidOut && bytes) {
           laidOut = await waitForAnnotateLaidOut(() => annotateHeightRef.current, 25000);
         }
-        if (!laidOut) {
+        if (!laidOut && bytes) {
           throw new Error(
             "This document did not finish opening — try again, or pick a smaller file.",
           );
@@ -2719,53 +2820,41 @@ export function Workspace({
           );
         }
 
-        setDocIndexStatus("indexing");
-        setDocIndexError(null);
-        const indexHash = hash;
-        const indexName = input.name;
-        const indexType = docType;
-        const indexText = text;
-        const indexBytes = bytes;
-        const indexDelayMs = indexType === "pdf" ? 1200 : 0;
-        window.setTimeout(() => {
-          if (workspaceLoadGenRef.current !== loadGen) return;
-          void (async () => {
-            try {
-              const pages = await extractDocumentPages({
-                docType: indexType,
-                name: indexName,
-                text: indexText,
-                bytes: indexBytes,
-              });
-              rememberExtractedPages(indexHash, pages);
-              if (pages.length === 0) {
-                if (workspaceLoadGenRef.current === loadGen) setDocIndexStatus("idle");
-                return;
-              }
-              const result = await client.putDocIndex(indexHash, {
-                name: indexName,
-                doc_type: indexType,
-                pages,
-              });
-              if (workspaceLoadGenRef.current !== loadGen) return;
-              if (!result.indexed) {
-                setDocIndexStatus("error");
-                setDocIndexError("the harness did not keep the index");
-                return;
-              }
-              try {
-                setDocIndexMeta(await client.getDocIndex(indexHash));
-              } catch {
-                setDocIndexMeta(null);
-              }
-              setDocIndexStatus("indexed");
-            } catch (cause) {
-              if (workspaceLoadGenRef.current !== loadGen) return;
-              setDocIndexStatus("error");
-              setDocIndexError(messageOf(cause));
-            }
-          })();
-        }, indexDelayMs);
+        /*
+         * A document you opened is a document you meant to open, so it indexes
+         * itself. A *page* is not: browsing is a trail of things glanced at and
+         * left, and indexing every one of them fills the room's index with the
+         * search results you clicked through on the way to the thing you
+         * actually wanted. So the web pad asks — there is a button on the
+         * address bar, and it is the reader who decides this page is worth
+         * keeping.
+         */
+        indexInputsRef.current = {
+          hash,
+          name: input.name,
+          docType,
+          text,
+          bytes,
+          delayMs: docType === "pdf" ? 1200 : 0,
+        };
+        /*
+         * A document you *opened* is one you meant to keep, so it indexes
+         * itself. Two kinds are not that, and both index on request instead.
+         *
+         * A page is a glance. Browsing is a trail of things looked at and left,
+         * and indexing all of it fills the room with the search results you
+         * clicked through on the way to what you wanted.
+         *
+         * A note you own is a draft. There is no moment while it is being
+         * written when it is worth indexing: at the moment it is created it
+         * says `# Untitled` and nothing else, and every autosave after that
+         * used to write a *new* index under a new hash — the old ones are
+         * hash-keyed and never collected, so a minute of typing left a dozen
+         * copies of a half-finished sentence in the room's index forever.
+         */
+        const drafting = docType === "web" || (existing?.owned === true && docType === "markdown");
+        if (drafting) setDocIndexStatus("idle");
+        else indexOpenDocument();
       } catch (cause) {
         if (workspaceLoadGenRef.current !== loadGen) return;
         // Declining to open something is an answer, not an error — so the
@@ -3188,7 +3277,9 @@ export function Workspace({
       try {
         const saved = await saveAnnotateDoc({
           id: freshAnnotateId(),
-          name: title.toLowerCase().endsWith(".md") ? title : `${title}.md`,
+          name: uniqueAnnotateName(
+            title.toLowerCase().endsWith(".md") ? title : `${title}.md`,
+          ),
           hash: hashMarkdown(source),
           docType: "markdown",
           owned: true,
@@ -3219,7 +3310,9 @@ export function Workspace({
    * the whole reason ink had to stop being keyed by it (step 1): the same set
    * keeps its id and its strokes across an edit that renames every byte.
    */
-  const saveEditBuffer = useCallback(async (): Promise<boolean> => {
+  const saveEditBuffer = useCallback(async (
+    { reindex = false }: { reindex?: boolean } = {},
+  ): Promise<boolean> => {
     const source = annotateSource;
     const id = annotateDocIdRef.current;
     if (!source || !id || !annotateOwned) return false;
@@ -3257,17 +3350,26 @@ export function Workspace({
        * hash-keyed and shared, deleting is not exposed to the client, and a
        * stale document nothing looks up again is wasted rows rather than a
        * wrong answer.
+       *
+       * Which is exactly why this cannot run on every save. Autosave fires
+       * every second and a half of typing, and each one wrote another
+       * uncollectable copy of a half-written sentence. It runs when the reader
+       * puts the pen down — leaving Edit — and only for a note that is already
+       * in the index, because keeping one current is a different decision from
+       * putting it there. Putting it there is the chip.
        */
-      const pages = await extractDocumentPages({
-        docType: "markdown",
-        name: source.name,
-        text: next,
-      });
-      if (pages.length > 0) {
-        rememberExtractedPages(hash, pages);
-        void client
-          .putDocIndex(hash, { name: source.name, doc_type: "markdown", pages })
-          .catch(() => {});
+      if (reindex) {
+        const pages = await extractDocumentPages({
+          docType: "markdown",
+          name: source.name,
+          text: next,
+        });
+        if (pages.length > 0) {
+          rememberExtractedPages(hash, pages);
+          void client
+            .putDocIndex(hash, { name: source.name, doc_type: "markdown", pages })
+            .catch(() => {});
+        }
       }
       /*
        * `[[Wiki]]` links, parsed here and nowhere else.
@@ -3323,14 +3425,14 @@ export function Workspace({
   const toggleEditMarkdown = useCallback(() => {
     if (!annotateOwned) return;
     if (editMarkdown) {
-      void saveEditBuffer().then((ok) => {
+      void saveEditBuffer({ reindex: docIndexStatus === "indexed" }).then((ok) => {
         if (ok) setEditMarkdown(false);
       });
       return;
     }
     setEditBuffer(annotateSourceRef.current?.text ?? "");
     setEditMarkdown(true);
-  }, [annotateOwned, editMarkdown, saveEditBuffer]);
+  }, [annotateOwned, docIndexStatus, editMarkdown, saveEditBuffer]);
 
   /**
    * Follow a link to whatever is on the other end.
@@ -6494,6 +6596,9 @@ export function Workspace({
     browseMotion === "done" ||
     (holdBrowseOverlay && boardPreparing);
 
+  /** The address bar's own idea of "a page is on its way". */
+  const webLoading = busy !== null || canvasLoading;
+
   /*
    * Tab switch uses `.lc-switching` on the canvas. Putting that on
    * `chrome.loading` also stamped `.lc-app-loading`, which blurs the header
@@ -6676,7 +6781,12 @@ export function Workspace({
       loading: shellLoading,
       busy: busy !== null,
       loadActive: workspaceLoadActive,
-      docIndex: { status: docIndexStatus, meta: docIndexMeta, error: docIndexError },
+      docIndex: {
+        status: docIndexStatus,
+        meta: docIndexMeta,
+        error: docIndexError,
+        onIndex: indexInputsRef.current ? indexOpenDocument : null,
+      },
     });
   }, [
     active,
@@ -6686,6 +6796,7 @@ export function Workspace({
     docIndexError,
     docIndexMeta,
     docIndexStatus,
+    indexOpenDocument,
     problem,
     setChrome,
     workspaceLoadActive,
@@ -7078,6 +7189,26 @@ export function Workspace({
             >
               ‹
             </button>
+            {/*
+              Reload and Stop are the same button, because they are the same
+              slot in the same moment: a page is either loading or it is not, so
+              one of the two is always the wrong thing to offer. It lives
+              between the arrows rather than after them so it never moves — the
+              arrows grey out constantly and a control that shuffles when its
+              neighbours disable is a control you have to look for.
+            */}
+            <button
+              type="button"
+              className={webLoading ? "lc-icon lc-web-stop" : "lc-icon"}
+              aria-label={webLoading ? "Stop loading" : "Reload page"}
+              title={webLoading ? "Stop" : "Reload"}
+              onClick={() => {
+                if (webLoading) void abortLoad();
+                else void openWebPage(webUrl);
+              }}
+            >
+              {webLoading ? "✕" : "↻"}
+            </button>
             <button
               type="button"
               className="lc-icon"
@@ -7126,6 +7257,37 @@ export function Workspace({
                 </svg>
               </button>
             </div>
+            {/*
+              Indexing a page is a decision, not a side effect of having looked
+              at it — see the open path. This is where the decision is made.
+            */}
+            <button
+              type="button"
+              className={
+                docIndexStatus === "indexed" ? "lc-icon is-active" : "lc-icon"
+              }
+              aria-label={
+                docIndexStatus === "indexed"
+                  ? "This page is in the index"
+                  : "Index this page"
+              }
+              title={
+                docIndexStatus === "indexed"
+                  ? "Indexed — the agent can search this page"
+                  : docIndexStatus === "indexing"
+                    ? "Indexing…"
+                    : "Index this page for the agent"
+              }
+              disabled={
+                busy !== null ||
+                canvasLoading ||
+                docIndexStatus === "indexing" ||
+                docIndexStatus === "indexed"
+              }
+              onClick={indexOpenDocument}
+            >
+              {docIndexStatus === "indexing" ? "…" : "⌸"}
+            </button>
           </div>
         </form>
       )}
@@ -8073,6 +8235,11 @@ function waitMs(ms: number): Promise<void> {
  *
  * Returns false when the timeout fires without a height — callers must not
  * treat that as "document ready" or the board reveals on a stuck "Opening…".
+ *
+ * A height of *zero* is an answer, not silence: an empty note has laid out and
+ * is zero tall. Only the reporters that can legitimately be empty send it (see
+ * AnnotateDocument), and the stability check still applies, so a reader that
+ * reads zero on its way up does not resolve early.
  */
 function waitForAnnotateLaidOut(
   readHeight: () => number | null,
@@ -8084,7 +8251,7 @@ function waitForAnnotateLaidOut(
     let stable = 0;
     const tick = () => {
       const height = readHeight();
-      if (height != null && height > 0) {
+      if (height != null && height >= 0) {
         if (last != null && Math.abs(height - last) < 1) {
           stable += 1;
           if (stable >= 3) {

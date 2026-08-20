@@ -778,6 +778,19 @@ function linearEditorState(element: { id: string; elbowed?: boolean }) {
 }
 
 const ZOOM_MIN = 0.15;
+/*
+ * Floor for a *page fit*, well under the floor for a pinch.
+ *
+ * `ZOOM_MIN` is the far end of a gesture — how far out a reader is allowed to
+ * push the camera by hand. A fit is not a gesture: it is arithmetic, and the
+ * answer is whatever puts the whole page in the hole. Clamping it to the
+ * gesture floor is what cut the panes off. A scratch page is 3920 scene units
+ * wide, so a 250 CSS px pane — the thin half of a split in a window the size of
+ * a tablet — needs 0.06, and 0.15 drew it two and a half times too big with the
+ * right-hand edge past the sash. Full screen on a 4K panel the same pane is
+ * 768 px and lands at 0.18, which is why the bug only showed up small.
+ */
+const FIT_ZOOM_MIN = 0.02;
 const ZOOM_MAX = 1.75;
 const ZOOM_STEP = 1.15;
 /** Button zoom animation — retargets smoothly on repeat / hold. */
@@ -4862,13 +4875,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return state?.zoom?.value ?? 1;
   }, []);
 
-  const getZoomFloor = useCallback(
-    () =>
-      mobile && mobileRegionRef.current != null && fitZoomMinRef.current != null
-        ? fitZoomMinRef.current
-        : ZOOM_MIN,
-    [mobile],
-  );
+  /*
+   * Hand-zoom floor. Tablet locks zoom-out at page fit; desktop stays free —
+   * but never *above* the fit, or a narrow split pane in a small window would
+   * snap back to a zoom that does not show the whole page.
+   */
+  const getZoomFloor = useCallback(() => {
+    const fit = fitZoomMinRef.current;
+    if (mobile && mobileRegionRef.current != null && fit != null) return fit;
+    return fit != null ? Math.min(ZOOM_MIN, fit) : ZOOM_MIN;
+  }, [mobile]);
 
   const getBoardCenter = useCallback((): { x: number; y: number } => {
     const rect = boardRef.current?.getBoundingClientRect();
@@ -5205,7 +5221,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 : num(primary.width, REGIONS.approach.w),
           );
           // Raw ratio — do not floor to ZOOM_MIN or fillHeight collapses.
-          const zoomForWidth = Math.max(0.05, Math.min(ZOOM_MAX, availWidth / frameW));
+          const zoomForWidth = Math.max(
+            FIT_ZOOM_MIN,
+            Math.min(ZOOM_MAX, availWidth / frameW),
+          );
           const fillHeight = availHeight / zoomForWidth;
           const regionMin =
             typeof regionKey === "string" && regionKey in REGION_MIN
@@ -5389,7 +5408,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               viewWidth,
               prevZoom: prevCamera.zoom?.value ?? 1,
               prevScrollY: prevCamera.scrollY ?? 0,
-              zoomMin: ZOOM_MIN,
+              zoomMin: FIT_ZOOM_MIN,
               zoomMax: ZOOM_MAX,
             })
           : null;
@@ -5399,11 +5418,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             widthOnly
               ? availWidth / boxWidth
               : Math.min(availWidth / boxWidth, availHeight / boxHeight),
+            FIT_ZOOM_MIN,
           );
         fitZoomMinRef.current = zoom;
         // Tablet locks zoom-out at page fit; desktop (coach on the right) stays free.
         setZoomFloorPct(
-          Math.round((mobile && page ? zoom : ZOOM_MIN) * 100),
+          Math.round((mobile && page ? zoom : Math.min(ZOOM_MIN, zoom)) * 100),
         );
         pageBoundsRef.current = { minX, minY, maxX, maxY };
 
@@ -7708,23 +7728,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       <LinkToolIcon on={linking} />
                     </button>
                   )}
-                  {editToggle && (
-                    <button
-                      type="button"
-                      className={
-                        editing
-                          ? "lc-lined-toggle lc-tip-target is-active"
-                          : "lc-lined-toggle lc-tip-target"
-                      }
-                      aria-pressed={editing}
-                      aria-label={editing ? "Done editing" : "Edit markdown"}
-                      data-tip={editing ? "Done editing — back to the page" : "Edit this note"}
-                      data-tip-placement="bottom"
-                      onClick={() => onToggleEdit?.()}
-                    >
-                      <EditMarkdownIcon on={editing} />
-                    </button>
-                  )}
                 </div>
               )}
               {annotateToggle && !chromeShown.chrome && !annotatePeek && (
@@ -7877,6 +7880,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   the tray grows in place instead of painting a second island.
                 */}
                 <div className="lc-explore-chrome-slot" data-lc-explore-chrome />
+                {/*
+                  Edit / preview for an owned note.
+
+                  It used to sit in the bottom-left corner beside Annotate, which
+                  is the corner for *how you mark the page*. Reading or writing
+                  the note is a view of the document, and views live in this
+                  stack — same rail as paper, page previews and the eye.
+                */}
+                {!mapChromeHidden && editToggle && (
+                  <button
+                    type="button"
+                    className={
+                      editing
+                        ? "lc-lined-toggle lc-tip-target is-active"
+                        : "lc-lined-toggle lc-tip-target"
+                    }
+                    aria-pressed={editing}
+                    aria-label={editing ? "Done editing" : "Edit markdown"}
+                    data-tip={editing ? "Done editing — back to the page" : "Edit this note"}
+                    data-tip-placement="bottom"
+                    onClick={() => onToggleEdit?.()}
+                  >
+                    <EditMarkdownIcon on={editing} />
+                  </button>
+                )}
                 {/*
                   Order here is deliberate, and the stack is bottom-anchored:
                   it grows upward off the eye, so everything optional sits

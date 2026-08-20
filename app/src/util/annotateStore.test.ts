@@ -20,6 +20,7 @@ import {
   restoreAnnotateDoc,
   restoreAnnotateFromTrash,
   saveAnnotateDoc,
+  uniqueAnnotateName,
   setAnnotateDocLocked,
   sweepAnnotateTrash,
   trashAnnotateDoc,
@@ -617,5 +618,46 @@ describe("annotate trash", () => {
     markAnnotateDeleteAcked(saved.id, true);
     expect(await sweepAnnotateTrash(1 + ANNOTATE_TRASH_TTL_MS)).toEqual([saved.id]);
     expect(listAnnotateTrash()).toHaveLength(0);
+  });
+});
+
+describe("uniqueAnnotateName", () => {
+  const board = (id: string) =>
+    ({ v: 1, elements: [{ id }], appState: {} }) as unknown as BoardBlob;
+
+  it("leaves a name nothing is using", () => {
+    expect(uniqueAnnotateName("Untitled.md")).toBe("Untitled.md");
+  });
+
+  it("numbers a repeat, before the extension", async () => {
+    await saveAnnotateDoc({ name: "Untitled.md", hash: "h1", source: "", board: board("a") });
+    expect(uniqueAnnotateName("Untitled.md")).toBe("Untitled (1).md");
+  });
+
+  it("keeps counting past the first collision", async () => {
+    await saveAnnotateDoc({ name: "Untitled.md", hash: "h1", source: "", board: board("a") });
+    await saveAnnotateDoc({
+      name: "Untitled (1).md",
+      hash: "h2",
+      source: "",
+      board: board("b"),
+    });
+    expect(uniqueAnnotateName("Untitled.md")).toBe("Untitled (2).md");
+  });
+
+  it("ignores case, the way a file manager would", async () => {
+    await saveAnnotateDoc({ name: "Notes.md", hash: "h1", source: "", board: board("a") });
+    expect(uniqueAnnotateName("notes.md")).toBe("notes (1).md");
+  });
+
+  it("lets a trashed name be taken again", async () => {
+    const doc = await saveAnnotateDoc({
+      name: "Untitled.md",
+      hash: "h1",
+      source: "",
+      board: board("a"),
+    });
+    deleteAnnotateDoc(doc.id);
+    expect(uniqueAnnotateName("Untitled.md")).toBe("Untitled.md");
   });
 });

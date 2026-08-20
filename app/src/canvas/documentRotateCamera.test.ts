@@ -108,6 +108,60 @@ describe("liveBoardViewSize", () => {
   });
 });
 
+describe("the split-pane fit floor", () => {
+  /*
+   * A scratch page is 3920 scene units wide. The thin half of a split in a
+   * window the size of a tablet is ~250 CSS px, which wants 0.06 — under the
+   * 0.15 floor a *pinch* is held to. Handing the fit that floor is what drew
+   * the page two and a half times too big and pushed its right edge past the
+   * sash; the fit gets its own, much lower, floor now.
+   */
+  const page = { minX: 0, minY: 0, maxX: 3920, maxY: 4200 };
+
+  it("fits a scratch page into a thin split pane", () => {
+    const camera = documentCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 250,
+      prevZoom: 1,
+      prevScrollY: 0,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    const availW = 250 - inset.left - inset.right;
+    expect(camera.zoom).toBeCloseTo(availW / 3920, 5);
+    // The whole page width lands inside the hole — nothing past either edge.
+    expect(3920 * camera.zoom).toBeLessThanOrEqual(availW + 0.5);
+  });
+
+  it("is the floor that used to cut the page off", () => {
+    const clamped = documentCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 250,
+      prevZoom: 1,
+      prevScrollY: 0,
+      zoomMin: 0.15,
+      zoomMax: 1.75,
+    });
+    expect(clamped.zoom).toBe(0.15);
+    expect(3920 * clamped.zoom).toBeGreaterThan(250);
+  });
+
+  it("leaves a roomy pane alone — the floor never binds there", () => {
+    const camera = documentCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 768,
+      prevZoom: 1,
+      prevScrollY: 0,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    expect(camera.zoom).toBeGreaterThan(0.15);
+  });
+});
+
 describe("liveExcalidrawViewport", () => {
   it("returns null until the board has a real box", () => {
     expect(liveExcalidrawViewport(null)).toBeNull();

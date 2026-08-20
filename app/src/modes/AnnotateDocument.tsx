@@ -67,11 +67,20 @@ export function AnnotateDocument({ source, onMeasure, selectable = false }: Anno
     const node = nodeRef.current;
     if (!node) return;
 
-    // Fonts land after first layout and change the height under us, so measure
-    // again when the box actually changes rather than once after mount.
+    /*
+     * Fonts land after first layout and change the height under us, so measure
+     * again when the box actually changes rather than once after mount.
+     *
+     * Zero is reported, unlike the PDF / code / epub readers next door. Those
+     * cannot be zero tall once they exist, so for them a zero reading means
+     * "not rendered yet" and swallowing it is right. A markdown note *can* be
+     * zero tall, because a note you have just created has nothing in it — and
+     * swallowing that reading meant the open never completed. The document
+     * timed out and the reader was told to pick a smaller file, about a file
+     * with nothing in it.
+     */
     const report = () => {
-      const height = node.scrollHeight;
-      if (height > 0) onMeasureRef.current?.(height);
+      onMeasureRef.current?.(node.scrollHeight);
     };
     report();
 

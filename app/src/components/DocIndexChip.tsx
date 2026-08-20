@@ -14,9 +14,18 @@ export interface DocIndexChipProps {
   status: DocIndexChipStatus;
   meta: DocIndexStatus | null;
   error: string | null;
+  /**
+   * Put this document in the index.
+   *
+   * Present only for the two kinds that do not index themselves — a web page
+   * and a note you are writing. Both are things you might be finished with, and
+   * neither can be guessed at: a page is a glance, and a draft is not a
+   * document until its author says so.
+   */
+  onIndex?: (() => void) | null;
 }
 
-export function DocIndexChip({ status, meta, error }: DocIndexChipProps) {
+export function DocIndexChip({ status, meta, error, onIndex }: DocIndexChipProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
@@ -45,7 +54,19 @@ export function DocIndexChip({ status, meta, error }: DocIndexChipProps) {
     };
   }, [open]);
 
-  if (status === "idle") return null;
+  if (status === "idle") {
+    if (!onIndex) return null;
+    return (
+      <button
+        type="button"
+        className="lc-doc-index-chip is-offer"
+        title="Index this document so the agent can search it"
+        onClick={onIndex}
+      >
+        index
+      </button>
+    );
+  }
   if (status === "indexing") {
     return <span className="lc-doc-index-chip">indexing…</span>;
   }

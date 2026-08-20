@@ -34,12 +34,12 @@ import { HOLD_MS, LONG_PRESS_MS, WHEEL_OPEN_MS } from "../util/gesture";
 import type { InkHandedness } from "../util/inkHandedness";
 import {
   clampToBox,
+  isNearDock,
   loadToolbarLayout,
   saveToolbarLayout,
-  TOOLBAR_DOCK_SNAP_PX,
   TOOLBAR_LEFT_CHROME_INSET_PX,
   toolbarAxis,
-  toolbarBoardIsNarrow,
+  toolbarWindowIsNarrow,
   type ToolbarLayout,
 } from "../util/toolbarLayout";
 import type { ToolName } from "./BoardHandle";
@@ -54,6 +54,14 @@ import { inkSwatches } from "./inkColors";
 import { InkFullnessSlider } from "./InkFullnessSlider";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
+
+/*
+ * How many live toolbars want the narrow rail.
+ *
+ * A split with an explore pane paints chrome from both halves, so one of them
+ * unmounting must not clear a flag the other still needs.
+ */
+let narrowVotes = 0;
 
 /** Board hole when the desktop coach is open; otherwise the window. */
 function boardChromeBox(): { left: number; top: number; right: number; bottom: number } {
@@ -243,10 +251,27 @@ export function BoardToolbar({
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
 
   const [layout, setLayout] = useState<ToolbarLayout>(() => loadToolbarLayout());
-  const [boardNarrow, setBoardNarrow] = useState(
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  /*
+   * The app window, and the length this row actually wants in it.
+   *
+   * Both are what decides row vs column now. The board under the island used
+   * to decide, and it was the wrong box twice over — see `toolbarWindowIsNarrow`.
+   */
+  const [viewWidth, setViewWidth] = useState(() =>
+    typeof window === "undefined" ? 1280 : window.innerWidth,
+  );
+  const [rowWidth, setRowWidth] = useState(0);
+  /*
+   * A toolbar already on screen when this one mounts is a *handover*, not an
+   * opening: the other half of a split had the pen out and focus moved. React
+   * has not committed the swap yet at this point, so the outgoing island is
+   * still in the DOM and this is the one moment it can be asked.
+   */
+  const [handover] = useState(
     () =>
-      typeof window !== "undefined" &&
-      toolbarBoardIsNarrow(window.innerWidth, window.innerWidth),
+      typeof document !== "undefined" &&
+      document.querySelector(".lc-toolbar") != null,
   );
   const [dragging, setDragging] = useState(false);
   const [docking, setDocking] = useState(false);
@@ -281,16 +306,44 @@ export function BoardToolbar({
   const floatX = layout.mode === "floating" ? layout.x : 0;
   const floatY = layout.mode === "floating" ? layout.y : 0;
   const axisPrevRef = useRef<"row" | "column">("row");
+  /*
+   * The window has run out of room for a row. Read before `toolbarAxis` so
+   * both see the same `previous`; the axis asks the same question internally,
+   * but the *chrome scale* is a window fact, not an island fact — a floating
+   * island parked on an edge of a wide screen is a column and must not shrink
+   * the whole board's controls.
+   */
+  const windowNarrow = toolbarWindowIsNarrow(viewWidth, rowWidth, axisPrevRef.current);
   const axis = toolbarAxis(
     layout.mode,
     floatX,
     toolbarRootRef.current?.offsetWidth ?? 400,
-    typeof window === "undefined" ? 1280 : window.innerWidth,
+    viewWidth,
     dockNear,
     axisPrevRef.current,
-    boardNarrow ? 1 : Number.POSITIVE_INFINITY,
+    rowWidth,
   );
   axisPrevRef.current = axis;
+  /*
+   * Which way a flyout opens off a column.
+   *
+   * A column grows up the side of the window, so the panel's usual "above the
+   * button" landed on the island itself. Docked it is stacked against the map
+   * chrome on the right, so it opens left; floating it opens away from whichever
+   * edge it is parked on.
+   */
+  const flyoutSide: "up" | "left" | "right" =
+    axis !== "column"
+      ? "up"
+      : layout.mode === "docked"
+        ? // Docked, the column is in the rail, and the rail changes sides with
+          // the writing hand.
+          handedness === "left"
+          ? "right"
+          : "left"
+        : floatX + (toolbarRootRef.current?.offsetWidth ?? 56) / 2 > viewWidth / 2
+          ? "left"
+          : "right";
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const draggingRef = useRef(dragging);
@@ -366,22 +419,93 @@ export function BoardToolbar({
     }
   }, [shapesOpen]);
 
+  /*
+   * One flag on the root for every rule that has to shrink with the window.
+   *
+   * The board's map chrome is rendered by Board, which knows nothing about the
+   * island's axis, and both have to agree — the pen column stacks into the same
+   * right-hand rail as the view stack and the two are sized together.
+   */
+  useEffect(() => {
+    if (!windowNarrow) return;
+    narrowVotes += 1;
+    document.documentElement.dataset.lcChromeNarrow = "1";
+    return () => {
+      narrowVotes = Math.max(0, narrowVotes - 1);
+      if (narrowVotes === 0) delete document.documentElement.dataset.lcChromeNarrow;
+    };
+  }, [windowNarrow]);
+
+  /*
+   * Crossing into the narrow rail puts a parked island back on the dock.
+   *
+   * Resizing inside one layout leaves a floating island exactly where it was
+   * put — that is the whole point of parking it. Crossing the threshold is a
+   * different event: the island changes shape, and a position chosen for a row
+   * on a wide board is not a position anyone meant for a column on a small one.
+   * It ends up somewhere arbitrary, and arbitrary is the one thing a remembered
+   * position must not be.
+   *
+   * The parked spot is *not* overwritten in storage — it is handed back on the
+   * way out, unless the island was moved again in the meantime, in which case
+   * the newer choice is the real one.
+   */
+  const wasNarrowRef = useRef(false);
+  const parkedRef = useRef<ToolbarLayout | null>(null);
+  useEffect(() => {
+    const was = wasNarrowRef.current;
+    wasNarrowRef.current = windowNarrow;
+    if (windowNarrow === was) return;
+    if (windowNarrow) {
+      if (layoutRef.current.mode !== "floating") return;
+      parkedRef.current = layoutRef.current;
+      setLayout({ mode: "docked" });
+      return;
+    }
+    const parked = parkedRef.current;
+    parkedRef.current = null;
+    // Moved by hand while narrow — that is the position now, not the old one.
+    if (!parked || layoutRef.current.mode !== "docked") return;
+    setLayout(parked);
+  }, [windowNarrow]);
+
+  /** The app window is the box the axis is decided against. */
+  useEffect(() => {
+    const publish = () =>
+      setViewWidth((was) => (was === window.innerWidth ? was : window.innerWidth));
+    publish();
+    window.addEventListener("resize", publish);
+    window.visualViewport?.addEventListener("resize", publish);
+    return () => {
+      window.removeEventListener("resize", publish);
+      window.visualViewport?.removeEventListener("resize", publish);
+    };
+  }, []);
+
+  /*
+   * How long the row wants to be.
+   *
+   * Only readable while it *is* a row — laid out as a column `scrollWidth` is
+   * the column's width — so the last row reading is kept and reused to decide
+   * when there is room to go back. `scrollWidth` rather than the box, because
+   * the island has a `max-width` and the whole question is what it wants.
+   */
   useLayoutEffect(() => {
-    const board =
-      toolbarRootRef.current?.closest(".lc-board") ?? document.querySelector(".lc-board");
-    if (!(board instanceof HTMLElement)) return;
+    const row = rowRef.current;
+    const root = toolbarRootRef.current;
+    if (!row || !root) return;
+    if (axis === "column") return;
     const publish = () => {
-      const next = toolbarBoardIsNarrow(
-        board.clientWidth,
-        typeof window === "undefined" ? board.clientWidth : window.innerWidth,
-      );
-      setBoardNarrow((was) => (was === next ? was : next));
+      const chrome = Math.max(0, root.offsetWidth - row.clientWidth);
+      const next = Math.ceil(row.scrollWidth + chrome);
+      if (next < 32) return;
+      setRowWidth((was) => (Math.abs(was - next) <= 1 ? was : next));
     };
     publish();
     const observer = new ResizeObserver(publish);
-    observer.observe(board);
+    observer.observe(row);
     return () => observer.disconnect();
-  }, []);
+  }, [axis]);
 
   // Keep a restored floating position inside the board hole after rotate /
   // resize / coach open (App dispatches `resize` when the panel docks).
@@ -518,18 +642,24 @@ export function BoardToolbar({
       window.innerWidth,
       false,
       axisPrevRef.current,
-      boardNarrow ? 1 : Number.POSITIVE_INFINITY,
+      rowWidth,
     );
     const extraLeft = nextAxis === "column" ? TOOLBAR_LEFT_CHROME_INSET_PX : 0;
     const next = clampFloatingPos(tentative.x, tentative.y, drag.width, drag.height, extraLeft);
     setLayout({ mode: "floating", ...next });
     const anchor = dockAnchorRect(toolbarRootRef.current);
     if (anchor) {
-      const cx = next.x + drag.width / 2;
-      const cy = next.y + drag.height / 2;
-      const ax = anchor.left + Math.max(anchor.width, 1) / 2;
-      const ay = anchor.top + Math.max(12, anchor.height / 2);
-      setDockNear(Math.hypot(cx - ax, cy - ay) < TOOLBAR_DOCK_SNAP_PX);
+      setDockNear(
+        isNearDock(
+          {
+            left: next.x,
+            top: next.y,
+            right: next.x + drag.width,
+            bottom: next.y + drag.height,
+          },
+          anchor,
+        ),
+      );
     } else {
       setDockNear(false);
     }
@@ -558,15 +688,16 @@ export function BoardToolbar({
     const anchor = dockAnchorRect(toolbarRootRef.current);
     const width = drag.width;
     const height = drag.height;
-    const cx = curX + width / 2;
-    const cy = curY + height / 2;
     let shouldDock = false;
     let dockX = curX;
     let dockY = curY;
     if (anchor) {
       const ax = anchor.left + Math.max(anchor.width, 1) / 2;
       const ay = anchor.top + Math.max(12, anchor.height / 2);
-      shouldDock = Math.hypot(cx - ax, cy - ay) < TOOLBAR_DOCK_SNAP_PX;
+      shouldDock = isNearDock(
+        { left: curX, top: curY, right: curX + width, bottom: curY + height },
+        anchor,
+      );
       dockX = ax - width / 2;
       dockY = ay - height / 2;
     }
@@ -692,6 +823,8 @@ export function BoardToolbar({
         gripShake ? "is-shake" : "",
         dockNear && (dragging || docking) ? "lc-toolbar-dock-near" : "",
         axis === "column" ? "is-column" : "",
+        flyoutSide === "left" ? "is-flyout-left" : "",
+        flyoutSide === "right" ? "is-flyout-right" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -723,7 +856,7 @@ export function BoardToolbar({
       role="toolbar"
       aria-label="Drawing tools"
     >
-      <div className="lc-toolbar-row">
+      <div className="lc-toolbar-row" ref={rowRef}>
         <button
           ref={gripRef}
           type="button"
@@ -782,6 +915,7 @@ export function BoardToolbar({
             active={presetName}
             axis={axis === "column" ? "height" : "width"}
             className="lc-preset-chip-morph"
+            animateOnMount={!handover}
           >
             <div data-morph-id={presetName}>
               <span className="lc-preset-chip-name">{presetName}</span>

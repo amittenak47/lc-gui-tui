@@ -193,6 +193,56 @@ export function footnoteChipLabel(number?: number, title?: string): string {
   return "Mark";
 }
 
+/** Gap between a mark and its number chip. */
+export const MARK_CHIP_PAD_PX = 3;
+
+/**
+ * Where a user mark's number chip goes, in page-local x.
+ *
+ * The page's outer margin, on the side the mark is on — the way a printed book
+ * puts a margin note. Not beside the mark, which is where this went first: on a
+ * two-column paper the space to the right of a left-column mark is the *gutter*,
+ * about eleven pixels of it, and a sixteen-pixel chip in an eleven-pixel gutter
+ * lands on the first letter of the other column. There is no arrangement that
+ * fits it there. The margins are the only space on a page that is reliably
+ * empty, and they are also where a reader already looks for a marginal number.
+ *
+ * Before that it was inset inside the mark's own block, which only looked right
+ * by accident — a short heading's block ends mid-column, so the chip fell in the
+ * whitespace beside it; mark a full column and it came down on the last word of
+ * the first line, and a mark spanning the page put its number in the page's
+ * top-right corner.
+ */
+export function markChipLeft(input: {
+  blockLeft: number;
+  blockRight: number;
+  pageWidth: number;
+  chipWidth: number;
+  pad?: number;
+}): number {
+  const pad = input.pad ?? MARK_CHIP_PAD_PX;
+  const { blockLeft, blockRight, pageWidth, chipWidth } = input;
+  if (pageWidth > 0) {
+    const onLeftHalf = (blockLeft + blockRight) / 2 < pageWidth / 2;
+    const inLeftMargin = pad;
+    const inRightMargin = pageWidth - chipWidth - pad;
+    // The margin on this mark's own side, when the mark leaves one.
+    if (onLeftHalf && inLeftMargin + chipWidth + pad <= blockLeft) return inLeftMargin;
+    if (!onLeftHalf && inRightMargin >= blockRight + pad) return inRightMargin;
+    // No margin that side — try the other before giving up on margins at all.
+    if (!onLeftHalf && inLeftMargin + chipWidth + pad <= blockLeft) return inLeftMargin;
+    if (onLeftHalf && inRightMargin >= blockRight + pad) return inRightMargin;
+  }
+  // A mark with no margin either side is a mark as wide as the paper. Beside it
+  // if the page allows, and only then back inside it, because at that point
+  // every answer is on top of something.
+  const after = blockRight + pad;
+  if (pageWidth <= 0 || after + chipWidth <= pageWidth) return after;
+  const before = blockLeft - chipWidth - pad;
+  if (before >= 0) return before;
+  return Math.max(blockLeft + pad, blockRight - chipWidth - pad);
+}
+
 /**
  * Same words (or same rectangle), same place.
  *
