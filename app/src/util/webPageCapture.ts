@@ -1,10 +1,22 @@
 /**
- * Hidden Tauri webview that runs a page, then serializes the post-JS DOM.
+ * The real browser, borrowed.
  *
- * Not a UI pane — off-screen, closed in `finally`. Android has no child
- * webview command; callers fall back to `fetch_html`.
+ * A Tauri child WebView2 that loads a page for real — its JavaScript runs, its
+ * CSS applies, its fonts load. Two things are done with it:
+ *
+ * - **Live**: shown over the pane, so the reader can actually browse. This is
+ *   the only way a page ever looks like itself; a serialised DOM is a
+ *   reconstruction and always will be.
+ * - **Frozen**: serialised into HTML the pad can paint under ink. That is what
+ *   makes a page annotatable, and it costs the fidelity above — which is why
+ *   browsing and annotating are two states rather than one.
+ *
+ * The webview paints above all HTML, so nothing of ours can be drawn over it
+ * while it is live. Android has no child webview command; callers fall back to
+ * `fetch_html`.
  */
 
+import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { Webview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -77,6 +89,108 @@ async function closeCapture(): Promise<void> {
   if (existing) await existing.close();
 }
 
+/** Viewport rectangle, in the same logical pixels the window uses. */
+export interface PaneRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** The live view, if there is one. */
+export async function liveWebview(): Promise<Webview | null> {
+  return (await Webview.getByLabel(CAPTURE_WEBVIEW_LABEL)) ?? null;
+}
+
+/**
+ * Open the page for real, over `rect`.
+ *
+ * Deliberately *not* hidden. `hide()` maps to `IsVisible = false` on Windows,
+ * which suspends compositing and throttles timers in that view — fine for a
+ * thing you are about to read once, wrong for one you are looking at, and a
+ * plausible reason the old read-once capture was flaky even off-screen.
+ */
+export async function openLiveWebview(url: string, rect: PaneRect): Promise<Webview> {
+  await closeCapture();
+  const host = getCurrentWindow();
+  const webview = new Webview(host, CAPTURE_WEBVIEW_LABEL, {
+    url,
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.max(1, Math.round(rect.width)),
+    height: Math.max(1, Math.round(rect.height)),
+    focus: false,
+    userAgent: CHROME_UA,
+    incognito: true,
+    javascriptDisabled: false,
+  });
+  await new Promise<void>((resolve, reject) => {
+    void webview.once("tauri://created", () => resolve());
+    void webview.once("tauri://error", (event) => {
+      reject(new Error(String(event.payload ?? "could not open a web view")));
+    });
+  });
+  return webview;
+}
+
+/** Follow the pane. Cheap enough to run from a ResizeObserver. */
+export async function placeLiveWebview(rect: PaneRect): Promise<void> {
+  const webview = await liveWebview();
+  if (!webview) return;
+  await webview.setPosition(new LogicalPosition(Math.round(rect.x), Math.round(rect.y)));
+  await webview.setSize(
+    new LogicalSize(Math.max(1, Math.round(rect.width)), Math.max(1, Math.round(rect.height))),
+  );
+}
+
+export async function showLiveWebview(show: boolean): Promise<void> {
+  const webview = await liveWebview();
+  if (!webview) return;
+  if (show) await webview.show();
+  else await webview.hide();
+}
+
+export async function closeLiveWebview(): Promise<void> {
+  await closeCapture();
+}
+
+/**
+ * Freeze whatever the live view is showing.
+ *
+ * The same serialise the read-once capture did, but it leaves the view open —
+ * the caller decides whether browsing continues.
+ */
+export async function serializeLiveWebview(): Promise<{ url: string; html: string }> {
+  const payload = await runSerialize(CAPTURE_WEBVIEW_LABEL);
+  return payload;
+}
+
+/** Wait for load + settle, then serialise. Shared by live and read-once. */
+async function runSerialize(label: string): Promise<{ url: string; html: string }> {
+  await waitUntil(
+    label,
+    READY_STATE_SCRIPT,
+    (value) => value === "complete" || value === "interactive",
+    LOAD_TIMEOUT_MS,
+  );
+  await sleep(SETTLE_MS);
+  await evalJson(label, SERIALIZE_PAGE_SCRIPT);
+  const payload = await waitUntil(
+    label,
+    SERIALIZE_POLL_SCRIPT,
+    (value) => value != null,
+    SERIALIZE_TIMEOUT_MS,
+  );
+  if (!payload || typeof payload !== "object") {
+    throw new Error("the page did not return a snapshot");
+  }
+  const record = payload as { error?: string; result?: { url?: string; html?: string } };
+  if (record.error) throw new Error(record.error);
+  const html = record.result?.html;
+  if (!html) throw new Error("the page did not return a snapshot");
+  return { url: record.result?.url || "", html };
+}
+
 export async function captureRenderedPage(
   url: string,
   size?: { width?: number; height?: number },
@@ -103,30 +217,16 @@ export async function captureRenderedPage(
         reject(new Error(String(event.payload ?? "could not open a capture view")));
       });
     });
-    await webview.hide();
-    await waitUntil(
-      CAPTURE_WEBVIEW_LABEL,
-      READY_STATE_SCRIPT,
-      (value) => value === "complete" || value === "interactive",
-      LOAD_TIMEOUT_MS,
-    );
-    await sleep(SETTLE_MS);
-    await evalJson(CAPTURE_WEBVIEW_LABEL, SERIALIZE_PAGE_SCRIPT);
-    const payload = await waitUntil(
-      CAPTURE_WEBVIEW_LABEL,
-      SERIALIZE_POLL_SCRIPT,
-      (value) => value != null,
-      SERIALIZE_TIMEOUT_MS,
-    );
-    if (!payload || typeof payload !== "object") {
-      throw new Error("the page did not return a snapshot");
-    }
-    const record = payload as { error?: string; result?: { url?: string; html?: string } };
-    if (record.error) throw new Error(record.error);
-    const html = record.result?.html;
-    const finalUrl = record.result?.url || url;
-    if (!html) throw new Error("the page did not return a snapshot");
-    return { url: finalUrl, html };
+    /*
+     * Off-screen, but not hidden.
+     *
+     * `hide()` is `IsVisible = false` on Windows, which suspends compositing
+     * and throttles timers in that view — so the page it is meant to be running
+     * stops running. `y: 10_000` already keeps it out of sight, and a child
+     * webview is clipped to its parent window anyway.
+     */
+    const serialized = await runSerialize(CAPTURE_WEBVIEW_LABEL);
+    return { url: serialized.url || url, html: serialized.html };
   } finally {
     try {
       await webview.close();

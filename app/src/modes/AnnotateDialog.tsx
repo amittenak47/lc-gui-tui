@@ -33,7 +33,20 @@ export type MdInkEntryChoice =
   /** Start a second set of annotations on the file already open. */
   | "fork"
   /** Write a new markdown note in the app, rather than opening one. */
-  | "new";
+  | "new"
+  /** Open a blank web pad — the globe's own "new". */
+  | "page";
+
+/**
+ * Which library the reader is standing in.
+ *
+ * Web pads are annotate documents — same store, same marks, same Save, Recent,
+ * Export and Import — so this is one dialog, not two. What differs is every
+ * word in it: holding the globe used to offer "Pick a .md, source file, .pdf or
+ * .epub to annotate", which is true of the machinery and useless to someone who
+ * pressed the browser button.
+ */
+export type AnnotateDialogKind = "document" | "web";
 
 interface LeaveProps {
   mode: "leave";
@@ -55,6 +68,8 @@ interface LeaveProps {
 
 interface EntryProps {
   mode: "entry";
+  /** Wording and choices. Defaults to the document library. */
+  kind?: AnnotateDialogKind;
   pending?: boolean;
   exiting?: boolean;
   error?: string | null;
@@ -116,6 +131,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   // decision about the ink in hand, not a moment to go opening another.
   const entry = props.mode === "entry" ? props : null;
   const allowSave = Boolean(entry?.allowSave);
+  const isWeb = entry?.kind === "web";
   const locked = pending || exiting;
 
   const removeDoc = (id: string) => setPendingId(id);
@@ -149,10 +165,10 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
         className="lc-settings-modal lc-attempt-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={isLeave ? "Leave document?" : "Document pad"}
+        aria-label={isLeave ? "Leave document?" : isWeb ? "Web pad" : "Document pad"}
       >
         <div className="lc-settings-head">
-          <h2>{isLeave ? "Leave document?" : "Document"}</h2>
+          <h2>{isLeave ? "Leave document?" : isWeb ? "Pages" : "Document"}</h2>
           <p className="lc-muted">
             {newTitle !== null
               ? "Name the note. It lives in this app — there is no file on disk until you export it."
@@ -166,9 +182,13 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                 ? dirty
                   ? "Discard throws away this session's annotations. The file itself is never changed. Hold to confirm."
                   : "Nothing annotated since the last save — leaving changes nothing."
-                : allowSave
-                  ? "Save these annotations, start a second set on this file, or open another document."
-                  : "Write a new note, open a document to annotate, or reopen a recent one."}
+                : isWeb
+                  ? allowSave
+                    ? "Save these marks, open another page, or reopen one you kept."
+                    : "Open a page to read and mark up, or reopen one you kept."
+                  : allowSave
+                    ? "Save these annotations, start a second set on this file, or open another document."
+                    : "Write a new note, open a document to annotate, or reopen a recent one."}
           </p>
         </div>
 
@@ -358,28 +378,44 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                       <span className="lc-muted">Keep these annotations.</span>
                     </HoldButton>
                   )}
-                  <HoldButton
-                    label="New file"
-                    className="lc-hold-choice"
-                    disabled={locked}
-                    onConfirm={() => setNewTitle("")}
-                  >
-                    <strong>New file…</strong>
-                    <span className="lc-muted">
-                      A markdown note you write here, and can edit.
-                    </span>
-                  </HoldButton>
-                  <HoldButton
-                    label="Open document"
-                    className="lc-hold-choice"
-                    disabled={locked}
-                    onConfirm={() => props.onChoose("open")}
-                  >
-                    <strong>Open document…</strong>
-                    <span className="lc-muted">
-                      Pick a .md, source file, .pdf or .epub to annotate.
-                    </span>
-                  </HoldButton>
+                  {isWeb ? (
+                    <HoldButton
+                      label="New page"
+                      className="lc-hold-choice"
+                      disabled={locked}
+                      onConfirm={() => props.onChoose("page")}
+                    >
+                      <strong>New page…</strong>
+                      <span className="lc-muted">
+                        A browser tab. Read it live, then freeze it to mark it up.
+                      </span>
+                    </HoldButton>
+                  ) : (
+                    <>
+                      <HoldButton
+                        label="New file"
+                        className="lc-hold-choice"
+                        disabled={locked}
+                        onConfirm={() => setNewTitle("")}
+                      >
+                        <strong>New file…</strong>
+                        <span className="lc-muted">
+                          A markdown note you write here, and can edit.
+                        </span>
+                      </HoldButton>
+                      <HoldButton
+                        label="Open document"
+                        className="lc-hold-choice"
+                        disabled={locked}
+                        onConfirm={() => props.onChoose("open")}
+                      >
+                        <strong>Open document…</strong>
+                        <span className="lc-muted">
+                          Pick a .md, source file, .pdf or .epub to annotate.
+                        </span>
+                      </HoldButton>
+                    </>
+                  )}
                   {allowSave && (
                     <HoldButton
                       label="New annotation set on this file"

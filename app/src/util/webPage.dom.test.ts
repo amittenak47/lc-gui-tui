@@ -6,6 +6,7 @@ import {
   flattenWebSnapshot,
   isolateWebCss,
   promoteLazyImages,
+  readerPageFromHtml,
   sanitizeWebHtml,
   styleTagStats,
 } from "./webPage";
@@ -195,5 +196,41 @@ describe("linked stylesheets", () => {
       "fetch",
     );
     expect(html).not.toContain("<link");
+  });
+});
+
+describe("readerPageFromHtml", () => {
+  const wikiUrl = "https://en.wikipedia.org/wiki/Single_source_of_truth";
+  const body = `
+    <p>In information systems design and theory, single source of truth is the
+    practice of structuring information models and associated data schemata such
+    that every data element is mastered in exactly one place. Any possible
+    linkages to this data element are by reference only.</p>
+    <p>Because all other locations of the data just refer back to the primary
+    location, updates to the data element in the primary location propagate to
+    the entire system without the possibility of a duplicate value somewhere
+    being forgotten. Deployment of an SSOT architecture is becoming increasingly
+    important in enterprise settings.</p>
+    <p>The master data is never copied and revised only references to it are made.
+    This means that all reads and updates go directly to the SSOT, and the master
+    data is copied but the copies are only read-only in nature.</p>
+  `;
+
+  it("takes the reader path for Wikipedia-shaped HTML without a capture webview", async () => {
+    const html = `<!doctype html><html><head><title>Single source of truth - Wikipedia</title></head>
+      <body><nav><a href="/wiki/Main_Page">Main page</a></nav>
+      <main><article><h1>Single source of truth</h1>${body}</article></main></body></html>`;
+    const page = await readerPageFromHtml(html, wikiUrl);
+    expect(page).not.toBeNull();
+    expect(page!.source).toBe("reader");
+    expect(page!.html).toContain("mastered in exactly one place");
+    expect(page!.html).not.toContain("Main page");
+  });
+
+  it("declines a nav page so capture can still run", async () => {
+    const html = `<!doctype html><html><body>
+      <a href="/a">one</a><a href="/b">two</a><a href="/c">three</a>
+    </body></html>`;
+    expect(await readerPageFromHtml(html, "https://www.google.com/")).toBeNull();
   });
 });

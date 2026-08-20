@@ -53,6 +53,11 @@ import {
 import { InkTileCache, paintHostBoundPass, paintLiveOp } from "./inkTiles";
 import { InkPageBook } from "./inkPageCache";
 import {
+  shiftAnchorAt,
+  straightAnchorFor,
+  straightenFromAnchor,
+} from "./straightAnchor";
+import {
   INK_PAGE_WINDOW_DEBOUNCE_MS,
   fallbackPageFrames,
   pageIdAtViewport,
@@ -173,18 +178,6 @@ export interface RasterInkLayerProps {
   getPageFrames?: () => readonly PageFrame[];
   onChange?: () => void;
   /**
-   * Straight pen lift: turn the chord into an Excalidraw line (midpoint bend
-   * handle) instead of a raster stroke. Return true to skip the ink commit.
-   * Highlighter chords stay raster.
-   */
-  onStraightLine?: (stroke: {
-    start: ScenePoint;
-    end: ScenePoint;
-    color: string;
-    width: number;
-    opacity: number;
-  }) => boolean;
-  /**
    * Stylus barrel / eraser tip: toggle pen↔eraser. Return true if handled so
    * the stroke is not started.
    */
@@ -228,7 +221,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       onStylusAccessory,
       wheelHoldEnabled = false,
       onWheelHold,
-      onStraightLine,
     },
     ref,
   ) {
@@ -386,6 +378,55 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     smoothingModeRef.current = smoothingMode;
     const straightInkRef = useRef(straightInk);
     straightInkRef.current = straightInk;
+    /*
+     * Shift straightens while it is held, and stops when it is let go.
+     *
+     * Window-level because the pen owns the pointer, not the keyboard, and the
+     * reader is not going to click something first. Desktop only in practice —
+     * a tablet has no Shift key, which is exactly why the toggle button stays.
+     */
+    useEffect(() => {
+      const onDown = (event: KeyboardEvent) => {
+        if (event.key !== "Shift" || shiftAnchorRef.current != null) return;
+        const live = liveRef.current;
+        shiftAnchorRef.current = shiftAnchorAt(
+          live && live.kind === "draw" ? live.points.length : null,
+        );
+      };
+      const onUp = (event: KeyboardEvent) => {
+        if (event.key !== "Shift") return;
+        shiftAnchorRef.current = null;
+      };
+      // A window that loses focus never delivers the keyup, and the chord would
+      // be stuck on until the next press.
+      const onBlur = () => {
+        shiftAnchorRef.current = null;
+      };
+      window.addEventListener("keydown", onDown);
+      window.addEventListener("keyup", onUp);
+      window.addEventListener("blur", onBlur);
+      return () => {
+        window.removeEventListener("keydown", onDown);
+        window.removeEventListener("keyup", onUp);
+        window.removeEventListener("blur", onBlur);
+      };
+    }, []);
+    /*
+     * Where a held Shift started straightening, or null.
+     *
+     * A ref rather than state on purpose: this changes in the middle of a
+     * gesture and is read per pointer sample, so a re-render between the key and
+     * the next point would put a kink in the line the reader is drawing.
+     */
+    const shiftAnchorRef = useRef<number | null>(null);
+    /*
+     * Any part of this stroke was straightened.
+     *
+     * Smoothing is skipped on commit when it was — the whole point of a chord is
+     * that it is exactly straight, and a smoothing pass over the finished stroke
+     * would put the curve back into the part the reader held Shift for.
+     */
+    const straightTouchedRef = useRef(false);
     const speedInkRef = useRef(speedInk);
     speedInkRef.current = speedInk;
     const speedBlotBlendRef = useRef(speedBlotBlend);
@@ -402,8 +443,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     wheelHoldEnabledRef.current = wheelHoldEnabled;
     const onWheelHoldRef = useRef(onWheelHold);
     onWheelHoldRef.current = onWheelHold;
-    const onStraightLineRef = useRef(onStraightLine);
-    onStraightLineRef.current = onStraightLine;
     const pendingHoldRef = useRef<{
       pointerId: number;
       down: PointerEvent;
@@ -1047,7 +1086,18 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                   inkLineWidth(live.baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE;
                 pts = trimHighlightLiftHook(pts, chisel);
               }
-              if (straight && pts.length >= 2) {
+              if (straightTouchedRef.current) {
+                /*
+                 * Already the right shape. The live branch has been maintaining
+                 * the chord point by point, so there is nothing to collapse —
+                 * and nothing to smooth, because smoothing a finished stroke
+                 * would put a curve back through the part that was held
+                 * straight. A stroke that was partly freehand keeps its
+                 * freehand exactly as drawn; that is the honest trade for being
+                 * able to straighten half of it.
+                 */
+                pts = [...pts];
+              } else if (straight && pts.length >= 2) {
                 pts = [pts[0]!, pts[pts.length - 1]!];
               } else if (!isLive && !live.pressureSensitive) {
                 const nib = inkLineWidth(live.baseWidth, 0, false);
@@ -1065,34 +1115,19 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             })()
           : live;
 
-      if (
-        committed.kind === "draw" &&
-        !committed.highlight &&
-        straight &&
-        committed.points.length >= 2
-      ) {
-        const start = committed.points[0]!;
-        const end = committed.points[committed.points.length - 1]!;
-        const taken = onStraightLineRef.current?.({
-          start,
-          end,
-          color: committed.color,
-          width: inkLineWidth(committed.baseWidth, 0, false),
-          opacity: committed.maxFullness,
-        });
-        if (taken) {
-          liveRef.current = null;
-          liveRawPointsRef.current = null;
-          liveDrawnIndexRef.current = 0;
-          lastPointRef.current = null;
-          rawPointRef.current = null;
-          strokeHostRef.current = null;
-          repaint();
-          onChange?.();
-          return;
-        }
-      }
-
+      /*
+       * A straight stroke is a stroke.
+       *
+       * It used to be handed to Excalidraw as a `line` element and selected on
+       * arrival, which is where the handles and the trash icon came from — and
+       * it is a category error, because the reader was holding the pen. Being an
+       * object also made it the only mark on the page you could not simply draw
+       * past: the selection could not be dismissed while an ink tool was active,
+       * and getting back to the pen took a mode cycle. Committing it as ink
+       * deletes that whole family of problems rather than fixing them one by
+       * one. Something you want to move or reshape is a shape, and the shapes
+       * menu already places those.
+       */
       const bound = bindStrokeHost(committed);
       const stamped = bookRef.current.commit(bound);
       opsRef.current = bookRef.current.paintOps();
@@ -1724,6 +1759,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
          * does not, so the same setting wrote visibly fatter on the document.
          */
         const penWidth = inkBaseWidthForZoom(width, strokeView.zoom);
+        // Per stroke, not per app: whether the last one was straightened says
+        // nothing about this one.
+        straightTouchedRef.current = false;
         const activeTool = toolRef.current;
         const pressureSensitive = pressureSensitiveRef.current;
         const attackApplies =
@@ -2118,11 +2156,15 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           // lift mode keeps raw stamps until commit.
           const point = raw;
 
-          if (live.kind === "draw" && straightInkRef.current) {
-            const start = live.points[0] ?? last;
-            live.points = [start, point];
+          const anchor = straightAnchorFor(
+            straightInkRef.current,
+            shiftAnchorRef.current,
+          );
+          if (live.kind === "draw" && anchor != null) {
+            straightTouchedRef.current = true;
+            live.points = straightenFromAnchor(live.points, anchor, point);
             if (reshapeLive) {
-              liveRawPointsRef.current = [start, point];
+              liveRawPointsRef.current = [...live.points];
             }
             lastPointRef.current = point;
             continue;

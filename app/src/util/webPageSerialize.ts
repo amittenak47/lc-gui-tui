@@ -40,10 +40,78 @@ export async function serializeCurrentDocument(): Promise<SerializedPage> {
     }
   }
 
+  /**
+   * CSS that lives in a constructable stylesheet, not in a `<style>`.
+   *
+   * `document.styleSheets` does not include `adoptedStyleSheets` — they are a
+   * separate list — so a framework that builds its CSS at runtime, which is
+   * most of them now, had all of it dropped here without a word.
+   */
+  function adoptedCss(root: Document | ShadowRoot): string {
+    const adopted = (root as { adoptedStyleSheets?: CSSStyleSheet[] }).adoptedStyleSheets;
+    if (!adopted || adopted.length === 0) return "";
+    const parts: string[] = [];
+    for (const sheet of Array.from(adopted)) {
+      const text = cssTextFromSheet(sheet);
+      if (text) parts.push(text);
+    }
+    return parts.join("\n");
+  }
+
+  function addStyle(css: string): void {
+    if (!css.trim()) return;
+    const style = doc.createElement("style");
+    style.textContent = css;
+    doc.head.appendChild(style);
+  }
+
+  /**
+   * Lift open shadow roots into the light DOM, deepest first.
+   *
+   * The serialised payload is `documentElement.outerHTML`, and `outerHTML` does
+   * not descend into a shadow root — so every custom element came out as an
+   * empty tag. Not mangled: absent. That is most of why a page built from web
+   * components arrived looking gutted.
+   *
+   * Flattening throws away encapsulation, which sounds worse than it is: the
+   * snapshot is a read-only document, and `scopeCss` downstream rewrites every
+   * selector anyway, so there is no encapsulation left to protect by the time
+   * anyone paints this. A closed root stays invisible — page script cannot
+   * reach one, and forcing them open needs an init script the JS webview API
+   * does not expose.
+   */
+  function flattenShadowRoots(root: ParentNode): void {
+    const hosts: Element[] = [];
+    for (const node of Array.from(root.querySelectorAll("*"))) {
+      if ((node as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot) hosts.push(node);
+    }
+    for (const host of hosts) {
+      const shadow = (host as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
+      if (!shadow) continue;
+      // Depth first: a root inside a root has to be lifted before its parent is.
+      flattenShadowRoots(shadow);
+      addStyle(adoptedCss(shadow));
+      const moved = doc.createDocumentFragment();
+      for (const child of Array.from(shadow.childNodes)) {
+        // A `<slot>` renders its assigned light-DOM children; the host already
+        // holds those, so the slot itself is scaffolding and goes.
+        if (child instanceof Element && child.tagName === "SLOT") {
+          for (const slotted of Array.from(child.childNodes)) moved.appendChild(slotted);
+          continue;
+        }
+        moved.appendChild(child);
+      }
+      host.insertBefore(moved, host.firstChild);
+    }
+  }
+
   const drop = doc.querySelectorAll(
     "script, iframe, object, embed, link[rel=preload], link[rel=modulepreload], link[rel=prefetch]",
   );
   for (const node of Array.from(drop)) node.remove();
+
+  flattenShadowRoots(doc);
+  addStyle(adoptedCss(doc));
 
   const sheets = Array.from(doc.styleSheets);
   for (const sheet of sheets) {

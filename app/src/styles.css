@@ -736,31 +736,94 @@ body {
  * three.
  */
 /*
- * "You are not reading the article." Warning-toned because it means something
- * was lost — the page's JavaScript never ran, or it was not an article to begin
- * with — and it is a button because the useful response is to try again.
+ * Reader, inside the address field.
+ *
+ * Safari's placement, and for Safari's reason: it is a fact about this URL, so
+ * it belongs on the URL. It replaced two chips further along the bar reading
+ * "full page" and "raw page", which named an implementation and looked like
+ * error badges for a page that had loaded perfectly well.
+ *
+ * Lit is the article. Dim is a page that is not one, or an extraction that
+ * failed — still a button, because trying again is the useful response.
  */
-.lc-web-source-chip {
+.lc-web-reader-toggle {
   flex: 0 0 auto;
-  margin: 0 4px;
-  padding: 2px 7px;
-  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bad) 12%, transparent);
-  color: color-mix(in srgb, var(--bad) 85%, var(--ink));
-  font-family: inherit;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  line-height: 1.4;
-  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--hint);
   cursor: pointer;
+  opacity: 0.6;
 }
 
-.lc-web-source-chip:hover,
-.lc-web-source-chip:focus-visible {
-  border-color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 20%, transparent);
+.lc-web-reader-toggle:hover,
+.lc-web-reader-toggle:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.lc-web-reader-toggle.is-on {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  opacity: 1;
+}
+
+/*
+ * The hole the live page is aimed at.
+ *
+ * Nothing is drawn here. A child WebView2 is a native surface that paints above
+ * every piece of HTML in the app whatever its z-index, so this box exists only
+ * to be measured — HTML does the layout, the webview follows the rectangle.
+ */
+.lc-live-web-pane {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+
+/*
+ * Board chrome cannot sit over a native surface, so while the page is live it
+ * gets out of the way rather than being drawn on top of and looking broken.
+ * The same bargain Instagram's in-app browser makes: its chrome is a bar above
+ * the webview, never over it.
+ */
+.lc-canvas-live-web .lc-board-chrome-slot,
+.lc-canvas-live-web .lc-map-controls,
+.lc-canvas-live-web .lc-page-marks-slot {
+  display: none;
+}
+
+/*
+ * The markdown island lifts over a phone keyboard.
+ *
+ * `--lc-keyboard-inset` is maintained live from the visual viewport, so this
+ * follows the keyboard up and down rather than guessing at a height. Keeps the
+ * island where every other tool lives instead of moving the dock to the top of
+ * the screen for one mode.
+ */
+.lc-toolbar-md-dock {
+  margin-bottom: var(--lc-keyboard-inset, 0px);
+  transition: margin-bottom 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-toolbar-md-dock {
+    transition: none;
+  }
+}
+
+/* Live page vs frozen copy — an icon among icons, not a pill among them. */
+.lc-web-live-toggle.is-live {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .lc-web-doc.is-reader {
@@ -1716,12 +1779,41 @@ body[data-lc-sash-drag="horizontal"] {
   border-right: 0;
 }
 
-.lc-tab-row.is-group .lc-tab-group-frame {
-  display: none;
+/*
+ * A split pair, drawn as one thing.
+ *
+ * The pair had no mark on it at all: two chips side by side look exactly like
+ * two chips side by side, so the only way to know a tab was in a group was to
+ * remember putting it there. The frame is deliberately quiet — a tinted bed
+ * with a hairline round it — because a group is a *fact about* two tabs, not a
+ * third piece of chrome competing with them. It sits behind them (`z-index: 0`
+ * against the chips' own stacking) so nothing is dimmed or shifted.
+ */
+.lc-tab-group-frame {
+  position: absolute;
+  inset: 3px 2px;
+  z-index: 0;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
-.lc-tab-group-frame {
-  display: none;
+/* The seam between the two halves, softened to a hairline that stops short. */
+.lc-tab-row.is-group .lc-tab:not(:last-of-type) {
+  border-right-color: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.lc-tab-row.is-group .lc-tab {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+}
+
+/* Lit a little more when one of the pair is the tab you are on. */
+.lc-tab-row.is-group:has(.lc-tab.is-active) .lc-tab-group-frame {
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
 }
 
 .lc-tab.is-grouped {
@@ -5103,6 +5195,19 @@ body[data-lc-sash-drag="horizontal"] {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
+/*
+ * Preview / Edit, as one letter.
+ *
+ * It reads as the mode you are in, and it is the size of every other button in
+ * the rail — two labelled buttons cost the width of a word each and said the
+ * same thing twice.
+ */
+.lc-md-view .lc-tool-emoji {
+  font-family: var(--lc-sans);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .lc-map-chrome-row {
   display: flex;
   flex-direction: row;
@@ -5510,30 +5615,50 @@ body[data-lc-sash-drag="horizontal"] {
   color: var(--ink);
 }
 
-.lc-md-edit-loading {
-  padding: 24px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-/* When Monaco will not load at all — plain, but typeable. */
+/*
+ * The page is the writing surface, not just the text.
+ *
+ * A short note used to leave a short box on a tall page, so pressing anywhere
+ * below the last line hit the board instead of the note and did nothing. A note
+ * is a sheet of paper — pressing the empty half of it should put the caret at
+ * the end.
+ *
+ * The height that achieves that is measured, not declared: the slot's own
+ * height is auto, so a percentage here has nothing to resolve against. See the
+ * measure pass in AnnotateMarkdownEditor. This floor is only for the fallback
+ * textarea, which is not measured.
+ */
+.lc-md-edit-area,
 .lc-md-edit-fallback {
   display: block;
   width: 100%;
-  min-height: 60vh;
-  padding: 16px;
+  min-height: 280px;
+  padding: 36px 28px 64px;
   border: 0;
   resize: none;
   background: var(--bg);
   color: var(--ink);
-  font-family: Consolas, "Cascadia Code", "Courier New", monospace;
-  font-size: 13px;
-  line-height: 1.6;
+  font-family: inherit;
+  font-size: 17px;
+  line-height: 1.65;
+  box-sizing: border-box;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
+/*
+ * No focus ring on the note.
+ *
+ * A text field indicates focus with its caret — that is what a caret is for.
+ * Ringing it as well drew a 2px accent box around the entire page, which reads
+ * as a selection or an error, not as "you may type here". It only became
+ * visible when Edit started focusing the editor for you; before that nobody had
+ * seen it, which is its own argument.
+ */
+.lc-md-edit-area:focus-visible,
 .lc-md-edit-fallback:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: none;
 }
 
 /* Naming a new note, in the entry dialog. */
@@ -10261,6 +10386,19 @@ button.lc-row-selected:hover:not(:disabled) {
   cursor: default;
 }
 
+/*
+ * A spawn icon waiting on the tab it asked for.
+ *
+ * It is disabled — a second tap would open a second tab — but disabled and
+ * *working* have to look different. Every spawn icon greys out together during
+ * a load, so without this the one you pressed is indistinguishable from the two
+ * you did not, and the app reads as unresponsive rather than busy. Full opacity
+ * plus the shimmer the fill already knows how to draw.
+ */
+.lc-hold-reveal.lc-progress-fill.is-indeterminate:disabled {
+  opacity: 1;
+}
+
 /* Destructive holds (discard, reset session, reset board) fill red, not accent. */
 .lc-hold-danger {
   background: color-mix(in srgb, var(--bad) 24%, transparent);
@@ -12869,6 +13007,12 @@ button.lc-row-selected:hover:not(:disabled) {
  */
 .lc-page-content-selectable {
   pointer-events: auto;
+}
+
+.lc-page-content-editing {
+  user-select: text;
+  -webkit-user-select: text;
+  contain: none;
 }
 
 .lc-doc-selectable {

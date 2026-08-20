@@ -6,27 +6,26 @@
  * for reopening, and writing to it would break the promise the whole annotate
  * library is built on.
  *
- * One Monaco over the whole source, not a notebook of per-block widgets.
- * Fenced code is just text here and becomes `<pre><code>` when the page goes
- * back to being paper; mounting an editor per fence on the annotate surface
- * would put a second thing under the pen that wants the same pointer.
- *
- * Monaco is ~4 MB and is not loaded until Edit is entered — which is also why
- * this is a separate module from the paper it replaces. If it fails to load or
- * throws, a plain textarea takes over: a note you cannot type into is worse
- * than a note without syntax colours.
+ * A textarea in the paper slot — the same camera-transformed box as preview,
+ * under Excalidraw, not over it. Monaco stays on code pads; a second
+ * contenteditable / IDE canvas on this slot fights Scroll vs Annotate.
  */
 
-import { Component, Suspense, lazy, useState, type ErrorInfo, type ReactNode } from "react";
+import {
+  forwardRef,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  type TextareaHTMLAttributes,
+} from "react";
 
+import { MIN_MEASURABLE_WIDTH_PX } from "./AnnotateDocument";
 import type { BoardReadingSize } from "./codeFontSize";
-
-const MonacoBlock = lazy(() => import("./MonacoBlock"));
+import { BODY_FONT_PX } from "./codeFontSize";
 
 export interface AnnotateMarkdownEditorProps {
   value: string;
   onChange: (next: string) => void;
-  themeId?: string;
   readingSize?: BoardReadingSize;
   /**
    * The editor's laid-out height, so the board page can grow to it.
@@ -37,8 +36,29 @@ export interface AnnotateMarkdownEditorProps {
   onMeasure?: (height: number) => void;
 }
 
+export type MdFormatKind =
+  | "heading"
+  | "bold"
+  | "italic"
+  | "list"
+  | "quote"
+  | "task"
+  | "link"
+  | "fence";
+
+export interface AnnotateMarkdownEditorHandle {
+  format: (kind: MdFormatKind) => void;
+}
+
 /** The fence a reader gets from Insert code block, when nothing says otherwise. */
 export const DEFAULT_FENCE_LANGUAGE = "python";
+
+/** New file seeds `# Title` — that is still a note with nothing to preview. */
+export function isFreshOwnedNote(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return true;
+  return /^# [^\n]+$/.test(trimmed);
+}
 
 /**
  * Put a fenced block at the cursor, and say where the cursor should end up.
@@ -67,62 +87,159 @@ export function insertFence(
   };
 }
 
-export function AnnotateMarkdownEditor({
-  value,
-  onChange,
-  themeId = "blue",
-  readingSize = "M",
-  onMeasure,
-}: AnnotateMarkdownEditorProps) {
-  const [failed, setFailed] = useState(false);
+function clampRange(source: string, start: number, end: number): { start: number; end: number } {
+  const a = Math.max(0, Math.min(start, source.length));
+  const b = Math.max(0, Math.min(end, source.length));
+  return a <= b ? { start: a, end: b } : { start: b, end: a };
+}
 
-  if (failed) {
-    return (
-      <textarea
-        className="lc-md-edit-fallback"
-        value={value}
-        spellCheck={false}
-        aria-label="Note source"
-        onChange={(event) => onChange(event.target.value)}
-      />
-    );
+function wrapInline(
+  source: string,
+  start: number,
+  end: number,
+  mark: string,
+): { source: string; cursor: number } {
+  const range = clampRange(source, start, end);
+  const inner = source.slice(range.start, range.end) || "text";
+  const next = `${source.slice(0, range.start)}${mark}${inner}${mark}${source.slice(range.end)}`;
+  return { source: next, cursor: range.start + mark.length + inner.length };
+}
+
+function prefixCurrentLine(
+  source: string,
+  at: number,
+  prefix: string,
+): { source: string; cursor: number } {
+  const cut = Math.max(0, Math.min(at, source.length));
+  const lineStart = source.lastIndexOf("\n", cut - 1) + 1;
+  if (source.slice(lineStart).startsWith(prefix)) {
+    return { source, cursor: cut };
   }
+  const next = `${source.slice(0, lineStart)}${prefix}${source.slice(lineStart)}`;
+  return { source: next, cursor: cut + prefix.length };
+}
+
+export function applyMdFormat(
+  source: string,
+  start: number,
+  end: number,
+  kind: MdFormatKind,
+): { source: string; cursor: number } {
+  const range = clampRange(source, start, end);
+  if (kind === "bold") return wrapInline(source, range.start, range.end, "**");
+  if (kind === "italic") return wrapInline(source, range.start, range.end, "*");
+  if (kind === "heading") return prefixCurrentLine(source, range.start, "# ");
+  if (kind === "list") return prefixCurrentLine(source, range.start, "- ");
+  if (kind === "quote") return prefixCurrentLine(source, range.start, "> ");
+  if (kind === "task") return prefixCurrentLine(source, range.start, "- [ ] ");
+  if (kind === "link") {
+    /*
+     * The URL is where the cursor lands, not the text.
+     *
+     * Selected words become the label — they are already the thing being linked
+     * — and what is missing afterwards is always the address, so that is what
+     * the caret should be sitting in.
+     */
+    const label = source.slice(range.start, range.end) || "text";
+    const next = `${source.slice(0, range.start)}[${label}](url)${source.slice(range.end)}`;
+    const urlAt = range.start + label.length + 3;
+    return { source: next, cursor: urlAt };
+  }
+  return insertFence(source, range.start);
+}
+
+export const AnnotateMarkdownEditor = forwardRef<
+  AnnotateMarkdownEditorHandle,
+  AnnotateMarkdownEditorProps
+>(function AnnotateMarkdownEditor(
+  { value, onChange, readingSize = "M", onMeasure },
+  ref,
+) {
+  const areaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    format(kind) {
+      const node = areaRef.current;
+      /*
+       * A caret the reader has not placed is at the end, not at zero.
+       *
+       * `selectionStart` is 0 on a textarea nobody has touched, so every format
+       * button inserted its marks in front of the first character — press bold
+       * twice before typing and the note began `****# Untitled`. Nobody means
+       * "before the title"; they mean "here, where I am about to write".
+       */
+      const touched = node != null && document.activeElement === node;
+      const start = touched ? node.selectionStart : value.length;
+      const end = touched ? node.selectionEnd : start;
+      const next = applyMdFormat(value, start, end, kind);
+      onChange(next.source);
+      requestAnimationFrame(() => {
+        const live = areaRef.current;
+        if (!live) return;
+        live.focus();
+        live.setSelectionRange(next.cursor, next.cursor);
+      });
+    },
+  }));
+
+  /*
+   * Entering Edit puts the caret in the note.
+   *
+   * Otherwise the reader is looking at a page with no visible caret and no
+   * obvious place to press — the paper and the editor are the same colour, so
+   * "where do I type" has no answer until something happens to focus it.
+   */
+  useLayoutEffect(() => {
+    const node = areaRef.current;
+    if (!node) return;
+    node.focus({ preventScroll: true });
+    const end = node.value.length;
+    node.setSelectionRange(end, end);
+  }, []);
+
+  useLayoutEffect(() => {
+    const node = areaRef.current;
+    if (!node) return;
+    node.style.height = "0px";
+    /*
+     * At least a pane's worth of paper, however little is written on it.
+     *
+     * A short note left a short box on a tall page, so pressing below the last
+     * line missed the note entirely. `min-height: 100%` cannot help — the slot's
+     * own height is auto, so the percentage has nothing to resolve against.
+     *
+     * The slot is CSS-scaled by the board camera, so the pane's pixels are not
+     * the page's units. Width gives the conversion: it is not being changed
+     * here, so its rendered-over-laid-out ratio *is* the current scale.
+     */
+    const laidOutWidth = node.offsetWidth;
+    const scale =
+      laidOutWidth > 0 ? node.getBoundingClientRect().width / laidOutWidth : 1;
+    const board = node.closest(".lc-board");
+    const paneHeight =
+      board instanceof HTMLElement && scale > 0.01
+        ? Math.round(board.clientHeight / scale)
+        : 0;
+    const next = Math.max(node.scrollHeight, paneHeight, 280);
+    node.style.height = `${next}px`;
+    // See `MIN_MEASURABLE_WIDTH_PX` — a height read from a one-glyph-wide
+    // column is the input to the loop that keeps the column one glyph wide.
+    if (node.clientWidth > 0 && node.clientWidth < MIN_MEASURABLE_WIDTH_PX) return;
+    onMeasure?.(next);
+  }, [onMeasure, value]);
+
+  const textProps: TextareaHTMLAttributes<HTMLTextAreaElement> = {
+    className: "lc-md-edit-area",
+    value,
+    spellCheck: true,
+    "aria-label": "Note source",
+    style: { fontSize: BODY_FONT_PX[readingSize] },
+    onChange: (event) => onChange(event.target.value),
+  };
 
   return (
     <div className="lc-md-edit-host">
-      <ErrorBoundary onError={() => setFailed(true)}>
-        <Suspense fallback={<div className="lc-md-edit-loading">loading editor…</div>}>
-          <MonacoBlock
-          value={value}
-          language="markdown"
-          themeId={themeId}
-          fontSizePref={readingSize}
-          height="100%"
-          onChange={onChange}
-          onReady={() => {}}
-          onContentHeight={onMeasure}
-        />
-        </Suspense>
-      </ErrorBoundary>
+      <textarea ref={areaRef} {...textProps} />
     </div>
   );
-}
-
-class ErrorBoundary extends Component<
-  { children: ReactNode; onError: () => void },
-  { crashed: boolean }
-> {
-  state = { crashed: false };
-
-  static getDerivedStateFromError() {
-    return { crashed: true };
-  }
-
-  componentDidCatch(_error: Error, _info: ErrorInfo) {
-    this.props.onError();
-  }
-
-  render() {
-    return this.state.crashed ? null : this.props.children;
-  }
-}
+});
