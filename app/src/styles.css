@@ -1940,6 +1940,19 @@ body[data-lc-sash-drag="horizontal"] {
   max-width: var(--lc-tab-max, none);
 }
 
+/*
+ * Home's row shrinks with Home.
+ *
+ * Making the *tab* compact was only half of it: every row takes an equal share
+ * of the strip, so the icon-sized tab sat at the left of a row still claiming a
+ * document's worth of width — a wide empty gap where a button used to be, which
+ * read as Home having disappeared rather than having got smaller.
+ */
+.lc-tab-row:has(> .lc-tab[data-tab-kind="home"]) {
+  flex: 0 0 auto;
+  max-width: none;
+}
+
 .lc-tab-row.is-group {
   max-width: calc(var(--lc-tab-max, 300px) * 2);
 }

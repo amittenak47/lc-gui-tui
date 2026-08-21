@@ -206,6 +206,26 @@ describe("TabStrip", () => {
     view.unmount();
   });
 
+  it("gives Home a row of its own, so the row can shrink with it", () => {
+    /*
+     * Making the tab compact was only half of it. Every `.lc-tab-row` takes an
+     * equal share of the strip, so an icon-sized Home sat at the left of a row
+     * still claiming a document's worth of width — a wide empty gap that read
+     * as Home having disappeared rather than having got smaller.
+     *
+     * The CSS shrinks that row with `:has(> .lc-tab[data-tab-kind="home"])`,
+     * which needs Home to be a *direct child* of a row it does not share.
+     */
+    const view = mount({ tabs: [homeTab(), board("b1", "doodle")], activeId: "b1" });
+    const home = view.chips()[0]!;
+    const row = home.parentElement!;
+    expect(row.classList.contains("lc-tab-row")).toBe(true);
+    expect(row.classList.contains("is-group")).toBe(false);
+    expect(row.querySelectorAll(":scope > .lc-tab")).toHaveLength(1);
+    expect(row.querySelector(':scope > .lc-tab[data-tab-kind="home"]')).not.toBeNull();
+    view.unmount();
+  });
+
   it("keeps saying Home while a workspace opens, and going there drops the load", () => {
     const onCancelLoad = vi.fn();
     const onFocus = vi.fn();

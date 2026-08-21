@@ -7747,7 +7747,22 @@ export function Workspace({
           {canBrowseLive && webLive && annotateSource?.docType === "web" && (
             <LiveWebPane
               url={annotateSource.name}
-              visible={Boolean(showing && active)}
+              /*
+               * Showing, not focused.
+               *
+               * In a split both panes are on screen at once, and only one of
+               * them has focus — so requiring focus hid the live page the
+               * moment you clicked the pane beside it. The frozen copy stayed
+               * put, which is what made the difference obvious: one pane kept
+               * its page and the other went blank for no reason a reader could
+               * see.
+               *
+               * `showing` is the question that was meant all along: a parked
+               * tab is not on screen and its native surface must go, but a pane
+               * you are looking at keeps its page whether or not the caret is
+               * in it.
+               */
+              visible={Boolean(showing)}
               onError={(message) => {
                 setError(message);
                 setWebLive(false);
