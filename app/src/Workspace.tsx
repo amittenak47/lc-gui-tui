@@ -6894,6 +6894,14 @@ export function Workspace({
    * instead, which is the one that does not look like the page.
    */
   const canBrowseLive = webPadLive && isTauriRuntime() && liveWebviewSupported();
+  /**
+   * A live page on screen in a pane that does not have focus.
+   *
+   * Only reachable in a split — an unsplit pane that is not active is not
+   * showing either. It is the one state where a native surface stands between
+   * the reader and their own chrome, so it is the one that needs a way back.
+   */
+  const liveParked = Boolean(canBrowseLive && webLive && showing && !active);
   const docPadLive = Boolean(problem && isAnnotate(problem) && annotateSource?.docType !== "web" && tab.kind !== "web");
   const boardPadLive = Boolean(problem && isWhiteboard(problem));
 
@@ -7748,6 +7756,7 @@ export function Workspace({
             annotateCode && "lc-annotating-code",
             pdfFilmOpen && pdfNav && pdfNav.count >= 2 && "lc-has-pdf-film",
             canBrowseLive && webLive && "lc-canvas-live-web",
+            liveParked && "lc-canvas-live-parked",
           ]
             .filter(Boolean)
             .join(" ")}
@@ -7763,6 +7772,35 @@ export function Workspace({
             paints above all HTML regardless of z-index, so the placeholder's
             only job is to say where.
           */}
+          {/*
+            A live pane you are not working in needs one strip of HTML.
+
+            `onPointerDownCapture` above is how every other pane takes focus
+            when you click it, and a live page is the one thing that can never
+            reach it: the webview is a native surface, so the press lands in the
+            page and React never hears about it. The pane therefore could not
+            become the active one, and everything keyed to `active` — the
+            address bar above all — stayed out of reach for as long as the page
+            was live. In a split that is the whole browser chrome, unreachable
+            by the only gesture anyone would try.
+
+            So the pane gives back a strip the webview does not cover, and the
+            strip is a button. One press and the pane is the active one, with
+            its address bar back in the header where it belongs.
+          */}
+          {liveParked && annotateSource?.docType === "web" && (
+            <button
+              type="button"
+              className="lc-live-web-focus"
+              onClick={() => focusTab(tab.id)}
+              title="Use this pane"
+            >
+              <span className="lc-live-web-focus-host">
+                {hostLabelFromUrl(annotateSource.name)}
+              </span>
+              <span className="lc-live-web-focus-hint">Tap to use this pane</span>
+            </button>
+          )}
           {canBrowseLive && webLive && annotateSource?.docType === "web" && (
             <LiveWebPane
               url={annotateSource.name}
