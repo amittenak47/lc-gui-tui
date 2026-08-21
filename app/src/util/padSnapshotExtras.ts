@@ -10,6 +10,7 @@ import { packEncodedInk } from "../canvas/inkCodec";
 import { getAnnotateDoc, saveAnnotateDoc } from "./annotateStore";
 import {
   annotateDocKey,
+  deleteInkPages,
   getInkPageRecords,
   inkPageKey,
   type InkPageRecord,
@@ -99,26 +100,40 @@ export async function applyPadSnapshotExtras(
   snap: Pick<PadSnapshot, "ink" | "edges" | "source" | "board" | "footnotes" | "agent" | "name">,
 ): Promise<void> {
   const docKey = kind === "whiteboard" ? whiteboardDocKey(key) : annotateDocKey(key);
-  const ink = parseSnapshotInk(snap.ink);
-  if (ink.length > 0) {
-    const rows: InkPageRecord[] = [];
-    for (const page of ink) {
-      const decoded = snapshotInkToBytes(page);
-      if (!decoded) continue;
-      rows.push({
-        v: 1,
-        docKey,
-        pageId: decoded.pageId,
-        gz: decoded.gz,
-        dirty: false,
-        updatedAt: decoded.updatedAt,
-      });
-    }
-    if (rows.length > 0) {
-      await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-        for (const row of rows) store.put(row, inkPageKey(docKey, row.pageId));
-      });
-    }
+  /*
+   * A restore replaces the document's ink. It does not merge into it.
+   *
+   * Two things went wrong when this only ever `put` the pages the snapshot
+   * named. Anything drawn *after* the snapshot survived on a page the snapshot
+   * had nothing to say about, so restoring to before a page existed left that
+   * page's strokes standing. And a snapshot written before the board blob
+   * stopped carrying `inkC` has no `ink` at all — it took this branch, wrote
+   * nothing, and `restoreInk` then found the live document's pages still in
+   * place and ingested *those*, so the restore quietly returned today's
+   * handwriting instead of the snapshot's.
+   *
+   * Clearing first fixes both, and it is what makes the fallback work: with the
+   * store empty, `restoreInk` falls through to the board blob, which is exactly
+   * where an older snapshot keeps its strokes.
+   */
+  await deleteInkPages(docKey);
+  const rows: InkPageRecord[] = [];
+  for (const page of parseSnapshotInk(snap.ink)) {
+    const decoded = snapshotInkToBytes(page);
+    if (!decoded) continue;
+    rows.push({
+      v: 1,
+      docKey,
+      pageId: decoded.pageId,
+      gz: decoded.gz,
+      dirty: false,
+      updatedAt: decoded.updatedAt,
+    });
+  }
+  if (rows.length > 0) {
+    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
+      for (const row of rows) store.put(row, inkPageKey(docKey, row.pageId));
+    });
   }
   for (const edge of parseSnapshotEdges(snap.edges)) {
     if (await edgeIsGone(edge.id)) continue;
