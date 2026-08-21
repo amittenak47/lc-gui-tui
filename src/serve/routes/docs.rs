@@ -209,6 +209,46 @@ pub async fn retrieve(
     Ok(Json(RetrieveResponse { chunks }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct LibraryRetrieveBody {
+    pub query: String,
+    #[serde(default)]
+    pub k: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LibraryRetrieveResponse {
+    pub chunks: Vec<docs_index::LibraryChunk>,
+    pub scope: docs_index::LibraryScope,
+    /// The sentence the UI shows verbatim, so the rule lives in one place.
+    pub summary: String,
+}
+
+/// Ask the whole library. Explore's home, and the agent's `query_library_vectors`.
+pub async fn retrieve_library(
+    State(state): State<Shared>,
+    Json(body): Json<LibraryRetrieveBody>,
+) -> Result<Json<LibraryRetrieveResponse>, AppError> {
+    let query = body.query.trim().to_string();
+    if query.is_empty() {
+        return Err(AppError::bad_request(anyhow::anyhow!("query is empty")));
+    }
+    let k = body.k.unwrap_or(4);
+    let cfg = state.cfg_snapshot();
+    let (chunks, scope) = blocking(move || {
+        let path = docs_index::db_path()?;
+        let conn = docs_index::open(&path)?;
+        docs_index::retrieve_library(&conn, &query, k, &cfg)
+    })
+    .await?;
+    let summary = docs_index::library_scope_line(&scope);
+    Ok(Json(LibraryRetrieveResponse {
+        chunks,
+        scope,
+        summary,
+    }))
+}
+
 pub async fn list_chunk_digests() -> Result<Json<Vec<docs_index::ChunkDigest>>, AppError> {
     let digests = blocking(move || {
         let path = docs_index::db_path()?;
