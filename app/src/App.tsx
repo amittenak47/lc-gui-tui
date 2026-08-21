@@ -786,6 +786,22 @@ export function App() {
   const onTabDropOnTab = useCallback(
     (dragId: string, ontoId: string) => {
       if (ontoId === HOME_TAB_ID || dragId === ontoId) return;
+      /*
+       * Two halves of one split: the drop can only mean "put me on the other
+       * side".
+       *
+       * It used to rebuild the same pair in the same order, so dragging the
+       * right-hand chip over to the left did nothing — the one gesture anyone
+       * would try for swapping the panes was the one that was silently a
+       * no-op.
+       */
+      const paired = tabsRef.current.groups.some(
+        (group) => group.children.includes(dragId) && group.children.includes(ontoId),
+      );
+      if (paired) {
+        dispatchTabs({ type: "swap-split", id: dragId });
+        return;
+      }
       splitTabs(ontoId, dragId, "right");
     },
     [splitTabs],

@@ -385,6 +385,32 @@ describe("split groups", () => {
     expect(state.tabs.find((tab) => tab.id === "b1")?.group).toBeUndefined();
   });
 
+  it("swaps the two halves of a split, and leaves the sash where it is", () => {
+    const grouped = run(
+      initialTabState(),
+      { type: "open", tab: board("b1", "nb-1"), at: 1 },
+      { type: "open", tab: board("b2", "nb-2"), at: 2 },
+      { type: "split", a: "b1", b: "b2", axis: "vertical", at: 3 },
+    );
+    const groupId = grouped.groups[0]!.id;
+    const sized = tabsReducer(grouped, { type: "set-ratio", groupId, ratio: 0.3 });
+    const state = tabsReducer(sized, { type: "swap-split", id: "b2" });
+    expect(state.groups[0]?.children).toEqual(["b2", "b1"]);
+    // The reader asked for the left side, at the left side's width. Inverting
+    // the ratio would move a boundary they set for unrelated reasons.
+    expect(state.groups[0]?.split.ratio).toBe(0.3);
+    // Swapping sides is not switching panes.
+    expect(state.activeId).toBe(sized.activeId);
+  });
+
+  it("has nothing to swap for a tab that is not in a split", () => {
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: board("b1", "nb-1"), at: 1 },
+    );
+    expect(tabsReducer(state, { type: "swap-split", id: "b1" })).toBe(state);
+  });
+
   it("clamps the sash ratio", () => {
     const grouped = run(
       initialTabState(),

@@ -5,7 +5,7 @@ import { describe, expect, it, vi, beforeAll, afterEach } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
-import { TabStrip } from "./TabStrip";
+import { TabStrip, distanceOutside } from "./TabStrip";
 import {
   HOME_TAB_ID,
   homeTab,
@@ -46,6 +46,12 @@ function pointer(type: string, init: { x: number; y: number; type?: string; butt
   Object.defineProperty(event, "pointerId", { value: 1 });
   Object.defineProperty(event, "pointerType", { value: init.type ?? "mouse" });
   return event;
+}
+
+function grab(view: ReturnType<typeof mount>, title: string) {
+  return Array.from(view.host.querySelectorAll<HTMLElement>(".lc-tab"))
+    .find((chip) => chip.querySelector(".lc-tab-title")?.textContent === title)!
+    .querySelector<HTMLElement>(".lc-tab-hit")!;
 }
 
 function board(id: string, title: string, dirty = false): WhiteboardTab {
@@ -109,6 +115,26 @@ function mount(props: Partial<Parameters<typeof TabStrip>[0]> & { tabs: TabRecor
     unmount: () => act(() => root.unmount()),
   };
 }
+
+describe("distanceOutside", () => {
+  const box = { left: 0, right: 400, top: 0, bottom: 32 };
+
+  it("is zero inside", () => {
+    expect(distanceOutside(box, 200, 16)).toBe(0);
+    expect(distanceOutside(box, 0, 32)).toBe(0);
+  });
+
+  it("measures along whichever axis the point left by", () => {
+    expect(distanceOutside(box, 200, 300)).toBe(268);
+    expect(distanceOutside(box, -20, 16)).toBe(20);
+  });
+
+  it("takes the larger of the two when it left by both", () => {
+    // A corner is out by whichever axis is further, so a diagonal drag has to
+    // clear the row by the margin on one axis rather than on their sum.
+    expect(distanceOutside(box, 450, 100)).toBe(68);
+  });
+});
 
 describe("TabStrip", () => {
   it("draws every open document, active one marked", () => {
@@ -221,12 +247,6 @@ describe("TabStrip", () => {
   });
 
   describe("drag to split", () => {
-    function grab(view: ReturnType<typeof mount>, title: string) {
-      return Array.from(view.host.querySelectorAll<HTMLElement>(".lc-tab"))
-        .find((chip) => chip.querySelector(".lc-tab-title")?.textContent === title)!
-        .querySelector<HTMLElement>(".lc-tab-hit")!;
-    }
-
     it("carries a chip under the pointer and drops it on the board", () => {
       const onTabDrag = vi.fn();
       const onTabDrop = vi.fn();
@@ -468,6 +488,74 @@ describe("TabStrip", () => {
       view.rightClick("Home");
       // Home is not a pane, so it has nothing to split and nothing to close.
       expect(view.menuItems()).toEqual([]);
+      view.unmount();
+    });
+
+    it("breaks a pair when a chip is carried off its row", () => {
+      // The detach used to also require staying inside the strip, which on a
+      // strip one row tall is a few pixels of padding — a target nobody can
+      // hit, so the gesture read as not working at all.
+      const onUnsplit = vi.fn();
+      const view = mount({
+        tabs: [homeTab(), grouped("b1", "left"), grouped("b2", "right")],
+        groups: [pair],
+        onUnsplit,
+      });
+      const row = view.host.querySelector<HTMLElement>('[data-tab-row-group="g1"]')!;
+      vi.spyOn(row, "getBoundingClientRect").mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 32,
+        width: 400,
+        height: 32,
+        toJSON() {
+          return {};
+        },
+      });
+      const hit = grab(view, "left");
+      act(() => {
+        hit.dispatchEvent(pointer("pointerdown", { x: 100, y: 16 }));
+        hit.dispatchEvent(pointer("pointermove", { x: 120, y: 300 }));
+      });
+      expect(document.querySelector(".lc-tab-ghost")?.textContent).toBe("Unsplit");
+      act(() => {
+        hit.dispatchEvent(pointer("pointerup", { x: 120, y: 300 }));
+      });
+      expect(onUnsplit).toHaveBeenCalledWith("b1");
+      view.unmount();
+    });
+
+    it("does not break a pair on a jitter at the row's edge", () => {
+      const onUnsplit = vi.fn();
+      const view = mount({
+        tabs: [homeTab(), grouped("b1", "left"), grouped("b2", "right")],
+        groups: [pair],
+        onUnsplit,
+      });
+      const row = view.host.querySelector<HTMLElement>('[data-tab-row-group="g1"]')!;
+      vi.spyOn(row, "getBoundingClientRect").mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 32,
+        width: 400,
+        height: 32,
+        toJSON() {
+          return {};
+        },
+      });
+      const hit = grab(view, "left");
+      act(() => {
+        hit.dispatchEvent(pointer("pointerdown", { x: 100, y: 16 }));
+        hit.dispatchEvent(pointer("pointermove", { x: 130, y: 36 }));
+        hit.dispatchEvent(pointer("pointerup", { x: 130, y: 36 }));
+      });
+      expect(onUnsplit).not.toHaveBeenCalled();
       view.unmount();
     });
 
