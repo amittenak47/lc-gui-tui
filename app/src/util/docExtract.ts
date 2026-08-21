@@ -9,6 +9,19 @@ import { readEpub } from "./epub";
 import { loadPdfJs } from "../modes/PdfDocument";
 import { webPagesFromMarks, type MarkLike } from "./webMarkPages";
 
+/**
+ * Told how far extraction has got, as it goes.
+ *
+ * Reported in **pages**, deliberately — indexing counts pages and embedding
+ * counts chunks, and blending the two into one number hides the distinction
+ * between chunking a document and giving its chunks a model's vectors. Two
+ * jobs, two units.
+ *
+ * `total` can be zero when nothing has said how much there is yet; a caller
+ * showing a ring should sweep rather than invent a percentage.
+ */
+export type ExtractProgress = (done: number, total: number) => void;
+
 export interface ExtractedPage {
   page: number;
   text: string;
@@ -51,18 +64,23 @@ export async function extractDocumentPages(input: {
    * is the part a selection block was drawn around.
    */
   marks?: readonly MarkLike[];
+  /** Called per page while a long document is read. See {@link ExtractProgress}. */
+  onProgress?: ExtractProgress;
 }): Promise<ExtractedPage[]> {
   if (input.docType === "pdf") {
     if (!input.bytes) return [];
-    return extractPdfPages(input.bytes);
+    return extractPdfPages(input.bytes, input.onProgress);
   }
   if (input.docType === "epub") {
     if (!input.bytes) return [];
-    return extractEpubPages(input.bytes);
+    return extractEpubPages(input.bytes, input.onProgress);
   }
   if (input.docType === "web") {
     const marked = webPagesFromMarks(input.marks ?? []);
     if (marked.length > 0) {
+      // A page's extraction is instantaneous; say so rather than leaving a ring
+      // sweeping at nothing.
+      input.onProgress?.(marked.length, marked.length);
       return marked.map((entry) => ({
         page: entry.page,
         text: entry.text,
@@ -74,6 +92,7 @@ export async function extractDocumentPages(input: {
     // the chip say that marking passages first would index less noise.
     const text = htmlToText(input.text).trim();
     if (!text) return [];
+    input.onProgress?.(1, 1);
     return [
       {
         page: 1,
@@ -85,6 +104,7 @@ export async function extractDocumentPages(input: {
   }
   const text = input.text.trim();
   if (!text) return [];
+  input.onProgress?.(1, 1);
   return [
     {
       page: 1,
@@ -94,7 +114,10 @@ export async function extractDocumentPages(input: {
   ];
 }
 
-async function extractPdfPages(bytes: ArrayBuffer): Promise<ExtractedPage[]> {
+async function extractPdfPages(
+  bytes: ArrayBuffer,
+  onProgress?: ExtractProgress,
+): Promise<ExtractedPage[]> {
   const pdfjs = await loadPdfJs();
   // Share the viewer's worker — a second workerPort hangs getDocument —
   // so yield between pages or flick-scroll stalls behind getTextContent.
@@ -123,6 +146,14 @@ async function extractPdfPages(bytes: ArrayBuffer): Promise<ExtractedPage[]> {
           scope: `p${n}`,
         });
       }
+      /*
+       * Every page, not every page that had text on it.
+       *
+       * A scanned plate or a blank leaf yields nothing and pushes no entry, so
+       * counting what was kept would make the bar stall on exactly the
+       * documents that take longest.
+       */
+      onProgress?.(n, doc.numPages);
       await new Promise<void>((resolve) => {
         if (typeof window === "undefined" || !window.requestAnimationFrame) {
           resolve();
@@ -137,9 +168,13 @@ async function extractPdfPages(bytes: ArrayBuffer): Promise<ExtractedPage[]> {
   return pages;
 }
 
-function extractEpubPages(bytes: ArrayBuffer): ExtractedPage[] {
+function extractEpubPages(
+  bytes: ArrayBuffer,
+  onProgress?: ExtractProgress,
+): ExtractedPage[] {
   const book = readEpub(bytes);
   return book.chapters.flatMap((chapter, index) => {
+    onProgress?.(index + 1, book.chapters.length);
     const text = htmlToText(chapter.html).trim();
     if (!text) return [];
     return [
