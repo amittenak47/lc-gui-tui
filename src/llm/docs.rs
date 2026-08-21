@@ -61,6 +61,18 @@ pub fn document_tools(cfg: &Config) -> Vec<serde_json::Value> {
             }),
         ),
         tool(
+            "query_library_vectors",
+            "Search every indexed document, not just this one. Use when the question is about anywhere rather than about this book.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "k": {"type": "integer", "minimum": 1, "maximum": 8}
+                },
+                "required": ["query"]
+            }),
+        ),
+        tool(
             "get_document_section",
             "Retrieve chunks whose heading or text matches a section name (e.g. conclusion).",
             serde_json::json!({
@@ -284,6 +296,7 @@ pub fn run_document_ask(
 fn tool_summary(name: &str) -> &'static str {
     match name {
         "query_document_vectors" => "searching the book",
+        "query_library_vectors" => "searching your library",
         "get_document_section" => "opening a section",
         "lookup_reference" => "checking a citation",
         "get_current_page" => "reading this page",
@@ -321,6 +334,28 @@ fn dispatch_tool(
             let conn = docs_index::open(&path)?;
             let hits = docs_index::retrieve(&conn, hash, query, k, cfg)?;
             Ok((docs_index::format_retrieval(&hits), None))
+        }
+        /*
+         * The library, not the open book.
+         *
+         * Deliberately a separate tool rather than a flag on the first one. The
+         * model picks by what the question is about, and the two have different
+         * costs: this scans every eligible document, and its answer has to name
+         * which book each passage came from or it is no use in a library.
+         *
+         * The scope line comes back with the passages, so an answer built from
+         * a partial library says so instead of sounding complete.
+         */
+        "query_library_vectors" => {
+            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
+            let path = docs_index::db_path()?;
+            let conn = docs_index::open(&path)?;
+            let (hits, scope) = docs_index::retrieve_library(&conn, query, k, cfg)?;
+            if hits.is_empty() {
+                return Ok((docs_index::library_scope_line(&scope), None));
+            }
+            Ok((docs_index::format_library_retrieval(&hits, &scope), None))
         }
         "get_document_section" => {
             let Some(hash) = ctx.document_hash.as_deref() else {

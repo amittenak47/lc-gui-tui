@@ -698,6 +698,263 @@ pub fn retrieve(conn: &Connection, hash: &str, query: &str, k: usize, cfg: &Conf
     Ok(scored)
 }
 
+/// A chunk, plus which book it came from.
+///
+/// A library answer that cannot say where a passage lives is not an answer.
+#[derive(Debug, Clone, Serialize)]
+pub struct LibraryChunk {
+    pub hash: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub chunk: RetrievedChunk,
+}
+
+/// What was searched, and what was left out — always reported, never implied.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LibraryScope {
+    pub searched: u32,
+    pub total: u32,
+    /// `document name — why it was skipped`, for the sentence the UI shows.
+    #[serde(default)]
+    pub skipped: Vec<String>,
+    /// True when no document was eligible and the whole library fell to words.
+    #[serde(default)]
+    pub lexical: bool,
+}
+
+/// What `retrieve_library` needs to know about one document to judge it.
+#[derive(Debug, Clone)]
+pub struct DocEligibility {
+    pub hash: String,
+    pub name: String,
+    pub embed_model: String,
+    pub chunks_total: u32,
+    pub chunks_embedded: u32,
+}
+
+/// Who may be scored by meaning, and the reason for everyone else.
+///
+/// Pure, and separate from the query, because this is the rule the whole design
+/// turns on and it should be checkable without an embedding server standing by.
+/// Each reason is written as the sentence the reader sees — there is no second
+/// vocabulary of codes to translate.
+pub fn library_eligibility(
+    docs: &[DocEligibility],
+    configured: &str,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut eligible = Vec::new();
+    let mut skipped = Vec::new();
+    for doc in docs {
+        let name = &doc.name;
+        if doc.chunks_total == 0 {
+            skipped.push(format!("{name} — not indexed"));
+        } else if doc.chunks_embedded < doc.chunks_total {
+            skipped.push(format!("{name} — not embedded yet"));
+        } else if configured.is_empty() {
+            skipped.push(format!("{name} — no embedding model is set"));
+        } else if doc.embed_model != configured {
+            skipped.push(format!(
+                "{name} — embedded with {}, now using {configured}",
+                doc.embed_model
+            ));
+        } else {
+            eligible.push((doc.hash.clone(), doc.name.clone()));
+        }
+    }
+    (eligible, skipped)
+}
+
+/// One eligible set, or none.
+///
+/// The whole-document rule from `retrieve` becomes a whole-*library* rule here,
+/// and for the same reason with a wider blast radius: a book embedded by a
+/// model and a book holding 64-bucket word-counts produce scores on two
+/// different number lines, and sorting them into one ranking lets whichever
+/// happens to run larger win regardless of relevance. Within one document that
+/// is a bad answer; across a library it is a bad answer that also names the
+/// wrong book.
+///
+/// So eligibility is decided first and applies to everything: fully embedded,
+/// under the model configured right now. Documents that fail either test are
+/// excluded and *counted*, never quietly mixed in. If nothing is eligible the
+/// whole library is scored lexically — consistently coarse, which is honest,
+/// rather than incomparably mixed, which is not.
+pub fn retrieve_library(
+    conn: &Connection,
+    query: &str,
+    k: usize,
+    cfg: &Config,
+) -> Result<(Vec<LibraryChunk>, LibraryScope)> {
+    let k = k.clamp(1, 8);
+    let configured = cfg.embed_model().unwrap_or_default().to_string();
+
+    let docs: Vec<(String, String, String, i64, i64)> = {
+        let mut stmt = conn.prepare(
+            "SELECT d.hash, d.name, d.embed_model,
+                    COUNT(c.id), COALESCE(SUM(c.embedded), 0)
+             FROM documents d LEFT JOIN chunks c ON c.hash = d.hash
+             GROUP BY d.hash, d.name, d.embed_model
+             ORDER BY d.name",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+
+    let mut scope = LibraryScope {
+        total: docs.len() as u32,
+        ..Default::default()
+    };
+    if docs.is_empty() {
+        return Ok((Vec::new(), scope));
+    }
+
+    let rows: Vec<DocEligibility> = docs
+        .iter()
+        .map(|(hash, name, model, total, embedded)| DocEligibility {
+            hash: hash.clone(),
+            name: name.clone(),
+            embed_model: model.clone(),
+            chunks_total: *total as u32,
+            chunks_embedded: *embedded as u32,
+        })
+        .collect();
+    let (eligible, skipped) = library_eligibility(&rows, &configured);
+    scope.skipped = skipped;
+
+    let (query_vecs, query_kind, _) = embed_texts(cfg, &[query])?;
+    let query_vec = query_vecs.into_iter().next().unwrap_or_default();
+    let semantic =
+        !eligible.is_empty() && !query_vec.is_empty() && matches!(query_kind, EmbedKind::Http);
+
+    /*
+     * Nothing eligible is not nothing to answer.
+     *
+     * A library with no embeddings still has the words you typed in it, and a
+     * lexical pass over all of it beats an empty result and a shrug. It is
+     * reported as lexical so the answer can say which kind of search it was.
+     */
+    let hunt: Vec<(String, String)> = if semantic {
+        eligible
+    } else {
+        scope.lexical = true;
+        scope.skipped.clear();
+        docs.iter()
+            .filter(|(_, _, _, total, _)| *total > 0)
+            .map(|(hash, name, _, _, _)| (hash.clone(), name.clone()))
+            .collect()
+    };
+    scope.searched = hunt.len() as u32;
+
+    let mut scored: Vec<LibraryChunk> = Vec::new();
+    for (hash, name) in &hunt {
+        let mut stmt = conn.prepare(
+            "SELECT page, heading, text, embedding FROM chunks WHERE hash = ?1
+             ORDER BY page, ordinal, id",
+        )?;
+        let rows = stmt.query_map(params![hash], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as u32,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<Vec<u8>>>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (page, heading, text, blob) = row?;
+            let score = if semantic {
+                let vec = blob.as_deref().map(decode_f32).unwrap_or_default();
+                if vec.len() != query_vec.len() || vec.is_empty() {
+                    continue;
+                }
+                cosine(&query_vec, &vec)
+            } else {
+                lexical_score(query, &text)
+            };
+            scored.push(LibraryChunk {
+                hash: hash.clone(),
+                name: name.clone(),
+                chunk: RetrievedChunk {
+                    page,
+                    heading,
+                    text,
+                    score,
+                },
+            });
+        }
+    }
+
+    scored.sort_by(|a, b| {
+        b.chunk
+            .score
+            .partial_cmp(&a.chunk.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    scored.truncate(k);
+    Ok((scored, scope))
+}
+
+/// The same 4000-character budget, with the book named on every passage.
+pub fn format_library_retrieval(chunks: &[LibraryChunk], scope: &LibraryScope) -> String {
+    if chunks.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("## Retrieved from your library\n\n");
+    let mut used = out.len();
+    for row in chunks {
+        let heading = row
+            .chunk
+            .heading
+            .as_deref()
+            .filter(|h| !h.is_empty())
+            .unwrap_or("(untitled)");
+        let block = format!(
+            "### {} — page {} — {}\n\n{}\n\n",
+            row.name,
+            row.chunk.page,
+            heading,
+            row.chunk.text.trim()
+        );
+        if used + block.len() > RETRIEVAL_CHAR_CAP {
+            break;
+        }
+        out.push_str(&block);
+        used += block.len();
+    }
+    out.push_str(&library_scope_line(scope));
+    out.push('\n');
+    out
+}
+
+/// Never a bare answer: how many documents were searched, and why not the rest.
+pub fn library_scope_line(scope: &LibraryScope) -> String {
+    if scope.total == 0 {
+        return "No documents are indexed yet.".into();
+    }
+    let how = if scope.lexical {
+        "searched by words"
+    } else {
+        "searched by meaning"
+    };
+    let mut line = format!(
+        "{} of {} documents {}.",
+        scope.searched, scope.total, how
+    );
+    if !scope.skipped.is_empty() {
+        line.push_str(" Not searched: ");
+        line.push_str(&scope.skipped.join("; "));
+        line.push('.');
+    }
+    line
+}
+
 pub fn format_retrieval(chunks: &[RetrievedChunk]) -> String {
     if chunks.is_empty() {
         return String::new();
@@ -2332,6 +2589,141 @@ mod tests {
             .unwrap();
         assert_eq!(ordinal, 0);
         assert_eq!(text_hash, chunk_text_hash("legacy words"));
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn book(conn: &mut Connection, hash: &str, name: &str, text: &str) {
+        upsert(
+            conn,
+            hash,
+            &IndexBody {
+                name: name.into(),
+                doc_type: "pdf".into(),
+                pages: vec![IndexPage {
+                    page: 1,
+                    text: text.into(),
+                    heading: None,
+                }],
+            },
+            &cfg(),
+            false,
+        )
+        .unwrap();
+    }
+
+    fn mark_embedded(conn: &Connection, hash: &str, model: &str) {
+        conn.execute(
+            "UPDATE chunks SET embedded = 1 WHERE hash = ?1",
+            params![hash],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE documents SET embed_model = ?1 WHERE hash = ?2",
+            params![model, hash],
+        )
+        .unwrap();
+    }
+
+    fn doc(name: &str, model: &str, total: u32, embedded: u32) -> DocEligibility {
+        DocEligibility {
+            hash: name.to_lowercase(),
+            name: name.into(),
+            embed_model: model.into(),
+            chunks_total: total,
+            chunks_embedded: embedded,
+        }
+    }
+
+    #[test]
+    fn only_fully_embedded_books_under_todays_model_are_comparable() {
+        /*
+         * The whole-document rule, one level up.
+         *
+         * A book embedded by a model and a book holding word-counts score on
+         * two different number lines. Within one document, mixing them gives a
+         * bad ranking; across a library it gives a bad ranking that also names
+         * the wrong book. So eligibility is decided before anything is scored.
+         */
+        let docs = vec![
+            doc("Deep Learning", "tiny-embed", 10, 10),
+            doc("Topology", "tiny-embed", 10, 4),
+            doc("Analysis", "other-model", 10, 10),
+            doc("Draft", "", 0, 0),
+        ];
+        let (eligible, skipped) = library_eligibility(&docs, "tiny-embed");
+        assert_eq!(eligible.len(), 1);
+        assert_eq!(eligible[0].1, "Deep Learning");
+        assert_eq!(skipped.len(), 3);
+        assert!(skipped[0].contains("Topology") && skipped[0].contains("not embedded"));
+        assert!(skipped[1].contains("Analysis") && skipped[1].contains("other-model"));
+        assert!(skipped[2].contains("Draft") && skipped[2].contains("not indexed"));
+    }
+
+    #[test]
+    fn no_configured_model_makes_everyone_ineligible_rather_than_everyone_eligible() {
+        // The failure to avoid is treating "no model" as "any model will do".
+        let docs = vec![doc("Deep Learning", "tiny-embed", 10, 10)];
+        let (eligible, skipped) = library_eligibility(&docs, "");
+        assert!(eligible.is_empty());
+        assert!(skipped[0].contains("no embedding model is set"));
+    }
+
+    #[test]
+    fn the_scope_line_states_the_count_and_the_reasons() {
+        let scope = LibraryScope {
+            searched: 2,
+            total: 4,
+            skipped: vec!["Topology — not embedded yet".into()],
+            lexical: false,
+        };
+        let line = library_scope_line(&scope);
+        assert!(line.starts_with("2 of 4 documents searched by meaning."), "{line}");
+        assert!(line.contains("Not searched: Topology — not embedded yet."), "{line}");
+    }
+
+    #[test]
+    fn nothing_eligible_falls_to_words_across_the_whole_library_and_says_so() {
+        // Consistently coarse beats incomparably mixed, and either way the
+        // answer has to admit which one it was.
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        book(&mut conn, "h1", "Deep Learning", "backpropagation and gradients");
+        book(&mut conn, "h2", "Topology", "open sets and continuity");
+        let (rows, scope) = retrieve_library(&conn, "gradients", 4, &cfg()).unwrap();
+        assert!(scope.lexical, "nothing is embedded, so nothing can be compared");
+        assert_eq!(scope.searched, 2, "both are still searched, by words");
+        assert!(library_scope_line(&scope).contains("by words"));
+        assert!(rows.iter().any(|row| row.name == "Deep Learning"));
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn results_name_the_book_they_came_from() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        book(&mut conn, "h1", "Deep Learning", "backpropagation and gradients");
+        let (rows, scope) = retrieve_library(&conn, "gradients", 4, &cfg()).unwrap();
+        assert!(!rows.is_empty());
+        assert_eq!(rows[0].name, "Deep Learning");
+        assert_eq!(rows[0].hash, "h1");
+        let formatted = format_library_retrieval(&rows, &scope);
+        assert!(formatted.contains("Deep Learning"), "{formatted}");
+        assert!(formatted.contains("1 of 1 documents"), "{formatted}");
+        assert!(formatted.len() <= RETRIEVAL_CHAR_CAP + 400);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_empty_library_answers_rather_than_failing() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        let (rows, scope) = retrieve_library(&conn, "anything", 4, &cfg()).unwrap();
+        assert!(rows.is_empty());
+        assert_eq!(scope.total, 0);
+        assert_eq!(library_scope_line(&scope), "No documents are indexed yet.");
         drop(conn);
         let _ = std::fs::remove_file(&path);
     }
