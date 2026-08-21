@@ -6591,7 +6591,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     rasterInkRef.current?.syncCamera();
     if (keepCamera) {
       if (!annotateCodeRef.current) armReadingScroll();
-      return;
+      /*
+       * Keep where you were. Re-derive how big it should be.
+       *
+       * A saved camera carries a zoom that fitted the pane it was saved in, and
+       * nothing checks that today's pane is that pane. Capture a page on the
+       * full window, reopen it in half of a split, and the saved zoom is around
+       * three times too large — the page arrives spilling out of its pane, and
+       * comes right the instant anything resizes. That is not a coincidence:
+       * `keepCamera` skips the open fit entirely, so a resize was genuinely the
+       * only thing left that would re-fit.
+       *
+       * `keepY` is precisely what that resize does — hold the scene line at the
+       * top of the hole, which is the page you were on, and re-fit the width.
+       * So the reader keeps their place and stops having to nudge the sash to
+       * get their document sized.
+       *
+       * On the ladder because the first frames of an open are not the pane's
+       * final box: the content is still measuring, and a split that is still
+       * laying out reports a width it is about to stop having.
+       */
+      const settle = [0, 80, 200, 400, 700].map((ms) =>
+        window.setTimeout(() => nudgeViewportFit(), ms),
+      );
+      return () => {
+        for (const id of settle) window.clearTimeout(id);
+      };
     }
     void settleFitView().then(() => {
       reportCodeSlot();
@@ -6604,6 +6629,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     interactive,
     mobileRegion,
     armReadingScroll,
+    nudgeViewportFit,
     reportCodeSlot,
     settleFitView,
     syncPageVisibility,
