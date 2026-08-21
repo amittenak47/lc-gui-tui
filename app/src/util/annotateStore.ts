@@ -29,6 +29,7 @@
 
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { deleteContent, getContent, putContent } from "./contentStore";
+import type { WebCapture, WebPadKind } from "./webCaptures";
 import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 import { deletePadSnapshots, renamePadSnapshots } from "./padSnapshotStore";
@@ -162,6 +163,10 @@ export interface AnnotateDoc extends AnnotateDocMeta {
    * restored the ribbon and lost the thread. Optional so older entries load.
    */
   agent?: unknown[];
+  /** See {@link AnnotateContent.captures}. Web pads only. */
+  captures?: WebCapture[];
+  /** See {@link AnnotateContent.padKind}. Web pads only. */
+  padKind?: WebPadKind;
 }
 
 /**
@@ -183,6 +188,16 @@ interface AnnotateContent {
   board: BoardBlob;
   footnotes: DocFootnote[];
   agent: unknown[];
+  /**
+   * Older captures of a web page, kept because a mark still stands on one.
+   *
+   * `source` is always the newest, so every reader downstream is unchanged and
+   * a pad with no history is exactly what it was. See `webCaptures` for the
+   * retention rule.
+   */
+  captures?: WebCapture[];
+  /** How the reader answered "page, or feed?" — remembered per pad. */
+  padKind?: WebPadKind;
 }
 
 /**
@@ -387,6 +402,8 @@ async function readContent(meta: AnnotateDocMeta): Promise<AnnotateDoc | null> {
       board: content.board,
       footnotes: sanitizeFootnotes(content.footnotes),
       agent: Array.isArray(content.agent) ? content.agent : [],
+      ...(Array.isArray(content.captures) ? { captures: content.captures } : {}),
+      ...(content.padKind ? { padKind: content.padKind } : {}),
     };
   }
   // Written by the old build, still whole in the legacy key.
@@ -559,6 +576,10 @@ export async function saveAnnotateDoc(input: {
   board: BoardBlob;
   footnotes?: readonly DocFootnote[];
   agent?: unknown[];
+  /** Web pads only. Undefined keeps whatever history the pad already has. */
+  captures?: readonly WebCapture[];
+  /** Web pads only. Undefined keeps the reader's existing answer. */
+  padKind?: WebPadKind;
 }): Promise<AnnotateDoc> {
   const index = readIndex();
   const now = Date.now();
@@ -590,6 +611,16 @@ export async function saveAnnotateDoc(input: {
       : await getContent<AnnotateContent>(id);
   const footnotes = input.footnotes ? [...input.footnotes] : prior?.footnotes ?? [];
   const agent = Array.isArray(input.agent) ? input.agent : prior?.agent ?? [];
+  /*
+   * Same contract as footnotes: undefined means "this caller does not track
+   * captures", not "there are none". An autosave that omits them must not drop
+   * the older page a stranded mark is still standing on.
+   */
+  const history = await (input.captures || input.padKind
+    ? prior ?? getContent<AnnotateContent>(id)
+    : Promise.resolve(prior));
+  const captures = input.captures ? [...input.captures] : history?.captures;
+  const padKind = input.padKind ?? history?.padKind;
   const label = input.label?.trim() || existing?.label;
   const owned = input.owned ?? existing?.owned;
   const meta: AnnotateDocMeta = {
@@ -611,8 +642,18 @@ export async function saveAnnotateDoc(input: {
     board: input.board,
     footnotes,
     agent,
+    ...(captures && captures.length > 0 ? { captures } : {}),
+    ...(padKind ? { padKind } : {}),
   } satisfies AnnotateContent);
-  return { ...meta, source: input.source, board: input.board, footnotes, agent };
+  return {
+    ...meta,
+    source: input.source,
+    board: input.board,
+    footnotes,
+    agent,
+    ...(captures && captures.length > 0 ? { captures } : {}),
+    ...(padKind ? { padKind } : {}),
+  };
 }
 
 export function markAnnotateHubAck(id: string, updatedAt: number): void {

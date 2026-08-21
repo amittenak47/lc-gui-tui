@@ -70,6 +70,18 @@ export interface DocFootnoteThread {
 }
 
 export interface DocFootnote {
+  /**
+   * Which capture of a web page this mark was made against (§1m).
+   *
+   * A web pad's identity is its address, so a re-freeze can replace the body
+   * under a mark that was anchored to the old one. Recording the capture is
+   * what lets the mark still be *read in context* — the page as it was when
+   * you marked it — instead of being reduced to a naked quote.
+   *
+   * Absent on every other document kind, where there is only one body, and on
+   * web marks made before captures existed, where there was only ever one.
+   */
+  captureId?: string;
   id: string;
   kind: DocFootnoteKind;
   /** Where in the document the mark sits. */
