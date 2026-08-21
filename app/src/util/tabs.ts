@@ -209,6 +209,7 @@ export type TabAction =
   | { type: "web-step"; id: string; delta: number }
   | { type: "split"; a: string; b: string; axis: SplitAxis; edge?: SplitEdge; at: number }
   | { type: "unsplit"; id: string }
+  | { type: "swap-split"; id: string }
   | { type: "set-ratio"; groupId: string; ratio: number }
   | { type: "hydrate"; state: TabState };
 
@@ -595,6 +596,31 @@ export function tabsReducer(state: TabState, action: TabAction): TabState {
 
     case "unsplit":
       return detachFromGroup(state, action.id);
+
+    /*
+     * The pair keeps its columns; the two panes trade places.
+     *
+     * Dragging one half of a split onto the other used to be a no-op — the
+     * drop rebuilt the same pair in the same order, so the one gesture anyone
+     * would try for "put this one on the left" did nothing at all.
+     *
+     * The ratio deliberately stays where it is. A reader who dragged a chip to
+     * the left side asked for that side, at that side's width; inverting the
+     * ratio as well would move the boundary they set for reasons that have
+     * nothing to do with which pane is which.
+     */
+    case "swap-split": {
+      const group = groupOf(state, action.id);
+      if (!group) return state;
+      return {
+        ...state,
+        groups: state.groups.map((entry) =>
+          entry.id === group.id
+            ? { ...entry, children: [entry.children[1], entry.children[0]] }
+            : entry,
+        ),
+      };
+    }
 
     case "set-ratio": {
       const ratio = clampSplitRatio(action.ratio);

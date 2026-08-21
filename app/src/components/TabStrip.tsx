@@ -167,6 +167,32 @@ function pointInBox(box: DOMRect, x: number, y: number): boolean {
   return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
 }
 
+/**
+ * How far outside `box` the point is, along whichever axis it left by.
+ *
+ * Zero while it is still inside. Used to ask "is this clearly out of the pair's
+ * row" without demanding that the reader find somewhere else to be.
+ */
+export function distanceOutside(
+  box: { left: number; right: number; top: number; bottom: number },
+  x: number,
+  y: number,
+): number {
+  const dx = Math.max(box.left - x, x - box.right, 0);
+  const dy = Math.max(box.top - y, y - box.bottom, 0);
+  return Math.max(dx, dy);
+}
+
+/**
+ * How far past the pair's row a chip has to be carried to leave it.
+ *
+ * Enough that a shaky hand on the row's edge does not break a split, and no
+ * more. It used to also have to stay *inside the strip*, which on a strip that
+ * is one row tall means a few pixels of padding — a target nobody can hit, so
+ * dragging a chip out of its pair read as not working at all.
+ */
+const DETACH_MARGIN_PX = 8;
+
 function chipIdAt(
   strip: HTMLElement | null,
   x: number,
@@ -322,19 +348,34 @@ export function TabStrip({
    * anyone would guess it works. Right-click → Unsplit stays, but it was the
    * *only* way, and a right-click is not something you have on a tablet.
    *
-   * Only inside the strip. Out over the board, a drag already means "split into
-   * that edge", and one drop cannot mean both.
+   * Anywhere clear of the pair's own row, including out over the board. This
+   * used to require staying inside the strip as well, which on a strip one row
+   * tall leaves a few pixels of padding to aim at — so the gesture existed and
+   * could not be performed. Nothing else claims a drop outside the strip, so
+   * there is no second meaning for one to collide with.
+   *
+   * Landing on another chip is still a pairing, not a detach: that drop has its
+   * own answer, and it is the more specific of the two.
    */
   const wouldDetach = (tabId: string, groupId: string | undefined, x: number, y: number) => {
     if (!groupId) return false;
     const strip = stripRef.current;
     if (!strip) return false;
-    const inStrip = pointInBox(strip.getBoundingClientRect(), x, y);
-    if (!inStrip) return false;
     if (chipIdAt(strip, x, y, tabId)) return false;
-    const row = strip.querySelector(`[data-tab-row-group="${CSS.escape(groupId)}"]`);
-    if (!(row instanceof HTMLElement)) return false;
-    return !pointInBox(row.getBoundingClientRect(), x, y);
+    /*
+     * Matched in JS rather than through a selector.
+     *
+     * `CSS.escape` is missing from older WebViews — the same reason
+     * `docAnchors` avoids it — and the cost of its absence here is total:
+     * `wouldDetach` runs inside a pointer handler, so a throw takes the whole
+     * drag with it and the chip simply stops responding.
+     */
+    const row =
+      Array.from(strip.querySelectorAll<HTMLElement>("[data-tab-row-group]")).find(
+        (candidate) => candidate.dataset.tabRowGroup === groupId,
+      ) ?? null;
+    if (!row) return false;
+    return distanceOutside(row.getBoundingClientRect(), x, y) > DETACH_MARGIN_PX;
   };
 
   return (
