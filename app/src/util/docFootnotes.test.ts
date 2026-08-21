@@ -539,12 +539,14 @@ describe("markChipLeft", () => {
   const page = 1065;
   const chip = 16;
 
-  it("puts a left-column mark in the left margin", () => {
+  it("puts a left-column mark in the left margin, hugging the text", () => {
     // The gutter between the columns is about 11px. A 16px chip cannot go there
     // without landing on the first letter of the right column — which is what it
-    // did. The 96px left margin is the only reliably empty space on that side.
+    // did. The 96px left margin is the only reliably empty space on that side,
+    // and the chip sits at the *inner* end of it: a margin note belongs beside
+    // the words it annotates, not out at the edge of the paper.
     expect(markChipLeft({ blockLeft: 96, blockRight: 744, pageWidth: page, chipWidth: chip }))
-      .toBe(3);
+      .toBe(96 - chip - 3);
   });
 
   it("puts a right-column mark in the right margin", () => {
@@ -554,16 +556,44 @@ describe("markChipLeft", () => {
       pageWidth: page,
       chipWidth: chip,
     });
-    expect(left).toBe(1046);
+    expect(left).toBe(972 + 3);
     expect(left).toBeGreaterThanOrEqual(972);
     expect(left + chip).toBeLessThanOrEqual(page);
   });
 
-  it("takes the other margin when its own side has none", () => {
+  it("takes the other side when its own has no room", () => {
     // A block running to the left edge: nothing fits before it, so the chip goes
-    // to the right margin rather than on top of the first word.
+    // to the right of the block rather than on top of the first word.
     expect(markChipLeft({ blockLeft: 2, blockRight: 500, pageWidth: page, chipWidth: chip }))
-      .toBe(1046);
+      .toBe(503);
+  });
+
+  it("stays beside a narrow column rather than out at the page edge", () => {
+    /*
+     * The case that prompted this. A captured web page is a centred column with
+     * hundreds of pixels of empty page either side, so "put it in the page
+     * margin" left the chip so far from the words it belonged to that the two
+     * did not read as connected at all. On a document whose text fills its page
+     * the two rules agree, which is why it took a web page to show the
+     * difference.
+     */
+    const left = markChipLeft({
+      blockLeft: 640,
+      blockRight: 1020,
+      pageWidth: 1660,
+      chipWidth: chip,
+    });
+    /*
+     * Either side of the column is right; which one is not the point. A centred
+     * column sits exactly on the midpoint, so asserting a side would be pinning
+     * a tie-break rather than the behaviour. What matters is that the chip is
+     * *adjacent* to the words and nowhere near the edge of the paper.
+     */
+    const besideLeft = left + chip <= 640 && left >= 640 - chip - 20;
+    const besideRight = left >= 1020 && left <= 1020 + 20;
+    expect(besideLeft || besideRight).toBe(true);
+    expect(left).toBeGreaterThan(300);
+    expect(left).toBeLessThan(1360);
   });
 
   it("falls back beside the mark when the page has no margins at all", () => {

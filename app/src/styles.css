@@ -1137,7 +1137,15 @@ html[data-theme="dark"] .lc-web-doc {
 
 .lc-doc-index-pop {
   position: fixed;
-  z-index: 80;
+  /*
+   * Above the board, below a dialog.
+   *
+   * This was 80, which lost to the board chrome slot at 95 — so a popover
+   * anchored to a chip in the *header* was painted over by whatever the board
+   * happened to be showing underneath it, and read as a transparent card with
+   * the page bleeding through.
+   */
+  z-index: 110;
   width: 280px;
   pointer-events: none;
 }

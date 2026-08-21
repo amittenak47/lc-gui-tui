@@ -238,14 +238,31 @@ export function markChipLeft(input: {
   const { blockLeft, blockRight, pageWidth, chipWidth } = input;
   if (pageWidth > 0) {
     const onLeftHalf = (blockLeft + blockRight) / 2 < pageWidth / 2;
-    const inLeftMargin = pad;
-    const inRightMargin = pageWidth - chipWidth - pad;
-    // The margin on this mark's own side, when the mark leaves one.
-    if (onLeftHalf && inLeftMargin + chipWidth + pad <= blockLeft) return inLeftMargin;
-    if (!onLeftHalf && inRightMargin >= blockRight + pad) return inRightMargin;
-    // No margin that side — try the other before giving up on margins at all.
-    if (!onLeftHalf && inLeftMargin + chipWidth + pad <= blockLeft) return inLeftMargin;
-    if (onLeftHalf && inRightMargin >= blockRight + pad) return inRightMargin;
+    /*
+     * Beside the block, not at the edge of the paper.
+     *
+     * These are the same place on a document whose text fills its page, which
+     * is why the difference did not show up until a captured web page: there the
+     * content is a narrow column with hundreds of pixels of empty page either
+     * side, so "in the page margin" put the chip so far from the words it
+     * belonged to that the two no longer read as connected.
+     *
+     * Still the mark's *own* side first, and still never the gutter — a
+     * two-column paper leaves about eleven pixels between the columns, which a
+     * chip cannot occupy without landing on the first letter of the next one.
+     * Hugging the block on its own side cannot reach that gutter: a left-column
+     * mark hugs leftward into the left margin, a right-column mark rightward
+     * into the right one.
+     */
+    const hugLeft = blockLeft - chipWidth - pad;
+    const hugRight = blockRight + pad;
+    const fitsLeft = hugLeft >= 0;
+    const fitsRight = hugRight + chipWidth <= pageWidth;
+    if (onLeftHalf && fitsLeft) return hugLeft;
+    if (!onLeftHalf && fitsRight) return hugRight;
+    // No room that side — try the other before giving up on margins at all.
+    if (!onLeftHalf && fitsLeft) return hugLeft;
+    if (onLeftHalf && fitsRight) return hugRight;
   }
   // A mark with no margin either side is a mark as wide as the paper. Beside it
   // if the page allows, and only then back inside it, because at that point
