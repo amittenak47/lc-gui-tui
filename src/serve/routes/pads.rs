@@ -244,6 +244,17 @@ pub struct PadSyncPing {
     pub problem: Vec<ProblemPad>,
     pub snapshots: Vec<SnapshotRow>,
     pub gone: Vec<GoneRow>,
+    /// Which pages of handwriting changed - page ids and stamps, never bytes.
+    ///
+    /// On the ping rather than a poll of its own, because the ping is already
+    /// the "what changed since" question and asking it twice would double the
+    /// round trips for an answer that is usually "nothing".
+    #[serde(default)]
+    pub ink: Vec<pads::InkPageDigest>,
+    #[serde(default)]
+    pub edges: Vec<pads::EdgeRow>,
+    #[serde(default)]
+    pub gone_edges: Vec<String>,
 }
 
 /// Periodic ping: saved whiteboards, annotated files, problem canvases, and
@@ -254,17 +265,21 @@ pub async fn sync_pads(Query(query): Query<SyncQuery>) -> Result<Json<PadSyncPin
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    let (whiteboard, annotate, problem, snapshots, gone) = blocking(move || {
-        let conn = pads::open(&pads::db_path()?)?;
-        Ok((
-            pads::list_changed_whiteboard(&conn, since)?,
-            pads::list_changed_annotate(&conn, since)?,
-            pads::list_changed_problem(&conn, since)?,
-            pads::list_changed_snapshots(&conn, since)?,
-            pads::list_changed_gone(&conn, since)?,
-        ))
-    })
-    .await?;
+    let (whiteboard, annotate, problem, snapshots, gone, ink, edges, gone_edges) =
+        blocking(move || {
+            let conn = pads::open(&pads::db_path()?)?;
+            Ok((
+                pads::list_changed_whiteboard(&conn, since)?,
+                pads::list_changed_annotate(&conn, since)?,
+                pads::list_changed_problem(&conn, since)?,
+                pads::list_changed_snapshots(&conn, since)?,
+                pads::list_changed_gone(&conn, since)?,
+                pads::list_ink_digests(&conn, since)?,
+                pads::list_edges(&conn, since)?,
+                pads::list_gone_edges(&conn, since)?,
+            ))
+        })
+        .await?;
     Ok(Json(PadSyncPing {
         now,
         whiteboard,
@@ -272,7 +287,61 @@ pub async fn sync_pads(Query(query): Query<SyncQuery>) -> Result<Json<PadSyncPin
         problem,
         snapshots,
         gone,
+        ink,
+        edges,
+        gone_edges,
     }))
+}
+
+/// The bytes for one pad's handwriting, fetched only when a digest says so.
+pub async fn get_ink_pages(
+    UrlPath((kind, key)): UrlPath<(String, String)>,
+) -> Result<Json<Vec<pads::InkPageRow>>, AppError> {
+    let rows = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pads::get_ink_pages(&conn, &kind, &key)
+    })
+    .await?;
+    Ok(Json(rows))
+}
+
+/// One page at a time, so a refused page never holds up the rest of a pad.
+pub async fn put_ink_page(Json(body): Json<pads::InkPageRow>) -> Result<Json<pads::ApplyAck>, AppError> {
+    let ack = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pads::put_ink_page(&conn, &body)
+    })
+    .await?;
+    Ok(Json(ack))
+}
+
+pub async fn put_edges(Json(body): Json<Vec<pads::EdgeRow>>) -> Result<StatusCode, AppError> {
+    blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        let now = now_ms();
+        for row in &body {
+            pads::put_edge(&conn, row, now)?;
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn tombstone_edge(UrlPath(id): UrlPath<String>) -> Result<StatusCode, AppError> {
+    blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pads::delete_edge(&conn, &id, now_ms())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 pub async fn put_snapshot(Json(body): Json<SnapshotRow>) -> Result<StatusCode, AppError> {

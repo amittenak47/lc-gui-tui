@@ -188,6 +188,10 @@ pub fn router(state: Shared) -> Router {
         .route("/pads/snapshots", put(routes::put_snapshot))
         .route("/pads/snapshots/:kind/:key", get(routes::get_snapshots))
         .route("/pads/sync", get(routes::sync_pads))
+        .route("/pads/ink", put(routes::put_ink_page))
+        .route("/pads/ink/:kind/:key", get(routes::get_ink_pages))
+        .route("/pads/edges", put(routes::put_edges))
+        .route("/pads/edges/:id/tombstone", post(routes::tombstone_edge))
         .route("/devices", get(routes::list_devices))
         .route(
             "/devices/:id/prefs",

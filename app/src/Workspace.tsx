@@ -294,6 +294,12 @@ import {
   docChunkMismatchReason,
   subscribeDocChunkMismatch,
 } from "./util/docChunkSync";
+import {
+  clearInkConflicts,
+  inkConflictMessage,
+  inkConflictsFor,
+  subscribeInkConflicts,
+} from "./util/inkConflicts";
 import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
@@ -7102,6 +7108,33 @@ export function Workspace({
     refresh();
     return subscribeDocChunkMismatch(refresh);
   }, [docIndexMeta?.hash]);
+  /*
+   * A page two devices both drew on, said out loud.
+   *
+   * Newest-wins is the right default and the wrong thing to do quietly: it is
+   * the one sync rule that can resolve away a page somebody is still holding a
+   * device over. The losing copy survives in the snapshot tiers, which is only
+   * worth anything if the reader is told there is something to go and get.
+   *
+   * Shown once. Dismissing is what clears it, so the same collision does not
+   * re-announce itself on every ping.
+   */
+  useEffect(() => {
+    const kind = whiteboardNotebookId ? "whiteboard" : annotateDocId ? "annotate" : null;
+    const key = whiteboardNotebookId ?? annotateDocId ?? null;
+    if (!kind || !key) return;
+    const refresh = () => {
+      const message = inkConflictMessage(inkConflictsFor(kind, key));
+      if (!message) return;
+      setNotice(message);
+      // Announced, so drop it. A later collision on the same page is a new
+      // event and deserves its own banner; this one is spoken for.
+      clearInkConflicts(kind, key);
+    };
+    refresh();
+    return subscribeInkConflicts(refresh);
+  }, [annotateDocId, setNotice, whiteboardNotebookId]);
+
 
   /*
    * Only the workspace on screen wears the app's chrome. The classes live on

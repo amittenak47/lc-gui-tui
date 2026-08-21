@@ -384,6 +384,30 @@ export interface ProblemPadDto {
   agent: unknown;
 }
 
+/** One page of handwriting: `gz` is base64 of the bytes `STORE_INK_PAGES` holds. */
+export interface InkPageDto {
+  kind: "annotate" | "whiteboard";
+  key: string;
+  page_id: number;
+  updated_at: number;
+  gz: string;
+}
+
+/** The same row without its bytes — what the ping carries. */
+export type InkPageDigestDto = Omit<InkPageDto, "gz">;
+
+export interface EdgeRowDto {
+  id: string;
+  from_type: string;
+  from_id: string;
+  to_type: string;
+  to_id: string;
+  kind: string;
+  created_at: number;
+  payload: unknown;
+  updated_at?: number;
+}
+
 export interface PadSyncPingDto {
   now: number;
   whiteboard: WhiteboardPadDto[];
@@ -391,6 +415,16 @@ export interface PadSyncPingDto {
   problem?: ProblemPadDto[];
   snapshots: PadSnapshotDto[];
   gone?: PadGoneDto[];
+  /**
+   * Which pages of handwriting changed since `since` — stamps, never strokes.
+   *
+   * Absent from an older hub, which is why every reader treats it as optional:
+   * a device that has not been updated simply reports no ink and syncs the rest
+   * exactly as it did before.
+   */
+  ink?: InkPageDigestDto[];
+  edges?: EdgeRowDto[];
+  gone_edges?: string[];
 }
 
 export interface DevicePrefsDto {
@@ -934,7 +968,51 @@ export class LcClient {
       problem: Array.isArray(body?.problem) ? body.problem : [],
       snapshots: Array.isArray(body?.snapshots) ? body.snapshots : [],
       gone: Array.isArray(body?.gone) ? body.gone : [],
+      ink: Array.isArray(body?.ink) ? body.ink : [],
+      edges: Array.isArray(body?.edges) ? body.edges : [],
+      gone_edges: Array.isArray(body?.gone_edges) ? body.gone_edges : [],
     };
+  }
+
+  async getInkPages(kind: "annotate" | "whiteboard", key: string): Promise<InkPageDto[]> {
+    const rows = await padInvokeOrHub<InkPageDto[]>(
+      () => this.cmd("lc_get_ink_pages", { kind, key }),
+      "GET",
+      `/pads/ink/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`,
+    );
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  /** One page per call, so a refused page never holds up the rest of a pad. */
+  async putInkPage(body: InkPageDto): Promise<ApplyAckDto> {
+    const ack = await padInvokeOrHub<ApplyAckDto>(
+      () => this.cmd("lc_put_ink_page", { body }),
+      "PUT",
+      "/pads/ink",
+      body,
+    );
+    return {
+      applied: ack?.applied !== false,
+      seq: typeof ack?.seq === "number" ? ack.seq : 0,
+    };
+  }
+
+  async putEdges(body: EdgeRowDto[]): Promise<void> {
+    if (body.length === 0) return;
+    await padInvokeOrHub<void>(
+      () => this.cmd("lc_put_edges", { body }),
+      "PUT",
+      "/pads/edges",
+      body,
+    );
+  }
+
+  async tombstoneEdge(id: string): Promise<void> {
+    await padInvokeOrHub<void>(
+      () => this.cmd("lc_tombstone_edge", { id }),
+      "POST",
+      `/pads/edges/${encodeURIComponent(id)}/tombstone`,
+    );
   }
 
   async listWhiteboardPads(): Promise<WhiteboardPadDto[]> {

@@ -31,6 +31,8 @@ import type { DocFootnote } from "./docFootnotes";
 import { run, STORE_SYNC_QUEUE } from "./idb";
 import { loadPadSyncSince, savePadSyncSince } from "./padHub";
 import { syncDocChunks } from "./docChunkSync";
+import { noteInkConflicts } from "./inkConflicts";
+import { syncEdges, syncInkPages, type InkPadKind } from "./inkSync";
 import {
   getPadSnapshot,
   PAD_SNAPSHOT_TIERS,
@@ -806,7 +808,11 @@ export async function pullPads(client: LcClient): Promise<void> {
    * They used to be keyed by the annotated file's hash, which meant two
    * annotation sets on one PDF would have shared all three tiers. Snapshots
    * the daemon still holds under a hash are simply not pulled — they belong to
-   * a key nothing asks for any more, and the live pad rows carry the ink.
+   * a key nothing asks for any more.
+   *
+   * The old wording here said the live pad rows carry the ink. They have not
+   * since live saves moved to `STORE_INK_PAGES`, and nothing carried it at all
+   * until `inkSync` — which is the hole §2c exists to close.
    */
   for (const row of annotate) {
     await fillMissingSnapshots(client, "annotate", row.id);
@@ -911,6 +917,24 @@ export async function applyPadSyncPing(
       if (row.hash) hashes.add(row.hash);
     }
     await syncDocChunks(client, [...hashes]).catch(() => {});
+  }
+
+  /*
+   * Handwriting and edges — the two rows that were authored and unsynced.
+   *
+   * On the same ping, and off the same watermark: the digest of what changed
+   * arrives with everything else, so a quiet interval costs no extra request
+   * and moves no strokes. Only pads the digest actually names, plus the ones
+   * this device holds, are examined.
+   */
+  {
+    const pads: Array<{ kind: InkPadKind; key: string }> = [
+      ...listWhiteboardNotebooks().map((row) => ({ kind: "whiteboard" as const, key: row.id })),
+      ...listAnnotateDocs().map((row) => ({ kind: "annotate" as const, key: row.id })),
+    ];
+    const conflicts = await syncInkPages(client, ping.ink ?? [], pads, since).catch(() => []);
+    if (conflicts.length > 0) noteInkConflicts(conflicts);
+    await syncEdges(client, ping.edges ?? [], ping.gone_edges ?? []).catch(() => {});
   }
 
   for (const row of ping.problem ?? []) {
