@@ -136,7 +136,7 @@ pub fn upsert(
     }
 
     let chunks = chunk_pages(&body.pages);
-    let (embeddings, kind) =
+    let (embeddings, kind, _skip) =
         embed_texts(cfg, &chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -192,7 +192,7 @@ pub fn retrieve(conn: &Connection, hash: &str, query: &str, k: usize, cfg: &Conf
             row.get::<_, Option<Vec<u8>>>(3)?,
         ))
     })?;
-    let (query_vecs, _) = embed_texts(cfg, &[query])?;
+    let (query_vecs, _, _) = embed_texts(cfg, &[query])?;
     let query_vec = query_vecs.into_iter().next().unwrap_or_default();
     let loaded: Vec<(u32, Option<String>, String, Vec<f32>)> = rows
         .map(|row| {
@@ -390,29 +390,88 @@ pub enum EmbedKind {
     Hashed,
 }
 
-fn embed_texts(cfg: &Config, texts: &[&str]) -> Result<(Vec<Vec<f32>>, EmbedKind)> {
-    const HTTP_EMBED_MAX_CHARS: usize = 24_000;
+/// Why a text is carrying word-counts rather than a model's vector.
+///
+/// The failure used to be discarded (`Err(_) => {}`), which is how a configured
+/// model with an unreachable server looked exactly like no model at all. They
+/// need different things done about them, so they are told apart here and
+/// carried out to whatever is going to say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbedSkip {
+    /// Nothing is configured; this is the default state, not a fault.
+    NoModel,
+    /// A model is configured and the request did not produce usable vectors.
+    Failed(String),
+}
+
+/// One request's worth of text for the embedding endpoint.
+///
+/// A ceiling on a *request*, not on how much of a document may be embedded —
+/// that distinction is the whole of §1b. Roughly what an endpoint will accept in
+/// one call.
+pub const HTTP_EMBED_MAX_CHARS: usize = 24_000;
+
+fn embed_texts(
+    cfg: &Config,
+    texts: &[&str],
+) -> Result<(Vec<Vec<f32>>, EmbedKind, Option<EmbedSkip>)> {
+    let hashed = |why: EmbedSkip| {
+        (
+            texts.iter().map(|t| hashed_embedding(t)).collect::<Vec<_>>(),
+            EmbedKind::Hashed,
+            Some(why),
+        )
+    };
+    let Some(model) = cfg.embed_model().filter(|m| !m.is_empty()) else {
+        return Ok(hashed(EmbedSkip::NoModel));
+    };
     let total: usize = texts.iter().map(|t| t.len()).sum();
-    if total <= HTTP_EMBED_MAX_CHARS {
-        if let Some(model) = cfg.embed_model().filter(|m| !m.is_empty()) {
-            match http_embed(cfg.embed_base_url(), model, texts) {
-                Ok(vectors) if vectors.len() == texts.len() => {
-                    return Ok((vectors, EmbedKind::Http))
-                }
-                Ok(_) => {}
-                Err(_) => {}
-            }
-        }
+    if total > HTTP_EMBED_MAX_CHARS {
+        return Ok(hashed(EmbedSkip::Failed(format!(
+            "{total} characters is more than one request holds; embed in batches"
+        ))));
     }
-    Ok((
-        texts.iter().map(|t| hashed_embedding(t)).collect(),
-        EmbedKind::Hashed,
-    ))
+    match http_embed(cfg.embed_base_url(), model, texts) {
+        Ok(vectors) if vectors.len() == texts.len() => Ok((vectors, EmbedKind::Http, None)),
+        Ok(vectors) => Ok(hashed(EmbedSkip::Failed(format!(
+            "the endpoint returned {} vectors for {} texts",
+            vectors.len(),
+            texts.len()
+        )))),
+        Err(err) => Ok(hashed(EmbedSkip::Failed(format!("{err:#}")))),
+    }
+}
+
+/*
+ * Long enough for a model that has to wake up first.
+ *
+ * This was two seconds, which is less than a local embedding model's cold start
+ * — the first request after boot loads weights, and 5-30s is ordinary. Every
+ * first request therefore timed out, the error was swallowed a few lines below,
+ * and the document was quietly stored as word-counts. It is the reason
+ * embeddings appeared never to work at all, and it bit hardest on the smallest
+ * document, because nothing else had to go wrong.
+ *
+ * The generous number is for the first request of a run; later ones are warm and
+ * a long wait there means something is stuck rather than starting.
+ */
+const EMBED_COLD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const EMBED_WARM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Whether any embedding request has succeeded since the process started.
+static EMBED_WARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn embed_timeout() -> std::time::Duration {
+    if EMBED_WARMED.load(std::sync::atomic::Ordering::Relaxed) {
+        EMBED_WARM_TIMEOUT
+    } else {
+        EMBED_COLD_TIMEOUT
+    }
 }
 
 fn http_embed(base_url: &str, model: &str, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
+        .timeout(embed_timeout())
         .build()?;
     let url = format!("{}/embeddings", base_url.trim_end_matches('/'));
     let body = serde_json::json!({ "model": model, "input": texts });
@@ -434,6 +493,7 @@ fn http_embed(base_url: &str, model: &str, texts: &[&str]) -> Result<Vec<Vec<f32
                 .collect(),
         );
     }
+    EMBED_WARMED.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(out)
 }
 
@@ -527,6 +587,63 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("lc-docs-test-{nanos}.db"))
+    }
+
+    /*
+     * The failure used to be thrown away.
+     *
+     * `Err(_) => {}` meant a configured model behind an unreachable server was
+     * indistinguishable from no model at all — same word-count vectors, same
+     * silence — and the two want completely different things done about them.
+     */
+    #[test]
+    fn no_model_is_reported_as_no_model_rather_than_a_failure() {
+        let (vectors, kind, skip) = embed_texts(&cfg(), &["some prose"]).unwrap();
+        assert_eq!(vectors[0].len(), HASH_DIM);
+        assert!(matches!(kind, EmbedKind::Hashed));
+        assert_eq!(skip, Some(EmbedSkip::NoModel));
+    }
+
+    #[test]
+    fn an_unreachable_endpoint_says_so_and_keeps_the_error() {
+        let mut cfg = cfg();
+        cfg.llm.local.embed_model = "tiny-embed".into();
+        cfg.llm.local.embed_base_url = "http://127.0.0.1:1".into();
+        let (_, kind, skip) = embed_texts(&cfg, &["some prose"]).unwrap();
+        assert!(matches!(kind, EmbedKind::Hashed));
+        match skip {
+            Some(EmbedSkip::Failed(why)) => assert!(!why.is_empty(), "the cause is the point"),
+            other => panic!("expected a reported failure, got {other:?}"),
+        }
+    }
+
+    /*
+     * A ceiling on one request, not on the document.
+     *
+     * Today this reports why; §1b makes it stop happening by filling several
+     * requests instead of giving up on the whole document.
+     */
+    #[test]
+    fn more_than_one_request_holds_is_a_reason_not_a_shrug() {
+        let mut cfg = cfg();
+        cfg.llm.local.embed_model = "tiny-embed".into();
+        let long = "x".repeat(HTTP_EMBED_MAX_CHARS + 1);
+        let (_, kind, skip) = embed_texts(&cfg, &[long.as_str()]).unwrap();
+        assert!(matches!(kind, EmbedKind::Hashed));
+        match skip {
+            Some(EmbedSkip::Failed(why)) => assert!(why.contains("batches"), "got {why}"),
+            other => panic!("expected a size failure, got {other:?}"),
+        }
+    }
+
+    /// The old two seconds was under a cold model's start-up time.
+    #[test]
+    fn the_first_embed_of_a_run_waits_for_a_model_to_wake_up() {
+        EMBED_WARMED.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert!(embed_timeout() >= std::time::Duration::from_secs(30));
+        EMBED_WARMED.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(embed_timeout() >= std::time::Duration::from_secs(10));
+        EMBED_WARMED.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[test]
