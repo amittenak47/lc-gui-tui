@@ -16,7 +16,7 @@ import {
   whiteboardDocKey,
 } from "./inkPageStore";
 import { withStore, STORE_INK_PAGES } from "./idb";
-import { edgesFor, putEdge } from "./noteLinks";
+import { edgesFor, edgeIsGone, putEdge } from "./noteLinks";
 import {
   inkPageToSnapshot,
   padNodeRef,
@@ -77,10 +77,20 @@ export async function gatherPadSnapshotExtras(
 export async function recordPadSnapshotsWithExtras(
   input: Parameters<typeof recordRollingSnapshots>[0],
 ): Promise<PadSnapshot[]> {
-  const extras = await gatherPadSnapshotExtras(input.kind, input.key, {
-    source: input.source,
+  return recordRollingSnapshots({
+    kind: input.kind,
+    key: input.key,
+    name: input.name,
+    board: input.board,
+    footnotes: input.footnotes,
+    agent: input.agent,
+    pageCount: input.pageCount,
+    now: input.now,
+    extras: () =>
+      gatherPadSnapshotExtras(input.kind, input.key, {
+        source: input.source,
+      }),
   });
-  return recordRollingSnapshots({ ...input, ...extras });
 }
 
 export async function applyPadSnapshotExtras(
@@ -111,6 +121,7 @@ export async function applyPadSnapshotExtras(
     }
   }
   for (const edge of parseSnapshotEdges(snap.edges)) {
+    if (await edgeIsGone(edge.id)) continue;
     await putEdge(edge);
   }
   if (kind !== "annotate") return;

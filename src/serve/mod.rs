@@ -143,6 +143,7 @@ pub fn router(state: Shared) -> Router {
         .route("/workspace/:id/open", post(routes::open_workspace))
         .route("/coach/review", post(coach::review))
         .route("/coach/ask", post(coach::ask))
+        .route("/docs/chunk-digests", get(routes::list_doc_chunk_digests))
         .route(
             "/docs/:hash/index",
             get(routes::get_docs_index).put(routes::put_docs_index),

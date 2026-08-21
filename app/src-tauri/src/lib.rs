@@ -129,6 +129,7 @@ pub fn run() {
         lc_routes::lc_docs_put_bytes,
         lc_routes::lc_docs_get_chunks,
         lc_routes::lc_docs_put_chunks,
+        lc_routes::lc_docs_list_chunk_digests,
         lc_routes::lc_list_whiteboard,
         lc_routes::lc_archive_whiteboard,
         lc_routes::lc_put_whiteboard,

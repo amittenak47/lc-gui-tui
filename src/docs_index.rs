@@ -5,6 +5,7 @@
 //! vector so Ask still retrieves without a second GPU slot.
 
 use anyhow::{Context, Result};
+use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -168,24 +169,60 @@ fn migrate(conn: &Connection) -> Result<()> {
         /*
          * Sync key for a chunk: (hash, page, ordinal), plus a hash of its own
          * text so two devices cannot glue the wrong vector to the wrong words.
+         *
+         * Backfill and the unique index are one transaction. A crash between
+         * them used to leave every leftover row at ordinal 0, so the unique
+         * index failed and `open()` refused the whole database.
          */
-        if !has_column(conn, "chunks", "ordinal")? {
-            conn.execute_batch(
+        let tx = conn.unchecked_transaction()?;
+        if !has_column(&tx, "chunks", "ordinal")? {
+            tx.execute_batch(
                 "ALTER TABLE chunks ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0;",
             )?;
         }
-        if !has_column(conn, "chunks", "text_hash")? {
-            conn.execute_batch(
+        if !has_column(&tx, "chunks", "text_hash")? {
+            tx.execute_batch(
                 "ALTER TABLE chunks ADD COLUMN text_hash TEXT NOT NULL DEFAULT '';",
             )?;
         }
-        backfill_chunk_keys(conn)?;
-        conn.execute_batch(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_pos ON chunks(hash, page, ordinal);",
-        )?;
+        backfill_chunk_keys(&tx)?;
+        ensure_chunk_position_index(&tx)?;
+        tx.commit()?;
     }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
+}
+
+/// Unique on `(hash, page, ordinal)` when the rows allow it.
+///
+/// Duplicates that survive backfill must not make `docs.db` unopenable: fall
+/// back to a plain index and mark those documents so a re-index is allowed.
+fn ensure_chunk_position_index(conn: &Connection) -> Result<()> {
+    conn.execute_batch("SAVEPOINT chunk_pos")?;
+    match conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_pos ON chunks(hash, page, ordinal);",
+    ) {
+        Ok(()) => {
+            conn.execute_batch("RELEASE SAVEPOINT chunk_pos")?;
+            Ok(())
+        }
+        Err(_) => {
+            conn.execute_batch("ROLLBACK TO SAVEPOINT chunk_pos")?;
+            conn.execute_batch("RELEASE SAVEPOINT chunk_pos")?;
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_chunks_pos ON chunks(hash, page, ordinal);",
+            )?;
+            conn.execute(
+                "UPDATE documents SET updated_at = 0 WHERE hash IN (
+                    SELECT hash FROM chunks
+                    GROUP BY hash, page, ordinal
+                    HAVING COUNT(*) > 1
+                 )",
+                [],
+            )?;
+            Ok(())
+        }
+    }
 }
 
 fn backfill_chunk_keys(conn: &Connection) -> Result<()> {
@@ -244,6 +281,41 @@ pub fn embedded_chunk_count(conn: &Connection, hash: &str) -> Result<u32> {
         |row| row.get(0),
     )?;
     Ok(count as u32)
+}
+
+/// Cheap sync watermark: counts and model, no vectors.
+///
+/// A ping asks this of the whole library before it moves any embeddings.
+/// Documents whose counts already agree have nothing to send.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChunkDigest {
+    pub hash: String,
+    pub embed_model: String,
+    pub chunks_total: u32,
+    pub chunks_embedded: u32,
+}
+
+pub fn list_chunk_digests(conn: &Connection) -> Result<Vec<ChunkDigest>> {
+    let mut stmt = conn.prepare(
+        "SELECT d.hash, d.embed_model, COUNT(c.id), COALESCE(SUM(c.embedded), 0)
+         FROM documents d
+         LEFT JOIN chunks c ON c.hash = d.hash
+         GROUP BY d.hash, d.embed_model
+         ORDER BY d.hash",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ChunkDigest {
+            hash: row.get(0)?,
+            embed_model: row.get(1)?,
+            chunks_total: row.get::<_, i64>(2)? as u32,
+            chunks_embedded: row.get::<_, i64>(3)? as u32,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 pub fn status(conn: &Connection, hash: &str) -> Result<IndexStatus> {
@@ -1048,36 +1120,17 @@ pub fn chunk_text_hash(text: &str) -> String {
     format!("{h:016x}")
 }
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0xf) as usize] as char);
-    }
-    out
+fn bytes_to_b64(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-fn hex_to_bytes(hex: &str) -> Result<Vec<u8>> {
-    if hex.len() % 2 != 0 {
-        anyhow::bail!("odd hex length");
+fn decode_embedding(s: &str) -> Result<Vec<u8>> {
+    if s.is_empty() {
+        return Ok(Vec::new());
     }
-    let nibble = |c: u8| -> Result<u8> {
-        match c {
-            b'0'..=b'9' => Ok(c - b'0'),
-            b'a'..=b'f' => Ok(c - b'a' + 10),
-            b'A'..=b'F' => Ok(c - b'A' + 10),
-            _ => anyhow::bail!("invalid hex"),
-        }
-    };
-    let raw = hex.as_bytes();
-    let mut out = Vec::with_capacity(raw.len() / 2);
-    let mut i = 0;
-    while i < raw.len() {
-        out.push((nibble(raw[i])? << 4) | nibble(raw[i + 1])?);
-        i += 2;
-    }
-    Ok(out)
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .context("invalid embedding encoding")
 }
 
 /// One chunk on the wire: vector + text hash, not the text itself.
@@ -1093,7 +1146,7 @@ pub struct ChunkRecord {
     pub heading: Option<String>,
     pub text_hash: String,
     pub embedded: u8,
-    /// Hex of little-endian f32 bytes.
+    /// Standard base64 of little-endian f32 bytes.
     pub embedding: String,
 }
 
@@ -1114,7 +1167,7 @@ pub struct ChunkMergeAck {
     pub reason: Option<String>,
 }
 
-pub const CHUNK_TEXT_MISMATCH: &str = "chunk text hash mismatch; local index dropped";
+pub const CHUNK_TEXT_MISMATCH: &str = "chunk text hash mismatch";
 
 pub fn list_chunks(conn: &Connection, hash: &str) -> Result<ChunkBundle> {
     let embed_model: String = conn
@@ -1148,7 +1201,7 @@ pub fn list_chunks(conn: &Connection, hash: &str) -> Result<ChunkBundle> {
             heading,
             text_hash,
             embedded,
-            embedding: bytes_to_hex(embedding.as_deref().unwrap_or(&[])),
+            embedding: bytes_to_b64(embedding.as_deref().unwrap_or(&[])),
         });
     }
     Ok(ChunkBundle {
@@ -1162,8 +1215,10 @@ pub fn list_chunks(conn: &Connection, hash: &str) -> Result<ChunkBundle> {
 ///
 /// An `embedded = 1` row beats `0`. Two embedded rows are equivalent, so the
 /// local one stays. Different `embed_model` values are kept apart. Positions
-/// that agree with a different `text_hash` refuse the whole document and drop
-/// the local index — a wrong vector is worse than a missing one.
+/// that agree with a different `text_hash` refuse the whole document and
+/// leave the receiver untouched — a mismatch is about these two copies, not
+/// a verdict on the side that already holds an index. The pusher decides
+/// whether to drop its own.
 pub fn merge_chunks(conn: &mut Connection, incoming: &ChunkBundle) -> Result<ChunkMergeAck> {
     if incoming.hash.trim().is_empty() {
         anyhow::bail!("missing document hash");
@@ -1225,14 +1280,6 @@ pub fn merge_chunks(conn: &mut Connection, incoming: &ChunkBundle) -> Result<Chu
                 && !text_hash.is_empty()
                 && chunk.text_hash != *text_hash
             {
-                conn.execute(
-                    "DELETE FROM chunks WHERE hash = ?1",
-                    params![incoming.hash],
-                )?;
-                conn.execute(
-                    "DELETE FROM documents WHERE hash = ?1",
-                    params![incoming.hash],
-                )?;
                 return Ok(ChunkMergeAck {
                     applied: false,
                     updated: 0,
@@ -1254,7 +1301,7 @@ pub fn merge_chunks(conn: &mut Connection, incoming: &ChunkBundle) -> Result<Chu
         if *local_embedded == 1 {
             continue;
         }
-        let blob = hex_to_bytes(&chunk.embedding)?;
+        let blob = decode_embedding(&chunk.embedding)?;
         tx.execute(
             "UPDATE chunks SET embedding = ?1, embedded = 1
              WHERE hash = ?2 AND page = ?3 AND ordinal = ?4",
@@ -2169,7 +2216,7 @@ mod tests {
     }
 
     #[test]
-    fn a_text_hash_mismatch_refuses_and_drops_the_local_index() {
+    fn a_text_hash_mismatch_refuses_and_keeps_the_receiver() {
         let path_a = tmp();
         let path_b = tmp();
         let mut a = open(&path_a).unwrap();
@@ -2196,7 +2243,13 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(n, 0, "local document is dropped so a re-index is honest");
+        assert_eq!(n, 1, "receiver's document stays; the pusher drops its own");
+        let chunks: i64 = b
+            .query_row("SELECT COUNT(*) FROM chunks WHERE hash = 'h'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(chunks, 1);
         drop(a);
         drop(b);
         let _ = std::fs::remove_file(&path_a);
@@ -2279,6 +2332,123 @@ mod tests {
             .unwrap();
         assert_eq!(ordinal, 0);
         assert_eq!(text_hash, chunk_text_hash("legacy words"));
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_docs_db_with_duplicate_chunk_keys_still_opens() {
+        let path = tmp();
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                r#"
+                PRAGMA user_version = 2;
+                CREATE TABLE documents (
+                    hash TEXT PRIMARY KEY, name TEXT NOT NULL, doc_type TEXT NOT NULL,
+                    page_count INTEGER NOT NULL, embedded INTEGER NOT NULL DEFAULT 0,
+                    embed_model TEXT NOT NULL DEFAULT '',
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE chunks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL,
+                    page INTEGER NOT NULL, heading TEXT, text TEXT NOT NULL, embedding BLOB,
+                    embedded INTEGER NOT NULL DEFAULT 0,
+                    ordinal INTEGER NOT NULL DEFAULT 0,
+                    text_hash TEXT NOT NULL DEFAULT ''
+                );
+                INSERT INTO documents VALUES ('h', 'n.pdf', 'pdf', 1, 0, '', 99);
+                INSERT INTO chunks (hash, page, heading, text, embedding, embedded, ordinal, text_hash)
+                VALUES
+                    ('h', 1, NULL, 'one', NULL, 0, 7, 'aaaa'),
+                    ('h', 1, NULL, 'two', NULL, 0, 7, 'bbbb');
+                "#,
+            )
+            .unwrap();
+        }
+        let conn = open(&path).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents WHERE hash = 'h'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 1);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn duplicate_positions_fall_back_to_a_plain_index() {
+        let path = tmp();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE documents (
+                hash TEXT PRIMARY KEY, name TEXT NOT NULL, doc_type TEXT NOT NULL,
+                page_count INTEGER NOT NULL, embedded INTEGER NOT NULL DEFAULT 0,
+                embed_model TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL,
+                page INTEGER NOT NULL, heading TEXT, text TEXT NOT NULL, embedding BLOB,
+                embedded INTEGER NOT NULL DEFAULT 0,
+                ordinal INTEGER NOT NULL DEFAULT 0,
+                text_hash TEXT NOT NULL DEFAULT ''
+            );
+            INSERT INTO documents VALUES ('h', 'n.pdf', 'pdf', 1, 0, '', 99);
+            INSERT INTO chunks (hash, page, heading, text, embedding, embedded, ordinal, text_hash)
+            VALUES
+                ('h', 1, NULL, 'one', NULL, 0, 7, 'aaaa'),
+                ('h', 1, NULL, 'two', NULL, 0, 7, 'bbbb');
+            "#,
+        )
+        .unwrap();
+        ensure_chunk_position_index(&conn).unwrap();
+        let updated: i64 = conn
+            .query_row("SELECT updated_at FROM documents WHERE hash = 'h'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(updated, 0, "duplicates are marked so a re-index is allowed");
+        conn.execute_batch(
+            "CREATE UNIQUE INDEX idx_chunks_pos_probe ON chunks(hash, page, ordinal);",
+        )
+        .unwrap_err();
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn chunk_digests_name_counts_without_vectors() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.pdf".into(),
+            doc_type: "pdf".into(),
+            pages: sample_pages(2),
+        };
+        upsert(&mut conn, "h", &body, &cfg(), false).unwrap();
+        conn.execute(
+            "UPDATE chunks SET embedded = 1 WHERE hash = 'h' AND page = 1",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE documents SET embed_model = 'tiny-embed' WHERE hash = 'h'",
+            [],
+        )
+        .unwrap();
+        let digests = list_chunk_digests(&conn).unwrap();
+        assert_eq!(
+            digests,
+            vec![ChunkDigest {
+                hash: "h".into(),
+                embed_model: "tiny-embed".into(),
+                chunks_total: 2,
+                chunks_embedded: 1,
+            }]
+        );
         drop(conn);
         let _ = std::fs::remove_file(&path);
     }

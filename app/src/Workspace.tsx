@@ -54,8 +54,8 @@ import {
 } from "./util/autosavePref";
 import { Board } from "./canvas/Board";
 import { inkOpsFrom } from "./canvas/inkCodec";
-import { concatInkShards, drainDirtyInkArchives } from "./canvas/inkArchiveClient";
-import type { BoardBlob, BoardHandle, ScreenRect } from "./canvas/BoardHandle";
+import { drainDirtyInkArchives } from "./canvas/inkArchiveClient";
+import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
 import { studentAuthoredElements, studentElements } from "./canvas/capture";
 import type { StructureBaseline } from "./canvas/boardDelta";
 import {
@@ -289,6 +289,11 @@ import {
   applyPadSnapshotExtras,
   recordPadSnapshotsWithExtras,
 } from "./util/padSnapshotExtras";
+import {
+  clearDocChunkMismatch,
+  docChunkMismatchReason,
+  subscribeDocChunkMismatch,
+} from "./util/docChunkSync";
 import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
@@ -378,12 +383,6 @@ async function flushDirtyInk(board: BoardHandle, docKey: string | null): Promise
   } catch {
     /* stay dirty — the next save retries */
   }
-}
-
-async function boardWithAssembledInk(board: BoardHandle, blob: BoardBlob): Promise<BoardBlob> {
-  const shards = board.encodedInkShards();
-  if (shards.length === 0) return blob;
-  return { ...blob, inkC: await concatInkShards(shards) };
 }
 
 async function restoreInk(board: BoardHandle, docKey: string | null, blob: { ink?: unknown; inkC?: unknown }): Promise<void> {
@@ -776,6 +775,7 @@ export function Workspace({
   >("idle");
   const [docIndexError, setDocIndexError] = useState<string | null>(null);
   const [docIndexMeta, setDocIndexMeta] = useState<DocIndexStatus | null>(null);
+  const [chunkSyncIssue, setChunkSyncIssue] = useState<string | null>(null);
   /*
    * Two jobs, two units, two bars.
    *
@@ -808,6 +808,7 @@ export function Workspace({
   const indexOpenDocument = useCallback(() => {
     const job = indexInputsRef.current;
     if (!job) return;
+    clearDocChunkMismatch(job.hash);
     const loadGen = workspaceLoadGenRef.current;
     setDocIndexStatus("indexing");
     setDocIndexError(null);
@@ -1651,14 +1652,13 @@ export function Workspace({
             });
             if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
             announceAutosave(tab.id, saved.name);
-            const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void pushAnnotatePad(client, saved).then((ok) => {
               if (!ok) return;
               void recordPadSnapshotsWithExtras({
                 kind: "annotate",
                 key: saved.id,
                 name: saved.name,
-                board: snapBoard,
+                board: liveBoard,
                 footnotes: saved.footnotes,
                 agent: saved.agent,
               }).then((written) => void pushRolledSnapshots(client, written));
@@ -1705,14 +1705,13 @@ export function Workspace({
             if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
             await flushDirtyInk(board, whiteboardDocKey(saved.id));
             announceAutosave(tab.id, saved.title);
-            const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void pushWhiteboardPad(client, saved).then((ok) => {
               if (!ok) return;
               void recordPadSnapshotsWithExtras({
                 kind: "whiteboard",
                 key: saved.id,
                 name: saved.title,
-                board: snapBoard,
+                board: liveBoard,
                 agent: saved.agent,
                 pageCount: saved.pageCount,
               }).then((written) => void pushRolledSnapshots(client, written));
@@ -3228,7 +3227,7 @@ export function Workspace({
       await applyPadSnapshotExtras(kind, key, snap);
       const board = boardRef.current;
       if (!board) return;
-      const ink = inkOpsFrom(snap.board);
+      const docKey = kind === "annotate" ? annotateDocKey(key) : whiteboardDocKey(key);
       if (kind === "annotate") {
         if (snap.footnotes) {
           setAnnotateFootnotes(snap.footnotes);
@@ -3248,7 +3247,7 @@ export function Workspace({
               }[],
             ) ?? annotatePageWidth,
           ),
-          ink,
+          ink: [],
           files: snap.board.files,
           inkPalettes: snap.board.inkPalettes,
         });
@@ -3259,7 +3258,7 @@ export function Workspace({
         );
         board.restoreBoard(snap.board.elements, snap.board.appState, {
           skeletons: buildWhiteboardTemplate(pages, isDarkTheme(themeId)),
-          ink,
+          ink: [],
           files: snap.board.files,
           inkPalettes: snap.board.inkPalettes,
         });
@@ -3268,7 +3267,7 @@ export function Workspace({
           setAgentMessages(restoreAgentMessages(snap.agent));
         }
       }
-      if (ink.length > 0) board.setInkOps(ink);
+      await restoreInk(board, docKey, snap.board);
       lastSavedHashRef.current = null;
       const when = new Date(snap.writtenAt).toLocaleString();
       setNotice(`Restored the ${tier} snapshot from ${when}.`);
@@ -6000,14 +5999,13 @@ export function Workspace({
         await flushDirtyInk(board, whiteboardDocKey(saved.id));
         await rebaselineWhiteboardSession(saved.id);
         if (!opts?.quiet) setNotice(`Saved “${saved.title}”.`);
-        const snapBoard = await boardWithAssembledInk(board, liveBoard);
         void pushWhiteboardPad(client, saved).then((ok) => {
           if (!ok) return;
           void recordPadSnapshotsWithExtras({
             kind: "whiteboard",
             key: saved.id,
             name: saved.title,
-            board: snapBoard,
+            board: liveBoard,
             agent: saved.agent,
             pageCount: saved.pageCount,
           }).then((written) => void pushRolledSnapshots(client, written));
@@ -6148,14 +6146,13 @@ export function Workspace({
       );
       annotatePristineMarksRef.current = footnoteRevision(annotateFootnotes);
       annotatePristineAgentRef.current = JSON.stringify(persistableAgentMessages(agentMessages));
-      const snapBoard = await boardWithAssembledInk(board, blob);
       void pushAnnotatePad(client, saved).then((ok) => {
         if (!ok) return;
         void recordPadSnapshotsWithExtras({
           kind: "annotate",
           key: saved.id,
           name: saved.name,
-          board: snapBoard,
+          board: blob,
           footnotes: saved.footnotes,
           agent: saved.agent,
         }).then((written) => void pushRolledSnapshots(client, written));
@@ -6421,14 +6418,13 @@ export function Workspace({
                 setWhiteboardNotebookId(saved.id);
                 await flushDirtyInk(handle, whiteboardDocKey(saved.id));
                 await rebaselineWhiteboardSession(saved.id);
-                const snapBoard = await boardWithAssembledInk(handle, blob);
                 void pushWhiteboardPad(client, saved).then((ok) => {
                   if (!ok) return;
                   void recordPadSnapshotsWithExtras({
                     kind: "whiteboard",
                     key: saved.id,
                     name: saved.title,
-                    board: snapBoard,
+                    board: blob,
                     agent: saved.agent,
                     pageCount: saved.pageCount,
                   }).then((written) => void pushRolledSnapshots(client, written));
@@ -7100,6 +7096,13 @@ export function Workspace({
     return () => setWorkspaceApi(tab.id, null);
   }, [abortLoad, leaveProblem, parkWorkspace, setWorkspaceApi, showHomeChooser, tab.id, tab.kind]);
 
+  useEffect(() => {
+    const hash = docIndexMeta?.hash?.trim() ?? "";
+    const refresh = () => setChunkSyncIssue(hash ? docChunkMismatchReason(hash) : null);
+    refresh();
+    return subscribeDocChunkMismatch(refresh);
+  }, [docIndexMeta?.hash]);
+
   /*
    * Only the workspace on screen wears the app's chrome. The classes live on
    * the shell's wrapper because they are global — header height, agent column
@@ -7135,6 +7138,7 @@ export function Workspace({
         blocked: webLive
           ? "Freeze this page first — indexing reads the frozen copy, not the live page."
           : null,
+        syncIssue: chunkSyncIssue,
       },
     });
   }, [
@@ -7142,6 +7146,7 @@ export function Workspace({
     busy,
     shellLoading,
     coachOpen,
+    chunkSyncIssue,
     docIndexError,
     docIndexMeta,
     docIndexStatus,
