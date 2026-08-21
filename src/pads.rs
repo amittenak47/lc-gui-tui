@@ -6,6 +6,8 @@
 //! not stored here.
 
 use anyhow::{Context, Result};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -84,6 +86,36 @@ pub fn open(path: &Path) -> Result<Connection> {
             prefs_json TEXT NOT NULL,
             updated_at INTEGER NOT NULL
         );
+        -- Handwriting, one row per page.
+        --
+        -- Not a column on the pad row, for the reason `inkPageStore` exists on
+        -- the device: a densely inked textbook is megabytes, and putting it in
+        -- the row means every title change ships every stroke. Per page is also
+        -- what makes the merge rule expressible — newest `updated_at` wins, and
+        -- only for the page that actually changed.
+        CREATE TABLE IF NOT EXISTS ink_pages (
+            kind TEXT NOT NULL,
+            key TEXT NOT NULL,
+            page_id INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            gz BLOB NOT NULL,
+            PRIMARY KEY (kind, key, page_id)
+        );
+        -- Graph edges. Stated facts with ids, so the merge is a union.
+        --
+        -- `gone` carries the tombstone: an edge deleted on one device must not
+        -- come back the next time the other device pushes its copy.
+        CREATE TABLE IF NOT EXISTS edges (
+            id TEXT PRIMARY KEY,
+            from_type TEXT NOT NULL,
+            from_id TEXT NOT NULL,
+            to_type TEXT NOT NULL,
+            to_id TEXT NOT NULL,
+            edge_kind TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS gone (
             kind TEXT NOT NULL,
             id TEXT NOT NULL,
@@ -96,6 +128,11 @@ pub fn open(path: &Path) -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS idx_problem_updated ON problem(updated_at);
         CREATE INDEX IF NOT EXISTS idx_revisions_pad ON revisions(kind, pad_id);
         CREATE INDEX IF NOT EXISTS idx_gone_at ON gone(gone_at);
+        CREATE INDEX IF NOT EXISTS idx_ink_pages_pad ON ink_pages(kind, key);
+        CREATE INDEX IF NOT EXISTS idx_ink_pages_updated ON ink_pages(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_type, from_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_type, to_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_updated ON edges(updated_at);
         "#,
     )?;
     ensure_column(&conn, "whiteboard", "sync_seq", "INTEGER NOT NULL DEFAULT 0")?;
@@ -566,6 +603,9 @@ pub fn delete_pad(conn: &Connection, kind: PadKind, id: &str, seq: i64) -> Resul
             });
         }
         drop_snapshots_and_revisions(conn, kind, id)?;
+        // Handwriting is pad content, so it goes with the pad. Left behind it
+        // would be resurrected by the next device to push a page of it.
+        delete_ink_pages(conn, kind.as_str(), id)?;
         let table = kind.as_str();
         conn.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id])?;
         conn.execute(
@@ -1064,6 +1104,268 @@ pub fn put_snapshot(conn: &Connection, row: &SnapshotRow) -> Result<ApplyAck> {
         applied: true,
         seq: stored_seq(conn, kind, &row.key)?,
     })
+}
+
+/// One page of handwriting on the wire. `gz` is base64 of the bytes on disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InkPageRow {
+    pub kind: String,
+    pub key: String,
+    pub page_id: i64,
+    pub updated_at: i64,
+    pub gz: String,
+}
+
+/// What a device needs to decide whether to ask for a page: no bytes.
+///
+/// The same shape the chunk digest takes, and for the same reason - a ping runs
+/// every fifteen seconds and must not move handwriting to discover that nothing
+/// has changed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InkPageDigest {
+    pub kind: String,
+    pub key: String,
+    pub page_id: i64,
+    pub updated_at: i64,
+}
+
+fn ink_kind(kind: &str) -> Result<PadKind> {
+    match kind {
+        "whiteboard" => Ok(PadKind::Whiteboard),
+        "annotate" => Ok(PadKind::Annotate),
+        _ => anyhow::bail!("unknown ink kind"),
+    }
+}
+
+pub fn list_ink_digests(conn: &Connection, since: i64) -> Result<Vec<InkPageDigest>> {
+    let mut stmt = conn.prepare(
+        "SELECT kind, key, page_id, updated_at FROM ink_pages
+         WHERE updated_at > ?1 ORDER BY updated_at, kind, key, page_id",
+    )?;
+    let rows = stmt.query_map(params![since], |row| {
+        Ok(InkPageDigest {
+            kind: row.get(0)?,
+            key: row.get(1)?,
+            page_id: row.get(2)?,
+            updated_at: row.get(3)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn get_ink_pages(conn: &Connection, kind: &str, key: &str) -> Result<Vec<InkPageRow>> {
+    ink_kind(kind)?;
+    let mut stmt = conn.prepare(
+        "SELECT kind, key, page_id, updated_at, gz FROM ink_pages
+         WHERE kind = ?1 AND key = ?2 ORDER BY page_id",
+    )?;
+    let rows = stmt.query_map(params![kind, key], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, Vec<u8>>(4)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (kind, key, page_id, updated_at, gz) = row?;
+        out.push(InkPageRow {
+            kind,
+            key,
+            page_id,
+            updated_at,
+            gz: BASE64.encode(&gz),
+        });
+    }
+    Ok(out)
+}
+
+/// Newest page wins, and a page of a deleted pad is refused.
+///
+/// Per page rather than per pad, so two devices writing on two pages of one
+/// notebook both land. Equal `updated_at` keeps what is already here: a tie is
+/// two devices that saved in the same millisecond, and taking the incoming one
+/// would make the result depend on which happened to ping last.
+pub fn put_ink_page(conn: &Connection, row: &InkPageRow) -> Result<ApplyAck> {
+    let kind = ink_kind(&row.kind)?;
+    let gone = gone_seq(conn, kind, &row.key)?;
+    if !pad_is_live(conn, kind.as_str(), &row.key)? {
+        return Ok(ApplyAck {
+            applied: false,
+            seq: gone,
+        });
+    }
+    let bytes = BASE64
+        .decode(row.gz.as_bytes())
+        .context("ink page is not base64")?;
+    if bytes.is_empty() {
+        anyhow::bail!("ink page is empty");
+    }
+    let current: Option<i64> = conn
+        .query_row(
+            "SELECT updated_at FROM ink_pages WHERE kind = ?1 AND key = ?2 AND page_id = ?3",
+            params![row.kind, row.key, row.page_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(current) = current {
+        if current >= row.updated_at {
+            return Ok(ApplyAck {
+                applied: false,
+                seq: stored_seq(conn, kind, &row.key)?,
+            });
+        }
+    }
+    conn.execute(
+        "INSERT INTO ink_pages (kind, key, page_id, updated_at, gz)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(kind, key, page_id) DO UPDATE SET
+            updated_at = excluded.updated_at,
+            gz = excluded.gz",
+        params![row.kind, row.key, row.page_id, row.updated_at, bytes],
+    )?;
+    Ok(ApplyAck {
+        applied: true,
+        seq: stored_seq(conn, kind, &row.key)?,
+    })
+}
+
+pub fn delete_ink_pages(conn: &Connection, kind: &str, key: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM ink_pages WHERE kind = ?1 AND key = ?2",
+        params![kind, key],
+    )?;
+    Ok(())
+}
+
+/// One graph edge on the wire. `payload` is the device's own JSON, kept whole.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeRow {
+    pub id: String,
+    pub from_type: String,
+    pub from_id: String,
+    pub to_type: String,
+    pub to_id: String,
+    pub kind: String,
+    pub created_at: i64,
+    pub payload: serde_json::Value,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+pub fn list_edges(conn: &Connection, since: i64) -> Result<Vec<EdgeRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, from_type, from_id, to_type, to_id, edge_kind, created_at,
+                payload_json, updated_at
+         FROM edges WHERE updated_at > ?1 ORDER BY updated_at, id",
+    )?;
+    let rows = stmt.query_map(params![since], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, i64>(8)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, from_type, from_id, to_type, to_id, kind, created_at, payload, updated_at) = row?;
+        out.push(EdgeRow {
+            id,
+            from_type,
+            from_id,
+            to_type,
+            to_id,
+            kind,
+            created_at,
+            payload: serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null),
+            updated_at,
+        });
+    }
+    Ok(out)
+}
+
+/// Union on id, minus anything tombstoned.
+///
+/// An edge is a stated fact, so two devices that both drew it agree and there
+/// is nothing to resolve. Deleting is the only real event, and `gone` already
+/// models that - without consulting it, a device still holding a deleted edge
+/// would put it back on its next push, forever.
+pub fn put_edge(conn: &Connection, row: &EdgeRow, now: i64) -> Result<ApplyAck> {
+    if row.id.trim().is_empty() {
+        anyhow::bail!("edge needs an id");
+    }
+    let gone = edge_gone_seq(conn, &row.id)?;
+    if gone > 0 {
+        return Ok(ApplyAck {
+            applied: false,
+            seq: gone,
+        });
+    }
+    conn.execute(
+        "INSERT INTO edges (id, from_type, from_id, to_type, to_id, edge_kind,
+                            created_at, payload_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(id) DO NOTHING",
+        params![
+            row.id,
+            row.from_type,
+            row.from_id,
+            row.to_type,
+            row.to_id,
+            row.kind,
+            row.created_at,
+            json_text(&row.payload),
+            now
+        ],
+    )?;
+    Ok(ApplyAck {
+        applied: true,
+        seq: now,
+    })
+}
+
+pub fn delete_edge(conn: &Connection, id: &str, now: i64) -> Result<()> {
+    conn.execute("DELETE FROM edges WHERE id = ?1", params![id])?;
+    conn.execute(
+        "INSERT INTO gone (kind, id, seq, gone_at) VALUES ('edge', ?1, ?2, ?2)
+         ON CONFLICT(kind, id) DO UPDATE SET seq = excluded.seq, gone_at = excluded.gone_at",
+        params![id, now],
+    )?;
+    Ok(())
+}
+
+pub fn edge_gone_seq(conn: &Connection, id: &str) -> Result<i64> {
+    let seq: Option<i64> = conn
+        .query_row(
+            "SELECT seq FROM gone WHERE kind = 'edge' AND id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(seq.unwrap_or(0))
+}
+
+pub fn list_gone_edges(conn: &Connection, since: i64) -> Result<Vec<String>> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM gone WHERE kind = 'edge' AND gone_at > ?1 ORDER BY gone_at")?;
+    let rows = stmt.query_map(params![since], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 pub fn get_snapshots(conn: &Connection, kind: &str, key: &str) -> Result<Vec<SnapshotRow>> {
@@ -1790,6 +2092,136 @@ mod tests {
             PutOutcome::Written(row) => assert_eq!(row.updated_at, 20),
             other => panic!("{other:?}"),
         }
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn ink(kind: &str, key: &str, page: i64, at: i64, body: &str) -> InkPageRow {
+        InkPageRow {
+            kind: kind.into(),
+            key: key.into(),
+            page_id: page,
+            updated_at: at,
+            gz: BASE64.encode(body.as_bytes()),
+        }
+    }
+
+    fn edge(id: &str, to: &str) -> EdgeRow {
+        EdgeRow {
+            id: id.into(),
+            from_type: "whiteboard".into(),
+            from_id: "w1".into(),
+            to_type: "annotate".into(),
+            to_id: to.into(),
+            kind: "picker".into(),
+            created_at: 1,
+            payload: json!({ "id": id }),
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn two_devices_writing_on_two_pages_both_land() {
+        // The case per-page exists for. A pad-wide newest-wins would have thrown
+        // one of these away for no reason: they do not touch the same paper.
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        assert!(put_ink_page(&conn, &ink("whiteboard", "w1", 1, 10, "pc"))
+            .unwrap()
+            .applied);
+        assert!(put_ink_page(&conn, &ink("whiteboard", "w1", 2, 9, "tablet"))
+            .unwrap()
+            .applied);
+        let pages = get_ink_pages(&conn, "whiteboard", "w1").unwrap();
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].page_id, 1);
+        assert_eq!(pages[1].page_id, 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn the_newer_page_wins_and_the_older_one_is_refused() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        put_ink_page(&conn, &ink("whiteboard", "w1", 1, 20, "newer")).unwrap();
+        let ack = put_ink_page(&conn, &ink("whiteboard", "w1", 1, 5, "older")).unwrap();
+        assert!(!ack.applied, "an older page must not overwrite a newer one");
+        let pages = get_ink_pages(&conn, "whiteboard", "w1").unwrap();
+        assert_eq!(BASE64.decode(pages[0].gz.as_bytes()).unwrap(), b"newer");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_tie_keeps_what_is_already_here() {
+        // Two devices saving in the same millisecond. Taking the incoming one
+        // would make the result depend on which pinged last, which is not a
+        // rule so much as a coin toss.
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        put_ink_page(&conn, &ink("whiteboard", "w1", 1, 7, "first")).unwrap();
+        let ack = put_ink_page(&conn, &ink("whiteboard", "w1", 1, 7, "second")).unwrap();
+        assert!(!ack.applied);
+        let pages = get_ink_pages(&conn, "whiteboard", "w1").unwrap();
+        assert_eq!(BASE64.decode(pages[0].gz.as_bytes()).unwrap(), b"first");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn ink_for_a_deleted_pad_is_refused_and_never_resurrects_it() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        put_ink_page(&conn, &ink("whiteboard", "w1", 1, 10, "strokes")).unwrap();
+        delete_pad(&conn, PadKind::Whiteboard, "w1", 5).unwrap();
+        assert!(get_ink_pages(&conn, "whiteboard", "w1").unwrap().is_empty());
+        let ack = put_ink_page(&conn, &ink("whiteboard", "w1", 1, 99, "late")).unwrap();
+        assert!(!ack.applied, "a pad in the grave stays there");
+        assert!(get_ink_pages(&conn, "whiteboard", "w1").unwrap().is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn the_ink_digest_carries_no_bytes_and_answers_since() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        put_ink_page(&conn, &ink("whiteboard", "w1", 1, 10, "one")).unwrap();
+        put_ink_page(&conn, &ink("whiteboard", "w1", 2, 30, "two")).unwrap();
+        let all = list_ink_digests(&conn, 0).unwrap();
+        assert_eq!(all.len(), 2);
+        let recent = list_ink_digests(&conn, 20).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].page_id, 2);
+        assert_eq!(recent[0].updated_at, 30);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn edges_union_on_id() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        assert!(put_edge(&conn, &edge("e1", "a1"), 10).unwrap().applied);
+        assert!(put_edge(&conn, &edge("e1", "a1"), 20).unwrap().applied);
+        assert!(put_edge(&conn, &edge("e2", "a2"), 30).unwrap().applied);
+        let rows = list_edges(&conn, 0).unwrap();
+        assert_eq!(rows.len(), 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_deleted_edge_does_not_come_back_when_the_other_device_pushes_it() {
+        // Without the tombstone the loser of a delete re-states the edge on its
+        // next ping, and the two devices push it back and forth forever.
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_edge(&conn, &edge("e1", "a1"), 10).unwrap();
+        delete_edge(&conn, "e1", 20).unwrap();
+        let ack = put_edge(&conn, &edge("e1", "a1"), 30).unwrap();
+        assert!(!ack.applied);
+        assert!(list_edges(&conn, 0).unwrap().is_empty());
+        assert_eq!(list_gone_edges(&conn, 0).unwrap(), vec!["e1".to_string()]);
         let _ = std::fs::remove_file(path);
     }
 
