@@ -782,6 +782,9 @@ export function Workspace({
             name: job.name,
             text: job.text,
             bytes: job.bytes,
+            // Only a web page uses these — see `webPagesFromMarks` for why the
+            // rest of a page is deliberately left out of the index.
+            marks: annotateFootnotesRef.current,
           });
           rememberExtractedPages(job.hash, pages);
           if (pages.length === 0) {

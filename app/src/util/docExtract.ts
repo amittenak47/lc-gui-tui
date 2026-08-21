@@ -7,6 +7,7 @@
 import type { DocType } from "./annotateStore";
 import { readEpub } from "./epub";
 import { loadPdfJs } from "../modes/PdfDocument";
+import { webPagesFromMarks, type MarkLike } from "./webMarkPages";
 
 export interface ExtractedPage {
   page: number;
@@ -42,6 +43,14 @@ export async function extractDocumentPages(input: {
   name: string;
   text: string;
   bytes?: ArrayBuffer | null;
+  /**
+   * The reader's marks, used only for a web page — see {@link webPagesFromMarks}.
+   *
+   * Every other kind was deliberately opened, so all of it is indexed. A page
+   * was not: it is mostly navigation and promotion, and the part that was meant
+   * is the part a selection block was drawn around.
+   */
+  marks?: readonly MarkLike[];
 }): Promise<ExtractedPage[]> {
   if (input.docType === "pdf") {
     if (!input.bytes) return [];
@@ -52,6 +61,17 @@ export async function extractDocumentPages(input: {
     return extractEpubPages(input.bytes);
   }
   if (input.docType === "web") {
+    const marked = webPagesFromMarks(input.marks ?? []);
+    if (marked.length > 0) {
+      return marked.map((entry) => ({
+        page: entry.page,
+        text: entry.text,
+        heading: headingFrom(entry.text) ?? input.name,
+        scope: input.name,
+      }));
+    }
+    // Nothing marked yet, so there is nothing to prefer — index the page and let
+    // the chip say that marking passages first would index less noise.
     const text = htmlToText(input.text).trim();
     if (!text) return [];
     return [
