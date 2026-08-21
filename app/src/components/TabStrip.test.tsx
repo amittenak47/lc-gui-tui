@@ -111,22 +111,35 @@ function mount(props: Partial<Parameters<typeof TabStrip>[0]> & { tabs: TabRecor
 }
 
 describe("TabStrip", () => {
-  it("draws every record, active one marked", () => {
+  it("draws every open document, active one marked", () => {
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")], activeId: "b1" });
     const chips = view.chips();
     expect(chips.map((chip) => chip.querySelector(".lc-tab-title")?.textContent)).toEqual([
-      "Home",
       "doodle",
     ]);
-    expect(chips[1]?.className).toContain("is-active");
-    expect(chips[0]?.getAttribute("aria-selected")).toBe("false");
+    expect(chips[0]?.className).toContain("is-active");
     view.unmount();
   });
 
-  it("gives Home no close button and everything else one", () => {
+  it("does not draw Home — the wordmark is the way back", () => {
+    /*
+     * Home used to be a chip, which made a fixed landmark compete for width
+     * with the documents actually open; shrinking it to an icon left a gap in
+     * the strip instead. The `lc whiteboard` wordmark already sits in the corner
+     * every application uses to mean "back to the start".
+     *
+     * The tab still exists in state — focusing and closing back to it are
+     * unchanged — it is simply not drawn here.
+     */
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")] });
-    expect(view.chips()[0]?.querySelector(".lc-tab-close")).toBeNull();
-    expect(view.chips()[1]?.querySelector(".lc-tab-close")).not.toBeNull();
+    expect(view.chips()).toHaveLength(1);
+    expect(view.chips()[0]?.getAttribute("data-tab-kind")).toBe("whiteboard");
+    view.unmount();
+  });
+
+  it("gives every drawn chip a close button", () => {
+    const view = mount({ tabs: [homeTab(), board("b1", "doodle")] });
+    expect(view.chips()[0]?.querySelector(".lc-tab-close")).not.toBeNull();
     view.unmount();
   });
 
@@ -135,23 +148,13 @@ describe("TabStrip", () => {
     const onClose = vi.fn();
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")], onFocus, onClose });
     act(() => {
-      view.chips()[1]?.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
+      view.chips()[0]?.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
     });
     act(() => {
-      view.chips()[1]?.querySelector<HTMLButtonElement>(".lc-tab-close")?.click();
+      view.chips()[0]?.querySelector<HTMLButtonElement>(".lc-tab-close")?.click();
     });
     expect(onFocus).toHaveBeenCalledWith("b1");
     expect(onClose).toHaveBeenCalledWith("b1");
-    view.unmount();
-  });
-
-  it("still reports Home focus when Home is already the active chip", () => {
-    const onFocus = vi.fn();
-    const view = mount({ tabs: [homeTab(), board("b1", "doodle")], onFocus });
-    act(() => {
-      view.chips()[0]?.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
-    });
-    expect(onFocus).toHaveBeenCalledWith(HOME_TAB_ID);
     view.unmount();
   });
 
@@ -164,7 +167,7 @@ describe("TabStrip", () => {
     const onFocus = vi.fn();
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")], busy: true, onFocus });
     act(() => {
-      view.chips()[1]?.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
+      view.chips()[0]?.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
     });
     expect(onFocus).toHaveBeenCalledWith("b1");
     view.unmount();
@@ -179,8 +182,8 @@ describe("TabStrip", () => {
     });
     const chips = view.chips();
     // Active tab shows the real chip (it has the popover), parked shows the word.
-    expect(chips[1]?.querySelector(".lc-doc-index-chip")?.className).toContain("is-ok");
-    expect(chips[2]?.querySelector(".lc-doc-index-chip")?.textContent).toBe("indexing…");
+    expect(chips[0]?.querySelector(".lc-doc-index-chip")?.className).toContain("is-ok");
+    expect(chips[1]?.querySelector(".lc-doc-index-chip")?.textContent).toBe("indexing…");
     view.unmount();
   });
 
@@ -190,74 +193,30 @@ describe("TabStrip", () => {
     view.unmount();
   });
 
-  it("shows Home as an icon, with no title text and no close button", () => {
-    const view = mount({ tabs: [homeTab(), board("b1", "doodle")], activeId: "b1" });
-    const home = view.chips()[0]!;
+  it("does not shift the strip while a workspace opens", () => {
     /*
-     * Home is a landmark, not a document: it keeps the house and gives its
-     * share of the strip back to the files you actually have open. The title is
-     * hidden in CSS, so what has to be true here is that the glyph is rendered
-     * and that nothing offers to close it.
+     * Home used to relabel itself "Cancel" for the length of a load, renaming
+     * the one fixed landmark in the strip at exactly the moment someone wants
+     * it. It is the wordmark now, which settles that for good: nothing in the
+     * strip changes shape while something is loading, and going Home — which
+     * drops the load — is a corner that never moves.
      */
-    expect(home.getAttribute("data-tab-kind")).toBe("home");
-    expect(home.querySelector(".lc-tab-glyph")).not.toBeNull();
-    expect(home.querySelector(".lc-tab-title")?.textContent).toBe("Home");
-    expect(home.querySelector(".lc-tab-close")).toBeNull();
-    view.unmount();
-  });
-
-  it("gives Home a row of its own, so the row can shrink with it", () => {
-    /*
-     * Making the tab compact was only half of it. Every `.lc-tab-row` takes an
-     * equal share of the strip, so an icon-sized Home sat at the left of a row
-     * still claiming a document's worth of width — a wide empty gap that read
-     * as Home having disappeared rather than having got smaller.
-     *
-     * The CSS shrinks that row with `:has(> .lc-tab[data-tab-kind="home"])`,
-     * which needs Home to be a *direct child* of a row it does not share.
-     */
-    const view = mount({ tabs: [homeTab(), board("b1", "doodle")], activeId: "b1" });
-    const home = view.chips()[0]!;
-    const row = home.parentElement!;
-    expect(row.classList.contains("lc-tab-row")).toBe(true);
-    expect(row.classList.contains("is-group")).toBe(false);
-    expect(row.querySelectorAll(":scope > .lc-tab")).toHaveLength(1);
-    expect(row.querySelector(':scope > .lc-tab[data-tab-kind="home"]')).not.toBeNull();
-    view.unmount();
-  });
-
-  it("keeps saying Home while a workspace opens, and going there drops the load", () => {
-    const onCancelLoad = vi.fn();
-    const onFocus = vi.fn();
     const view = mount({
       tabs: [homeTab(), board("b1", "doodle")],
       activeId: "b1",
       busy: true,
-      onFocus,
-      onCancelLoad,
     });
-    // Same number of chips, same slot — nothing shifts for the length of a load.
-    expect(view.chips()).toHaveLength(2);
-    const home = view.chips()[0]!;
-    /*
-     * It used to relabel itself "Cancel" for the duration. That renamed the one
-     * fixed landmark in the strip at exactly the moment someone wants it, and
-     * offered a second way to say "stop" next to the tab's own close button.
-     * Home is a place; going there is what abandons the load.
-     */
-    expect(home.querySelector(".lc-tab-title")?.textContent).toBe("Home");
-    act(() => {
-      home.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
-    });
-    expect(onCancelLoad).toHaveBeenCalledTimes(1);
-    expect(onFocus).toHaveBeenCalledWith(HOME_TAB_ID);
+    expect(view.chips()).toHaveLength(1);
+    expect(view.chips()[0]?.querySelector(".lc-tab-title")?.textContent).toBe("doodle");
     view.unmount();
   });
 
   it("marks unsaved work", () => {
-    const view = mount({ tabs: [homeTab(), board("b1", "doodle", true)] });
-    expect(view.chips()[1]?.querySelector(".lc-tab-dot")).not.toBeNull();
-    expect(view.chips()[0]?.querySelector(".lc-tab-dot")).toBeNull();
+    const view = mount({
+      tabs: [homeTab(), board("b1", "doodle", true), board("b2", "clean")],
+    });
+    expect(view.chips()[0]?.querySelector(".lc-tab-dot")).not.toBeNull();
+    expect(view.chips()[1]?.querySelector(".lc-tab-dot")).toBeNull();
     view.unmount();
   });
 
@@ -296,7 +255,7 @@ describe("TabStrip", () => {
       expect(onTabDrag).toHaveBeenCalledWith("b1", 300, 400);
       // The ghost is what makes the gesture visible while it is happening.
       expect(document.querySelector(".lc-tab-ghost")?.textContent).toBe("doodle");
-      expect(view.chips()[1]?.className).toContain("is-carrying");
+      expect(view.chips()[0]?.className).toContain("is-carrying");
 
       act(() => {
         hit.dispatchEvent(pointer("pointerup", { x: 300, y: 400 }));
@@ -343,16 +302,12 @@ describe("TabStrip", () => {
       view.unmount();
     });
 
-    it("leaves Home where it is", () => {
-      const onTabDrag = vi.fn();
-      const view = mount({ tabs: [homeTab(), board("b1", "doodle")], onTabDrag });
-      const hit = grab(view, "Home");
-      act(() => {
-        hit.dispatchEvent(pointer("pointerdown", { x: 40, y: 20 }));
-        hit.dispatchEvent(pointer("pointermove", { x: 300, y: 400 }));
-      });
-      expect(onTabDrag).not.toHaveBeenCalled();
-      expect(document.querySelector(".lc-tab-ghost")).toBeNull();
+    it("has no Home chip to drag", () => {
+      // Home is the wordmark now, so there is nothing in the strip to pick up —
+      // which is a stronger guarantee than the old one that it refused to move.
+      const view = mount({ tabs: [homeTab(), board("b1", "doodle")] });
+      const titles = view.chips().map((chip) => chip.querySelector(".lc-tab-title")?.textContent);
+      expect(titles).not.toContain("Home");
       view.unmount();
     });
 
@@ -397,13 +352,13 @@ describe("TabStrip", () => {
     });
   });
 
-  it("closes a tab that is not Home", () => {
+  it("closes a document", () => {
     const onClose = vi.fn();
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")], onClose });
-    // Home has no close button — you cannot close the place you land.
-    expect(view.chips()[0]?.querySelector(".lc-tab-close")).toBeNull();
+    // Home is not in the strip at all now, so there is nothing to protect it
+    // from: the place you land cannot be closed because it is never drawn.
     act(() => {
-      view.chips()[1]?.querySelector<HTMLButtonElement>(".lc-tab-close")?.click();
+      view.chips()[0]?.querySelector<HTMLButtonElement>(".lc-tab-close")?.click();
     });
     expect(onClose).toHaveBeenCalledWith("b1");
     view.unmount();
@@ -413,7 +368,7 @@ describe("TabStrip", () => {
     const onClose = vi.fn();
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")], busy: true, onClose });
     act(() => {
-      view.chips()[1]?.querySelector<HTMLButtonElement>(".lc-tab-close")?.click();
+      view.chips()[0]?.querySelector<HTMLButtonElement>(".lc-tab-close")?.click();
     });
     expect(onClose).toHaveBeenCalledWith("b1");
     view.unmount();
@@ -438,14 +393,13 @@ describe("TabStrip", () => {
         groups: [pair],
       });
       expect(view.chips().map((chip) => chip.querySelector(".lc-tab-title")?.textContent)).toEqual([
-        "Home",
         "right",
         "left",
         "loose",
       ]);
       const rows = Array.from(view.host.querySelectorAll(".lc-tab-row"));
-      // Home, the pair, and the loose tab — three rows, one of them a group.
-      expect(rows).toHaveLength(3);
+      // The pair and the loose tab — two rows, one of them a group.
+      expect(rows).toHaveLength(2);
       const group = view.host.querySelector(".lc-tab-row.is-group");
       expect(group?.querySelectorAll(".lc-tab")).toHaveLength(2);
       expect(group?.querySelector(".lc-tab-group-frame")).not.toBeNull();
@@ -460,7 +414,7 @@ describe("TabStrip", () => {
       expect(view.host.querySelector(".lc-tab-row.is-group")).not.toBeNull();
       view.rerender({ tabs: [homeTab(), board("b1", "left"), board("b2", "right")], groups: [] });
       expect(view.host.querySelector(".lc-tab-row.is-group")).toBeNull();
-      expect(view.chips()).toHaveLength(3);
+      expect(view.chips()).toHaveLength(2);
       view.unmount();
     });
 
@@ -522,7 +476,6 @@ describe("TabStrip", () => {
       // strip — the missing child is skipped, the survivor still draws.
       const view = mount({ tabs: [homeTab(), grouped("b1", "left")], groups: [pair] });
       expect(view.chips().map((chip) => chip.querySelector(".lc-tab-title")?.textContent)).toEqual([
-        "Home",
         "left",
       ]);
       view.unmount();

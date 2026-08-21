@@ -1108,6 +1108,33 @@ html[data-theme="dark"] .lc-web-doc {
   text-shadow: 1px 1px 0 var(--lc-sub-edge);
 }
 
+/*
+ * The wordmark is the Home button, so it needs a button's affordances without a
+ * button's chrome — the look was already right, and only the fact that it is
+ * pressable was missing.
+ *
+ * After `.lc-brand`, not before: `font: inherit` is what strips the user-agent
+ * button font, and it takes the size and weight with it.
+ */
+.lc-brand-home {
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  transition: background-color 120ms ease-out;
+}
+
+.lc-brand-home:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.lc-brand-home:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 @media (max-width: 640px) {
   .lc-browse-hint {
     display: none;

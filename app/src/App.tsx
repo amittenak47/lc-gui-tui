@@ -932,8 +932,29 @@ export function App() {
       >
         <header className="lc-header">
           <div className="lc-header-left">
-          <Tip tip="lc whiteboard — your coding workspace">
-            <span className="lc-brand">lc <strong>whiteboard</strong></span>
+          {/*
+            The logo *is* Home.
+            
+            It was a tab, which made it compete for width with the documents you
+            actually have open and left a gap in the strip when it was shrunk to
+            fit. A wordmark that always sits in the same corner is the thing
+            every application already uses to mean "back to the start", so there
+            is no reason to spend a tab slot saying it twice.
+          */}
+          <Tip tip="lc whiteboard — back to Home">
+            <button
+              type="button"
+              className="lc-brand lc-brand-home"
+              aria-label="Home"
+              onClick={() => {
+                // Going Home also drops whatever was loading, the way the Home
+                // chip used to.
+                if (shellLoadActive) cancelLoad();
+                focusTab(HOME_TAB_ID);
+              }}
+            >
+              lc <strong>whiteboard</strong>
+            </button>
           </Tip>
           {/*
             The strip is the title slot. It carries Home, every open workspace
