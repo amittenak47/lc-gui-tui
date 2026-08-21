@@ -15717,3 +15717,127 @@ button.lc-row-selected:hover:not(:disabled) {
 :root[data-theme="dark"] .lc-doc-marquee-hit.is-confirmed {
   background: color-mix(in srgb, var(--accent, #2dd4bf) 14%, transparent);
 }
+
+/*
+ * Ask the library, above the map of it.
+ *
+ * A strip rather than a panel: Explore's subject is the graph, and this is a
+ * way in to it, not a second view competing for the room.
+ */
+.lc-library-ask {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--chrome-edge);
+  background: var(--panel);
+}
+
+.lc-library-ask-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lc-library-ask-row input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.lc-library-ask-go {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lc-library-ask-go:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.lc-library-ask-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 34vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.lc-library-ask-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lc-library-ask-hit:disabled {
+  cursor: default;
+}
+
+.lc-library-ask-hit:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.lc-library-ask-where {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.lc-library-ask-page {
+  color: var(--hint);
+}
+
+.lc-library-ask-text {
+  color: var(--lc-sub-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Always shown — see the note in `LibraryAsk`. */
+.lc-library-ask-scope {
+  margin: 0;
+  color: var(--hint);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.lc-library-ask-bad {
+  margin: 0;
+  color: var(--lc-bad, #c2493d);
+  font-size: 12px;
+}
+
+.lc-library-ask-empty {
+  margin: 0;
+  color: var(--hint);
+  font-size: 12px;
+}

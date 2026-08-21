@@ -81,6 +81,36 @@ export interface DocChunkBundle {
   chunks: DocChunkRecord[];
 }
 
+/** One passage, and the book it lives in. */
+export interface LibraryHit {
+  hash: string;
+  name: string;
+  page: number;
+  heading?: string;
+  text: string;
+  score: number;
+}
+
+/**
+ * What was searched and what was not — never implied, always stated.
+ *
+ * `summary` is the sentence the server already composed, so the rule about
+ * what counts as searchable lives in one place rather than being re-derived
+ * here and drifting.
+ */
+export interface LibraryScope {
+  searched: number;
+  total: number;
+  skipped: string[];
+  lexical: boolean;
+}
+
+export interface LibraryAnswer {
+  chunks: LibraryHit[];
+  scope: LibraryScope;
+  summary: string;
+}
+
 export interface DocChunkMergeAck {
   applied: boolean;
   updated: number;
@@ -879,6 +909,30 @@ export class LcClient {
   async listDocChunkDigestsLocal(): Promise<DocChunkDigest[]> {
     const body = await this.cmd<unknown>("lc_docs_list_chunk_digests", {});
     return parseChunkDigests(body);
+  }
+
+  /** Ask every indexed document. Explore's home; the agent has its own tool. */
+  async retrieveLibrary(query: string, k = 6): Promise<LibraryAnswer> {
+    const hub = loadPadHub();
+    const body = { query, k };
+    const raw = hub
+      ? (await hubFetch(hub, "POST", "/docs/retrieve", { json: body })).json
+      : await this.cmd<unknown>("lc_docs_retrieve_library", { body });
+    const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    const scopeRaw =
+      row.scope && typeof row.scope === "object"
+        ? (row.scope as Record<string, unknown>)
+        : {};
+    return {
+      chunks: Array.isArray(row.chunks) ? (row.chunks as LibraryHit[]) : [],
+      scope: {
+        searched: typeof scopeRaw.searched === "number" ? scopeRaw.searched : 0,
+        total: typeof scopeRaw.total === "number" ? scopeRaw.total : 0,
+        skipped: Array.isArray(scopeRaw.skipped) ? (scopeRaw.skipped as string[]) : [],
+        lexical: scopeRaw.lexical === true,
+      },
+      summary: typeof row.summary === "string" ? row.summary : "",
+    };
   }
 
   async getDocChunks(hash: string): Promise<DocChunkBundle> {

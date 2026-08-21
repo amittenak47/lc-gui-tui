@@ -28,6 +28,8 @@ import { createPortal } from "react-dom";
 import { BackgroundPalette } from "../components/BackgroundPalette";
 import { MorphBar } from "../components/MorphBar";
 import { useShell } from "../shellContext";
+import type { LcClient } from "../api/client";
+import { LibraryAsk } from "./LibraryAsk";
 import { NodeSheet, type NodeSheetNeighbour } from "./NodeSheet";
 import {
   CLUSTERS,
@@ -72,6 +74,16 @@ export interface ExploreWorkspaceProps {
   showing?: boolean;
   /** Wait for the board's tray slot rather than filling the shell slot. */
   embedInBoardTray?: boolean;
+  /**
+   * Searching inside documents, not just their titles.
+   *
+   * Explore is the home for it (§3b): every other Ask is asked with one
+   * document open and is usually about that document. This view is already
+   * about the whole shelf.
+   */
+  client?: LcClient;
+  /** Open the document a passage came from, named by its content hash. */
+  onOpenHash?: (hash: string) => void;
 }
 
 const EDGE_LABEL: Record<EdgeKind, string> = {
@@ -112,6 +124,8 @@ export function ExploreWorkspace({
   active = true,
   showing = true,
   embedInBoardTray = false,
+  client,
+  onOpenHash,
 }: ExploreWorkspaceProps) {
   const { headerSlots } = useShell();
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -652,6 +666,15 @@ export function ExploreWorkspace({
 
   return (
     <div className="lc-explore">
+      {/*
+        Searching inside the documents, above the map of them.
+        
+        The strip below finds nodes by title; this finds passages by meaning.
+        They are different questions and deserve different controls — "which
+        note is called gradients" and "which of my books talks about
+        gradients" have almost nothing to do with each other.
+      */}
+      {client && <LibraryAsk client={client} onOpenHash={onOpenHash} />}
       <div className="lc-explore-stage" ref={hostRef}>
         {showing && chromeHost && (active || inBoardStack)
           ? createPortal(exploreChrome, chromeHost)

@@ -8166,6 +8166,19 @@ export function Workspace({
                     onRename={(node, title) => renameGraphNode(node, title)}
                     onOpen={openLinkedNode}
                     onOpenInNewTab={openLinkedNode}
+                    client={client}
+                    /*
+                     * A passage names a content hash; a node names a library
+                     * id. Two annotation sets over one PDF share the hash and
+                     * are two different nodes, so the newest set wins here —
+                     * the alternative is asking the reader which of their own
+                     * annotations they meant, about a passage in the file
+                     * underneath both.
+                     */
+                    onOpenHash={(hash) => {
+                      const entry = listAnnotateDocs().find((row) => row.hash === hash);
+                      if (entry) openLinkedNode({ type: "annotate", id: entry.id });
+                    }}
                     active={active}
                     showing={showing}
                     embedInBoardTray={embedInBoardTray}
