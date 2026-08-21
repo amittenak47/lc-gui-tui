@@ -888,15 +888,47 @@ body {
 }
 
 /*
- * Board chrome cannot sit over a native surface, so while the page is live it
- * gets out of the way rather than being drawn on top of and looking broken.
- * The same bargain Instagram's in-app browser makes: its chrome is a bar above
- * the webview, never over it.
+ * Board chrome cannot sit over a native surface — so it steps aside rather than
+ * hiding underneath it.
+ *
+ * Page marks are *deliberately* gone here, and that is honest: they describe a
+ * frozen document and have nothing to say about a live page.
+ *
+ * The dock was a different failure wearing the same clothes. `.lc-map-controls`
+ * and `.lc-board-chrome-slot` were both named in this rule, and on the path that
+ * matters neither was reachable: the dock is portalled into a chrome slot over
+ * `.lc-main` — the whole point being that a split's two panes share one chrome
+ * layer — so a descendant selector rooted at the pane cannot get to it. The rule
+ * read as "the dock steps aside while live" and did nothing. The dock kept
+ * rendering the whole time, underneath a native surface: present, pressable in
+ * principle, and invisible. That reads as broken rather than absent, and it is
+ * why the controls seemed to vanish.
+ *
+ * Hiding it from here would be the wrong thing to want anyway, since in a split
+ * that one layer carries the *other* pane's controls too.
+ *
+ * The webview follows the rectangle `.lc-live-web-pane` reserves, so the fix is
+ * to reserve less: leave the dock's strip out of the hole and the dock stays on
+ * screen, in HTML, where it can be seen and pressed. The same bargain
+ * Instagram's in-app browser makes — its chrome borders the webview rather than
+ * floating over it.
  */
-.lc-canvas-live-web .lc-board-chrome-slot,
-.lc-canvas-live-web .lc-map-controls,
 .lc-canvas-live-web .lc-page-marks-slot {
   display: none;
+}
+
+/*
+ * Room for the dock at the foot of a live pane.
+ *
+ * `.lc-map-controls`' own `bottom`, plus its height, so the strip left behind is
+ * the strip the dock occupies and no more. The height has to be measured rather
+ * than guessed — the dock is a column, and a pen toolbar with the colour wheel
+ * open is several times the height of a bare Recentre button. `liveDockStrip.ts`
+ * keeps this variable matched to it; the fallback is only what a first paint
+ * uses before the measurement lands.
+ */
+.lc-canvas-live-web .lc-live-web-pane {
+  bottom: calc(max(10px, var(--lc-color-wheel-r) - 24px + 8px) + var(--lc-live-dock-strip, 52px));
 }
 
 /*

@@ -41,6 +41,7 @@ import {
   type ShapeStamp,
 } from "../templates/shapes";
 import { healBoardLayout } from "./healBoardLayout";
+import { trackDockStrip } from "./liveDockStrip";
 import {
   healScratchpadGeometry,
   parseScratchPageId,
@@ -7812,6 +7813,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           />
             {paintBoardChrome(
             <div
+            /*
+             * A live page is a native surface that paints over this dock, so the
+             * pane beside it reserves a strip the webview will not cover. The
+             * strip has to be this element's real height — see `liveDockStrip`.
+             */
+            ref={trackDockStrip}
             className={[
               "lc-map-controls lc-map-controls-paged",
               mapChromeHidden ? "lc-map-controls-collapsed" : "",
