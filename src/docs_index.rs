@@ -164,6 +164,20 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     Ok(false)
 }
 
+/// How many of a document's chunks carry a model's vector.
+///
+/// Its own query because progress is asked for far more often than the rest of
+/// the status, and because this *is* the progress: the unit is a row, so there
+/// is nothing else to keep in step with it.
+pub fn embedded_chunk_count(conn: &Connection, hash: &str) -> Result<u32> {
+    let count: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(embedded), 0) FROM chunks WHERE hash = ?1",
+        params![hash],
+        |row| row.get(0),
+    )?;
+    Ok(count as u32)
+}
+
 pub fn status(conn: &Connection, hash: &str) -> Result<IndexStatus> {
     let head = conn
         .query_row(

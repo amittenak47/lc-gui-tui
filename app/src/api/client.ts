@@ -41,6 +41,29 @@ export interface DocIndexStatus {
   page_count: number;
   chunk_count: number;
   embedded: boolean;
+  /** The model that produced these vectors, or empty if none did. */
+  embed_model?: string;
+  chunks_total?: number;
+  chunks_embedded?: number;
+  /**
+   * `none` | `partial` | `full`.
+   *
+   * A document embedded under a *different* model reads `none`, not `partial`:
+   * vectors from two models cannot be ranked against each other, so it is work
+   * to redo rather than work half done.
+   */
+  embed_state?: "none" | "partial" | "full";
+  /** Why it is not `full` — `pending`, no model, or a named model mismatch. */
+  reason?: string;
+  /** What is configured now, so a mismatch can name both sides. */
+  configured_model?: string;
+}
+
+/** How far the embedding pass has got, and why it stopped if it did. */
+export interface DocEmbedProgress {
+  done: number;
+  total: number;
+  reason?: string;
 }
 
 export class LcApiError extends Error {
@@ -654,6 +677,17 @@ export class LcClient {
 
   async getDocIndex(hash: string): Promise<DocIndexStatus> {
     return this.cmd("lc_docs_get_index", { hash });
+  }
+
+  /**
+   * Run one budget of the embedding pass.
+   *
+   * Deliberately not a call that runs to completion: a book is minutes of work,
+   * and returning between budgets is what lets the reader close the app in the
+   * middle of one. Call until `done === total`, and stop on a `reason`.
+   */
+  async embedDoc(hash: string): Promise<DocEmbedProgress> {
+    return this.cmd("lc_docs_embed", { hash });
   }
 
   /**

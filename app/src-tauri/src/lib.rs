@@ -123,6 +123,7 @@ pub fn run() {
         lc_routes::lc_coach_scaffold,
         lc_routes::lc_docs_get_index,
         lc_routes::lc_docs_put_index,
+        lc_routes::lc_docs_embed,
         lc_routes::lc_docs_retrieve,
         lc_routes::lc_docs_get_bytes,
         lc_routes::lc_docs_put_bytes,
