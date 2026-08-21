@@ -150,6 +150,10 @@ pub fn router(state: Shared) -> Router {
         .route("/docs/:hash/embed", post(routes::embed_docs))
         .route("/docs/:hash/retrieve", post(routes::retrieve_docs))
         .route(
+            "/docs/:hash/chunks",
+            get(routes::get_doc_chunks).put(routes::put_doc_chunks),
+        )
+        .route(
             "/docs/:hash/bytes",
             get(routes::get_doc_bytes).put(routes::put_doc_bytes),
         )

@@ -403,6 +403,38 @@ describe("live PUT coalesce and 24h compact", () => {
     expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
 
+  it("ships ink, edges and source on the snapshot payload", async () => {
+    const client = fakeClient();
+    await pushPadSnapshot(client, {
+      kind: "annotate",
+      key: "a1",
+      tier: "24h",
+      writtenAt: 2,
+      name: "notes.md",
+      board: emptyBoard,
+      source: "# hi",
+      ink: [{ pageId: 3, updatedAt: 9, gz: "YQ==" }],
+      edges: [
+        {
+          id: "picker|annotate:a1|annotate:a2",
+          from: { type: "annotate", id: "a1" },
+          to: { type: "annotate", id: "a2" },
+          kind: "picker",
+          createdAt: 1,
+        },
+      ],
+    });
+    expect(client.putPadSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          source: "# hi",
+          ink: [{ pageId: 3, updatedAt: 9, gz: "YQ==" }],
+          edges: [expect.objectContaining({ id: "picker|annotate:a1|annotate:a2" })],
+        }),
+      }),
+    );
+  });
+
   it("keeps a live PUT newer than the 24h stamp", async () => {
     const client = fakeClient();
     await enqueuePadSync({

@@ -101,7 +101,22 @@ pub fn open(path: &Path) -> Result<Connection> {
     ensure_column(&conn, "whiteboard", "sync_seq", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(&conn, "annotate", "sync_seq", "INTEGER NOT NULL DEFAULT 0")?;
     migrate_tombstones_to_gone(&conn)?;
+    migrate(&conn)?;
     Ok(conn)
+}
+
+/// Snapshot payload may include `ink`, `edges`, and `source` (v1). Those live
+/// in `payload_json`; this version pin is the same `PRAGMA user_version` step
+/// the document index uses, so a later column can land without a second mechanism.
+const SCHEMA_VERSION: i64 = 1;
+
+fn migrate(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
 }
 
 fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
@@ -944,12 +959,67 @@ fn pad_is_live(conn: &Connection, kind: &str, key: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
+/// Shape of a snapshot payload that can restore ink, edges, and source text.
+///
+/// Absent fields are the old payload `{ name, board, footnotes, agent, pageCount }`.
+/// Present fields must be the right type — a string in `ink` would round-trip
+/// and then fail on restore, which is the silent loss this check exists to stop.
+pub fn validate_snapshot_payload(payload: &serde_json::Value) -> Result<()> {
+    if payload.is_null() {
+        return Ok(());
+    }
+    let obj = payload
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("snapshot payload must be an object"))?;
+    if let Some(ink) = obj.get("ink") {
+        let pages = ink
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("snapshot ink must be an array"))?;
+        for page in pages {
+            let page = page
+                .as_object()
+                .ok_or_else(|| anyhow::anyhow!("snapshot ink page must be an object"))?;
+            if page.get("pageId").and_then(|v| v.as_i64()).is_none() {
+                anyhow::bail!("snapshot ink page needs pageId");
+            }
+            if page.get("updatedAt").and_then(|v| v.as_i64()).is_none() {
+                anyhow::bail!("snapshot ink page needs updatedAt");
+            }
+            match page.get("gz") {
+                Some(serde_json::Value::String(s)) if !s.is_empty() => {}
+                _ => anyhow::bail!("snapshot ink page needs gz"),
+            }
+        }
+    }
+    if let Some(edges) = obj.get("edges") {
+        let edges = edges
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("snapshot edges must be an array"))?;
+        for edge in edges {
+            let edge = edge
+                .as_object()
+                .ok_or_else(|| anyhow::anyhow!("snapshot edge must be an object"))?;
+            match edge.get("id") {
+                Some(serde_json::Value::String(s)) if !s.is_empty() => {}
+                _ => anyhow::bail!("snapshot edge needs id"),
+            }
+        }
+    }
+    if let Some(source) = obj.get("source") {
+        if !source.is_string() {
+            anyhow::bail!("snapshot source must be a string");
+        }
+    }
+    Ok(())
+}
+
 pub fn put_snapshot(conn: &Connection, row: &SnapshotRow) -> Result<ApplyAck> {
     let kind = match row.kind.as_str() {
         "whiteboard" => PadKind::Whiteboard,
         "annotate" => PadKind::Annotate,
         _ => anyhow::bail!("unknown snapshot kind"),
     };
+    validate_snapshot_payload(&row.payload)?;
     let gone = gone_seq(conn, kind, &row.key)?;
     let live = pad_is_live(conn, kind.as_str(), &row.key)?;
     if !live {
@@ -1711,6 +1781,89 @@ mod tests {
             PutOutcome::Written(row) => assert_eq!(row.updated_at, 20),
             other => panic!("{other:?}"),
         }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn pads_schema_version_is_one() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn snapshot_round_trips_ink_edges_and_source() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_annotate(&conn, &an("a1", 1)).unwrap();
+        let payload = json!({
+            "name": "notes.md",
+            "source": "# hi\n\nmore",
+            "ink": [{ "pageId": 3, "updatedAt": 99, "gz": "YQ==" }],
+            "edges": [{ "id": "picker|annotate:a1|annotate:a2", "from": { "type": "annotate", "id": "a1" }, "to": { "type": "annotate", "id": "a2" }, "kind": "picker", "createdAt": 1 }]
+        });
+        let ack = put_snapshot(
+            &conn,
+            &SnapshotRow {
+                kind: "annotate".into(),
+                key: "a1".into(),
+                tier: "24h".into(),
+                written_at: 10,
+                payload: payload.clone(),
+            },
+        )
+        .unwrap();
+        assert!(ack.applied);
+        let got = get_snapshots(&conn, "annotate", "a1").unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].payload["source"], "# hi\n\nmore");
+        assert_eq!(got[0].payload["ink"][0]["pageId"], 3);
+        assert_eq!(got[0].payload["ink"][0]["gz"], "YQ==");
+        assert_eq!(got[0].payload["edges"][0]["id"], "picker|annotate:a1|annotate:a2");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn snapshot_rejects_a_malformed_ink_payload() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        let err = put_snapshot(
+            &conn,
+            &SnapshotRow {
+                kind: "whiteboard".into(),
+                key: "w1".into(),
+                tier: "24h".into(),
+                written_at: 2,
+                payload: json!({ "ink": "nope" }),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("ink must be an array"), "{err:#}");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn snapshot_still_accepts_the_old_payload_shape() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        let ack = put_snapshot(
+            &conn,
+            &SnapshotRow {
+                kind: "whiteboard".into(),
+                key: "w1".into(),
+                tier: "24h".into(),
+                written_at: 2,
+                payload: json!({ "name": "n-w1", "board": { "v": 1 } }),
+            },
+        )
+        .unwrap();
+        assert!(ack.applied);
         let _ = std::fs::remove_file(path);
     }
 }

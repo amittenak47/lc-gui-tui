@@ -66,6 +66,27 @@ export interface DocEmbedProgress {
   reason?: string;
 }
 
+export interface DocChunkRecord {
+  page: number;
+  ordinal: number;
+  heading?: string;
+  text_hash: string;
+  embedded: number;
+  embedding: string;
+}
+
+export interface DocChunkBundle {
+  hash: string;
+  embed_model: string;
+  chunks: DocChunkRecord[];
+}
+
+export interface DocChunkMergeAck {
+  applied: boolean;
+  updated: number;
+  reason?: string;
+}
+
 export class LcApiError extends Error {
   constructor(
     message: string,
@@ -138,6 +159,42 @@ async function hubFetch(
     throw new LcApiError(errBody || res.statusText, res.status, errBody, json);
   }
   return { json, bytes };
+}
+
+function parseChunkBundle(hash: string, raw: unknown): DocChunkBundle {
+  const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const chunks = Array.isArray(row.chunks)
+    ? row.chunks.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") return [];
+        const chunk = entry as Record<string, unknown>;
+        if (typeof chunk.page !== "number" || typeof chunk.ordinal !== "number") return [];
+        if (typeof chunk.text_hash !== "string") return [];
+        return [
+          {
+            page: chunk.page,
+            ordinal: chunk.ordinal,
+            heading: typeof chunk.heading === "string" ? chunk.heading : undefined,
+            text_hash: chunk.text_hash,
+            embedded: typeof chunk.embedded === "number" ? chunk.embedded : 0,
+            embedding: typeof chunk.embedding === "string" ? chunk.embedding : "",
+          } satisfies DocChunkRecord,
+        ];
+      })
+    : [];
+  return {
+    hash: typeof row.hash === "string" && row.hash ? row.hash : hash,
+    embed_model: typeof row.embed_model === "string" ? row.embed_model : "",
+    chunks,
+  };
+}
+
+function parseChunkMergeAck(raw: unknown): DocChunkMergeAck {
+  const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return {
+    applied: row.applied !== false,
+    updated: typeof row.updated === "number" ? row.updated : 0,
+    reason: typeof row.reason === "string" ? row.reason : undefined,
+  };
 }
 
 /**
@@ -750,6 +807,43 @@ export class LcClient {
     } catch {
       return [];
     }
+  }
+
+  async getDocChunks(hash: string): Promise<DocChunkBundle> {
+    const hub = loadPadHub();
+    if (hub) {
+      const { json } = await hubFetch(
+        hub,
+        "GET",
+        `/docs/${encodeURIComponent(hash)}/chunks`,
+      );
+      return parseChunkBundle(hash, json);
+    }
+    return this.getDocChunksLocal(hash);
+  }
+
+  async getDocChunksLocal(hash: string): Promise<DocChunkBundle> {
+    const body = await this.cmd<unknown>("lc_docs_get_chunks", { hash });
+    return parseChunkBundle(hash, body);
+  }
+
+  async putDocChunks(hash: string, body: DocChunkBundle): Promise<DocChunkMergeAck> {
+    const hub = loadPadHub();
+    if (hub) {
+      const { json } = await hubFetch(
+        hub,
+        "PUT",
+        `/docs/${encodeURIComponent(hash)}/chunks`,
+        { json: body },
+      );
+      return parseChunkMergeAck(json);
+    }
+    return this.mergeDocChunksLocal(body);
+  }
+
+  async mergeDocChunksLocal(body: DocChunkBundle): Promise<DocChunkMergeAck> {
+    const ack = await this.cmd<unknown>("lc_docs_put_chunks", { hash: body.hash, body });
+    return parseChunkMergeAck(ack);
   }
 
   async putDocBytes(hash: string, bytes: ArrayBuffer): Promise<void> {

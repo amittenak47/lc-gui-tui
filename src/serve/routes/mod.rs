@@ -26,8 +26,8 @@ pub use config::{
     ProviderConfigDto,
 };
 pub use docs::{
-    embed as embed_docs, get_index as get_docs_index, put_index as put_docs_index,
-    retrieve as retrieve_docs,
+    embed as embed_docs, get_chunks as get_doc_chunks, get_index as get_docs_index,
+    put_chunks as put_doc_chunks, put_index as put_docs_index, retrieve as retrieve_docs,
 };
 pub use pads::{
     archive_annotate, archive_whiteboard, clone_device_prefs, get_device_prefs, get_doc_bytes,

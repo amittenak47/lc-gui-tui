@@ -284,11 +284,11 @@ import {
   putInkPages,
   whiteboardDocKey,
 } from "./util/inkPageStore";
+import { getPadSnapshot, type PadSnapshotTier } from "./util/padSnapshotStore";
 import {
-  getPadSnapshot,
-  recordRollingSnapshots,
-  type PadSnapshotTier,
-} from "./util/padSnapshotStore";
+  applyPadSnapshotExtras,
+  recordPadSnapshotsWithExtras,
+} from "./util/padSnapshotExtras";
 import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
@@ -1654,7 +1654,7 @@ export function Workspace({
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void pushAnnotatePad(client, saved).then((ok) => {
               if (!ok) return;
-              void recordRollingSnapshots({
+              void recordPadSnapshotsWithExtras({
                 kind: "annotate",
                 key: saved.id,
                 name: saved.name,
@@ -1708,7 +1708,7 @@ export function Workspace({
             const snapBoard = await boardWithAssembledInk(board, liveBoard);
             void pushWhiteboardPad(client, saved).then((ok) => {
               if (!ok) return;
-              void recordRollingSnapshots({
+              void recordPadSnapshotsWithExtras({
                 kind: "whiteboard",
                 key: saved.id,
                 name: saved.title,
@@ -3225,6 +3225,7 @@ export function Workspace({
         setError("That snapshot is no longer on this device.");
         return;
       }
+      await applyPadSnapshotExtras(kind, key, snap);
       const board = boardRef.current;
       if (!board) return;
       const ink = inkOpsFrom(snap.board);
@@ -6002,7 +6003,7 @@ export function Workspace({
         const snapBoard = await boardWithAssembledInk(board, liveBoard);
         void pushWhiteboardPad(client, saved).then((ok) => {
           if (!ok) return;
-          void recordRollingSnapshots({
+          void recordPadSnapshotsWithExtras({
             kind: "whiteboard",
             key: saved.id,
             name: saved.title,
@@ -6150,7 +6151,7 @@ export function Workspace({
       const snapBoard = await boardWithAssembledInk(board, blob);
       void pushAnnotatePad(client, saved).then((ok) => {
         if (!ok) return;
-        void recordRollingSnapshots({
+        void recordPadSnapshotsWithExtras({
           kind: "annotate",
           key: saved.id,
           name: saved.name,
@@ -6423,7 +6424,7 @@ export function Workspace({
                 const snapBoard = await boardWithAssembledInk(handle, blob);
                 void pushWhiteboardPad(client, saved).then((ok) => {
                   if (!ok) return;
-                  void recordRollingSnapshots({
+                  void recordPadSnapshotsWithExtras({
                     kind: "whiteboard",
                     key: saved.id,
                     name: saved.title,
