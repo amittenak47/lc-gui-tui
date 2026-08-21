@@ -77,35 +77,98 @@ pub fn open(path: &Path) -> Result<Connection> {
             heading TEXT,
             text TEXT NOT NULL,
             embedding BLOB,
+            -- What this chunk's vector is made of: 1 a model's, 0 word-counts.
+            -- See `migrate` for why it is per chunk rather than per document.
+            embedded INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(hash) REFERENCES documents(hash) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(hash);
         CREATE INDEX IF NOT EXISTS idx_chunks_hash_page ON chunks(hash, page);
         "#,
     )?;
+    migrate(&conn)?;
     Ok(conn)
 }
 
+/// Schema version of the newest migration below.
+const SCHEMA_VERSION: i64 = 1;
+
+/*
+ * Migrations, because `CREATE TABLE IF NOT EXISTS` cannot add a column.
+ *
+ * `PRAGMA user_version` is SQLite's own four bytes of file header set aside for
+ * exactly this, so it costs no table and cannot itself need migrating. Each step
+ * is written to be safe on a database that already has what it adds, since the
+ * cheapest way to be wrong here is to assume the version is accurate.
+ */
+fn migrate(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    if version < 1 && !has_column(conn, "chunks", "embedded")? {
+        /*
+         * What a chunk's vector is made of, per chunk.
+         *
+         * `documents.embedded` was one boolean for a whole document, which could
+         * not tell "no model configured" from "too long to try" from "half done"
+         * — three different situations wanting three different things done.
+         *
+         * Existing rows default to 0, which is true of them: they hold
+         * word-counts unless something embedded them, and treating an embedded
+         * one as unembedded costs a re-embed and never lies. The other direction
+         * would.
+         */
+        conn.execute_batch(
+            "ALTER TABLE chunks ADD COLUMN embedded INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn status(conn: &Connection, hash: &str) -> Result<IndexStatus> {
-    let row = conn
+    let page_count = conn
         .query_row(
-            "SELECT page_count, embedded FROM documents WHERE hash = ?1",
+            "SELECT page_count FROM documents WHERE hash = ?1",
             params![hash],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            |row| row.get::<_, i64>(0),
         )
         .optional()?;
-    let chunk_count = conn.query_row(
-        "SELECT COUNT(*) FROM chunks WHERE hash = ?1",
+    /*
+     * Derived, never stored.
+     *
+     * A `documents.embedded` boolean can drift: crash between the last chunk's
+     * write and the flag's update and the document claims to be embedded
+     * forever, because nothing re-checks. Counting the chunks cannot drift —
+     * the worst it can say is "not finished yet", which is true and
+     * self-correcting. The column stays in the schema (dropping one in SQLite is
+     * awkward) but nothing reads it, so the chunks win by construction.
+     */
+    let (chunk_count, embedded_count) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(embedded), 0) FROM chunks WHERE hash = ?1",
         params![hash],
-        |row| row.get::<_, i64>(0),
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
     )?;
-    match row {
-        Some((page_count, embedded)) => Ok(IndexStatus {
+    match page_count {
+        Some(page_count) => Ok(IndexStatus {
             hash: hash.to_string(),
             indexed: true,
             page_count: page_count as u32,
             chunk_count: chunk_count as u32,
-            embedded: embedded != 0,
+            // An empty document is not embedded; `all` over nothing would say yes.
+            embedded: chunk_count > 0 && embedded_count == chunk_count,
         }),
         None => Ok(IndexStatus {
             hash: hash.to_string(),
@@ -171,8 +234,16 @@ pub fn upsert(
     for (chunk, vector) in chunks.iter().zip(embeddings.iter()) {
         let blob = encode_f32(vector);
         tx.execute(
-            "INSERT INTO chunks (hash, page, heading, text, embedding) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![hash, chunk.page as i64, chunk.heading, chunk.text, blob],
+            "INSERT INTO chunks (hash, page, heading, text, embedding, embedded)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                hash,
+                chunk.page as i64,
+                chunk.heading,
+                chunk.text,
+                blob,
+                if used_http { 1 } else { 0 }
+            ],
         )?;
     }
     tx.commit()?;
@@ -182,7 +253,8 @@ pub fn upsert(
 pub fn retrieve(conn: &Connection, hash: &str, query: &str, k: usize, cfg: &Config) -> Result<Vec<RetrievedChunk>> {
     let k = k.clamp(1, 8);
     let mut stmt = conn.prepare(
-        "SELECT page, heading, text, embedding FROM chunks WHERE hash = ?1 ORDER BY page, id",
+        "SELECT page, heading, text, embedding, embedded FROM chunks WHERE hash = ?1
+         ORDER BY page, id",
     )?;
     let rows = stmt.query_map(params![hash], |row| {
         Ok((
@@ -190,14 +262,21 @@ pub fn retrieve(conn: &Connection, hash: &str, query: &str, k: usize, cfg: &Conf
             row.get::<_, Option<String>>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, Option<Vec<u8>>>(3)?,
+            row.get::<_, i64>(4)? != 0,
         ))
     })?;
-    let (query_vecs, _, _) = embed_texts(cfg, &[query])?;
+    let (query_vecs, query_kind, _) = embed_texts(cfg, &[query])?;
     let query_vec = query_vecs.into_iter().next().unwrap_or_default();
-    let loaded: Vec<(u32, Option<String>, String, Vec<f32>)> = rows
+    let loaded: Vec<(u32, Option<String>, String, Vec<f32>, bool)> = rows
         .map(|row| {
-            row.map(|(page, heading, text, blob)| {
-                (page, heading, text, blob.as_deref().map(decode_f32).unwrap_or_default())
+            row.map(|(page, heading, text, blob, embedded)| {
+                (
+                    page,
+                    heading,
+                    text,
+                    blob.as_deref().map(decode_f32).unwrap_or_default(),
+                    embedded,
+                )
             })
         })
         .collect::<std::result::Result<_, _>>()?;
@@ -213,12 +292,24 @@ pub fn retrieve(conn: &Connection, hash: &str, query: &str, k: usize, cfg: &Conf
      * So the document answers as a whole: comparable vectors, or lexical
      * throughout. Being consistently coarse beats being incomparably mixed.
      */
+    /*
+     * Provenance, not shape.
+     *
+     * This used to infer comparability from vector *length*, which worked only
+     * because 64-dim word-counts happen to differ from every model's dimension.
+     * Two models can share a dimension and still be incomparable, so the flag is
+     * asked directly now — and length is kept as a second line of defence, since
+     * a document embedded under a different model is the case it still catches.
+     */
     let comparable = !query_vec.is_empty()
+        && matches!(query_kind, EmbedKind::Http)
         && loaded
             .iter()
-            .all(|(_, _, _, vec)| vec.len() == query_vec.len() && !vec.is_empty());
+            .all(|(_, _, _, vec, embedded)| {
+                *embedded && vec.len() == query_vec.len() && !vec.is_empty()
+            });
     let mut scored = Vec::new();
-    for (page, heading, text, vec) in loaded {
+    for (page, heading, text, vec, _) in loaded {
         let score = if comparable {
             cosine(&query_vec, &vec)
         } else {
@@ -692,6 +783,125 @@ mod tests {
             Some(EmbedSkip::Failed(why)) => assert!(!why.is_empty(), "the cause is the point"),
             other => panic!("expected a reported failure, got {other:?}"),
         }
+    }
+
+    /*
+     * An index written before the column existed must still open.
+     *
+     * There was no migration mechanism at all — only `CREATE TABLE IF NOT
+     * EXISTS`, which cannot add a column to a table that already exists. So the
+     * first thing to be sure of is that a database from the previous version
+     * opens, gains the column, and reports its chunks as unembedded, which is
+     * true of them.
+     */
+    #[test]
+    fn an_older_database_gains_the_column_and_claims_nothing() {
+        let path = tmp();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE documents (
+                    hash TEXT PRIMARY KEY, name TEXT NOT NULL, doc_type TEXT NOT NULL,
+                    page_count INTEGER NOT NULL, embedded INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE chunks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL,
+                    page INTEGER NOT NULL, heading TEXT, text TEXT NOT NULL, embedding BLOB
+                );
+                INSERT INTO documents VALUES ('h', 'n.pdf', 'pdf', 1, 1, 0);
+                INSERT INTO chunks (hash, page, heading, text, embedding)
+                VALUES ('h', 1, NULL, 'older text', NULL);
+                "#,
+            )
+            .unwrap();
+        }
+
+        let conn = open(&path).unwrap();
+        assert!(has_column(&conn, "chunks", "embedded").unwrap());
+        let st = status(&conn, "h").unwrap();
+        assert!(st.indexed);
+        assert_eq!(st.chunk_count, 1);
+        // The old row said `documents.embedded = 1`. Nothing reads that any more,
+        // and the chunk itself has never been through a model.
+        assert!(!st.embedded, "an unembedded chunk must not report otherwise");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn opening_twice_is_not_two_migrations() {
+        let path = tmp();
+        let first = open(&path).unwrap();
+        drop(first);
+        // `ALTER TABLE ADD COLUMN` twice is an error; the version guard and the
+        // column check each have to be enough on their own.
+        let conn = open(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /*
+     * Derived, so it cannot drift.
+     *
+     * A stored boolean survives a crash between the last chunk's write and the
+     * flag's update as a lie that nothing re-checks. A count degrades to "not
+     * finished yet", which is true.
+     */
+    #[test]
+    fn a_document_is_embedded_only_when_every_chunk_is() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.pdf".into(),
+            doc_type: "pdf".into(),
+            pages: vec![
+                IndexPage { page: 1, text: "first page of prose".into(), heading: None },
+                IndexPage { page: 2, text: "second page of prose".into(), heading: None },
+            ],
+        };
+        upsert(&mut conn, "h", &body, &cfg(), false).unwrap();
+        assert!(!status(&conn, "h").unwrap().embedded);
+
+        // Mark all but one, the way an interrupted pass leaves it.
+        conn.execute("UPDATE chunks SET embedded = 1 WHERE hash = 'h'", []).unwrap();
+        conn.execute(
+            "UPDATE chunks SET embedded = 0 WHERE id = (SELECT MAX(id) FROM chunks WHERE hash = 'h')",
+            [],
+        )
+        .unwrap();
+        assert!(
+            !status(&conn, "h").unwrap().embedded,
+            "one chunk short is not embedded"
+        );
+
+        conn.execute("UPDATE chunks SET embedded = 1 WHERE hash = 'h'", []).unwrap();
+        assert!(status(&conn, "h").unwrap().embedded);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_document_with_no_chunks_is_not_embedded() {
+        // `all` over an empty set is true, which would be the wrong answer here.
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO documents (hash, name, doc_type, page_count, embedded, updated_at)
+             VALUES ('empty', 'n.pdf', 'pdf', 0, 1, 0)",
+            [],
+        )
+        .unwrap();
+        let st = status(&conn, "empty").unwrap();
+        assert_eq!(st.chunk_count, 0);
+        assert!(!st.embedded);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 
     /*
