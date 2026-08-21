@@ -443,18 +443,31 @@ fn embed_texts(
 }
 
 /*
- * Long enough for a model that has to wake up first.
+ * Two questions, two deadlines.
  *
- * This was two seconds, which is less than a local embedding model's cold start
- * — the first request after boot loads weights, and 5-30s is ordinary. Every
- * first request therefore timed out, the error was swallowed a few lines below,
- * and the document was quietly stored as word-counts. It is the reason
- * embeddings appeared never to work at all, and it bit hardest on the smallest
- * document, because nothing else had to go wrong.
+ * "Is anything listening?" and "how long may the work take?" are different
+ * questions and deserve different patience. One number for both was the bug:
+ * two seconds is far under a local embedding model's cold start — the first
+ * request after boot loads weights, and 5-30s is ordinary — so every first
+ * request timed out, the error was swallowed below, and the document was stored
+ * as word-counts without a word said. It bit hardest on the smallest document,
+ * because nothing else had to go wrong.
  *
- * The generous number is for the first request of a run; later ones are warm and
- * a long wait there means something is stuck rather than starting.
+ * A chat can split this by streaming: the first token proves the server is
+ * there, and everything after it is patience. An embedding request returns
+ * nothing until the whole batch is done, so there is no such token — but the
+ * same split exists one layer down, between opening the connection and getting
+ * an answer over it.
+ *
+ * Connect stays short. A refused port already fails instantly at the TCP level;
+ * this is for the host that is firewalled or simply gone, which otherwise hangs
+ * for the full request timeout before admitting nothing was ever there.
  */
+const EMBED_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How long the work itself may take: generous while a model may still be
+/// loading, less so once one has answered — a long wait on a warm endpoint means
+/// stuck rather than starting.
 const EMBED_COLD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const EMBED_WARM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -471,6 +484,7 @@ fn embed_timeout() -> std::time::Duration {
 
 fn http_embed(base_url: &str, model: &str, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
     let client = reqwest::blocking::Client::builder()
+        .connect_timeout(EMBED_CONNECT_TIMEOUT)
         .timeout(embed_timeout())
         .build()?;
     let url = format!("{}/embeddings", base_url.trim_end_matches('/'));
@@ -644,6 +658,20 @@ mod tests {
         EMBED_WARMED.store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(embed_timeout() >= std::time::Duration::from_secs(10));
         EMBED_WARMED.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /*
+     * Reaching the endpoint and waiting for its answer are separate patiences.
+     *
+     * A host that is firewalled rather than refusing would otherwise hang for
+     * the whole request timeout before admitting nothing was ever there — the
+     * one case where being generous about slow work costs you an answer about
+     * something that is not running.
+     */
+    #[test]
+    fn a_missing_host_is_not_given_a_model_s_worth_of_patience() {
+        assert!(EMBED_CONNECT_TIMEOUT < EMBED_WARM_TIMEOUT);
+        assert!(EMBED_CONNECT_TIMEOUT <= std::time::Duration::from_secs(5));
     }
 
     #[test]
