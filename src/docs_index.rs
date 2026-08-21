@@ -190,7 +190,9 @@ pub fn upsert(
     conn: &mut Connection,
     hash: &str,
     body: &IndexBody,
-    cfg: &Config,
+    // Unused since indexing stopped embedding — kept because every caller has
+    // one, and `embed_pending`, which does need it, is the natural next call.
+    _cfg: &Config,
     force: bool,
 ) -> Result<IndexStatus> {
     let existing = status(conn, hash)?;
@@ -198,23 +200,23 @@ pub fn upsert(
         return Ok(existing);
     }
 
+    /*
+     * Chunk and write. No model, no network, no waiting.
+     *
+     * Embedding used to happen *inside* this call, which tied "is this document
+     * retrievable at all" to "is an embedding server up and fast" — so a slow or
+     * missing model made indexing slow or silently worse, when the two have
+     * nothing to do with each other. Now indexing is always fast and always
+     * finishes, storing word-count vectors and marking every chunk unembedded;
+     * `embed_pending` upgrades them afterwards, in its own time, resumably.
+     */
     let chunks = chunk_pages(&body.pages);
-    let (embeddings, kind, _skip) =
-        embed_texts(cfg, &chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>())?;
+    let embeddings: Vec<Vec<f32>> = chunks.iter().map(|c| hashed_embedding(&c.text)).collect();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    /*
-     * What happened, not what was configured.
-     *
-     * This used to read `cfg.embed_model()` — so a configured model with an
-     * unreachable server stored hashed word-counts and reported them as
-     * embeddings. `embed_texts` swallows the failure by design (an index that
-     * exists beats one that errored), which is precisely why the flag has to
-     * come back from it rather than be inferred alongside it.
-     */
-    let used_http = matches!(kind, EmbedKind::Http);
+    let used_http = false;
 
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM chunks WHERE hash = ?1", params![hash])?;
@@ -248,6 +250,121 @@ pub fn upsert(
     }
     tx.commit()?;
     status(conn, hash)
+}
+
+/// How far the embedding pass has got, and why it stopped if it did.
+#[derive(Debug, Clone, Serialize)]
+pub struct EmbedProgress {
+    pub done: u32,
+    pub total: u32,
+    /// Absent while work remains and nothing has gone wrong.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Chunks to attempt in one call, so a caller can stay responsive.
+pub const EMBED_BUDGET_CHUNKS: usize = 64;
+
+/// Upgrade unembedded chunks to a model's vectors, a budget at a time.
+///
+/// Separate from `upsert` on purpose. Indexing is chunking — fast, offline, and
+/// something that should always finish; embedding is a long conversation with a
+/// server that may be slow, missing or halfway through loading a model. Tying
+/// them together meant the second could quietly spoil the first.
+///
+/// **Resumable by construction.** The unit of progress is a row: each batch
+/// commits its own transaction, so an interruption loses exactly the batch in
+/// flight and leaves the rest marked done. There is no cursor to keep, no job
+/// record to reconcile — asking "what is still 0?" is the resume.
+///
+/// A batch that fails stops the pass and leaves its chunks unembedded rather
+/// than writing word-counts over them, so a retry is a retry rather than a
+/// second helping of the same fallback.
+pub fn embed_pending(
+    conn: &mut Connection,
+    hash: &str,
+    cfg: &Config,
+    budget: usize,
+) -> Result<EmbedProgress> {
+    let counts = |conn: &Connection| -> Result<(u32, u32)> {
+        let row = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(embedded), 0) FROM chunks WHERE hash = ?1",
+            params![hash],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        Ok((row.1 as u32, row.0 as u32))
+    };
+
+    let (done, total) = counts(conn)?;
+    if total == 0 {
+        return Ok(EmbedProgress {
+            done: 0,
+            total: 0,
+            reason: Some("nothing is indexed under this hash".into()),
+        });
+    }
+    if done == total {
+        return Ok(EmbedProgress { done, total, reason: None });
+    }
+    let Some(model) = cfg.embed_model().filter(|m| !m.is_empty()).map(str::to_string) else {
+        return Ok(EmbedProgress {
+            done,
+            total,
+            reason: Some("no embedding model is configured".into()),
+        });
+    };
+
+    let pending: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, text FROM chunks WHERE hash = ?1 AND embedded = 0 ORDER BY page, id
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![hash, budget.max(1) as i64], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<std::result::Result<_, _>>()?
+    };
+
+    let texts: Vec<&str> = pending.iter().map(|(_, text)| text.as_str()).collect();
+    let base_url = cfg.embed_base_url().to_string();
+    for range in embed_batches(&texts, HTTP_EMBED_MAX_CHARS) {
+        let batch = &texts[range.clone()];
+        let vectors = match http_embed(&base_url, &model, batch) {
+            Ok(vectors) if vectors.len() == batch.len() => vectors,
+            Ok(vectors) => {
+                let (done, total) = counts(conn)?;
+                return Ok(EmbedProgress {
+                    done,
+                    total,
+                    reason: Some(format!(
+                        "the endpoint returned {} vectors for {} texts",
+                        vectors.len(),
+                        batch.len()
+                    )),
+                });
+            }
+            Err(err) => {
+                let (done, total) = counts(conn)?;
+                return Ok(EmbedProgress {
+                    done,
+                    total,
+                    reason: Some(format!("{err:#}")),
+                });
+            }
+        };
+        // One transaction per batch: an interruption costs this batch and no more.
+        let tx = conn.transaction()?;
+        for ((id, _), vector) in pending[range].iter().zip(vectors.iter()) {
+            tx.execute(
+                "UPDATE chunks SET embedding = ?1, embedded = 1 WHERE id = ?2",
+                params![encode_f32(vector), id],
+            )?;
+        }
+        tx.commit()?;
+    }
+
+    let (done, total) = counts(conn)?;
+    Ok(EmbedProgress { done, total, reason: None })
 }
 
 pub fn retrieve(conn: &Connection, hash: &str, query: &str, k: usize, cfg: &Config) -> Result<Vec<RetrievedChunk>> {
@@ -786,6 +903,103 @@ mod tests {
     }
 
     /*
+     * Resume is a query, not a cursor.
+     *
+     * The unit of progress is a row, so "what is still 0?" *is* the resume —
+     * there is no job record to reconcile and nothing to lose track of.
+     */
+    #[test]
+    fn the_pass_resumes_from_whatever_is_still_unembedded() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.pdf".into(),
+            doc_type: "pdf".into(),
+            pages: (1..=4)
+                .map(|n| IndexPage {
+                    page: n,
+                    text: format!("page {n} of ordinary prose about gradients"),
+                    heading: None,
+                })
+                .collect(),
+        };
+        upsert(&mut conn, "h", &body, &cfg(), false).unwrap();
+        let total = status(&conn, "h").unwrap().chunk_count;
+        assert!(total >= 4);
+
+        // Nothing configured: the pass reports why and changes nothing.
+        let progress = embed_pending(&mut conn, "h", &cfg(), EMBED_BUDGET_CHUNKS).unwrap();
+        assert_eq!(progress.done, 0);
+        assert_eq!(progress.total, total);
+        assert!(progress.reason.as_deref().unwrap().contains("no embedding model"));
+
+        // Stand in for a finished batch, the way an interrupted pass leaves it.
+        conn.execute(
+            "UPDATE chunks SET embedded = 1 WHERE id IN
+             (SELECT id FROM chunks WHERE hash = 'h' ORDER BY id LIMIT 2)",
+            [],
+        )
+        .unwrap();
+        let progress = embed_pending(&mut conn, "h", &cfg(), EMBED_BUDGET_CHUNKS).unwrap();
+        assert_eq!(progress.done, 2, "picks up where it stopped");
+        assert_eq!(progress.total, total);
+        assert!(!status(&conn, "h").unwrap().embedded);
+
+        conn.execute("UPDATE chunks SET embedded = 1 WHERE hash = 'h'", []).unwrap();
+        let progress = embed_pending(&mut conn, "h", &cfg(), EMBED_BUDGET_CHUNKS).unwrap();
+        assert_eq!(progress.done, progress.total);
+        // Finished means finished: no reason, and nothing left to ask a model.
+        assert!(progress.reason.is_none());
+        assert!(status(&conn, "h").unwrap().embedded);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_failed_batch_leaves_its_chunks_alone_so_a_retry_is_a_retry() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let mut cfg = cfg();
+        cfg.llm.local.embed_model = "tiny-embed".into();
+        cfg.llm.local.embed_base_url = "http://127.0.0.1:1".into();
+        let body = IndexBody {
+            name: "n.pdf".into(),
+            doc_type: "pdf".into(),
+            pages: vec![IndexPage { page: 1, text: "some prose".into(), heading: None }],
+        };
+        upsert(&mut conn, "h", &body, &cfg, false).unwrap();
+
+        let progress = embed_pending(&mut conn, "h", &cfg, EMBED_BUDGET_CHUNKS).unwrap();
+        assert_eq!(progress.done, 0);
+        assert!(progress.reason.is_some(), "an unreachable server is worth saying");
+        // Crucially not word-counts written over the top: the chunk is still
+        // pending, so trying again is trying again rather than a second helping
+        // of the same fallback.
+        let pending: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks WHERE hash = 'h' AND embedded = 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, progress.total as i64);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_hash_with_nothing_indexed_says_so_rather_than_claiming_completion() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let progress = embed_pending(&mut conn, "missing", &cfg(), EMBED_BUDGET_CHUNKS).unwrap();
+        assert_eq!((progress.done, progress.total), (0, 0));
+        // 0 of 0 is not "done" — it is "there is nothing here".
+        assert!(progress.reason.is_some());
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /*
      * An index written before the column existed must still open.
      *
      * There was no migration mechanism at all — only `CREATE TABLE IF NOT
@@ -1093,7 +1307,7 @@ mod tests {
     }
 
     #[test]
-    fn http_embed_failure_falls_back_to_hashed() {
+    fn indexing_finishes_whatever_the_embed_server_is_doing() {
         let path = tmp();
         let mut conn = open(&path).unwrap();
         let mut cfg = Config::default();
@@ -1110,9 +1324,14 @@ mod tests {
         };
         let status = upsert(&mut conn, "h2", &body, &cfg, false).unwrap();
         assert!(status.indexed);
-        // The flag reports what happened, not what was asked for. A configured
-        // model with nothing answering on the other end stores word-counts, and
-        // saying otherwise made the UI promise semantic search it did not have.
+        /*
+         * Indexing does not depend on the embedding server at all any more.
+         *
+         * It used to embed inline, which tied "is this document retrievable"
+         * to "is a model up and fast" — two questions with nothing to do with
+         * each other. Now chunking always finishes and stores word-counts, and
+         * `embed_pending` upgrades them separately.
+         */
         assert!(!status.embedded);
         let blob: Vec<u8> = conn
             .query_row(
