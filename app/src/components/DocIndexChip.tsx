@@ -74,6 +74,16 @@ export interface DocIndexChipProps {
   embedEta?: string | null;
   /** The pass is running now. */
   embedding?: boolean;
+  /**
+   * Why indexing is not on offer right now, in the reader's words.
+   *
+   * A live page is the case this exists for. Indexing reads the pad's stored
+   * text — the frozen copy — and while you are browsing that copy is whatever
+   * was frozen last, which after three clicks is a different page from the one
+   * on screen. Pressing `index` there did work and indexed something else, so
+   * the chip has to say what it would have done rather than quietly doing it.
+   */
+  blocked?: string | null;
 }
 
 export function DocIndexChip({
@@ -86,6 +96,7 @@ export function DocIndexChip({
   embedProgress,
   embedEta,
   embedding,
+  blocked,
 }: DocIndexChipProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -117,6 +128,13 @@ export function DocIndexChip({
 
   if (status === "idle") {
     if (!onIndex) return null;
+    if (blocked) {
+      return (
+        <span className="lc-doc-index-chip is-offer is-blocked" title={blocked}>
+          index
+        </span>
+      );
+    }
     return (
       <button
         type="button"
@@ -272,18 +290,21 @@ export function DocIndexChip({
                         {staleModel ? "Embed again with this model" : "Embed this document"}
                       </button>
                     )}
-                    {onIndex && (
-                      <button
-                        type="button"
-                        className="lc-doc-index-redo"
-                        onClick={() => {
-                          setOpen(false);
-                          onIndex();
-                        }}
-                      >
-                        Re-index this document
-                      </button>
-                    )}
+                    {onIndex &&
+                      (blocked ? (
+                        <p className="lc-doc-index-lead lc-muted">{blocked}</p>
+                      ) : (
+                        <button
+                          type="button"
+                          className="lc-doc-index-redo"
+                          onClick={() => {
+                            setOpen(false);
+                            onIndex();
+                          }}
+                        >
+                          Re-index this document
+                        </button>
+                      ))}
                   </>
                 )}
               </aside>

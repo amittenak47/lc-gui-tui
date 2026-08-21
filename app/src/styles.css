@@ -650,6 +650,19 @@ body {
   opacity: 1;
 }
 
+/*
+ * The offer, withdrawn but still legible.
+ *
+ * Not hidden: a chip that disappears while a page is live reads as a bug, and
+ * the reader has no way to learn that freezing is what brings it back. It keeps
+ * its place, loses its underline, and carries the reason in its tooltip.
+ */
+.lc-doc-index-chip.is-offer.is-blocked {
+  cursor: default;
+  text-decoration: none;
+  opacity: 0.4;
+}
+
 .lc-doc-index-chip {
   margin-left: 0;
   margin-right: 6px;

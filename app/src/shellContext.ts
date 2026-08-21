@@ -101,6 +101,8 @@ export interface WorkspaceChrome {
     /** Measured after the first batch; absent until then, never guessed. */
     embedEta?: string | null;
     embedding?: boolean;
+    /** Why indexing is off the table right now — a live page, above all. */
+    blocked?: string | null;
   };
 }
 

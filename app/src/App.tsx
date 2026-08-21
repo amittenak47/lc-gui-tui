@@ -470,6 +470,7 @@ export function App() {
       current.docIndex.status === next.docIndex.status &&
       current.docIndex.meta === next.docIndex.meta &&
       current.docIndex.error === next.docIndex.error &&
+      current.docIndex.blocked === next.docIndex.blocked &&
       current.docIndex.onIndex === next.docIndex.onIndex
         ? current
         : next,
@@ -985,6 +986,7 @@ export function App() {
                   embedProgress={chrome.docIndex.embedProgress}
                   embedEta={chrome.docIndex.embedEta}
                   embedding={chrome.docIndex.embedding}
+                  blocked={chrome.docIndex.blocked}
                 />
               )
             }

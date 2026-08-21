@@ -7109,6 +7109,17 @@ export function Workspace({
         embedProgress: docEmbedProgress,
         embedEta: docEmbedEta,
         embedding: docEmbedding,
+        /*
+         * Indexing reads the pad's stored text, which is the frozen copy.
+         *
+         * While you are browsing, that copy is whatever was frozen last — and
+         * after three clicks it is a different page from the one on screen. So
+         * pressing `index` on a live page really did index something, just not
+         * what the reader was looking at, which is the worst of both answers.
+         */
+        blocked: webLive
+          ? "Freeze this page first — indexing reads the frozen copy, not the live page."
+          : null,
       },
     });
   }, [
@@ -7125,6 +7136,7 @@ export function Workspace({
     docEmbedding,
     embedOpenDocument,
     indexOpenDocument,
+    webLive,
     problem,
     setChrome,
     workspaceLoadActive,
