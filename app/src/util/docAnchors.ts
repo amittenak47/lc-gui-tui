@@ -30,6 +30,8 @@
  */
 
 /** Attribute a renderer puts on each page / chapter to name an offset space. */
+import { findQuote, quoteFromStream } from "./quoteAnchor";
+
 export const SCOPE_ATTR = "data-doc-scope";
 
 export interface TextAnchor {
@@ -40,6 +42,25 @@ export interface TextAnchor {
   end: number;
   /** Sub-document these offsets belong to — PDF page, EPUB spine href. */
   scope?: string;
+  /*
+   * The words themselves, and the words either side of them.
+   *
+   * Offsets are exact and free, and they mean nothing once the stream changes
+   * underneath them. That cannot happen to a PDF page. It happens to a web pad
+   * every time the page is captured again, because the pad's identity is its
+   * address rather than its bytes — so the same hash can hold a different
+   * document tomorrow, and every offset recorded today points into a string
+   * that is gone.
+   *
+   * This is the W3C `TextQuoteSelector`, and pairing it with the offsets is that
+   * standard's own canonical shape: a `TextPositionSelector` *refinedBy* a
+   * `TextQuoteSelector`. Offsets stay the finder; this is how a mark recovers
+   * when they miss. Absent on every anchor written before this existed, which
+   * simply means the old behaviour.
+   */
+  exact?: string;
+  prefix?: string;
+  suffix?: string;
 }
 
 /**
@@ -87,8 +108,13 @@ export function normalizeAnchor(value: unknown): DocAnchor | null {
     w?: unknown;
     h?: unknown;
     scope?: unknown;
+    exact?: unknown;
+    prefix?: unknown;
+    suffix?: unknown;
   };
   const scope = typeof raw.scope === "string" ? raw.scope : undefined;
+  const str = (value: unknown): string | undefined =>
+    typeof value === "string" && value.length > 0 ? value : undefined;
   if (raw.kind === "region") {
     if (
       typeof raw.x !== "number" ||
@@ -110,11 +136,15 @@ export function normalizeAnchor(value: unknown): DocAnchor | null {
   }
   if (typeof raw.start !== "number" || typeof raw.end !== "number") return null;
   if (raw.end <= raw.start) return null;
+  const exact = str(raw.exact);
   return {
     kind: "text",
     start: raw.start,
     end: raw.end,
     ...(scope ? { scope } : {}),
+    ...(exact ? { exact } : {}),
+    ...(exact && str(raw.prefix) ? { prefix: str(raw.prefix) } : {}),
+    ...(exact && str(raw.suffix) ? { suffix: str(raw.suffix) } : {}),
   };
 }
 
@@ -277,7 +307,16 @@ export function anchorFromRange(
   const start = offsetOfBoundary(root, range.startContainer, range.startOffset);
   const end = offsetOfBoundary(root, range.endContainer, range.endOffset);
   if (start == null || end == null || end <= start) return null;
-  return { kind: "text", start, end, ...(scope ? { scope } : {}) };
+  // Recorded now because it cannot be recovered later: once the stream changes,
+  // there is nothing left to read the surroundings out of.
+  const quote = quoteFromStream(textOf(root), start, end);
+  return {
+    kind: "text",
+    start,
+    end,
+    ...(scope ? { scope } : {}),
+    ...(quote ?? {}),
+  };
 }
 
 /**
@@ -343,6 +382,25 @@ export function rangeFromAnchor(root: Node, anchor: DocAnchor): Range | null {
   const { nodes, starts } = streamOf(root);
   if (nodes.length === 0) return null;
 
+  /*
+   * Offsets first, quote second — and the quote can also *veto*.
+   *
+   * The offsets are exact when the stream is the one they were taken from, so
+   * they stay the finder. The quote says whether that is still the case: if the
+   * characters at those positions are the words that were marked, nothing has
+   * moved and the ordinary path runs.
+   *
+   * If they are not, the stream changed underneath and there are two honest
+   * answers — the quote found somewhere else, or nothing. What there is not is
+   * "the old offsets anyway": those now name whatever happens to occupy those
+   * positions, and returning it would put a reader's note on words they never
+   * wrote it about. That silent substitution is the failure this exists to stop,
+   * so a recorded quote that cannot be found is a null rather than a guess.
+   */
+  const quoted = quoteRangeOf(root, anchor, nodes, starts, doc);
+  if (quoted.kind === "found") return quoted.range;
+  if (quoted.kind === "gone") return null;
+
   let startNode: Text | null = null;
   let startOffset = 0;
   let endNode: Text | null = null;
@@ -384,6 +442,75 @@ export function rangeFromAnchor(root: Node, anchor: DocAnchor): Range | null {
  * concatenates the same way the DOM does and would hand back the fused
  * "CollisionsHash maps…" the separators exist to prevent.
  */
+/**
+ * What the quote has to say about this document.
+ *
+ * - `offsets` — either no quote was recorded, or it is still exactly where the
+ *   offsets say. Use them.
+ * - `found` — the stream moved and the words were located elsewhere.
+ * - `gone` — the words were recorded and are not here. The offsets are stale and
+ *   must not be used; this is a real answer about the document, not a failure.
+ */
+type QuoteVerdict =
+  | { kind: "offsets" }
+  | { kind: "found"; range: Range }
+  | { kind: "gone" };
+
+function quoteRangeOf(
+  root: Node,
+  anchor: TextAnchor,
+  nodes: Text[],
+  starts: number[],
+  doc: Document,
+): QuoteVerdict {
+  if (!anchor.exact) return { kind: "offsets" };
+  const text = textOf(root);
+  if (text.slice(anchor.start, anchor.end) === anchor.exact) return { kind: "offsets" };
+  const found = findQuote(text, {
+    exact: anchor.exact,
+    ...(anchor.prefix ? { prefix: anchor.prefix } : {}),
+    ...(anchor.suffix ? { suffix: anchor.suffix } : {}),
+  });
+  if (!found) return { kind: "gone" };
+  const range = rangeAt(nodes, starts, found.start, found.end, doc);
+  return range ? { kind: "found", range } : { kind: "gone" };
+}
+
+/** Turn a `[start, end)` in the stream into a DOM range. */
+function rangeAt(
+  nodes: Text[],
+  starts: number[],
+  from: number,
+  to: number,
+  doc: Document,
+): Range | null {
+  let startNode: Text | null = null;
+  let startOffset = 0;
+  let endNode: Text | null = null;
+  let endOffset = 0;
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i]!;
+    const at = starts[i]!;
+    const until = at + node.data.length;
+    if (!startNode && from < until) {
+      startNode = node;
+      startOffset = Math.max(0, from - at);
+    }
+    if (to <= until) {
+      endNode = node;
+      endOffset = Math.max(0, Math.min(to - at, node.data.length));
+      break;
+    }
+    endNode = node;
+    endOffset = node.data.length;
+  }
+  if (!startNode || !endNode) return null;
+  const range = doc.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  return range;
+}
+
 export function textForAnchor(root: Node, anchor: DocAnchor): string {
   if (!isTextAnchor(anchor)) return "";
   const { text } = streamOf(root);
