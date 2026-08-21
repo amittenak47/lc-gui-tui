@@ -40,11 +40,12 @@ export interface TabStripProps {
   /** The live index chip for the active document, if it has one. */
   activeIndexChip?: ReactNode;
   /**
-   * A workspace is opening, and this cancels it.
+   * A workspace is opening, and going Home abandons it.
    *
-   * Home takes the job rather than a Cancel button appearing beside the strip:
-   * a chip that arrives for the length of a load shifts every tab along and
-   * then shifts them back, and the place you land when you cancel *is* Home.
+   * Home no longer *becomes* a Cancel button for the length of a load. Renaming
+   * the one fixed landmark in the strip mid-load was the problem: the chip you
+   * aim at to leave stopped saying Home exactly when you wanted it. Home stays
+   * Home; pressing it drops the load on the way, which is what leaving means.
    */
   onCancelLoad?: () => void;
   /**
@@ -335,9 +336,10 @@ export function TabStrip({
           {row.members.map((tab) => {
         const selected = tab.id === activeId;
         const indexState = indexStateOf(tab);
-        // Home wears Cancel for the length of a load — same chip, same slot.
-        const cancelling = tab.kind === "home" && Boolean(onCancelLoad);
-        const label = cancelling ? "Cancel" : tab.title;
+        // Home abandons an in-flight load, but it never stops saying Home.
+        const cancelling = false;
+        const label = tab.title;
+        const homeAborts = tab.kind === "home" && Boolean(onCancelLoad);
         const grouped = Boolean(tab.group);
         return (
           <div
@@ -362,11 +364,11 @@ export function TabStrip({
               type="button"
               className="lc-tab-hit"
               title={
-                cancelling
-                  ? "Cancel loading"
-                  : tab.id === HOME_TAB_ID
-                    ? tab.title
-                    : `${tab.title}\nDrag onto another tab to split · right-click for more`
+                tab.id === HOME_TAB_ID
+                  ? homeAborts
+                    ? "Home — stops the page that is loading"
+                    : tab.title
+                  : `${tab.title}\nDrag onto another tab to split · right-click for more`
               }
               aria-label={label}
               onClick={() => {
@@ -374,6 +376,7 @@ export function TabStrip({
                   skipClickRef.current = false;
                   return;
                 }
+                if (homeAborts) onCancelLoadRef.current?.();
                 if (!cancelling) {
                   onFocus(tab.id);
                   return;

@@ -5,9 +5,12 @@ import { absolutizeCssUrls, prefixSelectors, scopeCss } from "./webPageCss";
 describe("scopeCss", () => {
   it("rewrites body/html/:root onto the paper so they cannot paint the app", () => {
     const out = scopeCss(
-      "html { background:#fff } body { color:#111 } :root { --x:1 } header { border-top:4px solid #fff }",
+      "html { background:#111 } body { color:#111 } :root { --x:1 } header { border-top:4px solid #fff }",
     );
-    expect(out).toMatch(/\.lc-web-doc\s*\{[^}]*background:#fff/);
+    // A background the page actually chose is carried across like any other
+    // declaration. A *blank* one is not — see `dropBlankPaper`, and the paper
+    // tests in webPagePaper.test.ts.
+    expect(out).toMatch(/\.lc-web-doc\s*\{[^}]*background:#111/);
     expect(out).toMatch(/\.lc-web-doc\s*\{[^}]*color:#111/);
     expect(out).toMatch(/\.lc-web-doc\s*\{[^}]*--x:1/);
     expect(out).toMatch(/\.lc-web-doc header\s*\{/);

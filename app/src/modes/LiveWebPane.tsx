@@ -13,8 +13,9 @@
  * and the two are separate states for exactly this reason.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { watchScreenOverlay } from "../util/screenOverlay";
 import {
   closeLiveWebview,
   openLiveWebview,
@@ -89,9 +90,24 @@ export function LiveWebPane({ url, visible, onError }: LiveWebPaneProps) {
     };
   }, [url]);
 
+  /*
+   * Step aside for anything that takes the whole screen.
+   *
+   * Settings opened *behind* the page: the panel was there, the header blurred
+   * around it, and a native surface painted over the rest. Nothing of ours can
+   * be drawn above this view — that is the same constraint that makes the board
+   * chrome disappear while a page is live — so the only move is to take the
+   * view away for as long as the panel is up, and put it back afterwards.
+   *
+   * What shows through underneath is the frozen copy of the page, which is the
+   * right thing to be dimming behind a dialog anyway.
+   */
+  const [overlay, setOverlay] = useState(false);
+  useEffect(() => watchScreenOverlay(setOverlay), []);
+
   useEffect(() => {
-    void showLiveWebview(visible);
-  }, [visible]);
+    void showLiveWebview(visible && !overlay);
+  }, [visible, overlay]);
 
   return <div ref={holeRef} className="lc-live-web-pane" aria-hidden />;
 }

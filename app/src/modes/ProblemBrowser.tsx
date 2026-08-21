@@ -32,6 +32,7 @@ import {
   toggleColumnSort,
   type SortKey,
 } from "../util/browseSort";
+import { messageOf } from "../util/messageOf";
 
 export const PAGE_SIZE = 15;
 /** Smallest page the phone browser will request — still usable on iPhone SE. */
@@ -979,6 +980,3 @@ function EmptyTable({
   );
 }
 
-function messageOf(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
-}

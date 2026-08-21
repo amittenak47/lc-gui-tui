@@ -75,6 +75,7 @@ import {
   type WorkspaceApi,
   type WorkspaceChrome,
 } from "./shellContext";
+import { messageOf } from "./util/messageOf";
 
 /**
  * How many workspaces stay mounted at once.
@@ -110,9 +111,6 @@ function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function messageOf(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
-}
 
 /** Tauri's `invoke`, or null on plain web / `vite dev`. */
 async function loadTauriInvoke() {

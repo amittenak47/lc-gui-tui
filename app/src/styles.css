@@ -476,6 +476,48 @@ body {
   border-right: 0;
 }
 
+/*
+ * Home is a place, not a document.
+ *
+ * It took an equal share of the strip beside the files you actually have open,
+ * so on a two-tab window a third of the row was a fixed landmark that never
+ * changes and never needs reading. It keeps the house and gives the width back
+ * — which is also what lets the tabs either side stop truncating their titles.
+ */
+.lc-tab[data-tab-kind="home"] {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.lc-tab[data-tab-kind="home"] .lc-tab-title {
+  display: none;
+}
+
+/*
+ * `flex: 0 0 auto` on the tab was only half the job, and the other half ate the
+ * icon: `.lc-tab-hit` is `flex: 1 1 0`, so once the tab sized itself to its
+ * content the button asked for a basis of zero, and `overflow: hidden` clipped
+ * the house away. What was left was a compact tab with nothing in it — a Home
+ * button you could still press and could no longer see.
+ */
+.lc-tab[data-tab-kind="home"] .lc-tab-hit {
+  flex: 0 0 auto;
+  gap: 0;
+  justify-content: center;
+  padding-inline: 11px;
+}
+
+.lc-tab[data-tab-kind="home"] .lc-tab-glyph {
+  width: 16px;
+  height: 16px;
+  opacity: 0.9;
+}
+
+.lc-tab[data-tab-kind="home"]:hover .lc-tab-glyph,
+.lc-tab[data-tab-kind="home"].is-active .lc-tab-glyph {
+  opacity: 1;
+}
+
 .lc-tab.is-active {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   box-shadow: inset 0 -2px 0 var(--accent);
@@ -800,10 +842,35 @@ body {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.lc-web-reader-toggle.is-on {
+/*
+ * On means on.
+ *
+ * A 16% tint behind a small glyph is not a state anybody reads at a glance —
+ * these sit in a row of icons that all look alike, and "which of these is
+ * currently doing something" was a question you answered by pressing one. A
+ * ring and a short bloom, the same language the sash uses when it has the
+ * pointer.
+ */
+.lc-web-reader-toggle.is-on,
+.lc-web-live-toggle.is-live,
+.lc-web-omnibox-row .lc-icon.is-active {
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent),
+    0 0 8px color-mix(in srgb, var(--accent) 38%, transparent);
   opacity: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lc-web-reader-toggle,
+  .lc-web-live-toggle,
+  .lc-web-omnibox-row .lc-icon {
+    transition:
+      background-color 140ms ease-out,
+      box-shadow 140ms ease-out,
+      color 140ms ease-out;
+  }
 }
 
 /*
@@ -852,12 +919,20 @@ body {
 }
 
 /* Live page vs frozen copy — an icon among icons, not a pill among them. */
-.lc-web-live-toggle.is-live {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
 
 .lc-web-doc.is-reader {
+  /*
+   * A measure.
+   *
+   * `.lc-web-doc` is `width: 100%` of the page frame and reader text inherited
+   * it, so on a desktop window an article ran the full width of the pad —
+   * twenty-odd words to the line, past the point where the eye reliably finds
+   * the start of the next one. 34em lands near the 60–75 characters typography
+   * settled on a century ago, and centring it keeps the column in the middle of
+   * whatever frame it is handed rather than pinned to the left edge.
+   */
+  max-width: 34em;
+  margin-inline: auto;
   padding: 36px 28px 64px;
   color: var(--ink);
   font-family: var(--lc-sans);
@@ -866,6 +941,55 @@ body {
   overflow-wrap: break-word;
   letter-spacing: 0.01em;
   background: transparent;
+}
+
+/* The headline. Readability returns the body without it — see `withArticleTitle`. */
+.lc-web-doc.is-reader > h1:first-child {
+  margin: 0 0 0.15em;
+  font-size: 1.9em;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.lc-web-doc.is-reader .lc-reader-source {
+  margin: 0 0 2em;
+  color: var(--muted);
+  font-size: 0.82em;
+  letter-spacing: 0.02em;
+}
+
+.lc-web-doc.is-reader p {
+  margin: 0 0 1.15em;
+}
+
+.lc-web-doc.is-reader a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.lc-web-doc.is-reader blockquote {
+  margin: 1.5em 0;
+  padding-left: 1.1em;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: color-mix(in srgb, var(--ink) 82%, transparent);
+  font-style: italic;
+}
+
+.lc-web-doc.is-reader ul,
+.lc-web-doc.is-reader ol {
+  margin: 0 0 1.15em;
+  padding-left: 1.4em;
+}
+
+.lc-web-doc.is-reader li {
+  margin: 0 0 0.4em;
+}
+
+.lc-web-doc.is-reader hr {
+  margin: 2.2em 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
 }
 
 .lc-web-doc.is-reader img,
@@ -1401,8 +1525,18 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-mobile.lc-app:has(.lc-side-sheet)
   .lc-main.is-split-vertical
   > .lc-split-sash.is-vertical {
+  /*
+   * Meets the strip, rather than stopping short of it.
+   *
+   * The 6px that holds the seam off the top edge is there so a glow does not
+   * bleed over the tab strip. At the bottom the same 6px bought nothing and
+   * cost the seam its ending: it hung in the paper a few pixels above the coach
+   * peek, which reads as a line that gave up rather than a line that divides
+   * the board. Landing exactly on the strip's edge is what makes the two halves
+   * look like halves.
+   */
   bottom: calc(
-    6px + var(--lc-safe-bottom) + var(--lc-agent-sheet-lift) + var(--lc-agent-peek) +
+    var(--lc-safe-bottom) + var(--lc-agent-sheet-lift) + var(--lc-agent-peek) +
       (var(--lc-agent-sheet) - var(--lc-agent-peek)) * var(--lc-agent-open, 0)
   );
 }
@@ -1416,7 +1550,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   .lc-main.is-split-vertical
   > .lc-split-sash.is-vertical {
   bottom: calc(
-    6px + var(--lc-safe-bottom) + var(--lc-agent-sheet-lift) + var(--lc-agent-peek) +
+    var(--lc-safe-bottom) + var(--lc-agent-sheet-lift) + var(--lc-agent-peek) +
       (var(--lc-agent-sheet) - var(--lc-agent-peek)) * var(--lc-agent-open, 1)
   );
 }
@@ -9545,6 +9679,24 @@ button.lc-row-selected:hover:not(:disabled) {
   background: rgb(0 0 0 / 35%);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+}
+
+/*
+ * No blur on a touch device.
+ *
+ * `backdrop-filter` over a full screen means re-filtering everything behind
+ * this panel every frame — and behind it is a board with Excalidraw's canvases
+ * on it. On the desktop GPU that is free; in the Android WebView it is the
+ * whole frame budget, and Settings opened at a visibly worse frame rate than
+ * the app it opened over. A slightly heavier scrim reads the same and costs
+ * one paint.
+ */
+@media (pointer: coarse) {
+  .lc-settings-backdrop {
+    background: rgb(0 0 0 / 52%);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 .lc-leave-dialog-exit {

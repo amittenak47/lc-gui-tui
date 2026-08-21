@@ -7,6 +7,8 @@
  * `.lc-web-doc`; rewrite `html`/`body`/` :root` to the paper itself.
  */
 
+import { dropBlankPaper, targetsDocRoot } from "./webPagePaper";
+
 export const WEB_DOC_SCOPE = ".lc-web-doc";
 
 const SKIP_AT = /^(keyframes|-webkit-keyframes|-moz-keyframes|font-face|counter-style|property|font-feature-values)\b/i;
@@ -62,7 +64,17 @@ function prefixBlock(css: string, scope: string): string {
     }
     const selectors = css.slice(i, brace);
     const body = readCurly(css, brace);
-    out += `${prefixSelectors(selectors, scope)}{${rewriteDecls(body.body)}}`;
+    const prefixed = prefixSelectors(selectors, scope);
+    /*
+     * A rule that came from `html` / `body` / `:root` now targets the container
+     * itself, and its background would be an opaque sheet laid over the pad's
+     * paper. Blank ones give way to the theme; a real one is a decision made by
+     * the page and stays.
+     */
+    const decls = targetsDocRoot(prefixed, scope)
+      ? dropBlankPaper(rewriteDecls(body.body))
+      : rewriteDecls(body.body);
+    out += `${prefixed}{${decls}}`;
     i = body.next;
   }
   return out;

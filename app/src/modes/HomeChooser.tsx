@@ -102,11 +102,12 @@ export function HomeChooser({
       title: "Whiteboard",
       blurb: "Freeform pages for sketches, notes, and diagrams.",
       icon: (
+        // The nib, because this is the blank page you draw on. Annotate takes
+        // the ruled sheet: it is the one that arrives already written.
         <Glyph>
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <path d="M14 2v6h6" />
-          <path d="M8 13h8" />
-          <path d="M8 17h5" />
+          <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h9" />
+          <path d="M13 2v6h6V9" />
+          <path d="m20.2 11.3-6.6 6.6-2.8.8.8-2.8 6.6-6.6z" />
         </Glyph>
       ),
       onOpen: onWhiteboard,
@@ -118,10 +119,10 @@ export function HomeChooser({
       blurb: "Mark up PDFs, docs, code, and web pages.",
       icon: (
         <Glyph>
-          <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h9" />
-          <path d="M13 2v6h6V9" />
-          {/* A nib crossing the page corner — the mark, not the file. */}
-          <path d="m20.2 11.3-6.6 6.6-2.8.8.8-2.8 6.6-6.6z" />
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6" />
+          <path d="M8 13h8" />
+          <path d="M8 17h5" />
         </Glyph>
       ),
       onOpen: onAnnotate,

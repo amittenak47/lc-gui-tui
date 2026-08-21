@@ -15,6 +15,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { announceSplitResize } from "../util/splitResize";
 import { clampSplitRatio, type SplitAxis } from "../util/tabs";
 
 const MOVE_OPTS: AddEventListenerOptions = { capture: true, passive: false };
@@ -58,7 +59,21 @@ export function SplitSash({
     if (ratio === null) return;
     ratioRef.current = ratio;
     writeRatio(sashRef.current?.parentElement ?? null, ratio);
+    // Advisory: the panes have new widths as of this frame. A board may
+    // coalesce these however it likes — `settle` below is the one that has to
+    // land.
+    announceSplitResize("move");
   };
+
+  /**
+   * The gesture is over and the panes are their final size.
+   *
+   * Said separately from the moves because it is the only part a board may not
+   * skip: a `ResizeObserver` that was starved for the whole drag (Android, under
+   * touch) leaves two resized panes and two boards still fitted to the old
+   * halves, and nothing after this would ever tell them otherwise.
+   */
+  const announceSettled = () => announceSplitResize("settle");
 
   const unbind = () => {
     unbindRef.current?.();
@@ -83,6 +98,7 @@ export function SplitSash({
       const ratio = ratioRef.current;
       unbind();
       if (ratio != null) onRatioRef.current(ratio);
+      announceSettled();
     };
     window.addEventListener("pointermove", onMove, MOVE_OPTS);
     document.addEventListener("pointermove", onMove, MOVE_OPTS);
@@ -120,6 +136,7 @@ export function SplitSash({
           unbind();
           writeRatio(sashRef.current?.parentElement ?? null, 0.5);
           onRatioRef.current(0.5);
+          announceSettled();
           return;
         }
         lastTapRef.current = now;
@@ -154,6 +171,8 @@ export function SplitSash({
         event.preventDefault();
         writeRatio(main, next);
         onRatio(next);
+        // Each keypress is its own finished move — there is no drag to end.
+        announceSettled();
       }}
     >
       <span className="lc-split-sash-grip" aria-hidden>
