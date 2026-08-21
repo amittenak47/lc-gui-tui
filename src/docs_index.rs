@@ -411,6 +411,48 @@ pub enum EmbedSkip {
 /// one call.
 pub const HTTP_EMBED_MAX_CHARS: usize = 24_000;
 
+/// Group texts into runs that each fit one request.
+///
+/// The ceiling bounds a *request*, never a document — mistaking the two is what
+/// made every book fall through to word-counts. A text longer than the ceiling
+/// on its own still gets a batch of its own rather than being dropped: a chunk
+/// cannot be split without splitting its meaning, and an endpoint is far more
+/// likely to accept one oversized input than the caller is to want the whole
+/// document abandoned over it.
+/// Also a batch ceiling, counted in texts rather than characters.
+///
+/// A batch is the unit progress is reported in, so its size is how coarse the
+/// answer to "how far along is this?" can be. Characters alone are not enough:
+/// a book chunks into ~2400-character pieces and lands ten to a request, but a
+/// web page indexed from its marks can be a hundred short excerpts that all fit
+/// in one — a single opaque wait reported as one tick.
+///
+/// This is also the closest thing available to streaming the vectors back. The
+/// endpoints do not offer it — `/embeddings` and Ollama's `/api/embed` are
+/// request/response JSON — so the granularity of feedback is chosen here, by
+/// how much work is put in one request, rather than by the protocol.
+const EMBED_BATCH_MAX_TEXTS: usize = 16;
+
+pub fn embed_batches(texts: &[&str], ceiling: usize) -> Vec<std::ops::Range<usize>> {
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut start = 0usize;
+    let mut running = 0usize;
+    for (i, text) in texts.iter().enumerate() {
+        let len = text.len();
+        let full = running + len > ceiling || i - start >= EMBED_BATCH_MAX_TEXTS;
+        if i > start && full {
+            out.push(start..i);
+            start = i;
+            running = 0;
+        }
+        running += len;
+    }
+    if start < texts.len() {
+        out.push(start..texts.len());
+    }
+    out
+}
+
 fn embed_texts(
     cfg: &Config,
     texts: &[&str],
@@ -425,21 +467,42 @@ fn embed_texts(
     let Some(model) = cfg.embed_model().filter(|m| !m.is_empty()) else {
         return Ok(hashed(EmbedSkip::NoModel));
     };
-    let total: usize = texts.iter().map(|t| t.len()).sum();
-    if total > HTTP_EMBED_MAX_CHARS {
+
+    /*
+     * Several requests, not one refusal.
+     *
+     * This used to be `if total <= ceiling { …one request… }` with no else, so a
+     * document larger than a single request skipped embedding altogether — which
+     * is every book, and exactly the documents worth searching by meaning.
+     *
+     * All or nothing, deliberately: `retrieve` scores a document on one scale,
+     * so a half-embedded set of vectors would be worse than none. §1e is where
+     * partial progress becomes safe, because there it is recorded per chunk
+     * rather than mixed into one answer.
+     */
+    let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    for range in embed_batches(texts, HTTP_EMBED_MAX_CHARS) {
+        let batch = &texts[range.clone()];
+        match http_embed(cfg.embed_base_url(), model, batch) {
+            Ok(vectors) if vectors.len() == batch.len() => out.extend(vectors),
+            Ok(vectors) => {
+                return Ok(hashed(EmbedSkip::Failed(format!(
+                    "the endpoint returned {} vectors for {} texts",
+                    vectors.len(),
+                    batch.len()
+                ))))
+            }
+            Err(err) => return Ok(hashed(EmbedSkip::Failed(format!("{err:#}")))),
+        }
+    }
+    if out.len() != texts.len() {
         return Ok(hashed(EmbedSkip::Failed(format!(
-            "{total} characters is more than one request holds; embed in batches"
+            "collected {} vectors for {} texts",
+            out.len(),
+            texts.len()
         ))));
     }
-    match http_embed(cfg.embed_base_url(), model, texts) {
-        Ok(vectors) if vectors.len() == texts.len() => Ok((vectors, EmbedKind::Http, None)),
-        Ok(vectors) => Ok(hashed(EmbedSkip::Failed(format!(
-            "the endpoint returned {} vectors for {} texts",
-            vectors.len(),
-            texts.len()
-        )))),
-        Err(err) => Ok(hashed(EmbedSkip::Failed(format!("{err:#}")))),
-    }
+    Ok((out, EmbedKind::Http, None))
 }
 
 /*
@@ -632,22 +695,75 @@ mod tests {
     }
 
     /*
-     * A ceiling on one request, not on the document.
+     * The ceiling bounds a request, never a document.
      *
-     * Today this reports why; §1b makes it stop happening by filling several
-     * requests instead of giving up on the whole document.
+     * Mistaking the two is the whole bug: `if total <= ceiling { …one request… }`
+     * with no else meant every book — the documents most worth searching by
+     * meaning — skipped embedding entirely.
      */
     #[test]
-    fn more_than_one_request_holds_is_a_reason_not_a_shrug() {
+    fn a_document_larger_than_one_request_is_split_across_several() {
+        let a = "a".repeat(10_000);
+        let b = "b".repeat(10_000);
+        let c = "c".repeat(10_000);
+        let texts = [a.as_str(), b.as_str(), c.as_str()];
+        let batches = embed_batches(&texts, HTTP_EMBED_MAX_CHARS);
+        assert_eq!(batches, vec![0..2, 2..3]);
+        // Every text lands in exactly one batch, in order, none dropped.
+        let covered: Vec<usize> = batches.iter().flat_map(|r| r.clone()).collect();
+        assert_eq!(covered, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn one_text_over_the_ceiling_still_gets_its_own_request() {
+        // A chunk cannot be split without splitting its meaning, and an endpoint
+        // is likelier to accept one oversized input than the reader is to want
+        // the whole document abandoned over it.
+        let huge = "x".repeat(HTTP_EMBED_MAX_CHARS + 1);
+        let small = "y";
+        let batches = embed_batches(&[huge.as_str(), small], HTTP_EMBED_MAX_CHARS);
+        assert_eq!(batches, vec![0..1, 1..2]);
+    }
+
+    /*
+     * Progress is reported per batch, so a batch is how coarse progress can be.
+     *
+     * A hundred short marks that all fit one request would otherwise be a single
+     * opaque wait — the case a web page indexed from its marks produces.
+     */
+    #[test]
+    fn many_small_texts_are_still_split_so_progress_can_move() {
+        let texts: Vec<&str> = std::iter::repeat("short").take(100).collect();
+        let batches = embed_batches(&texts, HTTP_EMBED_MAX_CHARS);
+        assert!(batches.len() >= 6, "one tick for a hundred marks: {batches:?}");
+        assert!(batches.iter().all(|r| r.len() <= EMBED_BATCH_MAX_TEXTS));
+        let covered: usize = batches.iter().map(|r| r.len()).sum();
+        assert_eq!(covered, texts.len());
+    }
+
+    #[test]
+    fn batching_handles_the_empty_and_single_cases() {
+        assert!(embed_batches(&[], HTTP_EMBED_MAX_CHARS).is_empty());
+        assert_eq!(embed_batches(&["short"], HTTP_EMBED_MAX_CHARS), vec![0..1]);
+    }
+
+    /*
+     * All or nothing, on purpose.
+     *
+     * `retrieve` scores a document on one scale, so vectors from a half-finished
+     * run would be worse than none. §1e is where partial progress becomes safe,
+     * because there it is recorded per chunk rather than mixed into one answer.
+     */
+    #[test]
+    fn a_failed_batch_takes_the_whole_document_down_to_words() {
         let mut cfg = cfg();
         cfg.llm.local.embed_model = "tiny-embed".into();
+        cfg.llm.local.embed_base_url = "http://127.0.0.1:1".into();
         let long = "x".repeat(HTTP_EMBED_MAX_CHARS + 1);
-        let (_, kind, skip) = embed_texts(&cfg, &[long.as_str()]).unwrap();
+        let (vectors, kind, skip) = embed_texts(&cfg, &[long.as_str(), "second"]).unwrap();
         assert!(matches!(kind, EmbedKind::Hashed));
-        match skip {
-            Some(EmbedSkip::Failed(why)) => assert!(why.contains("batches"), "got {why}"),
-            other => panic!("expected a size failure, got {other:?}"),
-        }
+        assert!(matches!(skip, Some(EmbedSkip::Failed(_))));
+        assert!(vectors.iter().all(|v| v.len() == HASH_DIM));
     }
 
     /// The old two seconds was under a cold model's start-up time.
