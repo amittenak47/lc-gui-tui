@@ -41,6 +41,11 @@ pub struct IndexStatus {
     pub page_count: u32,
     pub chunk_count: u32,
     pub embedded: bool,
+    /// The model that produced these vectors, or empty if none did.
+    ///
+    /// A fact, not an interpretation: whether it is *stale* depends on what is
+    /// configured right now, which is the caller's to know and say.
+    pub embed_model: String,
 }
 
 /// One scored chunk. `Serialize` because `/docs/:hash/retrieve` returns these
@@ -68,6 +73,10 @@ pub fn open(path: &Path) -> Result<Connection> {
             doc_type TEXT NOT NULL,
             page_count INTEGER NOT NULL,
             embedded INTEGER NOT NULL DEFAULT 0,
+            -- The model that produced this document's vectors, or empty. See
+            -- `migrate`: dimension was standing in for provenance and is a poor
+            -- proxy, since two models can share one and still be incomparable.
+            embed_model TEXT NOT NULL DEFAULT '',
             updated_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS chunks (
@@ -91,7 +100,7 @@ pub fn open(path: &Path) -> Result<Connection> {
 }
 
 /// Schema version of the newest migration below.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /*
  * Migrations, because `CREATE TABLE IF NOT EXISTS` cannot add a column.
@@ -123,6 +132,23 @@ fn migrate(conn: &Connection) -> Result<()> {
             "ALTER TABLE chunks ADD COLUMN embedded INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
+    if version < 2 && !has_column(conn, "documents", "embed_model")? {
+        /*
+         * Which model made these vectors.
+         *
+         * Without it, changing model degrades retrieval in silence: the query
+         * comes back at a new dimension, `comparable` says no, and every
+         * document quietly drops to word matching with nothing said. Dimension
+         * was standing in for provenance and is a poor proxy — two models can
+         * share one and still be incomparable.
+         *
+         * Empty for existing rows, which is honest: nothing recorded what made
+         * them, so nothing can claim to know.
+         */
+        conn.execute_batch(
+            "ALTER TABLE documents ADD COLUMN embed_model TEXT NOT NULL DEFAULT '';",
+        )?;
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
@@ -139,11 +165,11 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
 }
 
 pub fn status(conn: &Connection, hash: &str) -> Result<IndexStatus> {
-    let page_count = conn
+    let head = conn
         .query_row(
-            "SELECT page_count FROM documents WHERE hash = ?1",
+            "SELECT page_count, embed_model FROM documents WHERE hash = ?1",
             params![hash],
-            |row| row.get::<_, i64>(0),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()?;
     /*
@@ -161,14 +187,15 @@ pub fn status(conn: &Connection, hash: &str) -> Result<IndexStatus> {
         params![hash],
         |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
     )?;
-    match page_count {
-        Some(page_count) => Ok(IndexStatus {
+    match head {
+        Some((page_count, embed_model)) => Ok(IndexStatus {
             hash: hash.to_string(),
             indexed: true,
             page_count: page_count as u32,
             chunk_count: chunk_count as u32,
             // An empty document is not embedded; `all` over nothing would say yes.
             embedded: chunk_count > 0 && embedded_count == chunk_count,
+            embed_model,
         }),
         None => Ok(IndexStatus {
             hash: hash.to_string(),
@@ -176,6 +203,7 @@ pub fn status(conn: &Connection, hash: &str) -> Result<IndexStatus> {
             page_count: 0,
             chunk_count: 0,
             embedded: false,
+            embed_model: String::new(),
         }),
     }
 }
@@ -303,16 +331,59 @@ pub fn embed_pending(
             reason: Some("nothing is indexed under this hash".into()),
         });
     }
+    let configured = cfg
+        .embed_model()
+        .filter(|m| !m.is_empty())
+        .map(str::to_string);
+
+    /*
+     * A different model means start again, not carry on — and this is settled
+     * before asking whether the work is finished.
+     *
+     * Vectors from two models do not share a space, so half of each is not a
+     * document half-done, it is a document that cannot be ranked at all. The
+     * case that matters most is one *fully* embedded under the old model: ask
+     * about completion first and the answer is yes, the pass returns, and
+     * `retrieve` is left to discover the mismatch later and drop to word
+     * matching without saying so.
+     */
+    let (done, total) = match &configured {
+        Some(model) => {
+            let stored: String = conn
+                .query_row(
+                    "SELECT embed_model FROM documents WHERE hash = ?1",
+                    params![hash],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .unwrap_or_default();
+            if !stored.is_empty() && &stored != model {
+                conn.execute("UPDATE chunks SET embedded = 0 WHERE hash = ?1", params![hash])?;
+                counts(conn)?
+            } else {
+                (done, total)
+            }
+        }
+        // Nothing configured to compare against, so nothing to invalidate.
+        None => (done, total),
+    };
+
+    // Finished is finished, whatever is or is not configured now: a document
+    // that needs no work does not need a model to say so.
     if done == total {
         return Ok(EmbedProgress { done, total, reason: None });
     }
-    let Some(model) = cfg.embed_model().filter(|m| !m.is_empty()).map(str::to_string) else {
+    let Some(model) = configured else {
         return Ok(EmbedProgress {
             done,
             total,
             reason: Some("no embedding model is configured".into()),
         });
     };
+    conn.execute(
+        "UPDATE documents SET embed_model = ?1 WHERE hash = ?2",
+        params![model, hash],
+    )?;
 
     let pending: Vec<(i64, String)> = {
         let mut stmt = conn.prepare(
@@ -951,6 +1022,109 @@ mod tests {
         // Finished means finished: no reason, and nothing left to ask a model.
         assert!(progress.reason.is_none());
         assert!(status(&conn, "h").unwrap().embedded);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /*
+     * Changing model must not look like nothing happened.
+     *
+     * The dangerous case is a document *fully* embedded under the old model:
+     * ask "is it finished?" before "was it the same model?" and the answer is
+     * yes, the pass returns, and `retrieve` is left to discover the mismatch
+     * later and drop to word matching without saying so.
+     */
+    #[test]
+    fn a_finished_document_is_redone_when_the_model_changes() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.pdf".into(),
+            doc_type: "pdf".into(),
+            pages: vec![IndexPage { page: 1, text: "prose about gradients".into(), heading: None }],
+        };
+        upsert(&mut conn, "h", &body, &cfg(), false).unwrap();
+
+        // Stand in for a completed run under one model.
+        conn.execute("UPDATE chunks SET embedded = 1 WHERE hash = 'h'", []).unwrap();
+        conn.execute(
+            "UPDATE documents SET embed_model = 'old-embed' WHERE hash = 'h'",
+            [],
+        )
+        .unwrap();
+        assert!(status(&conn, "h").unwrap().embedded);
+        assert_eq!(status(&conn, "h").unwrap().embed_model, "old-embed");
+
+        let mut cfg = cfg();
+        cfg.llm.local.embed_model = "new-embed".into();
+        cfg.llm.local.embed_base_url = "http://127.0.0.1:1".into();
+        let progress = embed_pending(&mut conn, "h", &cfg, EMBED_BUDGET_CHUNKS).unwrap();
+
+        // Reset rather than reported done: vectors from two models do not share
+        // a space, so half of each is not half-done, it is unrankable.
+        assert_eq!(progress.done, 0);
+        assert!(!status(&conn, "h").unwrap().embedded);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_same_model_carries_on_rather_than_starting_again() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.pdf".into(),
+            doc_type: "pdf".into(),
+            pages: (1..=3)
+                .map(|n| IndexPage { page: n, text: format!("page {n}"), heading: None })
+                .collect(),
+        };
+        upsert(&mut conn, "h", &body, &cfg(), false).unwrap();
+        conn.execute(
+            "UPDATE chunks SET embedded = 1 WHERE id = (SELECT MIN(id) FROM chunks WHERE hash = 'h')",
+            [],
+        )
+        .unwrap();
+        conn.execute("UPDATE documents SET embed_model = 'same' WHERE hash = 'h'", [])
+            .unwrap();
+
+        let mut cfg = cfg();
+        cfg.llm.local.embed_model = "same".into();
+        cfg.llm.local.embed_base_url = "http://127.0.0.1:1".into();
+        let progress = embed_pending(&mut conn, "h", &cfg, EMBED_BUDGET_CHUNKS).unwrap();
+        assert_eq!(progress.done, 1, "finished work under the same model is kept");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_finished_document_needs_no_model_to_say_so() {
+        // Completion is settled before the model is required. Reporting "no
+        // model configured" about work that is already done is true and useless.
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.pdf".into(),
+            doc_type: "pdf".into(),
+            pages: vec![IndexPage { page: 1, text: "prose".into(), heading: None }],
+        };
+        upsert(&mut conn, "h", &body, &cfg(), false).unwrap();
+        conn.execute("UPDATE chunks SET embedded = 1 WHERE hash = 'h'", []).unwrap();
+
+        let progress = embed_pending(&mut conn, "h", &cfg(), EMBED_BUDGET_CHUNKS).unwrap();
+        assert_eq!(progress.done, progress.total);
+        assert!(progress.reason.is_none());
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn status_reports_the_model_without_judging_it() {
+        // Whether a model is *stale* depends on what is configured right now,
+        // which is the caller's to know. This reports the fact only.
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        assert_eq!(status(&conn, "nothing").unwrap().embed_model, "");
         drop(conn);
         let _ = std::fs::remove_file(&path);
     }
