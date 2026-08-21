@@ -20,6 +20,8 @@ import { LcApiError, type DocIndexStatus, type ProposedAnnotation, type SearchOp
 import { AmbientCoach, defaultCoachSocketFactory, type AmbientProbe } from "./api/coachSocket";
 import { isTauriRuntime } from "./api/nativeHttp";
 import { liveWebviewSupported } from "./util/liveWebviewSupport";
+import { etaLabel, etaMs, newEta, recordBatch } from "./util/embedEta";
+import type { DocWorkProgress } from "./components/DocIndexChip";
 import {
   loadWebRenderMode,
   otherWebRenderMode,
@@ -755,6 +757,23 @@ export function Workspace({
   >("idle");
   const [docIndexError, setDocIndexError] = useState<string | null>(null);
   const [docIndexMeta, setDocIndexMeta] = useState<DocIndexStatus | null>(null);
+  /*
+   * Two jobs, two units, two bars.
+   *
+   * Indexing counts **pages** and embedding counts **chunks**, and blending
+   * them into one number would hide the very distinction the rest of this work
+   * exists to draw: chunking a document is not the same as giving its chunks a
+   * model's vectors, and they fail for different reasons.
+   *
+   * `null` means nothing has been measured, and the ring should sweep rather
+   * than show an invented percentage.
+   */
+  const [docIndexProgress, setDocIndexProgress] = useState<DocWorkProgress | null>(null);
+  const [docEmbedProgress, setDocEmbedProgress] = useState<DocWorkProgress | null>(null);
+  const [docEmbedEta, setDocEmbedEta] = useState<string | null>(null);
+  const [docEmbedding, setDocEmbedding] = useState(false);
+  /** Guards against two passes racing over one document's chunks. */
+  const docEmbedRunRef = useRef(false);
   /**
    * What it would take to index whatever is open, kept so the work can be asked
    * for later rather than only at open time (see the web pad's Index button).
@@ -773,6 +792,7 @@ export function Workspace({
     const loadGen = workspaceLoadGenRef.current;
     setDocIndexStatus("indexing");
     setDocIndexError(null);
+    setDocIndexProgress(null);
     window.setTimeout(() => {
       if (workspaceLoadGenRef.current !== loadGen) return;
       void (async () => {
@@ -785,6 +805,10 @@ export function Workspace({
             // Only a web page uses these — see `webPagesFromMarks` for why the
             // rest of a page is deliberately left out of the index.
             marks: annotateFootnotesRef.current,
+            onProgress: (done, total) => {
+              if (workspaceLoadGenRef.current !== loadGen) return;
+              setDocIndexProgress({ done, total });
+            },
           });
           rememberExtractedPages(job.hash, pages);
           if (pages.length === 0) {
@@ -825,9 +849,64 @@ export function Workspace({
           if (workspaceLoadGenRef.current !== loadGen) return;
           setDocIndexStatus("error");
           setDocIndexError(messageOf(cause));
+        } finally {
+          if (workspaceLoadGenRef.current === loadGen) setDocIndexProgress(null);
         }
       })();
     }, job.delayMs);
+  }, [client]);
+
+  /**
+   * Run the embedding pass to the end, a budget at a time.
+   *
+   * The server does one budget per call so it can be stopped between them; this
+   * is the loop that keeps calling. Closing the app mid-run loses nothing —
+   * chunks are marked as each batch commits, so the next press resumes from
+   * whatever is still pending rather than from the start.
+   *
+   * It stops on a reported reason rather than retrying: an unreachable endpoint
+   * or a refused model will not fix itself by being asked again immediately,
+   * and a loop that keeps trying is a loop that hides why it is not working.
+   */
+  const embedOpenDocument = useCallback(() => {
+    const job = indexInputsRef.current;
+    if (!job || docEmbedRunRef.current) return;
+    docEmbedRunRef.current = true;
+    setDocEmbedding(true);
+    setDocIndexError(null);
+    void (async () => {
+      let eta = newEta();
+      let last = 0;
+      try {
+        for (;;) {
+          const started = Date.now();
+          const progress = await client.embedDoc(job.hash);
+          setDocEmbedProgress({ done: progress.done, total: progress.total });
+          if (progress.reason) {
+            setDocIndexError(progress.reason);
+            break;
+          }
+          const moved = progress.done - last;
+          last = progress.done;
+          if (progress.done >= progress.total) break;
+          if (moved > 0) {
+            eta = recordBatch(eta, { chunks: moved, ms: Date.now() - started });
+            setDocEmbedEta(etaLabel(etaMs(eta, progress.total - progress.done)));
+          }
+        }
+        try {
+          setDocIndexMeta(await client.getDocIndex(job.hash));
+        } catch {
+          /* the pass is what mattered; the status will refresh on next open */
+        }
+      } catch (cause) {
+        setDocIndexError(messageOf(cause));
+      } finally {
+        docEmbedRunRef.current = false;
+        setDocEmbedding(false);
+        setDocEmbedEta(null);
+      }
+    })();
   }, [client]);
   // Read from the autosave interval, which must not be torn down and rebuilt
   // every time one of these changes — a restarted timer is a skipped save.
@@ -6959,6 +7038,11 @@ export function Workspace({
         meta: docIndexMeta,
         error: docIndexError,
         onIndex: indexInputsRef.current ? indexOpenDocument : null,
+        onEmbed: indexInputsRef.current ? embedOpenDocument : null,
+        indexProgress: docIndexProgress,
+        embedProgress: docEmbedProgress,
+        embedEta: docEmbedEta,
+        embedding: docEmbedding,
       },
     });
   }, [
@@ -6969,6 +7053,11 @@ export function Workspace({
     docIndexError,
     docIndexMeta,
     docIndexStatus,
+    docIndexProgress,
+    docEmbedProgress,
+    docEmbedEta,
+    docEmbedding,
+    embedOpenDocument,
     indexOpenDocument,
     problem,
     setChrome,

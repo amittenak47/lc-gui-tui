@@ -959,6 +959,11 @@ export function App() {
                   meta={chrome.docIndex.meta as never}
                   error={chrome.docIndex.error}
                   onIndex={chrome.docIndex.onIndex}
+                  onEmbed={chrome.docIndex.onEmbed}
+                  indexProgress={chrome.docIndex.indexProgress}
+                  embedProgress={chrome.docIndex.embedProgress}
+                  embedEta={chrome.docIndex.embedEta}
+                  embedding={chrome.docIndex.embedding}
                 />
               )
             }

@@ -10,6 +10,47 @@ import { MorphBar } from "./MorphBar";
 
 export type DocIndexChipStatus = "idle" | "indexing" | "indexed" | "error";
 
+/** Done over total, in whatever unit the job counts. */
+export interface DocWorkProgress {
+  done: number;
+  total: number;
+}
+
+/**
+ * A ring with the number inside it, or a sweep when there is no number.
+ *
+ * `stroke-dasharray` on a circle, no library. The sweep matters: before the
+ * first measurement there is genuinely nothing to report, and a ring showing
+ * "0%" or an invented figure would be claiming otherwise.
+ */
+function WorkRing({ progress }: { progress: DocWorkProgress | null }) {
+  const pct =
+    progress && progress.total > 0
+      ? Math.min(100, Math.max(0, Math.round((progress.done / progress.total) * 100)))
+      : null;
+  const radius = 6;
+  const circumference = 2 * Math.PI * radius;
+  return (
+    <span className="lc-doc-index-ring" aria-hidden>
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <circle cx="8" cy="8" r={radius} className="lc-doc-index-ring-track" />
+        <circle
+          cx="8"
+          cy="8"
+          r={radius}
+          className={pct == null ? "lc-doc-index-ring-arc is-sweeping" : "lc-doc-index-ring-arc"}
+          strokeDasharray={
+            pct == null
+              ? `${circumference * 0.25} ${circumference}`
+              : `${(circumference * pct) / 100} ${circumference}`
+          }
+        />
+      </svg>
+      {pct != null && <b className="lc-doc-index-ring-pct">{pct}</b>}
+    </span>
+  );
+}
+
 export interface DocIndexChipProps {
   status: DocIndexChipStatus;
   meta: DocIndexStatus | null;
@@ -23,9 +64,29 @@ export interface DocIndexChipProps {
    * document until its author says so.
    */
   onIndex?: (() => void) | null;
+  /** Run or resume the embedding pass. Absent when there is nothing to embed. */
+  onEmbed?: (() => void) | null;
+  /** Pages extracted, while chunking. */
+  indexProgress?: DocWorkProgress | null;
+  /** Chunks embedded, while the pass runs. */
+  embedProgress?: DocWorkProgress | null;
+  /** A measured remaining time, never a guessed one. */
+  embedEta?: string | null;
+  /** The pass is running now. */
+  embedding?: boolean;
 }
 
-export function DocIndexChip({ status, meta, error, onIndex }: DocIndexChipProps) {
+export function DocIndexChip({
+  status,
+  meta,
+  error,
+  onIndex,
+  onEmbed,
+  indexProgress,
+  embedProgress,
+  embedEta,
+  embedding,
+}: DocIndexChipProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
@@ -70,7 +131,23 @@ export function DocIndexChip({ status, meta, error, onIndex }: DocIndexChipProps
   // `onIndex` is also the re-index action once a document is already in — the
   // work is identical, `upsert` deletes and rewrites.
   if (status === "indexing") {
-    return <span className="lc-doc-index-chip">indexing…</span>;
+    return (
+      <span className="lc-doc-index-chip is-working">
+        <WorkRing progress={indexProgress ?? null} />
+        indexing…
+      </span>
+    );
+  }
+  if (embedding) {
+    return (
+      <span
+        className="lc-doc-index-chip is-working"
+        title={embedEta ?? "Embedding — the estimate appears after the first batch."}
+      >
+        <WorkRing progress={embedProgress ?? null} />
+        embedding…
+      </span>
+    );
   }
   if (status === "error") {
     return (
@@ -92,6 +169,22 @@ export function DocIndexChip({ status, meta, error, onIndex }: DocIndexChipProps
    * nothing on screen said so.
    */
   const wordsOnly = meta != null && meta.embedded === false;
+  /*
+   * Why it is not embedded, in the words the route worked out.
+   *
+   * "No model configured", "pending" and "embedded with X, now using Y" want
+   * three different things done about them, and a chip that says only "words"
+   * leaves the reader to guess which they are looking at.
+   */
+  const reason = meta?.reason ?? null;
+  const staleModel =
+    meta?.embed_model != null &&
+    meta.embed_model.length > 0 &&
+    meta.configured_model != null &&
+    meta.configured_model.length > 0 &&
+    meta.embed_model !== meta.configured_model;
+  const canEmbed =
+    wordsOnly && onEmbed != null && (meta?.configured_model ?? "").length > 0;
 
   return (
     <>
@@ -146,14 +239,39 @@ export function DocIndexChip({ status, meta, error, onIndex }: DocIndexChipProps
                     <dt>Matching</dt>
                     <dd>{meta?.embedded ? "by meaning" : "by words"}</dd>
                   </div>
+                  <div>
+                    <dt>Embedded</dt>
+                    <dd>
+                      {meta?.chunks_total
+                        ? `${meta.chunks_embedded ?? 0} of ${meta.chunks_total}`
+                        : "—"}
+                    </dd>
+                  </div>
                 </dl>
                 {wordsOnly && (
                   <>
                     <p className="lc-doc-index-lead">
-                      No embedding model is set, so chunks are matched on the
-                      words they share with your question rather than what it
-                      means. Set one under Settings → LLM, then re-index.
+                      {staleModel
+                        ? `These vectors were made by ${meta?.embed_model}, and ${meta?.configured_model} is configured now. Vectors from two models cannot be compared, so this document needs embedding again.`
+                        : canEmbed
+                          ? "Chunks are stored but not yet embedded, so they are matched on the words they share with your question rather than what it means."
+                          : "No embedding model is set, so chunks are matched on the words they share with your question rather than what it means. Set one under Settings → LLM."}
                     </p>
+                    {reason && !staleModel && !canEmbed && (
+                      <p className="lc-doc-index-lead lc-muted">{reason}</p>
+                    )}
+                    {canEmbed && onEmbed && (
+                      <button
+                        type="button"
+                        className="lc-doc-index-redo"
+                        onClick={() => {
+                          setOpen(false);
+                          onEmbed();
+                        }}
+                      >
+                        {staleModel ? "Embed again with this model" : "Embed this document"}
+                      </button>
+                    )}
                     {onIndex && (
                       <button
                         type="button"
