@@ -471,6 +471,7 @@ export function App() {
       current.docIndex.meta === next.docIndex.meta &&
       current.docIndex.error === next.docIndex.error &&
       current.docIndex.blocked === next.docIndex.blocked &&
+      current.docIndex.syncIssue === next.docIndex.syncIssue &&
       current.docIndex.onIndex === next.docIndex.onIndex
         ? current
         : next,
@@ -1003,6 +1004,7 @@ export function App() {
                   embedEta={chrome.docIndex.embedEta}
                   embedding={chrome.docIndex.embedding}
                   blocked={chrome.docIndex.blocked}
+                  syncIssue={chrome.docIndex.syncIssue}
                 />
               )
             }

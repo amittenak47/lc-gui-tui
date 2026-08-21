@@ -87,6 +87,13 @@ export interface DocChunkMergeAck {
   reason?: string;
 }
 
+export interface DocChunkDigest {
+  hash: string;
+  embed_model: string;
+  chunks_total: number;
+  chunks_embedded: number;
+}
+
 export class LcApiError extends Error {
   constructor(
     message: string,
@@ -195,6 +202,23 @@ function parseChunkMergeAck(raw: unknown): DocChunkMergeAck {
     updated: typeof row.updated === "number" ? row.updated : 0,
     reason: typeof row.reason === "string" ? row.reason : undefined,
   };
+}
+
+function parseChunkDigests(raw: unknown): DocChunkDigest[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DocChunkDigest[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    if (typeof row.hash !== "string" || !row.hash) continue;
+    out.push({
+      hash: row.hash,
+      embed_model: typeof row.embed_model === "string" ? row.embed_model : "",
+      chunks_total: typeof row.chunks_total === "number" ? row.chunks_total : 0,
+      chunks_embedded: typeof row.chunks_embedded === "number" ? row.chunks_embedded : 0,
+    });
+  }
+  return out;
 }
 
 /**
@@ -807,6 +831,20 @@ export class LcClient {
     } catch {
       return [];
     }
+  }
+
+  async listDocChunkDigests(): Promise<DocChunkDigest[]> {
+    const hub = loadPadHub();
+    if (hub) {
+      const { json } = await hubFetch(hub, "GET", "/docs/chunk-digests");
+      return parseChunkDigests(json);
+    }
+    return this.listDocChunkDigestsLocal();
+  }
+
+  async listDocChunkDigestsLocal(): Promise<DocChunkDigest[]> {
+    const body = await this.cmd<unknown>("lc_docs_list_chunk_digests", {});
+    return parseChunkDigests(body);
   }
 
   async getDocChunks(hash: string): Promise<DocChunkBundle> {

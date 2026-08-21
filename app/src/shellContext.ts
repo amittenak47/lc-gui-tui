@@ -103,6 +103,8 @@ export interface WorkspaceChrome {
     embedding?: boolean;
     /** Why indexing is off the table right now — a live page, above all. */
     blocked?: string | null;
+    /** A sync refusal that still wants a re-index, not a disabled chip. */
+    syncIssue?: string | null;
   };
 }
 

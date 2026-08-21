@@ -101,22 +101,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     ensure_column(&conn, "whiteboard", "sync_seq", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(&conn, "annotate", "sync_seq", "INTEGER NOT NULL DEFAULT 0")?;
     migrate_tombstones_to_gone(&conn)?;
-    migrate(&conn)?;
     Ok(conn)
-}
-
-/// Snapshot payload may include `ink`, `edges`, and `source` (v1). Those live
-/// in `payload_json`; this version pin is the same `PRAGMA user_version` step
-/// the document index uses, so a later column can land without a second mechanism.
-const SCHEMA_VERSION: i64 = 1;
-
-fn migrate(conn: &Connection) -> Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version >= SCHEMA_VERSION {
-        return Ok(());
-    }
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-    Ok(())
 }
 
 fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
@@ -959,6 +944,24 @@ fn pad_is_live(conn: &Connection, kind: &str, key: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
+fn snapshot_node_type_ok(ty: &str) -> bool {
+    matches!(ty, "annotate" | "whiteboard" | "practice" | "web" | "thread")
+}
+
+fn validate_snapshot_node(value: Option<&serde_json::Value>, end: &str) -> Result<()> {
+    let node = value
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| anyhow::anyhow!("snapshot edge {end} must be an object"))?;
+    match node.get("type").and_then(|v| v.as_str()) {
+        Some(ty) if snapshot_node_type_ok(ty) => {}
+        _ => anyhow::bail!("snapshot edge {end} needs a known type"),
+    }
+    match node.get("id") {
+        Some(serde_json::Value::String(s)) if !s.is_empty() => Ok(()),
+        _ => anyhow::bail!("snapshot edge {end} needs id"),
+    }
+}
+
 /// Shape of a snapshot payload that can restore ink, edges, and source text.
 ///
 /// Absent fields are the old payload `{ name, board, footnotes, agent, pageCount }`.
@@ -1003,6 +1006,12 @@ pub fn validate_snapshot_payload(payload: &serde_json::Value) -> Result<()> {
                 Some(serde_json::Value::String(s)) if !s.is_empty() => {}
                 _ => anyhow::bail!("snapshot edge needs id"),
             }
+            match edge.get("kind") {
+                Some(serde_json::Value::String(s)) if !s.is_empty() => {}
+                _ => anyhow::bail!("snapshot edge needs kind"),
+            }
+            validate_snapshot_node(edge.get("from"), "from")?;
+            validate_snapshot_node(edge.get("to"), "to")?;
         }
     }
     if let Some(source) = obj.get("source") {
@@ -1785,13 +1794,13 @@ mod tests {
     }
 
     #[test]
-    fn pads_schema_version_is_one() {
+    fn pads_schema_version_stays_unpinned() {
         let path = tmp();
         let conn = open(&path).unwrap();
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 0, "no schema change yet, so nothing to pin");
         let _ = std::fs::remove_file(path);
     }
 
@@ -1844,6 +1853,29 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("ink must be an array"), "{err:#}");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn snapshot_rejects_an_edge_without_ends() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_annotate(&conn, &an("a1", 1)).unwrap();
+        let err = put_snapshot(
+            &conn,
+            &SnapshotRow {
+                kind: "annotate".into(),
+                key: "a1".into(),
+                tier: "24h".into(),
+                written_at: 2,
+                payload: json!({ "edges": [{ "id": "orphan" }] }),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("kind") || err.to_string().contains("from"),
+            "{err:#}"
+        );
         let _ = std::fs::remove_file(path);
     }
 

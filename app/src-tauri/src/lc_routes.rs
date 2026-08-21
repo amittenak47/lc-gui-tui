@@ -581,6 +581,13 @@ pub async fn lc_docs_put_bytes(
 }
 
 #[tauri::command]
+pub async fn lc_docs_list_chunk_digests(
+    state: State<'_, Shared>,
+) -> Result<LcResponse, String> {
+    go(state, "GET", "/docs/chunk-digests".into(), None).await
+}
+
+#[tauri::command]
 pub async fn lc_docs_get_chunks(
     state: State<'_, Shared>,
     hash: String,

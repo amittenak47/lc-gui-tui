@@ -36,12 +36,25 @@ export interface PadSnapshot {
   footnotes?: DocFootnote[];
   agent?: unknown[];
   pageCount?: number;
-  /** Per-page gzip ink, the copy `STORE_INK_PAGES` holds. */
+  /** Per-page gzip ink. The board blob no longer carries the same strokes. */
   ink?: SnapshotInkPage[];
   /** Graph edges that name this pad. Apply is idempotent on edge id. */
   edges?: Edge[];
   /** Source text; live row has it, snapshots did not. */
   source?: string;
+}
+
+export type PadSnapshotExtras = Pick<PadSnapshot, "ink" | "edges" | "source">;
+
+function boardWithoutInk(board: BoardBlob): BoardBlob {
+  return {
+    v: board.v,
+    elements: board.elements,
+    appState: board.appState,
+    ...(board.inkPages ? { inkPages: board.inkPages } : {}),
+    ...(board.files ? { files: board.files } : {}),
+    ...(board.inkPalettes ? { inkPalettes: board.inkPalettes } : {}),
+  };
 }
 
 export interface PadSnapshotMeta {
@@ -94,29 +107,43 @@ export async function recordRollingSnapshots(input: {
   ink?: SnapshotInkPage[];
   edges?: Edge[];
   source?: string;
+  extras?: () => Promise<PadSnapshotExtras>;
   now?: number;
 }): Promise<PadSnapshot[]> {
   const now = input.now ?? Date.now();
   const key = input.key.trim();
   if (!key) return [];
-  const written: PadSnapshot[] = [];
+  const due: PadSnapshotTier[] = [];
   for (const tier of PAD_SNAPSHOT_TIERS) {
-    const id = recordKey(input.kind, key, tier.id);
-    const existing = await getRecord(id);
+    const existing = await getRecord(recordKey(input.kind, key, tier.id));
     if (!shouldWriteTier(existing?.writtenAt, now, tier.maxAgeMs)) continue;
+    due.push(tier.id);
+  }
+  if (due.length === 0) return [];
+  const extra = input.extras
+    ? await input.extras()
+    : {
+        ...(input.ink && input.ink.length > 0 ? { ink: input.ink } : {}),
+        ...(input.edges && input.edges.length > 0 ? { edges: input.edges } : {}),
+        ...(typeof input.source === "string" ? { source: input.source } : {}),
+      };
+  const board = boardWithoutInk(input.board);
+  const written: PadSnapshot[] = [];
+  for (const tierId of due) {
+    const id = recordKey(input.kind, key, tierId);
     const row: PadSnapshot = {
       kind: input.kind,
       key,
-      tier: tier.id,
+      tier: tierId,
       writtenAt: now,
       name: input.name,
-      board: input.board,
+      board,
       ...(input.footnotes ? { footnotes: input.footnotes } : {}),
       ...(input.agent ? { agent: input.agent } : {}),
       ...(input.pageCount != null ? { pageCount: input.pageCount } : {}),
-      ...(input.ink && input.ink.length > 0 ? { ink: input.ink } : {}),
-      ...(input.edges && input.edges.length > 0 ? { edges: input.edges } : {}),
-      ...(typeof input.source === "string" ? { source: input.source } : {}),
+      ...(extra.ink && extra.ink.length > 0 ? { ink: extra.ink } : {}),
+      ...(extra.edges && extra.edges.length > 0 ? { edges: extra.edges } : {}),
+      ...(typeof extra.source === "string" ? { source: extra.source } : {}),
     };
     try {
       await run(STORE_SNAPSHOTS, "readwrite", (store) => store.put(row, id));

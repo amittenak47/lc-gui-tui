@@ -175,9 +175,26 @@ export async function putEdge(edge: Edge): Promise<void> {
   }
 }
 
+function isGoneRow(value: unknown): value is { id: string; goneAt: number } {
+  if (!value || typeof value !== "object") return false;
+  const row = value as { id?: unknown; goneAt?: unknown };
+  return typeof row.id === "string" && typeof row.goneAt === "number";
+}
+
+export async function edgeIsGone(id: string): Promise<boolean> {
+  try {
+    const row = await run<unknown>(STORE_LINKS, "readonly", (store) => store.get(id));
+    return isGoneRow(row);
+  } catch {
+    return false;
+  }
+}
+
 export async function deleteEdge(id: string): Promise<void> {
   try {
-    await run(STORE_LINKS, "readwrite", (store) => store.delete(id));
+    await run(STORE_LINKS, "readwrite", (store) =>
+      store.put({ id, goneAt: Date.now() }, id),
+    );
   } catch {
     /* ignore */
   }

@@ -815,8 +815,8 @@ export async function pullPads(client: LcClient): Promise<void> {
   for (const row of annotate) {
     if (!row.hash || seenHash.has(row.hash)) continue;
     seenHash.add(row.hash);
-    await syncDocChunks(client, row.hash).catch(() => {});
   }
+  await syncDocChunks(client, [...seenHash]).catch(() => {});
 }
 
 /**
@@ -904,12 +904,13 @@ export async function applyPadSyncPing(
 
   {
     const hashes = new Set<string>();
+    for (const row of listAnnotateDocs()) {
+      if (row.hash) hashes.add(row.hash);
+    }
     for (const row of ping.annotate) {
       if (row.hash) hashes.add(row.hash);
     }
-    for (const hash of hashes) {
-      await syncDocChunks(client, hash).catch(() => {});
-    }
+    await syncDocChunks(client, [...hashes]).catch(() => {});
   }
 
   for (const row of ping.problem ?? []) {

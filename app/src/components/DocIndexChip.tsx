@@ -84,6 +84,8 @@ export interface DocIndexChipProps {
    * the chip has to say what it would have done rather than quietly doing it.
    */
   blocked?: string | null;
+  /** Index disagreed with the hub; re-index stays on offer. */
+  syncIssue?: string | null;
 }
 
 export function DocIndexChip({
@@ -97,6 +99,7 @@ export function DocIndexChip({
   embedEta,
   embedding,
   blocked,
+  syncIssue,
 }: DocIndexChipProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -278,6 +281,9 @@ export function DocIndexChip({
                     {reason && !staleModel && !canEmbed && (
                       <p className="lc-doc-index-lead lc-muted">{reason}</p>
                     )}
+                    {syncIssue && (
+                      <p className="lc-doc-index-lead lc-muted">{syncIssue}</p>
+                    )}
                     {canEmbed && onEmbed && (
                       <button
                         type="button"
@@ -305,6 +311,23 @@ export function DocIndexChip({
                           Re-index this document
                         </button>
                       ))}
+                  </>
+                )}
+                {!wordsOnly && syncIssue && (
+                  <>
+                    <p className="lc-doc-index-lead lc-muted">{syncIssue}</p>
+                    {onIndex && !blocked && (
+                      <button
+                        type="button"
+                        className="lc-doc-index-redo"
+                        onClick={() => {
+                          setOpen(false);
+                          onIndex();
+                        }}
+                      >
+                        Re-index this document
+                      </button>
+                    )}
                   </>
                 )}
               </aside>
