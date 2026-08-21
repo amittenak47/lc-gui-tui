@@ -200,6 +200,34 @@ export async function deleteEdge(id: string): Promise<void> {
   }
 }
 
+/**
+ * The ids this device has tombstoned.
+ *
+ * Sync needs them: a delete that never leaves the device is a delete the hub
+ * hands straight back, and the two trade the edge forever. `deleteEdge` writes
+ * the tombstone in place of the row, so the store already holds the answer.
+ */
+export async function listGoneEdgeIds(): Promise<string[]> {
+  const ids: string[] = [];
+  try {
+    await withStore(STORE_LINKS, "readonly", (store) => {
+      const request = store.openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const row = cursor.value;
+        if (isGoneRow(row) && typeof (row as { id?: unknown }).id === "string") {
+          ids.push((row as { id: string }).id);
+        }
+        cursor.continue();
+      };
+    });
+  } catch {
+    return [];
+  }
+  return ids;
+}
+
 /** Drop every edge that names this node, for a pad that has been deleted. */
 export async function deleteEdgesFor(node: NodeRef): Promise<void> {
   for (const edge of await edgesFor(node)) await deleteEdge(edge.id);

@@ -581,6 +581,51 @@ pub async fn lc_docs_put_bytes(
 }
 
 #[tauri::command]
+pub async fn lc_get_ink_pages(
+    state: State<'_, Shared>,
+    kind: String,
+    key: String,
+) -> Result<LcResponse, String> {
+    go(
+        state,
+        "GET",
+        format!("/pads/ink/{}/{}", enc(&kind), enc(&key)),
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn lc_put_ink_page(
+    state: State<'_, Shared>,
+    body: serde_json::Value,
+) -> Result<LcResponse, String> {
+    go(state, "PUT", "/pads/ink".into(), Some(body)).await
+}
+
+#[tauri::command]
+pub async fn lc_put_edges(
+    state: State<'_, Shared>,
+    body: serde_json::Value,
+) -> Result<LcResponse, String> {
+    go(state, "PUT", "/pads/edges".into(), Some(body)).await
+}
+
+#[tauri::command]
+pub async fn lc_tombstone_edge(
+    state: State<'_, Shared>,
+    id: String,
+) -> Result<LcResponse, String> {
+    go(
+        state,
+        "POST",
+        format!("/pads/edges/{}/tombstone", enc(&id)),
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn lc_docs_list_chunk_digests(
     state: State<'_, Shared>,
 ) -> Result<LcResponse, String> {
