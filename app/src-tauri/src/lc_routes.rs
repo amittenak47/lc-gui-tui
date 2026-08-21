@@ -506,6 +506,18 @@ pub async fn lc_docs_get_index(
     go(state, "GET", format!("/docs/{}/index", enc(&hash)), None).await
 }
 
+/// One budget of the embedding pass. Call until `done == total`.
+///
+/// Short by design: a book is minutes of work, and a call that returns between
+/// budgets is one the reader can close the app in the middle of.
+#[tauri::command]
+pub async fn lc_docs_embed(
+    state: State<'_, Shared>,
+    hash: String,
+) -> Result<LcResponse, String> {
+    go(state, "POST", format!("/docs/{}/embed", enc(&hash)), None).await
+}
+
 #[tauri::command]
 pub async fn lc_docs_put_index(
     state: State<'_, Shared>,

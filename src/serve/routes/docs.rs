@@ -17,21 +17,111 @@ pub struct IndexResponse {
     pub wrote: bool,
 }
 
+/// What the reader is told about a document's index.
+///
+/// `IndexStatus` reports facts; this adds the interpretation, because whether a
+/// model is *stale* depends on what is configured right now and the database
+/// cannot know that. Kept separate so the two never drift into one another.
+#[derive(Debug, Serialize)]
+pub struct IndexStatusView {
+    #[serde(flatten)]
+    pub status: IndexStatus,
+    pub chunks_total: u32,
+    pub chunks_embedded: u32,
+    /// `none`, `partial` or `full`.
+    pub embed_state: &'static str,
+    /// Why it is not `full`, when it is not. Absent when there is nothing to say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// What is configured now, so the UI can name both sides of a mismatch.
+    pub configured_model: String,
+}
+
+fn view(status: IndexStatus, embedded: u32, configured: &str) -> IndexStatusView {
+    let total = status.chunk_count;
+    let stale = !status.embed_model.is_empty()
+        && !configured.is_empty()
+        && status.embed_model != configured;
+    let embed_state = if !status.indexed || total == 0 {
+        "none"
+    } else if stale {
+        // Vectors from another model cannot be ranked against this one's, so a
+        // document embedded under a different model is not partly done. It is
+        // work to redo.
+        "none"
+    } else if embedded == 0 {
+        "none"
+    } else if embedded < total {
+        "partial"
+    } else {
+        "full"
+    };
+    let reason = if !status.indexed {
+        Some("not indexed".to_string())
+    } else if stale {
+        Some(format!(
+            "embedded with {}, now using {}",
+            status.embed_model, configured
+        ))
+    } else if configured.is_empty() && embedded < total {
+        Some("no embedding model is configured".to_string())
+    } else if embedded < total {
+        Some("pending".to_string())
+    } else {
+        None
+    };
+    IndexStatusView {
+        status,
+        chunks_total: total,
+        chunks_embedded: embedded,
+        embed_state,
+        reason,
+        configured_model: configured.to_string(),
+    }
+}
+
 pub async fn get_index(
-    State(_state): State<Shared>,
+    State(state): State<Shared>,
     UrlPath(hash): UrlPath<String>,
-) -> Result<Json<IndexStatus>, AppError> {
+) -> Result<Json<IndexStatusView>, AppError> {
     let hash = hash.trim().to_string();
     if hash.is_empty() {
         return Err(AppError::bad_request(anyhow::anyhow!("missing document hash")));
     }
-    let status = blocking(move || {
+    let cfg = state.cfg_snapshot();
+    let view = blocking(move || {
         let path = docs_index::db_path()?;
         let conn = docs_index::open(&path)?;
-        docs_index::status(&conn, &hash)
+        let status = docs_index::status(&conn, &hash)?;
+        let embedded = docs_index::embedded_chunk_count(&conn, &hash)?;
+        let configured = cfg.embed_model().unwrap_or("").to_string();
+        Ok::<_, anyhow::Error>(view(status, embedded, &configured))
     })
     .await?;
-    Ok(Json(status))
+    Ok(Json(view))
+}
+
+/// `POST /docs/{hash}/embed` — one budget's worth of the embedding pass.
+///
+/// Deliberately not a long-lived request that runs to completion: a book is
+/// minutes of work, and a caller that can stop between budgets is a caller the
+/// reader can close the app on. Call it until `done == total`.
+pub async fn embed(
+    State(state): State<Shared>,
+    UrlPath(hash): UrlPath<String>,
+) -> Result<Json<docs_index::EmbedProgress>, AppError> {
+    let hash = hash.trim().to_string();
+    if hash.is_empty() {
+        return Err(AppError::bad_request(anyhow::anyhow!("missing document hash")));
+    }
+    let cfg = state.cfg_snapshot();
+    let progress = blocking(move || {
+        let path = docs_index::db_path()?;
+        let mut conn = docs_index::open(&path)?;
+        docs_index::embed_pending(&mut conn, &hash, &cfg, docs_index::EMBED_BUDGET_CHUNKS)
+    })
+    .await?;
+    Ok(Json(progress))
 }
 
 /// Query for `PUT /docs/{hash}/index`.
