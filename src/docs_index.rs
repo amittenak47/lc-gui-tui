@@ -58,6 +58,13 @@ pub struct RetrievedChunk {
     pub score: f32,
 }
 
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 pub fn db_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("docs.db"))
 }
@@ -222,12 +229,27 @@ pub fn status(conn: &Connection, hash: &str) -> Result<IndexStatus> {
     }
 }
 
-/// Idempotent upsert. Same hash + same page count → no rewrite.
+/// How long a freshly indexed document is left alone.
 ///
-/// `force` rewrites anyway. Turning an embedding model on does not change a
-/// document's page count, so without it the one case that most needs redoing —
-/// vectors written as word-counts, now that real ones are available — is
-/// exactly the case the guard skips.
+/// A content hash already makes a changed file a different document, so a
+/// second index under the same hash is by definition a repeat — reopening a
+/// file, or index-on-open racing a press of the chip. Skipping those costs
+/// nothing and saves re-chunking a textbook every time it is opened.
+pub const REINDEX_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// Idempotent upsert: same hash, same page count, recently written → no rewrite.
+///
+/// `force` rewrites anyway, and the reason it exists is that a page count is a
+/// poor proxy for "nothing to do". Turning an embedding model on moves no page
+/// counts at all, so without `force` the guard would skip exactly the document
+/// that most needs redoing.
+///
+/// The TTL is the other half of the same thought. Page count catches "same
+/// document, same shape"; it does not catch a document whose *text* changed
+/// under a hash that did not, which cannot happen for a file but can for a web
+/// pad — its identity is its address now, and its text is whatever was last
+/// frozen. So a rewrite is allowed once a day even when the shape matches, and
+/// suppressed within it.
 pub fn upsert(
     conn: &mut Connection,
     hash: &str,
@@ -239,7 +261,20 @@ pub fn upsert(
 ) -> Result<IndexStatus> {
     let existing = status(conn, hash)?;
     if !force && existing.indexed && existing.page_count == body.pages.len() as u32 {
-        return Ok(existing);
+        let written_at: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM documents WHERE hash = ?1",
+                params![hash],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let now = unix_now();
+        // A clock that went backwards should not pin an index shut forever.
+        let age = now.saturating_sub(written_at);
+        if written_at > 0 && age >= 0 && age < REINDEX_TTL_SECS {
+            return Ok(existing);
+        }
     }
 
     /*
@@ -254,10 +289,7 @@ pub fn upsert(
      */
     let chunks = chunk_pages(&body.pages);
     let embeddings: Vec<Vec<f32>> = chunks.iter().map(|c| hashed_embedding(&c.text)).collect();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now = unix_now();
     let used_http = false;
 
     let tx = conn.transaction()?;
@@ -1107,6 +1139,104 @@ mod tests {
         cfg.llm.local.embed_base_url = "http://127.0.0.1:1".into();
         let progress = embed_pending(&mut conn, "h", &cfg, EMBED_BUDGET_CHUNKS).unwrap();
         assert_eq!(progress.done, 1, "finished work under the same model is kept");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /*
+     * Reopening a file is not work.
+     *
+     * Page count catches "same document, same shape". The TTL catches the case
+     * page count cannot: a hash whose *text* changed under it — impossible for a
+     * file, ordinary for a web pad, whose identity is its address and whose text
+     * is whatever was last frozen.
+     */
+    #[test]
+    fn a_repeat_inside_the_day_is_skipped_and_an_old_one_is_not() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "https://example.com".into(),
+            doc_type: "web".into(),
+            pages: vec![IndexPage { page: 1, text: "first capture".into(), heading: None }],
+        };
+        upsert(&mut conn, "h", &body, &cfg(), false).unwrap();
+
+        let changed = IndexBody {
+            pages: vec![IndexPage { page: 1, text: "a later capture".into(), heading: None }],
+            ..body.clone()
+        };
+        upsert(&mut conn, "h", &changed, &cfg(), false).unwrap();
+        let text: String = conn
+            .query_row("SELECT text FROM chunks WHERE hash = 'h'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(text, "first capture", "a repeat inside the day is skipped");
+
+        // Age it past the window and the same call rewrites.
+        conn.execute(
+            "UPDATE documents SET updated_at = ?1 WHERE hash = 'h'",
+            params![unix_now() - REINDEX_TTL_SECS - 1],
+        )
+        .unwrap();
+        upsert(&mut conn, "h", &changed, &cfg(), false).unwrap();
+        let text: String = conn
+            .query_row("SELECT text FROM chunks WHERE hash = 'h'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(text, "a later capture");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn force_still_beats_the_ttl() {
+        // The chip is the reader saying "do it anyway", and a day-long guard
+        // must not be able to refuse them.
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.md".into(),
+            doc_type: "markdown".into(),
+            pages: vec![IndexPage { page: 1, text: "first".into(), heading: None }],
+        };
+        upsert(&mut conn, "h", &body, &cfg(), false).unwrap();
+        let changed = IndexBody {
+            pages: vec![IndexPage { page: 1, text: "second".into(), heading: None }],
+            ..body.clone()
+        };
+        upsert(&mut conn, "h", &changed, &cfg(), true).unwrap();
+        let text: String = conn
+            .query_row("SELECT text FROM chunks WHERE hash = 'h'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(text, "second");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_clock_that_went_backwards_does_not_pin_an_index_shut() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.md".into(),
+            doc_type: "markdown".into(),
+            pages: vec![IndexPage { page: 1, text: "first".into(), heading: None }],
+        };
+        upsert(&mut conn, "h", &body, &cfg(), false).unwrap();
+        // Stamped in the future — a timezone change, a bad RTC, a restored backup.
+        conn.execute(
+            "UPDATE documents SET updated_at = ?1 WHERE hash = 'h'",
+            params![unix_now() + REINDEX_TTL_SECS * 10],
+        )
+        .unwrap();
+        let changed = IndexBody {
+            pages: vec![IndexPage { page: 1, text: "second".into(), heading: None }],
+            ..body.clone()
+        };
+        upsert(&mut conn, "h", &changed, &cfg(), false).unwrap();
+        let text: String = conn
+            .query_row("SELECT text FROM chunks WHERE hash = 'h'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(text, "second", "a future stamp must not lock it forever");
         drop(conn);
         let _ = std::fs::remove_file(&path);
     }
