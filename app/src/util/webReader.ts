@@ -162,3 +162,39 @@ export function extractArticle(html: string, url: string): ReadArticle | null {
   if (linkDensity(holder) > MAX_LINK_DENSITY) return null;
   return { title: parsed.title?.trim() || url, html: holder.innerHTML };
 }
+
+/** Escape text for insertion into HTML. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Put the headline back on.
+ *
+ * Readability returns the article *body*: it finds the title separately and
+ * does not include it in the content, so reader view opened on the first
+ * paragraph with no indication of what you were reading — the one thing a
+ * reading mode owes you. The host goes under it, because an extracted article
+ * has otherwise lost every trace of where it came from.
+ *
+ * Skipped when the extraction already starts with a heading, which happens on
+ * pages whose markup puts the title inside the article element. Two headlines
+ * is worse than none.
+ */
+export function withArticleTitle(html: string, title: string, url: string): string {
+  const trimmed = title.trim();
+  if (!trimmed) return html;
+  if (/^\s*<h1\b/i.test(html)) return html;
+  let host = "";
+  try {
+    host = new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    host = "";
+  }
+  const source = host ? `<p class="lc-reader-source">${escapeHtml(host)}</p>` : "";
+  return `<h1>${escapeHtml(trimmed)}</h1>${source}${html}`;
+}

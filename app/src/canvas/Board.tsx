@@ -125,6 +125,8 @@ import { paintExcalidrawCanvases } from "./excalidrawCanvasSize";
 import { encodeInkOps } from "./inkCodec";
 import { fallbackPageFrames, pageFramesFromPdfSlot, pageIdFromCamera } from "./inkPageIndex";
 import { eraserScreenRadius } from "./rasterInk";
+import { linedSlotCanSkip } from "./linedSlot";
+import { SPLIT_RESIZE_EVENT, splitResizePhase } from "../util/splitResize";
 import { reanchorInkOps } from "./reanchorInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import {
@@ -2574,21 +2576,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       phase: Math.round(phase * 100) / 100,
     };
     const prev = lastLinedSlotRef.current;
-    if (
-      prev &&
-      prev.left === next.left &&
-      prev.top === next.top &&
-      prev.width === next.width &&
-      prev.height === next.height &&
-      prev.gap === next.gap &&
-      prev.phase === next.phase
-    ) {
-      return;
-    }
+    const node = linedSlotNodeRef.current;
+    // The node's absence is part of the test — see `linedSlotCanSkip`.
+    if (linedSlotCanSkip(prev, next, node != null)) return;
     lastLinedSlotRef.current = next;
     if (width > 8 && height > 8) {
       setLinedSlotOn((on) => on || true);
-      const node = linedSlotNodeRef.current;
       if (node) {
         node.style.left = `${next.left}px`;
         node.style.top = `${next.top}px`;
@@ -5585,8 +5578,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [runFit],
   );
 
+  /**
+   * The Recentre button.
+   *
+   * A document keeps its reading line — width-fit and centre X, but the line
+   * you were on stays where it is. Someone pressing this on page nine does not
+   * mean "go back to page one", and a full fit used to do exactly that.
+   *
+   * A draw page has no reading line to keep, and that is what left the button
+   * inert: on a tablet the page is locked at fit zoom with X already centred,
+   * so "width-fit and keep Y" described the camera it was already looking at.
+   * Nothing to change, nothing to show for the press. On a page, recentring
+   * means the page — fit it, and go to its top.
+   */
   const recentreKeepPlace = useCallback(() => {
-    runFit(null, "keepY");
+    const drawPage = isDrawPageRegion(mobileRegionRef.current);
+    if (drawPage) userAdjustedCameraRef.current = false;
+    runFit(null, drawPage ? "both" : "keepY");
   }, [runFit]);
 
   const fitView = useCallback(
@@ -5941,11 +5949,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     window.addEventListener("orientationchange", onOrient);
     const orientation = window.screen?.orientation;
     orientation?.addEventListener("change", onOrient);
+    /*
+     * A sash drag, announced rather than observed.
+     *
+     * Everything above learns about a resize from the `ResizeObserver`, and on
+     * the desktop that is enough — which is exactly why this was only ever
+     * broken on Android, where the WebView starves layout callbacks for the
+     * length of a touch gesture. The drag then finished with both panes their
+     * new width and both boards still fitted to the old ones.
+     *
+     * `settle` takes the orientation path deliberately: it clears the
+     * last-fitted box so the run cannot early-out on "same size as last time",
+     * and it retries on the same ladder, because the first frame after a drag
+     * is as half-laid-out as the first frame after a rotate.
+     */
+    const onSplitResize = (event: Event) => {
+      if (splitResizePhase(event) === "settle") onOrient();
+      else schedule();
+    };
+    window.addEventListener(SPLIT_RESIZE_EVENT, onSplitResize);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", schedule);
       window.visualViewport?.removeEventListener("resize", schedule);
       window.removeEventListener("orientationchange", onOrient);
+      window.removeEventListener(SPLIT_RESIZE_EVENT, onSplitResize);
       orientation?.removeEventListener("change", onOrient);
       if (timer != null) window.clearTimeout(timer);
       for (const id of late) window.clearTimeout(id);
@@ -8152,11 +8180,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <LockIcon locked={sheetDragLocked} />
                   </button>
                 )}
-                {/*
-                  Recentre: width-fit the page to the hole and center X, keep
-                  the reading line. A full fitView jumped to page 1 / the top
-                  of the pad — the same reset that "fixed" a rotate black bar.
-                */}
+                {/* Recentre — see `recentreKeepPlace` for why it is two rules. */}
                 {!mapChromeHidden && (
                   <button
                     type="button"

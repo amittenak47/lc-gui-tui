@@ -21,13 +21,34 @@ import { Webview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { WEB_PAGE_W } from "./webPage";
+export { liveWebviewSupported } from "./liveWebviewSupport";
+import { queued } from "./labelQueue";
 import {
   READY_STATE_SCRIPT,
   SERIALIZE_PAGE_SCRIPT,
   SERIALIZE_POLL_SCRIPT,
 } from "./webPageSerialize";
 
+/**
+ * Two webviews, two names.
+ *
+ * These used to share one label, which was survivable only because the reader
+ * path short-circuited before the offscreen render on any page it could
+ * extract — so in practice only one of them existed at a time. Whole-page mode
+ * removed that accident: every open now runs the offscreen render, the live
+ * pane wants a view for the same tab, and they collided on the identity.
+ *
+ * The symptom was "a webview with label 'lc-web-capture' already exists", but
+ * the near miss is worse. `captureRenderedPage` closes by label when it is
+ * done, and `openLiveWebview` closes by label before it opens: whichever ran
+ * second would have torn down the other's view — the offscreen render killed
+ * mid-serialise, or the page you were reading closed underneath you.
+ *
+ * They are different objects. One is a transient worker parked off-screen; the
+ * other is the surface you are looking at.
+ */
 export const CAPTURE_WEBVIEW_LABEL = "lc-web-capture";
+export const LIVE_WEBVIEW_LABEL = "lc-web-live";
 const CAPTURE_WIDTH = WEB_PAGE_W;
 const CAPTURE_HEIGHT = 800;
 const LOAD_TIMEOUT_MS = 20_000;
@@ -84,9 +105,13 @@ async function waitUntil(
   throw new Error("the page took too long to finish loading");
 }
 
-async function closeCapture(): Promise<void> {
-  const existing = await Webview.getByLabel(CAPTURE_WEBVIEW_LABEL);
+async function closeByLabel(label: string): Promise<void> {
+  const existing = await Webview.getByLabel(label);
   if (existing) await existing.close();
+}
+
+async function closeCapture(): Promise<void> {
+  await closeByLabel(CAPTURE_WEBVIEW_LABEL);
 }
 
 /** Viewport rectangle, in the same logical pixels the window uses. */
@@ -99,7 +124,7 @@ export interface PaneRect {
 
 /** The live view, if there is one. */
 export async function liveWebview(): Promise<Webview | null> {
-  return (await Webview.getByLabel(CAPTURE_WEBVIEW_LABEL)) ?? null;
+  return (await Webview.getByLabel(LIVE_WEBVIEW_LABEL)) ?? null;
 }
 
 /**
@@ -111,9 +136,33 @@ export async function liveWebview(): Promise<Webview | null> {
  * plausible reason the old read-once capture was flaky even off-screen.
  */
 export async function openLiveWebview(url: string, rect: PaneRect): Promise<Webview> {
-  await closeCapture();
+  return queued(LIVE_WEBVIEW_LABEL, () => openLiveWebviewNow(url, rect));
+}
+
+async function openLiveWebviewNow(url: string, rect: PaneRect): Promise<Webview> {
+  await closeByLabel(LIVE_WEBVIEW_LABEL);
+  try {
+    return await createLiveWebview(url, rect);
+  } catch (cause) {
+    /*
+     * "Already exists" survives the close above when Tauri's registry and the
+     * native view disagree for a moment — the close resolves, the label is not
+     * free yet. One more close and a frame is enough, and it is worth trying:
+     * the alternative the reader sees is a red banner over a page that would
+     * have opened.
+     */
+    if (!/already exists/i.test(cause instanceof Error ? cause.message : String(cause))) {
+      throw cause;
+    }
+    await closeByLabel(LIVE_WEBVIEW_LABEL);
+    await sleep(120);
+    return createLiveWebview(url, rect);
+  }
+}
+
+async function createLiveWebview(url: string, rect: PaneRect): Promise<Webview> {
   const host = getCurrentWindow();
-  const webview = new Webview(host, CAPTURE_WEBVIEW_LABEL, {
+  const webview = new Webview(host, LIVE_WEBVIEW_LABEL, {
     url,
     x: Math.round(rect.x),
     y: Math.round(rect.y),
@@ -151,7 +200,7 @@ export async function showLiveWebview(show: boolean): Promise<void> {
 }
 
 export async function closeLiveWebview(): Promise<void> {
-  await closeCapture();
+  await queued(LIVE_WEBVIEW_LABEL, () => closeByLabel(LIVE_WEBVIEW_LABEL));
 }
 
 /**
@@ -161,7 +210,7 @@ export async function closeLiveWebview(): Promise<void> {
  * the caller decides whether browsing continues.
  */
 export async function serializeLiveWebview(): Promise<{ url: string; html: string }> {
-  const payload = await runSerialize(CAPTURE_WEBVIEW_LABEL);
+  const payload = await runSerialize(LIVE_WEBVIEW_LABEL);
   return payload;
 }
 
@@ -192,6 +241,13 @@ async function runSerialize(label: string): Promise<{ url: string; html: string 
 }
 
 export async function captureRenderedPage(
+  url: string,
+  size?: { width?: number; height?: number },
+): Promise<{ url: string; html: string }> {
+  return queued(CAPTURE_WEBVIEW_LABEL, () => captureRenderedPageNow(url, size));
+}
+
+async function captureRenderedPageNow(
   url: string,
   size?: { width?: number; height?: number },
 ): Promise<{ url: string; html: string }> {

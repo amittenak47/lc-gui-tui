@@ -19,6 +19,13 @@ import { useShell } from "./shellContext";
 import { LcApiError, type DocIndexStatus, type ProposedAnnotation, type SearchOptions } from "./api/client";
 import { AmbientCoach, defaultCoachSocketFactory, type AmbientProbe } from "./api/coachSocket";
 import { isTauriRuntime } from "./api/nativeHttp";
+import { liveWebviewSupported } from "./util/liveWebviewSupport";
+import {
+  loadWebRenderMode,
+  otherWebRenderMode,
+  saveWebRenderMode,
+  type WebRenderMode,
+} from "./util/webRenderMode";
 import {
   DEFAULT_PAIRING,
 } from "./api/pairing";
@@ -299,6 +306,7 @@ import {
 import { renderAnnotation } from "./viz/render/annotation";
 import { renderHighlight } from "./viz/render/highlight";
 import { parseVizProgram, type VizProgram } from "./viz/schema";
+import { messageOf } from "./util/messageOf";
 
 type Mode = "review" | "ambient";
 
@@ -2609,7 +2617,7 @@ export function Workspace({
            * why. Whether a page has been marked is a fact about the page.
            */
           const neverMarked = (existing?.footnotes?.length ?? 0) === 0;
-          setWebLive(isTauriRuntime() && neverMarked);
+          setWebLive(isTauriRuntime() && liveWebviewSupported() && neverMarked);
         }
         /*
          * Give this document a tab, or claim the one it arrived on.
@@ -3694,7 +3702,9 @@ export function Workspace({
       const { serializeLiveWebview } = await import("./util/webPageCapture");
       const live = await serializeLiveWebview();
       const { pageFromCapturedHtml } = await import("./util/webPage");
-      const page = await pageFromCapturedHtml(live.html, live.url || webUrlRef.current);
+      const page = await pageFromCapturedHtml(live.html, live.url || webUrlRef.current, {
+        mode: webRenderModeRef.current,
+      });
       setWebHtmlSource(page.source);
       setWebHtmlNote(page.note ?? null);
       setWebLive(false);
@@ -3741,7 +3751,7 @@ export function Workspace({
       let handedOff = false;
       let sameWorkspace = false;
       try {
-        const page = await fetchWebPage(raw);
+        const page = await fetchWebPage(raw, { mode: webRenderModeRef.current });
         if (workspaceLoadGenRef.current !== loadGen) return;
         setWebHtmlSource(page.source);
         setWebHtmlNote(page.note ?? null);
@@ -6720,7 +6730,23 @@ export function Workspace({
    * Desktop only: Android has no child webview, so those tabs stay frozen.
    */
   const [webLive, setWebLive] = useState(false);
-  const canBrowseLive = webPadLive && isTauriRuntime();
+  /**
+   * Reader or whole page — the reader's standing choice, not the fetch's guess.
+   *
+   * Held here and passed into every fetch for this pad, so switching it re-opens
+   * the address you are on in the other rendering rather than the next one you
+   * happen to type.
+   */
+  const [webRenderMode, setWebRenderMode] = useState<WebRenderMode>(loadWebRenderMode);
+  const webRenderModeRef = useRef(webRenderMode);
+  webRenderModeRef.current = webRenderMode;
+  /*
+   * Browse is only offered where a live pane can actually exist — see
+   * `liveWebviewSupported`. On Android it cannot, and asking anyway put a Tauri
+   * error object in the header banner and then quietly showed the fetched copy
+   * instead, which is the one that does not look like the page.
+   */
+  const canBrowseLive = webPadLive && isTauriRuntime() && liveWebviewSupported();
   const docPadLive = Boolean(problem && isAnnotate(problem) && annotateSource?.docType !== "web" && tab.kind !== "web");
   const boardPadLive = Boolean(problem && isWhiteboard(problem));
 
@@ -7388,26 +7414,45 @@ export function Workspace({
                 <button
                   type="button"
                   className={
-                    webHtmlSource === "reader"
+                    webRenderMode === "reader"
                       ? "lc-web-reader-toggle is-on"
                       : "lc-web-reader-toggle"
                   }
-                  aria-pressed={webHtmlSource === "reader"}
+                  aria-pressed={webRenderMode === "reader"}
                   aria-label={
-                    webHtmlSource === "reader" ? "Reader view" : "Try reader view"
+                    webRenderMode === "reader"
+                      ? "Reader view is on — show the whole page"
+                      : "Reader view is off — show the article only"
                   }
                   title={
-                    webHtmlSource === "reader"
-                      ? "Reader view — the article, without the page around it"
-                      : webHtmlSource === "fetch"
-                        ? `${
-                            webHtmlNote
-                              ? `The live capture failed — ${webHtmlNote}. `
-                              : "The live capture was unavailable. "
-                          }This is the raw HTML. Tap to try again.`
-                        : "Not an article, so the whole page was kept. Tap to try reader view."
+                    webRenderMode === "page"
+                      ? "Whole page. Tap for reader view — the article, without the page around it."
+                      : webHtmlSource === "reader"
+                        ? "Reader view — the article, without the page around it. Tap to show the whole page."
+                        : webHtmlSource === "fetch"
+                          ? `${
+                              webHtmlNote
+                                ? `The live capture failed — ${webHtmlNote}. `
+                                : "The live capture was unavailable. "
+                            }This is the raw HTML. Tap to show the whole page.`
+                          : "Reader view is on, but this page is not an article, so the whole page was kept."
                   }
-                  onClick={() => void openWebPage(webUrl)}
+                  /*
+                   * A switch, at last.
+                   *
+                   * This used to re-run the identical fetch, which on a page
+                   * Readability had already claimed produced the identical
+                   * result — a control that looked pressable and could not
+                   * change anything. It now sets the mode, remembers it, and
+                   * reopens this address in the other rendering.
+                   */
+                  onClick={() => {
+                    const next = otherWebRenderMode(webRenderMode);
+                    setWebRenderMode(next);
+                    webRenderModeRef.current = next;
+                    saveWebRenderMode(next);
+                    void openWebPage(webUrl);
+                  }}
                 >
                   <svg
                     viewBox="0 0 24 24"
@@ -7506,36 +7551,16 @@ export function Workspace({
               </button>
             )}
             {/*
-              Indexing a page is a decision, not a side effect of having looked
-              at it — see the open path. This is where the decision is made.
+              No Index button here.
+              
+              Indexing a page is still a decision rather than a side effect of
+              having looked at it — but the chip on the tab already *is* that
+              decision, for every kind of document that can be indexed, and it
+              says more than a button can: offered, indexing, indexed, indexed
+              by words only, failed. Two controls for one action, one of them
+              web-only and stateless, made the row of icons harder to read and
+              the answer to "is this page in?" depend on where you looked.
             */}
-            <button
-              type="button"
-              className={
-                docIndexStatus === "indexed" ? "lc-icon is-active" : "lc-icon"
-              }
-              aria-label={
-                docIndexStatus === "indexed"
-                  ? "This page is in the index"
-                  : "Index this page"
-              }
-              title={
-                docIndexStatus === "indexed"
-                  ? "Indexed — the agent can search this page"
-                  : docIndexStatus === "indexing"
-                    ? "Indexing…"
-                    : "Index this page for the agent"
-              }
-              disabled={
-                busy !== null ||
-                canvasLoading ||
-                docIndexStatus === "indexing" ||
-                docIndexStatus === "indexed"
-              }
-              onClick={indexOpenDocument}
-            >
-              {docIndexStatus === "indexing" ? "…" : "⌸"}
-            </button>
           </div>
         </form>
       )}
@@ -8601,9 +8626,6 @@ class AnnotateOpenCancelled extends Error {
   }
 }
 
-function messageOf(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
-}
 
 function coachFailureTurns(
   failText: string | null,

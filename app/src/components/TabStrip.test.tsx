@@ -5,7 +5,7 @@ import { describe, expect, it, vi, beforeAll, afterEach } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
-import { TabStrip, CANCEL_HIT_MS } from "./TabStrip";
+import { TabStrip } from "./TabStrip";
 import {
   HOME_TAB_ID,
   homeTab,
@@ -190,8 +190,23 @@ describe("TabStrip", () => {
     view.unmount();
   });
 
-  it("turns Home into Cancel in place while a workspace opens", () => {
-    vi.useFakeTimers();
+  it("shows Home as an icon, with no title text and no close button", () => {
+    const view = mount({ tabs: [homeTab(), board("b1", "doodle")], activeId: "b1" });
+    const home = view.chips()[0]!;
+    /*
+     * Home is a landmark, not a document: it keeps the house and gives its
+     * share of the strip back to the files you actually have open. The title is
+     * hidden in CSS, so what has to be true here is that the glyph is rendered
+     * and that nothing offers to close it.
+     */
+    expect(home.getAttribute("data-tab-kind")).toBe("home");
+    expect(home.querySelector(".lc-tab-glyph")).not.toBeNull();
+    expect(home.querySelector(".lc-tab-title")?.textContent).toBe("Home");
+    expect(home.querySelector(".lc-tab-close")).toBeNull();
+    view.unmount();
+  });
+
+  it("keeps saying Home while a workspace opens, and going there drops the load", () => {
     const onCancelLoad = vi.fn();
     const onFocus = vi.fn();
     const view = mount({
@@ -204,18 +219,18 @@ describe("TabStrip", () => {
     // Same number of chips, same slot — nothing shifts for the length of a load.
     expect(view.chips()).toHaveLength(2);
     const home = view.chips()[0]!;
-    expect(home.querySelector(".lc-tab-title")?.textContent).toBe("Cancel");
+    /*
+     * It used to relabel itself "Cancel" for the duration. That renamed the one
+     * fixed landmark in the strip at exactly the moment someone wants it, and
+     * offered a second way to say "stop" next to the tab's own close button.
+     * Home is a place; going there is what abandons the load.
+     */
+    expect(home.querySelector(".lc-tab-title")?.textContent).toBe("Home");
     act(() => {
       home.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
     });
-    // Press registers on the chip first; the load abort waits the flash out.
-    expect(home.classList.contains("is-cancel-hit")).toBe(true);
-    expect(onCancelLoad).not.toHaveBeenCalled();
-    act(() => {
-      vi.advanceTimersByTime(CANCEL_HIT_MS);
-    });
     expect(onCancelLoad).toHaveBeenCalledTimes(1);
-    expect(onFocus).not.toHaveBeenCalled();
+    expect(onFocus).toHaveBeenCalledWith(HOME_TAB_ID);
     view.unmount();
   });
 

@@ -290,26 +290,27 @@ function modelHint(
 function visionEvidence(
   catalog: ModelCatalog | null,
   selected: ModelEntry | undefined,
+  /** What the reader has answered, not what the server advertises. */
   ticked: boolean,
 ): string {
   if (!catalog || !selected) {
     return ticked
       ? "Images will be sent. Nothing was read back about this endpoint, so this is your call."
-      : "Nothing was read back about this endpoint. Tick the box if you know it takes images.";
+      : "Nothing was read back about this endpoint. Answer Yes if you know it takes images.";
   }
   if (selected.advertises_vision === true) {
     return ticked
       ? "The server reports this model accepts images. ✓"
-      : "The server reports this model accepts images — tick the box to let Draw and board review use them.";
+      : "The server reports this model accepts images — answer Yes to let Draw and board review use them.";
   }
   if (selected.has_mmproj) {
     return ticked
       ? "A projector file (mmproj) sits beside these weights, so images should work if the server was started with it."
-      : "A projector file (mmproj) sits beside these weights, so this model can read images if the server was started with it. The server does not advertise it, so ticking the box is your call.";
+      : "A projector file (mmproj) sits beside these weights, so this model can read images if the server was started with it. The server does not advertise it, so this one is your call.";
   }
   return ticked
-    ? "This endpoint does not report image support. Images will still be sent — untick if Draw starts failing."
-    : "This endpoint does not report image support. That is not the same as “no”: OpenAI and Groq never say. Tick the box only if you know the model reads images.";
+    ? "This endpoint does not report image support. Images will still be sent — answer No if Draw starts failing."
+    : "This endpoint does not report image support. That is not the same as “no”: OpenAI and Groq never say. Answer Yes only if you know the model reads images.";
 }
 
 function llmServerHint(provider: "local" | "ollama" | "openai" | "groq"): string {
@@ -2168,18 +2169,32 @@ export function SettingsModal({
                 </>
               )}
 
-              <label className="lc-settings-check">
-                <input
-                  type="checkbox"
-                  checked={provider.vision === true}
-                  onChange={(e) =>
-                    patchProvider(providerFocus, {
-                      vision: e.target.checked,
-                    })
-                  }
-                />
-                <span>Accepts images</span>
-              </label>
+              <div className="lc-settings-subhead">Accepts images</div>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Accepts images"
+              >
+                {([
+                  [true, "Yes"],
+                  [false, "No"],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    role="radio"
+                    aria-checked={(provider.vision === true) === value}
+                    className={
+                      (provider.vision === true) === value
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => patchProvider(providerFocus, { vision: value })}
+                  >
+                    <strong>{label}</strong>
+                  </button>
+                ))}
+              </div>
               <p className="lc-settings-hint">{visionHint}</p>
 
               {(providerFocus === "openai" || providerFocus === "groq") && (

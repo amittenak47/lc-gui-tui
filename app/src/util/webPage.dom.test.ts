@@ -101,12 +101,67 @@ describe("isolateWebCss", () => {
     expect(html).toMatch(/<p/);
   });
 
-  it("scopes small inline CSS; fetch drops huge sheets, capture keeps them", async () => {
-    const small = await isolateWebCss(
-      `<style>body { background:#fff } header { color:#111 }</style><p>hi</p>`,
+  it("keeps a button's shape and takes away its behaviour", () => {
+    /*
+     * Deleting `button` cost the snapshot its face. DOMPurify unwraps a
+     * forbidden tag rather than dropping its children, so a styled call to
+     * action came through as a bare glyph and a word, with the element every
+     * one of the page's own rules was written against gone.
+     */
+    const out = sanitizeWebHtml(
+      '<button class="cta"><svg viewBox="0 0 24 24"></svg><span>Start</span></button>',
       "https://example.com/",
     );
-    expect(small).toMatch(/\.lc-web-doc\s*\{[^}]*background:#fff/);
+    expect(out).toContain("<button");
+    expect(out).toContain('class="cta"');
+    expect(out).toContain("<svg");
+    expect(out).toContain('tabindex="-1"');
+  });
+
+  it("keeps an input visible and unfillable", () => {
+    const out = sanitizeWebHtml(
+      '<input class="q" name="q" placeholder="Search">',
+      "https://example.com/",
+    );
+    expect(out).toContain("<input");
+    expect(out).toContain('class="q"');
+    expect(out).toContain("readonly");
+    // Nothing left to submit under.
+    expect(out).not.toContain('name="q"');
+  });
+
+  it("turns a form into a plain box, so Enter cannot send anything", () => {
+    const out = sanitizeWebHtml(
+      '<form class="search" action="/search" method="get"><input></form>',
+      "https://example.com/",
+    );
+    // The form becomes a div and loses its destination. Whether that div then
+    // survives is `flattenWebSnapshot`'s business — it unwraps lone wrappers
+    // either way, and has done since before this.
+    expect(out).not.toContain("<form");
+    expect(out).not.toContain("/search");
+    expect(out).toContain("<input");
+  });
+
+  it("still refuses scripts and handlers", () => {
+    const out = sanitizeWebHtml(
+      '<div><script>alert(1)</script><button onclick="bad()">x</button></div>',
+      "https://example.com/",
+    );
+    expect(out).not.toContain("<script");
+    expect(out).not.toContain("alert(1)");
+    expect(out).not.toContain("onclick");
+  });
+
+  it("scopes small inline CSS; fetch drops huge sheets, capture keeps them", async () => {
+    const small = await isolateWebCss(
+      `<style>body { background:#111 } header { color:#111 }</style><p>hi</p>`,
+      "https://example.com/",
+    );
+    // `#111` rather than `#fff` on purpose: a blank root background is dropped
+    // now so the pad's paper shows through — see webPagePaper.test.ts. What
+    // this test is about is the scoping, which applies either way.
+    expect(small).toMatch(/\.lc-web-doc\s*\{[^}]*background:#111/);
     expect(small).toMatch(/\.lc-web-doc header/);
 
     const huge = "body{color:red}".repeat(6_000);

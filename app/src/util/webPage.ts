@@ -10,6 +10,7 @@ import DOMPurify from "dompurify";
 
 import { isSafeExternalUrl, normalizeExternalUrl } from "./openExternal";
 import { absolutizeCssUrls, scopeCss } from "./webPageCss";
+import { DEFAULT_WEB_RENDER_MODE, type WebRenderMode } from "./webRenderMode";
 
 /** Inlined CSS/images after capture; keep in sync with Rust `PAGE_MAX_BYTES`. */
 export const PAGE_MAX_BYTES = 8_000_000;
@@ -115,6 +116,44 @@ export function absolutizeUrl(base: string, href: string): string {
  * Executable bits out. Styles stay so a snapshot can lay out; a wrapper-only
  * DOM is flattened so marquee hits real blocks, not one 17k-px shell.
  */
+/**
+ * Make what is left of the page's chrome look right and do nothing.
+ *
+ * A snapshot is a picture of a page, so its buttons should be shaped like
+ * buttons and its search box should be a box. None of them should be reachable
+ * by a keyboard or able to send anything anywhere.
+ */
+function inertInteractive(holder: HTMLElement): void {
+  // A form is the only element here with behaviour of its own — Enter in a
+  // field submits it. Keep the box, drop the verb.
+  for (const form of Array.from(holder.querySelectorAll("form"))) {
+    const div = holder.ownerDocument.createElement("div");
+    for (const attr of Array.from(form.attributes)) {
+      if (/^(action|method|target|enctype|novalidate|name)$/i.test(attr.name)) continue;
+      try {
+        div.setAttribute(attr.name, attr.value);
+      } catch {
+        /* a name the parser accepted and the setter will not */
+      }
+    }
+    while (form.firstChild) div.appendChild(form.firstChild);
+    form.replaceWith(div);
+  }
+  for (const node of Array.from(
+    holder.querySelectorAll("button, input, textarea, select"),
+  )) {
+    // Out of the tab order, and carrying nothing that could be submitted.
+    node.setAttribute("tabindex", "-1");
+    node.setAttribute("aria-disabled", "true");
+    for (const attr of ["name", "formaction", "formmethod", "autofocus", "required"]) {
+      node.removeAttribute(attr);
+    }
+    if (node instanceof holder.ownerDocument.defaultView!.HTMLInputElement) {
+      node.setAttribute("readonly", "");
+    }
+  }
+}
+
 export function sanitizeWebHtml(
   html: string,
   baseUrl: string,
@@ -122,7 +161,24 @@ export function sanitizeWebHtml(
 ): string {
   const cleaned = DOMPurify.sanitize(html, {
     WHOLE_DOCUMENT: true,
-    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "input", "button", "textarea"],
+    /*
+     * `form` goes; the controls stay.
+     *
+     * Deleting `button` and `input` outright was costing the snapshot most of
+     * its face. DOMPurify unwraps a forbidden tag rather than dropping its
+     * children, so `<button class="cta"><svg/>Start</button>` came through as a
+     * bare glyph and a word — the element every one of the page's own rules was
+     * written against had gone, and with it the shape, the fill and the
+     * padding. Inputs, having no children, vanished entirely: that is the grey
+     * blob where Google's search box should be.
+     *
+     * Keeping them costs nothing here. `script` is still forbidden and
+     * DOMPurify strips event handlers, so nothing in a snapshot can run. The
+     * one live path left was a `form` submitting on Enter — so the form itself
+     * is turned into a plain `div` below, which keeps its classes for layout
+     * and has no submit behaviour to speak of.
+     */
+    FORBID_TAGS: ["script", "iframe", "object", "embed"],
     FORBID_ATTR: ["onerror", "onload", "onclick"],
     ADD_TAGS: ["style", "link"],
     ADD_ATTR: ["style"],
@@ -157,6 +213,7 @@ export function sanitizeWebHtml(
   for (const node of Array.from(holder.querySelectorAll("[hidden], [aria-hidden='true']"))) {
     node.remove();
   }
+  inertInteractive(holder);
   flattenWebSnapshot(holder);
   for (const style of Array.from(holder.querySelectorAll("style"))) {
     const raw = style.textContent || "";
@@ -391,17 +448,19 @@ export async function readerPageFromHtml(
   if (html.length > PAGE_MAX_BYTES) {
     throw new Error("this page is too large to annotate here");
   }
-  const { extractArticle } = await import("./webReader");
+  const { extractArticle, withArticleTitle } = await import("./webReader");
   const article = extractArticle(html, url);
   if (!article) return null;
+  const title = article.title || titleFromHtml(html) || url;
   console.debug("[lc-web]", "reader", {
     htmlBytes: html.length,
     articleBytes: article.html.length,
   });
   return {
     url,
-    title: article.title || titleFromHtml(html) || url,
-    html: article.html,
+    title,
+    // Readability hands back the body without its headline — see `withArticleTitle`.
+    html: withArticleTitle(article.html, title, url),
     source: "reader",
     note,
   };
@@ -418,9 +477,13 @@ export async function readerPageFromHtml(
 export async function pageFromCapturedHtml(
   html: string,
   url: string,
+  opts?: { mode?: WebRenderMode },
 ): Promise<FetchedWebPage> {
-  const article = await readerPageFromHtml(html, url);
-  if (article) return article;
+  const mode: WebRenderMode = opts?.mode ?? DEFAULT_WEB_RENDER_MODE;
+  if (mode === "reader") {
+    const article = await readerPageFromHtml(html, url);
+    if (article) return article;
+  }
   return snapshotPage({ url, html }, "capture");
 }
 
@@ -453,7 +516,21 @@ async function snapshotPage(
   };
 }
 
-export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
+/**
+ * Fetch a page and turn it into a document.
+ *
+ * `mode` is the reader's standing choice, not a guess about the page — see
+ * {@link WebRenderMode}. In `reader` this is the old behaviour: try Readability
+ * first and take it if it returns anything. In `page` extraction is skipped
+ * entirely, so the whole page arrives with its own structure intact — which is
+ * the only thing that works for a feed, where the boundaries between items are
+ * the content.
+ */
+export async function fetchWebPage(
+  raw: string,
+  opts?: { mode?: WebRenderMode },
+): Promise<FetchedWebPage> {
+  const mode: WebRenderMode = opts?.mode ?? DEFAULT_WEB_RENDER_MODE;
   const url = normalizeExternalUrl(raw);
   if (!url || !isSafeExternalUrl(url)) {
     throw new Error("that does not look like an http(s) address");
@@ -463,13 +540,19 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
    * Cheap GET first. Wikipedia (and any server-rendered article) is already
    * in that HTML, so Readability can finish without spinning a hidden
    * webview or waiting SETTLE_MS. Capture stays for JS shells (Google).
+   *
+   * In `page` mode the cheap copy is still fetched — it is the fallback when
+   * the offscreen render is unavailable — but it is not run through
+   * Readability, because the whole point is to keep the page.
    */
   let cheap: { url: string; html: string } | null = null;
   let cheapError: string | undefined;
   try {
     cheap = await fetchHtmlCheap(url);
-    const article = await readerPageFromHtml(cheap.html, cheap.url);
-    if (article) return article;
+    if (mode === "reader") {
+      const article = await readerPageFromHtml(cheap.html, cheap.url);
+      if (article) return article;
+    }
   } catch (cause) {
     cheapError = cause instanceof Error ? cause.message : String(cause);
   }
@@ -506,7 +589,9 @@ export async function fetchWebPage(raw: string): Promise<FetchedWebPage> {
     fetched = await fetchHtmlCheap(url);
   }
 
-  const capturedArticle = await readerPageFromHtml(fetched.html, fetched.url, note);
-  if (capturedArticle) return capturedArticle;
+  if (mode === "reader") {
+    const capturedArticle = await readerPageFromHtml(fetched.html, fetched.url, note);
+    if (capturedArticle) return capturedArticle;
+  }
   return snapshotPage(fetched, source, note);
 }
