@@ -57,6 +57,52 @@ describe("serializeCurrentDocument", () => {
     expect(out.html).not.toMatch(/href="\/x\.css"/);
   });
 
+  it("makes the inlined image the only candidate", async () => {
+    /*
+     * `srcset` outranks `src` whenever it is present, and `<picture><source>`
+     * wins before the `<img>` is consulted at all. Leaving either in place sent
+     * the frozen page back to the CDN for a picture it was already carrying —
+     * and a broken-image glyph is what came back.
+     */
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/x.gif")) {
+        return new Response(TINY_GIF, { headers: { "content-type": "image/gif" } });
+      }
+      return new Response("missing", { status: 404 });
+    });
+
+    document.documentElement.innerHTML = `
+      <body>
+        <picture>
+          <source srcset="https://cdn.example.com/a.webp" type="image/webp" />
+          <img src="/x.gif" srcset="https://cdn.example.com/a.gif 2x" sizes="50vw" alt="" />
+        </picture>
+        <p>hi</p>
+      </body>
+    `;
+
+    const out = await serializeCurrentDocument();
+    expect(out.html).toMatch(/src="data:image\/gif;base64,/);
+    expect(out.html).not.toMatch(/srcset/i);
+    expect(out.html).not.toMatch(/cdn\.example\.com/);
+    expect(out.html).not.toMatch(/<source/i);
+  });
+
+  it("marks what is invisible and where the pinned chrome sits", async () => {
+    vi.stubGlobal("fetch", async () => new Response("missing", { status: 404 }));
+    document.documentElement.innerHTML = `
+      <body>
+        <span aria-hidden="true" id="icon">*</span>
+        <div id="gone" style="display:none">junk</div>
+        <p>hi</p>
+      </body>
+    `;
+    const out = await serializeCurrentDocument();
+    // The icon is aria-hidden and visible — the case the attribute rule broke.
+    expect(out.html).toMatch(/id="icon"(?![^>]*data-lc-hidden)/);
+    expect(out.html).toMatch(/id="gone"[^>]*data-lc-hidden/);
+  });
+
   it("prefers CSSOM text over re-fetching stylesheets", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

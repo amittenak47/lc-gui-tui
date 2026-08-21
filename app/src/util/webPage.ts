@@ -210,7 +210,22 @@ export function sanitizeWebHtml(
     if (rel.includes("stylesheet")) continue;
     link.remove();
   }
-  for (const node of Array.from(holder.querySelectorAll("[hidden], [aria-hidden='true']"))) {
+  /*
+   * Trust the mark the capture left, not the attribute (§4b).
+   *
+   * `aria-hidden="true"` says "skip me, screen reader". It does not say
+   * invisible — pages put it on decorative but visible things, and icons most
+   * of all, which is why a frozen sidebar arrived with its glyphs missing.
+   * `serializeCurrentDocument` now stamps `data-lc-hidden` from the computed
+   * style, which is the only thing that actually knows.
+   *
+   * The fetch path never ran that pass and has no computed styles to consult,
+   * so it keeps the bare `[hidden]` rule — a plain attribute that does mean
+   * invisible.
+   */
+  const hiddenSelector =
+    source === "fetch" ? "[hidden], [data-lc-hidden]" : "[data-lc-hidden]";
+  for (const node of Array.from(holder.querySelectorAll(hiddenSelector))) {
     node.remove();
   }
   inertInteractive(holder);
@@ -224,9 +239,35 @@ export function sanitizeWebHtml(
     style.textContent = scopeCss(absolutizeCssUrls(raw, baseUrl));
   }
   promoteLazyImages(holder);
+  /*
+   * Put pinned chrome back where it was (§4c).
+   *
+   * `fixed` paints against the viewport, so flattening it to `static` drops it
+   * wherever its tag sits in the markup — which for a cookie bar or a floating
+   * header is a band across the middle of the article. The capture recorded
+   * each one's real document offset, so it can be placed instead of guessed.
+   *
+   * `sticky` needs no offset: it is in the flow already, and `static` leaves it
+   * exactly where it was resting.
+   */
+  for (const node of Array.from(holder.querySelectorAll("[data-lc-pin-top]"))) {
+    const top = node.getAttribute("data-lc-pin-top");
+    const left = node.getAttribute("data-lc-pin-left");
+    node.removeAttribute("data-lc-pin-top");
+    node.removeAttribute("data-lc-pin-left");
+    if (top == null) continue;
+    const style = (node.getAttribute("style") || "").replace(
+      /position\s*:\s*(fixed|sticky|absolute|static)\s*;?/gi,
+      "",
+    );
+    node.setAttribute(
+      "style",
+      `${style};position:absolute;top:${Number(top) || 0}px;left:${Number(left) || 0}px`,
+    );
+  }
   for (const node of Array.from(holder.querySelectorAll("[style]"))) {
     const raw = node.getAttribute("style");
-    if (!raw) continue;
+    if (!raw || /position\s*:\s*absolute/i.test(raw)) continue;
     node.setAttribute(
       "style",
       raw.replace(/position\s*:\s*(fixed|sticky)/gi, "position:static"),
