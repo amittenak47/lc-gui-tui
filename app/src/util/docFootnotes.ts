@@ -78,6 +78,20 @@ export interface DocFootnote {
   excerpt: string;
   createdAt: number;
   /**
+   * When the reader last changed this mark — a colour, a title, a note, a link.
+   *
+   * `DocFootnoteNote` has carried both timestamps from the start; the mark that
+   * owns them only ever recorded its birth. That is the one annotation property
+   * nothing can reconstruct afterwards: a creation time is stored, but a
+   * modification time is simply gone unless it was written down when it
+   * happened.
+   *
+   * Absent on marks written before this existed, and left that way until one of
+   * them is actually edited — inventing a modification time would be worse than
+   * admitting there is not one.
+   */
+  updatedAt?: number;
+  /**
    * Coach: the thread this quote opened — the first one, kept as the ribbon's
    * identity. Everything the reader has asked since lives in {@link threads},
    * which includes this one.
@@ -543,8 +557,20 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
       const now = Date.now();
       // `userNotes` was the single note box; it is read here and never written
       // again, so the property is stripped from the spread rather than carried.
-      const { userNotes, title: rawTitle, palette: rawPalette, color: rawColor, ...rest } =
-        candidate as DocFootnote & { userNotes?: unknown };
+      const {
+        userNotes,
+        title: rawTitle,
+        palette: rawPalette,
+        color: rawColor,
+        updatedAt: rawUpdatedAt,
+        ...rest
+      } = candidate as DocFootnote & { userNotes?: unknown };
+      // Pulled out of the spread so a stored non-number is dropped rather than
+      // passed through as a timestamp nothing can compare.
+      const updatedAt =
+        typeof rawUpdatedAt === "number" && Number.isFinite(rawUpdatedAt)
+          ? rawUpdatedAt
+          : undefined;
       const notes = sanitizeNotes(candidate.notes, userNotes, now);
       const excerpt = typeof candidate.excerpt === "string" ? candidate.excerpt : "";
       const threads = sanitizeThreads(candidate.threads, candidate.threadRootId, excerpt, now);
@@ -576,6 +602,7 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
           ...(bands ? { bands } : {}),
           ...(blockText ? { blockText } : {}),
           ...(subMarks ? { subMarks } : {}),
+          ...(updatedAt != null ? { updatedAt } : {}),
         },
       ];
     })
@@ -708,8 +735,18 @@ export function searchQueryFor(text: string, maxWords = 24): string {
  * they cannot change without the id changing too.
  */
 export function footnoteRevision(footnotes: readonly DocFootnote[]): string {
-  return footnotes
-    .map((entry) =>
+  return footnotes.map(footnoteFieldsRevision).join("\x1d");
+}
+
+/**
+ * One mark's editable fields, as a string.
+ *
+ * Split out of {@link footnoteRevision} so "has this mark changed?" can be asked
+ * of a single mark — which is what {@link stampFootnoteEdits} needs, and which
+ * keeps one definition of what counts as an edit rather than two that drift.
+ */
+export function footnoteFieldsRevision(entry: DocFootnote): string {
+  return (
       [
         entry.id,
         entry.kind,
@@ -736,7 +773,39 @@ export function footnoteRevision(footnotes: readonly DocFootnote[]): string {
             ].join(":"),
           )
           .join("\x1f"),
-      ].join("\x1e"),
-    )
-    .join("\x1d");
+      ].join("\x1e")
+  );
+}
+
+/**
+ * Stamp `updatedAt` on whatever the reader just changed.
+ *
+ * Compared before-and-after rather than stamped where marks are edited, for two
+ * reasons. There are sixteen such places — a colour, a title, a note, a link, a
+ * band, a sub-mark — and one that forgot would be silently wrong in a way
+ * nothing catches. And {@link footnoteRevision} already had to decide exactly
+ * which fields a reader can change, so asking it keeps one answer to that
+ * question instead of two.
+ *
+ * A mark that did not change keeps the timestamp it had, so this is safe on
+ * every update. A mark with no `updatedAt` — everything written before the field
+ * existed — is left alone until something actually edits it, because inventing a
+ * modification time is worse than admitting there is not one.
+ */
+export function stampFootnoteEdits(
+  before: readonly DocFootnote[],
+  after: readonly DocFootnote[],
+  now = Date.now(),
+): DocFootnote[] {
+  if (before === after) return after as DocFootnote[];
+  const was = new Map(before.map((entry) => [entry.id, footnoteFieldsRevision(entry)]));
+  return after.map((entry) => {
+    const previous = was.get(entry.id);
+    // Newly added: its creation time is its modification time too.
+    if (previous === undefined) {
+      return entry.updatedAt == null ? { ...entry, updatedAt: entry.createdAt } : entry;
+    }
+    if (previous === footnoteFieldsRevision(entry)) return entry;
+    return { ...entry, updatedAt: now };
+  });
 }

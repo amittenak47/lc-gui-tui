@@ -127,6 +127,7 @@ import { splitProblemKey } from "./util/datasetKey";
 import {
   addFootnote,
   footnoteRevision,
+  stampFootnoteEdits,
   freshFootnoteId,
   freshNoteId,
   freshSubMarkId,
@@ -693,7 +694,24 @@ export function Workspace({
    * State as well as a ref: the ribbons are rendered from it, and the autosave
    * tick — which runs outside React — writes it to the library entry.
    */
-  const [annotateFootnotes, setAnnotateFootnotes] = useState<DocFootnote[]>([]);
+  const [annotateFootnotes, setAnnotateFootnotesRaw] = useState<DocFootnote[]>([]);
+  /**
+   * Every write to the marks goes through here so edits get a timestamp.
+   *
+   * Stamped centrally rather than at each of the sixteen places a mark is
+   * changed — a colour, a title, a note, a link, a band, a sub-mark. One that
+   * forgot would be silently wrong in a way nothing catches, and
+   * `stampFootnoteEdits` already asks `footnoteRevision`'s definition of what
+   * counts as an edit rather than inventing a second one.
+   */
+  const setAnnotateFootnotes = useCallback(
+    (next: DocFootnote[] | ((prev: DocFootnote[]) => DocFootnote[])) => {
+      setAnnotateFootnotesRaw((prev) =>
+        stampFootnoteEdits(prev, typeof next === "function" ? next(prev) : next),
+      );
+    },
+    [],
+  );
   const annotateFootnotesRef = useRef<DocFootnote[]>([]);
   annotateFootnotesRef.current = annotateFootnotes;
   /**
