@@ -208,3 +208,49 @@ pub async fn retrieve(
     .await?;
     Ok(Json(RetrieveResponse { chunks }))
 }
+
+pub async fn get_chunks(
+    UrlPath(hash): UrlPath<String>,
+) -> Result<Json<docs_index::ChunkBundle>, AppError> {
+    let hash = hash.trim().to_string();
+    if hash.is_empty() {
+        return Err(AppError::bad_request(anyhow::anyhow!("missing document hash")));
+    }
+    let bundle = blocking(move || {
+        let path = docs_index::db_path()?;
+        let conn = docs_index::open(&path)?;
+        docs_index::list_chunks(&conn, &hash)
+    })
+    .await?;
+    Ok(Json(bundle))
+}
+
+pub async fn put_chunks(
+    UrlPath(hash): UrlPath<String>,
+    Json(mut body): Json<docs_index::ChunkBundle>,
+) -> Result<Response, AppError> {
+    let hash = hash.trim().to_string();
+    if hash.is_empty() {
+        return Err(AppError::bad_request(anyhow::anyhow!("missing document hash")));
+    }
+    if body.hash.trim().is_empty() {
+        body.hash = hash.clone();
+    } else if body.hash != hash {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "chunk bundle hash does not match the path"
+        )));
+    }
+    let ack = blocking(move || {
+        let path = docs_index::db_path()?;
+        let mut conn = docs_index::open(&path)?;
+        docs_index::merge_chunks(&mut conn, &body)
+    })
+    .await?;
+    if ack.reason.as_deref() == Some(docs_index::CHUNK_TEXT_MISMATCH) {
+        return Err(AppError::status(
+            StatusCode::CONFLICT,
+            anyhow::anyhow!("{}", docs_index::CHUNK_TEXT_MISMATCH),
+        ));
+    }
+    Ok(Json(ack).into_response())
+}

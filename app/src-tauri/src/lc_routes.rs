@@ -581,6 +581,29 @@ pub async fn lc_docs_put_bytes(
 }
 
 #[tauri::command]
+pub async fn lc_docs_get_chunks(
+    state: State<'_, Shared>,
+    hash: String,
+) -> Result<LcResponse, String> {
+    go(state, "GET", format!("/docs/{}/chunks", enc(&hash)), None).await
+}
+
+#[tauri::command]
+pub async fn lc_docs_put_chunks(
+    state: State<'_, Shared>,
+    hash: String,
+    body: serde_json::Value,
+) -> Result<LcResponse, String> {
+    go(
+        state,
+        "PUT",
+        format!("/docs/{}/chunks", enc(&hash)),
+        Some(body),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn lc_list_whiteboard(state: State<'_, Shared>) -> Result<LcResponse, String> {
     go(state, "GET", "/pads/whiteboard".into(), None).await
 }

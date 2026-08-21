@@ -10,6 +10,8 @@
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { run, STORE_SNAPSHOTS } from "./idb";
 import type { DocFootnote } from "./docFootnotes";
+import type { Edge } from "./noteLinks";
+import type { SnapshotInkPage } from "./padSnapshotPayload";
 
 export type PadSnapshotKind = "annotate" | "whiteboard";
 export type PadSnapshotTier = "2h" | "24h" | "7d";
@@ -34,6 +36,12 @@ export interface PadSnapshot {
   footnotes?: DocFootnote[];
   agent?: unknown[];
   pageCount?: number;
+  /** Per-page gzip ink, the copy `STORE_INK_PAGES` holds. */
+  ink?: SnapshotInkPage[];
+  /** Graph edges that name this pad. Apply is idempotent on edge id. */
+  edges?: Edge[];
+  /** Source text; live row has it, snapshots did not. */
+  source?: string;
 }
 
 export interface PadSnapshotMeta {
@@ -83,6 +91,9 @@ export async function recordRollingSnapshots(input: {
   footnotes?: DocFootnote[];
   agent?: unknown[];
   pageCount?: number;
+  ink?: SnapshotInkPage[];
+  edges?: Edge[];
+  source?: string;
   now?: number;
 }): Promise<PadSnapshot[]> {
   const now = input.now ?? Date.now();
@@ -103,6 +114,9 @@ export async function recordRollingSnapshots(input: {
       ...(input.footnotes ? { footnotes: input.footnotes } : {}),
       ...(input.agent ? { agent: input.agent } : {}),
       ...(input.pageCount != null ? { pageCount: input.pageCount } : {}),
+      ...(input.ink && input.ink.length > 0 ? { ink: input.ink } : {}),
+      ...(input.edges && input.edges.length > 0 ? { edges: input.edges } : {}),
+      ...(typeof input.source === "string" ? { source: input.source } : {}),
     };
     try {
       await run(STORE_SNAPSHOTS, "readwrite", (store) => store.put(row, id));

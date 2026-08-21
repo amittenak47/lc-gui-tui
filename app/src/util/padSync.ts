@@ -30,6 +30,7 @@ import { getDocBytes, putDocBytes } from "./docBytes";
 import type { DocFootnote } from "./docFootnotes";
 import { run, STORE_SYNC_QUEUE } from "./idb";
 import { loadPadSyncSince, savePadSyncSince } from "./padHub";
+import { syncDocChunks } from "./docChunkSync";
 import {
   getPadSnapshot,
   PAD_SNAPSHOT_TIERS,
@@ -467,6 +468,9 @@ export async function pushPadSnapshot(client: LcClient, snap: PadSnapshot): Prom
       footnotes: snap.footnotes,
       agent: snap.agent,
       pageCount: snap.pageCount,
+      ...(snap.ink && snap.ink.length > 0 ? { ink: snap.ink } : {}),
+      ...(snap.edges && snap.edges.length > 0 ? { edges: snap.edges } : {}),
+      ...(typeof snap.source === "string" ? { source: snap.source } : {}),
     },
   };
   try {
@@ -807,6 +811,12 @@ export async function pullPads(client: LcClient): Promise<void> {
   for (const row of annotate) {
     await fillMissingSnapshots(client, "annotate", row.id);
   }
+  const seenHash = new Set<string>();
+  for (const row of annotate) {
+    if (!row.hash || seenHash.has(row.hash)) continue;
+    seenHash.add(row.hash);
+    await syncDocChunks(client, row.hash).catch(() => {});
+  }
 }
 
 /**
@@ -892,6 +902,16 @@ export async function applyPadSyncPing(
     }
   }
 
+  {
+    const hashes = new Set<string>();
+    for (const row of ping.annotate) {
+      if (row.hash) hashes.add(row.hash);
+    }
+    for (const hash of hashes) {
+      await syncDocChunks(client, hash).catch(() => {});
+    }
+  }
+
   for (const row of ping.problem ?? []) {
     if (pendingDelete.has(`problem:${row.id}`)) continue;
     const local = await getProblemBoard(row.id);
@@ -956,7 +976,11 @@ async function writeSnapshotIfNewer(
   const local = await getPadSnapshot(kind, key, tier);
   if (opts?.skipIfLocal && local) return;
   if (local && local.writtenAt >= row.written_at) return;
-  const payload = (row.payload ?? {}) as Partial<PadSnapshot>;
+  const payload = (row.payload ?? {}) as Partial<PadSnapshot> & {
+    ink?: unknown;
+    edges?: unknown;
+    source?: unknown;
+  };
   const snap: PadSnapshot = {
     kind,
     key,
@@ -967,6 +991,9 @@ async function writeSnapshotIfNewer(
     footnotes: payload.footnotes,
     agent: payload.agent,
     pageCount: payload.pageCount,
+    ...(Array.isArray(payload.ink) ? { ink: payload.ink as PadSnapshot["ink"] } : {}),
+    ...(Array.isArray(payload.edges) ? { edges: payload.edges as PadSnapshot["edges"] } : {}),
+    ...(typeof payload.source === "string" ? { source: payload.source } : {}),
   };
   try {
     const { run: idbRun, STORE_SNAPSHOTS } = await import("./idb");
