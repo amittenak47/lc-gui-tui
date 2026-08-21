@@ -145,6 +145,22 @@ describe("syncDocChunks", () => {
     });
   });
 
+  it("says the hub is already embedded when this device has no index", async () => {
+    // §2d ships vectors and not text, so there is genuinely nothing to merge
+    // onto — but a wiped device sitting next to a finished index, with nothing
+    // on screen to explain it, is the worst version of that trade.
+    loadPadHub.mockReturnValue({ url: "http://hub", token: "t" });
+    const client = fakeClient({
+      listDocChunkDigests: vi.fn(async () => [
+        digest({ chunks_total: 4, chunks_embedded: 4 }),
+      ]),
+      listDocChunkDigestsLocal: vi.fn(async () => []),
+    });
+    await syncDocChunks(client, "h");
+    expect(docChunkMismatchReason("h")).toContain("Index it here");
+    expect(client.getDocChunks).not.toHaveBeenCalled();
+  });
+
   it("records a mismatch instead of pushing, and leaves the reason for the chip", async () => {
     loadPadHub.mockReturnValue({ url: "http://pc", token: "t" });
     const client = fakeClient({
