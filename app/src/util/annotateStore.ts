@@ -34,6 +34,8 @@ import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 import { deletePadSnapshots, renamePadSnapshots } from "./padSnapshotStore";
 import { deleteInkPages, annotateDocKey, renameInkPages } from "./inkPageStore";
 import { setStorageItem } from "./storageQuota";
+import { hashBytes } from "./docBytes";
+import { webIdentityUrl } from "./webIdentity";
 
 export const ANNOTATE_LIBRARY_LIMIT = 30;
 export const ANNOTATE_TRASH_TTL_MS = 3 * 24 * 60 * 60 * 1000;
@@ -198,6 +200,38 @@ export function hashMarkdown(source: string): string {
   }
   return `md${hash.toString(36)}-${source.length.toString(36)}`;
 }
+
+/**
+ * The identity of a document, decided by kind.
+ *
+ * For anything the reader brought, identity is its **content**: the same file is
+ * the same document wherever on disk it came from, which is what lets the
+ * library reopen it without ever having known its path, and what makes two
+ * copies of one textbook cost one entry.
+ *
+ * A web pad is the exception, and treating it like the rest was a bug. Its
+ * "content" is a frozen copy this app made moments ago, so it changes every time
+ * the page is frozen again — minting a second row in Recent, a second document
+ * in `docs.db`, and orphaning the previous index with nothing to collect it. Its
+ * identity is the **address**, which is the thing that did not change. See
+ * {@link webIdentityUrl}.
+ */
+export function docIdentityHash(input: {
+  docType: DocType;
+  name: string;
+  text?: string;
+  bytes?: ArrayBuffer | null;
+}): string {
+  if (input.docType === "web") {
+    const url = webIdentityUrl(input.name);
+    // A web pad with an unparseable name is not a page anyone navigated to;
+    // fall back to its text rather than inventing an identity for it.
+    if (url) return hashMarkdown(url);
+  }
+  if (input.bytes) return hashBytes(input.bytes);
+  return hashMarkdown(input.text ?? "");
+}
+
 
 /**
  * Bring a library written by the old build across, once.

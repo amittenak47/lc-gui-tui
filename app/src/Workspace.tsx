@@ -138,7 +138,7 @@ import {
   type DocFootnoteSubMarkKind,
 } from "./util/docFootnotes";
 import { footnoteThemeSeed } from "./util/inkPaletteHistory";
-import { getDocBytes, hashBytes, putDocBytes } from "./util/docBytes";
+import { getDocBytes, putDocBytes } from "./util/docBytes";
 import {
   extractDocumentPages,
   extractedPagesFor,
@@ -224,6 +224,7 @@ import {
   listAnnotateDocsByHash,
   migrateAnnotateKeysToId,
   getAnnotateDoc,
+  docIdentityHash,
   hashMarkdown,
   isBinaryDocType,
   AnnotateLibraryFullError,
@@ -2526,7 +2527,8 @@ export function Workspace({
               `${Math.round(CODE_SOURCE_MAX_CHARS / 1000)}k).`,
           );
         }
-        const hash = input.hash ?? (bytes ? hashBytes(bytes) : hashMarkdown(text));
+        const hash =
+          input.hash ?? docIdentityHash({ docType, name: input.name, text, bytes });
 
         /*
          * Which set of annotations on this file — asked before anything is set.
@@ -3240,7 +3242,12 @@ export function Workspace({
        * matches nothing — and opening the same document twice would grow a
        * second chip for it rather than focusing the first.
        */
-      const hash = input.bytes ? hashBytes(input.bytes) : hashMarkdown(input.text ?? "");
+      const hash = docIdentityHash({
+        docType,
+        name: input.name,
+        text: input.text,
+        bytes: input.bytes,
+      });
 
       /*
        * Which annotation set, decided here — before a record exists.
