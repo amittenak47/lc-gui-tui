@@ -6984,12 +6984,26 @@ export function Workspace({
    */
   const wasShowingRef = useRef(showing);
   const wasSplitRoleRef = useRef(splitRole);
+  /*
+   * Freezing and un-freezing resize the pane as surely as a sash does.
+   *
+   * A live page is a native surface the pane makes a hole for, and the hole is
+   * inset — by the dock's strip, and by the focus strip when the pane is not
+   * the active one. Flipping between live and frozen therefore changes the
+   * board's box while neither `showing` nor `splitRole` moves, so nothing told
+   * the board to re-measure and a frozen page stayed fitted to the pane it used
+   * to be in. Nudging the sash was the only thing that fixed it, which is
+   * exactly what a missing re-measure looks like from the outside.
+   */
+  const wasWebLiveRef = useRef(webLive);
   useEffect(() => {
     const returning = showing && !wasShowingRef.current;
     const splitChanged = showing && splitRole !== wasSplitRoleRef.current;
+    const froze = showing && webLive !== wasWebLiveRef.current;
     wasShowingRef.current = showing;
     wasSplitRoleRef.current = splitRole;
-    if (!returning && !splitChanged) return;
+    wasWebLiveRef.current = webLive;
+    if (!returning && !splitChanged && !froze) return;
     // Same settle ladder as rotate: the first frame is often still full-width.
     const delays = [0, 80, 200, 400, 700];
     const ids = delays.map((ms) =>
@@ -7001,7 +7015,7 @@ export function Workspace({
     return () => {
       for (const id of ids) window.clearTimeout(id);
     };
-  }, [showing, splitRole]);
+  }, [showing, splitRole, webLive]);
 
   /*
    * A parked save used to leave switchMotion busy / preparing on. Focusing the
