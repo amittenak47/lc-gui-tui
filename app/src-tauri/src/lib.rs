@@ -131,6 +131,7 @@ pub fn run() {
         lc_routes::lc_put_ink_page,
         lc_routes::lc_put_edges,
         lc_routes::lc_tombstone_edge,
+        lc_routes::lc_docs_retrieve_library,
         lc_routes::lc_docs_get_chunks,
         lc_routes::lc_docs_put_chunks,
         lc_routes::lc_docs_list_chunk_digests,

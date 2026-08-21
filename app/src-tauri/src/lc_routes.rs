@@ -626,6 +626,14 @@ pub async fn lc_tombstone_edge(
 }
 
 #[tauri::command]
+pub async fn lc_docs_retrieve_library(
+    state: State<'_, Shared>,
+    body: serde_json::Value,
+) -> Result<LcResponse, String> {
+    go(state, "POST", "/docs/retrieve".into(), Some(body)).await
+}
+
+#[tauri::command]
 pub async fn lc_docs_list_chunk_digests(
     state: State<'_, Shared>,
 ) -> Result<LcResponse, String> {
