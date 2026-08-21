@@ -21,6 +21,18 @@ export const CHUNK_TEXT_MISMATCH = "chunk text hash mismatch";
 export const CHUNK_MISMATCH_MESSAGE =
   "This device's index disagreed with the hub — the chunks are not the same text. Re-index this document.";
 
+/**
+ * The hub has vectors this device cannot use yet.
+ *
+ * §2d ships vectors and not text, deliberately: the receiver chunks its own
+ * words, and a merge onto a document it has never indexed has nothing to
+ * attach to. That is the right trade — but it leaves a wiped device sitting
+ * next to a finished index it cannot touch, with nothing on screen to say that
+ * indexing here (cheap, offline, seconds) is all that stands between them.
+ */
+export const CHUNK_UNINDEXED_MESSAGE =
+  "The hub has already embedded this document. Index it here and the vectors come across — no re-embedding.";
+
 const mismatchByHash = new Map<string, string>();
 const mismatchListeners = new Set<() => void>();
 
@@ -44,7 +56,12 @@ export function clearDocChunkMismatch(hash: string): void {
 }
 
 function noteMismatch(hash: string): void {
-  mismatchByHash.set(hash, CHUNK_MISMATCH_MESSAGE);
+  note(hash, CHUNK_MISMATCH_MESSAGE);
+}
+
+function note(hash: string, message: string): void {
+  if (mismatchByHash.get(hash) === message) return;
+  mismatchByHash.set(hash, message);
   for (const listener of mismatchListeners) listener();
 }
 
@@ -109,7 +126,18 @@ async function syncOne(
   local?: DocChunkDigest,
   remote?: DocChunkDigest,
 ): Promise<void> {
-  if (!local || local.chunks_total === 0) return;
+  if (!local || local.chunks_total === 0) {
+    /*
+     * Nothing to merge onto, which is not the same as nothing to say.
+     *
+     * The vectors are sitting on the hub and this device cannot take them
+     * until it has chunks of its own to hang them on. Indexing is the cheap
+     * half — no model, no network — so the reader is one press away from a
+     * fully embedded document, and used to have no way of knowing it.
+     */
+    if (remote && remote.chunks_embedded > 0) note(hash, CHUNK_UNINDEXED_MESSAGE);
+    return;
+  }
   if (
     local.embed_model &&
     remote?.embed_model &&

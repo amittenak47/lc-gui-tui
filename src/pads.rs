@@ -2225,6 +2225,92 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// §2a/§2e, as far as a test can take it.
+    ///
+    /// The real drill needs two machines and a wiped profile; what can be
+    /// checked here is the half that used to be silently empty — whether the
+    /// hub is *holding* everything a rebuilt device would ask for. Before §2b
+    /// and §2c this failed on ink and edges, which is the whole reason Part 2
+    /// exists. Source text and marks are checked with them so a regression in
+    /// any one of the four shows up as a named failure rather than a vague one.
+    #[test]
+    fn the_hub_holds_everything_a_wiped_device_asks_for() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+
+        // A pad with all of it: marks, a coach thread, handwriting, and an edge
+        // to a second pad.
+        let mut pad = an("a1", 10);
+        pad.source = "# Gradients\n\nthe chain rule".into();
+        pad.footnotes = json!([{ "id": "f1", "excerpt": "the chain rule" }]);
+        pad.agent = json!([{ "role": "user", "text": "why" }]);
+        put_annotate(&conn, &pad).unwrap();
+        put_annotate(&conn, &an("a2", 10)).unwrap();
+
+        put_ink_page(&conn, &ink("annotate", "a1", 1, 11, "strokes")).unwrap();
+        put_edge(
+            &conn,
+            &EdgeRow {
+                id: "picker|annotate:a1|annotate:a2".into(),
+                from_type: "annotate".into(),
+                from_id: "a1".into(),
+                to_type: "annotate".into(),
+                to_id: "a2".into(),
+                kind: "picker".into(),
+                created_at: 9,
+                payload: json!({ "id": "picker|annotate:a1|annotate:a2" }),
+                updated_at: 0,
+            },
+            12,
+        )
+        .unwrap();
+        put_snapshot(
+            &conn,
+            &SnapshotRow {
+                kind: "annotate".into(),
+                key: "a1".into(),
+                tier: "24h".into(),
+                written_at: 13,
+                payload: json!({
+                    "name": "notes.md",
+                    "source": "# Gradients\n\nthe chain rule",
+                    "ink": [{ "pageId": 1, "updatedAt": 11, "gz": "c3Ryb2tlcw==" }],
+                }),
+            },
+        )
+        .unwrap();
+
+        // Now ask the way a device with an empty profile would: everything
+        // since the beginning of time.
+        let pads = list_annotate(&conn, false).unwrap();
+        let mine = pads.iter().find(|row| row.id == "a1").unwrap();
+        assert_eq!(mine.source, "# Gradients\n\nthe chain rule", "source text");
+        assert_eq!(mine.footnotes[0]["id"], "f1", "marks");
+        assert_eq!(mine.agent[0]["role"], "user", "coach thread");
+
+        let ink_pages = get_ink_pages(&conn, "annotate", "a1").unwrap();
+        assert_eq!(ink_pages.len(), 1, "handwriting");
+        assert_eq!(
+            BASE64.decode(ink_pages[0].gz.as_bytes()).unwrap(),
+            b"strokes"
+        );
+
+        let edges = list_edges(&conn, 0).unwrap();
+        assert_eq!(edges.len(), 1, "graph edge");
+        assert_eq!(edges[0].to_id, "a2");
+
+        let snaps = get_snapshots(&conn, "annotate", "a1").unwrap();
+        assert_eq!(snaps.len(), 1, "snapshot tier");
+        assert_eq!(snaps[0].payload["ink"][0]["pageId"], 1);
+
+        // And the digests a ping would carry, so the device knows to ask.
+        let digests = list_ink_digests(&conn, 0).unwrap();
+        assert_eq!(digests.len(), 1);
+        assert_eq!(digests[0].key, "a1");
+
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn pads_schema_version_stays_unpinned() {
         let path = tmp();
