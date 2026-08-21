@@ -190,6 +190,7 @@ import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
 import { AnnotateMarkdownEditor, isFreshOwnedNote, type AnnotateMarkdownEditorHandle } from "./modes/AnnotateMarkdownEditor";
 import { LiveWebPane } from "./modes/LiveWebPane";
+import { loadWebViewMode, opensLive, saveWebViewMode } from "./util/webViewMode";
 import { StatementDocument } from "./modes/StatementDocument";
 import {
   buildAnnotateTemplate,
@@ -2707,19 +2708,30 @@ export function Workspace({
         if (docType === "web") {
           setWebUrl(input.name);
           /*
-           * A page you have not written on is one you are still browsing.
+           * Your standing choice, unless the page has marks on it.
            *
-           * So: live unless it carries marks. Reopening something you annotated
-           * gives you the document back, because the marks are the thing you
-           * came for and they only exist on the frozen copy.
+           * "Live unless it carries marks" was most of the rule and it dropped
+           * the reader's own answer: freeze a page deliberately, switch tabs,
+           * come back, and it was live again — or press Browse, unsplit, and it
+           * was frozen again. Either way a choice made once had to be made
+           * again, which is not a default so much as an opinion re-imposed.
+           *
+           * Marks still win. They only exist on the frozen copy, so opening
+           * live would show a page with the reader's own annotations invisible
+           * on it — the one outcome neither setting asks for.
            *
            * Deliberately not keyed to `userLoad` — that is load bookkeeping,
            * true or false for reasons that have nothing to do with what the
            * reader wants, and it left pages frozen on open with no way to tell
            * why. Whether a page has been marked is a fact about the page.
            */
-          const neverMarked = (existing?.footnotes?.length ?? 0) === 0;
-          setWebLive(isTauriRuntime() && liveWebviewSupported() && neverMarked);
+          setWebLive(
+            opensLive({
+              supported: isTauriRuntime() && liveWebviewSupported(),
+              hasMarks: (existing?.footnotes?.length ?? 0) > 0,
+              preference: loadWebViewMode(),
+            }),
+          );
         }
         /*
          * Give this document a tab, or claim the one it arrived on.
@@ -7665,8 +7677,15 @@ export function Workspace({
                     : "A frozen copy you can write on. Tap to go back to the live page."
                 }
                 onClick={() => {
-                  if (webLive) void freezeLivePage();
-                  else setWebLive(true);
+                  // Pressing this is the answer to "do I want to read pages or
+                  // write on them", so it is what the next page opens in.
+                  if (webLive) {
+                    saveWebViewMode("frozen");
+                    void freezeLivePage();
+                  } else {
+                    saveWebViewMode("live");
+                    setWebLive(true);
+                  }
                 }}
               >
                 <svg
