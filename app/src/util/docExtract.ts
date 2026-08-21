@@ -188,7 +188,14 @@ function extractEpubPages(
   });
 }
 
-function htmlToText(html: string): string {
+/**
+ * The words of a page, without its markup.
+ *
+ * Exported because `captureFit` asks the same question of a *proposed* capture
+ * — whether the marks are still on it — and has to read it the same way the
+ * index will, or the two would disagree about what the page says.
+ */
+export function htmlToText(html: string): string {
   if (typeof document === "undefined") {
     return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
   }

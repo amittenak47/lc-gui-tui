@@ -3812,6 +3812,34 @@ export function Workspace({
       const page = await pageFromCapturedHtml(live.html, live.url || webUrlRef.current, {
         mode: webRenderModeRef.current,
       });
+      /*
+       * Would this capture strand anything the reader already marked?
+       *
+       * A web pad's identity is its address, so this capture arrives under the
+       * same hash and replaces the last one. For an article that is right — the
+       * page was edited and the words are still there. For a feed it is
+       * destruction: today holds none of yesterday's posts, so replacing would
+       * leave every mark showing an excerpt and pointing at nothing.
+       *
+       * Nothing guesses which kind of page this is. It is asked of the capture
+       * itself, and only a *loss* is worth interrupting for.
+       */
+      const existing = annotateFootnotesRef.current;
+      if (existing.length > 0) {
+        const { captureFit, captureIsSafe, captureFitSummary } = await import(
+          "./util/captureFit"
+        );
+        const { htmlToText } = await import("./util/docExtract");
+        const fit = captureFit(existing, htmlToText(page.html));
+        if (!captureIsSafe(fit)) {
+          setBusy(null);
+          setWebLive(false);
+          setNotice(
+            `${captureFitSummary(fit)} Keeping the copy they were made on.`,
+          );
+          return;
+        }
+      }
       setWebHtmlSource(page.source);
       setWebHtmlNote(page.note ?? null);
       setWebLive(false);
@@ -3827,7 +3855,7 @@ export function Workspace({
       setBusy(null);
       setError(messageOf(cause));
     }
-  }, [loadAnnotate, tab.id]);
+  }, [loadAnnotate, setNotice, tab.id]);
 
   /**
    * Fetch a page, sanitise it, then open it as a web tab (globe / address bar).
