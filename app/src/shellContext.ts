@@ -93,6 +93,14 @@ export interface WorkspaceChrome {
     error: string | null;
     /** Present when this workspace holds something indexable that is not indexed. */
     onIndex?: (() => void) | null;
+    /** Run or resume the embedding pass over what is already indexed. */
+    onEmbed?: (() => void) | null;
+    /** Pages while chunking, chunks while embedding — two jobs, two units. */
+    indexProgress?: { done: number; total: number } | null;
+    embedProgress?: { done: number; total: number } | null;
+    /** Measured after the first batch; absent until then, never guessed. */
+    embedEta?: string | null;
+    embedding?: boolean;
   };
 }
 

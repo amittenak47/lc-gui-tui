@@ -10352,6 +10352,88 @@ button.lc-row-selected:hover:not(:disabled) {
   color: var(--muted);
 }
 
+/*
+ * Progress on the chip: a ring, with the number inside it.
+ *
+ * Two jobs report here — chunking counts pages, embedding counts chunks — and
+ * they never share a bar, because one number for both would hide the difference
+ * between having a document and having its meaning.
+ */
+.lc-doc-index-chip.is-working {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.lc-doc-index-ring {
+  position: relative;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.lc-doc-index-ring svg {
+  /* 12 o'clock, clockwise — the direction everyone reads a dial. */
+  transform: rotate(-90deg);
+}
+
+.lc-doc-index-ring-track {
+  fill: none;
+  stroke: color-mix(in srgb, currentColor 22%, transparent);
+  stroke-width: 2;
+}
+
+.lc-doc-index-ring-arc {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  transition: stroke-dasharray 240ms ease-out;
+}
+
+/* Nothing measured yet. A sweep says "working" without claiming a figure. */
+.lc-doc-index-ring-arc.is-sweeping {
+  transition: none;
+  transform-origin: 50% 50%;
+  animation: lc-doc-index-sweep 900ms linear infinite;
+}
+
+@keyframes lc-doc-index-sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-doc-index-ring-arc.is-sweeping {
+    animation: none;
+  }
+}
+
+.lc-doc-index-ring-pct {
+  position: absolute;
+  inset: 0;
+  display: none;
+}
+
+/*
+ * The percentage rides beside the ring rather than inside it: 14px is not
+ * enough for two legible digits, and a number nobody can read is worse than the
+ * ring alone.
+ */
+.lc-doc-index-chip.is-working .lc-doc-index-ring-pct {
+  position: static;
+  display: inline;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.lc-doc-index-chip.is-working .lc-doc-index-ring-pct::after {
+  content: "%";
+  opacity: 0.7;
+}
+
 .lc-pad-hub-code {
   font-size: 1.35em;
   font-weight: 600;
