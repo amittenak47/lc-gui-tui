@@ -190,6 +190,16 @@ import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
 import { AnnotateMarkdownEditor, isFreshOwnedNote, type AnnotateMarkdownEditorHandle } from "./modes/AnnotateMarkdownEditor";
 import { LiveWebPane } from "./modes/LiveWebPane";
+import { FreezeKindDialog } from "./modes/FreezeKindDialog";
+import {
+  addCapture,
+  captureKeptSummary,
+  likelyKind,
+  neededCaptures,
+  newCaptureId,
+  type WebCapture,
+  type WebPadKind,
+} from "./util/webCaptures";
 import { loadWebViewMode, opensLive, saveWebViewMode } from "./util/webViewMode";
 import { StatementDocument } from "./modes/StatementDocument";
 import {
@@ -1646,6 +1656,16 @@ export function Workspace({
           await flushDirtyInk(board, docKey);
           const liveBoard = board.saveBoard({ assembleInk: false });
           try {
+            /*
+             * A freeze's capture list travels on the next save, not its own.
+             *
+             * `saveAnnotateDoc` treats an absent `captures` as "this caller
+             * does not track them", the same contract footnotes use, so an
+             * ordinary autosave cannot drop the older page a stranded mark is
+             * standing on.
+             */
+            const pendingWrite = pendingCaptureWriteRef.current;
+            pendingCaptureWriteRef.current = null;
             const saved = await saveAnnotateDoc({
               id: annotateDocIdRef.current ?? undefined,
               name: source.name,
@@ -1655,6 +1675,8 @@ export function Workspace({
               board: liveBoard,
               footnotes: annotateFootnotesRef.current,
               agent: persistableAgentMessages(agentMessages),
+              ...(pendingWrite?.captures ? { captures: pendingWrite.captures } : {}),
+              ...(pendingWrite?.kind ? { padKind: pendingWrite.kind } : {}),
             });
             if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
             announceAutosave(tab.id, saved.name);
@@ -2712,6 +2734,30 @@ export function Workspace({
         setAnnotateSource({ name: input.name, text, hash, docType, bytes });
         if (docType === "web") {
           setWebUrl(input.name);
+          /*
+           * Which capture the pad is showing, and what it is.
+           *
+           * A freeze hands its answer over through `capturePendingRef` because
+           * it is `loadAnnotate` that writes the pad; a plain reopen reads the
+           * newest capture off the entry. Either way a mark made from here on
+           * knows which body it was made against.
+           */
+          const pending = capturePendingRef.current;
+          capturePendingRef.current = null;
+          const history = pending?.captures ?? existing?.captures ?? [];
+          setWebCaptures(history);
+          const kind = pending?.kind ?? existing?.padKind ?? null;
+          setWebPadKind(kind);
+          captureIdRef.current = pending?.id ?? history[0]?.id ?? null;
+          if (pending) pendingCaptureWriteRef.current = pending;
+          if (pending?.marks) {
+            setAnnotateFootnotes(pending.marks);
+            annotateFootnotesRef.current = pending.marks;
+          }
+        } else {
+          captureIdRef.current = null;
+          setWebCaptures([]);
+          setWebPadKind(null);
           /*
            * Your standing choice, unless the page has marks on it.
            *
@@ -3820,7 +3866,7 @@ export function Workspace({
    * page you are looking at is the one you meant to write on. A re-fetch would
    * freeze a different page and call it the same one.
    */
-  const freezeLivePage = useCallback(async () => {
+  const freezeLivePage = useCallback(async (padKind?: WebPadKind) => {
     if (!isTauriRuntime()) return;
     setBusy("Freezing this page…");
     try {
@@ -3843,25 +3889,59 @@ export function Workspace({
        * itself, and only a *loss* is worth interrupting for.
        */
       const existing = annotateFootnotesRef.current;
+      const docId = annotateDocIdRef.current;
+      const prior = docId ? await getAnnotateDoc(docId) : null;
+      const kind = padKind ?? prior?.padKind;
+      const now = Date.now();
+      const freshId = newCaptureId(now);
+      let stranded: string[] = [];
       if (existing.length > 0) {
-        const { captureFit, captureIsSafe, captureFitSummary } = await import(
-          "./util/captureFit"
-        );
+        const { captureFit } = await import("./util/captureFit");
         const { htmlToText } = await import("./util/docExtract");
-        const fit = captureFit(existing, htmlToText(page.html));
-        if (!captureIsSafe(fit)) {
-          setBusy(null);
-          setWebLive(false);
-          setNotice(
-            `${captureFitSummary(fit)} Keeping the copy they were made on.`,
-          );
-          return;
-        }
+        stranded = captureFit(existing, htmlToText(page.html)).stranded;
       }
+      /*
+       * A capture that strands a mark is kept, not refused.
+       *
+       * Refusing was the safe half and it left the pad frozen on one old copy
+       * for good — you could never move a feed forward. Keeping both is what
+       * §1m is for: the new capture becomes the body, the old one stays under
+       * the marks that cannot move into it, and each of those marks can still
+       * be read in context rather than reduced to a naked quote.
+       */
+      const carried = prior?.captures ?? [];
+      const priorBody = prior?.source ?? "";
+      const priorId =
+        carried[0]?.html === priorBody
+          ? carried[0]?.id
+          : priorBody
+            ? newCaptureId(now - 1)
+            : undefined;
+      const seed =
+        priorId && !carried.some((row) => row.id === priorId)
+          ? [{ id: priorId, capturedAt: (prior?.updatedAt ?? now) - 1, html: priorBody }]
+          : carried;
+      const stampedMarks = existing.map((mark) =>
+        mark.captureId
+          ? mark
+          : { ...mark, ...(priorId ? { captureId: priorId } : {}) },
+      );
+      const captures = addCapture({
+        existing: seed,
+        html: page.html,
+        now,
+        id: freshId,
+        needed: neededCaptures(stampedMarks, new Set(stranded)),
+        kind,
+      });
+      capturePendingRef.current = { id: freshId, captures, kind, marks: stampedMarks };
       setWebHtmlSource(page.source);
       setWebHtmlNote(page.note ?? null);
       setWebLive(false);
       setBusy(null);
+      if (stranded.length > 0) {
+        setNotice(captureKeptSummary(stranded.length, existing.length));
+      }
       await loadAnnotate({
         name: page.url,
         docType: "web",
@@ -6201,6 +6281,7 @@ export function Workspace({
           anchor: selection.anchor,
           excerpt: selection.excerpt,
           createdAt: Date.now(),
+          ...(captureIdRef.current ? { captureId: captureIdRef.current } : {}),
           ...footnoteThemeSeed(current.length),
           ...(selection.hitRects.length > 0 ? { bands: selection.hitRects } : {}),
           ...(selection.text.trim() ? { blockText: selection.text } : {}),
@@ -6298,6 +6379,7 @@ export function Workspace({
         anchor: selection.anchor,
         excerpt: selection.excerpt,
         createdAt: Date.now(),
+        ...(captureIdRef.current ? { captureId: captureIdRef.current } : {}),
         ...footnoteThemeSeed(current.length),
         ...(selection.hitRects.length > 0 ? { bands: selection.hitRects } : {}),
         ...(selection.text.trim() ? { blockText: selection.text } : {}),
@@ -6880,6 +6962,38 @@ export function Workspace({
    * Desktop only: Android has no child webview, so those tabs stay frozen.
    */
   const [webLive, setWebLive] = useState(false);
+  /**
+   * The capture a new mark belongs to (§1m).
+   *
+   * A web pad's body can be replaced under its marks, so a mark that does not
+   * say which capture it was made against cannot be read in context afterwards
+   * — only quoted. Null on every other document kind, where there is one body
+   * and nothing to disambiguate.
+   */
+  const captureIdRef = useRef<string | null>(null);
+  /**
+   * What the freeze worked out, waiting for the reload that will save it.
+   *
+   * `loadAnnotate` writes the pad, so the capture list has to survive from the
+   * freeze into that write. Cleared as soon as it is used.
+   */
+  const capturePendingRef = useRef<{
+    id: string;
+    captures: WebCapture[];
+    kind?: WebPadKind;
+    marks: DocFootnote[];
+  } | null>(null);
+  /** Asked once per pad, at the freeze. Null while nothing is being asked. */
+  const [freezeAsk, setFreezeAsk] = useState<string | null>(null);
+  /** Older captures still under a mark. Drives nothing but the save. */
+  const [webCaptures, setWebCaptures] = useState<WebCapture[]>([]);
+  /** The reader's page-or-feed answer for this pad, once they have given one. */
+  const [webPadKind, setWebPadKind] = useState<WebPadKind | null>(null);
+  /** Carried into the first save after a freeze, then dropped. */
+  const pendingCaptureWriteRef = useRef<{
+    captures: WebCapture[];
+    kind?: WebPadKind;
+  } | null>(null);
   /**
    * Reader or whole page — the reader's standing choice, not the fetch's guess.
    *
@@ -7640,6 +7754,25 @@ export function Workspace({
                 Lit means you are reading the extracted article. Dim means the
                 page is not one, or extraction failed; pressing it tries again.
               */}
+              {/*
+                Kept versions, said plainly.
+
+                The retention rule is invisible otherwise: a reader who freezes
+                a feed twice has no way to know the first copy survived under
+                their marks, and a rule nobody can see is one nobody trusts.
+                Absent when there is only the current capture, which is almost
+                always.
+              */}
+              {webCaptures.length > 1 && (
+                <span
+                  className="lc-web-kept"
+                  title={`${webCaptures.length - 1} earlier version${
+                    webCaptures.length === 2 ? "" : "s"
+                  } of this page are kept, because marks were made on them.`}
+                >
+                  {webCaptures.length - 1}×
+                </span>
+              )}
               {webHtmlSource && (
                 <button
                   type="button"
@@ -7754,7 +7887,17 @@ export function Workspace({
                   // write on them", so it is what the next page opens in.
                   if (webLive) {
                     saveWebViewMode("frozen");
-                    void freezeLivePage();
+                    /*
+                     * Asked once per pad, and only where the answer can matter
+                     * — a pad that already knows what it is goes straight
+                     * through, and so does the first freeze of a page nobody
+                     * has marked, because there is nothing yet to strand.
+                     */
+                    if (webPadKind || annotateFootnotes.length === 0) {
+                      void freezeLivePage(webPadKind ?? undefined);
+                    } else {
+                      setFreezeAsk(webUrl);
+                    }
                   } else {
                     saveWebViewMode("live");
                     setWebLive(true);
@@ -8513,6 +8656,19 @@ export function Workspace({
             const pending = sidecarChoice;
             setSidecarChoice(null);
             pending.resolve(choice);
+          }}
+        />
+      )}
+
+      {freezeAsk != null && (
+        <FreezeKindDialog
+          url={freezeAsk}
+          suggested={likelyKind(freezeAsk)}
+          onCancel={() => setFreezeAsk(null)}
+          onChoose={(kind) => {
+            setFreezeAsk(null);
+            setWebPadKind(kind);
+            void freezeLivePage(kind);
           }}
         />
       )}
