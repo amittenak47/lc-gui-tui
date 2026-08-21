@@ -284,6 +284,19 @@ export function TabStrip({
     const out: Array<{ group: TabGroup | null; members: TabRecord[] }> = [];
     for (const tab of tabs) {
       if (seen.has(tab.id)) continue;
+      /*
+       * Home is the wordmark, not a chip.
+       *
+       * It competed for width with the documents actually open, and shrinking it
+       * to an icon left a gap in the strip instead — a landmark that fits in the
+       * corner every application already uses for it has no reason to spend a
+       * tab slot as well. The tab still exists in state; it is simply not drawn
+       * here, so focusing it and closing back to it work exactly as before.
+       */
+      if (tab.kind === "home") {
+        seen.add(tab.id);
+        continue;
+      }
       const group = tab.group ? (groups.find((g) => g.id === tab.group) ?? null) : null;
       if (!group) {
         seen.add(tab.id);
