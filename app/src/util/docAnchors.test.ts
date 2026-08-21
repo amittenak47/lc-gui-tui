@@ -99,8 +99,16 @@ describe("anchor round trip", () => {
     range.setStart(first, 0);
     range.setEnd(first, 4);
     const anchor = anchorFromRange(root, range);
-    expect(anchor).toEqual({ kind: "text", start: 0, end: 4 });
+    expect(anchor).toMatchObject({ kind: "text", start: 0, end: 4 });
     expect(textForAnchor(root, anchor!)).toBe("Hash");
+    /*
+     * The words and their surroundings are recorded alongside the offsets now,
+     * because they cannot be recovered afterwards: once the stream changes there
+     * is nothing left to read the context out of. Offsets stay the finder; this
+     * is what the mark recovers by when they stop meaning anything.
+     */
+    expect(anchor).toMatchObject({ exact: "Hash", suffix: " maps collide" });
+    expect(anchor).not.toHaveProperty("prefix");
   });
 
   it("spans element boundaries", () => {
