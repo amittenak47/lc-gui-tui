@@ -194,6 +194,8 @@ export async function placeLiveWebview(rect: PaneRect): Promise<void> {
 
 export async function showLiveWebview(show: boolean): Promise<void> {
   const webview = await liveWebview();
+  // Nothing to show or hide is not a failure — a pane can ask before its view
+  // has opened, or after the address it was on closed one.
   if (!webview) return;
   if (show) await webview.show();
   else await webview.hide();
@@ -210,8 +212,19 @@ export async function closeLiveWebview(): Promise<void> {
  * the caller decides whether browsing continues.
  */
 export async function serializeLiveWebview(): Promise<{ url: string; html: string }> {
-  const payload = await runSerialize(LIVE_WEBVIEW_LABEL);
-  return payload;
+  /*
+   * Ask whether there is one before talking to it.
+   *
+   * The bridge answers "no webview named lc-web-live" when the label is gone,
+   * which is a true statement about the machinery and no use at all to a reader
+   * who pressed Freeze. The view can be gone legitimately — a pane unmounting,
+   * an address change closing one before the next opens — so this is a race to
+   * report plainly rather than a fault to hide.
+   */
+  if (!(await liveWebview())) {
+    throw new Error("the live page has closed — open it again before freezing");
+  }
+  return runSerialize(LIVE_WEBVIEW_LABEL);
 }
 
 /** Wait for load + settle, then serialise. Shared by live and read-once. */
