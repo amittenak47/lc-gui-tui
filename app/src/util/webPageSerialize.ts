@@ -105,6 +105,70 @@ export async function serializeCurrentDocument(): Promise<SerializedPage> {
     }
   }
 
+  /*
+   * Decide invisibility here, where the computed styles are (§4a).
+   *
+   * The rewrite downstream has only the markup, so it was reduced to guessing
+   * from attributes — and `aria-hidden="true"` is what pages put on things that
+   * are decorative but perfectly *visible*, icons above all. That is why the
+   * sidebar came back without its glyphs. Only a computed style can tell a
+   * hidden element from an unlabelled one, and only this pass has them.
+   *
+   * The same walk records where anything pinned actually sits. A `fixed`
+   * element is painted against the viewport, so dropping it into the flow puts
+   * it wherever its tag happens to be in the markup — usually a banner across
+   * the middle of the article. Its document offset is knowable now and
+   * unknowable later.
+   */
+  const HIDDEN_ATTR = "data-lc-hidden";
+  const PIN_TOP = "data-lc-pin-top";
+  const PIN_LEFT = "data-lc-pin-left";
+  const all = Array.from(doc.body ? doc.body.querySelectorAll("*") : []);
+  const scrollY = window.scrollY || doc.documentElement.scrollTop || 0;
+  const scrollX = window.scrollX || doc.documentElement.scrollLeft || 0;
+  for (const node of all) {
+    if (!(node instanceof HTMLElement) && !(node instanceof SVGElement)) continue;
+    let style: CSSStyleDeclaration;
+    try {
+      style = window.getComputedStyle(node);
+    } catch {
+      continue;
+    }
+    const box = node.getBoundingClientRect();
+    /*
+     * Zero-sized only counts when there is nothing inside.
+     *
+     * A wrapper can measure zero and still be the only thing holding its
+     * children — `display: contents`, a float-only container, a box whose
+     * children are all absolutely positioned. Pruning it takes the content with
+     * it, which is a far worse failure than leaving an empty spacer in. So the
+     * size test applies to leaves, where it does what it was meant to do: drop
+     * tracking pixels and collapsed spacers.
+     */
+    const empty =
+      node.children.length === 0 && !(node.textContent || "").trim();
+    /*
+     * Parsed, not coerced. `Number("")` is 0, so an engine that reports an
+     * unset opacity as the empty string would have called every element on the
+     * page invisible and returned a blank capture.
+     */
+    const opacity = Number.parseFloat(style.opacity);
+    const invisible =
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.visibility === "collapse" ||
+      (Number.isFinite(opacity) && opacity === 0) ||
+      (empty && box.width === 0 && box.height === 0);
+    if (invisible) {
+      node.setAttribute(HIDDEN_ATTR, "1");
+      continue;
+    }
+    if (style.position === "fixed") {
+      node.setAttribute(PIN_TOP, String(Math.round(box.top + scrollY)));
+      node.setAttribute(PIN_LEFT, String(Math.round(box.left + scrollX)));
+    }
+  }
+
   const drop = doc.querySelectorAll(
     "script, iframe, object, embed, link[rel=preload], link[rel=modulepreload], link[rel=prefetch]",
   );
@@ -189,6 +253,24 @@ export async function serializeCurrentDocument(): Promise<SerializedPage> {
         reader.readAsDataURL(blob);
       });
       img.setAttribute("src", String(data));
+      /*
+       * The data URL is the only copy that will still resolve, so it has to be
+       * the only candidate.
+       *
+       * `srcset` outranks `src` whenever it is present, and its entries still
+       * pointed at the CDN — so the frozen page went back to the network for an
+       * image it was already carrying, and got a broken glyph when that failed.
+       * `<picture>` is the same trick one level up: its `<source>` wins before
+       * the `<img>` is even consulted.
+       */
+      img.removeAttribute("srcset");
+      img.removeAttribute("sizes");
+      const picture = img.parentElement;
+      if (picture && picture.tagName === "PICTURE") {
+        for (const source of Array.from(picture.querySelectorAll("source"))) {
+          source.remove();
+        }
+      }
     } catch {
       img.setAttribute("src", abs);
     }

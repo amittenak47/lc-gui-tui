@@ -45,6 +45,56 @@ describe("sanitizeWebHtml", () => {
     expect(html).toMatch(/<p/);
   });
 
+  it("keeps an aria-hidden icon that the capture said was visible", () => {
+    /*
+     * `aria-hidden="true"` means "skip me, screen reader". It does not mean
+     * invisible — pages put it on decorative but perfectly visible things, and
+     * on icons above all, which is why a frozen sidebar came back without its
+     * glyphs. Only the computed style knows, and only the capture has it.
+     */
+    const html = sanitizeWebHtml(
+      `<html><body>
+        <span aria-hidden="true" class="icon">★</span>
+        <div data-lc-hidden="1">really gone</div>
+        <p>hi</p>
+      </body></html>`,
+      "https://example.com/",
+      "capture",
+    );
+    expect(html).toMatch(/★/);
+    expect(html).not.toMatch(/really gone/);
+  });
+
+  it("still trusts a bare hidden attribute on the fetch path", () => {
+    // No capture ran, so there are no computed styles to consult — and
+    // `hidden` is the one attribute that does mean invisible.
+    const html = sanitizeWebHtml(
+      `<html><body><div hidden>junk</div><p>hi</p></body></html>`,
+      "https://example.com/",
+      "fetch",
+    );
+    expect(html).not.toMatch(/junk/);
+    expect(html).toMatch(/<p/);
+  });
+
+  it("places pinned chrome where the capture measured it", () => {
+    // `fixed` paints against the viewport, so flattening it to `static` drops a
+    // cookie bar into the middle of the article.
+    const html = sanitizeWebHtml(
+      `<html><body>
+        <div data-lc-pin-top="640" data-lc-pin-left="12" style="position:fixed">bar</div>
+        <p>article</p>
+      </body></html>`,
+      "https://example.com/",
+      "capture",
+    );
+    expect(html).toMatch(/position:absolute/);
+    expect(html).toMatch(/top:640px/);
+    expect(html).toMatch(/left:12px/);
+    expect(html).not.toMatch(/position:fixed/);
+    expect(html).not.toMatch(/data-lc-pin-top/);
+  });
+
   it("drops modulepreload so remote JS never loads from our origin", () => {
     const html = sanitizeWebHtml(
       `<link rel="modulepreload" href="https://developer.nvidia.com/blog/wp-includes/js/dist/script-modules/interactivity/index.min.js?ver=efaa5193bbad9c60ffd1" />
