@@ -38,6 +38,19 @@ export interface LiveRect {
  */
 export const BACK_EXHAUSTED_EVENT = "lc-live-webview-back-exhausted";
 
+/**
+ * The live view has moved to another address.
+ *
+ * The app opens the view at a URL and, until this existed, never heard another
+ * word — so tapping through links left the omnibox reading the address you
+ * started at, Back and Forward holding the single entry they were born with,
+ * and Freeze naming the page you were on after the page you came from. Fires
+ * for `pushState` too, not just full loads.
+ *
+ * Must match `NAVIGATED_EVENT` in `LiveWebViewPlugin.kt`.
+ */
+export const NAVIGATED_EVENT = "lc-live-webview-navigated";
+
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
 let invokeLoader: Promise<Invoke | null> | null = null;
@@ -133,4 +146,27 @@ export function onLiveWebviewBackExhausted(onExhausted: () => void): () => void 
   if (typeof window === "undefined") return () => {};
   window.addEventListener(BACK_EXHAUSTED_EVENT, onExhausted);
   return () => window.removeEventListener(BACK_EXHAUSTED_EVENT, onExhausted);
+}
+
+/**
+ * Follow the live view's address. Returns an unsubscribe.
+ *
+ * Filtered to the live label: the offscreen render never reports, but a caller
+ * should not have to know that to be correct.
+ */
+export function onLiveWebviewNavigated(
+  onNavigated: (url: string) => void,
+  label?: string,
+): () => void {
+  if (typeof window === "undefined") return () => {};
+  const handler = (event: Event) => {
+    const detail = (event as CustomEvent<unknown>).detail;
+    if (!detail || typeof detail !== "object") return;
+    const row = detail as { label?: unknown; url?: unknown };
+    if (typeof row.url !== "string" || !row.url) return;
+    if (label && row.label !== label) return;
+    onNavigated(row.url);
+  };
+  window.addEventListener(NAVIGATED_EVENT, handler);
+  return () => window.removeEventListener(NAVIGATED_EVENT, handler);
 }
