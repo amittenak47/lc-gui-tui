@@ -26,10 +26,10 @@ import {
   type AnnotateDoc,
   type DocType,
 } from "./annotateStore";
-import { getDocBytes, putDocBytes } from "./docBytes";
+import { bytesMatchDocHash, getDocBytes, putDocBytes } from "./docBytes";
 import type { DocFootnote } from "./docFootnotes";
 import { run, STORE_SYNC_QUEUE } from "./idb";
-import { loadPadSyncSince, savePadSyncSince } from "./padHub";
+import { loadPadHub, loadPadSyncSince, savePadSyncSince } from "./padHub";
 import { syncDocChunks } from "./docChunkSync";
 import { noteInkConflicts } from "./inkConflicts";
 import { syncEdges, syncInkPages, type InkPadKind } from "./inkSync";
@@ -504,6 +504,46 @@ async function compactLivePuts(kind: PadKindSync, padId: string, until: number):
   for (const id of ids) await dropJob(id);
 }
 
+/**
+ * Hashes the hub had nothing for, this session.
+ *
+ * A document whose bytes are missing locally *and* absent from the hub cannot
+ * resolve until someone picks the file again. Without this the ping asks for it
+ * once per row per ping, forever — and each of those is a round trip that fails
+ * slowly when the hub is unreachable. Session-scoped on purpose: a restart, or
+ * pushing the file from the other device, gets a fresh try.
+ */
+const missingRemoteBytes = new Set<string>();
+
+export function resetMissingRemoteBytesForTests(): void {
+  missingRemoteBytes.clear();
+}
+
+/**
+ * Fetch a document's bytes from the hub, if that is even worth trying.
+ *
+ * Returns silently when there is no hub configured: the whole point of the
+ * local copy is that a device with no sync still opens its own files, and
+ * asking a server that does not exist is pure latency on a path a reader is
+ * waiting behind.
+ */
+async function pullDocBytesFromHub(client: LcClient, hash: string): Promise<void> {
+  if (!loadPadHub() || missingRemoteBytes.has(hash)) return;
+  const bytes = await client.getDocBytes(hash).catch(() => null);
+  if (!bytes || bytes.byteLength === 0) {
+    missingRemoteBytes.add(hash);
+    return;
+  }
+  // The key is the content hash, so the answer can be checked against what was
+  // asked for. An unverified body cached here is permanent: `if (!have)` below
+  // means nothing ever revisits the row.
+  if (!bytesMatchDocHash(hash, bytes)) {
+    missingRemoteBytes.add(hash);
+    return;
+  }
+  await putDocBytes(hash, bytes).catch(() => {});
+}
+
 export async function pushDocBytes(client: LcClient, hash: string, bytes: ArrayBuffer): Promise<void> {
   try {
     await client.putDocBytes(hash, bytes);
@@ -792,10 +832,7 @@ export async function pullPads(client: LcClient): Promise<void> {
     });
     if (row.hash) {
       const have = await getDocBytes(row.hash);
-      if (!have) {
-        const bytes = await client.getDocBytes(row.hash);
-        if (bytes && bytes.byteLength > 0) await putDocBytes(row.hash, bytes);
-      }
+      if (!have) await pullDocBytesFromHub(client, row.hash);
     }
   }
 
@@ -901,10 +938,7 @@ export async function applyPadSyncPing(
     await applyHubAnnotate(row, { emitReload: emit });
     if (row.hash) {
       const have = await getDocBytes(row.hash);
-      if (!have) {
-        const bytes = await client.getDocBytes(row.hash);
-        if (bytes && bytes.byteLength > 0) await putDocBytes(row.hash, bytes);
-      }
+      if (!have) await pullDocBytesFromHub(client, row.hash);
     }
   }
 
