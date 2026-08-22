@@ -7,9 +7,12 @@ import {
 import {
   buildAnnotateSidecar,
   DOCUMENT_ACCEPT,
+  documentPickerAccept,
   docTypeForName,
+  docTypeForPicked,
   isMarkdownName,
   isTextDocType,
+  missingAppFileCopy,
   readAnnotateSidecar,
 } from "./annotateFs";
 import type { BoardBlob } from "../canvas/BoardHandle";
@@ -54,6 +57,15 @@ describe("docTypeForName", () => {
   });
 });
 
+describe("missingAppFileCopy", () => {
+  it("does not claim the original file is gone from the device", () => {
+    const copy = missingAppFileCopy("book.pdf");
+    expect(copy).toContain("book.pdf");
+    expect(copy).toContain("this app no longer has its copy");
+    expect(copy.toLowerCase()).not.toContain("not on this device");
+  });
+});
+
 describe("languageForName", () => {
   it("maps extensions to language ids", () => {
     expect(languageForName("a.py")).toBe("python");
@@ -79,6 +91,49 @@ describe("DOCUMENT_ACCEPT", () => {
     expect(DOCUMENT_ACCEPT).toContain(".py");
     expect(DOCUMENT_ACCEPT).toContain(".rs");
     expect(DOCUMENT_ACCEPT).toContain(".ts");
+  });
+
+  it("lists PDF/EPUB MIME types before markdown, so the first token is not text/markdown", () => {
+    const pdfAt = DOCUMENT_ACCEPT.indexOf("application/pdf");
+    const mdAt = DOCUMENT_ACCEPT.indexOf("text/markdown");
+    expect(pdfAt).toBeGreaterThanOrEqual(0);
+    expect(pdfAt).toBeLessThan(mdAt);
+  });
+});
+
+describe("documentPickerAccept", () => {
+  it("does not filter the Android picker to markdown", () => {
+    expect(
+      documentPickerAccept(
+        "Mozilla/5.0 (Linux; Android 14; SM-X910) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      ),
+    ).toBe("*/*");
+  });
+
+  it("keeps the typed list on desktop", () => {
+    expect(documentPickerAccept("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122")).toBe(
+      DOCUMENT_ACCEPT,
+    );
+  });
+});
+
+describe("docTypeForPicked", () => {
+  it("sniffs a PDF whose name is empty", () => {
+    const bytes = new TextEncoder().encode("%PDF-1.4\n%").buffer;
+    expect(docTypeForPicked({ name: "", type: "" }, bytes)).toBe("pdf");
+  });
+
+  it("sniffs an EPUB from the mimetype header when the name is useless", () => {
+    const bytes = new TextEncoder().encode("PK\x03\x04....application/epub+zip").buffer;
+    expect(docTypeForPicked({ name: "document", type: "" }, bytes)).toBe("epub");
+  });
+
+  it("trusts application/pdf when the name has no extension", () => {
+    expect(docTypeForPicked({ name: "document", type: "application/pdf" })).toBe("pdf");
+  });
+
+  it("still opens markdown by name", () => {
+    expect(docTypeForPicked({ name: "notes.md" })).toBe("markdown");
   });
 });
 

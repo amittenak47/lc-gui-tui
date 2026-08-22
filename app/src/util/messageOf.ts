@@ -40,3 +40,24 @@ export function messageOf(cause: unknown): string {
   }
   return String(cause);
 }
+
+
+/**
+ * A running account of what an open actually did, printed to the console.
+ *
+ * Opening a document fails silently in more than one place — a guard that
+ * returns before the try block, a generation check that bails mid-flight —
+ * and each of those leaves a different half-built state behind. Reading the
+ * code cannot tell you which one you hit; the last line this prints can.
+ *
+ * `console.info` with a fixed prefix so it survives a WebView and is greppable
+ * in `adb logcat` as well as in DevTools.
+ */
+export function traceOpen(step: string, detail?: Record<string, unknown>): void {
+  try {
+    // eslint-disable-next-line no-console
+    console.info(`[lc:open] ${step}`, detail ? JSON.stringify(detail) : "");
+  } catch {
+    /* logging must never be the thing that breaks an open */
+  }
+}

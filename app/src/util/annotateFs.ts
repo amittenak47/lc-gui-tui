@@ -17,6 +17,8 @@
 
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { codeAcceptExtensions, isCodeName } from "./codeLanguages";
+import { readBlobBytes } from "./docBytes";
+import { traceOpen } from "./messageOf";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 import { canGzip, gzipText, textFromMaybeGzip } from "./gzip";
 import type { DocType } from "./annotateStore";
@@ -30,14 +32,32 @@ const MARKDOWN_EXTENSIONS = [".md", ".markdown", ".mdown", ".mkd"];
 
 const CODE_ACCEPT = codeAcceptExtensions().join(",");
 
-/** Everything the document pad will open. */
+/**
+ * Desktop picker filter. PDF/EPUB MIME types come first on purpose: some
+ * WebViews only honour the first `accept` token, and this list used to start
+ * with `.md` / `text/markdown`, which hid every textbook.
+ *
+ * Android ignores this — see {@link documentPickerAccept}.
+ */
 export const DOCUMENT_ACCEPT = [
+  "application/pdf,.pdf",
+  "application/epub+zip,.epub",
   MARKDOWN_ACCEPT,
-  ".pdf,application/pdf",
-  ".epub,application/epub+zip",
   CODE_ACCEPT,
   "text/plain",
 ].join(",");
+
+/** `accept` actually handed to the file input. */
+export function documentPickerAccept(userAgent?: string): string {
+  const ua =
+    userAgent ?? (typeof navigator === "undefined" ? "" : navigator.userAgent);
+  // Android DocumentsUI / WebView file chooser treats `accept` as MIME types
+  // and often keeps only the first one. A long mix of `.md`, `.py`, `.pdf`
+  // then greys out PDFs and EPUBs. `*/*` still lets the pad refuse inside
+  // {@link docTypeForPicked}; the filter is what was wrong, not the open path.
+  if (/\bandroid\b/i.test(ua)) return "*/*";
+  return DOCUMENT_ACCEPT;
+}
 
 export interface OpenedMarkdown {
   name: string;
@@ -84,25 +104,113 @@ export function docTypeForName(name: string): DocType {
   return "code";
 }
 
+function looksLikePdf(bytes: Uint8Array): boolean {
+  return (
+    bytes.length >= 4 &&
+    bytes[0] === 0x25 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x44 &&
+    bytes[3] === 0x46
+  );
+}
+
+function looksLikeEpub(bytes: Uint8Array): boolean {
+  if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) return false;
+  const head = new TextDecoder("latin1").decode(bytes.subarray(0, Math.min(bytes.length, 256)));
+  return head.includes("application/epub+zip");
+}
+
+/**
+ * Kind of a picked file, using bytes and MIME when the name is empty or wrong.
+ *
+ * Android's picker often hands back `document`, a content-URI basename, or no
+ * name at all. Trusting {@link docTypeForName} alone then opens a PDF as code
+ * (garbled text) and a real markdown file is the only thing that still looks
+ * right.
+ */
+export function docTypeForPicked(
+  file: { name: string; type?: string },
+  bytes?: ArrayBuffer | null,
+): DocType {
+  if (bytes && bytes.byteLength > 0) {
+    const raw = new Uint8Array(bytes);
+    if (looksLikePdf(raw)) return "pdf";
+    if (looksLikeEpub(raw)) return "epub";
+  }
+  const named = docTypeForName(file.name);
+  if (named === "pdf" || named === "epub" || named === "markdown") return named;
+  const mime = (file.type ?? "").toLowerCase();
+  if (mime === "application/pdf") return "pdf";
+  if (mime === "application/epub+zip" || mime === "application/epub") return "epub";
+  if (mime === "text/markdown" || mime === "text/x-markdown") return "markdown";
+  return named;
+}
+
+function fallbackPickedName(docType: DocType): string {
+  if (docType === "pdf") return "document.pdf";
+  if (docType === "epub") return "document.epub";
+  if (docType === "markdown") return "document.md";
+  return "document";
+}
+
 /** True when the pad stores this type as a string in the library entry. */
 export function isTextDocType(docType: DocType): boolean {
   return docType === "markdown" || docType === "code" || docType === "web";
 }
 
 /**
- * Ask for a markdown file and read it as text.
+ * Copy when the library still has the annotation set but IndexedDB no longer
+ * has the PDF/EPUB bytes.
  *
- * Resolves `null` when the picker is dismissed. There is no reliable cancel
- * event on a file input — browsers fire `cancel` inconsistently and some never
- * fire anything — so the caller gets `null` only on an explicit cancel it can
- * observe, and otherwise the promise settles when a file arrives. The input is
- * removed either way once it resolves.
+ * This is not "the file is gone from the tablet". The original in Files is
+ * untouched; the app never stored a URI, so it cannot reopen that copy itself.
  */
-export function pickMarkdownFile(): Promise<OpenedMarkdown | null> {
+export function missingAppFileCopy(name: string): string {
+  return (
+    `“${name}” is still in the library, but this app no longer has its copy of the file. ` +
+    `Pick the same file again — the one in Files is untouched — and the annotations will come back.`
+  );
+}
+
+/**
+ * After the WebView is back in front, wait this long for `change` before
+ * treating the picker as dismissed.
+ *
+ * Android's DocumentsUI fires neither `cancel` nor `change` on back-swipe, or
+ * when the user leaves the picker by switching apps. The WebView becomes
+ * visible again with an empty input. Desktop Chrome usually fires `cancel`;
+ * this is the fallback that unsticks that path too.
+ *
+ * Long enough that a real pick's `change` (which often arrives a beat after
+ * `focus` / `visibilitychange`) still wins; short enough that a dismiss does
+ * not look like a hang.
+ */
+export const FILE_PICKER_RESUME_MS = 2500;
+/** Pointer in the WebView: the picker activity is gone; don't wait a full resume. */
+export const FILE_PICKER_POINTER_MS = 400;
+/** How often the poll re-reads `input.files` once the deadline has passed. */
+export const FILE_PICKER_POLL_MS = 500;
+/**
+ * Total silence before a pick is treated as dismissed.
+ *
+ * Generous on purpose: the cost of waiting too long is a sheet that stays busy
+ * a few seconds after someone backed out, and the cost of not waiting long
+ * enough is losing the file they chose without saying so.
+ */
+export const FILE_PICKER_GIVE_UP_MS = 20_000;
+
+function pickFromHiddenInput<T>(
+  accept: string,
+  read: (file: File) => Promise<T>,
+): Promise<T | null> {
   return new Promise((resolve, reject) => {
+    if (typeof document === "undefined") {
+      resolve(null);
+      return;
+    }
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = MARKDOWN_ACCEPT;
+    input.accept = accept;
     // Off-screen rather than `display: none`: a hidden input is ignored by
     // some WebViews when `click()` is called programmatically.
     input.style.position = "fixed";
@@ -110,83 +218,179 @@ export function pickMarkdownFile(): Promise<OpenedMarkdown | null> {
     input.style.opacity = "0";
 
     let settled = false;
-    const finish = (value: OpenedMarkdown | null) => {
+    let chosen = false;
+    let leftForeground = false;
+    let resumeTimer = 0;
+
+    const cleanup = () => {
+      window.clearTimeout(resumeTimer);
+      window.removeEventListener("focus", onResume);
+      window.removeEventListener("blur", onLeave);
+      window.removeEventListener("pagehide", onLeave);
+      window.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("visibilitychange", onVisibility);
+      input.remove();
+    };
+
+    const settle = (value: T | null) => {
       if (settled) return;
       settled = true;
-      input.remove();
+      cleanup();
       resolve(value);
     };
 
-    input.addEventListener("cancel", () => finish(null));
+    const fail = (cause: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(cause);
+    };
+
+    /*
+     * Give up on a pick only after watching for a while, not on one look.
+     *
+     * Android hands the file over through `change` whenever its content
+     * resolver gets round to it. For a textbook that is routinely slower than
+     * any single timeout worth waiting through, and the old single-shot check
+     * turned that into a silent loss: the timer fired, `input.files` was still
+     * empty, the promise resolved `null`, and the caller's `if (!picked)
+     * return` swallowed the whole open. The reader picked a file and nothing
+     * happened — no document, no error, nothing in the log.
+     *
+     * So the deadline only starts a poll. Each tick re-reads `input.files`,
+     * because the one thing we can be sure of is that a file arriving late is
+     * still a file the reader chose.
+     */
+    const armResume = (delayMs: number) => {
+      if (settled || chosen) return;
+      window.clearTimeout(resumeTimer);
+      let waited = 0;
+      const check = () => {
+        if (settled || chosen) return;
+        if (input.files && input.files.length > 0) {
+          // It landed after all. Let `change` finish the job; if it somehow
+          // does not fire, keep polling rather than discarding the pick.
+          resumeTimer = window.setTimeout(check, FILE_PICKER_POLL_MS);
+          return;
+        }
+        waited += FILE_PICKER_POLL_MS;
+        if (waited >= FILE_PICKER_GIVE_UP_MS) {
+          traceOpen("picker: gave up waiting for a file", { waitedMs: waited });
+          settle(null);
+          return;
+        }
+        resumeTimer = window.setTimeout(check, FILE_PICKER_POLL_MS);
+      };
+      resumeTimer = window.setTimeout(check, delayMs);
+    };
+
+    const onLeave = () => {
+      leftForeground = true;
+    };
+
+    const onResume = () => {
+      if (!leftForeground) return;
+      // Long on purpose: Android SAF can deliver `change` well after the
+      // activity has resumed, and a short timer cancelled textbook PDFs
+      // while tiny markdown files still won the race.
+      armResume(FILE_PICKER_RESUME_MS);
+    };
+
+    const onPointer = () => {
+      /*
+       * Only meaningful *after* the picker has actually taken the foreground.
+       *
+       * This used to set `leftForeground` itself, which made any tap before the
+       * picker appeared look like a return from it. Android's SAF can take a
+       * second to cover the WebView, so an impatient second tap armed the
+       * 400 ms timer, the pick settled `null` while the picker was still
+       * opening, and the file the reader went on to choose was dropped on the
+       * floor with no error — the picker closed and nothing happened.
+       *
+       * A pointer only tells us the picker is gone if we know it was there.
+       */
+      if (!leftForeground) return;
+      armResume(FILE_PICKER_POINTER_MS);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") onLeave();
+      else if (document.visibilityState === "visible") onResume();
+    };
+
+    input.addEventListener("cancel", () => {
+      traceOpen("picker: cancel event");
+      settle(null);
+    });
     input.addEventListener("change", () => {
       const file = input.files?.[0];
       if (!file) {
-        finish(null);
+        settle(null);
         return;
       }
-      file
-        .text()
-        .then((source) => finish({ name: file.name, source }))
-        .catch((cause) => {
-          if (settled) return;
-          settled = true;
-          input.remove();
-          reject(cause);
-        });
+      chosen = true;
+      window.clearTimeout(resumeTimer);
+      traceOpen("picker: file chosen", { name: file.name, size: file.size });
+      read(file).then(
+        (value) => {
+          traceOpen("picker: file read", { name: file.name });
+          settle(value);
+        },
+        (cause) => {
+          traceOpen("picker: read FAILED", {
+            name: file.name,
+            error: cause instanceof Error ? cause.message : String(cause),
+          });
+          fail(cause);
+        },
+      );
     });
+
+    window.addEventListener("focus", onResume);
+    window.addEventListener("blur", onLeave);
+    window.addEventListener("pagehide", onLeave);
+    window.addEventListener("pointerdown", onPointer, true);
+    document.addEventListener("visibilitychange", onVisibility);
 
     document.body.append(input);
     input.click();
   });
 }
 
+function readPickedText(file: File): Promise<string> {
+  if (typeof file.text === "function") return file.text();
+  return readBlobBytes(file).then((bytes) => new TextDecoder().decode(bytes));
+}
+
+/**
+ * Ask for a markdown file and read it as text.
+ *
+ * Resolves `null` when the picker is dismissed. Android's file activity does
+ * not fire `cancel` on back-swipe or app switch, so {@link pickFromHiddenInput}
+ * also settles null once the WebView is in front again without a file.
+ */
+export function pickMarkdownFile(): Promise<OpenedMarkdown | null> {
+  return pickFromHiddenInput(MARKDOWN_ACCEPT, async (file) => ({
+    name: file.name,
+    source: await readPickedText(file),
+  }));
+}
+
 /**
  * Ask for a `.lc-ink.json` sidecar and read it.
  *
- * Same shape as {@link pickMarkdownFile} — see the note there about why cancel
- * resolves rather than rejects.
+ * Same dismiss contract as {@link pickMarkdownFile}. Bytes, not text: a
+ * sidecar may be gzipped, and `File.text()` on compressed bytes yields
+ * mojibake rather than an error.
  */
 export function pickSidecarFile(): Promise<{ name: string; text: string } | null> {
-  return new Promise((resolve, reject) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json,.gz,application/json,application/gzip";
-    input.style.position = "fixed";
-    input.style.left = "-10000px";
-    input.style.opacity = "0";
-
-    let settled = false;
-    const finish = (value: { name: string; text: string } | null) => {
-      if (settled) return;
-      settled = true;
-      input.remove();
-      resolve(value);
-    };
-
-    input.addEventListener("cancel", () => finish(null));
-    input.addEventListener("change", () => {
-      const file = input.files?.[0];
-      if (!file) {
-        finish(null);
-        return;
-      }
-      // Bytes, not text: a sidecar may be gzipped, and `File.text()` on
-      // compressed bytes yields mojibake rather than an error.
-      file
-        .arrayBuffer()
-        .then((buffer) => textFromMaybeGzip(new Uint8Array(buffer)))
-        .then((text) => finish({ name: file.name, text }))
-        .catch((cause) => {
-          if (settled) return;
-          settled = true;
-          input.remove();
-          reject(cause);
-        });
-    });
-
-    document.body.append(input);
-    input.click();
-  });
+  return pickFromHiddenInput(
+    ".json,.gz,application/json,application/gzip",
+    async (file) => ({
+      name: file.name,
+      text: await textFromMaybeGzip(new Uint8Array(await readBlobBytes(file))),
+    }),
+  );
 }
 
 export interface AnnotateSidecar {
@@ -323,53 +527,16 @@ export function exportMarkdownNote(name: string, source: string): void {
 /**
  * Ask for a document of any kind the pad understands, and read it.
  *
- * Same cancel contract as {@link pickMarkdownFile} — see the note there.
+ * Same dismiss contract as {@link pickMarkdownFile}.
  */
 export function pickDocumentFile(): Promise<OpenedDocument | null> {
-  return new Promise((resolve, reject) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = DOCUMENT_ACCEPT;
-    input.style.position = "fixed";
-    input.style.left = "-10000px";
-    input.style.opacity = "0";
-
-    let settled = false;
-    const finish = (value: OpenedDocument | null) => {
-      if (settled) return;
-      settled = true;
-      input.remove();
-      resolve(value);
-    };
-    const fail = (cause: unknown) => {
-      if (settled) return;
-      settled = true;
-      input.remove();
-      reject(cause);
-    };
-
-    input.addEventListener("cancel", () => finish(null));
-    input.addEventListener("change", () => {
-      const file = input.files?.[0];
-      if (!file) {
-        finish(null);
-        return;
-      }
-      const docType = docTypeForName(file.name);
-      if (isTextDocType(docType)) {
-        file
-          .text()
-          .then((text) => finish({ name: file.name, docType, text }))
-          .catch(fail);
-        return;
-      }
-      file
-        .arrayBuffer()
-        .then((bytes) => finish({ name: file.name, docType, bytes }))
-        .catch(fail);
-    });
-
-    document.body.append(input);
-    input.click();
+  return pickFromHiddenInput(documentPickerAccept(), async (file) => {
+    const bytes = await readBlobBytes(file);
+    const docType = docTypeForPicked(file, bytes);
+    const name = file.name || fallbackPickedName(docType);
+    if (isTextDocType(docType)) {
+      return { name, docType, text: new TextDecoder().decode(bytes) };
+    }
+    return { name, docType, bytes };
   });
 }

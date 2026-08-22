@@ -23,6 +23,9 @@
     "android:apk:release": "npm run android:apk:practice:release",
     "android:apk:pads": "npm run android:apk:whiteboard",
     "android:apk:pads:release": "npm run android:apk:whiteboard:release",
+    "logs:android": "adb logcat -s Tauri/Console:D",
+    "logs:open": "adb logcat -s Tauri/Console:D -e \"lc:open\"",
+    "logs:clear": "adb logcat -c",
     "icons:sync": "tauri icon ../docs/icons/tauri.manifest.json"
   },
   "dependencies": {

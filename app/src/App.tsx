@@ -1112,8 +1112,7 @@ export function App() {
             <h2>“{missingTab.title}” could not be opened</h2>
             <p>{missingTab.detail}</p>
             <p className="lc-muted">
-              The tab is still here and still empty. Closing it throws nothing away — whatever it
-              held is already gone from this device.
+              The tab is still here and still empty. Closing it throws nothing away.
             </p>
             <div className="lc-modal-actions">
               <button

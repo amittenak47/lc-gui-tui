@@ -103,6 +103,7 @@ import {
 } from "../util/offlineMerge";
 import { useIsMobile } from "../util/mobile";
 import { estimateStorage, formatBytes, type StorageUsage } from "../util/storageQuota";
+import { auditDocBytes, clearDocBytes, inspectDocStore } from "../util/docBytes";
 import {
   deviceRole,
   ensureDevicePrefs,
@@ -532,6 +533,123 @@ export function SettingsModal({
    * "am I near the wall?".
    */
   const [storage, setStorage] = useState<(StorageUsage & { persisted: boolean }) | null>(null);
+  /*
+   * The document-copy sweep, and its answer.
+   *
+   * "Clear all" is armed by a first tap rather than a confirm dialog: it is the
+   * destructive one of the three, and every other hold-to-confirm control in
+   * this app works the same way.
+   */
+  const [docCache, setDocCache] = useState<
+    { kind: "idle" } | { kind: "busy" } | { kind: "done"; message: string } | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+  const [docCacheArmed, setDocCacheArmed] = useState(false);
+
+  const runDocCache = useCallback(
+    async (action: "check" | "repair" | "clear" | "inspect") => {
+      if (action === "inspect") {
+        setDocCacheArmed(false);
+        setDocCache({ kind: "busy" });
+        try {
+          const report = await inspectDocStore();
+          const filled = report.stores
+            .filter((row) => row.rows > 0)
+            .map((row) => `${row.name} ${row.rows}`)
+            .join(", ");
+          setDocCache({
+            kind: report.writeFailure ? "failed" : "done",
+            message: [
+              `${report.db} v${report.version}.`,
+              `Document copies: ${report.rows} (${formatBytes(report.bytes)}).`,
+              filled ? `Other stores: ${filled}.` : "Every store is empty.",
+              report.wanted === 0
+                ? "No PDFs or EPUBs in the library."
+                : report.missing === 0
+                  ? `All ${report.wanted} of the library's documents have their bytes.`
+                  : `${report.missing} of ${report.wanted} library documents have no stored copy${
+                      report.missingNames.length
+                        ? ` (${report.missingNames.join(", ")}${report.missing > report.missingNames.length ? ", …" : ""})`
+                        : ""
+                    }.`,
+              report.writeFailure
+                ? `This device cannot save a document: ${report.writeFailure}`
+                : "A 64 KB test write saved and read back correctly, so saving works.",
+              report.missing > 0 && !report.writeFailure
+                ? "Saving works, so these arrived by sync without their bytes — pick each one from Files once to restore it."
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" "),
+          });
+        } catch (cause) {
+          setDocCache({
+            kind: "failed",
+            message: `The document store could not be opened: ${cause instanceof Error ? cause.message : String(cause)}`,
+          });
+        }
+        return;
+      }
+      if (action === "clear" && !docCacheArmed) {
+        setDocCacheArmed(true);
+        setDocCache({
+          kind: "done",
+          message:
+            "This drops every stored copy — each document has to be picked once more. Tap again to confirm.",
+        });
+        return;
+      }
+      setDocCacheArmed(false);
+      setDocCache({ kind: "busy" });
+      try {
+        const audit =
+          action === "clear"
+            ? await clearDocBytes()
+            : await auditDocBytes({ repair: action === "repair" });
+        const held = `${audit.rows} ${audit.rows === 1 ? "copy" : "copies"}`;
+        if (action === "clear") {
+          setDocCache({
+            kind: "done",
+            message: `Cleared ${held}, freeing ${formatBytes(audit.freed)}. Pick each document again to bring it back.`,
+          });
+        } else if (audit.rows === 0) {
+          // Not the same as healthy. An empty store on a device that has opened
+          // documents means saving them is failing, and no repair touches that.
+          setDocCache({
+            kind: "failed",
+            message:
+              "No stored copies at all. If you have opened documents on this device, saving them is failing — run Diagnose.",
+          });
+        } else if (audit.bad === 0) {
+          setDocCache({
+            kind: "done",
+            message: `${held} checked, all of them intact.`,
+          });
+        } else if (action === "repair") {
+          setDocCache({
+            kind: "done",
+            message: `Dropped ${audit.removed} bad ${audit.removed === 1 ? "copy" : "copies"} of ${held}, freeing ${formatBytes(audit.freed)}. Pick those documents again — the rest are untouched.`,
+          });
+        } else {
+          setDocCache({
+            kind: "done",
+            message: `${audit.bad} of ${held} no longer match the document they are filed under. Repair drops just those.`,
+          });
+        }
+        // The bar above is now stale — re-read it rather than leave a number
+        // that contradicts what this just reported.
+        const usage = await estimateStorage().catch(() => null);
+        if (usage) {
+          setStorage((prev) => ({ ...usage, persisted: prev?.persisted ?? false }));
+        }
+      } catch (cause) {
+        setDocCache({
+          kind: "failed",
+          message: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+    },
+    [docCacheArmed],
+  );
   const [siblingDevices, setSiblingDevices] = useState<DevicePrefsDto[]>([]);
   const [hubUrl, setHubUrl] = useState("");
   const [hubToken, setHubToken] = useState("");
@@ -1829,6 +1947,65 @@ export function SettingsModal({
                 </>
               ) : (
                 <p className="lc-muted">This browser does not report a storage estimate.</p>
+              )}
+
+              <div className="lc-settings-subhead">Stored document copies</div>
+              <p className="lc-settings-hint">
+                The app keeps its own copy of every PDF and EPUB you have opened, filed
+                under a fingerprint of the file’s contents. <strong>Check copies</strong>{" "}
+                re-reads each one and reports any that no longer match the file they are
+                filed under — a stale copy is what makes a document that opens fine in
+                Files refuse to open here. Repairing drops only those; the originals in
+                Files are untouched and your annotations stay in the library, so a
+                repaired document just has to be picked once more.
+              </p>
+              <div className="lc-pad-hub-check">
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={docCache.kind === "busy"}
+                  onClick={() => {
+                    void runDocCache("check");
+                  }}
+                >
+                  {docCache.kind === "busy" ? "Working…" : "Check copies"}
+                </button>
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={docCache.kind === "busy"}
+                  onClick={() => {
+                    void runDocCache("inspect");
+                  }}
+                >
+                  Diagnose
+                </button>
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={docCache.kind === "busy"}
+                  onClick={() => {
+                    void runDocCache("repair");
+                  }}
+                >
+                  Repair
+                </button>
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={docCache.kind === "busy"}
+                  onClick={() => {
+                    void runDocCache("clear");
+                  }}
+                >
+                  {docCacheArmed ? "Tap again to clear all" : "Clear all"}
+                </button>
+              </div>
+              {docCache.kind === "done" && (
+                <p className="lc-muted">{docCache.message}</p>
+              )}
+              {docCache.kind === "failed" && (
+                <p className="lc-settings-error">{docCache.message}</p>
               )}
               </SettingsFold>
             </div>
