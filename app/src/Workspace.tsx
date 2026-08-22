@@ -141,7 +141,7 @@ import {
   type DocFootnoteSubMarkKind,
 } from "./util/docFootnotes";
 import { footnoteThemeSeed } from "./util/inkPaletteHistory";
-import { getDocBytes, putDocBytes } from "./util/docBytes";
+import { loadBinaryDocBytes, putDocBytes } from "./util/docBytes";
 import {
   extractDocumentPages,
   extractedPagesFor,
@@ -222,6 +222,7 @@ import {
   sidecarNameFor,
   languageForName,
   exportMarkdownNote,
+  missingAppFileCopy,
   pickDocumentFile,
   pickSidecarFile,
   readAnnotateSidecar,
@@ -332,7 +333,7 @@ import {
 import { renderAnnotation } from "./viz/render/annotation";
 import { renderHighlight } from "./viz/render/highlight";
 import { parseVizProgram, type VizProgram } from "./viz/schema";
-import { messageOf } from "./util/messageOf";
+import { messageOf, traceOpen } from "./util/messageOf";
 
 type Mode = "review" | "ambient";
 
@@ -2087,9 +2088,19 @@ export function Workspace({
         setSwitchMotion("idle");
       } finally {
         if (workspaceLoadGenRef.current === loadGen) {
+          traceOpen("workspace: done, clearing busy", { loadGen });
           setBusy(null);
           setWorkspaceLoadActive(false);
           setShellLoadActive(false);
+        } else {
+          // A newer load is assumed to own the flag. That only holds if it
+          // reached its own finally — one that returned at the busy guard did
+          // not, and then nothing ever clears it.
+          traceOpen("workspace: LEFT BUSY SET for a newer load", {
+            loadGen,
+            currentGen: workspaceLoadGenRef.current,
+            busy: busyRef.current,
+          });
         }
       }
       return opened;
@@ -2165,11 +2176,33 @@ export function Workspace({
         setBoardPreparing(true);
       }
       try {
-        await applyPadSyncPing(client, { emit: false }).catch(() => {});
+        /*
+         * Kicked, not waited on.
+         *
+         * This used to be awaited, which put a full sync round trip in front of
+         * every document open. The ping is not cheap — it walks each annotate
+         * row and, for any binary one with no local copy, asks the hub for its
+         * bytes. A library with PDFs whose bytes are missing therefore paid a
+         * failing round trip per document, on every open, before the file on
+         * this device was so much as looked at. With no hub reachable that is
+         * where the open stopped: no error, just a spinner.
+         *
+         * Nothing here needs it. The ping folds in what other devices changed;
+         * reading a file that is already on this one does not depend on that.
+         * `loadWorkspace` already kicks it this way.
+         */
+        void applyPadSyncPing(client, { emit: false }).catch(() => {});
         await migrateLegacyWhiteboard(countWhiteboardPages);
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the coach sheet never paints mid-open.
-        if (workspaceLoadGenRef.current !== loadGen) return;
+        if (workspaceLoadGenRef.current !== loadGen) {
+          traceOpen("BAILED: a newer load started", {
+            loadGen,
+            currentGen: workspaceLoadGenRef.current,
+          });
+          return;
+        }
+        traceOpen("whiteboard: mounting the board", { loadGen });
         setBoardPreparing(true);
         setProblem(WHITEBOARD_PROBLEM);
         setPseudocode("");
@@ -2302,9 +2335,19 @@ export function Workspace({
       } finally {
         endPadOpen();
         if (workspaceLoadGenRef.current === loadGen) {
+          traceOpen("done: clearing busy", { loadGen });
           setBusy(null);
           setWorkspaceLoadActive(false);
           setShellLoadActive(false);
+        } else {
+          // Deliberate: a newer load is assumed to own the flag now. It is only
+          // safe if that load actually reached its own finally — a load that
+          // returned at the busy guard never did, and then nothing clears it.
+          traceOpen("LEFT BUSY SET for a newer load", {
+            loadGen,
+            currentGen: workspaceLoadGenRef.current,
+            busy: busyRef.current,
+          });
         }
       }
     },
@@ -2598,9 +2641,21 @@ export function Workspace({
       hash?: string;
       userLoad?: boolean;
     }) => {
-      if (busyRef.current !== null) return;
+      if (busyRef.current !== null) {
+        // The silent no-op. Everything downstream — the library entry, the
+        // bytes, the board — is skipped, and the tab the caller already wrote
+        // is left behind pointing at a document that was never loaded.
+        traceOpen("BAILED: busy is already set", {
+          busy: busyRef.current,
+          name: input.name,
+          docType: input.docType,
+          tabId: input.tabId,
+        });
+        return;
+      }
       beginPadOpen();
       const loadGen = ++workspaceLoadGenRef.current;
+      traceOpen("start", { name: input.name, docType: input.docType, loadGen, tabId: input.tabId });
       /*
        * Same loading transition as pickProblem — do not invent a parallel path.
        * fromBrowse: browser overlay spinner → slide → checkmark → board under
@@ -2636,7 +2691,22 @@ export function Workspace({
       }
 
       try {
-        await applyPadSyncPing(client, { emit: false }).catch(() => {});
+        /*
+         * Kicked, not waited on.
+         *
+         * This used to be awaited, which put a full sync round trip in front of
+         * every document open. The ping is not cheap — it walks each annotate
+         * row and, for any binary one with no local copy, asks the hub for its
+         * bytes. A library with PDFs whose bytes are missing therefore paid a
+         * failing round trip per document, on every open, before the file on
+         * this device was so much as looked at. With no hub reachable that is
+         * where the open stopped: no error, just a spinner.
+         *
+         * Nothing here needs it. The ping folds in what other devices changed;
+         * reading a file that is already on this one does not depend on that.
+         * `loadWorkspace` already kicks it this way.
+         */
+        void applyPadSyncPing(client, { emit: false }).catch(() => {});
         const docType = input.docType ?? "markdown";
         const text = input.text ?? "";
         const bytes = input.bytes ?? null;
@@ -2657,6 +2727,7 @@ export function Workspace({
         }
         const hash =
           input.hash ?? docIdentityHash({ docType, name: input.name, text, bytes });
+        traceOpen("hashed", { hash, bytes: bytes ? bytes.byteLength : null });
 
         /*
          * Which set of annotations on this file — asked before anything is set.
@@ -2708,8 +2779,12 @@ export function Workspace({
          * blank page with ink floating over nothing.
          */
         if (bytes) {
+          traceOpen("saving bytes", { hash, bytes: bytes.byteLength });
           await putDocBytes(hash, bytes);
+          traceOpen("bytes saved", { hash });
           void pushDocBytes(client, hash, bytes);
+        } else {
+          traceOpen("no bytes to save", { hash, docType });
         }
 
         /*
@@ -3087,6 +3162,12 @@ export function Workspace({
         // chrome comes down but no banner goes up, and the chip this open was
         // going to fill goes with it.
         const cancelled = cause instanceof AnnotateOpenCancelled;
+        traceOpen("FAILED", {
+          name: input.name,
+          tabId: input.tabId,
+          cancelled,
+          error: messageOf(cause),
+        });
         if (cancelled) closeTab(input.tabId);
         else setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
@@ -3100,9 +3181,19 @@ export function Workspace({
       } finally {
         endPadOpen();
         if (workspaceLoadGenRef.current === loadGen) {
+          traceOpen("annotate: done, clearing busy", { loadGen });
           setBusy(null);
           setWorkspaceLoadActive(false);
           setShellLoadActive(false);
+        } else {
+          // A newer load is assumed to own the flag. That only holds if it
+          // reached its own finally — one that returned at the busy guard did
+          // not, and then nothing ever clears it.
+          traceOpen("annotate: LEFT BUSY SET for a newer load", {
+            loadGen,
+            currentGen: workspaceLoadGenRef.current,
+            busy: busyRef.current,
+          });
         }
       }
     },
@@ -3469,6 +3560,25 @@ export function Workspace({
       if (proposed.kind === "annotate" && !input.bytes && newSet) {
         proposed.source = input.text ?? null;
       }
+      /*
+       * Bytes cannot ride the record, so they go to their store first.
+       *
+       * Text rides on `source` above; a PDF or EPUB is far too big for that,
+       * and the record carries only the content hash. The workspace that is
+       * about to mount reads binary documents back by that hash and has no
+       * other source for them — so if nothing writes them here, it mounts,
+       * finds nothing, and reports the file missing a moment after the reader
+       * picked it. That is the whole of the "could not be opened" bug: the
+       * bytes were read correctly and then dropped on the floor.
+       *
+       * Awaited on purpose. A quota failure has to stop the open rather than
+       * hand the reader a chip pointing at a document that was never stored.
+       */
+      if (input.bytes) {
+        traceOpen("saving picked bytes", { hash, bytes: input.bytes.byteLength });
+        await putDocBytes(hash, input.bytes);
+        traceOpen("picked bytes saved", { hash });
+      }
       openWorkspace(proposed);
     },
     [askSidecarChoice, openWorkspace],
@@ -3710,13 +3820,26 @@ export function Workspace({
               setError("That workspace is no longer in the library.");
               return;
             }
+            if (isBinaryDocType(entry.docType)) {
+              const bytes = await loadBinaryDocBytes(entry.hash, (hash) =>
+                client.getDocBytes(hash),
+              );
+              if (!bytes) {
+                setError(missingAppFileCopy(entry.name));
+                return;
+              }
+              await openAnnotate({
+                name: entry.name,
+                docType: entry.docType,
+                bytes,
+                docId: entry.id,
+              });
+              return;
+            }
             await openAnnotate({
               name: entry.name,
               docType: entry.docType,
               text: entry.source,
-              bytes: isBinaryDocType(entry.docType)
-                ? (await getDocBytes(entry.hash).catch(() => null)) ?? undefined
-                : undefined,
               docId: entry.id,
             });
           })();
@@ -3727,7 +3850,7 @@ export function Workspace({
           return;
       }
     },
-    [openAnnotate, openWhiteboard, pickProblem],
+    [client, openAnnotate, openWhiteboard, pickProblem],
   );
 
   const openExplore = useCallback(() => {
@@ -3801,19 +3924,27 @@ export function Workspace({
   const pickAndOpenAnnotate = useCallback(async () => {
     if (busy !== null) return;
     beginPadOpen();
-    setShellLoadActive(true);
-    setWorkspaceLoadActive(true);
+    /*
+     * Do not lock the Document sheet until a file is actually chosen.
+     *
+     * Android's picker fires neither cancel nor change on back-swipe or app
+     * switch. A busy/preparing flag set here would stick, and every HoldButton
+     * in the sheet stays disabled until the next reload. Overlay and shell
+     * load start only after pickDocumentFile resolves a file.
+     */
     const fromBrowse = !problem;
-    if (fromBrowse) {
-      setHoldBrowseOverlay(true);
-      setBrowseMotion("busy");
-      setBoardPreparing(true);
-    }
     let handedOff = false;
     try {
       const picked = await pickDocumentFile();
       if (!picked) return;
       handedOff = true;
+      setShellLoadActive(true);
+      setWorkspaceLoadActive(true);
+      if (fromBrowse) {
+        setHoldBrowseOverlay(true);
+        setBrowseMotion("busy");
+        setBoardPreparing(true);
+      }
       await openAnnotate({
         name: picked.name,
         docType: picked.docType,
@@ -6663,24 +6794,33 @@ export function Workspace({
     [client, bankFilters, pickProblem],
   );
 
+  /**
+   * Stop every beat of a load that is not going to finish.
+   *
+   * Nothing downstream will do it, because the thing that would have is the
+   * failure. Any path that abandons a load has to call this or the overlay
+   * spins for the rest of the session.
+   */
+  const stopLoadingBeats = useCallback(() => {
+    setSwitchMotion("idle");
+    setBoardPreparing(false);
+    setEntering(false);
+    setHoldBrowseOverlay(false);
+    setBrowseMotion("idle");
+    setWorkspaceLoadActive(false);
+    setShellLoadActive(false);
+    setBusy(null);
+    setError(null);
+  }, [setBrowseMotion, setError, setHoldBrowseOverlay, setShellLoadActive]);
+
   const reportMissingTab = useCallback(
     (missing: TabRecord, detail: string) => {
-      // Stop every beat of the load that just failed; nothing downstream is
-      // going to, because the thing that would have is the failure.
-      setSwitchMotion("idle");
-      setBoardPreparing(false);
-      setEntering(false);
-      setHoldBrowseOverlay(false);
-      setBrowseMotion("idle");
-      setWorkspaceLoadActive(false);
-      setShellLoadActive(false);
-      setBusy(null);
-      setError(null);
+      stopLoadingBeats();
       // The chip and the prompt are the shell's. This workspace stays mounted
       // and empty underneath it, which is what the reader asked to land on.
       onMissingContent(missing.id, missing.title, detail);
     },
-    [onMissingContent, setBrowseMotion, setError, setHoldBrowseOverlay, setShellLoadActive],
+    [onMissingContent, stopLoadingBeats],
   );
 
   /**
@@ -6794,14 +6934,39 @@ export function Workspace({
            */
           if (isBinaryDocType(docType)) {
             const hash = entry?.hash ?? tab.hash;
-            const bytes = hash ? await getDocBytes(hash).catch(() => null) : null;
+            const bytes = hash
+              ? await loadBinaryDocBytes(hash, (key) => client.getDocBytes(key))
+              : null;
             if (bytes) {
               await loadAnnotate({ name, docType, bytes, docId: restoreDocId, tabId: tab.id, userLoad });
               return;
             }
+            /*
+             * Say which of the two situations this is.
+             *
+             * "Still in the library, pick it again" is only true when the entry
+             * survived and just its bytes are gone. When there is no entry
+             * either, the open never completed — re-picking is still the fix,
+             * but the reader has been told a story about their file that is not
+             * what happened, and it sent this investigation the wrong way twice.
+             */
+            const stillListed = Boolean(entry) || listAnnotateDocsByHash(hash ?? "").length > 0;
+            traceOpen("restore found no bytes", { name, hash, stillListed });
+            /*
+             * Report it; never close the chip.
+             *
+             * An earlier version dropped a chip with no entry behind it,
+             * reasoning that there was nothing to lose. That turned a failed
+             * open into a silent bounce back to Home — the reader picked a
+             * file, the workspace mounted, found no bytes, and the tab
+             * vanished with no explanation. Whatever is wrong, saying so beats
+             * tidying the evidence away.
+             */
             reportMissingTab(
               tab,
-              "It is still in the library, but its file is not on this device — open the file again to restore the annotations.",
+              stillListed
+                ? missingAppFileCopy(name)
+                : `“${name}” did not finish opening, so this app has no copy of the file yet. Pick the same file again from Files — the original there is untouched.`,
             );
             return;
           }
@@ -6817,6 +6982,7 @@ export function Workspace({
     },
     [
       bankFilters,
+      client,
       loadAnnotate,
       loadProblem,
       loadWhiteboard,
@@ -8768,11 +8934,11 @@ export function Workspace({
                    * cleared storage, a device that never had them. Say so rather
                    * than opening an entry whose ink has nothing under it.
                    */
-                  const bytes = await getDocBytes(entry.hash).catch(() => null);
+                  const bytes = await loadBinaryDocBytes(entry.hash, (hash) =>
+                    client.getDocBytes(hash),
+                  );
                   if (!bytes) {
-                    setError(
-                      `“${entry.name}” is in the library but its file is not on this device — open it again to restore the annotations.`,
-                    );
+                    setError(missingAppFileCopy(entry.name));
                     return;
                   }
                   await openAnnotate({
