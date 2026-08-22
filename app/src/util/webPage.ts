@@ -8,6 +8,7 @@
 
 import DOMPurify from "dompurify";
 
+import { liveWebviewTransport } from "./liveWebviewSupport";
 import { isSafeExternalUrl, normalizeExternalUrl } from "./openExternal";
 import { absolutizeCssUrls, scopeCss } from "./webPageCss";
 import { DEFAULT_WEB_RENDER_MODE, type WebRenderMode } from "./webRenderMode";
@@ -602,7 +603,29 @@ export async function fetchWebPage(
   let source: WebHtmlSource = "fetch";
   let note: string | undefined;
 
-  if (isTauriRuntime()) {
+  /*
+   * The offscreen render, on desktop only — and that is a speed decision.
+   *
+   * It was briefly wired up on Android too, on the reasoning that the tablet
+   * should get the real page rather than a copy of its markup. It does get the
+   * real page: that is what Live is for, and Live opens in under a second.
+   * What this path costs there is the part that was not measured. Every step of
+   * it is a poll across the JS/Rust/JNI bridge — `readyState` every 100ms, then
+   * a fixed settle, then the serialise result every 100ms — and a round trip
+   * that is microseconds in-process on desktop is milliseconds through
+   * `run_mobile_plugin` and a hop to the UI thread. Opening a page in reader or
+   * frozen mode went from under a second to thirty and worse, on the same
+   * thread the pen draws on.
+   *
+   * So the tablet takes the cheap GET again, which is what it did before and
+   * what made it fast. Fidelity has not gone anywhere — it moved to where it is
+   * actually wanted: press Live to read the page for real, press Freeze and
+   * `serializeLiveWebview` reads the DOM of the view already on screen. That
+   * costs one serialise instead of a second full page load, and it freezes the
+   * page you are looking at rather than a re-fetch of the address you started
+   * from.
+   */
+  if (isTauriRuntime() && liveWebviewTransport() === "wry") {
     try {
       const { captureRenderedPage } = await import("./webPageCapture");
       const width = webPageWidthForViewport(
