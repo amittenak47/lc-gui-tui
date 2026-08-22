@@ -26,17 +26,17 @@ export interface LiveRect {
 }
 
 /**
- * Back ran past the beginning of the page's history.
+ * Back was pressed over the live pane.
  *
- * Dispatched on `window` by the plugin, in the app's own WebView. While a live
- * pane is up the plugin takes Back for the page — that is what makes it a
- * browser rather than a picture — and when there is no earlier page left, the
- * next honest step is to leave the pane, not the app. Which is a decision the
- * pane owns, so it is told rather than acted on.
+ * Dispatched on `window` by the plugin, in the app's own WebView. The plugin
+ * takes the gesture — that is what makes the pane a browser rather than a
+ * picture of one — but it does not act on it, because the history worth
+ * walking is the app's and not the native view's. The app steps its own
+ * entries, or leaves the pane when there is nothing behind.
  *
- * Must match `BACK_EXHAUSTED_EVENT` in `LiveWebViewPlugin.kt`.
+ * Must match `BACK_EVENT` in `LiveWebViewPlugin.kt`.
  */
-export const BACK_EXHAUSTED_EVENT = "lc-live-webview-back-exhausted";
+export const BACK_EVENT = "lc-live-webview-back";
 
 /**
  * The live view has moved to another address.
@@ -135,17 +135,17 @@ export async function androidWebviewExists(label: string): Promise<boolean> {
 }
 
 /**
- * Listen for Back running out of page history. Returns an unsubscribe.
+ * Listen for Back over the live pane. Returns an unsubscribe.
  *
  * A DOM event rather than a plugin channel: the sender is Kotlin evaluating one
  * line in the app's own WebView, there is exactly one listener, and the event
  * carries nothing because there is one live label and nothing else to say. A
  * no-op where `window` does not exist, so the pane can call it unconditionally.
  */
-export function onLiveWebviewBackExhausted(onExhausted: () => void): () => void {
+export function onLiveWebviewBack(onBack: () => void): () => void {
   if (typeof window === "undefined") return () => {};
-  window.addEventListener(BACK_EXHAUSTED_EVENT, onExhausted);
-  return () => window.removeEventListener(BACK_EXHAUSTED_EVENT, onExhausted);
+  window.addEventListener(BACK_EVENT, onBack);
+  return () => window.removeEventListener(BACK_EVENT, onBack);
 }
 
 /**

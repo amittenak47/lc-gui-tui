@@ -158,7 +158,14 @@ import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelection
 import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
 import { WebDocument } from "./modes/WebDocument";
-import { canStepWeb, currentEntry, pushWeb, stepWeb, type WebPadEntry } from "./util/webPadSession";
+import {
+  canStepWeb,
+  currentEntry,
+  needsFetch,
+  pushWeb,
+  stepWeb,
+  type WebPadEntry,
+} from "./util/webPadSession";
 import {
   HOME_TAB_ID,
   activeTab as activeTabOf,
@@ -3978,6 +3985,46 @@ export function Workspace({
     async (tab: WebTab, userLoad = false) => {
       const entry = currentEntry(tab);
       if (!entry || busyRef.current !== null) return;
+      /*
+       * A place without a snapshot — fetch it, then keep it.
+       *
+       * Live browsing records where it went and nothing else: the page is in a
+       * native view the app cannot read. Stepping back onto one of those
+       * entries has to go and get the page. The result replaces the
+       * placeholder at the same address rather than joining it, so walking the
+       * history twice does not grow it.
+       *
+       * Only this path fetches. An entry that already carries its HTML is
+       * replayed as-is, which is what makes Back instant on anything you
+       * arrived at frozen, and what keeps its marks attached to the capture
+       * they were made against.
+       */
+      if (needsFetch(entry)) {
+        setBusy("loading page…");
+        try {
+          const page = await fetchWebPage(entry.url, { mode: webRenderModeRef.current });
+          const filled = {
+            url: page.url,
+            title: page.title || hostLabelFromUrl(page.url),
+            html: page.html,
+          };
+          setWebHtmlSource(page.source);
+          setWebHtmlNote(page.note ?? null);
+          webPush(tab.id, filled);
+          setBusy(null);
+          await loadAnnotate({
+            name: filled.url,
+            docType: "web",
+            text: filled.html,
+            tabId: tab.id,
+            userLoad,
+          });
+        } catch (cause) {
+          setBusy(null);
+          setError(messageOf(cause));
+        }
+        return;
+      }
       await loadAnnotate({
         name: entry.url,
         docType: "web",
@@ -3986,7 +4033,7 @@ export function Workspace({
         userLoad,
       });
     },
-    [loadAnnotate],
+    [loadAnnotate, webPush],
   );
 
   /**
@@ -7918,7 +7965,21 @@ export function Workspace({
               it is the same gesture as pressing Enter, so it belongs with the
               text rather than beside it as a button the width of a word.
             */}
-            <div className="lc-web-address">
+            {/*
+              The address bar says which of the three you are reading.
+              
+              The mode already had an icon, and an icon in a row of icons is
+              something you check rather than something you know. The field is
+              the one element that is always in view, always the same shape,
+              and always about the page — so it carries the state as a colour
+              you stop having to read.
+            */}
+            <div
+              className="lc-web-address"
+              data-web-mode={
+                webLive ? "live" : webHtmlSource === "reader" ? "reader" : "frozen"
+              }
+            >
               {/*
                 Reader, on the address — where Safari puts it, and where it
                 belongs: it is a statement about *this URL*, not a mode of the
@@ -8204,15 +8265,21 @@ export function Workspace({
                */
               visible={Boolean(showing)}
               /*
-               * Back, once the page has no earlier page to go to.
+               * The system Back gesture, answered from the one history.
                *
-               * Android only — the plugin owns the system Back while a live
-               * view is up, so the pane is a browser and not a picture of one.
-               * Running out of history is not a reason to leave the app; it is
-               * the point at which "back" means the frozen copy underneath,
-               * which is exactly where an error would land us too.
+               * Same list the omnibox arrows walk, so the gesture and the
+               * button cannot disagree — and stepping it while live re-opens
+               * the pane at that entry, so Back works the same whether you got
+               * there by tapping a link in a live page or in a frozen one.
+               *
+               * Nothing behind means leaving the live page rather than the
+               * app: the frozen copy is underneath, which is where an error
+               * would land us too.
                */
-              onExit={() => setWebLive(false)}
+              onBack={() => {
+                if (activeWebTab && canStepWeb(activeWebTab, -1)) stepWebTab(-1);
+                else setWebLive(false);
+              }}
               /*
                * Keep the omnibox on the page, not on the door it came in by.
                *
@@ -8222,7 +8289,28 @@ export function Workspace({
                * three links deep saved it under the name of the one the tab
                * opened at, and reopened there afterwards.
                */
-              onNavigate={(next) => setWebUrl(next)}
+              onNavigate={(next) => {
+                setWebUrl(next);
+                /*
+                 * One history, and this is the half that was missing from it.
+                 *
+                 * Frozen browsing has always recorded where it went; live
+                 * browsing recorded nothing, so Back and Forward went blank
+                 * the moment you followed a link in a live page. They are the
+                 * same history because the mode is a *rendering* of the page
+                 * you are on, not a separate session — Back has to mean one
+                 * thing, and switching live/frozen has to keep your place.
+                 *
+                 * Pushed only when the address actually differs from the entry
+                 * we are standing on. A report also arrives for the load that
+                 * put us here — opening the pane, or stepping onto an entry —
+                 * and pushing on those would record the page we just arrived
+                 * at as somewhere new, truncating everything ahead of it.
+                 */
+                const current = currentEntry(activeTabRecord as WebTab);
+                if (current && current.url === next) return;
+                webPush(tab.id, { url: next, title: hostLabelFromUrl(next) });
+              }}
               onError={(message) => {
                 setError(message);
                 setWebLive(false);

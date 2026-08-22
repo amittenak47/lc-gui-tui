@@ -792,6 +792,61 @@ body {
   padding-right: 30px;
 }
 
+/*
+ * The mode, as a colour on the field itself.
+ *
+ * Same three hues as the toggles, so the button and the bar agree and you only
+ * learn the vocabulary once: live is blue, frozen is cold, reader is warm. A
+ * left edge rather than a full tint — the address has to stay readable, and a
+ * bar that changes background under the text is a bar you notice instead of
+ * read.
+ */
+.lc-web-address::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 62%;
+  border-radius: 0 2px 2px 0;
+  background: var(--hint);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.lc-web-address[data-web-mode="live"]::before {
+  background: var(--live);
+  opacity: 1;
+}
+
+.lc-web-address[data-web-mode="frozen"]::before {
+  background: var(--frozen);
+  opacity: 0.85;
+}
+
+.lc-web-address[data-web-mode="reader"]::before {
+  background: var(--reader);
+  opacity: 0.9;
+}
+
+.lc-web-address[data-web-mode="live"] input {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--live) 34%, transparent);
+}
+
+.lc-web-address[data-web-mode="reader"] input {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--reader) 30%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lc-web-address::before,
+  .lc-web-address input {
+    transition:
+      background-color 160ms ease-out,
+      box-shadow 160ms ease-out;
+  }
+}
+
 .lc-web-go {
   position: absolute;
   right: 4px;
