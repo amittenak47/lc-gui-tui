@@ -988,7 +988,23 @@ export class LcClient {
     const hub = loadPadHub();
     if (hub) {
       try {
-        const { bytes } = await hubFetch(hub, "GET", `/docs/${encodeURIComponent(hash)}/bytes`);
+        const { json, bytes } = await hubFetch(
+          hub,
+          "GET",
+          `/docs/${encodeURIComponent(hash)}/bytes`,
+        );
+        /*
+         * A 200 is not proof this is the document.
+         *
+         * `hubFetch` hands back the response body whatever it turned out to
+         * be, and a hub — or anything between here and it — can answer a
+         * missing document with a JSON envelope or an HTML page and still call
+         * it success. Returned as-is, that text becomes the PDF: the caller
+         * caches it under the content hash and every later open reads a few
+         * hundred bytes of markup back. `json` is only set when the response
+         * announced itself as JSON, which a document never does.
+         */
+        if (json != null) return null;
         return bytes;
       } catch (cause) {
         if (cause instanceof LcApiError && cause.status === 404) return null;

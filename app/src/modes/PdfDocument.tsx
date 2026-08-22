@@ -36,6 +36,7 @@
 
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 
+import { pdfByteReport } from "../util/docBytes";
 import type { PdfThumbRenderer } from "./pdfFilm";
 
 /**
@@ -151,6 +152,248 @@ export async function loadPdfJs() {
   return pdfJsLoader;
 }
 
+/**
+ * The one sentence pdf.js uses for everything that goes wrong while it reads a
+ * cross-reference table.
+ *
+ * `XRef.parse` catches every exception the read throws, reports it through
+ * `info()` — silent unless verbosity is raised — and retries in recovery mode;
+ * when the recovery scan finds no trailer either it throws this. A truncated
+ * download, an encrypted file it cannot open, and a `TypeError` from a missing
+ * API inside the worker all arrive here wearing the same label, which is why
+ * "the file is broken, pick it again" was the wrong advice often enough to be
+ * worth this much machinery.
+ */
+const GENERIC_PDF_FAILURE = /invalid pdf structure/i;
+
+/**
+ * Whether the worker has already proved it cannot parse in this session.
+ *
+ * Set once, on the first document that failed in the worker and then parsed on
+ * the main thread. A WebView that cannot run the worker bundle cannot run it
+ * for the second book either, and paying a full failed parse per open — on a
+ * textbook, seconds of it — to rediscover that is not worth the cleanliness.
+ */
+let workerParseBroken = false;
+
+/**
+ * The one `PDFWorker` every document is opened against, handed to `getDocument`
+ * explicitly rather than left to be found.
+ *
+ * This is not a shortcut — it is what keeps `loadingTask.destroy()` from taking
+ * the whole app's worker down with one document. pdf.js only records
+ * `task._worker` when *it* had to create the worker (`getDocument` sets it in
+ * the `if (!worker)` branch), and `destroy()` destroys whatever it recorded. So
+ * with `GlobalWorkerOptions.workerPort` alone, closing one PDF calls
+ * `PDFWorker.destroy()` on the shared instance: the port is dropped from the
+ * cache and the main-side `MessageHandler` is torn off the live Worker.
+ *
+ * Two things then run into it, and both are ordinary here. The load effect
+ * re-runs whenever `frameWidth` changes — a second layout pass is close to
+ * guaranteed on a tablet, where safe-area insets and the board's own measure
+ * settle after first paint — and its cleanup fires `void task.destroy()`
+ * without awaiting, exactly what pdf.js's own error text asks callers not to
+ * do ("Please remember to await `PDFDocumentLoadingTask.destroy()`-calls").
+ * Meanwhile `docExtract` has a second document open on the same worker for
+ * indexing. Either one's teardown can land in the middle of the other's parse.
+ *
+ * Passing the worker in means `task._worker` stays null, `destroy()` ends the
+ * document and nothing else, and the worker outlives every document — which is
+ * what the single `workerPort` was always trying to express.
+ */
+type PdfJs = Awaited<ReturnType<typeof loadPdfJs>>;
+type PdfWorker = InstanceType<PdfJs["PDFWorker"]>;
+
+let sharedWorker: PdfWorker | null = null;
+
+function pdfWorker(pdfjs: PdfJs): PdfWorker {
+  sharedWorker ??= pdfjs.PDFWorker.create({
+    // `loadPdfJs` has already set this; `?? undefined` only satisfies the type,
+    // and a missing port would mean pdf.js spawns its own worker rather than
+    // failing — which is still a working PDF, just not the shared one.
+    port: pdfjs.GlobalWorkerOptions.workerPort ?? undefined,
+  }) as PdfWorker;
+  return sharedWorker;
+}
+
+/**
+ * The main-thread parser, also made once.
+ *
+ * Same ownership rule as {@link pdfWorker}: it is passed in, so a document's
+ * teardown does not destroy it and the next fallback open still has one.
+ */
+let sharedMainThreadWorker: PdfWorker | null = null;
+
+/** Pins the worker module into this realm so pdf.js parses without a Worker. */
+let mainThreadWorkerLoaded: Promise<void> | null = null;
+
+async function loadMainThreadWorker(): Promise<void> {
+  mainThreadWorkerLoaded ??= (async () => {
+    const mod = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+    // pdf.js looks here before it reaches for a real Worker: `PDFWorker`
+    // checks `globalThis.pdfjsWorker?.WorkerMessageHandler` and, finding one,
+    // runs the whole parser in this realm instead.
+    (globalThis as Record<string, unknown>).pdfjsWorker = mod;
+  })();
+  return mainThreadWorkerLoaded;
+}
+
+/**
+ * Run pdf.js loudly and keep what it says.
+ *
+ * The cause of a swallowed xref failure only exists as an `info()` line, and
+ * `info()` is `console.log` — so on the fallback parse, which runs in this
+ * realm rather than in a worker, the console is the only place the real error
+ * is reachable from. Patching it is ugly and deliberately brief: it is on for
+ * one parse, on a path already known to have failed.
+ */
+async function capturePdfJsLog<T>(body: () => Promise<T>): Promise<{
+  value: T | null;
+  cause: unknown;
+  log: string[];
+}> {
+  const log: string[] = [];
+  const realLog = console.log;
+  const realWarn = console.warn;
+  const keep = (...args: unknown[]) => {
+    const line = args.map((a) => (typeof a === "string" ? a : String(a))).join(" ");
+    if (/^(Info|Warning):/.test(line)) log.push(line);
+  };
+  console.log = (...args: unknown[]) => {
+    keep(...args);
+    realLog.apply(console, args as []);
+  };
+  console.warn = (...args: unknown[]) => {
+    keep(...args);
+    realWarn.apply(console, args as []);
+  };
+  try {
+    return { value: await body(), cause: null, log };
+  } catch (cause) {
+    return { value: null, cause, log };
+  } finally {
+    console.log = realLog;
+    console.warn = realWarn;
+  }
+}
+
+/** The first line that names what actually threw, if pdf.js logged one. */
+export function swallowedCause(log: string[]): string | null {
+  const line = log.find((entry) => entry.includes("while reading XRef"));
+  if (!line) return null;
+  return line.replace(/^Info:\s*/, "").replace(/^\(while reading XRef\):\s*/, "");
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** Everything but `data` — the same for every open, and worth not repeating. */
+function pdfSourceParams() {
+  return {
+    /*
+     * Font metrics and character maps, served from the bundle.
+     *
+     * pdf.js fetches these by URL rather than importing them, so they are
+     * copied out of the package at build time (see `pdfjsAssets` in
+     * vite.config). Without the fonts a document that assumes the base-14
+     * set renders with the wrong glyph widths; without the cmaps a CJK or
+     * scanned document renders blank.
+     */
+    standardFontDataUrl: new URL("standard_fonts/", document.baseURI).href,
+    cMapUrl: new URL("cmaps/", document.baseURI).href,
+    cMapPacked: true,
+  };
+}
+
+export interface OpenedPdf {
+  /** Teardown lives on the loading task, not the document — keep it. */
+  task: ReturnType<typeof import("pdfjs-dist").getDocument>;
+  doc: Awaited<ReturnType<typeof import("pdfjs-dist").getDocument>["promise"]>;
+}
+
+/**
+ * Open a PDF, and do not accept "Invalid PDF structure" as an answer.
+ *
+ * `freshData` is called per attempt rather than taking bytes once: pdf.js
+ * transfers the buffer it is handed to the worker, so a retry needs its own
+ * copy and the caller's original has to stay whole.
+ *
+ * Order matters. The worker is tried first because it is the fast path and the
+ * one that keeps the pen responsive on a textbook. When it fails generically,
+ * the bytes are judged here — if they are visibly not a whole PDF the reader
+ * is told exactly that and nothing further is attempted. Only for bytes that
+ * *are* whole is the document parsed again in this realm, which both rescues
+ * the open when the worker is the broken part and, if it fails too, gets the
+ * real exception out of pdf.js's `info()` channel and into the message.
+ */
+export async function openPdfDocument(
+  freshData: () => Uint8Array,
+  bytes: ArrayBuffer,
+): Promise<OpenedPdf> {
+  const pdfjs = await loadPdfJs();
+  if (!workerParseBroken) {
+    const task = pdfjs.getDocument({
+      data: freshData(),
+      worker: pdfWorker(pdfjs),
+      ...pdfSourceParams(),
+    });
+    try {
+      return { task, doc: await task.promise };
+    } catch (cause) {
+      if (!GENERIC_PDF_FAILURE.test(messageOf(cause))) throw cause;
+      try {
+        void task.destroy();
+      } catch {
+        /* already torn down */
+      }
+      const report = pdfByteReport(bytes);
+      if (!report.whole) {
+        throw new Error(
+          `This PDF could not be opened: ${report.detail}. Pick the same file again from Files — the original there is untouched.`,
+        );
+      }
+    }
+  }
+
+  await loadMainThreadWorker();
+  const attempt = await capturePdfJsLog(async () => {
+    sharedMainThreadWorker ??= new pdfjs.PDFWorker({
+      verbosity: pdfjs.VerbosityLevel.INFOS,
+    }) as PdfWorker;
+    const task = pdfjs.getDocument({
+      data: freshData(),
+      worker: sharedMainThreadWorker,
+      verbosity: pdfjs.VerbosityLevel.INFOS,
+      ...pdfSourceParams(),
+    });
+    return { task, doc: await task.promise };
+  });
+
+  if (attempt.value) {
+    workerParseBroken = true;
+    return attempt.value;
+  }
+
+  const report = pdfByteReport(bytes);
+  if (!report.whole) {
+    throw new Error(
+      `This PDF could not be opened: ${report.detail}. Pick the same file again from Files — the original there is untouched.`,
+    );
+  }
+  const real = swallowedCause(attempt.log);
+  if (real) {
+    // The file is intact and the engine is what failed. Say which, because
+    // "pick the file again" cannot fix this one and wastes the reader's time.
+    throw new Error(
+      `This PDF is intact (${report.detail}) but this build could not read it: ${real}`,
+    );
+  }
+  throw new Error(
+    `This PDF is intact (${report.detail}) but this build could not read it: ${messageOf(attempt.cause)}`,
+  );
+}
+
 interface RenderedPage {
   pageNumber: number;
   /** Natural-size → frame-width factor for this page. */
@@ -207,9 +450,25 @@ export function PdfDocument({
   useEffect(() => {
     let cancelled = false;
     disposedRef.current = false;
-    // pdf.js detaches the buffer it is handed, and React may run this effect
-    // twice in development — a copy keeps the prop reusable either way.
-    const data = bytes.slice(0);
+    // pdf.js transfers the buffer it is handed to the worker, and React may run
+    // this effect twice in development — a fresh copy per attempt keeps the
+    // prop reusable either way. A factory rather than one buffer because the
+    // fallback parse in `openPdfDocument` needs a second copy of its own.
+    // Uint8Array, not the raw ArrayBuffer: a transferred/neutered buffer
+    // reaches the worker as zero bytes and pdf.js reports "Invalid PDF structure".
+    const freshData = () => new Uint8Array(bytes.slice(0));
+    // A detached buffer reports zero length, which is also what an empty one
+    // reports — and the reader needs the same answer for both. Checked before
+    // any state is cleared, and by length rather than by attempting a copy, so
+    // a textbook is not duplicated in memory just to ask the question.
+    if (bytes.byteLength === 0) {
+      onErrorRef.current?.(
+        "this PDF's bytes were released before they could be drawn — pick the file again",
+      );
+      return () => {
+        cancelled = true;
+      };
+    }
     setPages([]);
     paintedRef.current.clear();
     wantedRef.current = new Set();
@@ -219,28 +478,18 @@ export function PdfDocument({
 
     void (async () => {
       try {
-        const pdfjs = await loadPdfJs();
-        // Teardown lives on the loading task, not the document — keep it.
-        const task = pdfjs.getDocument({
-          data,
-          /*
-           * Font metrics and character maps, served from the bundle.
-           *
-           * pdf.js fetches these by URL rather than importing them, so they are
-           * copied out of the package at build time (see `pdfjsAssets` in
-           * vite.config). Without the fonts a document that assumes the base-14
-           * set renders with the wrong glyph widths; without the cmaps a CJK or
-           * scanned document renders blank.
-           */
-          standardFontDataUrl: new URL("standard_fonts/", document.baseURI).href,
-          cMapUrl: new URL("cmaps/", document.baseURI).href,
-          cMapPacked: true,
-        });
+        const { task, doc } = await openPdfDocument(freshData, bytes);
+        if (cancelled) {
+          try {
+            void task.destroy();
+          } catch {
+            /* already torn down */
+          }
+          return;
+        }
         taskRef.current = task;
-        const doc = await task.promise;
-        if (cancelled) return;
         docRef.current = doc;
-        textLayerRef.current = pdfjs.TextLayer;
+        textLayerRef.current = (await loadPdfJs()).TextLayer;
 
         const laid: RenderedPage[] = [];
         for (let from = 1; from <= doc.numPages; from += LAYOUT_BATCH) {
@@ -270,6 +519,9 @@ export function PdfDocument({
         setPages(laid);
       } catch (cause: unknown) {
         if (cancelled) return;
+        // `openPdfDocument` has already turned a generic pdf.js failure into a
+        // sentence that says which side broke, so whatever arrives here is
+        // reportable as-is.
         onErrorRef.current?.(
           cause instanceof Error ? cause.message : "this PDF could not be opened",
         );
