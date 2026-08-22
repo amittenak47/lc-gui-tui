@@ -136,7 +136,7 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
             destroy(args.label)
             val view = WebView(activity)
             try {
-                configure(view, args.userAgent, args.behind)
+                configure(view, args.label, args.userAgent, args.behind)
                 val params = layoutFor(args.rect, args.density, parent)
                 if (args.behind) {
                     // Under `content`: invisible behind an opaque app, still
@@ -268,7 +268,7 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
     private fun decor(): ViewGroup? = activity.window?.decorView as? ViewGroup
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun configure(view: WebView, userAgent: String?, behind: Boolean) {
+    private fun configure(view: WebView, label: String, userAgent: String?, behind: Boolean) {
         view.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -289,9 +289,26 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
         /*
          * Without a client of its own a WebView hands every navigation to
          * whatever browser the device uses — so the first link tapped in the
-         * live pane would leave the app. The default `WebViewClient` keeps it.
+         * live pane would leave the app. A client of our own keeps it, and
+         * says where it went.
+         *
+         * Saying so is the part that was missing. The app opened this view at
+         * an address and then never heard another word: tap through three
+         * links and the omnibox still read the address you started at, Back
+         * and Forward still had the one entry they were born with, and Freeze
+         * — which falls back to the omnibox when it cannot read a URL — saved
+         * the page you came from under the name of the page you were on.
+         *
+         * `doUpdateVisitedHistory` rather than `onPageFinished` because it
+         * also fires for `pushState`, and a single-page site is still
+         * navigation to everyone except the loader.
          */
-        view.webViewClient = WebViewClient()
+        view.webViewClient = object : WebViewClient() {
+            override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                super.doUpdateVisitedHistory(view, url, isReload)
+                if (!behind && url != null) notifyNavigated(label, url)
+            }
+        }
         view.webChromeClient = WebChromeClient()
         view.setBackgroundColor(Color.WHITE)
         /*
@@ -453,6 +470,28 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
      * a channel would be the same nothing through three more layers. It is
      * also the only direction this plugin ever speaks in.
      */
+    /**
+     * Tell the app the live view has moved.
+     *
+     * Same one-way DOM event as [notifyBackExhausted], and for the same reason
+     * — one listener, one direction, no channel worth building for it. The
+     * label rides along here because the URL is only meaningful paired with
+     * the view it belongs to, and a reader in a split has two.
+     */
+    private fun notifyNavigated(label: String, url: String) {
+        val app = appWebView ?: return
+        val script =
+            "window.dispatchEvent(new CustomEvent(" +
+                JSONObject.quote(NAVIGATED_EVENT) +
+                ",{detail:{label:" + JSONObject.quote(label) +
+                ",url:" + JSONObject.quote(url) + "}}))"
+        try {
+            app.evaluateJavascript(script, null)
+        } catch (_: Throwable) {
+            /* the app view has gone; nothing is listening */
+        }
+    }
+
     private fun notifyBackExhausted() {
         val app = appWebView ?: return
         val script =
@@ -467,6 +506,9 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
     companion object {
         /** Matches `BACK_EXHAUSTED_EVENT` in `androidLiveWebview.ts`. */
         const val BACK_EXHAUSTED_EVENT = "lc-live-webview-back-exhausted"
+
+        /** Matches `NAVIGATED_EVENT` in `androidLiveWebview.ts`. */
+        const val NAVIGATED_EVENT = "lc-live-webview-navigated"
 
         /**
          * Longer than the desktop bridge's own 8s, on purpose: the poll loop

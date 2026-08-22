@@ -21,13 +21,17 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { onLiveWebviewBackExhausted } from "../util/androidLiveWebview";
+import {
+  onLiveWebviewBackExhausted,
+  onLiveWebviewNavigated,
+} from "../util/androidLiveWebview";
 import { watchScreenOverlay } from "../util/screenOverlay";
 import {
   closeLiveWebview,
   openLiveWebview,
   placeLiveWebview,
   showLiveWebview,
+  LIVE_WEBVIEW_LABEL,
   type PaneRect,
 } from "../util/webPageCapture";
 
@@ -51,6 +55,15 @@ export interface LiveWebPaneProps {
    * that is decided.
    */
   onExit?: () => void;
+  /**
+   * The live view went somewhere — a tapped link, a search, a `pushState`.
+   *
+   * The pane opens at `url` and the page is free to leave it. Nothing else in
+   * the app can see that happen: the view is a native surface with its own
+   * history, so without this the omnibox, Back/Forward and Freeze all keep
+   * describing the address the tab opened at.
+   */
+  onNavigate?: (url: string) => void;
 }
 
 function rectOf(node: HTMLElement): PaneRect {
@@ -58,12 +71,35 @@ function rectOf(node: HTMLElement): PaneRect {
   return { x: box.left, y: box.top, width: box.width, height: box.height };
 }
 
-export function LiveWebPane({ url, visible, onError, onExit }: LiveWebPaneProps) {
+export function LiveWebPane({
+  url,
+  visible,
+  onError,
+  onExit,
+  onNavigate,
+}: LiveWebPaneProps) {
   const holeRef = useRef<HTMLDivElement | null>(null);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
+  const onNavigateRef = useRef(onNavigate);
+  onNavigateRef.current = onNavigate;
+
+  /*
+   * Follow the page's own address.
+   *
+   * Bound for the life of the pane rather than per address: the whole point is
+   * the addresses this component was never told about.
+   */
+  useEffect(
+    () =>
+      onLiveWebviewNavigated(
+        (next) => onNavigateRef.current?.(next),
+        LIVE_WEBVIEW_LABEL,
+      ),
+    [],
+  );
 
   /*
    * Back belongs to the page first and to the pane second.

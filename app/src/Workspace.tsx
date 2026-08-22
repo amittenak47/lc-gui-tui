@@ -8213,6 +8213,16 @@ export function Workspace({
                * which is exactly where an error would land us too.
                */
               onExit={() => setWebLive(false)}
+              /*
+               * Keep the omnibox on the page, not on the door it came in by.
+               *
+               * Android only, where the live view is a native surface with its
+               * own history. Freeze reads that view's DOM and only falls back
+               * to this address when it cannot — which is how freezing a page
+               * three links deep saved it under the name of the one the tab
+               * opened at, and reopened there afterwards.
+               */
+              onNavigate={(next) => setWebUrl(next)}
               onError={(message) => {
                 setError(message);
                 setWebLive(false);
