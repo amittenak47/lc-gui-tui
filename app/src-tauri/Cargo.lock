@@ -6002,6 +6002,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-livewebview"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "tauri-plugin-opener"
 version = "2.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7254,6 +7265,7 @@ dependencies = [
  "tauri-plugin-gallerysave",
  "tauri-plugin-gestureguard",
  "tauri-plugin-inkrecognition",
+ "tauri-plugin-livewebview",
  "tauri-plugin-opener",
  "tokio",
  "whiteboard",

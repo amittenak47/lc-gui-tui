@@ -7125,7 +7125,10 @@ export function Workspace({
    * makes those possible and what costs the fidelity. Keeping them as two
    * states is the only honest way to have both.
    *
-   * Desktop only: Android has no child webview, so those tabs stay frozen.
+   * Both platforms, now. Android has no *wry* child webview, which is not the
+   * same as having no child web view — the `livewebview` plugin is one, and
+   * `webPageCapture` picks between them. A tablet browses and freezes like a
+   * desktop does.
    */
   const [webLive, setWebLive] = useState(false);
   /**
@@ -7172,9 +7175,15 @@ export function Workspace({
   webRenderModeRef.current = webRenderMode;
   /*
    * Browse is only offered where a live pane can actually exist — see
-   * `liveWebviewSupported`. On Android it cannot, and asking anyway put a Tauri
-   * error object in the header banner and then quietly showed the fetched copy
-   * instead, which is the one that does not look like the page.
+   * `liveWebviewTransport`. That used to exclude the tablet, and the exclusion
+   * was aimed at the wrong layer: wry has no child webview on Android, but
+   * Android does, and the plugin behind `liveWebviewSupported` is it. What is
+   * still excluded is a plain browser tab (`npm run dev`), which has no native
+   * surface under any name.
+   *
+   * Offering it where it does not work was the first mistake: a Tauri error
+   * object in the header banner, then the fetched copy shown without a word —
+   * the copy that does not look like the page.
    */
   const canBrowseLive = webPadLive && isTauriRuntime() && liveWebviewSupported();
   /**
@@ -8194,6 +8203,16 @@ export function Workspace({
                * in it.
                */
               visible={Boolean(showing)}
+              /*
+               * Back, once the page has no earlier page to go to.
+               *
+               * Android only — the plugin owns the system Back while a live
+               * view is up, so the pane is a browser and not a picture of one.
+               * Running out of history is not a reason to leave the app; it is
+               * the point at which "back" means the frozen copy underneath,
+               * which is exactly where an error would land us too.
+               */
+              onExit={() => setWebLive(false)}
               onError={(message) => {
                 setError(message);
                 setWebLive(false);
