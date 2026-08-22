@@ -6,7 +6,7 @@
 
 import type { DocType } from "./annotateStore";
 import { readEpub } from "./epub";
-import { openPdfDocument } from "../modes/PdfDocument";
+import { loadPdfJs, pdfWorker } from "../modes/PdfDocument";
 import { webPagesFromMarks, type MarkLike } from "./webMarkPages";
 
 /**
@@ -118,14 +118,21 @@ async function extractPdfPages(
   bytes: ArrayBuffer,
   onProgress?: ExtractProgress,
 ): Promise<ExtractedPage[]> {
+  const pdfjs = await loadPdfJs();
   // Share the viewer's worker — a second workerPort hangs getDocument — so
-  // yield between pages or flick-scroll stalls behind getTextContent. Opened
-  // through the same helper the viewer uses, so a WebView whose worker cannot
-  // parse still gets its text indexed rather than failing every document with
-  // pdf.js's catch-all "Invalid PDF structure".
-  const { task, doc } = await openPdfDocument(() => new Uint8Array(bytes.slice(0)), bytes);
+  // yield between pages or flick-scroll stalls behind getTextContent. Passed
+  // in rather than found, so this task's teardown does not destroy the worker
+  // the viewer is still reading through.
+  const task = pdfjs.getDocument({
+    data: new Uint8Array(bytes.slice(0)),
+    worker: pdfWorker(pdfjs),
+    standardFontDataUrl: new URL("standard_fonts/", document.baseURI).href,
+    cMapUrl: new URL("cmaps/", document.baseURI).href,
+    cMapPacked: true,
+  });
   const pages: ExtractedPage[] = [];
   try {
+    const doc = await task.promise;
     for (let n = 1; n <= doc.numPages; n++) {
       const page = await doc.getPage(n);
       const content = await page.getTextContent();
