@@ -7,11 +7,13 @@
  * opens full-screen over the app and cannot be closed. That is still true of
  * *wry*, and `webPageCapture.transport.test.ts` is where it is now asserted.
  *
- * The question here is one level up and it has changed its answer. `fetchWebPage`
- * gates on whether a live surface exists, not on which platform this is, so on
- * a tablet in the app shell the render now runs — through the `livewebview`
- * plugin — and the reader gets the page rather than a copy of its markup. In a
- * browser tab, with no shell to ask, the cheap GET is still the whole story.
+ * It stays true here for a different reason, and the reason is speed. The
+ * offscreen render *can* run on Android now — the plugin serves it — and for a
+ * short while it did. Every step of it is a poll across the JS/Rust/JNI bridge,
+ * so opening a page in reader or frozen mode went from under a second to thirty
+ * and worse. Fidelity lives in Live and in Freeze, which reads the view already
+ * on screen; this path is the cheap GET on anything but desktop, and it is what
+ * makes opening a page feel instant.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -66,29 +68,31 @@ afterEach(() => {
 });
 
 describe("fetchWebPage on an Android tablet", () => {
-  it("renders the page, the same as a desktop does", async () => {
+  it("opens from the fetched copy without spinning a second render", async () => {
+    // The regression this pins: a render here is ~30s of bridge polling on a
+    // tablet, for a page Live already shows in under one.
     setUserAgent(ANDROID_TABLET);
     captureRenderedPage.mockResolvedValue({ url: "https://example.com/", html: RENDERED });
     const { fetchWebPage } = await import("./webPage");
 
     const page = await fetchWebPage("https://example.com/", { mode: "page" });
 
-    expect(captureRenderedPage).toHaveBeenCalledTimes(1);
-    expect(page.source).toBe("capture");
+    expect(captureRenderedPage).not.toHaveBeenCalled();
+    expect(page.source).toBe("fetch");
     expect(page.note).toBeUndefined();
   });
 
-  it("falls back to the fetched copy when the render fails, and says so", async () => {
-    // The plugin can still be missing from an old APK. That is a sentence in
-    // the banner and a page that reads, not a page that never opens.
+  it("carries no error note, because nothing was attempted", async () => {
+    // Not a failure that fell back — a path that was never taken. The reader
+    // gets a page and no banner explaining a render they did not ask for.
     setUserAgent(ANDROID_TABLET);
-    captureRenderedPage.mockRejectedValue(new Error("live web view unavailable"));
+    captureRenderedPage.mockRejectedValue(new Error("should never be called"));
     const { fetchWebPage } = await import("./webPage");
 
     const page = await fetchWebPage("https://example.com/", { mode: "page" });
 
     expect(page.source).toBe("fetch");
-    expect(page.note).toMatch(/live web view unavailable/);
+    expect(page.note).toBeUndefined();
   });
 });
 
