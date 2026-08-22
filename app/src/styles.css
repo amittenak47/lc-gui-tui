@@ -48,6 +48,18 @@
   --panel: #f8fafc;
   --overlay-bg: rgb(255 255 255 / 97%);
   --accent: #4a6280;
+  /*
+   * Modes get colour; chrome does not.
+   *
+   * `--accent` is a slate on purpose — it tints a dozen pieces of furniture
+   * that should recede. Reader and Live/Frozen are not furniture: they are the
+   * answer to "what am I looking at, and can I write on it", and rendered in
+   * the same slate as everything else they read as three grey squares in a row
+   * of grey squares. Each state gets a hue it does not share.
+   */
+  --live: #2563eb;
+  --frozen: #0e7490;
+  --reader: #b45309;
   --ok: #166534;
   --bad: #b91c1c;
   --touch: 44px;
@@ -525,13 +537,44 @@ body {
 
 /* Home wearing Cancel for the length of a load. Same chip, same slot, so the
    strip does not shift out from under whatever is being pointed at. */
+/*
+ * Loading is blue, and it moves.
+ *
+ * This is Home wearing Cancel for the length of a load, and it was a flat slate
+ * underline — the same still, grey mark the strip wears for half a dozen other
+ * reasons. The one question it has to answer is "is this still going, or has it
+ * hung", and a static bar cannot. The underline runs while the load does.
+ */
 .lc-tab.is-cancelling {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  box-shadow: inset 0 -2px 0 var(--accent);
+  background: color-mix(in srgb, var(--live) 14%, transparent);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--live) 45%, transparent);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--live) 34%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 60% 100%;
+  background-repeat: no-repeat;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lc-tab.is-cancelling {
+    animation: lc-tab-loading 1.15s ease-in-out infinite;
+  }
+}
+
+@keyframes lc-tab-loading {
+  from {
+    background-position: -70% 0;
+  }
+  to {
+    background-position: 170% 0;
+  }
 }
 
 .lc-tab.is-cancelling .lc-tab-hit {
-  color: var(--accent);
+  color: var(--live);
   transition:
     transform 0.12s ease,
     background-color 0.12s ease;
@@ -539,7 +582,7 @@ body {
 
 .lc-tab.is-cancelling.is-cancel-hit .lc-tab-hit {
   transform: scale(0.94);
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--live) 24%, transparent);
 }
 
 .lc-header .lc-tab-hit {
@@ -883,6 +926,81 @@ body {
       background-color 140ms ease-out,
       box-shadow 140ms ease-out,
       color 140ms ease-out;
+  }
+}
+
+/*
+ * Live is blue and breathing; frozen is cold and still.
+ *
+ * The state above gave every "on" control the same slate ring, which answered
+ * "something here is active" and not "which, and what does it mean". These two
+ * are a pair — one button, two modes — so they are told apart the way the modes
+ * differ: live is a page still moving under its own power, frozen is paper.
+ */
+.lc-web-live-toggle.is-live {
+  color: var(--live);
+  background: color-mix(in srgb, var(--live) 20%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--live) 60%, transparent),
+    0 0 10px color-mix(in srgb, var(--live) 45%, transparent);
+}
+
+/*
+ * The frozen half was the worse of the two: no state class at all, so it fell
+ * back to the dim shared icon and read as disabled — on the one control you
+ * press to start browsing.
+ */
+.lc-web-live-toggle:not(.is-live) {
+  color: var(--frozen);
+  background: color-mix(in srgb, var(--frozen) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--frozen) 28%, transparent);
+  opacity: 0.9;
+}
+
+.lc-web-live-toggle:not(.is-live):hover,
+.lc-web-live-toggle:not(.is-live):focus-visible {
+  color: var(--frozen);
+  background: color-mix(in srgb, var(--frozen) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--frozen) 45%, transparent);
+  opacity: 1;
+}
+
+/* Reader is warm — paper, not signal. Nothing else in the row is. */
+.lc-web-reader-toggle.is-on {
+  color: var(--reader);
+  background: color-mix(in srgb, var(--reader) 18%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--reader) 55%, transparent),
+    0 0 8px color-mix(in srgb, var(--reader) 34%, transparent);
+}
+
+.lc-web-reader-toggle:hover,
+.lc-web-reader-toggle:focus-visible {
+  background: color-mix(in srgb, var(--reader) 14%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /*
+   * A live page is the one thing on screen that is still changing without you.
+   * A slow bloom says so without becoming something that moves in the corner
+   * of your eye while you read.
+   */
+  .lc-web-live-toggle.is-live {
+    animation: lc-live-breathe 2.6s ease-in-out infinite;
+  }
+}
+
+@keyframes lc-live-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--live) 60%, transparent),
+      0 0 6px color-mix(in srgb, var(--live) 30%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--live) 75%, transparent),
+      0 0 13px color-mix(in srgb, var(--live) 55%, transparent);
   }
 }
 
