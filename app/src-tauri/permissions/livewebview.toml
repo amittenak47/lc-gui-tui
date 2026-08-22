@@ -1,0 +1,18 @@
+# The live pane and the offscreen render, on Android.
+#
+# Not platform-split the way `capabilities/desktop-webview.json` is. That file
+# fences off `core:webview:*` because those calls are actively harmful on a
+# tablet — a view that opens full-screen and cannot be closed. These are the
+# opposite: they do nothing anywhere else, and the desktop build answers them
+# with a sentence rather than a permission error, which is the same shape
+# `allow-webview-eval-json` already has.
+[[permission]]
+identifier = "allow-live-webview"
+description = "Open, place, hide and tear down the native child web view Android has instead of wry's"
+commands.allow = [
+  "live_webview_create",
+  "live_webview_place",
+  "live_webview_show",
+  "live_webview_close",
+  "live_webview_exists",
+]

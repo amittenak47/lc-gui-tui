@@ -604,19 +604,22 @@ export async function fetchWebPage(
   let note: string | undefined;
 
   /*
-   * Only where a second webview can actually be placed and torn down.
+   * Only where a second web view can actually be placed and torn down.
    *
-   * `isTauriRuntime()` alone was not the question. Android is a Tauri runtime
-   * and cannot host this: wry maps `new_as_child` onto `new` there and its
+   * `isTauriRuntime()` alone was not the question, and for a while the answer
+   * was "not Android". Wry maps `new_as_child` onto `new` there and its
    * `set_bounds` is a no-op, so the `y: 10_000` that parks the render view
-   * offscreen is ignored and the view opens full-screen over the app. The
-   * bridge it then needs refuses (`web_capture.rs`), and the close that would
-   * clear it is the same unsupported call — so the page you never asked to
-   * browse is left covering everything.
+   * offscreen was ignored and the view opened full-screen over the app; the
+   * bridge it then needed refused, and the close that would have cleared it
+   * was the same unsupported call. Reader mode hid that for a long time by
+   * returning from the cheap GET before reaching here; whole-page mode skips
+   * the extraction, so every open arrives here.
    *
-   * Reader mode used to hide this: it returned from the cheap GET before
-   * reaching here on anything Readability could extract. Whole-page mode
-   * skips that, so every open arrives here.
+   * What the guard asks now is which surface answers, not which platform this
+   * is: wry on desktop, the `livewebview` plugin's own `WebView` on Android,
+   * neither in a plain browser tab. The tablet renders the page rather than
+   * the fetched copy of it, which is the difference between a snapshot of a
+   * feed and a picture of its markup.
    */
   if (isTauriRuntime() && liveWebviewSupported()) {
     try {

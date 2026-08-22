@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop-webview",
-  "description": "Child-webview control, desktop only. The live pane and the offscreen page render are both a second webview placed at a rectangle inside the window and taken away again. wry's Android backend maps `new_as_child` onto `new` and its `set_bounds`/`set_visible` are no-ops, so there a `create` cannot be placed, hidden, or reliably closed — it opens full-screen over the app and the close path cannot clear it. The JS side already checks (`liveWebviewSupported`); this makes the IPC itself refuse, so a call site that forgets cannot reach the failure.",
+  "description": "Child-webview control, desktop only. The live pane and the offscreen page render are both a second webview placed at a rectangle inside the window and taken away again. wry's Android backend maps `new_as_child` onto `new` and its `set_bounds`/`set_visible` are no-ops, so there a `create` cannot be placed, hidden, or reliably closed — it opens full-screen over the app and the close path cannot clear it. The JS side does not route here on Android at all — `liveWebviewTransport` sends it to the `livewebview` plugin instead, and `liveWebviewSupported` now answers yes there rather than no. This file is the floor under that choice: it makes the IPC itself refuse, so a call site that picks the wrong transport cannot reach the failure it was picking around.",
   "windows": ["main"],
   "platforms": ["macOS", "windows", "linux"],
   "permissions": [
