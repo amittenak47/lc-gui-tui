@@ -8,7 +8,7 @@
 
 import DOMPurify from "dompurify";
 
-import { liveWebviewSupported } from "./liveWebviewSupport";
+import { liveWebviewTransport } from "./liveWebviewSupport";
 import { isSafeExternalUrl, normalizeExternalUrl } from "./openExternal";
 import { absolutizeCssUrls, scopeCss } from "./webPageCss";
 import { DEFAULT_WEB_RENDER_MODE, type WebRenderMode } from "./webRenderMode";
@@ -604,24 +604,28 @@ export async function fetchWebPage(
   let note: string | undefined;
 
   /*
-   * Only where a second web view can actually be placed and torn down.
+   * The offscreen render, on desktop only — and that is a speed decision.
    *
-   * `isTauriRuntime()` alone was not the question, and for a while the answer
-   * was "not Android". Wry maps `new_as_child` onto `new` there and its
-   * `set_bounds` is a no-op, so the `y: 10_000` that parks the render view
-   * offscreen was ignored and the view opened full-screen over the app; the
-   * bridge it then needed refused, and the close that would have cleared it
-   * was the same unsupported call. Reader mode hid that for a long time by
-   * returning from the cheap GET before reaching here; whole-page mode skips
-   * the extraction, so every open arrives here.
+   * It was briefly wired up on Android too, on the reasoning that the tablet
+   * should get the real page rather than a copy of its markup. It does get the
+   * real page: that is what Live is for, and Live opens in under a second.
+   * What this path costs there is the part that was not measured. Every step of
+   * it is a poll across the JS/Rust/JNI bridge — `readyState` every 100ms, then
+   * a fixed settle, then the serialise result every 100ms — and a round trip
+   * that is microseconds in-process on desktop is milliseconds through
+   * `run_mobile_plugin` and a hop to the UI thread. Opening a page in reader or
+   * frozen mode went from under a second to thirty and worse, on the same
+   * thread the pen draws on.
    *
-   * What the guard asks now is which surface answers, not which platform this
-   * is: wry on desktop, the `livewebview` plugin's own `WebView` on Android,
-   * neither in a plain browser tab. The tablet renders the page rather than
-   * the fetched copy of it, which is the difference between a snapshot of a
-   * feed and a picture of its markup.
+   * So the tablet takes the cheap GET again, which is what it did before and
+   * what made it fast. Fidelity has not gone anywhere — it moved to where it is
+   * actually wanted: press Live to read the page for real, press Freeze and
+   * `serializeLiveWebview` reads the DOM of the view already on screen. That
+   * costs one serialise instead of a second full page load, and it freezes the
+   * page you are looking at rather than a re-fetch of the address you started
+   * from.
    */
-  if (isTauriRuntime() && liveWebviewSupported()) {
+  if (isTauriRuntime() && liveWebviewTransport() === "wry") {
     try {
       const { captureRenderedPage } = await import("./webPageCapture");
       const width = webPageWidthForViewport(

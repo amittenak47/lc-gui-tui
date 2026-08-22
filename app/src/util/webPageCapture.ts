@@ -75,6 +75,16 @@ const LOAD_TIMEOUT_MS = 20_000;
  * snapshotted several heavy ones mid-build.
  */
 const SETTLE_MS = 2_800;
+/*
+ * A page you have been looking at is already settled.
+ *
+ * `SETTLE_MS` buys time for a framework to hydrate after `readyState` lies,
+ * which is a fresh-load problem. The live view has been on screen — loaded,
+ * scrolled, maybe clicked through — so Freeze was paying nearly three seconds
+ * for a wait that had already happened. Enough is left for an in-flight paint
+ * to land.
+ */
+const LIVE_SETTLE_MS = 250;
 const SERIALIZE_TIMEOUT_MS = 8_000;
 const POLL_MS = 100;
 const CHROME_UA =
@@ -318,18 +328,21 @@ export async function serializeLiveWebview(): Promise<{ url: string; html: strin
   if (!(await liveWebviewOpen())) {
     throw new Error("the live page has closed — open it again before freezing");
   }
-  return runSerialize(LIVE_WEBVIEW_LABEL);
+  return runSerialize(LIVE_WEBVIEW_LABEL, LIVE_SETTLE_MS);
 }
 
 /** Wait for load + settle, then serialise. Shared by live and read-once. */
-async function runSerialize(label: string): Promise<{ url: string; html: string }> {
+async function runSerialize(
+  label: string,
+  settleMs: number = SETTLE_MS,
+): Promise<{ url: string; html: string }> {
   await waitUntil(
     label,
     READY_STATE_SCRIPT,
     (value) => value === "complete" || value === "interactive",
     LOAD_TIMEOUT_MS,
   );
-  await sleep(SETTLE_MS);
+  await sleep(settleMs);
   await evalJson(label, SERIALIZE_PAGE_SCRIPT);
   const payload = await waitUntil(
     label,
