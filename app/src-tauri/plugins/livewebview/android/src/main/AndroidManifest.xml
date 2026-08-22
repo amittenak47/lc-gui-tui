@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- A second WebView in this app's own window needs nothing the app does
+         not already hold: INTERNET is declared by the generated app manifest,
+         and adding a view to the activity's own decor view is not a permission
+         the framework guards. -->
+</manifest>

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Everything the whiteboard window needs. The daemon is reached through this crate's own commands, so no HTTP-scope permission is required. `opener` needs both halves: allow-open-url grants the command, allow-default-urls grants the http/https scope it checks the URL against — with only the first, every open_url is refused at runtime and a footnote's Google search silently falls back to an in-app window. Child-webview control moved to `desktop-webview.json`, which is platform-scoped; `allow-webview-eval-json` stays here because the command itself answers Android with a sentence rather than a permission error.",
+  "description": "Everything the whiteboard window needs. The daemon is reached through this crate's own commands, so no HTTP-scope permission is required. `opener` needs both halves: allow-open-url grants the command, allow-default-urls grants the http/https scope it checks the URL against — with only the first, every open_url is refused at runtime and a footnote's Google search silently falls back to an in-app window. Child-webview control moved to `desktop-webview.json`, which is platform-scoped; `allow-webview-eval-json` stays here because the command itself answers Android with a sentence rather than a permission error — and on Android it now answers with the page, through the `livewebview` plugin. `allow-live-webview` is that plugin's bridge and stays here for the same reason: it is inert off Android rather than dangerous there.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -12,6 +12,7 @@
     "allow-lc-harness",
     "allow-webview-eval-json",
     "allow-set-gesture-exclusions",
-    "allow-set-drawing-immersive"
+    "allow-set-drawing-immersive",
+    "allow-live-webview"
   ]
 }

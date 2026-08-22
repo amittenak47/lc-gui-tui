@@ -39,6 +39,9 @@ malachite-bigint = { version = "=0.9.2", optional = true }
 tauri-plugin-inkrecognition = { path = "plugins/inkrecognition" }
 tauri-plugin-gallerysave = { path = "plugins/gallerysave" }
 tauri-plugin-gestureguard = { path = "plugins/gestureguard" }
+# wry has no child webview on Android; the live pane and the offscreen page
+# render are both a child webview. This plugin is that surface, in Kotlin.
+tauri-plugin-livewebview = { path = "plugins/livewebview" }
 # Only the share bridge needs it, and only on Android — the desktop build has
 # no share sheet to hand bytes to.
 base64 = "0.22"
