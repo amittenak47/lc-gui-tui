@@ -21,6 +21,7 @@ import { Webview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { WEB_PAGE_W } from "./webPage";
+import { liveWebviewSupported } from "./liveWebviewSupport";
 export { liveWebviewSupported } from "./liveWebviewSupport";
 import { queued } from "./labelQueue";
 import {
@@ -139,7 +140,23 @@ export async function openLiveWebview(url: string, rect: PaneRect): Promise<Webv
   return queued(LIVE_WEBVIEW_LABEL, () => openLiveWebviewNow(url, rect));
 }
 
+/**
+ * Refuse before anything is constructed.
+ *
+ * Both openers below hand wry a rectangle and expect to be able to take the
+ * view away again. Where `set_bounds` and `set_visible` are no-ops, neither is
+ * true, and a `new Webview` that cannot be placed is not a degraded view — it
+ * is a full-screen one over the app that the close path cannot clear. Throwing
+ * here is what lets `fetchWebPage` fall back to the fetched copy.
+ */
+function requirePlaceableWebview(): void {
+  if (!liveWebviewSupported()) {
+    throw new Error("page capture needs a desktop webview");
+  }
+}
+
 async function openLiveWebviewNow(url: string, rect: PaneRect): Promise<Webview> {
+  requirePlaceableWebview();
   await closeByLabel(LIVE_WEBVIEW_LABEL);
   try {
     return await createLiveWebview(url, rect);
@@ -212,6 +229,7 @@ export async function closeLiveWebview(): Promise<void> {
  * the caller decides whether browsing continues.
  */
 export async function serializeLiveWebview(): Promise<{ url: string; html: string }> {
+  requirePlaceableWebview();
   /*
    * Ask whether there is one before talking to it.
    *
@@ -264,6 +282,7 @@ async function captureRenderedPageNow(
   url: string,
   size?: { width?: number; height?: number },
 ): Promise<{ url: string; html: string }> {
+  requirePlaceableWebview();
   await closeCapture();
   const host = getCurrentWindow();
   const width = size?.width && size.width > 0 ? Math.round(size.width) : CAPTURE_WIDTH;
