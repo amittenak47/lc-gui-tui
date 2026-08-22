@@ -404,17 +404,27 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
     // ---- back --------------------------------------------------------------
 
     /**
-     * Back walks the page's history before it leaves the pane.
+     * Back is handed to the app, which owns the only history that counts.
      *
      * Registered at `PRIORITY_OVERLAY` so it outranks the sink
      * `GestureGuardPlugin` installs while a drawing tool is up: a live page is
      * not a surface anyone is writing on, and Back there means "the previous
      * page", not "stay put".
      *
-     * When the history is spent there is nothing left to go back *to*, and the
-     * honest next step is to leave the live page rather than the app. The JS
-     * side owns that decision, so it is told rather than acted on — see
-     * [notifyBackExhausted].
+     * This used to call `goBack()` on the WebView first and only tell the app
+     * once that ran out. That gave the tablet two histories — this view's,
+     * which the app cannot see, and the app's own, which the buttons in the
+     * omnibox walk — so Back did one thing under your thumb and another under
+     * the arrow, and switching live/frozen dropped whichever place you were
+     * not standing on. Two answers to "where am I" is the shape of bug that
+     * had Freeze saving the wrong page.
+     *
+     * So the gesture reports and the app decides: step its history, or leave
+     * the pane when there is nothing behind. The cost is real and accepted —
+     * `goBack()` would have restored scroll and session state that a re-fetch
+     * cannot. It is worth it here because a mark is bound to a capture the app
+     * recorded, and a page restored behind the app's back is one your ink
+     * cannot attach to.
      */
     private fun registerBack(label: String) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
@@ -454,16 +464,13 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     private fun onBack(label: String) {
-        val view = views[label]
-        if (view != null && view.visibility == View.VISIBLE && view.canGoBack()) {
-            view.goBack()
-            return
-        }
-        notifyBackExhausted()
+        val view = views[label] ?: return
+        if (view.visibility != View.VISIBLE) return
+        notifyBackPressed()
     }
 
     /**
-     * Tell the page that Back ran out of history.
+     * Tell the app that Back was pressed over the live pane.
      *
      * A DOM event on the app's own WebView rather than a plugin channel: there
      * is one listener, one live label, and nothing to say beyond the fact —
@@ -492,10 +499,10 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    private fun notifyBackExhausted() {
+    private fun notifyBackPressed() {
         val app = appWebView ?: return
         val script =
-            "window.dispatchEvent(new Event(" + JSONObject.quote(BACK_EXHAUSTED_EVENT) + "))"
+            "window.dispatchEvent(new Event(" + JSONObject.quote(BACK_EVENT) + "))"
         try {
             app.evaluateJavascript(script, null)
         } catch (_: Throwable) {
@@ -504,8 +511,8 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     companion object {
-        /** Matches `BACK_EXHAUSTED_EVENT` in `androidLiveWebview.ts`. */
-        const val BACK_EXHAUSTED_EVENT = "lc-live-webview-back-exhausted"
+        /** Matches `BACK_EVENT` in `androidLiveWebview.ts`. */
+        const val BACK_EVENT = "lc-live-webview-back"
 
         /** Matches `NAVIGATED_EVENT` in `androidLiveWebview.ts`. */
         const val NAVIGATED_EVENT = "lc-live-webview-navigated"

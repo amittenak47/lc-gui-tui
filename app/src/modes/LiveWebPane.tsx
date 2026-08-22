@@ -22,7 +22,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
-  onLiveWebviewBackExhausted,
+  onLiveWebviewBack,
   onLiveWebviewNavigated,
 } from "../util/androidLiveWebview";
 import { watchScreenOverlay } from "../util/screenOverlay";
@@ -46,15 +46,14 @@ export interface LiveWebPaneProps {
   visible: boolean;
   onError?: (message: string) => void;
   /**
-   * Back went past the first page in this pane's history.
+   * The system Back gesture, over the live pane.
    *
-   * Only ever fires on Android, where the plugin takes the system Back for the
-   * page while a live view is up — that is what makes the pane a browser
-   * rather than a picture of one. When there is no earlier page left, going
-   * back means leaving the live page, not leaving the app, and this is where
-   * that is decided.
+   * Android only. The plugin takes the gesture and acts on none of it: the
+   * history worth walking is the app's, so the decision — step back, or leave
+   * the pane because there is nothing behind — belongs to whoever owns that
+   * history, which is not this component either.
    */
-  onExit?: () => void;
+  onBack?: () => void;
   /**
    * The live view went somewhere — a tapped link, a search, a `pushState`.
    *
@@ -75,14 +74,14 @@ export function LiveWebPane({
   url,
   visible,
   onError,
-  onExit,
+  onBack,
   onNavigate,
 }: LiveWebPaneProps) {
   const holeRef = useRef<HTMLDivElement | null>(null);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
-  const onExitRef = useRef(onExit);
-  onExitRef.current = onExit;
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
   const onNavigateRef = useRef(onNavigate);
   onNavigateRef.current = onNavigate;
 
@@ -102,14 +101,14 @@ export function LiveWebPane({
   );
 
   /*
-   * Back belongs to the page first and to the pane second.
+   * Back belongs to whoever owns the history, which is neither of us.
    *
    * The subscription is a `window` listener, so it costs nothing where nothing
    * ever dispatches — desktop keeps the wry view and never sends this. Bound
    * once for the life of the pane rather than per address: history survives a
    * navigation, and so should the way out of it.
    */
-  useEffect(() => onLiveWebviewBackExhausted(() => onExitRef.current?.()), []);
+  useEffect(() => onLiveWebviewBack(() => onBackRef.current?.()), []);
 
   /**
    * Bumped when a view finishes opening, so the visibility effect re-runs.
