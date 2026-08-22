@@ -8,6 +8,7 @@
 
 import DOMPurify from "dompurify";
 
+import { liveWebviewSupported } from "./liveWebviewSupport";
 import { isSafeExternalUrl, normalizeExternalUrl } from "./openExternal";
 import { absolutizeCssUrls, scopeCss } from "./webPageCss";
 import { DEFAULT_WEB_RENDER_MODE, type WebRenderMode } from "./webRenderMode";
@@ -602,7 +603,22 @@ export async function fetchWebPage(
   let source: WebHtmlSource = "fetch";
   let note: string | undefined;
 
-  if (isTauriRuntime()) {
+  /*
+   * Only where a second webview can actually be placed and torn down.
+   *
+   * `isTauriRuntime()` alone was not the question. Android is a Tauri runtime
+   * and cannot host this: wry maps `new_as_child` onto `new` there and its
+   * `set_bounds` is a no-op, so the `y: 10_000` that parks the render view
+   * offscreen is ignored and the view opens full-screen over the app. The
+   * bridge it then needs refuses (`web_capture.rs`), and the close that would
+   * clear it is the same unsupported call — so the page you never asked to
+   * browse is left covering everything.
+   *
+   * Reader mode used to hide this: it returned from the cheap GET before
+   * reaching here on anything Readability could extract. Whole-page mode
+   * skips that, so every open arrives here.
+   */
+  if (isTauriRuntime() && liveWebviewSupported()) {
     try {
       const { captureRenderedPage } = await import("./webPageCapture");
       const width = webPageWidthForViewport(

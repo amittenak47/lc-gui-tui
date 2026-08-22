@@ -63,27 +63,54 @@ export function LiveWebPane({ url, visible, onError }: LiveWebPaneProps) {
   }, [url]);
 
   /*
-   * Follow the hole.
+   * Follow the hole — once per frame, and only when it has moved.
    *
    * A ResizeObserver catches layout changes the window never hears about — the
    * split sash, the agent panel opening — and `scroll` catches the page moving
-   * under a scroll without resizing. Both are cheap: two IPC calls that set a
-   * rectangle.
+   * under a scroll without resizing. `scroll` is registered in the capture
+   * phase, which means every scroller in the app, and a momentum scroll fires
+   * it at display rate. A place is not the "two IPC calls" it reads as: it is
+   * a `get_all_webviews` to resolve the label, then `setPosition`, then
+   * `setSize` — three round trips, each awaited. Unthrottled, that is enough
+   * traffic to sit on the bridge, and freezing a page dispatches five
+   * synthetic resizes of its own (see `Workspace`).
+   *
+   * So: coalesce to one placement per frame, and drop it entirely when the
+   * rectangle is where it already was, which is what most of those events say.
    */
   useEffect(() => {
     const node = holeRef.current;
     if (!node) return;
-    const place = () => {
-      if (!holeRef.current) return;
-      void placeLiveWebview(rectOf(holeRef.current));
+    let frame: number | null = null;
+    let placed: PaneRect | null = null;
+    const same = (a: PaneRect, b: PaneRect) =>
+      Math.round(a.x) === Math.round(b.x) &&
+      Math.round(a.y) === Math.round(b.y) &&
+      Math.round(a.width) === Math.round(b.width) &&
+      Math.round(a.height) === Math.round(b.height);
+    const placeNow = () => {
+      const hole = holeRef.current;
+      if (!hole) return;
+      const rect = rectOf(hole);
+      if (placed && same(placed, rect)) return;
+      placed = rect;
+      void placeLiveWebview(rect);
     };
-    place();
+    const place = () => {
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        placeNow();
+      });
+    };
+    placeNow();
     const observer =
       typeof ResizeObserver === "function" ? new ResizeObserver(place) : null;
     observer?.observe(node);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => {
+      if (frame != null) cancelAnimationFrame(frame);
       observer?.disconnect();
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
