@@ -19,7 +19,7 @@ import {
   type TextareaHTMLAttributes,
 } from "react";
 
-import { MIN_MEASURABLE_WIDTH_PX } from "./AnnotateDocument";
+import { shouldReportDocumentHeight } from "./AnnotateDocument";
 import type { BoardReadingSize } from "./codeFontSize";
 import { BODY_FONT_PX } from "./codeFontSize";
 
@@ -222,9 +222,7 @@ export const AnnotateMarkdownEditor = forwardRef<
         : 0;
     const next = Math.max(node.scrollHeight, paneHeight, 280);
     node.style.height = `${next}px`;
-    // See `MIN_MEASURABLE_WIDTH_PX` — a height read from a one-glyph-wide
-    // column is the input to the loop that keeps the column one glyph wide.
-    if (node.clientWidth > 0 && node.clientWidth < MIN_MEASURABLE_WIDTH_PX) return;
+    if (!shouldReportDocumentHeight(node.clientWidth, Boolean(value.trim()))) return;
     onMeasure?.(next);
   }, [onMeasure, value]);
 

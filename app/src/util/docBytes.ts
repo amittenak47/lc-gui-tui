@@ -171,6 +171,22 @@ export async function putDocBytes(hash: string, bytes: ArrayBuffer): Promise<voi
   await run(STORE, "readwrite", (store) => store.put(copy, hash));
 }
 
+/**
+ * Store the bytes, then refuse to continue if IndexedDB does not actually
+ * have them.
+ *
+ * `put` can resolve while the row is still missing on Android WebView. The
+ * workspace that mounts next reads by hash; a chip with no row is the
+ * "could not be opened" modal on the next launch.
+ */
+export async function putDocBytesVerified(hash: string, bytes: ArrayBuffer): Promise<void> {
+  await putDocBytes(hash, bytes);
+  const back = await getDocBytes(hash);
+  if (!back || back.byteLength !== bytes.byteLength || !bytesMatchDocHash(hash, back)) {
+    throw new Error("the file was not stored — try again");
+  }
+}
+
 export async function getDocBytes(hash: string): Promise<ArrayBuffer | null> {
   const value = await run<unknown>(STORE, "readonly", (store) => store.get(hash));
   return bytesFromStoredValue(value);
@@ -231,6 +247,36 @@ export async function loadBinaryDocBytes(
   } catch {
     return null;
   }
+}
+
+const IDB_RETRY_MS = [0, 150, 400] as const;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Read the local row a few times before asking the hub, and before telling
+ * the reader the file is gone.
+ *
+ * A write that just landed can miss the first `get` on WebView. Three local
+ * tries, hub only on the last.
+ */
+export async function loadBinaryDocBytesWithRetry(
+  hash: string,
+  remote?: (hash: string) => Promise<ArrayBuffer | null>,
+): Promise<ArrayBuffer | null> {
+  if (!hash) return null;
+  const last = IDB_RETRY_MS.length - 1;
+  for (let i = 0; i < IDB_RETRY_MS.length; i += 1) {
+    const wait = IDB_RETRY_MS[i]!;
+    if (wait > 0) await sleep(wait);
+    const got = await loadBinaryDocBytes(hash, i === last ? remote : undefined);
+    if (got) return got;
+  }
+  return null;
 }
 
 export async function deleteDocBytes(hash: string): Promise<void> {

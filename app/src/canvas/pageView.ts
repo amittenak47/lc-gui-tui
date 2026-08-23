@@ -18,6 +18,7 @@
  * a region, and a page has to follow the box they can see.
  */
 
+import { ANNOTATE_REGION, isAnnotatePageFrame } from "../templates/annotate";
 import { PAGE_BREAK, REGIONS, REGION_GUTTER, type RegionId } from "../templates/regions";
 
 /** What an element needs to have for paging to place and hide it. */
@@ -56,6 +57,16 @@ function frameRects(elements: readonly PageableElement[]): Map<string, Rect> {
   for (const element of elements) {
     if (element.isDeleted) continue;
     const meta = element.customData;
+    if (isAnnotatePageFrame(element)) {
+      const region = typeof meta?.lcRegion === "string" ? meta.lcRegion : ANNOTATE_REGION;
+      rects.set(region, {
+        x: num(element.x, 0),
+        y: num(element.y, 0),
+        w: num(element.width, 0),
+        h: num(element.height, 0),
+      });
+      continue;
+    }
     if (!meta?.lcRegionFrame) continue;
     const region = meta.lcRegion;
     if (typeof region !== "string") continue;
@@ -293,4 +304,32 @@ export function pageBounds(
     maxX: rect.x + rect.w + pad,
     maxY: rect.y + rect.h + pad,
   };
+}
+
+/**
+ * Clamp box for the pan: the page frame, or the document drawn on it when the
+ * document is the taller of the two.
+ *
+ * The frame is grown to its document by a measurement that travels out to React
+ * and back, and every link in that chain can fail quietly — a reader that
+ * reports before it has a column, a state update that lands after the last fit,
+ * a frame the grow pass cannot find. When one does, the frame sits at its floor
+ * while the HTML goes on painting the whole file over the top of it, and a clamp
+ * bounded on the frame pins the camera outright: a document whose end you can
+ * see and cannot scroll to.
+ *
+ * `renderedHeight` is the document layer's laid-out height. That layer is laid
+ * out at scene width and only ever *transformed* by the camera, so its height is
+ * already in scene units and needs no conversion. Zero means nothing is
+ * rendered, and the frame stands on its own.
+ *
+ * The frame still wins wherever it is taller, which is every case where the
+ * measurement did land — so this changes nothing about a page that was working.
+ */
+export function pageBoundsWithRendered<
+  T extends { minX: number; minY: number; maxX: number; maxY: number },
+>(bounds: T, renderedHeight: number, tailPad = 0): T {
+  if (!Number.isFinite(renderedHeight) || renderedHeight <= 0) return bounds;
+  const end = bounds.minY + renderedHeight + tailPad;
+  return end > bounds.maxY ? { ...bounds, maxY: end } : bounds;
 }

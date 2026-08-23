@@ -26,6 +26,50 @@ export const ANNOTATE_DATASET = "annotate";
  */
 export const ANNOTATE_REGION = "mdink-0";
 
+/** Stable id of the document page rectangle. */
+export const ANNOTATE_FRAME_ID = "lcmdink-0-frame";
+
+export function isAnnotatePageFrame(el: {
+  id?: string;
+  customData?: {
+    lcMdInkFrame?: boolean;
+    lcDocumentPage?: boolean;
+    lcRegion?: string;
+    lcRegionFrame?: boolean;
+  } | null;
+}): boolean {
+  if (el.id === ANNOTATE_FRAME_ID) return true;
+  const meta = el.customData;
+  if (!meta) return false;
+  return Boolean(
+    meta.lcMdInkFrame ||
+      meta.lcDocumentPage ||
+      (meta.lcRegionFrame && meta.lcRegion === ANNOTATE_REGION),
+  );
+}
+
+/** Convert can drop skeleton flags. Put them back so fit/clamp/ink still see a page. */
+export function stampAnnotateFrameMeta<
+  T extends {
+    id?: string;
+    customData?: Record<string, unknown> | null;
+  },
+>(elements: readonly T[]): T[] {
+  return elements.map((el) => {
+    if (!isAnnotatePageFrame(el)) return el;
+    return {
+      ...el,
+      customData: {
+        ...(el.customData ?? {}),
+        lcRegion: ANNOTATE_REGION,
+        lcRegionFrame: true,
+        lcMdInkFrame: true,
+        lcDocumentPage: true,
+      },
+    };
+  });
+}
+
 /**
  * Scene width of the document page — a reading column, not a desk.
  *
@@ -143,7 +187,7 @@ export function buildAnnotateTemplate(
   );
   return [
     {
-      id: "lcmdink-0-frame",
+      id: ANNOTATE_FRAME_ID,
       type: "rectangle",
       x: 0,
       y: 0,

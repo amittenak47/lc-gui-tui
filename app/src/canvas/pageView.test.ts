@@ -6,6 +6,7 @@ import {
   hasPagedElements,
   pageAtViewport,
   pageBounds,
+  pageBoundsWithRendered,
   regionOfElement,
   viewportBand,
   type PageableElement,
@@ -219,5 +220,96 @@ describe("pageAtViewport", () => {
     expect(at(REGIONS.approach.y + REGIONS.approach.h + 10_000, 400)).toBeNull();
     // A degenerate camera is not a page.
     expect(pageAtViewport(TEMPLATE, ORDER as unknown as RegionId[], 100, 100)).toBeNull();
+  });
+});
+
+/**
+ * The page frame is a claim about the document; the rendered layer is the
+ * document. Where they disagree, the reader can see the taller one.
+ */
+describe("pageBoundsWithRendered", () => {
+  /** As the annotate template seeds it: `MD_INK_MIN_PAGE_H`, before any measure. */
+  const floor = { minX: 0, minY: 0, maxX: 760, maxY: 1100 };
+
+  it("stretches a frame left at its floor down to the document on it", () => {
+    const grown = pageBoundsWithRendered(floor, 9000, 180);
+    // Without this the clamp reads 1100 against a taller viewport, pins scrollY
+    // and the document will not scroll past its first screen.
+    expect(grown.maxY).toBe(9180);
+    expect(grown.minY).toBe(floor.minY);
+    expect(grown.maxX).toBe(floor.maxX);
+  });
+
+  it("leaves a frame that already grew alone", () => {
+    const measured = { ...floor, maxY: 9180 };
+    expect(pageBoundsWithRendered(measured, 9000, 180)).toBe(measured);
+  });
+
+  it("measures the document from the top of the page, not from zero", () => {
+    const offset = { minX: 0, minY: 4000, maxX: 760, maxY: 5100 };
+    expect(pageBoundsWithRendered(offset, 9000, 180).maxY).toBe(13180);
+  });
+
+  it("says nothing when nothing is rendered", () => {
+    // An empty note reads zero, and a reader that has not laid out is supposed
+    // to stay silent rather than report one — either way the frame stands.
+    expect(pageBoundsWithRendered(floor, 0, 180)).toBe(floor);
+    expect(pageBoundsWithRendered(floor, Number.NaN, 180)).toBe(floor);
+    expect(pageBoundsWithRendered(floor, -20, 180)).toBe(floor);
+  });
+
+  it("lets the pan clamp travel once the rendered layer is taller than the 1100 floor", () => {
+    const visH = 1100;
+    expect(floor.maxY - floor.minY).toBeLessThanOrEqual(visH + 1);
+    const grown = pageBoundsWithRendered(floor, 9000, 180);
+    expect(grown.maxY - grown.minY).toBeGreaterThan(visH + 1);
+  });
+});
+
+describe("pageBounds for a markdown document", () => {
+  it("finds lcmdink-0-frame without any practice region in the scene", () => {
+    const pad = REGION_GUTTER / 2;
+    const scene: PageableElement[] = [
+      {
+        id: "lcmdink-0-frame",
+        type: "rectangle",
+        x: 0,
+        y: 0,
+        width: 760,
+        height: 85920,
+        customData: {
+          lcRegion: "mdink-0",
+          lcRegionFrame: true,
+          lcMdInkFrame: true,
+          lcDocumentPage: true,
+        },
+      },
+    ];
+    expect(pageBounds(scene, "mdink-0")).toEqual({
+      minX: -pad,
+      minY: -pad,
+      maxX: 760 + pad,
+      maxY: 85920 + pad,
+    });
+  });
+
+  it("still finds the page when convert left only the stable id", () => {
+    const pad = REGION_GUTTER / 2;
+    const scene: PageableElement[] = [
+      {
+        id: "lcmdink-0-frame",
+        type: "rectangle",
+        x: 0,
+        y: 0,
+        width: 760,
+        height: 1100,
+      },
+    ];
+    expect(pageBounds(scene, "mdink-0")).toEqual({
+      minX: -pad,
+      minY: -pad,
+      maxX: 760 + pad,
+      maxY: 1100 + pad,
+    });
   });
 });

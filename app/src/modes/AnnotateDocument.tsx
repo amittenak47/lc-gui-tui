@@ -67,6 +67,24 @@ export function renderMarkdown(source: string): string {
  */
 export const MIN_MEASURABLE_WIDTH_PX = 80;
 
+/**
+ * True when the paper column is wide enough that its height means something.
+ *
+ * Empty notes wait for this bar so a 0×0 first paint is not reported as
+ * "nothing in it". Files with text must not wait — that swallow left them on
+ * the 1100 floor with the pan clamp pinned.
+ */
+export function columnIsMeasurable(clientWidth: number): boolean {
+  return Number.isFinite(clientWidth) && clientWidth >= MIN_MEASURABLE_WIDTH_PX;
+}
+
+/** Whether `onMeasure` should fire for this layout. */
+export function shouldReportDocumentHeight(clientWidth: number, hasText: boolean): boolean {
+  if (!Number.isFinite(clientWidth) || clientWidth <= 0) return false;
+  if (hasText) return true;
+  return columnIsMeasurable(clientWidth);
+}
+
 export function AnnotateDocument({ source, onMeasure, selectable = false }: AnnotateDocumentProps) {
   const nodeRef = useRef<HTMLDivElement | null>(null);
   const html = useMemo(() => renderMarkdown(source), [source]);
@@ -90,16 +108,22 @@ export function AnnotateDocument({ source, onMeasure, selectable = false }: Anno
      * with nothing in it.
      */
     const report = () => {
-      if (node.clientWidth > 0 && node.clientWidth < MIN_MEASURABLE_WIDTH_PX) return;
-      onMeasureRef.current?.(node.scrollHeight);
+      if (!shouldReportDocumentHeight(node.clientWidth, Boolean(source.trim()))) return;
+      onMeasureRef.current?.(Math.max(node.scrollHeight, node.offsetHeight));
     };
     report();
+    const raf = requestAnimationFrame(report);
 
-    if (typeof ResizeObserver !== "function") return;
+    if (typeof ResizeObserver !== "function") {
+      return () => cancelAnimationFrame(raf);
+    }
     const observer = new ResizeObserver(report);
     observer.observe(node);
-    return () => observer.disconnect();
-  }, [html]);
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
+  }, [html, source]);
 
   return (
     <div
