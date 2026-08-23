@@ -7138,21 +7138,32 @@ body[data-lc-sash-drag="horizontal"] {
   }
 }
 
+.lc-page-content-ride {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  pointer-events: none;
+  will-change: transform;
+}
+
 .lc-page-content-slot {
   position: absolute;
   left: 0;
   top: 0;
   z-index: 1;
   transform-origin: 0 0;
-  /* Scroll moves this via transform only — keep it off the layout path. */
   will-change: transform;
-  contain: layout paint;
+  contain: layout;
+  overflow: visible;
   pointer-events: none;
   user-select: none;
 }
 
 .lc-md-ink-doc {
   width: 100%;
+  height: auto;
+  overflow: visible;
   padding: 36px 28px 64px;
   box-sizing: border-box;
   color: var(--ink);
@@ -15700,6 +15711,15 @@ button.lc-row-selected:hover:not(:disabled) {
  * transformed in lockstep with the first (see `marksSlotNodeRef`), is what lets
  * a mark be found in Annotate mode as well as Scroll.
  */
+.lc-page-marks-ride {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 13;
+  pointer-events: none;
+  will-change: transform;
+}
+
 .lc-page-marks-slot {
   position: absolute;
   left: 0;

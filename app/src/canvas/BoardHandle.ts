@@ -163,6 +163,14 @@ export interface BoardHandle {
    * pointer used to be required before the pane looked right.
    */
   nudgeViewportFit(): void;
+  /**
+   * Re-read the paper's laid-out height into the pan clamp.
+   *
+   * Open and unpark often measure while the column is `display: none` or under
+   * Home's overlay. ResizeObserver can miss the reveal; this is the kick the
+   * camera needs so `clampScrollToBounds` will travel down the file.
+   */
+  syncDocumentScrollBounds(): void;
   /** Fit one template region to the viewport — the mobile "page turn". */
   fitRegion(regionId: RegionId | string): void;
   /**

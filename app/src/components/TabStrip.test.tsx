@@ -199,6 +199,52 @@ describe("TabStrip", () => {
     view.unmount();
   });
 
+  it("does not cancel a load when the file chip is focused", () => {
+    /*
+     * Home (the wordmark) aborts an in-flight open. The file chip must not —
+     * tapping the document you asked for used to look like "go Home" if the
+     * overlay was still up, and left you needing a second tap that did nothing
+     * because the chip was already active.
+     */
+    const onFocus = vi.fn();
+    const onCancelLoad = vi.fn();
+    const view = mount({
+      tabs: [homeTab(), doc("d1", "notes.md")],
+      activeId: "d1",
+      onFocus,
+      onCancelLoad,
+    });
+    act(() => {
+      view.chips()[0]?.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
+    });
+    expect(onFocus).toHaveBeenCalledWith("d1");
+    expect(onCancelLoad).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("does not cancel a load when the file chip is focused", () => {
+    /*
+     * Home (the wordmark) aborts an in-flight open. The file chip must not —
+     * tapping the document you asked for used to look like "go Home" if the
+     * overlay was still up, and left you needing a second tap that did nothing
+     * because the chip was already active.
+     */
+    const onFocus = vi.fn();
+    const onCancelLoad = vi.fn();
+    const view = mount({
+      tabs: [homeTab(), doc("d1", "notes.md")],
+      activeId: "d1",
+      onFocus,
+      onCancelLoad,
+    });
+    act(() => {
+      view.chips()[0]?.querySelector<HTMLButtonElement>(".lc-tab-hit")?.click();
+    });
+    expect(onFocus).toHaveBeenCalledWith("d1");
+    expect(onCancelLoad).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
   it("badges parked documents from the record and the live one from the chip", () => {
     const live = <span className="lc-doc-index-chip is-ok">indexed</span>;
     const view = mount({
