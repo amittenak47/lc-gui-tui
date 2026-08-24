@@ -82,8 +82,8 @@ audit-*.jsonl.progress.json
 
 # --- Misc tooling ---
 .mimicflow/
-.tmp-unix/
-.tmp-frames/
+# Last `adb connect` target for wireless debugging (IP:port).
+/app/.adb-wireless
 
 # Accidental build outDir under the source tree — a `vite build` run from a
 # subdirectory drops pdf.js cmaps and fonts wherever it was invoked.

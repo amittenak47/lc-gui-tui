@@ -17,7 +17,7 @@ The APK is **self-contained**: it runs the same in-process harness router as des
 | **Rust Android targets** | `rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android` |
 | **Node 20+** | For `npm install` / Tauri build |
 
-On the tablet: **Settings → About → tap Build number 7×** → Developer options → **USB debugging** on.
+On the tablet: **Settings → About → tap Build number 7×** → Developer options → **USB debugging** on. For no-cable installs, also turn on **Wireless debugging** (Android 11+; Magic Note Pad is 14).
 
 ---
 
@@ -163,7 +163,18 @@ npm run android:apk:practice
 adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk
 ```
 
-**No USB cable:** copy `app-universal-debug.apk` to the tablet → open in **Files** → allow "Install unknown apps" when prompted.
+**No USB cable:** wireless debugging (same Wi-Fi as the PC). Pairing is once; the connect *port* changes after a reboot.
+
+```cmd
+cd <repo>\app
+npm run adb:pair -- 192.168.1.20:37123 123456
+npm run adb:connect -- 192.168.1.20:41259
+npm run android:wireless:practice
+```
+
+The pairing port is on **Pair device with pairing code**. The connect port is the **IP address & Port** line on the main Wireless debugging screen — they are not the same. After that, `npm run adb:reconnect` then `npm run android:wireless:practice`. Live PDF open log: `npm run logs:open`.
+
+Or copy `app-universal-debug.apk` to the tablet → open in **Files** → allow "Install unknown apps" when prompted.
 
 **"App not installed":** old signing key still on device:
 
