@@ -9,6 +9,9 @@ import {
   peekPadSyncQueueForTests,
   pullPads,
   PAD_TRASH_OP_QUEUE_CAP,
+  PAD_SYNC_IDLE_KICK_MS_ANDROID,
+  PAD_SYNC_IDLE_KICK_MS_DESKTOP,
+  padSyncIdleKickMs,
   pushPadSnapshot,
   pushProblemPad,
   pushWhiteboardPad,
@@ -267,6 +270,16 @@ describe("padSync ping", () => {
     }));
     await applyPadSyncPing(fakeClient({ pingPadSync }));
     expect(pingPadSync).not.toHaveBeenCalled();
+  });
+
+  it("waits longer before the first idle kick on Android", () => {
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" });
+    expect(padSyncIdleKickMs()).toBe(PAD_SYNC_IDLE_KICK_MS_DESKTOP);
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (Linux; Android 14; SM-X910) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    });
+    expect(padSyncIdleKickMs()).toBe(PAD_SYNC_IDLE_KICK_MS_ANDROID);
   });
 
   it("backs off after a dead hub instead of retrying immediately", async () => {

@@ -49,6 +49,7 @@ import { AGENT_SHEET_LOCK_EVENT, loadAgentSheetLock } from "./util/agentSheetLoc
 import { loadTestForwardMode, type TestForwardMode } from "./util/agentPrefs";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { installSafeAreaInsets } from "./util/safeArea";
+import { isAndroidDevice } from "./util/androidDevice";
 import { useIsMobile } from "./util/mobile";
 import {
   HOME_TAB_ID,
@@ -125,6 +126,7 @@ async function loadTauriInvoke() {
 
 export function App() {
   const mobile = useIsMobile();
+  const android = isAndroidDevice();
 
   useEffect(() => {
     if (!mobile) return;
@@ -925,6 +927,7 @@ export function App() {
         className={[
           "lc-app",
           mobile ? "lc-mobile" : "",
+          android ? "lc-android" : "",
           chrome.problem ? "lc-app-problem" : "",
           chrome.pad ? "lc-app-pad" : "",
           chrome.agentOpen ? "lc-app-agent-open" : "",

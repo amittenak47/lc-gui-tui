@@ -1,14 +1,16 @@
 /**
  * Picking a quote out of the page.
  *
- * On a tablet, hold-still then drag is the quote path. Native drag-select is
+ * On Android, hold-still then drag is the quote path. Native drag-select is
  * left for mouse / highlighter: Android WebView paints a magnified copy of
  * selected text that does not follow the page camera's `translate() scale()`,
  * so the styled overlay sits on the wrong glyphs.
  *
+ * Desktop keeps native drag-select (and Annotate only from the hold box).
  * Hold stillness of {@link SELECT_HOLD_ARM_MS} claims the finger; the drag
  * after that is the box. Immediate travel is pan (touch) or native select
- * (mouse).
+ * (mouse). After the hold, Android starts the box in any direction; desktop
+ * still yields a mostly-vertical first move back to pan.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -46,6 +48,7 @@ import {
   HOLD_SENSITIVE_MS,
   SELECT_HOLD_ARM_MS,
   SELECT_HOLD_SLOP_PX,
+  selectHoldYieldsToScroll,
 } from "../util/gesture";
 import {
   claimSelectionGesture,
@@ -85,6 +88,7 @@ import {
 } from "../canvas/inkPaletteBridge";
 import { currentInkPalette } from "../util/inkPaletteHistory";
 import { footnoteThemeVars } from "../util/footnoteTheme";
+import { isAndroidDevice } from "../util/androidDevice";
 
 /** How far into the edge a drag has to reach before the page starts moving. */
 const SELECT_EDGE_PX = 36;
@@ -602,23 +606,30 @@ export function DocSelectionLayer({
       if (!text.trim()) return;
 
       const clientRects = tightClientRects(range, body);
-      const local = unionRectsIntoBlocks(clientRectsToLocal(body, clientRects));
       selectionScreenBoxRef.current = unionViewportBoxes(clientRects);
 
-      try {
-        window.getSelection()?.removeAllRanges();
-      } catch {
-        /* native overlay on Android fights the camera transform */
+      let hitRects: LocalRect[] = [];
+      if (isAndroidDevice()) {
+        const local = unionRectsIntoBlocks(clientRectsToLocal(body, clientRects));
+        try {
+          window.getSelection()?.removeAllRanges();
+        } catch {
+          /* native overlay on Android fights the camera transform */
+        }
+        setRects(local);
+        hitRects = local;
+      } else {
+        // Desktop: sheet-only chrome — native path paints no overlay rects.
+        setRects([]);
       }
 
-      setRects(local);
       setHitRects([]);
       setActionsVia("native");
       setSelection({
         text,
         excerpt: excerptOf(text),
         anchor,
-        hitRects: local,
+        hitRects,
       });
       setBand(null);
       setBandFading(false);
@@ -805,9 +816,18 @@ export function DocSelectionLayer({
           return;
         }
         if (moved <= SELECT_HOLD_SLOP_PX) return;
-        // Armed: any direction starts the box. Stillness already beat pan.
+        // Android: any direction starts the box. Stillness already beat pan.
         // Yielding vertical drags back to scroll made a hold-then-drag down
         // a paragraph (the natural annotate motion) never signal.
+        // Desktop: a mostly-vertical first move is still a reading pan.
+        if (!isAndroidDevice()) {
+          const dx = event.clientX - hold.startX;
+          const dy = event.clientY - hold.startY;
+          if (selectHoldYieldsToScroll(dx, dy)) {
+            clearGesture();
+            return;
+          }
+        }
         hold.lastX = event.clientX;
         hold.lastY = event.clientY;
         beginMarquee(hold);
@@ -2218,8 +2238,9 @@ export function DocSelectionLayer({
                           </button>
                         </>
                       )}
-                      {/* Annotate = make a mark — text quote or hold-marquee. */}
-                      {onAnnotate && (
+                      {/* Annotate = make a mark. Desktop: hold-marquee only.
+                          Android: native quote too — native handles are broken. */}
+                      {(isAndroidDevice() || actionsVia === "marquee") && onAnnotate && (
                         <button
                           type="button"
                           role="menuitem"
