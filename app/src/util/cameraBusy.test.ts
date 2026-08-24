@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isCameraBusy, noteCameraBusy, resetCameraBusyForTests } from "./cameraBusy";
+import {
+  CAMERA_BUSY_HOLD_MS,
+  isCameraBusy,
+  noteCameraBusy,
+  resetCameraBusyForTests,
+  waitWhileCameraBusy,
+} from "./cameraBusy";
 
 afterEach(() => {
   resetCameraBusyForTests();
@@ -19,7 +25,19 @@ describe("cameraBusy", () => {
     vi.setSystemTime(1_700_000_000_000);
     noteCameraBusy();
     expect(isCameraBusy()).toBe(true);
-    vi.advanceTimersByTime(200);
+    vi.advanceTimersByTime(CAMERA_BUSY_HOLD_MS - 1);
+    expect(isCameraBusy()).toBe(true);
+    vi.advanceTimersByTime(2);
+    expect(isCameraBusy()).toBe(false);
+  });
+
+  it("waitWhileCameraBusy resolves once the hold ends", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    noteCameraBusy();
+    const pending = waitWhileCameraBusy();
+    await vi.advanceTimersByTimeAsync(CAMERA_BUSY_HOLD_MS + 80);
+    await pending;
     expect(isCameraBusy()).toBe(false);
   });
 });

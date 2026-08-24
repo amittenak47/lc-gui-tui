@@ -269,6 +269,23 @@ describe("padSync ping", () => {
     expect(pingPadSync).not.toHaveBeenCalled();
   });
 
+  it("backs off after a dead hub instead of retrying immediately", async () => {
+    const padHub = await import("./padHub");
+    const hubSpy = vi.spyOn(padHub, "loadPadHub").mockReturnValue({
+      url: "http://127.0.0.1:9",
+      token: "t",
+    });
+    const pingPadSync = vi.fn(async () => {
+      throw new Error("failed to fetch");
+    });
+    const client = fakeClient({ pingPadSync });
+    await expect(applyPadSyncPing(client)).rejects.toThrow(/failed to fetch/);
+    pingPadSync.mockClear();
+    await applyPadSyncPing(client);
+    expect(pingPadSync).not.toHaveBeenCalled();
+    hubSpy.mockRestore();
+  });
+
   it("writes a newer whiteboard and skips an older annotate", async () => {
     getWhiteboardNotebook.mockResolvedValue({
       id: "w1",

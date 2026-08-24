@@ -69,6 +69,12 @@ export const PAD_SYNC_PING_MS = 15_000;
 let padSyncPingInFlight = false;
 let idlePadSyncTimer: ReturnType<typeof setTimeout> | 0 = 0;
 
+/** After a dead hub, do not retry on the 15s tick until this time. */
+let hubBackoffUntil = 0;
+let hubBackoffMs = 20_000;
+const HUB_BACKOFF_MIN_MS = 20_000;
+const HUB_BACKOFF_MAX_MS = 5 * 60_000;
+
 export const PAD_TRASH_OP_QUEUE_CAP = 8;
 
 export const PAD_HUB_WINDOW_EVENT = "lc-pad-hub";
@@ -107,10 +113,27 @@ const memoryQueue: PadSyncJob[] = [];
 
 export function resetPadSyncQueueForTests(): void {
   memoryQueue.length = 0;
+  hubBackoffUntil = 0;
+  hubBackoffMs = HUB_BACKOFF_MIN_MS;
 }
 
 export function peekPadSyncQueueForTests(): PadSyncJob[] {
   return [...memoryQueue];
+}
+
+function hubBackoffActive(): boolean {
+  return loadPadHub() != null && Date.now() < hubBackoffUntil;
+}
+
+function noteHubPingOk(): void {
+  hubBackoffUntil = 0;
+  hubBackoffMs = HUB_BACKOFF_MIN_MS;
+}
+
+function noteHubPingFail(): void {
+  if (!loadPadHub()) return;
+  hubBackoffUntil = Date.now() + hubBackoffMs;
+  hubBackoffMs = Math.min(HUB_BACKOFF_MAX_MS, hubBackoffMs * 2);
 }
 
 function jobId(): string {
@@ -568,6 +591,7 @@ export function scheduleIdlePadSyncPing(
     const kick = () => {
       // Skip. The 15s tick retries. Do not poll every 200ms while flicking.
       if (isCameraBusy()) return;
+      if (hubBackoffActive()) return;
       void applyPadSyncPing(client, opts).catch(() => {});
     };
     if (typeof requestIdleCallback === "function") {
@@ -575,7 +599,7 @@ export function scheduleIdlePadSyncPing(
     } else {
       kick();
     }
-  }, 400);
+  }, 1000);
 }
 
 export async function pushDocBytes(client: LcClient, hash: string, bytes: ArrayBuffer): Promise<void> {
@@ -912,6 +936,7 @@ export async function applyPadSyncPing(
   opts?: { emit?: boolean },
 ): Promise<void> {
   if (isCameraBusy()) return;
+  if (hubBackoffActive()) return;
   if (padSyncPingInFlight) return;
   padSyncPingInFlight = true;
   try {
@@ -927,7 +952,14 @@ async function applyPadSyncPingBody(
 ): Promise<void> {
   const emit = opts?.emit !== false;
   const since = loadPadSyncSince();
-  const ping = await client.pingPadSync(since);
+  let ping;
+  try {
+    ping = await client.pingPadSync(since);
+    noteHubPingOk();
+  } catch (cause) {
+    noteHubPingFail();
+    throw cause;
+  }
   const pendingDelete = new Set(
     memoryQueue
       .filter((job) => job.op === "deletePad")

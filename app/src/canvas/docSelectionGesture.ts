@@ -20,6 +20,8 @@
  * DocSelectionLayer defers `place()` until the camera settles.
  */
 
+import { noteCameraBusy } from "../util/cameraBusy";
+
 let claimed = false;
 let onClaimed: (() => void) | null = null;
 
@@ -37,6 +39,7 @@ export function onSelectionGestureClaimed(handler: (() => void) | null): void {
 /** The selection has taken this gesture — Board must not pan on it. */
 export function claimSelectionGesture(): void {
   claimed = true;
+  noteCameraBusy();
   onClaimed?.();
 }
 

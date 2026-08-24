@@ -1,12 +1,14 @@
 /**
  * Picking a quote out of the page.
  *
- * Two gestures in Scroll mode — and the same two when Ask-area (🔍) is on:
- * 1. Native text selection — down + drag immediately (any direction). Primary
- *    path for Copy / Google.
- * 2. Hold-still then drag — annotate region marquee (figures / Mark).
- *    Stillness of {@link SELECT_HOLD_ARM_MS} claims the finger; the drag
- *    after that is the box. Immediate travel is native select or pan.
+ * On a tablet, hold-still then drag is the quote path. Native drag-select is
+ * left for mouse / highlighter: Android WebView paints a magnified copy of
+ * selected text that does not follow the page camera's `translate() scale()`,
+ * so the styled overlay sits on the wrong glyphs.
+ *
+ * Hold stillness of {@link SELECT_HOLD_ARM_MS} claims the finger; the drag
+ * after that is the box. Immediate travel is pan (touch) or native select
+ * (mouse).
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -44,7 +46,6 @@ import {
   HOLD_SENSITIVE_MS,
   SELECT_HOLD_ARM_MS,
   SELECT_HOLD_SLOP_PX,
-  selectHoldYieldsToScroll,
 } from "../util/gesture";
 import {
   claimSelectionGesture,
@@ -60,6 +61,7 @@ import {
   MIN_BAND_PX,
   type LocalRect,
   bandFromLocalPoints,
+  clientRectsToLocal,
   coversViewportBox,
   isPageCoverRect,
   finalizeMarquee,
@@ -72,6 +74,7 @@ import {
   tightClientRects,
   tightLocalRects,
   unionLocalRects,
+  unionRectsIntoBlocks,
   unionViewportBoxes,
   viewportToLocal,
 } from "../util/docMarquee";
@@ -598,19 +601,24 @@ export function DocSelectionLayer({
       const text = textForAnchor(root, anchor);
       if (!text.trim()) return;
 
-      // Remember the DOM Selection's screen box — native path paints no overlay
-      // rects, so highlightBox() must not fall back to the top of the window.
       const clientRects = tightClientRects(range, body);
+      const local = unionRectsIntoBlocks(clientRectsToLocal(body, clientRects));
       selectionScreenBoxRef.current = unionViewportBoxes(clientRects);
 
-      // Sheet-only chrome for native path — no grey word boxes / confirm band.
+      try {
+        window.getSelection()?.removeAllRanges();
+      } catch {
+        /* native overlay on Android fights the camera transform */
+      }
+
+      setRects(local);
       setHitRects([]);
       setActionsVia("native");
       setSelection({
         text,
         excerpt: excerptOf(text),
         anchor,
-        hitRects: [],
+        hitRects: local,
       });
       setBand(null);
       setBandFading(false);
@@ -797,12 +805,9 @@ export function DocSelectionLayer({
           return;
         }
         if (moved <= SELECT_HOLD_SLOP_PX) return;
-        const dx = event.clientX - hold.startX;
-        const dy = event.clientY - hold.startY;
-        if (selectHoldYieldsToScroll(dx, dy)) {
-          clearGesture();
-          return;
-        }
+        // Armed: any direction starts the box. Stillness already beat pan.
+        // Yielding vertical drags back to scroll made a hold-then-drag down
+        // a paragraph (the natural annotate motion) never signal.
         hold.lastX = event.clientX;
         hold.lastY = event.clientY;
         beginMarquee(hold);
@@ -2213,8 +2218,8 @@ export function DocSelectionLayer({
                           </button>
                         </>
                       )}
-                      {/* Annotate = make a mark — hold-marquee only, not plain drag-select. */}
-                      {actionsVia === "marquee" && onAnnotate && (
+                      {/* Annotate = make a mark — text quote or hold-marquee. */}
+                      {onAnnotate && (
                         <button
                           type="button"
                           role="menuitem"
