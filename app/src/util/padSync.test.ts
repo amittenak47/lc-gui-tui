@@ -16,6 +16,7 @@ import {
   restoreTrashedPad,
   TrashQueueFullError,
 } from "./padSync";
+import { noteCameraBusy, resetCameraBusyForTests } from "./cameraBusy";
 
 const restoreWhiteboardNotebook = vi.fn(async (_entry?: unknown) => {});
 const restoreWhiteboardFromTrash = vi.fn(
@@ -131,6 +132,7 @@ function fakeClient(overrides: Partial<LcClient> = {}): LcClient {
 
 beforeEach(() => {
   resetPadSyncQueueForTests();
+  resetCameraBusyForTests();
   restoreWhiteboardNotebook.mockClear();
   restoreAnnotateDoc.mockClear();
   deleteWhiteboardNotebook.mockClear();
@@ -160,6 +162,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  resetCameraBusyForTests();
 });
 
 describe("padSync queue", () => {
@@ -253,6 +256,19 @@ describe("deletePadEverywhere", () => {
 });
 
 describe("padSync ping", () => {
+  it("skips a tick while the camera is moving", async () => {
+    noteCameraBusy();
+    const pingPadSync = vi.fn(async () => ({
+      now: 100,
+      whiteboard: [],
+      annotate: [],
+      snapshots: [],
+      gone: [],
+    }));
+    await applyPadSyncPing(fakeClient({ pingPadSync }));
+    expect(pingPadSync).not.toHaveBeenCalled();
+  });
+
   it("writes a newer whiteboard and skips an older annotate", async () => {
     getWhiteboardNotebook.mockResolvedValue({
       id: "w1",

@@ -56,6 +56,7 @@ import {
   type LayoutElement,
 } from "../templates/regionLayout";
 import { readingColumnWidth } from "../templates/readingColumn";
+import { noteCameraBusy } from "../util/cameraBusy";
 import { traceOpen } from "../util/messageOf";
 import { ANNOTATE_PAGE_W, ANNOTATE_REGION, MD_INK_MIN_PAGE_H, MD_INK_TAIL_PAD, buildAnnotateTemplate, isAnnotatePageFrame, stampAnnotateFrameMeta } from "../templates/annotate";
 import {
@@ -1832,6 +1833,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   clearPanOffsetsRef.current = clearPanOffsets;
 
   const pulseCameraMotion = useCallback(() => {
+    noteCameraBusy();
     if (!cameraMotionActiveRef.current) {
       cameraMotionActiveRef.current = true;
       // Gesture open: Excalidraw may have remounted canvases since last ride.
@@ -5138,11 +5140,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        */
       const sideScroll = horizontalScrollHost(target);
       if (sideScroll) {
-        if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+        if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+          noteCameraBusy();
+          return;
+        }
         if (event.shiftKey && event.deltaY !== 0) {
           event.preventDefault();
           event.stopPropagation();
           sideScroll.scrollLeft += event.deltaY;
+          noteCameraBusy();
           return;
         }
       }
@@ -5199,6 +5205,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     root.addEventListener("wheel", onWheel, { capture: true, passive: false });
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
   }, [clampPanScroll, interactive, mobile, pulseCameraMotion, reportCodeSlot]);
+
+  useEffect(() => {
+    const root = boardRef.current;
+    if (!root) return;
+    const onNestedScroll = (event: Event) => {
+      if (horizontalScrollHost(event.target)) noteCameraBusy();
+    };
+    root.addEventListener("scroll", onNestedScroll, { capture: true, passive: true });
+    return () => root.removeEventListener("scroll", onNestedScroll, { capture: true });
+  }, [interactive]);
 
   type FitMode = "frame" | "camera" | "both" | "keepY";
 

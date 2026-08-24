@@ -277,6 +277,7 @@ import {
   pullPads,
   flushPadSyncQueue,
   applyPadSyncPing,
+  scheduleIdlePadSyncPing,
   PAD_HUB_WINDOW_EVENT,
   PAD_SYNC_PING_MS,
   pushAnnotatePad,
@@ -289,6 +290,9 @@ import {
   tombstonePad,
   type PadHubWindowDetail,
 } from "./util/padSync";
+import { isCameraBusy } from "./util/cameraBusy";
+import { getParkedDocSource, parkDocSource } from "./util/parkedDocSource";
+import { MAX_SOURCE_CHARS } from "./util/tabPersist";
 import { ensureDevicePrefs } from "./util/devicePrefs";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
 import {
@@ -1141,8 +1145,9 @@ export function Workspace({
     let cancelled = false;
     void (async () => {
       try {
+        if (isCameraBusy()) return;
         await applyPadSyncPing(client).catch(() => {});
-        if (cancelled) return;
+        if (cancelled || isCameraBusy()) return;
         await pullPads(client);
         if (cancelled) return;
         await flushPadSyncQueue(client);
@@ -1163,6 +1168,7 @@ export function Workspace({
     const tick = () => {
       if (cancelled) return;
       if (document.visibilityState === "hidden") return;
+      if (isCameraBusy()) return;
       void applyPadSyncPing(client).catch(() => {});
     };
     const timer = window.setInterval(tick, PAD_SYNC_PING_MS);
@@ -2199,22 +2205,6 @@ export function Workspace({
         setBoardPreparing(true);
       }
       try {
-        /*
-         * Kicked, not waited on.
-         *
-         * This used to be awaited, which put a full sync round trip in front of
-         * every document open. The ping is not cheap — it walks each annotate
-         * row and, for any binary one with no local copy, asks the hub for its
-         * bytes. A library with PDFs whose bytes are missing therefore paid a
-         * failing round trip per document, on every open, before the file on
-         * this device was so much as looked at. With no hub reachable that is
-         * where the open stopped: no error, just a spinner.
-         *
-         * Nothing here needs it. The ping folds in what other devices changed;
-         * reading a file that is already on this one does not depend on that.
-         * `loadWorkspace` already kicks it this way.
-         */
-        void applyPadSyncPing(client, { emit: false }).catch(() => {});
         await migrateLegacyWhiteboard(countWhiteboardPages);
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the coach sheet never paints mid-open.
@@ -2344,6 +2334,7 @@ export function Workspace({
         } else if (userLoad) {
           boardRef.current?.showPadTitle(title);
         }
+        scheduleIdlePadSyncPing(client, { emit: false });
       } catch (cause) {
         if (workspaceLoadGenRef.current !== loadGen) return;
         setError(messageOf(cause));
@@ -2714,22 +2705,6 @@ export function Workspace({
       }
 
       try {
-        /*
-         * Kicked, not waited on.
-         *
-         * This used to be awaited, which put a full sync round trip in front of
-         * every document open. The ping is not cheap — it walks each annotate
-         * row and, for any binary one with no local copy, asks the hub for its
-         * bytes. A library with PDFs whose bytes are missing therefore paid a
-         * failing round trip per document, on every open, before the file on
-         * this device was so much as looked at. With no hub reachable that is
-         * where the open stopped: no error, just a spinner.
-         *
-         * Nothing here needs it. The ping folds in what other devices changed;
-         * reading a file that is already on this one does not depend on that.
-         * `loadWorkspace` already kicks it this way.
-         */
-        void applyPadSyncPing(client, { emit: false }).catch(() => {});
         const docType = input.docType ?? "markdown";
         const text = input.text ?? "";
         const bytes = input.bytes ?? null;
@@ -2909,7 +2884,14 @@ export function Workspace({
           hash,
           docType,
           indexed: "idle",
-          source: docType === "web" || bytes ? null : existing?.source ? null : text,
+          source:
+            docType === "web" || bytes
+              ? null
+              : existing?.source
+                ? null
+                : text.length > MAX_SOURCE_CHARS
+                  ? null
+                  : text,
         });
         setAnnotateHeight(null);
         annotateHeightRef.current = null;
@@ -3157,6 +3139,7 @@ export function Workspace({
         if (workspaceLoadGenRef.current !== loadGen) return;
         boardRef.current?.syncDocumentScrollBounds();
         boardRef.current?.armReadingScroll();
+        scheduleIdlePadSyncPing(client, { emit: false });
 
         if (stale) {
           setNotice(
@@ -3603,7 +3586,9 @@ export function Workspace({
        * workspace will load from.
        */
       if (proposed.kind === "annotate" && !input.bytes && newSet) {
-        proposed.source = input.text ?? null;
+        const raw = input.text ?? null;
+        if (raw) await parkDocSource(hash, raw).catch(() => {});
+        proposed.source = raw && raw.length > MAX_SOURCE_CHARS ? null : raw;
       }
       /*
        * Bytes cannot ride the record, so they go to their store first.
@@ -7052,7 +7037,11 @@ export function Workspace({
             );
             return;
           }
-          const text = entry?.source ?? tab.source;
+          const parked =
+            tab.hash && !(entry?.source || tab.source)
+              ? await getParkedDocSource(tab.hash)
+              : null;
+          const text = entry?.source ?? tab.source ?? parked;
           if (text !== null && text !== undefined) {
             await loadAnnotate({ name, docType, text, docId: restoreDocId, tabId: tab.id, userLoad });
             return;
