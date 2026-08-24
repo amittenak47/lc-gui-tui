@@ -158,6 +158,30 @@ export function isCoverRect(
 }
 
 /**
+ * The last answer, kept while the document has not moved under it.
+ *
+ * Every one of these boxes is a `getBoundingClientRect`, and the list ends with
+ * *every page in the document* — a textbook has hundreds of `[data-doc-scope]`
+ * divs, all of them in the DOM whether or not their bitmap is. The cover test
+ * runs three or four times per pointer sample during a sweep (paint the band,
+ * preview the sub-mark, filter the band in render, filter each ribbon), so a
+ * finger dragged across a book was re-measuring the whole book several times a
+ * frame and allocating a key string per page each time. That is the stall.
+ *
+ * None of those boxes can move while the body itself is still: the camera
+ * transforms the slot the pages sit in, so a pan, a zoom or a re-layout all
+ * show up as a different body box, and the entry is thrown away then. Keyed on
+ * the body's own rect rather than on a frame counter for exactly that reason —
+ * a scroll that writes a new transform and re-measures inside one frame gets
+ * fresh boxes, not the ones from before the write.
+ */
+const coverBoxCache = new WeakMap<HTMLElement, { key: string; boxes: ViewportBox[] }>();
+
+function hostBoxKey(box: DOMRect): string {
+  return `${Math.round(box.left)}:${Math.round(box.top)}:${Math.round(box.width)}:${Math.round(box.height)}`;
+}
+
+/**
  * Boxes a quote rect must not match: the body, the paper slot, the marks slot,
  * and — the one that was missing — the page.
  *
@@ -177,13 +201,23 @@ export function isCoverRect(
  * Catching it here is what stops the next piece of chrome inheriting it.
  */
 export function coverReferenceBoxes(host: HTMLElement): ViewportBox[] {
+  const own = host.getBoundingClientRect();
+  const key = hostBoxKey(own);
+  const cached = coverBoxCache.get(host);
+  if (cached && cached.key === key) return cached.boxes;
+  const boxes = measureCoverReferenceBoxes(host);
+  coverBoxCache.set(host, { key, boxes });
+  return boxes;
+}
+
+function measureCoverReferenceBoxes(host: HTMLElement): ViewportBox[] {
   const boxes: ViewportBox[] = [];
   const seen = new Set<string>();
   const push = (node: Element | null | undefined) => {
     if (!(node instanceof HTMLElement)) return;
     const box = node.getBoundingClientRect();
     if (box.width <= 1 || box.height <= 1) return;
-    const key = `${Math.round(box.left)}:${Math.round(box.top)}:${Math.round(box.width)}:${Math.round(box.height)}`;
+    const key = hostBoxKey(box);
     if (seen.has(key)) return;
     seen.add(key);
     boxes.push(box);
@@ -391,6 +425,46 @@ export function scopeRootAtPoint(
   return { root: body };
 }
 
+/**
+ * Room to breathe around a quote, in the body's own units.
+ *
+ * Every box a mark is painted from is a *glyph* box, and a glyph box is not the
+ * shape a reader thinks a line is. A PDF text span is exactly the font's em
+ * box, placed from the ascent — so a face whose ascent and descent together run
+ * past one em hangs its descenders out of the bottom of its own highlight. The
+ * tail of the "g" in a marked "Prologue" sits below the wash that is supposed
+ * to contain it, and a block outline lands hard against the cap heights with
+ * nothing either side.
+ *
+ * The pad is a fraction of the line rather than a number of pixels because the
+ * overflow is: a 22pt body line spills about four units, a 56pt chapter title
+ * about eleven. Tall boxes are blocks rather than lines — the paragraph shapes
+ * `unionRectsIntoBlocks` merges — so the line the fraction is taken from is
+ * capped, and a paragraph gets a border of air rather than a proportional one.
+ *
+ * Geometry only, at paint time. Nothing that hit-tests, anchors or stores a
+ * mark sees these numbers, so a padded wash cannot drift a quote's meaning.
+ */
+export const QUOTE_PAD_FRACTION = 0.18;
+export const QUOTE_PAD_MIN = 2;
+export const QUOTE_PAD_MAX = 10;
+/** Above this a rect is a block of lines, not a line — pad it like one line. */
+export const QUOTE_PAD_LINE_MAX = 64;
+
+export function padQuoteRect(rect: LocalRect): LocalRect {
+  const line = Math.min(Math.max(rect.height, 0), QUOTE_PAD_LINE_MAX);
+  const padY = Math.min(Math.max(line * QUOTE_PAD_FRACTION, QUOTE_PAD_MIN), QUOTE_PAD_MAX);
+  // Less at the sides: a line already carries its side bearings, and a wash
+  // that reaches into the margin reads as covering the words next to it.
+  const padX = Math.min(Math.max(padY * 0.6, 1.5), 6);
+  return {
+    left: rect.left - padX,
+    top: rect.top - padY,
+    width: rect.width + padX * 2,
+    height: rect.height + padY * 2,
+  };
+}
+
 /** Axis-aligned union of body-local rects; null when empty. */
 export function unionLocalRects(rects: readonly LocalRect[]): LocalRect | null {
   if (rects.length === 0) return null;
@@ -537,6 +611,83 @@ export function hitRectsUnder(
       width: box.width / scale,
       height: box.height / scale,
     });
+  }
+  // PDF text layers are per-item spans, not `<p>` blocks. Union those into
+  // lines / nearby lines so confirm chrome wraps the quote, not a scatter.
+  const pdfPage =
+    searchRoot.closest?.(".lc-pdf-page") ??
+    (searchRoot instanceof HTMLElement &&
+    searchRoot.querySelector(".lc-pdf-text, .textLayer")
+      ? searchRoot
+      : null);
+  return pdfPage ? unionRectsIntoBlocks(out) : out;
+}
+
+export function isPdfSearchRoot(searchRoot: HTMLElement): boolean {
+  return Boolean(
+    searchRoot.closest?.(".lc-pdf-page") ??
+      (searchRoot.querySelector(".lc-pdf-text, .textLayer") ? searchRoot : null),
+  );
+}
+
+/**
+ * Merge boxes that share a line (similar vertical midpoints), left-to-right.
+ */
+export function unionRectsIntoLines(rects: readonly LocalRect[], slop = 6): LocalRect[] {
+  if (rects.length <= 1) return rects.map((rect) => ({ ...rect }));
+  const sorted = [...rects].sort((a, b) => a.top - b.top || a.left - b.left);
+  const lines: LocalRect[] = [];
+  for (const rect of sorted) {
+    const last = lines[lines.length - 1];
+    if (!last) {
+      lines.push({ ...rect });
+      continue;
+    }
+    const lastMid = last.top + last.height / 2;
+    const mid = rect.top + rect.height / 2;
+    const sameLine =
+      Math.abs(mid - lastMid) <= Math.max(last.height, rect.height) * 0.55 + slop;
+    if (!sameLine) {
+      lines.push({ ...rect });
+      continue;
+    }
+    const left = Math.min(last.left, rect.left);
+    const top = Math.min(last.top, rect.top);
+    const right = Math.max(last.left + last.width, rect.left + rect.width);
+    const bottom = Math.max(last.top + last.height, rect.top + rect.height);
+    last.left = left;
+    last.top = top;
+    last.width = right - left;
+    last.height = bottom - top;
+  }
+  return lines;
+}
+
+/** Merge consecutive lines with a small gap into one paragraph-shaped box. */
+export function unionRectsIntoBlocks(rects: readonly LocalRect[]): LocalRect[] {
+  const lines = unionRectsIntoLines(rects);
+  if (lines.length <= 1) return lines;
+  const out: LocalRect[] = [];
+  for (const line of lines) {
+    const last = out[out.length - 1];
+    if (!last) {
+      out.push({ ...line });
+      continue;
+    }
+    const gap = line.top - (last.top + last.height);
+    const maxH = Math.max(last.height, line.height);
+    if (gap > maxH * 0.65 + 4) {
+      out.push({ ...line });
+      continue;
+    }
+    const left = Math.min(last.left, line.left);
+    const top = Math.min(last.top, line.top);
+    const right = Math.max(last.left + last.width, line.left + line.width);
+    const bottom = Math.max(last.top + last.height, line.top + line.height);
+    last.left = left;
+    last.top = top;
+    last.width = right - left;
+    last.height = bottom - top;
   }
   return out;
 }

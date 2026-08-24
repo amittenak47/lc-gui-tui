@@ -119,6 +119,21 @@ describe("loadTabState / saveTabState", () => {
     expect(loaded.activeId).toBe("d1");
   });
 
+  it("keeps unsaved markdown on the chip even when a hash and docId exist", () => {
+    const state = tabsReducer(
+      initialTabState(),
+      { type: "open", tab: doc("d1", { source: "# still only on the tab" }), at: 2 },
+    );
+    saveTabState(state);
+    const loaded = loadTabState(9);
+    const annotate = loaded.tabs.find((tab) => tab.id === "d1");
+    expect(annotate).toMatchObject({
+      hash: "h-1",
+      docId: "d-1",
+      source: "# still only on the tab",
+    });
+  });
+
   it("falls back to Home on junk", () => {
     localStorage.setItem(TAB_STRIP_KEY, "{not json");
     expect(loadTabState(3).activeId).toBe(HOME_TAB_ID);

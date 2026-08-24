@@ -1,12 +1,16 @@
 /**
  * Picking a quote out of the page.
  *
- * Two gestures in Scroll mode — and the same two when Ask-area (🔍) is on:
- * 1. Native text selection — down + drag immediately (any direction). Primary
- *    path for Copy / Google.
- * 2. Hold-still then drag — annotate region marquee (figures / Mark).
- *    Stillness of {@link SELECT_HOLD_ARM_MS} claims the finger; the drag
- *    after that is the box. Immediate travel is native select or pan.
+ * On Android, hold-still then drag is the quote path. Native drag-select is
+ * left for mouse / highlighter: Android WebView paints a magnified copy of
+ * selected text that does not follow the page camera's `translate() scale()`,
+ * so the styled overlay sits on the wrong glyphs.
+ *
+ * Desktop keeps native drag-select (and Annotate only from the hold box).
+ * Hold stillness of {@link SELECT_HOLD_ARM_MS} claims the finger; the drag
+ * after that is the box. Immediate travel is pan (touch) or native select
+ * (mouse). After the hold, Android starts the box in any direction; desktop
+ * still yields a mostly-vertical first move back to pan.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -54,16 +58,18 @@ import {
   onDocCameraLiveChange,
   releaseSelectionGesture,
   setSubMarkPointerHit,
+  setSubMarkDragLive,
 } from "../canvas/docSelectionGesture";
 import { horizontalScrollHost } from "../canvas/scrollHost";
 import {
   MIN_BAND_PX,
   type LocalRect,
   bandFromLocalPoints,
+  clientRectsToLocal,
   coversViewportBox,
   isPageCoverRect,
   finalizeMarquee,
-  hitRectsUnder,
+  padQuoteRect,
   localRectCoversHost,
   localRects,
   scaleOf,
@@ -72,16 +78,18 @@ import {
   tightClientRects,
   tightLocalRects,
   unionLocalRects,
+  unionRectsIntoBlocks,
   unionViewportBoxes,
   viewportToLocal,
 } from "../util/docMarquee";
-import { caretPointIn } from "../util/docSubMarkHit";
+import { caretPointIn, isCodeDocRoot, preOffsetAtPoint } from "../util/docSubMarkHit";
 import {
   inkPaletteNow,
   onInkPaletteChange,
 } from "../canvas/inkPaletteBridge";
 import { currentInkPalette } from "../util/inkPaletteHistory";
 import { footnoteThemeVars } from "../util/footnoteTheme";
+import { isAndroidDevice } from "../util/androidDevice";
 
 /** How far into the edge a drag has to reach before the page starts moving. */
 const SELECT_EDGE_PX = 36;
@@ -116,7 +124,6 @@ function localRectEqual(a: LocalRect, b: LocalRect): boolean {
   return a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
 }
 
-/** Avoid setState when place() remeasures the same geometry. */
 function ribbonsPlacementEqual(a: RibbonPlacement[], b: RibbonPlacement[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -133,6 +140,34 @@ function ribbonsPlacementEqual(a: RibbonPlacement[], b: RibbonPlacement[]): bool
     }
     for (let j = 0; j < x.bands.length; j++) {
       if (!localRectEqual(x.bands[j], y.bands[j])) return false;
+    }
+  }
+  return true;
+}
+
+type PaintedSubMark = {
+  id: string;
+  kind: DocFootnoteSubMarkKind;
+  rects: LocalRect[];
+  color?: string;
+  palette?: string[];
+};
+
+function paintedSubMarksEqual(a: PaintedSubMark[], b: PaintedSubMark[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (
+      x.id !== y.id ||
+      x.kind !== y.kind ||
+      x.color !== y.color ||
+      x.rects.length !== y.rects.length
+    ) {
+      return false;
+    }
+    for (let j = 0; j < x.rects.length; j++) {
+      if (!localRectEqual(x.rects[j]!, y.rects[j]!)) return false;
     }
   }
   return true;
@@ -185,6 +220,34 @@ export interface DocSelectionLayerProps {
   subMarkPaintTheme?: { color: string; palette: string[] } | null;
   /** New live drag — stop retinting the last committed underline. */
   onSubMarkLiveStart?: () => void;
+}
+
+/**
+ * The one screen box a set of body-local rects covers.
+ *
+ * Chrome that has to keep off a mark — the hub card, so far — is placed in
+ * window coordinates, while everything the page knows about a mark is in the
+ * body's own units. Null when there is nothing to cover.
+ */
+function screenBoxOfLocalRects(
+  body: HTMLElement | null,
+  rects: readonly LocalRect[],
+): DOMRect | null {
+  if (!body || rects.length === 0) return null;
+  const origin = body.getBoundingClientRect();
+  const scale = scaleOf(body) || 1;
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const rect of rects) {
+    left = Math.min(left, origin.left + rect.left * scale);
+    top = Math.min(top, origin.top + rect.top * scale);
+    right = Math.max(right, origin.left + (rect.left + rect.width) * scale);
+    bottom = Math.max(bottom, origin.top + (rect.top + rect.height) * scale);
+  }
+  if (!Number.isFinite(left) || right <= left || bottom <= top) return null;
+  return new DOMRect(left, top, right - left, bottom - top);
 }
 
 /**
@@ -272,6 +335,7 @@ export function DocSelectionLayer({
       number: number;
     }>
   >([]);
+  const [paintedSubMarks, setPaintedSubMarks] = useState<PaintedSubMark[]>([]);
   const [copied, setCopied] = useState(false);
   /** Native text select vs hold-marquee — drives which actions sheet buttons show. */
   const [actionsVia, setActionsVia] = useState<"native" | "marquee">("native");
@@ -302,6 +366,12 @@ export function DocSelectionLayer({
     scope?: string;
     anchor: number;
     focus: number;
+    /** Code files: rubber-band until lift, then snap to glyphs. */
+    preview?: boolean;
+    startLocal?: { x: number; y: number };
+    lastX?: number;
+    lastY?: number;
+    sideScroll?: HTMLElement | null;
   } | null>(null);
   const subMarkLiveRef = useRef(subMarkLive);
   subMarkLiveRef.current = subMarkLive;
@@ -391,7 +461,7 @@ export function DocSelectionLayer({
   const inkHistory = useSyncExternalStore(onInkPaletteChange, inkPaletteNow, inkPaletteNow);
   const inkPalette = currentInkPalette(inkHistory);
 
-  const paintMarquee = useCallback((rect: LocalRect, root: HTMLElement) => {
+  const paintMarquee = useCallback((rect: LocalRect, _root: HTMLElement) => {
     const body = bodyRef.current;
     if (!body) return;
     if (bandFadeTimerRef.current != null) {
@@ -405,7 +475,12 @@ export function DocSelectionLayer({
       return;
     }
     setBand(rect);
-    setHitRects(hitRectsUnder(body, root, rect));
+    /*
+     * Live chrome is the rubber-band only. `hitRectsUnder` walks every PDF
+     * span / code glyph box — doing that on pointermove is the stall. Confirm
+     * (`finalizeMarquee`) still hugs the text once, on lift.
+     */
+    setHitRects([]);
   }, []);
 
   /** Enter confirm: keep paragraph chrome, fade the rubber-band away. */
@@ -598,19 +673,31 @@ export function DocSelectionLayer({
       const text = textForAnchor(root, anchor);
       if (!text.trim()) return;
 
-      // Remember the DOM Selection's screen box — native path paints no overlay
-      // rects, so highlightBox() must not fall back to the top of the window.
       const clientRects = tightClientRects(range, body);
       selectionScreenBoxRef.current = unionViewportBoxes(clientRects);
 
-      // Sheet-only chrome for native path — no grey word boxes / confirm band.
+      let hitRects: LocalRect[] = [];
+      if (isAndroidDevice()) {
+        try {
+          window.getSelection()?.removeAllRanges();
+        } catch {
+          /* native overlay on Android fights the camera transform */
+        }
+        const local = unionRectsIntoBlocks(clientRectsToLocal(body, clientRects));
+        setRects(local);
+        hitRects = local;
+      } else {
+        // Desktop: sheet-only chrome — native path paints no overlay rects.
+        setRects([]);
+      }
+
       setHitRects([]);
       setActionsVia("native");
       setSelection({
         text,
         excerpt: excerptOf(text),
         anchor,
-        hitRects: [],
+        hitRects,
       });
       setBand(null);
       setBandFading(false);
@@ -630,7 +717,7 @@ export function DocSelectionLayer({
     };
   }, [enabled, highlighting, subMarkArmed, subMarkParent]);
 
-  /** Panel open (no sub-mark tool): still register mark hit so Board/backdrop can test it. */
+  /** Panel open: hit-test the mark so the overview card does not close on a tap in-band. Board pan ignores this. */
   useEffect(() => {
     if (!subMarkParent || subMarkArmed) return;
     const SUBMARK_HIT_PAD = 48;
@@ -797,11 +884,17 @@ export function DocSelectionLayer({
           return;
         }
         if (moved <= SELECT_HOLD_SLOP_PX) return;
-        const dx = event.clientX - hold.startX;
-        const dy = event.clientY - hold.startY;
-        if (selectHoldYieldsToScroll(dx, dy)) {
-          clearGesture();
-          return;
+        // Android: any direction starts the box. Stillness already beat pan.
+        // Yielding vertical drags back to scroll made a hold-then-drag down
+        // a paragraph (the natural annotate motion) never signal.
+        // Desktop: a mostly-vertical first move is still a reading pan.
+        if (!isAndroidDevice()) {
+          const dx = event.clientX - hold.startX;
+          const dy = event.clientY - hold.startY;
+          if (selectHoldYieldsToScroll(dx, dy)) {
+            clearGesture();
+            return;
+          }
         }
         hold.lastX = event.clientX;
         hold.lastY = event.clientY;
@@ -985,9 +1078,40 @@ export function DocSelectionLayer({
       setSubMarkLive({ start, end, root, scope });
     };
 
+    const paintBandPreview = (drag: NonNullable<typeof subMarkDragRef.current>) => {
+      const body = bodyRef.current;
+      if (!body || !drag.startLocal || drag.lastX == null || drag.lastY == null) return;
+      const end = viewportToLocal(body, drag.lastX, drag.lastY);
+      const rect = bandFromLocalPoints(body, drag.startLocal, end);
+      if (bandFadeTimerRef.current != null) {
+        window.clearTimeout(bandFadeTimerRef.current);
+        bandFadeTimerRef.current = null;
+      }
+      setBandFading(false);
+      setBand(localRectCoversHost(body, rect) ? null : rect);
+    };
+
     const releaseSubMarkGesture = () => {
+      if (edgeFrameRef.current != null) {
+        cancelAnimationFrame(edgeFrameRef.current);
+        edgeFrameRef.current = null;
+      }
+      setSubMarkDragLive(false);
       host.classList.remove("lc-doc-selecting", "lc-doc-submark-mode", "lc-doc-submark-grip-drag");
       releaseSelectionGesture();
+    };
+
+    let pendingHold: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+      armTimer: number | null;
+      armed: boolean;
+    } | null = null;
+
+    const clearPendingHold = () => {
+      if (pendingHold?.armTimer != null) window.clearTimeout(pendingHold.armTimer);
+      pendingHold = null;
     };
 
     const SUBMARK_HIT_PAD = 48;
@@ -1008,6 +1132,223 @@ export function DocSelectionLayer({
 
     setSubMarkPointerHit(pointerHitsParentMark);
     killNativeSelection();
+
+    const tickSubMarkFinger = (clientX: number, clientY: number) => {
+      const drag = subMarkDragRef.current;
+      if (!drag) return;
+      drag.lastX = clientX;
+      drag.lastY = clientY;
+      killNativeSelection();
+      const region = parentRegion();
+      if (!region) return;
+      if (drag.preview && drag.mode === "select") {
+        paintBandPreview(drag);
+        const cheap = isCodeDocRoot(region.root)
+          ? preOffsetAtPoint(region.root, clientX, clientY)
+          : null;
+        if (cheap != null) {
+          drag.focus = region.bounds
+            ? Math.max(
+                region.bounds.start,
+                Math.min(Math.max(region.bounds.start, region.bounds.end - 1), cheap),
+              )
+            : cheap;
+          return;
+        }
+        const at = offsetAt(
+          region.body,
+          region.root,
+          region.bands,
+          region.bounds,
+          clientX,
+          clientY,
+          drag.scope,
+        );
+        if (at) drag.focus = at.start;
+        return;
+      }
+      const at = offsetAt(
+        region.body,
+        region.root,
+        region.bands,
+        region.bounds,
+        clientX,
+        clientY,
+        drag.scope,
+      );
+      if (!at) return;
+      if (drag.mode === "select") {
+        drag.focus = at.start;
+        liveFrom(drag.root, drag.scope, drag.anchor, drag.focus, region.bounds);
+        return;
+      }
+      if (drag.mode === "start") {
+        const next = Math.min(at.start, drag.focus - 1);
+        drag.anchor = next;
+        liveFrom(drag.root, drag.scope, drag.anchor, drag.focus, region.bounds);
+        return;
+      }
+      const next = Math.max(at.start, drag.anchor + 1);
+      drag.focus = next;
+      liveFrom(drag.root, drag.scope, drag.anchor, drag.focus, region.bounds);
+    };
+
+    const autoScrollSubMark = () => {
+      const drag = subMarkDragRef.current;
+      if (!drag || drag.lastX == null || drag.lastY == null) {
+        edgeFrameRef.current = null;
+        return;
+      }
+      const x = drag.lastX;
+      const y = drag.lastY;
+      let moved = false;
+      const side = drag.sideScroll;
+      if (side) {
+        const box = side.getBoundingClientRect();
+        const over =
+          x > box.right - SELECT_EDGE_PX
+            ? x - (box.right - SELECT_EDGE_PX)
+            : x < box.left + SELECT_EDGE_PX
+              ? x - (box.left + SELECT_EDGE_PX)
+              : 0;
+        if (over !== 0) {
+          const before = side.scrollLeft;
+          side.scrollLeft += Math.sign(over) * edgeStep(over);
+          if (side.scrollLeft !== before) moved = true;
+        }
+      }
+      const view = hostRef.current?.getBoundingClientRect();
+      const top = view ? Math.max(view.top, 0) : 0;
+      const bottom = view ? Math.min(view.bottom, window.innerHeight) : window.innerHeight;
+      const overY =
+        y > bottom - SELECT_EDGE_PX
+          ? y - (bottom - SELECT_EDGE_PX)
+          : y < top + SELECT_EDGE_PX
+            ? y - (top + SELECT_EDGE_PX)
+            : 0;
+      if (overY !== 0 && requestDocScroll(Math.sign(overY) * edgeStep(overY)) !== 0) {
+        moved = true;
+      }
+      if (moved) tickSubMarkFinger(x, y);
+      edgeFrameRef.current = requestAnimationFrame(autoScrollSubMark);
+    };
+
+    const startEdgeScroll = () => {
+      if (edgeFrameRef.current == null) {
+        edgeFrameRef.current = requestAnimationFrame(autoScrollSubMark);
+      }
+    };
+
+    const ownSubMarkGesture = () => {
+      killNativeSelection();
+      setSubMarkConfirm(false);
+      setSelection(null);
+      setPhase("idle");
+      setRects([]);
+      setBand(null);
+      setBandFading(false);
+      setHitRects([]);
+      setCopied(false);
+      claimSelectionGesture();
+      setSubMarkDragLive(true);
+      host.classList.add("lc-doc-selecting", "lc-doc-submark-mode");
+    };
+
+    const beginSelectAt = (
+      pointerId: number,
+      startX: number,
+      startY: number,
+      nowX: number,
+      nowY: number,
+    ) => {
+      const region = parentRegion();
+      if (!region) return;
+      ownSubMarkGesture();
+      const live = subMarkLiveRef.current;
+      const at =
+        offsetAt(
+          region.body,
+          region.root,
+          region.bands,
+          region.bounds,
+          startX,
+          startY,
+          region.scope,
+        ) ??
+        (live
+          ? {
+              start: region.bounds
+                ? Math.max(
+                    region.bounds.start,
+                    Math.min(region.bounds.end - 1, live.start),
+                  )
+                : live.start,
+              root: region.root,
+              scope: region.scope,
+            }
+          : null);
+      if (!at) {
+        releaseSubMarkGesture();
+        return;
+      }
+      const focusHit = offsetAt(
+        region.body,
+        region.root,
+        region.bands,
+        region.bounds,
+        nowX,
+        nowY,
+        region.scope,
+      );
+      const focus = focusHit
+        ? focusHit.start
+        : region.bounds
+          ? Math.min(region.bounds.end, at.start + 1)
+          : at.start + 1;
+      /*
+       * Underline drags paint the words, not a box — except over source.
+       *
+       * The rubber-band preview exists because measuring a growing range on
+       * every pointer sample is a stall, and in a whole-file `<pre>` it is:
+       * the document is one text node thousands of lines long, so resolving
+       * offsets means rebuilding that whole string and `getClientRects()`
+       * answers with a rect per line of it.
+       *
+       * A PDF page is not that. Its text layer is a few dozen spans, and the
+       * caret hit-test the drag already runs per move costs more than the
+       * range does — measured at 0.03ms a move for a three-line quote, which
+       * is nothing next to the frame it happens in. Paying it buys the reader
+       * the thing they are actually doing: the underline appears under the
+       * words as the finger passes them, with grips to adjust it, instead of a
+       * dashed box that only becomes an underline once they let go.
+       *
+       * So the preview is for the case that needs it, and everything else
+       * underlines live. Offsets track either way; lift commits the same range.
+       */
+      subMarkDragRef.current = {
+        pointerId,
+        mode: "select",
+        root: at.root,
+        scope: at.scope,
+        anchor: at.start,
+        focus,
+        preview: isCodeDocRoot(region.root),
+        startLocal: viewportToLocal(region.body, startX, startY),
+        lastX: nowX,
+        lastY: nowY,
+        sideScroll:
+          horizontalScrollHost(document.elementFromPoint(startX, startY)) ??
+          horizontalScrollHost(region.root),
+      };
+      try {
+        host.setPointerCapture(pointerId);
+      } catch {
+        /* capture is best-effort */
+      }
+      startEdgeScroll();
+      setSubMarkLive(null);
+      paintBandPreview(subMarkDragRef.current);
+    };
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
@@ -1034,23 +1375,13 @@ export function DocSelectionLayer({
         return;
       }
 
-      // Own the gesture — no browser Selection (that was the blurry duplicate text).
-      event.preventDefault();
-      event.stopPropagation();
       killNativeSelection();
-      setSubMarkConfirm(false);
-      setSelection(null);
-      setPhase("idle");
-      setRects([]);
-      setBand(null);
-      setBandFading(false);
-      setHitRects([]);
-      setCopied(false);
-      claimSelectionGesture();
-      host.classList.add("lc-doc-selecting", "lc-doc-submark-mode");
-
       const live = subMarkLiveRef.current;
       if (grip && live) {
+        event.preventDefault();
+        event.stopPropagation();
+        clearPendingHold();
+        ownSubMarkGesture();
         host.classList.add("lc-doc-submark-grip-drag");
         const which = grip.getAttribute("data-grip");
         subMarkDragRef.current = {
@@ -1060,6 +1391,11 @@ export function DocSelectionLayer({
           scope: live.scope,
           anchor: live.start,
           focus: live.end,
+          lastX: event.clientX,
+          lastY: event.clientY,
+          sideScroll:
+            horizontalScrollHost(document.elementFromPoint(event.clientX, event.clientY)) ??
+            horizontalScrollHost(region.root),
         };
         try {
           (grip as HTMLElement).setPointerCapture(event.pointerId);
@@ -1070,86 +1406,58 @@ export function DocSelectionLayer({
             /* capture is best-effort */
           }
         }
+        startEdgeScroll();
         return;
       }
 
-      const at =
-        offsetAt(
-          region.body,
-          region.root,
-          region.bands,
-          region.bounds,
-          event.clientX,
-          event.clientY,
-          region.scope,
-        ) ??
-        (live
-          ? {
-              start: region.bounds
-                ? Math.max(
-                    region.bounds.start,
-                    Math.min(region.bounds.end - 1, live.start),
-                  )
-                : live.start,
-              root: region.root,
-              scope: region.scope,
-            }
-          : null);
-      if (!at) {
-        releaseSubMarkGesture();
-        return;
-      }
-      const focus = region.bounds
-        ? Math.min(region.bounds.end, at.start + 1)
-        : at.start + 1;
-      subMarkDragRef.current = {
+      /*
+       * Hold still, then drag, to underline — same gate as quote-select.
+       * A flick must pan: a mark taller than the viewport is otherwise stuck.
+       * preventDefault kills native select; do not stopPropagation or Board
+       * never sees the down and cannot pan.
+       */
+      event.preventDefault();
+      clearPendingHold();
+      pendingHold = {
         pointerId: event.pointerId,
-        mode: "select",
-        root: at.root,
-        scope: at.scope,
-        anchor: at.start,
-        focus,
+        startX: event.clientX,
+        startY: event.clientY,
+        armed: false,
+        armTimer: window.setTimeout(() => {
+          if (pendingHold && pendingHold.pointerId === event.pointerId) {
+            pendingHold.armed = true;
+            try {
+              navigator.vibrate?.(10);
+            } catch {
+              /* haptics are a nicety */
+            }
+          }
+        }, SELECT_HOLD_ARM_MS),
       };
-      try {
-        host.setPointerCapture(event.pointerId);
-      } catch {
-        /* capture is best-effort */
-      }
-      liveFrom(at.root, at.scope, at.start, focus, region.bounds);
     };
 
     const onPointerMove = (event: PointerEvent) => {
+      const hold = pendingHold;
+      if (hold && hold.pointerId === event.pointerId && !subMarkDragRef.current) {
+        const moved = Math.hypot(event.clientX - hold.startX, event.clientY - hold.startY);
+        if (!hold.armed) {
+          if (moved > SELECT_HOLD_SLOP_PX) clearPendingHold();
+          return;
+        }
+        if (moved <= SELECT_HOLD_SLOP_PX) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const startX = hold.startX;
+        const startY = hold.startY;
+        clearPendingHold();
+        beginSelectAt(event.pointerId, startX, startY, event.clientX, event.clientY);
+        return;
+      }
       const drag = subMarkDragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
       event.preventDefault();
       event.stopPropagation();
-      killNativeSelection();
-      const region = parentRegion();
-      if (!region) return;
-      const at = offsetAt(
-        region.body,
-        region.root,
-        region.bands,
-        region.bounds,
-        event.clientX,
-        event.clientY,
-        drag.scope,
-      );
-      if (!at) return;
-      if (drag.mode === "select") {
-        drag.focus = at.start;
-        liveFrom(drag.root, drag.scope, drag.anchor, drag.focus, region.bounds);
-        return;
-      }
-      if (drag.mode === "start") {
-        const next = Math.min(at.start, drag.focus - 1);
-        drag.anchor = next;
-        liveFrom(drag.root, drag.scope, drag.anchor, drag.focus, region.bounds);
-        return;
-      }
-      const next = Math.max(at.start, drag.anchor + 1);
-      drag.focus = next;
-      liveFrom(drag.root, drag.scope, drag.anchor, drag.focus, region.bounds);
+      tickSubMarkFinger(event.clientX, event.clientY);
     };
 
     const commitSubMark = (rawStart: number, rawEnd: number, root: HTMLElement, scope?: string) => {
@@ -1217,6 +1525,7 @@ export function DocSelectionLayer({
     };
 
     const onPointerUp = (event: PointerEvent) => {
+      if (pendingHold?.pointerId === event.pointerId) clearPendingHold();
       const drag = subMarkDragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
       subMarkDragRef.current = null;
@@ -1224,6 +1533,18 @@ export function DocSelectionLayer({
       killNativeSelection();
 
       const region = parentRegion();
+      if (drag.preview && drag.mode === "select" && drag.lastX != null && drag.lastY != null) {
+        const at = offsetAt(
+          region?.body ?? drag.root,
+          drag.root,
+          region?.bands ?? [],
+          region?.bounds ?? null,
+          drag.lastX,
+          drag.lastY,
+          drag.scope,
+        );
+        if (at) drag.focus = at.start;
+      }
       const [rawStart, rawEnd] = [
         Math.min(drag.anchor, drag.focus),
         Math.max(drag.anchor, drag.focus),
@@ -1251,6 +1572,7 @@ export function DocSelectionLayer({
 
       const moved = Math.abs(drag.focus - drag.anchor) > 1;
       if (!moved) {
+        if (drag.preview) setBand(null);
         const live = subMarkLiveRef.current;
         if (live && live.end - live.start >= 2) setSubMarkConfirm(true);
         return;
@@ -1258,6 +1580,7 @@ export function DocSelectionLayer({
       if (rawEnd <= rawStart) return;
       const [clampedStart, clampedEnd] = clampToParent(rawStart, rawEnd, region?.bounds ?? null);
       if (clampedEnd <= clampedStart) return;
+      if (drag.preview) setBand(null);
       setSubMarkLive({
         start: clampedStart,
         end: clampedEnd,
@@ -1275,6 +1598,7 @@ export function DocSelectionLayer({
     window.addEventListener("pointerup", onPointerUp, true);
     window.addEventListener("pointercancel", onPointerUp, true);
     return () => {
+      clearPendingHold();
       setSubMarkPointerHit(null);
       host.removeEventListener("selectstart", onSelectStart);
       window.removeEventListener("pointerdown", onPointerDown, true);
@@ -1310,6 +1634,7 @@ export function DocSelectionLayer({
     const body = bodyRef.current;
     if (!body) {
       setRibbons([]);
+      setPaintedSubMarks([]);
       return;
     }
 
@@ -1372,6 +1697,8 @@ export function DocSelectionLayer({
       // Skip React commits when geometry is unchanged — mid-scroll place() used
       // to re-render the overlay every time even when nothing moved.
       setRibbons((prev) => (ribbonsPlacementEqual(prev, placed) ? prev : placed));
+      const subPaint = collectPaintedSubMarks(body, footnotes);
+      setPaintedSubMarks((prev) => (paintedSubMarksEqual(prev, subPaint) ? prev : subPaint));
       const overlayNode = overlayRef.current;
       if (overlayNode) {
         overlayNode.style.left = "0px";
@@ -1718,34 +2045,6 @@ export function DocSelectionLayer({
     };
   }, [phase, placeSelectionChrome, overlaps.length, selection, copied, subMarkConfirm, subMarkLive]);
 
-  const paintedSubMarks = useMemo(() => {
-    const body = bodyRef.current;
-    if (!body || !subMarkParent?.subMarks?.length) return [];
-    const out: Array<{
-      id: string;
-      kind: DocFootnoteSubMarkKind;
-      rects: LocalRect[];
-      color?: string;
-      palette?: string[];
-    }> = [];
-    for (const mark of subMarkParent.subMarks) {
-      const anchor = resolveSubMarkAnchor(subMarkParent, mark);
-      if (!anchor) continue;
-      const root = scopeRootIn(body, anchor.scope) as HTMLElement | null;
-      if (!root) continue;
-      const range = rangeFromAnchor(root, anchor);
-      if (!range) continue;
-      out.push({
-        id: mark.id,
-        kind: mark.kind,
-        rects: localRects(body, range),
-        color: mark.color,
-        palette: mark.palette,
-      });
-    }
-    return out;
-  }, [subMarkParent, footnotes, children]);
-
   const subMarkLivePaint = useMemo(() => {
     const body = bodyRef.current;
     if (!body || !subMarkLive) return [];
@@ -1792,7 +2091,13 @@ export function DocSelectionLayer({
         <div
           ref={overlayRef}
           className="lc-doc-select-overlay"
-          aria-hidden={rects.length === 0 && hitRects.length === 0 && !band && ribbons.length === 0}
+          aria-hidden={
+            rects.length === 0 &&
+            hitRects.length === 0 &&
+            !band &&
+            ribbons.length === 0 &&
+            paintedSubMarks.length === 0
+          }
         >
           {band &&
             !(bodyRef.current && localRectCoversHost(bodyRef.current, band)) && (
@@ -1809,34 +2114,44 @@ export function DocSelectionLayer({
               }}
             />
           )}
-          {hitRects.map((rect, index) => (
-            <div
-              key={`hit-${index}`}
-              className={
-                phase === "idle"
-                  ? "lc-doc-marquee-hit"
-                  : "lc-doc-marquee-hit is-confirmed"
-              }
-              style={{
-                left: rect.left,
-                top: rect.top,
-                width: rect.width,
-                height: rect.height,
-              }}
-            />
-          ))}
-          {rects.map((rect, index) => (
-            <div
-              key={`sel-${index}`}
-              className="lc-doc-select-rect"
-              style={{
-                left: rect.left,
-                top: rect.top,
-                width: rect.width,
-                height: rect.height,
-              }}
-            />
-          ))}
+          {/*
+            Painted from the glyph boxes, with a little air — see `padQuoteRect`.
+            The rects themselves stay as measured; only what is drawn grows.
+          */}
+          {hitRects.map((rect, index) => {
+            const box = padQuoteRect(rect);
+            return (
+              <div
+                key={`hit-${index}`}
+                className={
+                  phase === "idle"
+                    ? "lc-doc-marquee-hit"
+                    : "lc-doc-marquee-hit is-confirmed"
+                }
+                style={{
+                  left: box.left,
+                  top: box.top,
+                  width: box.width,
+                  height: box.height,
+                }}
+              />
+            );
+          })}
+          {rects.map((rect, index) => {
+            const box = padQuoteRect(rect);
+            return (
+              <div
+                key={`sel-${index}`}
+                className="lc-doc-select-rect"
+                style={{
+                  left: box.left,
+                  top: box.top,
+                  width: box.width,
+                  height: box.height,
+                }}
+              />
+            );
+          })}
           {ribbons.map(({ footnote, at, bands, useBands, number }) => {
             /*
              * Tap opens the mark; hold fills left→right and deletes.
@@ -1897,19 +2212,22 @@ export function DocSelectionLayer({
             const caption = footnote.title?.replace(/\s+/g, " ").trim() ?? "";
             return (
               <span key={footnote.id} className="lc-doc-footnote-pack" style={tint}>
-                {paintBands.map((bandRect, bandIndex) => (
+                {paintBands.map((bandRect, bandIndex) => {
+                  const box = padQuoteRect(bandRect);
+                  return (
                     <div
                       key={`fn-band-${bandIndex}`}
                       className="lc-doc-footnote-band"
                       style={{
-                        left: bandRect.left,
-                        top: bandRect.top,
-                        width: bandRect.width,
-                        height: bandRect.height,
+                        left: box.left,
+                        top: box.top,
+                        width: box.width,
+                        height: box.height,
                         ...tint,
                       }}
                     />
-                  ))}
+                  );
+                })}
                 {caption ? (
                   <span
                     className="lc-doc-footnote-caption"
@@ -1927,7 +2245,19 @@ export function DocSelectionLayer({
                   dataId={footnote.id}
                   ariaLabel={`${footnoteTitle(footnote, number)} — tap to open, hold to delete`}
                   onTap={() => {
-                    const rect = ribbonRects.current.get(footnote.id) ?? null;
+                    /*
+                     * The quote, not the chip.
+                     *
+                     * The hub places itself clear of what it is given, so a
+                     * sixteen-pixel chip let it open straight over the marked
+                     * sentence — the one thing the reader has just said they
+                     * are interested in. Hand it the whole block of bands and
+                     * it settles under, over, or beside the passage instead.
+                     */
+                    const rect =
+                      screenBoxOfLocalRects(bodyRef.current, paintBands) ??
+                      ribbonRects.current.get(footnote.id) ??
+                      null;
                     onOpenFootnote?.(footnote, rect);
                   }}
                   /*
@@ -1955,23 +2285,29 @@ export function DocSelectionLayer({
           })}
 
           {paintedSubMarks.flatMap((entry) =>
-            entry.rects.map((rect, index) => (
+            entry.rects.map((rect, index) => {
+              // A highlight is a wash and wants the same air as a mark band. An
+              // underline is a rule sitting on the baseline: pad it and the rule
+              // drifts off the words it belongs to.
+              const box = entry.kind === "highlight" ? padQuoteRect(rect) : rect;
+              return (
               <div
                 key={`sub-${entry.id}-${index}`}
                 className={`lc-doc-submark-paint lc-doc-submark-${entry.kind}${
                   hoveredSubMarkId === entry.id ? " is-hovered" : ""
                 }`}
                 style={{
-                  left: rect.left,
-                  top: rect.top,
-                  width: rect.width,
-                  height: rect.height,
+                  left: box.left,
+                  top: box.top,
+                  width: box.width,
+                  height: box.height,
                   ...(entry.color
                     ? footnoteThemeVars(entry.color, entry.palette ?? inkPalette)
                     : subMarkTint),
                 }}
               />
-            )),
+              );
+            }),
           )}
           {subMarkLivePaint.map((rect, index) => (
             <div
@@ -2213,8 +2549,9 @@ export function DocSelectionLayer({
                           </button>
                         </>
                       )}
-                      {/* Annotate = make a mark — hold-marquee only, not plain drag-select. */}
-                      {actionsVia === "marquee" && onAnnotate && (
+                      {/* Annotate = make a mark. Desktop: hold-marquee only.
+                          Android: native quote too — native handles are broken. */}
+                      {(isAndroidDevice() || actionsVia === "marquee") && onAnnotate && (
                         <button
                           type="button"
                           role="menuitem"
@@ -2463,4 +2800,43 @@ function resolveSubMarkAnchor(
     end: parent.anchor.start + mark.end,
     ...(parent.anchor.scope ? { scope: parent.anchor.scope } : {}),
   };
+}
+
+/** Underlines/highlights for every footnote — not only the open panel parent. */
+function collectPaintedSubMarks(
+  body: HTMLElement,
+  footnotes: readonly DocFootnote[],
+): PaintedSubMark[] {
+  const out: PaintedSubMark[] = [];
+  for (const footnote of footnotes) {
+    for (const mark of footnote.subMarks ?? []) {
+      const anchor = resolveSubMarkAnchor(footnote, mark);
+      if (anchor) {
+        const root = scopeRootIn(body, anchor.scope) as HTMLElement | null;
+        if (root) {
+          const range = rangeFromAnchor(root, anchor);
+          if (range) {
+            out.push({
+              id: mark.id,
+              kind: mark.kind,
+              rects: localRects(body, range),
+              color: mark.color ?? footnote.color,
+              palette: mark.palette,
+            });
+            continue;
+          }
+        }
+      }
+      if (mark.bands && mark.bands.length > 0) {
+        out.push({
+          id: mark.id,
+          kind: mark.kind,
+          rects: mark.bands,
+          color: mark.color ?? footnote.color,
+          palette: mark.palette,
+        });
+      }
+    }
+  }
+  return out;
 }

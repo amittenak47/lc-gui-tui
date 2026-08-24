@@ -792,6 +792,61 @@ body {
   padding-right: 30px;
 }
 
+/*
+ * The mode, as a colour on the field itself.
+ *
+ * Same three hues as the toggles, so the button and the bar agree and you only
+ * learn the vocabulary once: live is blue, frozen is cold, reader is warm. A
+ * left edge rather than a full tint — the address has to stay readable, and a
+ * bar that changes background under the text is a bar you notice instead of
+ * read.
+ */
+.lc-web-address::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 62%;
+  border-radius: 0 2px 2px 0;
+  background: var(--hint);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.lc-web-address[data-web-mode="live"]::before {
+  background: var(--live);
+  opacity: 1;
+}
+
+.lc-web-address[data-web-mode="frozen"]::before {
+  background: var(--frozen);
+  opacity: 0.85;
+}
+
+.lc-web-address[data-web-mode="reader"]::before {
+  background: var(--reader);
+  opacity: 0.9;
+}
+
+.lc-web-address[data-web-mode="live"] input {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--live) 34%, transparent);
+}
+
+.lc-web-address[data-web-mode="reader"] input {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--reader) 30%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lc-web-address::before,
+  .lc-web-address input {
+    transition:
+      background-color 160ms ease-out,
+      box-shadow 160ms ease-out;
+  }
+}
+
 .lc-web-go {
   position: absolute;
   right: 4px;
@@ -7091,13 +7146,18 @@ body[data-lc-sash-drag="horizontal"] {
   transform-origin: 0 0;
   /* Scroll moves this via transform only — keep it off the layout path. */
   will-change: transform;
-  contain: layout paint;
+  /* Not `contain: paint` — that makes Range.getClientRects() the slot box,
+   * so the hold marquee is treated as a page-cover and never paints. */
+  contain: layout;
+  overflow: visible;
   pointer-events: none;
   user-select: none;
 }
 
 .lc-md-ink-doc {
   width: 100%;
+  height: auto;
+  overflow: visible;
   padding: 36px 28px 64px;
   box-sizing: border-box;
   color: var(--ink);
@@ -13619,6 +13679,30 @@ button.lc-row-selected:hover:not(:disabled) {
   -webkit-touch-callout: default;
 }
 
+/*
+ * Android WebView draws a magnified copy of selected text that does not follow
+ * the page camera's `translate() scale()`. That overlay sits on the unscaled
+ * glyphs and makes the quote unreadable. Reading mode on Android therefore
+ * does not use native drag-select: hold-still then drag is the quote path.
+ *
+ * Keyed on `.lc-android` (UA), not `.lc-mobile` (viewport): a narrow desktop
+ * window must keep native drag-select, and a wide tablet in landscape can
+ * miss the mobile media query.
+ */
+.lc-android .lc-board-reading .lc-doc-selectable-body,
+.lc-android .lc-board-reading .lc-doc-selectable-body * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.lc-android .lc-board-reading.lc-board-highlighting .lc-doc-selectable-body,
+.lc-android .lc-board-reading.lc-board-highlighting .lc-doc-selectable-body * {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
 /* Hold-armed annotate box owns the gesture — kill native select chrome. */
 .lc-doc-selecting .lc-doc-selectable-body,
 .lc-doc-selecting .lc-doc-selectable-body * {
@@ -15055,7 +15139,7 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 10px;
 }
 
-/* Sub-marks painted on the page while the hub is open. */
+/* Sub-marks on the page — visible with the panel closed. */
 .lc-doc-submark-paint {
   position: absolute;
   pointer-events: none;
@@ -15422,6 +15506,12 @@ button.lc-row-selected:hover:not(:disabled) {
   color: transparent;
   transform-origin: 0% 0%;
   cursor: text;
+}
+
+/* Glyphs live on the canvas. Native ::selection must not paint a second copy. */
+.lc-pdf-text.textLayer ::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
 }
 
 .lc-pdf-loading,

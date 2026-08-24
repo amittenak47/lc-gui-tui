@@ -9,6 +9,9 @@ import {
   peekPadSyncQueueForTests,
   pullPads,
   PAD_TRASH_OP_QUEUE_CAP,
+  PAD_SYNC_IDLE_KICK_MS_ANDROID,
+  PAD_SYNC_IDLE_KICK_MS_DESKTOP,
+  padSyncIdleKickMs,
   pushPadSnapshot,
   pushProblemPad,
   pushWhiteboardPad,
@@ -16,6 +19,7 @@ import {
   restoreTrashedPad,
   TrashQueueFullError,
 } from "./padSync";
+import { noteCameraBusy, resetCameraBusyForTests } from "./cameraBusy";
 
 const restoreWhiteboardNotebook = vi.fn(async (_entry?: unknown) => {});
 const restoreWhiteboardFromTrash = vi.fn(
@@ -131,6 +135,7 @@ function fakeClient(overrides: Partial<LcClient> = {}): LcClient {
 
 beforeEach(() => {
   resetPadSyncQueueForTests();
+  resetCameraBusyForTests();
   restoreWhiteboardNotebook.mockClear();
   restoreAnnotateDoc.mockClear();
   deleteWhiteboardNotebook.mockClear();
@@ -160,6 +165,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  resetCameraBusyForTests();
 });
 
 describe("padSync queue", () => {
@@ -253,6 +259,46 @@ describe("deletePadEverywhere", () => {
 });
 
 describe("padSync ping", () => {
+  it("skips a tick while the camera is moving", async () => {
+    noteCameraBusy();
+    const pingPadSync = vi.fn(async () => ({
+      now: 100,
+      whiteboard: [],
+      annotate: [],
+      snapshots: [],
+      gone: [],
+    }));
+    await applyPadSyncPing(fakeClient({ pingPadSync }));
+    expect(pingPadSync).not.toHaveBeenCalled();
+  });
+
+  it("waits longer before the first idle kick on Android", () => {
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" });
+    expect(padSyncIdleKickMs()).toBe(PAD_SYNC_IDLE_KICK_MS_DESKTOP);
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (Linux; Android 14; SM-X910) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    });
+    expect(padSyncIdleKickMs()).toBe(PAD_SYNC_IDLE_KICK_MS_ANDROID);
+  });
+
+  it("backs off after a dead hub instead of retrying immediately", async () => {
+    const padHub = await import("./padHub");
+    const hubSpy = vi.spyOn(padHub, "loadPadHub").mockReturnValue({
+      url: "http://127.0.0.1:9",
+      token: "t",
+    });
+    const pingPadSync = vi.fn(async () => {
+      throw new Error("failed to fetch");
+    });
+    const client = fakeClient({ pingPadSync });
+    await expect(applyPadSyncPing(client)).rejects.toThrow(/failed to fetch/);
+    pingPadSync.mockClear();
+    await applyPadSyncPing(client);
+    expect(pingPadSync).not.toHaveBeenCalled();
+    hubSpy.mockRestore();
+  });
+
   it("writes a newer whiteboard and skips an older annotate", async () => {
     getWhiteboardNotebook.mockResolvedValue({
       id: "w1",

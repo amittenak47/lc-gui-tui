@@ -8,7 +8,11 @@ import {
   MD_INK_MIN_PAGE_H,
   ANNOTATE_PAGE_W,
   ANNOTATE_PAGE_W_MIN,
+  ANNOTATE_FRAME_ID,
+  ANNOTATE_REGION,
   MD_INK_TAIL_PAD,
+  isAnnotatePageFrame,
+  stampAnnotateFrameMeta,
 } from "./annotate";
 
 describe("annotatePageHeight", () => {
@@ -87,5 +91,36 @@ describe("buildAnnotateTemplate", () => {
 
   it("draws no background of its own, so the document shows through", () => {
     expect(buildAnnotateTemplate(1000)[0].backgroundColor).toBe("transparent");
+  });
+});
+
+describe("isAnnotatePageFrame", () => {
+  it("recognises the seeded document rectangle by id or flags", () => {
+    const [seeded] = buildAnnotateTemplate(1100);
+    expect(seeded.id).toBe(ANNOTATE_FRAME_ID);
+    expect(isAnnotatePageFrame(seeded)).toBe(true);
+    expect(isAnnotatePageFrame({ id: ANNOTATE_FRAME_ID })).toBe(true);
+    expect(
+      isAnnotatePageFrame({
+        id: "other",
+        customData: { lcRegionFrame: true, lcRegion: ANNOTATE_REGION },
+      }),
+    ).toBe(true);
+    expect(
+      isAnnotatePageFrame({
+        id: "lcregion-constraints-frame",
+        customData: { lcRegionFrame: true, lcRegion: "constraints" },
+      }),
+    ).toBe(false);
+  });
+
+  it("puts convert-dropped flags back so fit and clamp still see a page", () => {
+    const stamped = stampAnnotateFrameMeta([{ id: ANNOTATE_FRAME_ID, customData: null }]);
+    expect(stamped[0].customData).toMatchObject({
+      lcRegion: ANNOTATE_REGION,
+      lcRegionFrame: true,
+      lcMdInkFrame: true,
+      lcDocumentPage: true,
+    });
   });
 });

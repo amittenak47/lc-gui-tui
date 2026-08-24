@@ -56,6 +56,9 @@ import {
   type LayoutElement,
 } from "../templates/regionLayout";
 import { readingColumnWidth } from "../templates/readingColumn";
+import { noteCameraBusy } from "../util/cameraBusy";
+import { traceOpen } from "../util/messageOf";
+import { ANNOTATE_PAGE_W, ANNOTATE_REGION, MD_INK_MIN_PAGE_H, MD_INK_TAIL_PAD, buildAnnotateTemplate, isAnnotatePageFrame, stampAnnotateFrameMeta } from "../templates/annotate";
 import {
   contentAABBsInFrame,
   contentBottomInFrame,
@@ -113,6 +116,7 @@ import {
   clearPageVisibility,
   pageAtViewport,
   pageBounds,
+  pageBoundsWithRendered,
   viewportBand,
   type PageableElement,
 } from "./pageView";
@@ -123,6 +127,13 @@ import {
   liveExcalidrawViewport,
 } from "./documentRotateCamera";
 import { paintExcalidrawCanvases } from "./excalidrawCanvasSize";
+import { DOCUMENT_LAYER_SELECTOR, documentLayerHeight } from "./documentLayer";
+import {
+  contentSlotCssTransform,
+  contentSlotPlaceAt,
+  shouldSkipFrozenContentSlotReport,
+  type ContentSlotPlace,
+} from "./contentSlotPlace";
 import { encodeInkOps } from "./inkCodec";
 import { fallbackPageFrames, pageFramesFromPdfSlot, pageIdFromCamera } from "./inkPageIndex";
 import { eraserScreenRadius } from "./rasterInk";
@@ -157,7 +168,7 @@ import {
   selectionOwnsGesture,
   onDocScrollRequest,
   setDocCameraLive,
-  pointerInSubMark,
+  isSubMarkDragLive,
 } from "./docSelectionGesture";
 import {
   DOC_PAGE_SELECTOR,
@@ -1367,13 +1378,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     marks.style.transform = content.style.transform;
     marks.style.height = `${content.offsetHeight}px`;
   };
+
   const [contentSceneWidth, setContentSceneWidth] = useState(1);
-  const lastContentSlotRef = useRef<{
-    left: number;
-    top: number;
-    sceneWidth: number;
-    zoom: number;
-  } | null>(null);
+  const lastContentSlotRef = useRef<ContentSlotPlace | null>(null);
+  const placeContentSlotAtRef = useRef<
+    (scrollX: number, scrollY: number, zoom: number) => ContentSlotPlace | null
+  >(() => null);
   const pageContentRef = useRef<ReactNode>(pageContent);
   pageContentRef.current = pageContent;
   /**
@@ -1644,6 +1654,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const fitZoomMinRef = useRef<number | null>(null);
   /** Live page bounds for scroll clamping (same box as inkClip). */
   const pageBoundsRef = useRef<SceneBounds | null>(null);
+  /**
+   * Height of the document layer as it is actually laid out, in scene units.
+   *
+   * Zero until something has rendered. Kept by the observer below rather than
+   * derived on demand: the pan clamp reads it per pointer sample, and a layout
+   * read in that path is a forced reflow on every frame of every drag.
+   */
+  const contentRenderedHeightRef = useRef(0);
   /** Student changed zoom/pan — skip auto camera reset on resize refits. */
   const userAdjustedCameraRef = useRef(false);
   /** Last board box we fitted to — skip no-op resize; clear on orientation. */
@@ -1813,6 +1831,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   clearPanOffsetsRef.current = clearPanOffsets;
 
   const pulseCameraMotion = useCallback(() => {
+    noteCameraBusy();
     if (!cameraMotionActiveRef.current) {
       cameraMotionActiveRef.current = true;
       // Gesture open: Excalidraw may have remounted canvases since last ride.
@@ -2047,19 +2066,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // Desktop free-scroll: page is null (show all), but the statement HTML still
     // needs constraints bounds so the overlay can ride the camera mid-pan.
     const boundsPage =
-      page ?? (pageContentRef.current ? "constraints" : null);
+      page ?? (pageContentRef.current ? ANNOTATE_REGION : null);
 
     const bounds = pageBounds(live, boundsPage);
-    // Pan clamp uses the tight frame (no gutter pad) so a fitted page cannot
-    // drift off one edge. Ink clip keeps the half-gutter pad.
     if (bounds) {
       const pad = REGION_GUTTER / 2;
-      pageBoundsRef.current = {
+      const tight = {
         minX: bounds.minX + pad,
         minY: bounds.minY + pad,
         maxX: bounds.maxX - pad,
         maxY: bounds.maxY - pad,
       };
+      pageBoundsRef.current = pageContentRef.current
+        ? pageBoundsWithRendered(tight, contentRenderedHeightRef.current, MD_INK_TAIL_PAD)
+        : tight;
+    } else if (pageContentRef.current) {
+      const w = Math.max(1, lastContentSlotRef.current?.sceneWidth ?? ANNOTATE_PAGE_W);
+      const h = Math.max(contentRenderedHeightRef.current, MD_INK_MIN_PAGE_H);
+      pageBoundsRef.current = pageBoundsWithRendered(
+        { minX: 0, minY: 0, maxX: w, maxY: MD_INK_MIN_PAGE_H },
+        h,
+        MD_INK_TAIL_PAD,
+      );
     } else {
       pageBoundsRef.current = null;
     }
@@ -2257,37 +2285,86 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   /**
+   * Write the file slot to this camera.
+   *
+   * Inner node, not the ride wrapper: the wrapper is grouping only. Live wheel
+   * samples call this with the live camera. Land stamps the same numbers, then
+   * drops pan translates. Skip the write and the file stays on page 1 while
+   * ink rides away, then commit clears the ride and the page jumps back.
+   */
+  const placeContentSlotAt = (
+    scrollX: number,
+    scrollY: number,
+    zoom: number,
+  ): ContentSlotPlace | null => {
+    if (!pageContentRef.current) return null;
+    let bounds = pageBoundsRef.current;
+    if (!bounds) {
+      const api = apiRef.current;
+      if (api) {
+        const liveEls = api.getSceneElements() as unknown as PageableElement[];
+        const page = mobileRegionRef.current ?? ANNOTATE_REGION;
+        const raw = pageBounds(liveEls, page);
+        if (raw) {
+          const pad = REGION_GUTTER / 2;
+          bounds = {
+            minX: raw.minX + pad,
+            minY: raw.minY + pad,
+            maxX: raw.maxX - pad,
+            maxY: raw.maxY - pad,
+          };
+        }
+      }
+    }
+    const next = contentSlotPlaceAt(
+      scrollX,
+      scrollY,
+      zoom,
+      bounds,
+      lastContentSlotRef.current,
+    );
+    if (!next) return null;
+    lastContentSlotRef.current = next;
+    const node = contentSlotNodeRef.current;
+    if (node) {
+      node.style.transform = contentSlotCssTransform(next);
+      syncMarksSlotFrom(node);
+    }
+    return next;
+  };
+  placeContentSlotAtRef.current = placeContentSlotAt;
+
+  /**
    * Project the open page onto the screen for the HTML content layer.
    *
-   * Position is transform-only (translate+scale) so a scroll frame does not
-   * reflow the markdown tree. Scene width still uses React because it reflows
-   * the column — that path is rare (open / resize), not per-scroll.
+   * Live samples already wrote the slot from the live camera. A report off
+   * frozen Excalidraw `appState` mid-gesture rewinds the file to page 1.
    */
   const reportContentSlot = useCallback(() => {
     const api = apiRef.current;
-    const node = contentSlotNodeRef.current;
     if (!pageContentRef.current || !api) {
       lastContentSlotRef.current = null;
       return;
     }
-    let bounds = pageBoundsRef.current;
-    // Desktop / race: pageBoundsRef may lag one frame — measure the open page.
-    // Do not hardcode constraints: md-ink uses ANNOTATE_REGION.
-    if (!bounds) {
-      const live = api.getSceneElements() as unknown as PageableElement[];
-      const page = mobileRegionRef.current ?? "constraints";
-      const raw = pageBounds(live, page);
-      if (raw) {
-        const pad = REGION_GUTTER / 2;
-        bounds = {
-          minX: raw.minX + pad,
-          minY: raw.minY + pad,
-          maxX: raw.maxX - pad,
-          maxY: raw.maxY - pad,
-        };
-      }
+    const live = liveCameraRef.current;
+    const pan = panOffsetRef.current;
+    if (live?.live) return;
+    if (shouldSkipFrozenContentSlotReport(false, pan.x, pan.y)) {
+      return;
     }
-    if (!bounds) {
+    const app = api.getAppState() as {
+      scrollX?: number;
+      scrollY?: number;
+      zoom?: { value?: number };
+    };
+    const camera = {
+      scrollX: app.scrollX ?? 0,
+      scrollY: app.scrollY ?? 0,
+      zoom: app.zoom?.value ?? 1,
+    };
+    const last = lastContentSlotRef.current;
+    const next = placeContentSlotAtRef.current(camera.scrollX, camera.scrollY, camera.zoom);
+    if (!next) {
       /*
        * No page frame in the scene yet — but the slot still has to be a usable
        * width, because `contentSceneWidth` starts at 1 and only this function
@@ -2315,52 +2392,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       lastContentSlotRef.current = null;
       return;
-    }
-    /*
-     * The live camera wins while a gesture owns it.
-     *
-     * Unlike the ink and the overlays, this slot is not carried by the shared
-     * pan translate — `applyVisualScroll` writes its absolute transform every
-     * sample. A report that ran mid-gesture off Excalidraw's (deliberately
-     * frozen) appState would therefore drag the markdown back to where the
-     * gesture started, one frame before the next sample dragged it forward
-     * again: the page tearing away from the ink on top of it.
-     */
-    const live = liveCameraRef.current;
-    const state = live?.live
-      ? { scrollX: live.scrollX, scrollY: live.scrollY, zoom: { value: live.zoom } }
-      : (api.getAppState() as {
-          scrollX?: number;
-          scrollY?: number;
-          zoom?: { value?: number };
-        });
-    const zoom = state.zoom?.value ?? 1;
-    const next = {
-      left: (bounds.minX + (state.scrollX ?? 0)) * zoom,
-      top: (bounds.minY + (state.scrollY ?? 0)) * zoom,
-      sceneWidth: Math.max(1, bounds.maxX - bounds.minX),
-      zoom,
-    };
-    const last = lastContentSlotRef.current;
-    if (
-      last &&
-      Math.abs(last.left - next.left) < 0.01 &&
-      Math.abs(last.top - next.top) < 0.01 &&
-      Math.abs(last.sceneWidth - next.sceneWidth) < 0.01 &&
-      Math.abs(last.zoom - next.zoom) < 1e-4
-    ) {
-      return;
-    }
-    lastContentSlotRef.current = next;
-    if (node) {
-      /*
-       * Translate+scale only — never left/top.
-       *
-       * Writing left/top every scroll frame reflows the whole markdown tree
-       * (long notes = thousands of nodes). Transform stays on the compositor.
-       */
-      node.style.transform = `translate(${next.left}px, ${next.top}px) scale(${next.zoom})`;
-      syncMarksSlotFrom(node);
     }
     if (!last || Math.abs(last.sceneWidth - next.sceneWidth) >= 0.01) {
       setContentSceneWidth(next.sceneWidth);
@@ -2733,6 +2764,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (slotReportFrameRef.current) cancelAnimationFrame(slotReportFrameRef.current);
       slotReportFrameRef.current = requestAnimationFrame(() => {
         slotReportFrameRef.current = 0;
+        const live = liveCameraRef.current;
+        if (live?.live) {
+          placeContentSlotAtRef.current(live.scrollX, live.scrollY, live.zoom);
+        }
         clearPanOffsetsRef.current();
         runSlotReports();
         onLanded?.();
@@ -2742,9 +2777,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
 
   const clampPanScroll = useCallback((scrollX: number, scrollY: number, zoom: number) => {
-    const bounds = pageBoundsRef.current;
+    let bounds = pageBoundsRef.current;
     const api = apiRef.current;
     if (!bounds || !api) return { scrollX, scrollY };
+    // Cached height only — wheel hits this many times per frame.
+    if (pageContentRef.current) {
+      bounds = pageBoundsWithRendered(
+        bounds,
+        contentRenderedHeightRef.current,
+        MD_INK_TAIL_PAD,
+      );
+    }
     /*
      * Mobile paging always clamped. Desktop used to skip clamp entirely, so a
      * reading board could pan into empty beige past the page — Excalidraw then
@@ -3345,45 +3388,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       offsetTop,
       live: true,
     };
-    const bounds = pageBoundsRef.current;
-    const node = contentSlotNodeRef.current;
-    if (bounds && node && pageContentRef.current) {
-      const left = (bounds.minX + scrollX) * zoom;
-      const top = (bounds.minY + scrollY) * zoom;
-      node.style.transform = `translate(${left}px, ${top}px) scale(${zoom})`;
-      syncMarksSlotFrom(node);
-      lastContentSlotRef.current = {
-        left,
-        top,
-        sceneWidth: Math.max(1, bounds.maxX - bounds.minX),
-        zoom,
-      };
-    } else if (!bounds && node && pageContentRef.current && api) {
-      // Same desktop fallback as reportContentSlot — live pan must not wait a
-      // slot-report frame before the markdown rides.
-      const liveEls = api.getSceneElements() as unknown as PageableElement[];
-      const page = mobileRegionRef.current ?? "constraints";
-      const raw = pageBounds(liveEls, page);
-      if (raw) {
-        const pad = REGION_GUTTER / 2;
-        const fallback = {
-          minX: raw.minX + pad,
-          minY: raw.minY + pad,
-          maxX: raw.maxX - pad,
-          maxY: raw.maxY - pad,
-        };
-        const left = (fallback.minX + scrollX) * zoom;
-        const top = (fallback.minY + scrollY) * zoom;
-        node.style.transform = `translate(${left}px, ${top}px) scale(${zoom})`;
-        syncMarksSlotFrom(node);
-        lastContentSlotRef.current = {
-          left,
-          top,
-          sceneWidth: Math.max(1, fallback.maxX - fallback.minX),
-          zoom,
-        };
-      }
-    }
+    // File first — same camera as this sample. Ink rides a delta; the slot
+    // cannot. Drop this write and wheel travel dies on commit: pan translates
+    // clear, the slot is still on the fit camera, page jumps to the start.
+    placeContentSlotAtRef.current(scrollX, scrollY, zoom);
     pulseCameraMotionRef.current();
     if (stampTrashPosRef.current) syncStampTrashRef.current();
 
@@ -3710,11 +3718,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (event.button !== 0) return;
       if (!isScrollSurface(event.target)) return;
       /*
-       * Armed sub-mark owns the finger inside the open mark. Do not write
-       * panDragRef at all — deferred selectable-doc pan would still arm after
-       * SELECT_HOLD_SLOP_PX when DocSelectionLayer's band hit misses.
+       * Live underline/highlight drag owns this finger. The panel being open
+       * must not freeze the page — a mark taller than the viewport needs pan.
        */
-      if (pointerInSubMark(event.clientX, event.clientY)) return;
+      if (isSubMarkDragLive()) return;
 
       // Mouse: down+drag on words is native select. Touch/pen must still pan —
       // Android has no wheel, `touch-action: none` kills native scroll, and an
@@ -3811,10 +3818,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!handPanningRef.current) return;
       if (!canOwnScroll()) return;
       /*
-       * Sub-mark owns the finger once it enters the open mark — even if pan
-       * deferred-armed from a down outside the bands.
+       * Live underline/highlight drag owns the finger. Opening the panel
+       * must not steal pan — a mark taller than the viewport needs scroll.
        */
-      if (pointerInSubMark(event.clientX, event.clientY)) {
+      if (isSubMarkDragLive()) {
         dropPanForSelection();
         return;
       }
@@ -5130,11 +5137,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        */
       const sideScroll = horizontalScrollHost(target);
       if (sideScroll) {
-        if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+        if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+          noteCameraBusy();
+          return;
+        }
         if (event.shiftKey && event.deltaY !== 0) {
           event.preventDefault();
           event.stopPropagation();
           sideScroll.scrollLeft += event.deltaY;
+          noteCameraBusy();
           return;
         }
       }
@@ -5191,6 +5202,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     root.addEventListener("wheel", onWheel, { capture: true, passive: false });
     return () => root.removeEventListener("wheel", onWheel, { capture: true });
   }, [clampPanScroll, interactive, mobile, pulseCameraMotion, reportCodeSlot]);
+
+  useEffect(() => {
+    const root = boardRef.current;
+    if (!root) return;
+    const onNestedScroll = (event: Event) => {
+      if (horizontalScrollHost(event.target)) noteCameraBusy();
+    };
+    root.addEventListener("scroll", onNestedScroll, { capture: true, passive: true });
+    return () => root.removeEventListener("scroll", onNestedScroll, { capture: true });
+  }, [interactive]);
 
   type FitMode = "frame" | "camera" | "both" | "keepY";
 
@@ -5486,14 +5507,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           scrollY?: number;
           zoom?: { value?: number };
         };
+        const riding = liveCameraRef.current;
         const keepDocumentY = mode === "keepY";
         const rotated = keepDocumentY
           ? documentCameraAfterViewportChange({
               box: { minX, minY, maxX, maxY },
               inset,
               viewWidth,
-              prevZoom: prevCamera.zoom?.value ?? 1,
-              prevScrollY: prevCamera.scrollY ?? 0,
+              prevZoom: riding?.live ? riding.zoom : (prevCamera.zoom?.value ?? 1),
+              prevScrollY: riding?.live ? riding.scrollY : (prevCamera.scrollY ?? 0),
               zoomMin: FIT_ZOOM_MIN,
               zoomMax: ZOOM_MAX,
             })
@@ -5609,7 +5631,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** Resize the page frame and refit zoom/scroll to the chrome hole (window/board resize). */
   const refitToViewport = useCallback(
     (regionId?: string | null) => {
-      userAdjustedCameraRef.current = false;
+      // Wheel already moved the camera. `both` recentres Y at the page top —
+      // that is the snap back to the start after a desktop wheel.
+      if (userAdjustedCameraRef.current || liveCameraRef.current?.live) {
+        runFit(regionId, "frame");
+        return;
+      }
       runFit(regionId, "both");
     },
     [runFit],
@@ -5644,6 +5671,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [pageContent, contentSceneWidth, reportContentSlot]);
 
   useLayoutEffect(() => {
+    const node = contentSlotNodeRef.current;
+    const last = lastContentSlotRef.current;
+    if (!node || !last) return;
+    node.style.transform = contentSlotCssTransform(last);
+    syncMarksSlotFrom(node);
+  });
+
+  useLayoutEffect(() => {
     if (!linedSlotOn) return;
     const next = lastLinedSlotRef.current;
     const node = linedSlotNodeRef.current;
@@ -5655,6 +5690,46 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     node.style.backgroundSize = `100% ${next.gap}px`;
     node.style.backgroundPosition = `0 ${next.phase}px`;
   }, [linedSlotOn]);
+
+  /**
+   * Put `lcmdink-0-frame` in the scene if the document is open and the page is gone.
+   *
+   * `seedTemplate` is a no-op until Excalidraw hands over its API, and
+   * `waitForTemplate` used to wait for practice `lcregion-*-frame` ids that
+   * annotate never has. The HTML still measured tall; clamp/place saw no page
+   * box; wheel did nothing. Insert here, on API attach, and from the grow pass.
+   */
+  const ensureDocumentPageInScene = useCallback((): boolean => {
+    const api = apiRef.current;
+    if (!api || !pageContentRef.current) return false;
+    const scene = (api.getSceneElements() ?? []) as SceneElementLike[];
+    if (scene.some((el) => isAnnotatePageFrame(el))) return true;
+    const width = Math.max(1, lastContentSlotRef.current?.sceneWidth ?? ANNOTATE_PAGE_W);
+    const height = Math.max(
+      contentRenderedHeightRef.current,
+      pageContentHeightRef.current ?? 0,
+      MD_INK_MIN_PAGE_H,
+    );
+    const skeletons =
+      seedSkeletonsRef.current.length > 0
+        ? seedSkeletonsRef.current
+        : buildAnnotateTemplate(height, isDarkTheme(themeId), width);
+    const converted = stampAnnotateFrameMeta(
+      convert(skeletons, { regenerateIds: false }) as SceneElementLike[],
+    );
+    const dark = isDarkTheme(themeId);
+    const recolored = recolorTemplateElements(converted, dark) ?? converted;
+    const next = stampAnnotateFrameMeta(
+      applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M")),
+    );
+    const keep = scene.filter((el) => !isAnnotatePageFrame(el));
+    templateRef.current = next;
+    api.updateScene({
+      elements: [...next, ...keep] as unknown[],
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    return next.some((el) => isAnnotatePageFrame(el));
+  }, [convert, readingOpts, themeId]);
 
   /**
    * Grow the page to the document, and tell the pan clamp about it.
@@ -5672,33 +5747,37 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const applyDocumentFrameHeight = useCallback(
     (heightArg?: number | null) => {
       const api = apiRef.current;
-      const height =
-        heightArg != null && heightArg >= 1 ? heightArg : pageContentHeightRef.current;
-      if (!api || !height || height < 1) return;
+      const fromDom =
+        contentSlotNodeRef.current && pageContentRef.current
+          ? documentLayerHeight(contentSlotNodeRef.current)
+          : 0;
+      if (fromDom >= 1) {
+        contentRenderedHeightRef.current = Math.max(contentRenderedHeightRef.current, fromDom);
+      }
+      const height = Math.max(
+        heightArg != null && heightArg >= 1 ? heightArg : 0,
+        pageContentHeightRef.current ?? 0,
+        fromDom >= 1 ? fromDom + MD_INK_TAIL_PAD : 0,
+      );
+      if (!api || height < 1) return;
+      if (pageContentRef.current) ensureDocumentPageInScene();
       const current = api.getSceneElements() as SceneElementLike[];
-      const page = mobileRegionRef.current;
-      const frame = current.find((el) => {
-        const meta = (el as { customData?: { lcMdInkFrame?: boolean; lcRegion?: string; lcRegionFrame?: boolean } })
-          .customData;
-        return (
-          meta?.lcMdInkFrame ||
-          (Boolean(pageContentRef.current) &&
-            meta?.lcRegionFrame &&
-            meta.lcRegion === "constraints" &&
-            (page === "constraints" || page === null))
-        );
-      }) as (SceneElementLike & { height?: number }) | undefined;
-      if (!frame) return;
+      const frame = current.find((el) => isAnnotatePageFrame(el)) as
+        | (SceneElementLike & { height?: number })
+        | undefined;
+      if (!frame) {
+        traceOpen("document frame missing — page not grown", { height });
+        syncPageVisibility();
+        return;
+      }
       if (typeof frame.height === "number" && Math.abs(frame.height - height) < 1) {
         syncPageVisibility();
         scheduleSlotReports();
         return;
       }
-      const isMdFrame = Boolean(
-        (frame as { customData?: { lcMdInkFrame?: boolean } }).customData?.lcMdInkFrame,
-      );
+      const isMdFrame = isAnnotatePageFrame(frame);
       const grown = current.map((el) =>
-        el === frame
+        el.id === frame.id
           ? ({
               ...el,
               height,
@@ -5714,12 +5793,76 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       syncPageVisibility();
       scheduleSlotReports();
     },
-    [scheduleSlotReports, syncPageVisibility],
+    [ensureDocumentPageInScene, scheduleSlotReports, syncPageVisibility],
   );
 
   useEffect(() => {
     applyDocumentFrameHeight(pageContentHeight);
   }, [pageContent, pageContentHeight, applyDocumentFrameHeight]);
+
+  const hasPageContent = Boolean(pageContent);
+
+  /*
+   * Ask the document how tall it is, instead of waiting to be told.
+   *
+   * `applyDocumentFrameHeight` grows the frame from a number that has been all
+   * the way out to the reader component, through `onMeasure`, into React state
+   * and back down as a prop. That trip is where a document loses its height: a
+   * reader that reports zero before it has a column, a state update that lands
+   * after the last fit, a frame the grow pass cannot find. The board is holding
+   * the rendered node the whole time and never asked it.
+   *
+   * So it asks, and re-asks whenever the box changes — which is precisely when
+   * the answer changes, and never during a pan (the slot is moved by transform,
+   * and a transform is not a resize). `syncPageVisibility` is called rather than
+   * the height written straight into the ref, because the clamp reads
+   * `pageBoundsRef` and that is the function that owns it.
+   */
+  useEffect(() => {
+    if (!hasPageContent) {
+      contentRenderedHeightRef.current = 0;
+      return;
+    }
+    const node = contentSlotNodeRef.current;
+    if (!node || typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(() => read());
+    const watch = () => {
+      observer.observe(node);
+      for (const inner of node.querySelectorAll<HTMLElement>(DOCUMENT_LAYER_SELECTOR)) {
+        if (inner !== node) observer.observe(inner);
+      }
+    };
+    const read = () => {
+      watch();
+      const height = documentLayerHeight(node);
+      if (height < 1) return;
+      if (Math.abs(height - contentRenderedHeightRef.current) < 1) return;
+      contentRenderedHeightRef.current = Math.max(contentRenderedHeightRef.current, height);
+      syncPageVisibility();
+      scheduleSlotReports();
+    };
+    watch();
+    read();
+    const raf = requestAnimationFrame(read);
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
+  }, [hasPageContent, scheduleSlotReports, syncPageVisibility]);
+
+  const syncDocumentScrollBounds = useCallback(() => {
+    const node = contentSlotNodeRef.current;
+    if (node && pageContentRef.current) {
+      const height = documentLayerHeight(node);
+      if (height > contentRenderedHeightRef.current) {
+        contentRenderedHeightRef.current = height;
+      }
+      if (height >= 1) applyDocumentFrameHeight(height);
+      else syncPageVisibility();
+    } else {
+      syncPageVisibility();
+    }
+  }, [applyDocumentFrameHeight, syncPageVisibility]);
 
   // A toggle mid-gesture must not leave a stale pin behind.
   useEffect(() => {
@@ -6367,9 +6510,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const skeletons = seedSkeletonsRef.current;
       if (skeletons.length === 0) return;
       const dark = isDarkTheme(themeId);
-      const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
+      const converted = stampAnnotateFrameMeta(
+        convert(skeletons, { regenerateIds: false }) as SceneElementLike[],
+      );
       const recolored = recolorTemplateElements(converted, dark) ?? converted;
-      const sized = applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M"));
+      const sized = stampAnnotateFrameMeta(
+        applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M")),
+      );
       templateRef.current = sized;
       /*
        * Keep the camera. Clearing marks is not "jump back to the top of the
@@ -6476,7 +6623,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     pageContentHeightRef.current =
       pageContentHeight != null && pageContentHeight >= 1 ? pageContentHeight : null;
-  }, [pageContentHeight]);
+    if (
+      pageContentHeight != null &&
+      pageContentHeight > MD_INK_MIN_PAGE_H + 1 &&
+      pageContentHeight > contentRenderedHeightRef.current
+    ) {
+      contentRenderedHeightRef.current = pageContentHeight;
+      syncPageVisibility();
+    }
+  }, [pageContentHeight, syncPageVisibility]);
 
   /** Resolve once every seeded region frame is in the scene (and fonts are ready). */
   const waitForTemplate = useCallback((): Promise<void> => {
@@ -6489,6 +6644,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     return (async () => {
       await fontsReady;
+      if (pageContentRef.current) {
+        for (let attempt = 0; attempt < 45; attempt++) {
+          if (ensureDocumentPageInScene()) {
+            await waitFrame();
+            await waitFrame();
+            syncPageVisibility();
+            return;
+          }
+          await waitFrame();
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+        }
+        ensureDocumentPageInScene();
+        syncPageVisibility();
+        return;
+      }
       const neededRegions = new Set(
         Object.keys(REGIONS).map((id) => `lcregion-${id}-frame`),
       );
@@ -6524,7 +6694,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       applyRegionLayout();
     })();
-  }, [applyRegionLayout]);
+  }, [applyRegionLayout, ensureDocumentPageInScene, syncPageVisibility]);
 
   const fitCodeToSource = useCallback(
     (source: string) => {
@@ -6586,7 +6756,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // canvas, so zooming out on a tablet shows one frame, not the whole column.
     // Ink clip tracks the same box — without this, marks from the previous page
     // can flash on the next one until the next camera tick.
-    syncPageVisibility();
+    //
+    // Open often measured this column while it was parked or under Home's
+    // overlay. ResizeObserver can miss the reveal, so re-read height here —
+    // otherwise the pan clamp stays on the 1100 floor and the wheel is a no-op.
+    syncDocumentScrollBounds();
     reportCodeSlot();
     rasterInkRef.current?.syncCamera();
     if (keepCamera) {
@@ -6612,13 +6786,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * laying out reports a width it is about to stop having.
        */
       const settle = [0, 80, 200, 400, 700].map((ms) =>
-        window.setTimeout(() => nudgeViewportFit(), ms),
+        window.setTimeout(() => {
+          syncDocumentScrollBounds();
+          nudgeViewportFit();
+        }, ms),
       );
       return () => {
         for (const id of settle) window.clearTimeout(id);
       };
     }
     void settleFitView().then(() => {
+      syncDocumentScrollBounds();
       reportCodeSlot();
       rasterInkRef.current?.syncCamera();
       // Fit runs after view-mode exit and can wipe the hand tool. Re-arm so
@@ -6632,7 +6810,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     nudgeViewportFit,
     reportCodeSlot,
     settleFitView,
-    syncPageVisibility,
+    syncDocumentScrollBounds,
   ]);
 
   /*
@@ -6644,7 +6822,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     if (!interactive || annotateCodeRef.current) return;
     const arm = () => {
-      if (!annotateCodeRef.current) armReadingScroll();
+      if (annotateCodeRef.current) return;
+      syncDocumentScrollBounds();
+      armReadingScroll();
     };
     arm();
     const raf = requestAnimationFrame(arm);
@@ -6653,7 +6833,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       cancelAnimationFrame(raf);
       for (const id of timers) window.clearTimeout(id);
     };
-  }, [interactive, armReadingScroll]);
+  }, [interactive, armReadingScroll, syncDocumentScrollBounds]);
 
   /**
    * Place the selection trash from live geometry, not from the last committed
@@ -7084,9 +7264,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       seedTemplate: (skeletons: Skeleton[]) => {
         seedSkeletonsRef.current = skeletons;
         const dark = isDarkTheme(themeId);
-        const converted = convert(skeletons, { regenerateIds: false }) as SceneElementLike[];
+        const converted = stampAnnotateFrameMeta(
+          convert(skeletons, { regenerateIds: false }) as SceneElementLike[],
+        );
         const recolored = recolorTemplateElements(converted, dark) ?? converted;
-        const next = applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M"));
+        const next = stampAnnotateFrameMeta(
+          applyBoardReadingSize(recolored, readingSizeRef.current, readingOpts("M")),
+        );
         templateRef.current = next;
         rasterInkRef.current?.clear();
         applyInkPaletteHistoryRef.current(seedInkPaletteHistory(themeId));
@@ -7706,8 +7890,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
       },
       armReadingScroll,
+      syncDocumentScrollBounds,
     }),
-    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, maybeGrowDrawFrame, nudgeViewportFit, refitToViewport, scheduleSlotReports, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll],
+    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, maybeGrowDrawFrame, nudgeViewportFit, refitToViewport, scheduleSlotReports, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll, syncDocumentScrollBounds],
   );
 
   const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
@@ -7779,9 +7964,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 }`
               : "lc-page-content-slot"
           }
-          // Selectable prose is content, not decoration: hiding it from the
-          // accessibility tree while the reader can pick quotes out of it would
-          // be a lie. Annotate mode goes back to being paper under the pen.
           aria-hidden={
             editing ||
             (selectableContent && (!annotateCode || highlighting || textMarkSelecting))
@@ -8421,6 +8603,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         handleKeyboardGlobally={interactive}
         excalidrawAPI={(api: unknown) => {
           apiRef.current = api as ExcalidrawApi;
+          if (pageContentRef.current) {
+            ensureDocumentPageInScene();
+            syncPageVisibility();
+          }
           scrollUnsubRef.current?.();
           scrollUnsubRef.current =
             apiRef.current.onScrollChange?.((scrollX, scrollY) => {
@@ -8505,7 +8691,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               if (!rasterInkRef.current?.isDrawing()) {
                 rasterInkRef.current?.syncCamera();
               }
-              scheduleSlotReports();
+              // Live samples already placed the file slot. A report here would
+              // read frozen appState and rewind the paper off the ink.
+              if (!liveCameraRef.current?.live) scheduleSlotReports();
 
               // Tablet only — desktop keeps free pan (coach docks on the right).
               if (!fittingCameraRef.current && !clampingScrollRef.current) {

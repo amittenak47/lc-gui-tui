@@ -27,7 +27,7 @@ import {
 export const TAB_STRIP_KEY = "whiteboard.tabs.v1";
 
 /** Parked markdown that never reached the library. Bigger than this is dropped. */
-const MAX_SOURCE_CHARS = 80_000;
+export const MAX_SOURCE_CHARS = 80_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -51,14 +51,13 @@ function persistable(tab: TabRecord): TabRecord | null {
       if (!tab.notebookId) return null;
       return { ...tab, dirty: false };
     case "annotate": {
+      // Keep the text until the library actually has it. A hash/docId on the
+      // chip used to drop source and assume IndexedDB already stored a copy —
+      // unsaved markdown never got one, so relaunch showed a missing-file dialog.
       const source =
         tab.source && tab.source.length > 0 && tab.source.length <= MAX_SOURCE_CHARS
           ? tab.source
-          : tab.hash || tab.docId
-            ? null
-            : tab.source && tab.source.length > MAX_SOURCE_CHARS
-              ? null
-              : tab.source;
+          : null;
       if (!tab.hash && !tab.docId && !source) return null;
       return { ...tab, dirty: false, indexed: asIndex(tab.indexed), source };
     }

@@ -174,12 +174,27 @@ function clampPanel(node: HTMLElement, anchorRect: DOMRect | null | undefined) {
      */
     const below = anchorRect.bottom + 6;
     const above = anchorRect.top - height - 6;
-    top =
-      below + height + margin <= pane.bottom
-        ? below
-        : above >= pane.top + margin
-          ? above
-          : anchorRect.top + anchorRect.height / 2 - height / 2;
+    if (below + height + margin <= pane.bottom) {
+      top = below;
+    } else if (above >= pane.top + margin) {
+      top = above;
+    } else {
+      /*
+       * Beside the mark rather than over it.
+       *
+       * Level with the mark used to mean *on* it: the card was centred on the
+       * anchor in both directions, so a quote too tall to clear vertically got
+       * its own words covered by the card that is about them. A reading column
+       * does not fill the pane — there is a margin either side of it on every
+       * screen this runs on — so the card goes into that gutter first, and only
+       * lands on the words when there is nowhere either side to put it.
+       */
+      const rightOf = anchorRect.right + 6;
+      const leftOf = anchorRect.left - width - 6;
+      if (rightOf + width + margin <= pane.right) left = rightOf;
+      else if (leftOf >= pane.left + margin) left = leftOf;
+      top = anchorRect.top + anchorRect.height / 2 - height / 2;
+    }
   } else {
     left = pane.left + pane.width / 2 - width / 2;
     top = pane.top + pane.height / 2 - height / 2;
