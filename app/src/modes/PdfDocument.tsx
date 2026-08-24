@@ -539,7 +539,9 @@ export function PdfDocument({
         if (disposedRef.current) return;
         const message = cause instanceof Error ? cause.message : String(cause);
         // A cancelled render is the window moving on, not a failure.
-        if (!/cancel/i.test(message)) onErrorRef.current?.(message);
+        if (!/cancel|abort|worker.*(destroy|terminat|not running)/i.test(message)) {
+          onErrorRef.current?.(message);
+        }
       } finally {
         if (!done) {
           paintedRef.current.get(n)?.release();

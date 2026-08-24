@@ -72,7 +72,9 @@ export const LONG_PRESS_MS = 580;
  * Capture + `claimSelectionGesture` run here so Android's native long-press
  * (~400–500ms) cannot `pointercancel` the pointer before the box arms. 140ms
  * was short enough that a scroll hitch looked like a hold. 260ms still beats
- * native select; a first move that is mostly vertical yields back to pan.
+ * native select. On Android the first move after that stillness is the box
+ * in any direction; on desktop a mostly-vertical first move still yields
+ * back to pan ({@link selectHoldYieldsToScroll}).
  */
 export const SELECT_HOLD_ARM_MS = 260;
 
@@ -88,6 +90,10 @@ export const SELECT_HOLD_SLOP_PX = 16;
 /**
  * After the marquee arms, a first move this much more vertical than horizontal
  * is a reading pan, not a box. Horizontal / diagonal still marquees.
+ *
+ * Desktop keeps this so a hold-then-flick-down stays a pan. Android does not:
+ * a hold, then a drag down a paragraph, is the natural quote motion there,
+ * and yielding it back to scroll meant the custom box never signalled.
  */
 export const SELECT_HOLD_SCROLL_RATIO = 1.35;
 
