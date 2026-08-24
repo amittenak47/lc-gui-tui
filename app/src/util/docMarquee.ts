@@ -538,6 +538,75 @@ export function hitRectsUnder(
       height: box.height / scale,
     });
   }
+  // PDF text layers are per-item spans, not `<p>` blocks. Union those into
+  // lines / nearby lines so confirm chrome wraps the quote, not a scatter.
+  const pdfPage =
+    searchRoot.closest?.(".lc-pdf-page") ??
+    (searchRoot instanceof HTMLElement && searchRoot.querySelector(".lc-pdf-text, .textLayer")
+      ? searchRoot
+      : null);
+  return pdfPage ? unionRectsIntoBlocks(out) : out;
+}
+
+/**
+ * Merge boxes that share a line (similar vertical midpoints), left-to-right.
+ */
+export function unionRectsIntoLines(rects: readonly LocalRect[], slop = 6): LocalRect[] {
+  if (rects.length <= 1) return rects.map((rect) => ({ ...rect }));
+  const sorted = [...rects].sort((a, b) => a.top - b.top || a.left - b.left);
+  const lines: LocalRect[] = [];
+  for (const rect of sorted) {
+    const last = lines[lines.length - 1];
+    if (!last) {
+      lines.push({ ...rect });
+      continue;
+    }
+    const lastMid = last.top + last.height / 2;
+    const mid = rect.top + rect.height / 2;
+    const sameLine =
+      Math.abs(mid - lastMid) <= Math.max(last.height, rect.height) * 0.55 + slop;
+    if (!sameLine) {
+      lines.push({ ...rect });
+      continue;
+    }
+    const left = Math.min(last.left, rect.left);
+    const top = Math.min(last.top, rect.top);
+    const right = Math.max(last.left + last.width, rect.left + rect.width);
+    const bottom = Math.max(last.top + last.height, rect.top + rect.height);
+    last.left = left;
+    last.top = top;
+    last.width = right - left;
+    last.height = bottom - top;
+  }
+  return lines;
+}
+
+/** Merge consecutive lines with a small gap into one paragraph-shaped box. */
+export function unionRectsIntoBlocks(rects: readonly LocalRect[]): LocalRect[] {
+  const lines = unionRectsIntoLines(rects);
+  if (lines.length <= 1) return lines;
+  const out: LocalRect[] = [];
+  for (const line of lines) {
+    const last = out[out.length - 1];
+    if (!last) {
+      out.push({ ...line });
+      continue;
+    }
+    const gap = line.top - (last.top + last.height);
+    const maxH = Math.max(last.height, line.height);
+    if (gap > maxH * 0.65 + 4) {
+      out.push({ ...line });
+      continue;
+    }
+    const left = Math.min(last.left, line.left);
+    const top = Math.min(last.top, line.top);
+    const right = Math.max(last.left + last.width, line.left + line.width);
+    const bottom = Math.max(last.top + last.height, line.top + line.height);
+    last.left = left;
+    last.top = top;
+    last.width = right - left;
+    last.height = bottom - top;
+  }
   return out;
 }
 

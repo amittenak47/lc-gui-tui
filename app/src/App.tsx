@@ -68,6 +68,7 @@ import { loadTabState, saveTabState } from "./util/tabPersist";
 import type { WebPadEntry } from "./util/webPadSession";
 import { Workspace } from "./Workspace";
 import {
+  chromeLooksSame,
   NO_CHROME,
   ShellContext,
   type HeaderSlots,
@@ -460,22 +461,7 @@ export function App() {
 
   const [chrome, setChromeState] = useState<WorkspaceChrome>(NO_CHROME);
   const setChrome = useCallback((next: WorkspaceChrome) => {
-    setChromeState((current) =>
-      current.problem === next.problem &&
-      current.pad === next.pad &&
-      current.agentOpen === next.agentOpen &&
-      current.loading === next.loading &&
-      current.busy === next.busy &&
-      current.loadActive === next.loadActive &&
-      current.docIndex.status === next.docIndex.status &&
-      current.docIndex.meta === next.docIndex.meta &&
-      current.docIndex.error === next.docIndex.error &&
-      current.docIndex.blocked === next.docIndex.blocked &&
-      current.docIndex.syncIssue === next.docIndex.syncIssue &&
-      current.docIndex.onIndex === next.docIndex.onIndex
-        ? current
-        : next,
-    );
+    setChromeState((current) => (chromeLooksSame(current, next) ? current : next));
   }, []);
 
   const [shellLoadActive, setShellLoadActive] = useState(false);

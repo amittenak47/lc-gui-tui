@@ -86,8 +86,13 @@ export const SELECT_HOLD_ARM_MS = 260;
 export const SELECT_HOLD_SLOP_PX = 16;
 
 /**
- * After the marquee arms, a first move this much more vertical than horizontal
- * is a reading pan, not a box. Horizontal / diagonal still marquees.
+ * After the marquee arms, any first move starts the box.
+ *
+ * A vertical-vs-horizontal yield used to live here so a hitch-then-flick
+ * would pan rather than draw a tall band. That also meant a hold, then a
+ * drag down a paragraph — the natural annotate motion — never claimed the
+ * finger. Stillness of {@link SELECT_HOLD_ARM_MS} is the disambiguation;
+ * keep this helper only as a documented ratio for tests.
  */
 export const SELECT_HOLD_SCROLL_RATIO = 1.35;
 
