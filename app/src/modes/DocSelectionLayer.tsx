@@ -69,6 +69,7 @@ import {
   coversViewportBox,
   isPageCoverRect,
   finalizeMarquee,
+  padQuoteRect,
   localRectCoversHost,
   localRects,
   scaleOf,
@@ -1305,9 +1306,24 @@ export function DocSelectionLayer({
           ? Math.min(region.bounds.end, at.start + 1)
           : at.start + 1;
       /*
-       * Live underline is a rubber-band. `liveFrom` → `localRects` /
-       * `Range.getClientRects()` every move is the stall (whole `<pre>`, PDF
-       * text layer). Offsets still track; hug snaps on lift.
+       * Underline drags paint the words, not a box — except over source.
+       *
+       * The rubber-band preview exists because measuring a growing range on
+       * every pointer sample is a stall, and in a whole-file `<pre>` it is:
+       * the document is one text node thousands of lines long, so resolving
+       * offsets means rebuilding that whole string and `getClientRects()`
+       * answers with a rect per line of it.
+       *
+       * A PDF page is not that. Its text layer is a few dozen spans, and the
+       * caret hit-test the drag already runs per move costs more than the
+       * range does — measured at 0.03ms a move for a three-line quote, which
+       * is nothing next to the frame it happens in. Paying it buys the reader
+       * the thing they are actually doing: the underline appears under the
+       * words as the finger passes them, with grips to adjust it, instead of a
+       * dashed box that only becomes an underline once they let go.
+       *
+       * So the preview is for the case that needs it, and everything else
+       * underlines live. Offsets track either way; lift commits the same range.
        */
       subMarkDragRef.current = {
         pointerId,
@@ -1316,7 +1332,7 @@ export function DocSelectionLayer({
         scope: at.scope,
         anchor: at.start,
         focus,
-        preview: true,
+        preview: isCodeDocRoot(region.root),
         startLocal: viewportToLocal(region.body, startX, startY),
         lastX: nowX,
         lastY: nowY,
@@ -2098,34 +2114,44 @@ export function DocSelectionLayer({
               }}
             />
           )}
-          {hitRects.map((rect, index) => (
-            <div
-              key={`hit-${index}`}
-              className={
-                phase === "idle"
-                  ? "lc-doc-marquee-hit"
-                  : "lc-doc-marquee-hit is-confirmed"
-              }
-              style={{
-                left: rect.left,
-                top: rect.top,
-                width: rect.width,
-                height: rect.height,
-              }}
-            />
-          ))}
-          {rects.map((rect, index) => (
-            <div
-              key={`sel-${index}`}
-              className="lc-doc-select-rect"
-              style={{
-                left: rect.left,
-                top: rect.top,
-                width: rect.width,
-                height: rect.height,
-              }}
-            />
-          ))}
+          {/*
+            Painted from the glyph boxes, with a little air — see `padQuoteRect`.
+            The rects themselves stay as measured; only what is drawn grows.
+          */}
+          {hitRects.map((rect, index) => {
+            const box = padQuoteRect(rect);
+            return (
+              <div
+                key={`hit-${index}`}
+                className={
+                  phase === "idle"
+                    ? "lc-doc-marquee-hit"
+                    : "lc-doc-marquee-hit is-confirmed"
+                }
+                style={{
+                  left: box.left,
+                  top: box.top,
+                  width: box.width,
+                  height: box.height,
+                }}
+              />
+            );
+          })}
+          {rects.map((rect, index) => {
+            const box = padQuoteRect(rect);
+            return (
+              <div
+                key={`sel-${index}`}
+                className="lc-doc-select-rect"
+                style={{
+                  left: box.left,
+                  top: box.top,
+                  width: box.width,
+                  height: box.height,
+                }}
+              />
+            );
+          })}
           {ribbons.map(({ footnote, at, bands, useBands, number }) => {
             /*
              * Tap opens the mark; hold fills left→right and deletes.
@@ -2186,19 +2212,22 @@ export function DocSelectionLayer({
             const caption = footnote.title?.replace(/\s+/g, " ").trim() ?? "";
             return (
               <span key={footnote.id} className="lc-doc-footnote-pack" style={tint}>
-                {paintBands.map((bandRect, bandIndex) => (
+                {paintBands.map((bandRect, bandIndex) => {
+                  const box = padQuoteRect(bandRect);
+                  return (
                     <div
                       key={`fn-band-${bandIndex}`}
                       className="lc-doc-footnote-band"
                       style={{
-                        left: bandRect.left,
-                        top: bandRect.top,
-                        width: bandRect.width,
-                        height: bandRect.height,
+                        left: box.left,
+                        top: box.top,
+                        width: box.width,
+                        height: box.height,
                         ...tint,
                       }}
                     />
-                  ))}
+                  );
+                })}
                 {caption ? (
                   <span
                     className="lc-doc-footnote-caption"
@@ -2256,23 +2285,29 @@ export function DocSelectionLayer({
           })}
 
           {paintedSubMarks.flatMap((entry) =>
-            entry.rects.map((rect, index) => (
+            entry.rects.map((rect, index) => {
+              // A highlight is a wash and wants the same air as a mark band. An
+              // underline is a rule sitting on the baseline: pad it and the rule
+              // drifts off the words it belongs to.
+              const box = entry.kind === "highlight" ? padQuoteRect(rect) : rect;
+              return (
               <div
                 key={`sub-${entry.id}-${index}`}
                 className={`lc-doc-submark-paint lc-doc-submark-${entry.kind}${
                   hoveredSubMarkId === entry.id ? " is-hovered" : ""
                 }`}
                 style={{
-                  left: rect.left,
-                  top: rect.top,
-                  width: rect.width,
-                  height: rect.height,
+                  left: box.left,
+                  top: box.top,
+                  width: box.width,
+                  height: box.height,
                   ...(entry.color
                     ? footnoteThemeVars(entry.color, entry.palette ?? inkPalette)
                     : subMarkTint),
                 }}
               />
-            )),
+              );
+            }),
           )}
           {subMarkLivePaint.map((rect, index) => (
             <div
