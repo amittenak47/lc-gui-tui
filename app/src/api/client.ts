@@ -857,8 +857,8 @@ export class LcClient {
       indexed?: boolean;
       wrote?: boolean;
     } | null>("lc_docs_put_index", { hash, body, force: opts?.force ?? false }, 180_000);
-    if (!result) return { indexed: true, wrote: false };
-    return { indexed: result.indexed !== false, wrote: Boolean(result.wrote) };
+    if (!result) return { indexed: false, wrote: false };
+    return { indexed: result.indexed === true, wrote: Boolean(result.wrote) };
   }
 
   /**

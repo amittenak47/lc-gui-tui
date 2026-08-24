@@ -834,18 +834,38 @@ export function Workspace({
     bytes: ArrayBuffer | null;
     delayMs: number;
   } | null>(null);
-  const indexOpenDocument = useCallback(() => {
+  const indexOpenDocument = useCallback((opts?: { force?: boolean }) => {
     const job = indexInputsRef.current;
     if (!job) return;
+    const force = opts?.force === true;
     clearDocChunkMismatch(job.hash);
     const loadGen = workspaceLoadGenRef.current;
-    setDocIndexStatus("indexing");
-    setDocIndexError(null);
-    setDocIndexProgress(null);
+    if (force) {
+      setDocIndexStatus("indexing");
+      setDocIndexError(null);
+      setDocIndexProgress(null);
+    }
     window.setTimeout(() => {
       if (workspaceLoadGenRef.current !== loadGen) return;
       void (async () => {
         try {
+          if (!force) {
+            try {
+              const existing = await client.getDocIndex(job.hash);
+              if (existing?.indexed && (existing.page_count ?? 0) > 0) {
+                if (workspaceLoadGenRef.current !== loadGen) return;
+                setDocIndexMeta(existing);
+                setDocIndexStatus("indexed");
+                return;
+              }
+            } catch {
+              /* not indexed yet */
+            }
+            if (workspaceLoadGenRef.current !== loadGen) return;
+            setDocIndexStatus("indexing");
+            setDocIndexError(null);
+            setDocIndexProgress(null);
+          }
           const pages = await extractDocumentPages({
             docType: job.docType,
             name: job.name,
@@ -861,7 +881,13 @@ export function Workspace({
           });
           rememberExtractedPages(job.hash, pages);
           if (pages.length === 0) {
-            if (workspaceLoadGenRef.current === loadGen) setDocIndexStatus("idle");
+            if (workspaceLoadGenRef.current !== loadGen) return;
+            if (job.bytes && (job.docType === "pdf" || job.docType === "epub")) {
+              setDocIndexStatus("error");
+              setDocIndexError("no text could be read from this file");
+            } else {
+              setDocIndexStatus("idle");
+            }
             return;
           }
           /*
@@ -880,7 +906,7 @@ export function Workspace({
               doc_type: job.docType,
               pages,
             },
-            { force: true },
+            { force },
           );
           if (workspaceLoadGenRef.current !== loadGen) return;
           if (!result.indexed) {
@@ -902,8 +928,12 @@ export function Workspace({
           if (workspaceLoadGenRef.current === loadGen) setDocIndexProgress(null);
         }
       })();
-    }, job.delayMs);
+    }, force ? 0 : job.delayMs);
   }, [client]);
+
+  const indexOpenDocumentByHand = useCallback(() => {
+    indexOpenDocument({ force: true });
+  }, [indexOpenDocument]);
 
   /**
    * Run the embedding pass to the end, a budget at a time.
@@ -7546,7 +7576,7 @@ export function Workspace({
         status: docIndexStatus,
         meta: docIndexMeta,
         error: docIndexError,
-        onIndex: indexInputsRef.current ? indexOpenDocument : null,
+        onIndex: indexInputsRef.current ? indexOpenDocumentByHand : null,
         onEmbed: indexInputsRef.current ? embedOpenDocument : null,
         indexProgress: docIndexProgress,
         embedProgress: docEmbedProgress,
@@ -7580,7 +7610,7 @@ export function Workspace({
     docEmbedEta,
     docEmbedding,
     embedOpenDocument,
-    indexOpenDocument,
+    indexOpenDocumentByHand,
     webLive,
     problem,
     setChrome,
@@ -8505,7 +8535,12 @@ export function Workspace({
                       onNav={setPdfNav}
                       onThumbRenderer={onPdfThumbRenderer}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
-                      onError={setError}
+                      onError={(message) => {
+                        if (/cancel|abort|worker.*(destroy|terminat|not running)/i.test(message)) {
+                          return;
+                        }
+                        setError(message);
+                      }}
                     />
                   ) : annotateSource.docType === "epub" && annotateSource.bytes ? (
                     <EpubDocument
