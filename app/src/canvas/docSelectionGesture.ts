@@ -119,9 +119,8 @@ export function isDocChromeTarget(target: EventTarget | null): boolean {
 /* ----------------------------------------------- sub-mark pointer hit --- */
 
 /**
- * While sub-mark mode is armed, DocSelectionLayer registers a hit-test for the
- * open mark (bands + grips). Board reads it on pointerdown so a deferred pan
- * never arms inside the mark — even when band hit-tests miss and claim is late.
+ * Overview card uses this so a tap inside the open mark does not close the
+ * panel. Board pan ignores it — only {@link isSubMarkDragLive} steals the finger.
  */
 type SubMarkPointerHit = (clientX: number, clientY: number) => boolean;
 
@@ -134,4 +133,15 @@ export function setSubMarkPointerHit(handler: SubMarkPointerHit | null): void {
 /** True when the pointer is inside the armed sub-mark (bands / grips / pad). */
 export function pointerInSubMark(clientX: number, clientY: number): boolean {
   return subMarkPointerHit?.(clientX, clientY) ?? false;
+}
+
+let subMarkDragLive = false;
+
+/** Underline/highlight drag in progress — Board must not pan this finger. */
+export function setSubMarkDragLive(live: boolean): void {
+  subMarkDragLive = live;
+}
+
+export function isSubMarkDragLive(): boolean {
+  return subMarkDragLive;
 }

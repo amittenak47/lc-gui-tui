@@ -168,7 +168,7 @@ import {
   selectionOwnsGesture,
   onDocScrollRequest,
   setDocCameraLive,
-  pointerInSubMark,
+  isSubMarkDragLive,
 } from "./docSelectionGesture";
 import {
   DOC_PAGE_SELECTOR,
@@ -3718,11 +3718,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (event.button !== 0) return;
       if (!isScrollSurface(event.target)) return;
       /*
-       * Armed sub-mark owns the finger inside the open mark. Do not write
-       * panDragRef at all — deferred selectable-doc pan would still arm after
-       * SELECT_HOLD_SLOP_PX when DocSelectionLayer's band hit misses.
+       * Live underline/highlight drag owns this finger. The panel being open
+       * must not freeze the page — a mark taller than the viewport needs pan.
        */
-      if (pointerInSubMark(event.clientX, event.clientY)) return;
+      if (isSubMarkDragLive()) return;
 
       // Mouse: down+drag on words is native select. Touch/pen must still pan —
       // Android has no wheel, `touch-action: none` kills native scroll, and an
@@ -3819,10 +3818,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!handPanningRef.current) return;
       if (!canOwnScroll()) return;
       /*
-       * Sub-mark owns the finger once it enters the open mark — even if pan
-       * deferred-armed from a down outside the bands.
+       * Live underline/highlight drag owns the finger. Opening the panel
+       * must not steal pan — a mark taller than the viewport needs scroll.
        */
-      if (pointerInSubMark(event.clientX, event.clientY)) {
+      if (isSubMarkDragLive()) {
         dropPanForSelection();
         return;
       }
