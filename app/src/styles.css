@@ -15144,7 +15144,7 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 10px;
 }
 
-/* Sub-marks painted on the page while the hub is open. */
+/* Sub-marks on the page — visible with the panel closed. */
 .lc-doc-submark-paint {
   position: absolute;
   pointer-events: none;

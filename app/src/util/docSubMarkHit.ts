@@ -211,3 +211,63 @@ export function caretPointIn(
   if (!node) return null;
   return { node, offset: charOffsetInNode(node, clientX, clientY) };
 }
+
+/**
+ * A `.py` (or any whole-file source) is one `<pre><code>` text node.
+ *
+ * Live underline paints via `Range.getClientRects()` on that node. A PDF span
+ * is a dozen characters; a markdown paragraph is a few hundred; a source file
+ * is thousands of characters on many lines. Measuring that on every move is
+ * why the underline only appeared after lift. The rubber-band is cheap; glyph
+ * boxes wait until the finger is up.
+ */
+export function isCodeDocRoot(root: HTMLElement | null | undefined): boolean {
+  if (!root) return false;
+  return Boolean(
+    root.closest?.(".lc-code-doc") ||
+      root.querySelector?.(".lc-code-doc-pre, .lc-code-doc") ||
+      (root.classList.contains("lc-code-doc") ? root : null),
+  );
+}
+
+/**
+ * Pointer → character in a `<pre>` without measuring every glyph.
+ *
+ * Monospace + `white-space: pre` means line index × column is enough for a
+ * live drag. Lift still uses {@link caretPointIn} for the committed range.
+ */
+export function preOffsetAtPoint(
+  root: HTMLElement,
+  clientX: number,
+  clientY: number,
+): number | null {
+  const pre =
+    (root.matches("pre, code") ? root : null) ??
+    root.querySelector("pre, code") ??
+    root;
+  const text = pre.textContent ?? "";
+  if (!text) return null;
+  const box = pre.getBoundingClientRect();
+  if (box.width < 1 || box.height < 1) return null;
+  const style = typeof getComputedStyle === "function" ? getComputedStyle(pre) : null;
+  const fontSize = style ? Number.parseFloat(style.fontSize) : 14;
+  const lineHeightRaw = style?.lineHeight ?? "";
+  const lineHeight = Number.parseFloat(lineHeightRaw);
+  const lh =
+    Number.isFinite(lineHeight) && lineHeight > 0
+      ? lineHeight
+      : Number.isFinite(fontSize)
+        ? fontSize * 1.55
+        : 22;
+  const ch = Number.isFinite(fontSize) && fontSize > 0 ? fontSize * 0.6 : 8;
+  const padL = style ? Number.parseFloat(style.paddingLeft) || 0 : 0;
+  const padT = style ? Number.parseFloat(style.paddingTop) || 0 : 0;
+  const x = clientX - box.left - padL;
+  const y = clientY - box.top - padT;
+  const lines = text.split("\n");
+  const line = Math.max(0, Math.min(lines.length - 1, Math.floor(y / lh)));
+  const col = Math.max(0, Math.min(lines[line]!.length, Math.round(x / ch)));
+  let offset = col;
+  for (let i = 0; i < line; i += 1) offset += lines[i]!.length + 1;
+  return Math.max(0, Math.min(text.length, offset));
+}
