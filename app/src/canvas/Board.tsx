@@ -1344,8 +1344,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * Same class of fix as the zoom pill (camera perf pass).
    */
   const contentSlotNodeRef = useRef<HTMLDivElement | null>(null);
-  const contentRideNodeRef = useRef<HTMLDivElement | null>(null);
-  const marksRideNodeRef = useRef<HTMLDivElement | null>(null);
   /**
    * A second slot, in the same place as the content slot but over the ink.
    *
@@ -7957,27 +7955,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         `reportContentSlot`.
       */}
       {pageContent && (
-        <div ref={contentRideNodeRef} className="lc-page-content-ride">
-          <div
-            ref={contentSlotNodeRef}
-            className={
-              editing ||
-              (selectableContent && (!annotateCode || highlighting || textMarkSelecting))
-                ? `lc-page-content-slot lc-page-content-selectable${
-                    editing ? " lc-page-content-editing" : ""
-                  }`
-                : "lc-page-content-slot"
-            }
-            aria-hidden={
-              editing ||
-              (selectableContent && (!annotateCode || highlighting || textMarkSelecting))
-                ? undefined
-                : true
-            }
-            style={{ width: contentSceneWidth }}
-          >
-            {pageContent}
-          </div>
+        <div
+          ref={contentSlotNodeRef}
+          className={
+            editing ||
+            (selectableContent && (!annotateCode || highlighting || textMarkSelecting))
+              ? `lc-page-content-slot lc-page-content-selectable${
+                  editing ? " lc-page-content-editing" : ""
+                }`
+              : "lc-page-content-slot"
+          }
+          aria-hidden={
+            editing ||
+            (selectableContent && (!annotateCode || highlighting || textMarkSelecting))
+              ? undefined
+              : true
+          }
+          style={{ width: contentSceneWidth }}
+        >
+          {pageContent}
         </div>
       )}
       {/*
@@ -7991,13 +7987,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         back in.
       */}
       {pageContent && (
-        <div ref={marksRideNodeRef} className="lc-page-marks-ride">
-          <div
-            ref={attachMarksSlot}
-            className="lc-page-marks-slot"
-            style={{ width: contentSceneWidth + 24 }}
-          />
-        </div>
+        <div
+          ref={attachMarksSlot}
+          className="lc-page-marks-slot"
+          style={{ width: contentSceneWidth + 24 }}
+        />
       )}
       {linedPaperOn && linedSlotOn && (
         <div ref={linedSlotNodeRef} className="lc-board-lined-overlay" aria-hidden />

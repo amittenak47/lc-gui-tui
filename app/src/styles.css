@@ -7138,22 +7138,16 @@ body[data-lc-sash-drag="horizontal"] {
   }
 }
 
-.lc-page-content-ride {
-  position: absolute;
-  left: 0;
-  top: 0;
-  z-index: 1;
-  pointer-events: none;
-  will-change: transform;
-}
-
 .lc-page-content-slot {
   position: absolute;
   left: 0;
   top: 0;
   z-index: 1;
   transform-origin: 0 0;
+  /* Scroll moves this via transform only — keep it off the layout path. */
   will-change: transform;
+  /* Not `contain: paint` — that makes Range.getClientRects() the slot box,
+   * so the hold marquee is treated as a page-cover and never paints. */
   contain: layout;
   overflow: visible;
   pointer-events: none;
@@ -15490,6 +15484,12 @@ button.lc-row-selected:hover:not(:disabled) {
   cursor: text;
 }
 
+/* Glyphs live on the canvas. Native ::selection must not paint a second copy. */
+.lc-pdf-text.textLayer ::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
 .lc-pdf-loading,
 .lc-epub-loading {
   margin: 48px auto;
@@ -15711,15 +15711,6 @@ button.lc-row-selected:hover:not(:disabled) {
  * transformed in lockstep with the first (see `marksSlotNodeRef`), is what lets
  * a mark be found in Annotate mode as well as Scroll.
  */
-.lc-page-marks-ride {
-  position: absolute;
-  left: 0;
-  top: 0;
-  z-index: 13;
-  pointer-events: none;
-  will-change: transform;
-}
-
 .lc-page-marks-slot {
   position: absolute;
   left: 0;
