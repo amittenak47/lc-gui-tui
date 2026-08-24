@@ -158,6 +158,30 @@ export function isCoverRect(
 }
 
 /**
+ * The last answer, kept while the document has not moved under it.
+ *
+ * Every one of these boxes is a `getBoundingClientRect`, and the list ends with
+ * *every page in the document* — a textbook has hundreds of `[data-doc-scope]`
+ * divs, all of them in the DOM whether or not their bitmap is. The cover test
+ * runs three or four times per pointer sample during a sweep (paint the band,
+ * preview the sub-mark, filter the band in render, filter each ribbon), so a
+ * finger dragged across a book was re-measuring the whole book several times a
+ * frame and allocating a key string per page each time. That is the stall.
+ *
+ * None of those boxes can move while the body itself is still: the camera
+ * transforms the slot the pages sit in, so a pan, a zoom or a re-layout all
+ * show up as a different body box, and the entry is thrown away then. Keyed on
+ * the body's own rect rather than on a frame counter for exactly that reason —
+ * a scroll that writes a new transform and re-measures inside one frame gets
+ * fresh boxes, not the ones from before the write.
+ */
+const coverBoxCache = new WeakMap<HTMLElement, { key: string; boxes: ViewportBox[] }>();
+
+function hostBoxKey(box: DOMRect): string {
+  return `${Math.round(box.left)}:${Math.round(box.top)}:${Math.round(box.width)}:${Math.round(box.height)}`;
+}
+
+/**
  * Boxes a quote rect must not match: the body, the paper slot, the marks slot,
  * and — the one that was missing — the page.
  *
@@ -177,13 +201,23 @@ export function isCoverRect(
  * Catching it here is what stops the next piece of chrome inheriting it.
  */
 export function coverReferenceBoxes(host: HTMLElement): ViewportBox[] {
+  const own = host.getBoundingClientRect();
+  const key = hostBoxKey(own);
+  const cached = coverBoxCache.get(host);
+  if (cached && cached.key === key) return cached.boxes;
+  const boxes = measureCoverReferenceBoxes(host);
+  coverBoxCache.set(host, { key, boxes });
+  return boxes;
+}
+
+function measureCoverReferenceBoxes(host: HTMLElement): ViewportBox[] {
   const boxes: ViewportBox[] = [];
   const seen = new Set<string>();
   const push = (node: Element | null | undefined) => {
     if (!(node instanceof HTMLElement)) return;
     const box = node.getBoundingClientRect();
     if (box.width <= 1 || box.height <= 1) return;
-    const key = `${Math.round(box.left)}:${Math.round(box.top)}:${Math.round(box.width)}:${Math.round(box.height)}`;
+    const key = hostBoxKey(box);
     if (seen.has(key)) return;
     seen.add(key);
     boxes.push(box);

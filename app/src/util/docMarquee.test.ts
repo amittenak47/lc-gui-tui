@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   MIN_BAND_PX,
   bandFromLocalPoints,
+  coverReferenceBoxes,
   coversMostOfBox,
   coversViewportBox,
   finalizeMarquee,
@@ -691,6 +692,31 @@ describe("a wash over one page of many", () => {
     expect(
       localRectCoversHost(host, { left: 96, top: 1240, width: 420, height: 22 }),
     ).toBe(false);
+  });
+
+  it("measures the book once while it is standing still", () => {
+    /*
+     * The cover test runs several times per pointer sample, and its list ends
+     * with every page in the document. Re-walking a textbook on each of those
+     * is the sweep stall — so the answer is kept until the body itself moves.
+     */
+    const { host, page } = book();
+    let measured = 0;
+    const pageBox = page.getBoundingClientRect;
+    page.getBoundingClientRect = () => {
+      measured += 1;
+      return pageBox.call(page);
+    };
+
+    coverReferenceBoxes(host);
+    coverReferenceBoxes(host);
+    coverReferenceBoxes(host);
+    expect(measured).toBe(1);
+
+    // A pan, a zoom or a re-layout all move the body: measure again.
+    host.getBoundingClientRect = () => box(0, -600, 800, 40000);
+    coverReferenceBoxes(host);
+    expect(measured).toBe(2);
   });
 
   it("drops the wash and keeps the lines in one pass", () => {
