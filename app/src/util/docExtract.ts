@@ -4,7 +4,7 @@
  * Uploads extracted text, never the raw PDF/EPUB bytes.
  */
 
-import type { DocType } from "./annotateStore";
+import { waitWhileCameraBusy } from "./cameraBusy";
 import { readEpub } from "./epub";
 import { loadPdfJs, pdfWorker } from "../modes/PdfDocument";
 import { webPagesFromMarks, type MarkLike } from "./webMarkPages";
@@ -133,7 +133,9 @@ async function extractPdfPages(
   const pages: ExtractedPage[] = [];
   try {
     const doc = await task.promise;
+    onProgress?.(0, doc.numPages);
     for (let n = 1; n <= doc.numPages; n++) {
+      await waitWhileCameraBusy();
       const page = await doc.getPage(n);
       const content = await page.getTextContent();
       const text = content.items
@@ -164,6 +166,7 @@ async function extractPdfPages(
         }
         window.requestAnimationFrame(() => resolve());
       });
+      await waitWhileCameraBusy();
     }
   } finally {
     void task.destroy();

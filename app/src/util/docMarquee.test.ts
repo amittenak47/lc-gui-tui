@@ -14,6 +14,8 @@ import {
   tightClientRects,
   tightLocalRects,
   unionLocalRects,
+  unionRectsIntoBlocks,
+  unionRectsIntoLines,
   unionViewportBoxes,
   viewportToLocal,
 } from "./docMarquee";
@@ -320,6 +322,66 @@ describe("docMarquee", () => {
     expect(hits).toHaveLength(2);
     expect(hits[0]).toEqual({ left: 10, top: 10, width: 60, height: 20 });
     expect(hits[1]).toEqual({ left: 10, top: 40, width: 70, height: 20 });
+  });
+
+  it("hitRectsUnder wraps PDF text-layer spans into one block", () => {
+    const body = document.createElement("div");
+    Object.defineProperty(body, "offsetWidth", { value: 400 });
+    body.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 800,
+        right: 400,
+        bottom: 800,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    const page = document.createElement("div");
+    page.className = "lc-pdf-page";
+    page.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 500,
+        right: 400,
+        bottom: 500,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    const layer = document.createElement("div");
+    layer.className = "lc-pdf-text textLayer";
+    const span = (left: number, top: number, width: number) => {
+      const node = document.createElement("span");
+      node.textContent = "x";
+      node.getBoundingClientRect = () =>
+        ({
+          left,
+          top,
+          width,
+          height: 16,
+          right: left + width,
+          bottom: top + 16,
+          x: left,
+          y: top,
+          toJSON() {},
+        }) as DOMRect;
+      return node;
+    };
+    layer.append(span(20, 40, 12), span(34, 41, 18), span(20, 60, 80));
+    page.append(layer);
+    body.append(page);
+    document.body.append(body);
+
+    const hits = hitRectsUnder(body, page, { left: 0, top: 30, width: 200, height: 50 });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.left).toBe(20);
+    expect(hits[0]?.top).toBe(40);
+    expect(hits[0]?.height).toBe(36);
   });
 
   it("coversViewportBox treats a slot-sized rect as the host", () => {
@@ -642,5 +704,41 @@ describe("a wash over one page of many", () => {
     ]);
     expect(kept).toHaveLength(2);
     expect(kept.every((rect) => rect.height === 22)).toBe(true);
+  });
+});
+
+describe("unionRectsIntoLines / unionRectsIntoBlocks", () => {
+  it("joins glyph boxes on one line", () => {
+    const lines = unionRectsIntoLines([
+      { left: 10, top: 20, width: 12, height: 16 },
+      { left: 24, top: 21, width: 18, height: 15 },
+      { left: 44, top: 20, width: 9, height: 16 },
+    ]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toEqual({ left: 10, top: 20, width: 43, height: 16 });
+  });
+
+  it("keeps a second line separate, then wraps nearby lines into a block", () => {
+    const lines = unionRectsIntoLines([
+      { left: 10, top: 20, width: 80, height: 16 },
+      { left: 10, top: 40, width: 60, height: 16 },
+    ]);
+    expect(lines).toHaveLength(2);
+    const blocks = unionRectsIntoBlocks([
+      { left: 10, top: 20, width: 12, height: 16 },
+      { left: 24, top: 21, width: 18, height: 15 },
+      { left: 10, top: 40, width: 60, height: 16 },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.top).toBe(20);
+    expect(blocks[0]?.height).toBe(36);
+  });
+
+  it("does not glue paragraphs across a large gap", () => {
+    const blocks = unionRectsIntoBlocks([
+      { left: 10, top: 20, width: 80, height: 16 },
+      { left: 10, top: 120, width: 80, height: 16 },
+    ]);
+    expect(blocks).toHaveLength(2);
   });
 });

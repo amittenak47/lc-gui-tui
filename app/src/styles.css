@@ -13679,6 +13679,30 @@ button.lc-row-selected:hover:not(:disabled) {
   -webkit-touch-callout: default;
 }
 
+/*
+ * Android WebView draws a magnified copy of selected text that does not follow
+ * the page camera's `translate() scale()`. That overlay sits on the unscaled
+ * glyphs and makes the quote unreadable. Reading mode on Android therefore
+ * does not use native drag-select: hold-still then drag is the quote path.
+ *
+ * Keyed on `.lc-android` (UA), not `.lc-mobile` (viewport): a narrow desktop
+ * window must keep native drag-select, and a wide tablet in landscape can
+ * miss the mobile media query.
+ */
+.lc-android .lc-board-reading .lc-doc-selectable-body,
+.lc-android .lc-board-reading .lc-doc-selectable-body * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.lc-android .lc-board-reading.lc-board-highlighting .lc-doc-selectable-body,
+.lc-android .lc-board-reading.lc-board-highlighting .lc-doc-selectable-body * {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
 /* Hold-armed annotate box owns the gesture — kill native select chrome. */
 .lc-doc-selecting .lc-doc-selectable-body,
 .lc-doc-selecting .lc-doc-selectable-body * {
