@@ -8,6 +8,7 @@ import type { DocType } from "./annotateStore";
 import { waitWhileCameraBusy } from "./cameraBusy";
 import { readEpub } from "./epub";
 import { loadPdfJs, pdfWorker } from "../modes/PdfDocument";
+import { borrowPdfDocument } from "../modes/pdfOpenDocs";
 import { webPagesFromMarks, type MarkLike } from "./webMarkPages";
 
 /**
@@ -58,6 +59,11 @@ export async function extractDocumentPages(input: {
   text: string;
   bytes?: ArrayBuffer | null;
   /**
+   * Content hash of `bytes`. When this matches the viewer's open PDF, extract
+   * borrows that document instead of calling getDocument again.
+   */
+  hash?: string;
+  /**
    * The reader's marks, used only for a web page — see {@link webPagesFromMarks}.
    *
    * Every other kind was deliberately opened, so all of it is indexed. A page
@@ -70,7 +76,7 @@ export async function extractDocumentPages(input: {
 }): Promise<ExtractedPage[]> {
   if (input.docType === "pdf") {
     if (!input.bytes) return [];
-    return extractPdfPages(input.bytes, input.onProgress);
+    return extractPdfPages(input.bytes, input.onProgress, input.hash);
   }
   if (input.docType === "epub") {
     if (!input.bytes) return [];
@@ -118,7 +124,11 @@ export async function extractDocumentPages(input: {
 async function extractPdfPages(
   bytes: ArrayBuffer,
   onProgress?: ExtractProgress,
+  hash?: string,
 ): Promise<ExtractedPage[]> {
+  const borrowed = hash ? borrowPdfDocument(hash) : null;
+  if (borrowed) return readPdfPages(borrowed, onProgress);
+
   const pdfjs = await loadPdfJs();
   // Share the viewer's worker — a second workerPort hangs getDocument — so
   // yield between pages or flick-scroll stalls behind getTextContent. Passed
@@ -131,46 +141,53 @@ async function extractPdfPages(
     cMapUrl: new URL("cmaps/", document.baseURI).href,
     cMapPacked: true,
   });
-  const pages: ExtractedPage[] = [];
   try {
     const doc = await task.promise;
-    onProgress?.(0, doc.numPages);
-    for (let n = 1; n <= doc.numPages; n++) {
-      await waitWhileCameraBusy();
-      const page = await doc.getPage(n);
-      const content = await page.getTextContent();
-      const text = content.items
-        .map((item) => ("str" in item ? String(item.str) : ""))
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (text) {
-        pages.push({
-          page: n,
-          text,
-          heading: headingFrom(text),
-          scope: `p${n}`,
-        });
-      }
-      /*
-       * Every page, not every page that had text on it.
-       *
-       * A scanned plate or a blank leaf yields nothing and pushes no entry, so
-       * counting what was kept would make the bar stall on exactly the
-       * documents that take longest.
-       */
-      onProgress?.(n, doc.numPages);
-      await new Promise<void>((resolve) => {
-        if (typeof window === "undefined" || !window.requestAnimationFrame) {
-          resolve();
-          return;
-        }
-        window.requestAnimationFrame(() => resolve());
-      });
-      await waitWhileCameraBusy();
-    }
+    return await readPdfPages(doc, onProgress);
   } finally {
     void task.destroy();
+  }
+}
+
+async function readPdfPages(
+  doc: NonNullable<ReturnType<typeof borrowPdfDocument>>,
+  onProgress?: ExtractProgress,
+): Promise<ExtractedPage[]> {
+  const pages: ExtractedPage[] = [];
+  onProgress?.(0, doc.numPages);
+  for (let n = 1; n <= doc.numPages; n++) {
+    await waitWhileCameraBusy();
+    const page = await doc.getPage(n);
+    const content = await page.getTextContent();
+    const text = content.items
+      .map((item) => ("str" in item ? String(item.str) : ""))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text) {
+      pages.push({
+        page: n,
+        text,
+        heading: headingFrom(text),
+        scope: `p${n}`,
+      });
+    }
+    /*
+     * Every page, not every page that had text on it.
+     *
+     * A scanned plate or a blank leaf yields nothing and pushes no entry, so
+     * counting what was kept would make the bar stall on exactly the
+     * documents that take longest.
+     */
+    onProgress?.(n, doc.numPages);
+    await new Promise<void>((resolve) => {
+      if (typeof window === "undefined" || !window.requestAnimationFrame) {
+        resolve();
+        return;
+      }
+      window.requestAnimationFrame(() => resolve());
+    });
+    await waitWhileCameraBusy();
   }
   return pages;
 }

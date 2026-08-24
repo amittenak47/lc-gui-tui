@@ -37,6 +37,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 
 import type { PdfThumbRenderer } from "./pdfFilm";
+import { dropPdfDocument, lendPdfDocument } from "./pdfOpenDocs";
 import { alignTextLayerToGlyphs } from "../util/pdfTextFit";
 
 /**
@@ -86,6 +87,11 @@ const LAYOUT_BATCH = 32;
 export interface PdfDocumentProps {
   /** The file's bytes. pdf.js takes ownership of the buffer it is given. */
   bytes: ArrayBuffer;
+  /**
+   * Content hash of these bytes — the indexer borrows this open document
+   * instead of parsing a second 44 MB copy into the same worker.
+   */
+  docHash?: string | null;
   /**
    * Scene width of the page frame this stack sits in.
    *
@@ -177,6 +183,7 @@ interface RenderedPage {
 
 export function PdfDocument({
   bytes,
+  docHash = null,
   frameWidth,
   onMeasure,
   onNav,
@@ -222,6 +229,7 @@ export function PdfDocument({
    */
   useEffect(() => {
     let cancelled = false;
+    let lent: NonNullable<typeof docRef.current> | null = null;
     disposedRef.current = false;
     // pdf.js transfers the buffer it is handed to the worker, and React may run
     // this effect twice in development — a copy keeps the prop reusable either
@@ -282,6 +290,10 @@ export function PdfDocument({
         }
         taskRef.current = task;
         docRef.current = doc;
+        if (docHash) {
+          lendPdfDocument(docHash, doc);
+          lent = doc;
+        }
         textLayerRef.current = pdfjs.TextLayer;
 
         const laid: RenderedPage[] = [];
@@ -321,6 +333,7 @@ export function PdfDocument({
     return () => {
       cancelled = true;
       disposedRef.current = true;
+      if (lent && docHash) dropPdfDocument(docHash, lent);
       for (const entry of paintedRef.current.values()) entry.release();
       paintedRef.current.clear();
       docRef.current = null;
@@ -334,7 +347,7 @@ export function PdfDocument({
         }
       }
     };
-  }, [bytes, frameWidth]);
+  }, [bytes, docHash, frameWidth]);
 
   /**
    * Which pages are near enough to be worth a bitmap.

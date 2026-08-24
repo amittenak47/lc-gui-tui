@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 
 describe("lengthFromHash", () => {
   it("reads back the length hashBytes encoded", async () => {
-    const { hashBytes, hashBytesCooperative, lengthFromHash } = await import("./docBytes");
+    const { hashBytes, hashBytesAsync, hashBytesCooperative, lengthFromHash } = await import("./docBytes");
     const bytes = new Uint8Array(859).buffer;
     expect(lengthFromHash(hashBytes(bytes))).toBe(859);
     expect(await hashBytesCooperative(bytes)).toBe(hashBytes(bytes));
+    expect(await hashBytesAsync(bytes)).toBe(hashBytes(bytes));
   });
 
   it("does not hash a body while the camera is moving", async () => {

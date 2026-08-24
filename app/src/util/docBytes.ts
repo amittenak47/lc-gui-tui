@@ -20,7 +20,9 @@
 
 import { openDb, run, STORE_BYTES } from "./idb";
 import { isCameraBusy } from "./cameraBusy";
+import { hashBytesDigest } from "./hashBytesDigest";
 import { traceOpen } from "./messageOf";
+import type { HashBytesRequest, HashBytesResponse } from "./hashBytes.worker";
 
 const STORE = STORE_BYTES;
 
@@ -180,10 +182,24 @@ export async function putDocBytes(hash: string, bytes: ArrayBuffer): Promise<voi
  * workspace that mounts next reads by hash; a chip with no row is the
  * "could not be opened" modal on the next launch.
  */
+/** Below this, prove the row by reading it back. Above it, `getKey` is enough. */
+const VERIFY_READBACK_MAX = 512 * 1024;
+
 export async function putDocBytesVerified(hash: string, bytes: ArrayBuffer): Promise<void> {
   await putDocBytes(hash, bytes);
-  const back = await getDocBytes(hash);
-  if (!back || back.byteLength !== bytes.byteLength || !bytesMatchDocHash(hash, back)) {
+  if (bytes.byteLength <= VERIFY_READBACK_MAX) {
+    const back = await getDocBytes(hash);
+    if (!back || back.byteLength !== bytes.byteLength || !bytesMatchDocHash(hash, back)) {
+      throw new Error("the file was not stored — try again");
+    }
+    return;
+  }
+  const want = lengthFromHash(hash);
+  if (want != null && want !== bytes.byteLength) {
+    throw new Error("the file was not stored — try again");
+  }
+  const key = await hasDocBytes(hash);
+  if (!key) {
     throw new Error("the file was not stored — try again");
   }
 }
@@ -487,6 +503,7 @@ export async function hasDocBytes(hash: string): Promise<boolean> {
  * every time a book is opened. Length is mixed into the label so two files that
  * collide in 32 bits still have to be the same size to be confused.
  */
+
 /**
  * The byte length a content hash was made from.
  *
@@ -508,13 +525,72 @@ export function lengthFromHash(hash: string): number | null {
 }
 
 export function hashBytes(bytes: ArrayBuffer): string {
-  const view = new Uint8Array(bytes);
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < view.length; i += 1) {
-    hash ^= view[i];
-    hash = Math.imul(hash, 0x01000193) >>> 0;
+  return hashBytesDigest(bytes);
+}
+
+/** Skip the worker for small bodies — tests and notes are not the 44 MB case. */
+const HASH_WORKER_MIN = 256 * 1024;
+
+let hashWorker: Worker | null | undefined;
+let hashJobId = 1;
+const hashPending = new Map<number, (hash: string) => void>();
+
+async function hashBytesWorker(): Promise<Worker | null> {
+  if (hashWorker !== undefined) return hashWorker;
+  if (typeof Worker === "undefined") {
+    hashWorker = null;
+    return null;
   }
-  return `bin${hash.toString(36)}-${view.length.toString(36)}`;
+  try {
+    const { default: HashBytesWorker } = await import("./hashBytes.worker.ts?worker");
+    hashWorker = new HashBytesWorker();
+    hashWorker.onmessage = (event: MessageEvent<HashBytesResponse>) => {
+      const done = hashPending.get(event.data.id);
+      if (!done) return;
+      hashPending.delete(event.data.id);
+      done(event.data.hash);
+    };
+    hashWorker.onerror = () => {
+      hashWorker?.terminate();
+      hashWorker = null;
+      hashPending.clear();
+    };
+    return hashWorker;
+  } catch {
+    hashWorker = null;
+    return null;
+  }
+}
+
+/**
+ * Same digest as {@link hashBytes}, off the main thread for textbook-sized
+ * files. Falls back to the sync loop when Workers are missing. Never returns
+ * empty the way {@link hashBytesCooperative} does while the camera is busy —
+ * this value is a storage key.
+ */
+export async function hashBytesAsync(bytes: ArrayBuffer): Promise<string> {
+  if (bytes.byteLength < HASH_WORKER_MIN) return hashBytes(bytes);
+  const worker = await hashBytesWorker();
+  if (!worker) return hashBytes(bytes);
+  const id = hashJobId++;
+  return new Promise((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      hashPending.delete(id);
+      reject(new Error("hashing the file took too long"));
+    }, 120_000);
+    hashPending.set(id, (hash) => {
+      globalThis.clearTimeout(timer);
+      resolve(hash);
+    });
+    try {
+      const copy = bytes.slice(0);
+      worker.postMessage({ id, bytes: copy } satisfies HashBytesRequest, [copy]);
+    } catch {
+      globalThis.clearTimeout(timer);
+      hashPending.delete(id);
+      resolve(hashBytes(bytes));
+    }
+  });
 }
 
 /** Same digest as {@link hashBytes}, yielding so a textbook does not freeze scroll. */
