@@ -37,6 +37,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 
 import type { PdfThumbRenderer } from "./pdfFilm";
+import { alignTextLayerToGlyphs } from "../util/pdfTextFit";
 
 /**
  * Supersampling of the page bitmap relative to its scene size.
@@ -524,8 +525,10 @@ export function PdfDocument({
         if (disposedRef.current) return;
 
         textHost.textContent = "";
+        const content = await page.getTextContent();
+        if (disposedRef.current) return;
         const layer = new TextLayer({
-          textContentSource: await page.getTextContent(),
+          textContentSource: content,
           container: textHost,
           // The laid-out scale, not the supersampled one: these spans sit over
           // the picture in scene units, not in bitmap pixels.
@@ -533,6 +536,18 @@ export function PdfDocument({
         });
         await layer.render();
         if (disposedRef.current) return;
+        /*
+         * Second pass over the spans, in the DOM.
+         *
+         * pdf.js fits each span to its glyphs by measuring the string on a
+         * canvas, and a WebView that scales text — Android applies the system
+         * font size to the whole view — lays the same string out at a different
+         * width than the canvas reports. The spans keep their left edge and
+         * lose the difference off the right, and since every quote is measured
+         * from them, a swept selection comes back ending short of the words it
+         * covers. Re-fit from what the DOM actually laid out.
+         */
+        alignTextLayerToGlyphs(slot, layer.textDivs, content.items, entry.fit);
         slot.setAttribute("data-painted", "");
         done = true;
       } catch (cause: unknown) {
