@@ -425,6 +425,46 @@ export function scopeRootAtPoint(
   return { root: body };
 }
 
+/**
+ * Room to breathe around a quote, in the body's own units.
+ *
+ * Every box a mark is painted from is a *glyph* box, and a glyph box is not the
+ * shape a reader thinks a line is. A PDF text span is exactly the font's em
+ * box, placed from the ascent — so a face whose ascent and descent together run
+ * past one em hangs its descenders out of the bottom of its own highlight. The
+ * tail of the "g" in a marked "Prologue" sits below the wash that is supposed
+ * to contain it, and a block outline lands hard against the cap heights with
+ * nothing either side.
+ *
+ * The pad is a fraction of the line rather than a number of pixels because the
+ * overflow is: a 22pt body line spills about four units, a 56pt chapter title
+ * about eleven. Tall boxes are blocks rather than lines — the paragraph shapes
+ * `unionRectsIntoBlocks` merges — so the line the fraction is taken from is
+ * capped, and a paragraph gets a border of air rather than a proportional one.
+ *
+ * Geometry only, at paint time. Nothing that hit-tests, anchors or stores a
+ * mark sees these numbers, so a padded wash cannot drift a quote's meaning.
+ */
+export const QUOTE_PAD_FRACTION = 0.18;
+export const QUOTE_PAD_MIN = 2;
+export const QUOTE_PAD_MAX = 10;
+/** Above this a rect is a block of lines, not a line — pad it like one line. */
+export const QUOTE_PAD_LINE_MAX = 64;
+
+export function padQuoteRect(rect: LocalRect): LocalRect {
+  const line = Math.min(Math.max(rect.height, 0), QUOTE_PAD_LINE_MAX);
+  const padY = Math.min(Math.max(line * QUOTE_PAD_FRACTION, QUOTE_PAD_MIN), QUOTE_PAD_MAX);
+  // Less at the sides: a line already carries its side bearings, and a wash
+  // that reaches into the margin reads as covering the words next to it.
+  const padX = Math.min(Math.max(padY * 0.6, 1.5), 6);
+  return {
+    left: rect.left - padX,
+    top: rect.top - padY,
+    width: rect.width + padX * 2,
+    height: rect.height + padY * 2,
+  };
+}
+
 /** Axis-aligned union of body-local rects; null when empty. */
 export function unionLocalRects(rects: readonly LocalRect[]): LocalRect | null {
   if (rects.length === 0) return null;
