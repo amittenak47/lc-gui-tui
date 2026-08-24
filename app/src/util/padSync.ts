@@ -26,6 +26,7 @@ import {
   type AnnotateDoc,
   type DocType,
 } from "./annotateStore";
+import { isAndroidDevice } from "./androidDevice";
 import { isCameraBusy, yieldToIdle } from "./cameraBusy";
 import { bytesMatchDocHash, getDocBytes, putDocBytes } from "./docBytes";
 import type { DocFootnote } from "./docFootnotes";
@@ -65,6 +66,14 @@ export const TOMBSTONE_COPY =
 
 /** How often a device asks the hub (or local pads.db) what changed. */
 export const PAD_SYNC_PING_MS = 15_000;
+
+/** First idle kick after open — Android waits longer so a flick can start. */
+export const PAD_SYNC_IDLE_KICK_MS_DESKTOP = 400;
+export const PAD_SYNC_IDLE_KICK_MS_ANDROID = 1000;
+
+export function padSyncIdleKickMs(): number {
+  return isAndroidDevice() ? PAD_SYNC_IDLE_KICK_MS_ANDROID : PAD_SYNC_IDLE_KICK_MS_DESKTOP;
+}
 
 let padSyncPingInFlight = false;
 let idlePadSyncTimer: ReturnType<typeof setTimeout> | 0 = 0;
@@ -599,7 +608,7 @@ export function scheduleIdlePadSyncPing(
     } else {
       kick();
     }
-  }, 1000);
+  }, padSyncIdleKickMs());
 }
 
 export async function pushDocBytes(client: LcClient, hash: string, bytes: ArrayBuffer): Promise<void> {
