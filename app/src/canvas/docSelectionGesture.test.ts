@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   isDocChromeTarget,
+  isSubMarkDragLive,
   pointerInSubMark,
+  setSubMarkDragLive,
   setSubMarkPointerHit,
 } from "./docSelectionGesture";
 
@@ -38,5 +40,19 @@ describe("pointerInSubMark", () => {
     expect(pointerInSubMark(10, 10)).toBe(true);
     expect(pointerInSubMark(80, 10)).toBe(false);
     setSubMarkPointerHit(null);
+  });
+});
+
+describe("sub-mark drag live", () => {
+  it("defaults off", () => {
+    setSubMarkDragLive(false);
+    expect(isSubMarkDragLive()).toBe(false);
+  });
+
+  it("Board pan only yields while a drag is live", () => {
+    setSubMarkDragLive(true);
+    expect(isSubMarkDragLive()).toBe(true);
+    setSubMarkDragLive(false);
+    expect(isSubMarkDragLive()).toBe(false);
   });
 });

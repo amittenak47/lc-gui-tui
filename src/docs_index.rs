@@ -1046,6 +1046,26 @@ struct PreparedChunk {
     text: String,
 }
 
+fn floor_char_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+fn ceil_char_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
+}
+
 fn chunk_pages(pages: &[IndexPage]) -> Vec<PreparedChunk> {
     let mut out = Vec::new();
     for page in pages {
@@ -1064,24 +1084,31 @@ fn chunk_pages(pages: &[IndexPage]) -> Vec<PreparedChunk> {
         }
         let mut start = 0;
         while start < text.len() {
-            let mut end = (start + CHUNK_CHARS).min(text.len());
+            let mut end = ceil_char_boundary(text, (start + CHUNK_CHARS).min(text.len()));
             if end < text.len() {
                 if let Some(rel) = text[start..end].rfind(|c: char| c == '.' || c == '\n') {
                     end = start + rel + 1;
                 }
             }
             if end <= start {
-                end = (start + CHUNK_CHARS).min(text.len());
+                end = ceil_char_boundary(text, (start + CHUNK_CHARS).min(text.len()));
             }
-            out.push(PreparedChunk {
-                page: page.page,
-                heading: heading.clone(),
-                text: text[start..end].trim().to_string(),
-            });
+            if end <= start {
+                end = ceil_char_boundary(text, start + 1);
+            }
+            let piece = text[start..end].trim();
+            if !piece.is_empty() {
+                out.push(PreparedChunk {
+                    page: page.page,
+                    heading: heading.clone(),
+                    text: piece.to_string(),
+                });
+            }
             if end >= text.len() {
                 break;
             }
-            start = end.saturating_sub(OVERLAP_CHARS);
+            let next = floor_char_boundary(text, end.saturating_sub(OVERLAP_CHARS));
+            start = if next > start { next } else { end };
         }
     }
     out
@@ -1598,6 +1625,25 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("lc-docs-test-{nanos}.db"))
+    }
+
+    #[test]
+    fn chunk_pages_does_not_split_inside_an_em_dash() {
+        let prefix = "a".repeat(CHUNK_CHARS - 1);
+        let text = format!("{prefix}—{}", "b".repeat(500));
+        let chunks = chunk_pages(&[IndexPage {
+            page: 1,
+            text,
+            heading: None,
+        }]);
+        assert!(!chunks.is_empty());
+        for chunk in &chunks {
+            assert!(
+                chunk.text.is_char_boundary(chunk.text.len()),
+                "chunk is not valid UTF-8",
+            );
+            assert!(!chunk.text.contains('\u{FFFD}'));
+        }
     }
 
     /*

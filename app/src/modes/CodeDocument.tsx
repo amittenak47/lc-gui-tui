@@ -10,6 +10,8 @@
 
 import { useEffect, useMemo, useRef } from "react";
 
+import { shouldReportDocumentHeight } from "./AnnotateDocument";
+
 export interface CodeDocumentProps {
   source: string;
   /** Highlight.js-style language id for `class="language-…"`. */
@@ -64,16 +66,23 @@ export function CodeDocument({
     if (!node) return;
 
     const report = () => {
-      const height = node.scrollHeight;
-      if (height > 0) onMeasureRef.current?.(height);
+      if (!shouldReportDocumentHeight(node.clientWidth, Boolean(source.trim()))) return;
+      const height = Math.max(node.scrollHeight, node.offsetHeight);
+      if (height > 0 || !source.trim()) onMeasureRef.current?.(height);
     };
     report();
+    const raf = requestAnimationFrame(report);
 
-    if (typeof ResizeObserver !== "function") return;
+    if (typeof ResizeObserver !== "function") {
+      return () => cancelAnimationFrame(raf);
+    }
     const observer = new ResizeObserver(report);
     observer.observe(node);
-    return () => observer.disconnect();
-  }, [html]);
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
+  }, [html, source]);
 
   return (
     <div

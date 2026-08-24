@@ -4,16 +4,20 @@ import { describe, expect, it } from "vitest";
 import {
   MIN_BAND_PX,
   bandFromLocalPoints,
+  coverReferenceBoxes,
   coversMostOfBox,
   coversViewportBox,
   finalizeMarquee,
   hitRectsUnder,
   isPageCoverRect,
   localRectCoversHost,
+  padQuoteRect,
   scaleOf,
   tightClientRects,
   tightLocalRects,
   unionLocalRects,
+  unionRectsIntoBlocks,
+  unionRectsIntoLines,
   unionViewportBoxes,
   viewportToLocal,
 } from "./docMarquee";
@@ -320,6 +324,64 @@ describe("docMarquee", () => {
     expect(hits).toHaveLength(2);
     expect(hits[0]).toEqual({ left: 10, top: 10, width: 60, height: 20 });
     expect(hits[1]).toEqual({ left: 10, top: 40, width: 70, height: 20 });
+  });
+
+  it("hitRectsUnder hugs PDF text-layer spans under the marquee", () => {
+    const body = document.createElement("div");
+    Object.defineProperty(body, "offsetWidth", { value: 400 });
+    body.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 800,
+        right: 400,
+        bottom: 800,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    const page = document.createElement("div");
+    page.className = "lc-pdf-page";
+    page.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 500,
+        right: 400,
+        bottom: 500,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    const layer = document.createElement("div");
+    layer.className = "lc-pdf-text textLayer";
+    const span = (left: number, top: number, width: number) => {
+      const node = document.createElement("span");
+      node.textContent = "x";
+      node.getBoundingClientRect = () =>
+        ({
+          left,
+          top,
+          width,
+          height: 16,
+          right: left + width,
+          bottom: top + 16,
+          x: left,
+          y: top,
+          toJSON() {},
+        }) as DOMRect;
+      return node;
+    };
+    layer.append(span(20, 40, 12), span(34, 41, 18), span(20, 60, 80));
+    page.append(layer);
+    body.append(page);
+    document.body.append(body);
+
+    const marquee = { left: 0, top: 30, width: 200, height: 50 };
+    const hits = hitRectsUnder(body, page, marquee);
+    expect(hits).toEqual([{ left: 20, top: 40, width: 80, height: 36 }]);
   });
 
   it("coversViewportBox treats a slot-sized rect as the host", () => {
@@ -633,6 +695,31 @@ describe("a wash over one page of many", () => {
     ).toBe(false);
   });
 
+  it("measures the book once while it is standing still", () => {
+    /*
+     * The cover test runs several times per pointer sample, and its list ends
+     * with every page in the document. Re-walking a textbook on each of those
+     * is the sweep stall — so the answer is kept until the body itself moves.
+     */
+    const { host, page } = book();
+    let measured = 0;
+    const pageBox = page.getBoundingClientRect;
+    page.getBoundingClientRect = () => {
+      measured += 1;
+      return pageBox.call(page);
+    };
+
+    coverReferenceBoxes(host);
+    coverReferenceBoxes(host);
+    coverReferenceBoxes(host);
+    expect(measured).toBe(1);
+
+    // A pan, a zoom or a re-layout all move the body: measure again.
+    host.getBoundingClientRect = () => box(0, -600, 800, 40000);
+    coverReferenceBoxes(host);
+    expect(measured).toBe(2);
+  });
+
   it("drops the wash and keeps the lines in one pass", () => {
     const { host } = book();
     const kept = tightLocalRects(host, [
@@ -642,5 +729,71 @@ describe("a wash over one page of many", () => {
     ]);
     expect(kept).toHaveLength(2);
     expect(kept.every((rect) => rect.height === 22)).toBe(true);
+  });
+});
+
+describe("padQuoteRect", () => {
+  it("gives a body line a few units of air", () => {
+    const box = padQuoteRect({ left: 100, top: 200, width: 400, height: 22 });
+    // 22 * 0.18 ≈ 4 above and below, a little less either side.
+    expect(box.top).toBeCloseTo(196.04, 1);
+    expect(box.height).toBeCloseTo(29.92, 1);
+    expect(box.left).toBeLessThan(100);
+    expect(box.width).toBeGreaterThan(400);
+  });
+
+  it("gives a chapter title more, because it overflows more", () => {
+    // A 56-unit display line hangs its descenders further out of its em box
+    // than a 22-unit body line does, so the pad follows the type size.
+    const title = padQuoteRect({ left: 100, top: 200, width: 400, height: 56 });
+    const body = padQuoteRect({ left: 100, top: 200, width: 400, height: 22 });
+    expect(200 - title.top).toBeGreaterThan(200 - body.top);
+  });
+
+  it("treats a merged paragraph as one line's worth of air, not a fifth of it", () => {
+    const block = padQuoteRect({ left: 100, top: 200, width: 400, height: 300 });
+    expect(200 - block.top).toBeLessThanOrEqual(10);
+    expect(block.height).toBeLessThanOrEqual(320);
+  });
+
+  it("never pads a hairline rect away to nothing", () => {
+    const thin = padQuoteRect({ left: 100, top: 200, width: 400, height: 1 });
+    expect(thin.height).toBeCloseTo(5, 5);
+  });
+});
+
+describe("unionRectsIntoLines / unionRectsIntoBlocks", () => {
+  it("joins glyph boxes on one line", () => {
+    const lines = unionRectsIntoLines([
+      { left: 10, top: 20, width: 12, height: 16 },
+      { left: 24, top: 21, width: 18, height: 15 },
+      { left: 44, top: 20, width: 9, height: 16 },
+    ]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toEqual({ left: 10, top: 20, width: 43, height: 16 });
+  });
+
+  it("keeps a second line separate, then wraps nearby lines into a block", () => {
+    const lines = unionRectsIntoLines([
+      { left: 10, top: 20, width: 80, height: 16 },
+      { left: 10, top: 40, width: 60, height: 16 },
+    ]);
+    expect(lines).toHaveLength(2);
+    const blocks = unionRectsIntoBlocks([
+      { left: 10, top: 20, width: 12, height: 16 },
+      { left: 24, top: 21, width: 18, height: 15 },
+      { left: 10, top: 40, width: 60, height: 16 },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.top).toBe(20);
+    expect(blocks[0]?.height).toBe(36);
+  });
+
+  it("does not glue paragraphs across a large gap", () => {
+    const blocks = unionRectsIntoBlocks([
+      { left: 10, top: 20, width: 80, height: 16 },
+      { left: 10, top: 120, width: 80, height: 16 },
+    ]);
+    expect(blocks).toHaveLength(2);
   });
 });

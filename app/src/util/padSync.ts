@@ -26,6 +26,8 @@ import {
   type AnnotateDoc,
   type DocType,
 } from "./annotateStore";
+import { isAndroidDevice } from "./androidDevice";
+import { isCameraBusy, yieldToIdle } from "./cameraBusy";
 import { bytesMatchDocHash, getDocBytes, putDocBytes } from "./docBytes";
 import type { DocFootnote } from "./docFootnotes";
 import { run, STORE_SYNC_QUEUE } from "./idb";
@@ -65,6 +67,23 @@ export const TOMBSTONE_COPY =
 /** How often a device asks the hub (or local pads.db) what changed. */
 export const PAD_SYNC_PING_MS = 15_000;
 
+/** First idle kick after open — Android waits longer so a flick can start. */
+export const PAD_SYNC_IDLE_KICK_MS_DESKTOP = 400;
+export const PAD_SYNC_IDLE_KICK_MS_ANDROID = 1000;
+
+export function padSyncIdleKickMs(): number {
+  return isAndroidDevice() ? PAD_SYNC_IDLE_KICK_MS_ANDROID : PAD_SYNC_IDLE_KICK_MS_DESKTOP;
+}
+
+let padSyncPingInFlight = false;
+let idlePadSyncTimer: ReturnType<typeof setTimeout> | 0 = 0;
+
+/** After a dead hub, do not retry on the 15s tick until this time. */
+let hubBackoffUntil = 0;
+let hubBackoffMs = 20_000;
+const HUB_BACKOFF_MIN_MS = 20_000;
+const HUB_BACKOFF_MAX_MS = 5 * 60_000;
+
 export const PAD_TRASH_OP_QUEUE_CAP = 8;
 
 export const PAD_HUB_WINDOW_EVENT = "lc-pad-hub";
@@ -103,10 +122,27 @@ const memoryQueue: PadSyncJob[] = [];
 
 export function resetPadSyncQueueForTests(): void {
   memoryQueue.length = 0;
+  hubBackoffUntil = 0;
+  hubBackoffMs = HUB_BACKOFF_MIN_MS;
 }
 
 export function peekPadSyncQueueForTests(): PadSyncJob[] {
   return [...memoryQueue];
+}
+
+function hubBackoffActive(): boolean {
+  return loadPadHub() != null && Date.now() < hubBackoffUntil;
+}
+
+function noteHubPingOk(): void {
+  hubBackoffUntil = 0;
+  hubBackoffMs = HUB_BACKOFF_MIN_MS;
+}
+
+function noteHubPingFail(): void {
+  if (!loadPadHub()) return;
+  hubBackoffUntil = Date.now() + hubBackoffMs;
+  hubBackoffMs = Math.min(HUB_BACKOFF_MAX_MS, hubBackoffMs * 2);
 }
 
 function jobId(): string {
@@ -529,19 +565,50 @@ export function resetMissingRemoteBytesForTests(): void {
  */
 async function pullDocBytesFromHub(client: LcClient, hash: string): Promise<void> {
   if (!loadPadHub() || missingRemoteBytes.has(hash)) return;
+  // Skip while the camera is moving — a later ping retries.
+  if (isCameraBusy()) return;
+  await yieldToIdle();
+  if (isCameraBusy()) return;
   const bytes = await client.getDocBytes(hash).catch(() => null);
   if (!bytes || bytes.byteLength === 0) {
     missingRemoteBytes.add(hash);
     return;
   }
-  // The key is the content hash, so the answer can be checked against what was
-  // asked for. An unverified body cached here is permanent: `if (!have)` below
-  // means nothing ever revisits the row.
+  // Length only here. A full rehash of the body belongs off the scroll path.
   if (!bytesMatchDocHash(hash, bytes)) {
     missingRemoteBytes.add(hash);
     return;
   }
+  await yieldToIdle();
+  if (isCameraBusy()) return;
   await putDocBytes(hash, bytes).catch(() => {});
+}
+
+/**
+ * Run a pad-sync ping after the board is up and the browser is idle.
+ *
+ * Open used to fire this in the same turn as first paint. Overlay gone + idle
+ * keeps the first wheel off a disk/hub walk.
+ */
+export function scheduleIdlePadSyncPing(
+  client: LcClient,
+  opts?: { emit?: boolean },
+): void {
+  if (idlePadSyncTimer) clearTimeout(idlePadSyncTimer);
+  idlePadSyncTimer = setTimeout(() => {
+    idlePadSyncTimer = 0;
+    const kick = () => {
+      // Skip. The 15s tick retries. Do not poll every 200ms while flicking.
+      if (isCameraBusy()) return;
+      if (hubBackoffActive()) return;
+      void applyPadSyncPing(client, opts).catch(() => {});
+    };
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(() => kick(), { timeout: 2500 });
+    } else {
+      kick();
+    }
+  }, padSyncIdleKickMs());
 }
 
 export async function pushDocBytes(client: LcClient, hash: string, bytes: ArrayBuffer): Promise<void> {
@@ -799,6 +866,7 @@ export async function pullPads(client: LcClient): Promise<void> {
 
   const trashedWb = new Set(listWhiteboardTrash().map((row) => row.id));
   for (const row of whiteboards) {
+    if (isCameraBusy()) return;
     if (trashedWb.has(row.id)) continue;
     const local = await getWhiteboardNotebook(row.id);
     const missing = !local || boardLooksCorrupt(local.board);
@@ -815,6 +883,7 @@ export async function pullPads(client: LcClient): Promise<void> {
 
   const trashedAn = new Set(listAnnotateTrash().map((row) => row.id));
   for (const row of annotate) {
+    if (isCameraBusy()) return;
     if (trashedAn.has(row.id)) continue;
     const local = await getAnnotateDoc(row.id);
     const missing = !local || boardLooksCorrupt(local.board);
@@ -837,6 +906,7 @@ export async function pullPads(client: LcClient): Promise<void> {
   }
 
   for (const row of whiteboards) {
+    if (isCameraBusy()) return;
     await fillMissingSnapshots(client, "whiteboard", row.id);
   }
   /*
@@ -852,8 +922,10 @@ export async function pullPads(client: LcClient): Promise<void> {
    * until `inkSync` — which is the hole §2c exists to close.
    */
   for (const row of annotate) {
+    if (isCameraBusy()) return;
     await fillMissingSnapshots(client, "annotate", row.id);
   }
+  if (isCameraBusy()) return;
   const seenHash = new Set<string>();
   for (const row of annotate) {
     if (!row.hash || seenHash.has(row.hash)) continue;
@@ -872,9 +944,31 @@ export async function applyPadSyncPing(
   client: LcClient,
   opts?: { emit?: boolean },
 ): Promise<void> {
+  if (isCameraBusy()) return;
+  if (hubBackoffActive()) return;
+  if (padSyncPingInFlight) return;
+  padSyncPingInFlight = true;
+  try {
+    await applyPadSyncPingBody(client, opts);
+  } finally {
+    padSyncPingInFlight = false;
+  }
+}
+
+async function applyPadSyncPingBody(
+  client: LcClient,
+  opts?: { emit?: boolean },
+): Promise<void> {
   const emit = opts?.emit !== false;
   const since = loadPadSyncSince();
-  const ping = await client.pingPadSync(since);
+  let ping;
+  try {
+    ping = await client.pingPadSync(since);
+    noteHubPingOk();
+  } catch (cause) {
+    noteHubPingFail();
+    throw cause;
+  }
   const pendingDelete = new Set(
     memoryQueue
       .filter((job) => job.op === "deletePad")
@@ -884,6 +978,7 @@ export async function applyPadSyncPing(
   const trashAn = new Set(listAnnotateTrash().map((row) => row.id));
 
   for (const gone of ping.gone ?? []) {
+    if (isCameraBusy()) return;
     const kind: PadKindSync =
       gone.kind === "annotate" ? "annotate" : gone.kind === "problem" ? "problem" : "whiteboard";
     await dropPadPayloadJobs(kind, gone.id);
@@ -908,6 +1003,7 @@ export async function applyPadSyncPing(
   }
 
   for (const row of ping.whiteboard) {
+    if (isCameraBusy()) return;
     if (trashWb.has(row.id) || pendingDelete.has(`whiteboard:${row.id}`)) continue;
     const local = await getWhiteboardNotebook(row.id);
     if (local?.locked && local.deletedAt) continue;
@@ -924,6 +1020,7 @@ export async function applyPadSyncPing(
   }
 
   for (const row of ping.annotate) {
+    if (isCameraBusy()) return;
     if (trashAn.has(row.id) || pendingDelete.has(`annotate:${row.id}`)) continue;
     const local = await getAnnotateDoc(row.id);
     const stale =
@@ -943,6 +1040,7 @@ export async function applyPadSyncPing(
   }
 
   {
+    if (isCameraBusy()) return;
     const hashes = new Set<string>();
     for (const row of listAnnotateDocs()) {
       if (row.hash) hashes.add(row.hash);
@@ -962,6 +1060,7 @@ export async function applyPadSyncPing(
    * this device holds, are examined.
    */
   {
+    if (isCameraBusy()) return;
     const pads: Array<{ kind: InkPadKind; key: string }> = [
       ...listWhiteboardNotebooks().map((row) => ({ kind: "whiteboard" as const, key: row.id })),
       ...listAnnotateDocs().map((row) => ({ kind: "annotate" as const, key: row.id })),
@@ -972,6 +1071,7 @@ export async function applyPadSyncPing(
   }
 
   for (const row of ping.problem ?? []) {
+    if (isCameraBusy()) return;
     if (pendingDelete.has(`problem:${row.id}`)) continue;
     const local = await getProblemBoard(row.id);
     const stale =
@@ -987,6 +1087,7 @@ export async function applyPadSyncPing(
   }
 
   for (const row of ping.snapshots) {
+    if (isCameraBusy()) return;
     const kind = kindOfSnap(row.kind);
     if (row.tier === "2h") {
       if (!padIsLive(kind, row.key) || padIsTrashed(kind, row.key)) continue;

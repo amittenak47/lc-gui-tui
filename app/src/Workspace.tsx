@@ -141,7 +141,7 @@ import {
   type DocFootnoteSubMarkKind,
 } from "./util/docFootnotes";
 import { footnoteThemeSeed } from "./util/inkPaletteHistory";
-import { loadBinaryDocBytes, putDocBytes } from "./util/docBytes";
+import { loadBinaryDocBytesWithRetry, putDocBytesVerified } from "./util/docBytes";
 import {
   extractDocumentPages,
   extractedPagesFor,
@@ -158,7 +158,14 @@ import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelection
 import { FootnoteOverview } from "./modes/FootnoteOverview";
 import { EpubDocument } from "./modes/EpubDocument";
 import { WebDocument } from "./modes/WebDocument";
-import { canStepWeb, currentEntry, pushWeb, stepWeb, type WebPadEntry } from "./util/webPadSession";
+import {
+  canStepWeb,
+  currentEntry,
+  needsFetch,
+  pushWeb,
+  stepWeb,
+  type WebPadEntry,
+} from "./util/webPadSession";
 import {
   HOME_TAB_ID,
   activeTab as activeTabOf,
@@ -214,6 +221,7 @@ import {
   LEGACY_MD_INK_TASK_ID,
 } from "./templates/annotate";
 import { BROWSE_PICK_QUIET_MS, browsePickBlocked } from "./util/browsePickGuard";
+import { waitForAnnotateLaidOut } from "./util/annotateLaidOut";
 import {
   buildAnnotateSidecar,
   CODE_SOURCE_MAX_CHARS,
@@ -269,6 +277,7 @@ import {
   pullPads,
   flushPadSyncQueue,
   applyPadSyncPing,
+  scheduleIdlePadSyncPing,
   PAD_HUB_WINDOW_EVENT,
   PAD_SYNC_PING_MS,
   pushAnnotatePad,
@@ -281,6 +290,9 @@ import {
   tombstonePad,
   type PadHubWindowDetail,
 } from "./util/padSync";
+import { isCameraBusy } from "./util/cameraBusy";
+import { getParkedDocSource, parkDocSource } from "./util/parkedDocSource";
+import { MAX_SOURCE_CHARS } from "./util/tabPersist";
 import { ensureDevicePrefs } from "./util/devicePrefs";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
 import {
@@ -822,18 +834,38 @@ export function Workspace({
     bytes: ArrayBuffer | null;
     delayMs: number;
   } | null>(null);
-  const indexOpenDocument = useCallback(() => {
+  const indexOpenDocument = useCallback((opts?: { force?: boolean }) => {
     const job = indexInputsRef.current;
     if (!job) return;
+    const force = opts?.force === true;
     clearDocChunkMismatch(job.hash);
     const loadGen = workspaceLoadGenRef.current;
-    setDocIndexStatus("indexing");
-    setDocIndexError(null);
-    setDocIndexProgress(null);
+    if (force) {
+      setDocIndexStatus("indexing");
+      setDocIndexError(null);
+      setDocIndexProgress(null);
+    }
     window.setTimeout(() => {
       if (workspaceLoadGenRef.current !== loadGen) return;
       void (async () => {
         try {
+          if (!force) {
+            try {
+              const existing = await client.getDocIndex(job.hash);
+              if (existing?.indexed && (existing.page_count ?? 0) > 0) {
+                if (workspaceLoadGenRef.current !== loadGen) return;
+                setDocIndexMeta(existing);
+                setDocIndexStatus("indexed");
+                return;
+              }
+            } catch {
+              /* not indexed yet */
+            }
+            if (workspaceLoadGenRef.current !== loadGen) return;
+            setDocIndexStatus("indexing");
+            setDocIndexError(null);
+            setDocIndexProgress(null);
+          }
           const pages = await extractDocumentPages({
             docType: job.docType,
             name: job.name,
@@ -849,7 +881,13 @@ export function Workspace({
           });
           rememberExtractedPages(job.hash, pages);
           if (pages.length === 0) {
-            if (workspaceLoadGenRef.current === loadGen) setDocIndexStatus("idle");
+            if (workspaceLoadGenRef.current !== loadGen) return;
+            if (job.bytes && (job.docType === "pdf" || job.docType === "epub")) {
+              setDocIndexStatus("error");
+              setDocIndexError("no text could be read from this file");
+            } else {
+              setDocIndexStatus("idle");
+            }
             return;
           }
           /*
@@ -868,7 +906,7 @@ export function Workspace({
               doc_type: job.docType,
               pages,
             },
-            { force: true },
+            { force },
           );
           if (workspaceLoadGenRef.current !== loadGen) return;
           if (!result.indexed) {
@@ -890,8 +928,12 @@ export function Workspace({
           if (workspaceLoadGenRef.current === loadGen) setDocIndexProgress(null);
         }
       })();
-    }, job.delayMs);
+    }, force ? 0 : job.delayMs);
   }, [client]);
+
+  const indexOpenDocumentByHand = useCallback(() => {
+    indexOpenDocument({ force: true });
+  }, [indexOpenDocument]);
 
   /**
    * Run the embedding pass to the end, a budget at a time.
@@ -962,8 +1004,13 @@ export function Workspace({
    * way round.
    */
   const [annotateHeight, setAnnotateHeight] = useState<number | null>(null);
+  /**
+   * Open-gate copy of the measure. Must not be assigned from `annotateHeight`
+   * each render — that stomps `onMdInkMeasure`'s same-tick write, so
+   * `waitForAnnotateLaidOut` never sees three stable readings and text files
+   * reveal at the 1100 floor with the pan clamp pinned.
+   */
   const annotateHeightRef = useRef<number | null>(null);
-  annotateHeightRef.current = annotateHeight;
   const [pdfNav, setPdfNav] = useState<PdfNav | null>(null);
   const pdfNavRef = useRef<PdfNav | null>(null);
   pdfNavRef.current = pdfNav;
@@ -989,6 +1036,16 @@ export function Workspace({
   const annotatePageWidthRef = useRef(ANNOTATE_PAGE_W);
   annotatePageWidthRef.current = annotatePageWidth;
   const onMdInkMeasure = useCallback((height: number) => {
+    // Only the suspicious reading is logged. A zero from a reader that has a
+    // column is an empty note; a zero from one that has not laid out is how a
+    // page gets stuck at `MD_INK_MIN_PAGE_H`, and the two are told apart in the
+    // reader (see `MIN_MEASURABLE_WIDTH_PX`). If one still arrives here, it is
+    // worth a line — it decides the height of the page and the ink clip on it.
+    if (!(height > 0)) traceOpen("md-ink measured zero", { height });
+    // Write the ref in this tick. The copy from React state only lands on the
+    // next render, and `waitForAnnotateLaidOut` polls the ref — so a first
+    // real height that sat only in state was invisible to the open gate.
+    annotateHeightRef.current = height;
     setAnnotateHeight((prev) =>
       prev !== null && Math.abs(prev - height) < 1 ? prev : height,
     );
@@ -1118,8 +1175,9 @@ export function Workspace({
     let cancelled = false;
     void (async () => {
       try {
+        if (isCameraBusy()) return;
         await applyPadSyncPing(client).catch(() => {});
-        if (cancelled) return;
+        if (cancelled || isCameraBusy()) return;
         await pullPads(client);
         if (cancelled) return;
         await flushPadSyncQueue(client);
@@ -1140,6 +1198,7 @@ export function Workspace({
     const tick = () => {
       if (cancelled) return;
       if (document.visibilityState === "hidden") return;
+      if (isCameraBusy()) return;
       void applyPadSyncPing(client).catch(() => {});
     };
     const timer = window.setInterval(tick, PAD_SYNC_PING_MS);
@@ -2176,22 +2235,6 @@ export function Workspace({
         setBoardPreparing(true);
       }
       try {
-        /*
-         * Kicked, not waited on.
-         *
-         * This used to be awaited, which put a full sync round trip in front of
-         * every document open. The ping is not cheap — it walks each annotate
-         * row and, for any binary one with no local copy, asks the hub for its
-         * bytes. A library with PDFs whose bytes are missing therefore paid a
-         * failing round trip per document, on every open, before the file on
-         * this device was so much as looked at. With no hub reachable that is
-         * where the open stopped: no error, just a spinner.
-         *
-         * Nothing here needs it. The ping folds in what other devices changed;
-         * reading a file that is already on this one does not depend on that.
-         * `loadWorkspace` already kicks it this way.
-         */
-        void applyPadSyncPing(client, { emit: false }).catch(() => {});
         await migrateLegacyWhiteboard(countWhiteboardPages);
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the coach sheet never paints mid-open.
@@ -2321,6 +2364,7 @@ export function Workspace({
         } else if (userLoad) {
           boardRef.current?.showPadTitle(title);
         }
+        scheduleIdlePadSyncPing(client, { emit: false });
       } catch (cause) {
         if (workspaceLoadGenRef.current !== loadGen) return;
         setError(messageOf(cause));
@@ -2691,22 +2735,6 @@ export function Workspace({
       }
 
       try {
-        /*
-         * Kicked, not waited on.
-         *
-         * This used to be awaited, which put a full sync round trip in front of
-         * every document open. The ping is not cheap — it walks each annotate
-         * row and, for any binary one with no local copy, asks the hub for its
-         * bytes. A library with PDFs whose bytes are missing therefore paid a
-         * failing round trip per document, on every open, before the file on
-         * this device was so much as looked at. With no hub reachable that is
-         * where the open stopped: no error, just a spinner.
-         *
-         * Nothing here needs it. The ping folds in what other devices changed;
-         * reading a file that is already on this one does not depend on that.
-         * `loadWorkspace` already kicks it this way.
-         */
-        void applyPadSyncPing(client, { emit: false }).catch(() => {});
         const docType = input.docType ?? "markdown";
         const text = input.text ?? "";
         const bytes = input.bytes ?? null;
@@ -2780,7 +2808,7 @@ export function Workspace({
          */
         if (bytes) {
           traceOpen("saving bytes", { hash, bytes: bytes.byteLength });
-          await putDocBytes(hash, bytes);
+          await putDocBytesVerified(hash, bytes);
           traceOpen("bytes saved", { hash });
           void pushDocBytes(client, hash, bytes);
         } else {
@@ -2829,10 +2857,6 @@ export function Workspace({
             setAnnotateFootnotes(pending.marks);
             annotateFootnotesRef.current = pending.marks;
           }
-        } else {
-          captureIdRef.current = null;
-          setWebCaptures([]);
-          setWebPadKind(null);
           /*
            * Your standing choice, unless the page has marks on it.
            *
@@ -2858,6 +2882,13 @@ export function Workspace({
               preference: loadWebViewMode(),
             }),
           );
+        } else {
+          captureIdRef.current = null;
+          setWebCaptures([]);
+          setWebPadKind(null);
+          // A file pad is never a live webview. This used to run for every
+          // annotate open and fired extra keepY fits on md/pdf/epub.
+          setWebLive(false);
         }
         /*
          * Give this document a tab, or claim the one it arrived on.
@@ -2883,7 +2914,14 @@ export function Workspace({
           hash,
           docType,
           indexed: "idle",
-          source: docType === "web" || existing || bytes ? null : text,
+          source:
+            docType === "web" || bytes
+              ? null
+              : existing?.source
+                ? null
+                : text.length > MAX_SOURCE_CHARS
+                  ? null
+                  : text,
         });
         setAnnotateHeight(null);
         annotateHeightRef.current = null;
@@ -3049,12 +3087,27 @@ export function Workspace({
          *
          * So the throw now needs `bytes` — a real file that renders. Text opens,
          * and its page grows when the measurement arrives.
+         *
+         * Zero is only settled for a note that can be empty. A file with text
+         * or bytes that reports zero has not laid out; treating that as done
+         * floors the page and the pan clamp will not travel down it.
          */
-        let laidOut = await waitForAnnotateLaidOut(() => annotateHeightRef.current);
-        if (!laidOut && bytes) {
-          laidOut = await waitForAnnotateLaidOut(() => annotateHeightRef.current, 25000);
+        const allowZero = !bytes && !text.trim();
+        const needsHeight = Boolean(bytes) || Boolean(text.trim());
+        let laidOut = await waitForAnnotateLaidOut(
+          () => annotateHeightRef.current,
+          8000,
+          allowZero,
+        );
+        if (!laidOut && needsHeight) {
+          boardRef.current?.syncDocumentScrollBounds();
+          laidOut = await waitForAnnotateLaidOut(
+            () => annotateHeightRef.current,
+            25000,
+            allowZero,
+          );
         }
-        if (!laidOut && bytes) {
+        if (!laidOut && needsHeight) {
           throw new Error(
             "This document did not finish opening — try again, or pick a smaller file.",
           );
@@ -3102,16 +3155,21 @@ export function Workspace({
           requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
         );
         if (workspaceLoadGenRef.current !== loadGen) return;
+        boardRef.current?.syncDocumentScrollBounds();
         boardRef.current?.armReadingScroll();
         await waitMs(50);
         if (workspaceLoadGenRef.current !== loadGen) return;
+        boardRef.current?.syncDocumentScrollBounds();
         boardRef.current?.armReadingScroll();
         await waitMs(200);
         if (workspaceLoadGenRef.current !== loadGen) return;
+        boardRef.current?.syncDocumentScrollBounds();
         boardRef.current?.armReadingScroll();
         await waitMs(500);
         if (workspaceLoadGenRef.current !== loadGen) return;
+        boardRef.current?.syncDocumentScrollBounds();
         boardRef.current?.armReadingScroll();
+        scheduleIdlePadSyncPing(client, { emit: false });
 
         if (stale) {
           setNotice(
@@ -3558,7 +3616,9 @@ export function Workspace({
        * workspace will load from.
        */
       if (proposed.kind === "annotate" && !input.bytes && newSet) {
-        proposed.source = input.text ?? null;
+        const raw = input.text ?? null;
+        if (raw) await parkDocSource(hash, raw).catch(() => {});
+        proposed.source = raw && raw.length > MAX_SOURCE_CHARS ? null : raw;
       }
       /*
        * Bytes cannot ride the record, so they go to their store first.
@@ -3576,7 +3636,7 @@ export function Workspace({
        */
       if (input.bytes) {
         traceOpen("saving picked bytes", { hash, bytes: input.bytes.byteLength });
-        await putDocBytes(hash, input.bytes);
+        await putDocBytesVerified(hash, input.bytes);
         traceOpen("picked bytes saved", { hash });
       }
       openWorkspace(proposed);
@@ -3821,7 +3881,7 @@ export function Workspace({
               return;
             }
             if (isBinaryDocType(entry.docType)) {
-              const bytes = await loadBinaryDocBytes(entry.hash, (hash) =>
+              const bytes = await loadBinaryDocBytesWithRetry(entry.hash, (hash) =>
                 client.getDocBytes(hash),
               );
               if (!bytes) {
@@ -3940,11 +4000,6 @@ export function Workspace({
       handedOff = true;
       setShellLoadActive(true);
       setWorkspaceLoadActive(true);
-      if (fromBrowse) {
-        setHoldBrowseOverlay(true);
-        setBrowseMotion("busy");
-        setBoardPreparing(true);
-      }
       await openAnnotate({
         name: picked.name,
         docType: picked.docType,
@@ -3965,8 +4020,9 @@ export function Workspace({
           setHoldBrowseOverlay(false);
         }
       } else {
-        // Load lives on the new chip. Home must not stay preparing/busy or
-        // focusing it later would keep the chooser disabled.
+        // Load lives on the new chip. Home must not stay preparing/busy.
+        // Overlay and browse motion are shell-shared — clearing them here
+        // races the workspace that just mounted (column at 0 width).
         setBusy(null);
         setWorkspaceLoadActive(false);
         setBoardPreparing(false);
@@ -3978,6 +4034,46 @@ export function Workspace({
     async (tab: WebTab, userLoad = false) => {
       const entry = currentEntry(tab);
       if (!entry || busyRef.current !== null) return;
+      /*
+       * A place without a snapshot — fetch it, then keep it.
+       *
+       * Live browsing records where it went and nothing else: the page is in a
+       * native view the app cannot read. Stepping back onto one of those
+       * entries has to go and get the page. The result replaces the
+       * placeholder at the same address rather than joining it, so walking the
+       * history twice does not grow it.
+       *
+       * Only this path fetches. An entry that already carries its HTML is
+       * replayed as-is, which is what makes Back instant on anything you
+       * arrived at frozen, and what keeps its marks attached to the capture
+       * they were made against.
+       */
+      if (needsFetch(entry)) {
+        setBusy("loading page…");
+        try {
+          const page = await fetchWebPage(entry.url, { mode: webRenderModeRef.current });
+          const filled = {
+            url: page.url,
+            title: page.title || hostLabelFromUrl(page.url),
+            html: page.html,
+          };
+          setWebHtmlSource(page.source);
+          setWebHtmlNote(page.note ?? null);
+          webPush(tab.id, filled);
+          setBusy(null);
+          await loadAnnotate({
+            name: filled.url,
+            docType: "web",
+            text: filled.html,
+            tabId: tab.id,
+            userLoad,
+          });
+        } catch (cause) {
+          setBusy(null);
+          setError(messageOf(cause));
+        }
+        return;
+      }
       await loadAnnotate({
         name: entry.url,
         docType: "web",
@@ -3986,7 +4082,7 @@ export function Workspace({
         userLoad,
       });
     },
-    [loadAnnotate],
+    [loadAnnotate, webPush],
   );
 
   /**
@@ -6249,14 +6345,11 @@ export function Workspace({
       if (whiteboardNotebookId) {
         void deleteWhiteboardNotebook(whiteboardNotebookId).catch(() => {});
       }
-      // Nothing to come back to, so the chip goes with it. A discard onto a
-      // baseline keeps its tab — that notebook is still in the library.
-      closeTab(tab.id);
     }
     whiteboardBaselineRef.current = { id: null, entry: null };
     whiteboardPristineHashRef.current = null;
     setWhiteboardNotebookId(null);
-  }, [closeTab, tab.id, whiteboardNotebookId]);
+  }, [whiteboardNotebookId]);
 
   /** Nothing drawn on this document since it opened. */
   /**
@@ -6311,9 +6404,6 @@ export function Workspace({
       void restoreAnnotateDoc(baseline.entry).catch(() => {});
     } else {
       if (annotateDocId) void deleteAnnotateDoc(annotateDocId).catch(() => {});
-      // See the notebook discard: a tab whose entry has just been deleted has
-      // nothing left to reopen.
-      closeTab(tab.id);
     }
     annotateBaselineRef.current = { id: null, entry: null };
     annotatePristineHashRef.current = null;
@@ -6329,7 +6419,7 @@ export function Workspace({
     footnoteCoachUpgradeRef.current = null;
     setOpenFootnoteId(null);
     setFootnoteAnchorRect(null);
-  }, [annotateDocId, closeTab, tab.id]);
+  }, [annotateDocId]);
 
   /** Commit the annotations to the library. Returns the entry, or null on failure. */
   const saveAnnotateSession = useCallback(async (): Promise<AnnotateDoc | null> => {
@@ -6908,11 +6998,18 @@ export function Workspace({
           return;
         }
         case "annotate": {
-          const entry = tab.docId
-            ? await getAnnotateDoc(tab.docId)
-            : tab.hash
-              ? await findAnnotateDocByHash(tab.hash)
-              : null;
+          /*
+           * Both keys, not the first one that exists.
+           *
+           * The hash lookup used to be the `else` of the id lookup, so a record
+           * carrying a `docId` that the library has never heard of — a session
+           * that was read and not annotated, or one whose entry was trashed —
+           * never got as far as asking after its bytes, and the tab was declared
+           * missing with the file sitting right there under its hash.
+           */
+          const entry =
+            (tab.docId ? await getAnnotateDoc(tab.docId) : null) ??
+            (tab.hash ? await findAnnotateDocByHash(tab.hash) : null);
           /*
            * The record's id outranks the entry's, because it may not have one.
            *
@@ -6935,7 +7032,7 @@ export function Workspace({
           if (isBinaryDocType(docType)) {
             const hash = entry?.hash ?? tab.hash;
             const bytes = hash
-              ? await loadBinaryDocBytes(hash, (key) => client.getDocBytes(key))
+              ? await loadBinaryDocBytesWithRetry(hash, (key) => client.getDocBytes(key))
               : null;
             if (bytes) {
               await loadAnnotate({ name, docType, bytes, docId: restoreDocId, tabId: tab.id, userLoad });
@@ -6970,7 +7067,11 @@ export function Workspace({
             );
             return;
           }
-          const text = entry?.source ?? tab.source;
+          const parked =
+            tab.hash && !(entry?.source || tab.source)
+              ? await getParkedDocSource(tab.hash)
+              : null;
+          const text = entry?.source ?? tab.source ?? parked;
           if (text !== null && text !== undefined) {
             await loadAnnotate({ name, docType, text, docId: restoreDocId, tabId: tab.id, userLoad });
             return;
@@ -7080,8 +7181,39 @@ export function Workspace({
     patchTab(tab.id, { notebookId: whiteboardNotebookId });
   }, [patchTab, tab.id, whiteboardNotebookId]);
 
+  /*
+   * The text comes off the record only once the library is holding it.
+   *
+   * `annotateDocId` is a *session* id — `freshAnnotateId()` for a file nobody
+   * has annotated yet — and the entry behind it is not written until there is
+   * something to write. Nulling `source` on the strength of the id alone took
+   * the only copy off a document that was merely being read: parking an
+   * untouched document writes nothing to the library, so coming back to the tab
+   * found neither the entry nor the text, and said so — "The document is not in
+   * the library and its file is not on this device", about a file that had
+   * opened a moment earlier and was still open.
+   *
+   * `docId` is still mirrored unconditionally; `sameEntity` is found by it. It
+   * is only the discard of the text that has to wait for the receipt, which is
+   * the same guard the title effect below already applies for the same reason.
+   */
   useEffect(() => {
-    patchTab(tab.id, { docId: annotateDocId, ...(annotateDocId ? { source: null } : {}) });
+    const docId = annotateDocId;
+    if (!docId) {
+      patchTab(tab.id, { docId });
+      return;
+    }
+    let cancelled = false;
+    void getAnnotateDoc(docId).then((doc) => {
+      if (cancelled) return;
+      patchTab(tab.id, {
+        docId,
+        ...(doc?.source ? { source: null } : {}),
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [annotateDocId, patchTab, tab.id]);
 
   /*
@@ -7300,6 +7432,7 @@ export function Workspace({
     const delays = [0, 80, 200, 400, 700];
     const ids = delays.map((ms) =>
       window.setTimeout(() => {
+        boardRef.current?.syncDocumentScrollBounds();
         boardRef.current?.nudgeViewportFit();
         window.dispatchEvent(new Event("resize"));
       }, ms),
@@ -7443,7 +7576,7 @@ export function Workspace({
         status: docIndexStatus,
         meta: docIndexMeta,
         error: docIndexError,
-        onIndex: indexInputsRef.current ? indexOpenDocument : null,
+        onIndex: indexInputsRef.current ? indexOpenDocumentByHand : null,
         onEmbed: indexInputsRef.current ? embedOpenDocument : null,
         indexProgress: docIndexProgress,
         embedProgress: docEmbedProgress,
@@ -7477,7 +7610,7 @@ export function Workspace({
     docEmbedEta,
     docEmbedding,
     embedOpenDocument,
-    indexOpenDocument,
+    indexOpenDocumentByHand,
     webLive,
     problem,
     setChrome,
@@ -7918,7 +8051,21 @@ export function Workspace({
               it is the same gesture as pressing Enter, so it belongs with the
               text rather than beside it as a button the width of a word.
             */}
-            <div className="lc-web-address">
+            {/*
+              The address bar says which of the three you are reading.
+              
+              The mode already had an icon, and an icon in a row of icons is
+              something you check rather than something you know. The field is
+              the one element that is always in view, always the same shape,
+              and always about the page — so it carries the state as a colour
+              you stop having to read.
+            */}
+            <div
+              className="lc-web-address"
+              data-web-mode={
+                webLive ? "live" : webHtmlSource === "reader" ? "reader" : "frozen"
+              }
+            >
               {/*
                 Reader, on the address — where Safari puts it, and where it
                 belongs: it is a statement about *this URL*, not a mode of the
@@ -8204,15 +8351,21 @@ export function Workspace({
                */
               visible={Boolean(showing)}
               /*
-               * Back, once the page has no earlier page to go to.
+               * The system Back gesture, answered from the one history.
                *
-               * Android only — the plugin owns the system Back while a live
-               * view is up, so the pane is a browser and not a picture of one.
-               * Running out of history is not a reason to leave the app; it is
-               * the point at which "back" means the frozen copy underneath,
-               * which is exactly where an error would land us too.
+               * Same list the omnibox arrows walk, so the gesture and the
+               * button cannot disagree — and stepping it while live re-opens
+               * the pane at that entry, so Back works the same whether you got
+               * there by tapping a link in a live page or in a frozen one.
+               *
+               * Nothing behind means leaving the live page rather than the
+               * app: the frozen copy is underneath, which is where an error
+               * would land us too.
                */
-              onExit={() => setWebLive(false)}
+              onBack={() => {
+                if (activeWebTab && canStepWeb(activeWebTab, -1)) stepWebTab(-1);
+                else setWebLive(false);
+              }}
               /*
                * Keep the omnibox on the page, not on the door it came in by.
                *
@@ -8222,7 +8375,28 @@ export function Workspace({
                * three links deep saved it under the name of the one the tab
                * opened at, and reopened there afterwards.
                */
-              onNavigate={(next) => setWebUrl(next)}
+              onNavigate={(next) => {
+                setWebUrl(next);
+                /*
+                 * One history, and this is the half that was missing from it.
+                 *
+                 * Frozen browsing has always recorded where it went; live
+                 * browsing recorded nothing, so Back and Forward went blank
+                 * the moment you followed a link in a live page. They are the
+                 * same history because the mode is a *rendering* of the page
+                 * you are on, not a separate session — Back has to mean one
+                 * thing, and switching live/frozen has to keep your place.
+                 *
+                 * Pushed only when the address actually differs from the entry
+                 * we are standing on. A report also arrives for the load that
+                 * put us here — opening the pane, or stepping onto an entry —
+                 * and pushing on those would record the page we just arrived
+                 * at as somewhere new, truncating everything ahead of it.
+                 */
+                const current = currentEntry(activeTabRecord as WebTab);
+                if (current && current.url === next) return;
+                webPush(tab.id, { url: next, title: hostLabelFromUrl(next) });
+              }}
               onError={(message) => {
                 setError(message);
                 setWebLive(false);
@@ -8361,7 +8535,12 @@ export function Workspace({
                       onNav={setPdfNav}
                       onThumbRenderer={onPdfThumbRenderer}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
-                      onError={setError}
+                      onError={(message) => {
+                        if (/cancel|abort|worker.*(destroy|terminat|not running)/i.test(message)) {
+                          return;
+                        }
+                        setError(message);
+                      }}
                     />
                   ) : annotateSource.docType === "epub" && annotateSource.bytes ? (
                     <EpubDocument
@@ -8963,7 +9142,7 @@ export function Workspace({
                    * cleared storage, a device that never had them. Say so rather
                    * than opening an entry whose ink has nothing under it.
                    */
-                  const bytes = await loadBinaryDocBytes(entry.hash, (hash) =>
+                  const bytes = await loadBinaryDocBytesWithRetry(entry.hash, (hash) =>
                     client.getDocBytes(hash),
                   );
                   if (!bytes) {
@@ -9186,50 +9365,6 @@ function RegionPager({
 function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
-  });
-}
-
-/**
- * Wait until AnnotateDocument has reported a stable height.
- * Used under the existing loading overlay so refresh runs on a finished page.
- *
- * Returns false when the timeout fires without a height — callers must not
- * treat that as "document ready" or the board reveals on a stuck "Opening…".
- *
- * A height of *zero* is an answer, not silence: an empty note has laid out and
- * is zero tall. Only the reporters that can legitimately be empty send it (see
- * AnnotateDocument), and the stability check still applies, so a reader that
- * reads zero on its way up does not resolve early.
- */
-function waitForAnnotateLaidOut(
-  readHeight: () => number | null,
-  timeoutMs = 8000,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const start = performance.now();
-    let last: number | null = null;
-    let stable = 0;
-    const tick = () => {
-      const height = readHeight();
-      if (height != null && height >= 0) {
-        if (last != null && Math.abs(height - last) < 1) {
-          stable += 1;
-          if (stable >= 3) {
-            resolve(true);
-            return;
-          }
-        } else {
-          stable = 0;
-        }
-        last = height;
-      }
-      if (performance.now() - start >= timeoutMs) {
-        resolve(false);
-        return;
-      }
-      window.setTimeout(tick, 50);
-    };
-    tick();
   });
 }
 

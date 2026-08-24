@@ -89,3 +89,13 @@ describe("putDocBytes refuses a row that is not its key", () => {
     expect(store.get("legacy-key")).toBeDefined();
   });
 });
+
+describe("putDocBytesVerified", () => {
+  it("reads the row back after put", async () => {
+    const { putDocBytesVerified, getDocBytes } = await import("./docBytes");
+    await putDocBytesVerified(HASH, REAL);
+    const back = await getDocBytes(HASH);
+    expect(back).not.toBeNull();
+    expect(back!.byteLength).toBe(2048);
+  });
+});
