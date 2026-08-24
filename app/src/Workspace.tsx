@@ -141,7 +141,7 @@ import {
   type DocFootnoteSubMarkKind,
 } from "./util/docFootnotes";
 import { footnoteThemeSeed } from "./util/inkPaletteHistory";
-import { loadBinaryDocBytesWithRetry, putDocBytesVerified } from "./util/docBytes";
+import { hashBytesAsync, loadBinaryDocBytesWithRetry, putDocBytesVerified } from "./util/docBytes";
 import {
   extractDocumentPages,
   extractedPagesFor,
@@ -871,6 +871,7 @@ export function Workspace({
             name: job.name,
             text: job.text,
             bytes: job.bytes,
+            hash: job.hash,
             // Only a web page uses these — see `webPagesFromMarks` for why the
             // rest of a page is deliberately left out of the index.
             marks: annotateFootnotesRef.current,
@@ -2735,6 +2736,8 @@ export function Workspace({
       }
 
       try {
+        const openT0 = performance.now();
+        const openMs = () => Math.round(performance.now() - openT0);
         const docType = input.docType ?? "markdown";
         const text = input.text ?? "";
         const bytes = input.bytes ?? null;
@@ -2753,9 +2756,12 @@ export function Workspace({
               `${Math.round(CODE_SOURCE_MAX_CHARS / 1000)}k).`,
           );
         }
-        const hash =
-          input.hash ?? docIdentityHash({ docType, name: input.name, text, bytes });
-        traceOpen("hashed", { hash, bytes: bytes ? bytes.byteLength : null });
+        const hash = input.hash
+          ? input.hash
+          : bytes && docType !== "web"
+            ? await hashBytesAsync(bytes)
+            : docIdentityHash({ docType, name: input.name, text, bytes });
+        traceOpen("hashed", { hash, bytes: bytes ? bytes.byteLength : null, ms: openMs() });
 
         /*
          * Which set of annotations on this file — asked before anything is set.
@@ -2806,13 +2812,14 @@ export function Workspace({
          * IndexedDB — has to stop the open rather than land the reader on a
          * blank page with ink floating over nothing.
          */
+        let hubBytes: { hash: string; bytes: ArrayBuffer } | null = null;
         if (bytes) {
-          traceOpen("saving bytes", { hash, bytes: bytes.byteLength });
+          traceOpen("saving bytes", { hash, bytes: bytes.byteLength, ms: openMs() });
           await putDocBytesVerified(hash, bytes);
-          traceOpen("bytes saved", { hash });
-          void pushDocBytes(client, hash, bytes);
+          traceOpen("bytes saved", { hash, ms: openMs() });
+          hubBytes = { hash, bytes };
         } else {
-          traceOpen("no bytes to save", { hash, docType });
+          traceOpen("no bytes to save", { hash, docType, ms: openMs() });
         }
 
         /*
@@ -3108,9 +3115,16 @@ export function Workspace({
           );
         }
         if (!laidOut && needsHeight) {
-          throw new Error(
-            "This document did not finish opening — try again, or pick a smaller file.",
-          );
+          const seen = annotateHeightRef.current;
+          if (!(typeof seen === "number" && seen > 0)) {
+            throw new Error(
+              "This document did not finish opening — try again, or pick a smaller file.",
+            );
+          }
+          traceOpen("layout gate timed out with paper on screen", {
+            height: seen,
+            ms: openMs(),
+          });
         }
         await boardRef.current?.settleFitView();
         if (existing?.board.appState) {
@@ -3170,6 +3184,10 @@ export function Workspace({
         boardRef.current?.syncDocumentScrollBounds();
         boardRef.current?.armReadingScroll();
         scheduleIdlePadSyncPing(client, { emit: false });
+
+        if (hubBytes) {
+          void pushDocBytes(client, hubBytes.hash, hubBytes.bytes);
+        }
 
         if (stale) {
           setNotice(
@@ -3555,12 +3573,15 @@ export function Workspace({
        * matches nothing — and opening the same document twice would grow a
        * second chip for it rather than focusing the first.
        */
-      const hash = docIdentityHash({
-        docType,
-        name: input.name,
-        text: input.text,
-        bytes: input.bytes,
-      });
+      const hash =
+        input.bytes && docType !== "web"
+          ? await hashBytesAsync(input.bytes)
+          : docIdentityHash({
+              docType,
+              name: input.name,
+              text: input.text,
+              bytes: input.bytes,
+            });
 
       /*
        * Which annotation set, decided here — before a record exists.
@@ -8530,6 +8551,7 @@ export function Workspace({
                   {annotateSource.docType === "pdf" && annotateSource.bytes ? (
                     <PdfDocument
                       bytes={annotateSource.bytes}
+                      docHash={annotateSource.hash}
                       frameWidth={annotatePageWidth}
                       onMeasure={onMdInkMeasure}
                       onNav={setPdfNav}

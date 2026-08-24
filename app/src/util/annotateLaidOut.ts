@@ -15,9 +15,17 @@ export function annotateHeightIsSettled(
   return true;
 }
 
+/** How long one height value must hold before the page is treated as laid out. */
+export const ANNOTATE_LAYOUT_SETTLE_MS = 250;
+
 /**
  * Wait until AnnotateDocument (or the PDF / EPUB / web reader) has reported a
  * stable height. Used under the loading overlay so reveal runs on a finished page.
+ *
+ * Stability is elapsed time at the same height, not a tick count — a main
+ * thread stuck in long tasks can miss four 50 ms polls and still have been
+ * the right height the whole time. A height that is still changing resets
+ * the deadline, so a document still growing keeps its budget.
  *
  * Returns false when the timeout fires without a height — callers must not
  * treat that as "document ready" or the board reveals on a stuck "Opening…".
@@ -28,24 +36,25 @@ export function waitForAnnotateLaidOut(
   allowZero = true,
 ): Promise<boolean> {
   return new Promise((resolve) => {
-    const start = performance.now();
+    let deadline = performance.now() + timeoutMs;
     let last: number | null = null;
-    let stable = 0;
+    let since = 0;
     const tick = () => {
+      const now = performance.now();
       const height = readHeight();
       if (annotateHeightIsSettled(height, allowZero)) {
         if (last != null && Math.abs(height! - last) < 1) {
-          stable += 1;
-          if (stable >= 3) {
+          if (now - since >= ANNOTATE_LAYOUT_SETTLE_MS) {
             resolve(true);
             return;
           }
         } else {
-          stable = 0;
+          if (last != null) deadline = now + timeoutMs;
+          last = height;
+          since = now;
         }
-        last = height;
       }
-      if (performance.now() - start >= timeoutMs) {
+      if (now >= deadline) {
         resolve(false);
         return;
       }
