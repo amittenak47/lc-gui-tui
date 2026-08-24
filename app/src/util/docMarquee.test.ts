@@ -11,6 +11,7 @@ import {
   hitRectsUnder,
   isPageCoverRect,
   localRectCoversHost,
+  padQuoteRect,
   scaleOf,
   tightClientRects,
   tightLocalRects,
@@ -728,6 +729,36 @@ describe("a wash over one page of many", () => {
     ]);
     expect(kept).toHaveLength(2);
     expect(kept.every((rect) => rect.height === 22)).toBe(true);
+  });
+});
+
+describe("padQuoteRect", () => {
+  it("gives a body line a few units of air", () => {
+    const box = padQuoteRect({ left: 100, top: 200, width: 400, height: 22 });
+    // 22 * 0.18 ≈ 4 above and below, a little less either side.
+    expect(box.top).toBeCloseTo(196.04, 1);
+    expect(box.height).toBeCloseTo(29.92, 1);
+    expect(box.left).toBeLessThan(100);
+    expect(box.width).toBeGreaterThan(400);
+  });
+
+  it("gives a chapter title more, because it overflows more", () => {
+    // A 56-unit display line hangs its descenders further out of its em box
+    // than a 22-unit body line does, so the pad follows the type size.
+    const title = padQuoteRect({ left: 100, top: 200, width: 400, height: 56 });
+    const body = padQuoteRect({ left: 100, top: 200, width: 400, height: 22 });
+    expect(200 - title.top).toBeGreaterThan(200 - body.top);
+  });
+
+  it("treats a merged paragraph as one line's worth of air, not a fifth of it", () => {
+    const block = padQuoteRect({ left: 100, top: 200, width: 400, height: 300 });
+    expect(200 - block.top).toBeLessThanOrEqual(10);
+    expect(block.height).toBeLessThanOrEqual(320);
+  });
+
+  it("never pads a hairline rect away to nothing", () => {
+    const thin = padQuoteRect({ left: 100, top: 200, width: 400, height: 1 });
+    expect(thin.height).toBeCloseTo(5, 5);
   });
 });
 
