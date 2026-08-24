@@ -19,6 +19,7 @@
  */
 
 import { openDb, run, STORE_BYTES } from "./idb";
+import { isCameraBusy } from "./cameraBusy";
 import { traceOpen } from "./messageOf";
 
 const STORE = STORE_BYTES;
@@ -241,7 +242,7 @@ export async function loadBinaryDocBytes(
      * IndexedDB and every later open reads the bad copy back — the reader ends
      * up re-picking the file to fix a row the app poisoned itself.
      */
-    if (hashBytes(bytes) !== hash) return null;
+    if (await hashBytesCooperative(bytes) !== hash) return null;
     await putDocBytes(hash, bytes).catch(() => {});
     return bytes;
   } catch {
@@ -512,6 +513,26 @@ export function hashBytes(bytes: ArrayBuffer): string {
   for (let i = 0; i < view.length; i += 1) {
     hash ^= view[i];
     hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `bin${hash.toString(36)}-${view.length.toString(36)}`;
+}
+
+/** Same digest as {@link hashBytes}, yielding so a textbook does not freeze scroll. */
+export async function hashBytesCooperative(bytes: ArrayBuffer): Promise<string> {
+  if (isCameraBusy()) return "";
+  const view = new Uint8Array(bytes);
+  let hash = 0x811c9dc5;
+  const yieldEvery = 128 * 1024;
+  for (let i = 0; i < view.length; i += 1) {
+    hash ^= view[i];
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+    if (i > 0 && i % yieldEvery === 0) {
+      if (isCameraBusy()) return "";
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      if (isCameraBusy()) return "";
+    }
   }
   return `bin${hash.toString(36)}-${view.length.toString(36)}`;
 }
