@@ -4,6 +4,7 @@
  * Uploads extracted text, never the raw PDF/EPUB bytes.
  */
 
+import type { DocType } from "./annotateStore";
 import { waitWhileCameraBusy } from "./cameraBusy";
 import { readEpub } from "./epub";
 import { loadPdfJs, pdfWorker } from "../modes/PdfDocument";

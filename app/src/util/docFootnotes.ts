@@ -193,6 +193,10 @@ export interface DocFootnoteSubMark {
   /** Live page anchor when the sub-mark was made on the document. */
   anchor?: TextAnchor;
   /**
+   * Optional stored boxes. Paint prefers the text-anchor range (glyph lines).
+   */
+  bands?: Array<{ left: number; top: number; width: number; height: number }>;
+  /**
    * This underline's picked swatch. Absent on older sub-marks that still
    * inherit the parent mark's colour.
    */
@@ -686,6 +690,7 @@ function sanitizeSubMarks(value: unknown): DocFootnoteSubMark[] | undefined {
     const textAnchor = anchor && isTextAnchor(anchor) ? anchor : undefined;
     const color = isHexColor(mark.color) ? mark.color.trim() : undefined;
     const palette = normalizePalette(mark.palette) ?? undefined;
+    const bands = sanitizeBands(mark.bands);
     out.push({
       id: mark.id,
       kind: mark.kind as DocFootnoteSubMarkKind,
@@ -695,6 +700,7 @@ function sanitizeSubMarks(value: unknown): DocFootnoteSubMark[] | undefined {
       ...(textAnchor ? { anchor: textAnchor } : {}),
       ...(color ? { color } : {}),
       ...(palette ? { palette } : {}),
+      ...(bands ? { bands } : {}),
     });
   }
   return out.length > 0 ? out : undefined;

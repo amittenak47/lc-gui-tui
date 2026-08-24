@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { caretPointIn, charOffsetInNode } from "./docSubMarkHit";
+import { caretPointIn, charOffsetInNode, isCodeDocRoot, preOffsetAtPoint } from "./docSubMarkHit";
 
 /*
  * jsdom has no layout, so every range answers a zero rectangle. The stub below
@@ -157,5 +157,42 @@ describe("caretPointIn", () => {
     const hit = caretPointIn(root, 43, lineTop(0), { skipNative: true, bands, body });
     expect(hit?.node).toBe(only);
     expect(hit?.offset).toBe(4);
+  });
+});
+
+describe("isCodeDocRoot / preOffsetAtPoint", () => {
+  it("detects a code document host", () => {
+    const wrap = document.createElement("div");
+    wrap.className = "lc-code-doc";
+    const pre = document.createElement("pre");
+    pre.className = "lc-code-doc-pre";
+    wrap.append(pre);
+    expect(isCodeDocRoot(wrap)).toBe(true);
+    expect(isCodeDocRoot(pre)).toBe(true);
+    expect(isCodeDocRoot(document.createElement("p"))).toBe(false);
+  });
+
+  it("maps a point onto a pre line without walking glyphs", () => {
+    const wrap = document.createElement("div");
+    wrap.className = "lc-code-doc";
+    const pre = document.createElement("pre");
+    pre.className = "lc-code-doc-pre";
+    pre.textContent = "abc\ndefg\nhi";
+    wrap.append(pre);
+    document.body.appendChild(wrap);
+    pre.getBoundingClientRect = () => box(0, 0, 200, 60);
+    Object.defineProperty(pre, "style", { value: { fontSize: "10px", lineHeight: "20px" } });
+    const orig = window.getComputedStyle;
+    window.getComputedStyle = () =>
+      ({
+        fontSize: "10px",
+        lineHeight: "20px",
+        paddingLeft: "0px",
+        paddingTop: "0px",
+      }) as CSSStyleDeclaration;
+
+    // Line 1 ("defg"), near column 2. ch ≈ 6px at 10px font.
+    expect(preOffsetAtPoint(wrap, 12, 30)).toBe(3 + 1 + 2);
+    window.getComputedStyle = orig;
   });
 });

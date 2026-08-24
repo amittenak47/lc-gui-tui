@@ -324,7 +324,7 @@ describe("docMarquee", () => {
     expect(hits[1]).toEqual({ left: 10, top: 40, width: 70, height: 20 });
   });
 
-  it("hitRectsUnder wraps PDF text-layer spans into one block", () => {
+  it("hitRectsUnder hugs PDF text-layer spans under the marquee", () => {
     const body = document.createElement("div");
     Object.defineProperty(body, "offsetWidth", { value: 400 });
     body.getBoundingClientRect = () =>
@@ -377,11 +377,9 @@ describe("docMarquee", () => {
     body.append(page);
     document.body.append(body);
 
-    const hits = hitRectsUnder(body, page, { left: 0, top: 30, width: 200, height: 50 });
-    expect(hits).toHaveLength(1);
-    expect(hits[0]?.left).toBe(20);
-    expect(hits[0]?.top).toBe(40);
-    expect(hits[0]?.height).toBe(36);
+    const marquee = { left: 0, top: 30, width: 200, height: 50 };
+    const hits = hitRectsUnder(body, page, marquee);
+    expect(hits).toEqual([{ left: 20, top: 40, width: 80, height: 36 }]);
   });
 
   it("coversViewportBox treats a slot-sized rect as the host", () => {
