@@ -2780,12 +2780,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     let bounds = pageBoundsRef.current;
     const api = apiRef.current;
     if (!bounds || !api) return { scrollX, scrollY };
-    const slot = contentSlotNodeRef.current;
-    if (slot && pageContentRef.current) {
-      const rendered = documentLayerHeight(slot);
-      if (rendered > contentRenderedHeightRef.current) {
-        contentRenderedHeightRef.current = rendered;
-      }
+    // Cached height only — wheel hits this many times per frame.
+    if (pageContentRef.current) {
       bounds = pageBoundsWithRendered(
         bounds,
         contentRenderedHeightRef.current,
