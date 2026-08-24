@@ -195,6 +195,34 @@ export interface DocSelectionLayerProps {
 }
 
 /**
+ * The one screen box a set of body-local rects covers.
+ *
+ * Chrome that has to keep off a mark — the hub card, so far — is placed in
+ * window coordinates, while everything the page knows about a mark is in the
+ * body's own units. Null when there is nothing to cover.
+ */
+function screenBoxOfLocalRects(
+  body: HTMLElement | null,
+  rects: readonly LocalRect[],
+): DOMRect | null {
+  if (!body || rects.length === 0) return null;
+  const origin = body.getBoundingClientRect();
+  const scale = scaleOf(body) || 1;
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const rect of rects) {
+    left = Math.min(left, origin.left + rect.left * scale);
+    top = Math.min(top, origin.top + rect.top * scale);
+    right = Math.max(right, origin.left + (rect.left + rect.width) * scale);
+    bottom = Math.max(bottom, origin.top + (rect.top + rect.height) * scale);
+  }
+  if (!Number.isFinite(left) || right <= left || bottom <= top) return null;
+  return new DOMRect(left, top, right - left, bottom - top);
+}
+
+/**
  * Where a mark sits, in the body's own coordinates.
  *
  * Both anchor kinds end up here, because a ribbon does not care how its mark
@@ -1743,9 +1771,18 @@ export function DocSelectionLayer({
     };
   }, [phase, placeSelectionChrome, overlaps.length, selection, copied, subMarkConfirm, subMarkLive]);
 
+  /**
+   * Every committed underline / highlight on the page, open panel or not.
+   *
+   * These used to be read off `subMarkParent` — the mark whose hub is open —
+   * so a reader who underlined a sentence and closed the panel watched their
+   * own underline disappear, and had to reopen the mark to see it again. A
+   * mark on the words is a mark on the words: it belongs to the page, and the
+   * panel is only where it is edited.
+   */
   const paintedSubMarks = useMemo(() => {
     const body = bodyRef.current;
-    if (!body || !subMarkParent?.subMarks?.length) return [];
+    if (!body) return [];
     const out: Array<{
       id: string;
       kind: DocFootnoteSubMarkKind;
@@ -1753,20 +1790,31 @@ export function DocSelectionLayer({
       color?: string;
       palette?: string[];
     }> = [];
-    for (const mark of subMarkParent.subMarks) {
-      const anchor = resolveSubMarkAnchor(subMarkParent, mark);
-      if (!anchor) continue;
-      const root = scopeRootIn(body, anchor.scope) as HTMLElement | null;
-      if (!root) continue;
-      const range = rangeFromAnchor(root, anchor);
-      if (!range) continue;
-      out.push({
-        id: mark.id,
-        kind: mark.kind,
-        rects: localRects(body, range),
-        color: mark.color,
-        palette: mark.palette,
-      });
+    const seen = new Set<string>();
+    // The open mark first: it is the live copy, and its sub-marks may have
+    // moved on from the `footnotes` array the page was last rendered with.
+    const parents = [
+      ...(subMarkParent ? [subMarkParent] : []),
+      ...footnotes.filter((note) => note.id !== subMarkParent?.id),
+    ];
+    for (const parent of parents) {
+      for (const mark of parent.subMarks ?? []) {
+        if (seen.has(mark.id)) continue;
+        seen.add(mark.id);
+        const anchor = resolveSubMarkAnchor(parent, mark);
+        if (!anchor) continue;
+        const root = scopeRootIn(body, anchor.scope) as HTMLElement | null;
+        if (!root) continue;
+        const range = rangeFromAnchor(root, anchor);
+        if (!range) continue;
+        out.push({
+          id: mark.id,
+          kind: mark.kind,
+          rects: localRects(body, range),
+          color: mark.color ?? parent.color,
+          palette: mark.palette,
+        });
+      }
     }
     return out;
   }, [subMarkParent, footnotes, children]);
@@ -1952,7 +2000,19 @@ export function DocSelectionLayer({
                   dataId={footnote.id}
                   ariaLabel={`${footnoteTitle(footnote, number)} — tap to open, hold to delete`}
                   onTap={() => {
-                    const rect = ribbonRects.current.get(footnote.id) ?? null;
+                    /*
+                     * The quote, not the chip.
+                     *
+                     * The hub places itself clear of what it is given, so a
+                     * sixteen-pixel chip let it open straight over the marked
+                     * sentence — the one thing the reader has just said they
+                     * are interested in. Hand it the whole block of bands and
+                     * it settles under, over, or beside the passage instead.
+                     */
+                    const rect =
+                      screenBoxOfLocalRects(bodyRef.current, paintBands) ??
+                      ribbonRects.current.get(footnote.id) ??
+                      null;
                     onOpenFootnote?.(footnote, rect);
                   }}
                   /*
