@@ -49,6 +49,7 @@ import { AGENT_SHEET_LOCK_EVENT, loadAgentSheetLock } from "./util/agentSheetLoc
 import { loadTestForwardMode, type TestForwardMode } from "./util/agentPrefs";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { installSafeAreaInsets } from "./util/safeArea";
+import { isAndroidDevice } from "./util/androidDevice";
 import { useIsMobile } from "./util/mobile";
 import {
   HOME_TAB_ID,
@@ -68,6 +69,7 @@ import { loadTabState, saveTabState } from "./util/tabPersist";
 import type { WebPadEntry } from "./util/webPadSession";
 import { Workspace } from "./Workspace";
 import {
+  chromeLooksSame,
   NO_CHROME,
   ShellContext,
   type HeaderSlots,
@@ -124,6 +126,7 @@ async function loadTauriInvoke() {
 
 export function App() {
   const mobile = useIsMobile();
+  const android = isAndroidDevice();
 
   useEffect(() => {
     if (!mobile) return;
@@ -460,22 +463,7 @@ export function App() {
 
   const [chrome, setChromeState] = useState<WorkspaceChrome>(NO_CHROME);
   const setChrome = useCallback((next: WorkspaceChrome) => {
-    setChromeState((current) =>
-      current.problem === next.problem &&
-      current.pad === next.pad &&
-      current.agentOpen === next.agentOpen &&
-      current.loading === next.loading &&
-      current.busy === next.busy &&
-      current.loadActive === next.loadActive &&
-      current.docIndex.status === next.docIndex.status &&
-      current.docIndex.meta === next.docIndex.meta &&
-      current.docIndex.error === next.docIndex.error &&
-      current.docIndex.blocked === next.docIndex.blocked &&
-      current.docIndex.syncIssue === next.docIndex.syncIssue &&
-      current.docIndex.onIndex === next.docIndex.onIndex
-        ? current
-        : next,
-    );
+    setChromeState((current) => (chromeLooksSame(current, next) ? current : next));
   }, []);
 
   const [shellLoadActive, setShellLoadActive] = useState(false);
@@ -939,6 +927,7 @@ export function App() {
         className={[
           "lc-app",
           mobile ? "lc-mobile" : "",
+          android ? "lc-android" : "",
           chrome.problem ? "lc-app-problem" : "",
           chrome.pad ? "lc-app-pad" : "",
           chrome.agentOpen ? "lc-app-agent-open" : "",

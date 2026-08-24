@@ -118,6 +118,38 @@ export const NO_CHROME: WorkspaceChrome = {
   docIndex: { status: "idle", meta: null, error: null, onIndex: null },
 };
 
+function progressEqual(
+  a: { done: number; total: number } | null | undefined,
+  b: { done: number; total: number } | null | undefined,
+): boolean {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  return a.done === b.done && a.total === b.total;
+}
+
+/** True when a chrome update would not change what the shell paints. */
+export function chromeLooksSame(current: WorkspaceChrome, next: WorkspaceChrome): boolean {
+  return (
+    current.problem === next.problem &&
+    current.pad === next.pad &&
+    current.agentOpen === next.agentOpen &&
+    current.loading === next.loading &&
+    current.busy === next.busy &&
+    current.loadActive === next.loadActive &&
+    current.docIndex.status === next.docIndex.status &&
+    current.docIndex.meta === next.docIndex.meta &&
+    current.docIndex.error === next.docIndex.error &&
+    current.docIndex.blocked === next.docIndex.blocked &&
+    current.docIndex.syncIssue === next.docIndex.syncIssue &&
+    current.docIndex.onIndex === next.docIndex.onIndex &&
+    current.docIndex.onEmbed === next.docIndex.onEmbed &&
+    current.docIndex.embedding === next.docIndex.embedding &&
+    current.docIndex.embedEta === next.docIndex.embedEta &&
+    progressEqual(current.docIndex.indexProgress, next.docIndex.indexProgress) &&
+    progressEqual(current.docIndex.embedProgress, next.docIndex.embedProgress)
+  );
+}
+
 /** What the shell may ask of a workspace before it unmounts it. */
 export interface WorkspaceApi {
   /** Commit whatever the autosave has not; no dialog, nothing discarded. */

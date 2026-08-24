@@ -1,12 +1,16 @@
 /**
  * Picking a quote out of the page.
  *
- * Two gestures in Scroll mode — and the same two when Ask-area (🔍) is on:
- * 1. Native text selection — down + drag immediately (any direction). Primary
- *    path for Copy / Google.
- * 2. Hold-still then drag — annotate region marquee (figures / Mark).
- *    Stillness of {@link SELECT_HOLD_ARM_MS} claims the finger; the drag
- *    after that is the box. Immediate travel is native select or pan.
+ * On Android, hold-still then drag is the quote path. Native drag-select is
+ * left for mouse / highlighter: Android WebView paints a magnified copy of
+ * selected text that does not follow the page camera's `translate() scale()`,
+ * so the styled overlay sits on the wrong glyphs.
+ *
+ * Desktop keeps native drag-select (and Annotate only from the hold box).
+ * Hold stillness of {@link SELECT_HOLD_ARM_MS} claims the finger; the drag
+ * after that is the box. Immediate travel is pan (touch) or native select
+ * (mouse). After the hold, Android starts the box in any direction; desktop
+ * still yields a mostly-vertical first move back to pan.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -60,6 +64,7 @@ import {
   MIN_BAND_PX,
   type LocalRect,
   bandFromLocalPoints,
+  clientRectsToLocal,
   coversViewportBox,
   isPageCoverRect,
   finalizeMarquee,
@@ -72,6 +77,7 @@ import {
   tightClientRects,
   tightLocalRects,
   unionLocalRects,
+  unionRectsIntoBlocks,
   unionViewportBoxes,
   viewportToLocal,
 } from "../util/docMarquee";
@@ -82,6 +88,7 @@ import {
 } from "../canvas/inkPaletteBridge";
 import { currentInkPalette } from "../util/inkPaletteHistory";
 import { footnoteThemeVars } from "../util/footnoteTheme";
+import { isAndroidDevice } from "../util/androidDevice";
 
 /** How far into the edge a drag has to reach before the page starts moving. */
 const SELECT_EDGE_PX = 36;
@@ -598,19 +605,31 @@ export function DocSelectionLayer({
       const text = textForAnchor(root, anchor);
       if (!text.trim()) return;
 
-      // Remember the DOM Selection's screen box — native path paints no overlay
-      // rects, so highlightBox() must not fall back to the top of the window.
       const clientRects = tightClientRects(range, body);
       selectionScreenBoxRef.current = unionViewportBoxes(clientRects);
 
-      // Sheet-only chrome for native path — no grey word boxes / confirm band.
+      let hitRects: LocalRect[] = [];
+      if (isAndroidDevice()) {
+        const local = unionRectsIntoBlocks(clientRectsToLocal(body, clientRects));
+        try {
+          window.getSelection()?.removeAllRanges();
+        } catch {
+          /* native overlay on Android fights the camera transform */
+        }
+        setRects(local);
+        hitRects = local;
+      } else {
+        // Desktop: sheet-only chrome — native path paints no overlay rects.
+        setRects([]);
+      }
+
       setHitRects([]);
       setActionsVia("native");
       setSelection({
         text,
         excerpt: excerptOf(text),
         anchor,
-        hitRects: [],
+        hitRects,
       });
       setBand(null);
       setBandFading(false);
@@ -797,11 +816,17 @@ export function DocSelectionLayer({
           return;
         }
         if (moved <= SELECT_HOLD_SLOP_PX) return;
-        const dx = event.clientX - hold.startX;
-        const dy = event.clientY - hold.startY;
-        if (selectHoldYieldsToScroll(dx, dy)) {
-          clearGesture();
-          return;
+        // Android: any direction starts the box. Stillness already beat pan.
+        // Yielding vertical drags back to scroll made a hold-then-drag down
+        // a paragraph (the natural annotate motion) never signal.
+        // Desktop: a mostly-vertical first move is still a reading pan.
+        if (!isAndroidDevice()) {
+          const dx = event.clientX - hold.startX;
+          const dy = event.clientY - hold.startY;
+          if (selectHoldYieldsToScroll(dx, dy)) {
+            clearGesture();
+            return;
+          }
         }
         hold.lastX = event.clientX;
         hold.lastY = event.clientY;
@@ -2213,8 +2238,9 @@ export function DocSelectionLayer({
                           </button>
                         </>
                       )}
-                      {/* Annotate = make a mark — hold-marquee only, not plain drag-select. */}
-                      {actionsVia === "marquee" && onAnnotate && (
+                      {/* Annotate = make a mark. Desktop: hold-marquee only.
+                          Android: native quote too — native handles are broken. */}
+                      {(isAndroidDevice() || actionsVia === "marquee") && onAnnotate && (
                         <button
                           type="button"
                           role="menuitem"
