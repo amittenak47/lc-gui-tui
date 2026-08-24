@@ -542,10 +542,18 @@ export function hitRectsUnder(
   // lines / nearby lines so confirm chrome wraps the quote, not a scatter.
   const pdfPage =
     searchRoot.closest?.(".lc-pdf-page") ??
-    (searchRoot instanceof HTMLElement && searchRoot.querySelector(".lc-pdf-text, .textLayer")
+    (searchRoot instanceof HTMLElement &&
+    searchRoot.querySelector(".lc-pdf-text, .textLayer")
       ? searchRoot
       : null);
   return pdfPage ? unionRectsIntoBlocks(out) : out;
+}
+
+export function isPdfSearchRoot(searchRoot: HTMLElement): boolean {
+  return Boolean(
+    searchRoot.closest?.(".lc-pdf-page") ??
+      (searchRoot.querySelector(".lc-pdf-text, .textLayer") ? searchRoot : null),
+  );
 }
 
 /**
