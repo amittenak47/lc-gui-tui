@@ -23,8 +23,12 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   paintOrder,
   PDF_HOT_RADIUS,
+  PDF_PREVIEW_SCALE,
+  PDF_RENDER_SCALE,
+  PDF_REST_SCALE,
   pdfJsDataUrls,
   pdfNavShouldPublish,
+  pdfPageFit,
   pdfPagePaintScale,
   pdfStackHeight,
   windowedPages,
@@ -117,6 +121,17 @@ describe("the fixture, through pdf.js", () => {
     expect(laid.height / laid.width).toBeCloseTo(natural.height / natural.width, 6);
   });
 
+  it("doubles the fit so one two-up half fills the column", async () => {
+    const frameWidth = 700;
+    const doc = await open();
+    const page = await doc.getPage(1);
+    const natural = page.getViewport({ scale: 1 });
+    const fit = pdfPageFit(natural.width, frameWidth, true);
+    const laid = page.getViewport({ scale: fit });
+    expect(Math.round(laid.width)).toBe(frameWidth * 2);
+    expect(laid.height / laid.width).toBeCloseTo(natural.height / natural.width, 6);
+  });
+
   it("has text to select — the layer a quote is picked out of", async () => {
     const doc = await open();
     const content = await (await doc.getPage(1)).getTextContent();
@@ -152,10 +167,10 @@ describe("the fixture, through pdf.js", () => {
  * is the session pagefile, not more GPU textures.
  */
 describe("windowedPages", () => {
-  it("keeps three neighbours either side of the page on screen", () => {
-    expect(windowedPages([50], 200, PDF_HOT_RADIUS)).toHaveLength(7);
-    expect(windowedPages([50], 200, PDF_HOT_RADIUS)[0]).toBe(47);
-    expect(windowedPages([50], 200, PDF_HOT_RADIUS).at(-1)).toBe(53);
+  it("keeps the hot-radius neighbours either side of the page on screen", () => {
+    expect(windowedPages([50], 200, PDF_HOT_RADIUS)).toHaveLength(1 + 2 * PDF_HOT_RADIUS);
+    expect(windowedPages([50], 200, PDF_HOT_RADIUS)[0]).toBe(50 - PDF_HOT_RADIUS);
+    expect(windowedPages([50], 200, PDF_HOT_RADIUS).at(-1)).toBe(50 + PDF_HOT_RADIUS);
   });
 
   it("does not run off the front of the book", () => {
@@ -189,10 +204,25 @@ describe("windowedPages", () => {
   });
 });
 
+describe("pdfPageFit", () => {
+  it("width-fits the whole sheet when spread is off", () => {
+    expect(pdfPageFit(612, 700, false)).toBeCloseTo(700 / 612, 8);
+  });
+
+  it("fits one half of a two-up sheet to the column when spread is on", () => {
+    expect(pdfPageFit(612, 700, true)).toBeCloseTo((2 * 700) / 612, 8);
+  });
+});
+
 describe("pdfPagePaintScale", () => {
-  it("uses the same 2× for the page on screen and its neighbours", () => {
-    expect(pdfPagePaintScale(12, [12])).toBe(2);
-    expect(pdfPagePaintScale(40, [12])).toBe(2);
+  it("uses rest scale on the visible page and preview on neighbours", () => {
+    expect(pdfPagePaintScale(12, [12])).toBe(PDF_REST_SCALE);
+    expect(pdfPagePaintScale(12, [12])).toBe(PDF_RENDER_SCALE);
+    expect(pdfPagePaintScale(40, [12])).toBe(PDF_PREVIEW_SCALE);
+  });
+
+  it("uses rest when nothing is visible yet", () => {
+    expect(pdfPagePaintScale(1, [])).toBe(PDF_REST_SCALE);
   });
 });
 

@@ -9,6 +9,10 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import {
+  isCameraIdleForTeardown,
+  msUntilCameraIdleTeardown,
+} from "../util/cameraBusy";
+import {
   PDF_FILM_THUMB_CSS,
   PDF_LETTER_ASPECT,
   grabLivePdfThumb,
@@ -47,11 +51,26 @@ export function PdfPageRail({
   renderThumbRef.current = renderThumb;
 
   useEffect(() => {
-    currentRef.current?.scrollIntoView({
-      inline: "center",
-      block: "nearest",
-      behavior: "smooth",
-    });
+    const node = currentRef.current;
+    if (!node) return;
+    let timer = 0;
+    const snap = () => {
+      // Numbers already updated; scrollIntoView during a 1–2s pause rebuilds
+      // compositor layers. Wait for the same idle as canvas pageOut.
+      if (!isCameraIdleForTeardown()) {
+        timer = window.setTimeout(snap, Math.max(16, msUntilCameraIdleTeardown()));
+        return;
+      }
+      node.scrollIntoView({
+        inline: "center",
+        block: "nearest",
+        behavior: "smooth",
+      });
+    };
+    snap();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
   }, [current]);
 
   useEffect(() => {

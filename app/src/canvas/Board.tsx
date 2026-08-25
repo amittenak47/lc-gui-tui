@@ -56,7 +56,12 @@ import {
   type LayoutElement,
 } from "../templates/regionLayout";
 import { readingColumnWidth } from "../templates/readingColumn";
-import { noteCameraBusy } from "../util/cameraBusy";
+import {
+  CAMERA_IDLE_TEARDOWN_MS,
+  cameraPulseSettleMs,
+  noteCameraBusy,
+  noteCameraIdlePulse,
+} from "../util/cameraBusy";
 import { traceOpen } from "../util/messageOf";
 import { ANNOTATE_PAGE_W, ANNOTATE_REGION, MD_INK_MIN_PAGE_H, MD_INK_TAIL_PAD, buildAnnotateTemplate, isAnnotatePageFrame, stampAnnotateFrameMeta } from "../templates/annotate";
 import {
@@ -167,6 +172,7 @@ import {
   onSelectionGestureClaimed,
   selectionOwnsGesture,
   onDocScrollRequest,
+  isDocCameraLive,
   setDocCameraLive,
   setDocPointerHeld,
   isSubMarkDragLive,
@@ -1189,6 +1195,11 @@ export interface BoardProps {
    * markdown are one flowing document and have nothing to thumbnail.
    */
   pageFilm?: { open: boolean; onToggle: () => void } | null;
+  /**
+   * Two-up / spread: each scanned sheet becomes two stacked reading slots.
+   * Shown for any PDF, including one page. Off by default.
+   */
+  pageSpread?: { on: boolean; onToggle: () => void } | null;
 }
 
 /** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
@@ -1274,6 +1285,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     sheetDragLocked = false,
     onToggleSheetLock,
     pageFilm = null,
+    pageSpread = null,
   },
   ref,
 ) {
@@ -1763,6 +1775,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * Without this, every scroll frame paid full raster budget (camera perf).
    */
   const cameraMotionTimerRef = useRef(0);
+  const cameraIdleTeardownTimerRef = useRef(0);
   const cameraMotionActiveRef = useRef(false);
   const applyVisualScrollNowRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
   const scheduleVisualScrollRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
@@ -1833,6 +1846,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const pulseCameraMotion = useCallback(() => {
     noteCameraBusy();
+    noteCameraIdlePulse();
     if (!cameraMotionActiveRef.current) {
       cameraMotionActiveRef.current = true;
       // Gesture open: Excalidraw may have remounted canvases since last ride.
@@ -1842,19 +1856,29 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       setDocCameraLive(true);
     }
     if (cameraMotionTimerRef.current) window.clearTimeout(cameraMotionTimerRef.current);
+    if (cameraIdleTeardownTimerRef.current) {
+      window.clearTimeout(cameraIdleTeardownTimerRef.current);
+    }
     cameraMotionTimerRef.current = window.setTimeout(() => {
       cameraMotionTimerRef.current = 0;
       cameraMotionActiveRef.current = false;
       setDocCameraLive(false);
-      // Wheel bursts use live camera — paint while live is still true, then
-      // commit (clears live on the next frame).
-      if (!handPanningRef.current && !inertiaFrameRef.current) {
-        rasterInkRef.current?.setCameraMoving(false);
-        commitVisualScrollRef.current();
+    }, cameraPulseSettleMs());
+    // Commit / ink moving-mode drop wait for a real reading idle, not the
+    // pulse settle. A 3–5s pause then a same-direction burst must still be
+    // on the live cache with GPU canvases intact.
+    cameraIdleTeardownTimerRef.current = window.setTimeout(() => {
+      cameraIdleTeardownTimerRef.current = 0;
+      if (
+        handPanningRef.current ||
+        inertiaFrameRef.current ||
+        isDocCameraLive()
+      ) {
         return;
       }
       rasterInkRef.current?.setCameraMoving(false);
-    }, 140);
+      commitVisualScrollRef.current();
+    }, CAMERA_IDLE_TEARDOWN_MS);
   }, []);
   const pulseCameraMotionRef = useRef(pulseCameraMotion);
   const readScrollRef = useRef<() => { scrollX: number; scrollY: number; zoom: number }>(
@@ -3347,7 +3371,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     let offsetTop: number;
     let committedScrollX: number;
     let committedScrollY: number;
-    if (prev?.live) {
+    if (prev && typeof prev.width === "number" && typeof prev.height === "number") {
+      // Riding, or a settled cache from commit / pointerdown prime. First
+      // sample after a 1–2s pause must not pay getAppState.
       zoom = prev.zoom;
       width = prev.width;
       height = prev.height;
@@ -3499,6 +3525,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * the top of the page) for one frame when a coast hits the bottom wall.
    */
   const commitVisualScroll = useCallback(() => {
+    if (cameraIdleTeardownTimerRef.current) {
+      window.clearTimeout(cameraIdleTeardownTimerRef.current);
+      cameraIdleTeardownTimerRef.current = 0;
+    }
     flushVisualScroll();
     const live = liveCameraRef.current;
     if (!live?.live) {
@@ -3519,6 +3549,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     });
     landPanOffset(() => {
       committingScrollRef.current = false;
+      // Drop the riding flag only. Keep width/height/zoom so the next pan
+      // from rest skips getAppState.
       if (liveCameraRef.current === live) live.live = false;
     });
   }, [flushVisualScroll, landPanOffset]);
@@ -3652,6 +3684,34 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       heldPointerId = pointerId;
       setDocPointerHeld(true);
       refreshPanRideNodes();
+      const prev = liveCameraRef.current;
+      if (prev?.live) return;
+      const api = apiRef.current;
+      if (!api) return;
+      const state = api.getAppState() as {
+        zoom?: { value?: number };
+        scrollX?: number;
+        scrollY?: number;
+        offsetLeft?: number;
+        offsetTop?: number;
+        width?: number;
+        height?: number;
+      };
+      if (typeof state.width !== "number" || typeof state.height !== "number") return;
+      const zoom = state.zoom?.value ?? 1;
+      const scrollX = state.scrollX ?? 0;
+      const scrollY = state.scrollY ?? 0;
+      committedPanCameraRef.current = { scrollX, scrollY, zoom };
+      liveCameraRef.current = {
+        scrollX,
+        scrollY,
+        zoom,
+        width: state.width,
+        height: state.height,
+        offsetLeft: state.offsetLeft ?? 0,
+        offsetTop: state.offsetTop ?? 0,
+        live: false,
+      };
     };
     const releaseHeldPointer = (pointerId: number) => {
       if (heldPointerId !== pointerId) return;
@@ -3692,10 +3752,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const settle = () => {
         inertiaFrameRef.current = 0;
         applyVisualScrollNowRef.current(scrollX, scrollY);
-        // Paint while live camera still holds the coast position, then push
-        // into Excalidraw. Commit clears live on the next frame.
-        rasterInkRef.current?.setCameraMoving(false);
-        commitVisualScrollRef.current();
+        // Keep moving-mode and the live cache through a 3–5s reading pause.
+        // Idle teardown commits.
       };
 
       const step = (now: number) => {
@@ -4020,8 +4078,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         startPanInertia(0, velY);
         return;
       }
-      rasterInkRef.current?.setCameraMoving(false);
-      commitVisualScrollRef.current();
+      pulseCameraMotionRef.current();
     };
 
     root.addEventListener("pointerdown", onPointerDown, true);
@@ -8398,6 +8455,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <PagesFilmIcon />
                   </button>
                 )}
+                {!mapChromeHidden && pageSpread && (
+                  <button
+                    type="button"
+                    className={
+                      pageSpread.on
+                        ? "lc-lined-toggle lc-tip-target is-active"
+                        : "lc-lined-toggle lc-tip-target"
+                    }
+                    aria-pressed={pageSpread.on}
+                    aria-label={
+                      pageSpread.on
+                        ? "Show whole sheet"
+                        : "Split two-up sheets into stacked pages"
+                    }
+                    data-tip={
+                      pageSpread.on
+                        ? "Spread on — each half fills the column"
+                        : "Spread: stack left then right of a two-up scan"
+                    }
+                    data-tip-placement="bottom"
+                    onClick={pageSpread.onToggle}
+                  >
+                    <SpreadTwoUpIcon />
+                  </button>
+                )}
                 {!mapChromeHidden && mobile && onToggleSheetLock && (
                   <button
                     type="button"
@@ -8990,6 +9072,25 @@ function PagesFilmIcon() {
     >
       <rect x="4" y="7" width="11" height="14" rx="1.5" />
       <path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4H19a1.5 1.5 0 0 1 1.5 1.5V17A1.5 1.5 0 0 1 19 18.5h-4" />
+    </svg>
+  );
+}
+
+function SpreadTwoUpIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="3" y="4" width="8" height="16" rx="1.25" />
+      <rect x="13" y="4" width="8" height="16" rx="1.25" />
     </svg>
   );
 }

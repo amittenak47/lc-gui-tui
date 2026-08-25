@@ -111,8 +111,20 @@ body {
   overscroll-behavior: none;
   -webkit-user-select: none;
   user-select: none;
+  /* Android WebView default is a blue flash on every tap. */
+  -webkit-tap-highlight-color: transparent;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--ink) 32%, transparent) transparent;
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a,
+[role="button"] {
+  -webkit-tap-highlight-color: transparent;
 }
 
 *::-webkit-scrollbar {
@@ -15285,6 +15297,24 @@ button.lc-row-selected:hover:not(:disabled) {
   cursor: text;
 }
 
+/*
+ * Reading pan: drop the pdf.js overlay and footnote bands from the compositor.
+ * Glyphs stay on the page canvas. Quotes/footnotes need those spans at rest —
+ * hide only while `setDocCameraLive(true)`, not on mere pointer-down (hold-
+ * then-drag still has to hit the text layer).
+ */
+html.lc-doc-camera-live .lc-pdf-text.textLayer {
+  visibility: hidden;
+  pointer-events: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+html.lc-doc-camera-live .lc-page-marks-slot {
+  visibility: hidden;
+  pointer-events: none !important;
+}
+
 
 /* ------------------------------------------------------ PDF and EPUB --- */
 
@@ -15460,6 +15490,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-pdf-page {
   position: relative;
   flex: 0 0 auto;
+  overflow: hidden;
   background: #fff;
   /*
    * Unpainted sheets are layout-only. A blur on every page in a 400-page stack
@@ -15468,11 +15499,10 @@ button.lc-row-selected:hover:not(:disabled) {
    */
   box-shadow: none;
   /*
-   * ±60 painted neighbours would otherwise all be in the compositor's display
-   * list on every pan sample. Skip raster for off-screen sheets; the inline
-   * width/height still holds the stack.
+   * Do not use content-visibility: auto here. A 1–2s reading pause lets
+   * Chrome discard off-screen page layers; the first pan unsuspends a band
+   * of the eager stack and spikes command-issue / HWUI.
    */
-  content-visibility: auto;
   /* pdf.js TextLayer setLayerDimensions() rounds against these. */
   --scale-round-x: 1px;
   --scale-round-y: 1px;
@@ -15490,6 +15520,18 @@ button.lc-row-selected:hover:not(:disabled) {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+/*
+ * Full sheet under a two-up clip. Left slot sits at 0; right slot is translated
+ * by minus one column so quotes and the text layer share the real page box.
+ */
+.lc-pdf-spread {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  pointer-events: none;
 }
 
 /*

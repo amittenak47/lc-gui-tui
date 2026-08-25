@@ -12,14 +12,38 @@
 import { isAndroidDevice } from "./androidDevice";
 
 let busyUntil = 0;
+/** Epoch ms when canvas zeroing / delayed commit may run. 0 = never pulsed. */
+let idleTeardownAt = 0;
 
 /** Quiet window after the last camera pulse on desktop / browser. */
 export const CAMERA_BUSY_HOLD_MS_DESKTOP = 180;
 /** Quiet window on Android WebView — long enough that a second flick wins. */
 export const CAMERA_BUSY_HOLD_MS_ANDROID = 900;
+/**
+ * Pulse timeout on desktop: PDF pump may paint neighbours. Not pageOut, not
+ * Excalidraw commit, not ink moving-mode drop.
+ */
+export const CAMERA_PULSE_SETTLE_MS = 140;
+/**
+ * After the last pan sample, wait this long before tearing down GPU canvases
+ * or committing the live camera. Must outlast a 3–5s reading pause; 3s was
+ * short enough that the next burst met a dead layer stack.
+ */
+export const CAMERA_IDLE_TEARDOWN_MS = 15_000;
 
 export function cameraBusyHoldMs(): number {
   return isAndroidDevice() ? CAMERA_BUSY_HOLD_MS_ANDROID : CAMERA_BUSY_HOLD_MS_DESKTOP;
+}
+
+/**
+ * How long `setDocCameraLive` stays true after the last sample.
+ *
+ * 140ms lets neighbour paint sneak in between strong flicks (finger up ~200–
+ * 500ms). Android uses the same 900ms window as {@link cameraBusyHoldMs} so
+ * a same-direction burst stays frozen until it actually stops.
+ */
+export function cameraPulseSettleMs(): number {
+  return isAndroidDevice() ? CAMERA_BUSY_HOLD_MS_ANDROID : CAMERA_PULSE_SETTLE_MS;
 }
 
 function nowMs(): number {
@@ -36,6 +60,20 @@ export function isCameraBusy(): boolean {
 
 export function resetCameraBusyForTests(): void {
   busyUntil = 0;
+  idleTeardownAt = 0;
+}
+
+/** Board calls this on every pan/wheel sample so PDF pageOut shares the idle clock. */
+export function noteCameraIdlePulse(): void {
+  idleTeardownAt = nowMs() + CAMERA_IDLE_TEARDOWN_MS;
+}
+
+export function isCameraIdleForTeardown(): boolean {
+  return nowMs() >= idleTeardownAt;
+}
+
+export function msUntilCameraIdleTeardown(): number {
+  return Math.max(0, idleTeardownAt - nowMs());
 }
 
 /** Pause until the camera has been still for {@link cameraBusyHoldMs}. */

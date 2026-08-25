@@ -8,19 +8,20 @@
  * would mean an erase writes two records and export would have to dedupe.
  *
  * Page frames come from the laid-out `.lc-pdf-page` divs (every page keeps its
- * height in the DOM even when its canvas is not painted). Markdown, EPUB and
- * the whiteboard have no such stack, so they fall back to a single page-1
- * frame covering the clip.
+ * height in the DOM even when its canvas is not painted). Two-up mode mounts
+ * two slots with the same `data-pdf-page` and different scene Y — frames are
+ * unique by Y, not by id. Markdown, EPUB and the whiteboard have no such
+ * stack, so they fall back to a single page-1 frame covering the clip.
  */
 
 import { inkOpBounds } from "./inkTiles";
 import type { InkOp, SceneBounds } from "./rasterInk";
+import { INK_LRU_RADIUS } from "../perfPreset";
+
+export { INK_LRU_RADIUS };
 
 /** Synthetic shard for strokes whose AABB crosses a page gap. */
 export const SPANNING_PAGE_ID = 0;
-
-/** Decoded LRU starts at current ± this many pages (not LAYOUT_BATCH 32). */
-export const INK_LRU_RADIUS = 3;
 
 /** How long a fast scrollbar skip waits before hydrating the new window. */
 export const INK_PAGE_WINDOW_DEBOUNCE_MS = 100;
@@ -84,8 +85,13 @@ export function pageIdForOp(op: InkOp, frames: readonly PageFrame[]): number {
     if (box.maxY >= frame.minY && box.minY <= frame.maxY) hits.push(frame);
   }
   if (hits.length === 1) return hits[0]!.pageId;
-  // Zero hits: the stroke lives in a gap or off the board. Several hits: it
-  // crosses a seam. Both belong on the spanning shard so mutations stay atomic.
+  if (hits.length > 1) {
+    const first = hits[0]!.pageId;
+    if (hits.every((frame) => frame.pageId === first)) return first;
+  }
+  // Zero hits: the stroke lives in a gap or off the board. Several hits of
+  // *different* pages: it crosses a seam. Both belong on the spanning shard
+  // so mutations stay atomic. Two-up left|right of the same sheet share an id.
   if (frames.length === 1) return frames[0]!.pageId;
   return SPANNING_PAGE_ID;
 }
@@ -144,7 +150,7 @@ export function pageFramesFromPdfSlot(
       maxY: pageBounds.minY + (r.bottom - slotRect.top) / sy,
     });
   }
-  frames.sort((a, b) => a.pageId - b.pageId);
+  frames.sort((a, b) => a.minY - b.minY || a.pageId - b.pageId);
   return frames;
 }
 

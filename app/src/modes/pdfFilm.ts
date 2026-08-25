@@ -7,15 +7,23 @@
  * scroll into the strip.
  */
 
+import {
+  PDF_FILM_CACHE,
+  PDF_FILM_RADIUS,
+} from "../perfPreset";
+
 export type PdfThumbRenderer = (page: number) => Promise<string | null>;
 
 export const PDF_FILM_PREF_KEY = "whiteboard.pdfFilm";
 /** Replaces the old always-on number column — on until the reader hides it. */
 export const PDF_FILM_DEFAULT = true;
 export const PDF_FILM_THUMB_CSS = 48;
-export const PDF_FILM_CACHE = 40;
-export const PDF_FILM_RADIUS = 10;
+export { PDF_FILM_CACHE, PDF_FILM_RADIUS };
 export const PDF_LETTER_ASPECT = 612 / 792;
+
+/** Per-document two-up. Keyed by content hash so Kleinberg can stay on. */
+export const PDF_SPREAD_PREF_PREFIX = "whiteboard.pdfSpread.";
+export const PDF_SPREAD_DEFAULT = false;
 
 export function loadPdfFilmPref(): boolean {
   try {
@@ -31,6 +39,27 @@ export function loadPdfFilmPref(): boolean {
 export function savePdfFilmPref(on: boolean): void {
   try {
     localStorage.setItem(PDF_FILM_PREF_KEY, on ? "1" : "0");
+  } catch {
+    /* private mode */
+  }
+}
+
+export function loadPdfSpreadPref(docHash: string): boolean {
+  if (!docHash) return PDF_SPREAD_DEFAULT;
+  try {
+    const raw = localStorage.getItem(PDF_SPREAD_PREF_PREFIX + docHash);
+    if (raw === "1") return true;
+    if (raw === "0") return false;
+  } catch {
+    /* private mode */
+  }
+  return PDF_SPREAD_DEFAULT;
+}
+
+export function savePdfSpreadPref(docHash: string, on: boolean): void {
+  if (!docHash) return;
+  try {
+    localStorage.setItem(PDF_SPREAD_PREF_PREFIX + docHash, on ? "1" : "0");
   } catch {
     /* private mode */
   }

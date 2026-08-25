@@ -191,7 +191,7 @@ import { WorkspaceLinkPicker, groupLabel, type LinkTarget } from "./modes/Worksp
 import { resolveWikiLinks } from "./util/wikiLinks";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
-import { savePdfFilmPref } from "./modes/pdfFilm";
+import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
@@ -1031,6 +1031,24 @@ export function Workspace({
       const next = !on;
       savePdfFilmPref(next);
       return next;
+    });
+  }, []);
+  const [pdfSpreadByHash, setPdfSpreadByHash] = useState<Record<string, boolean>>(
+    {},
+  );
+  const annotatePdfHash =
+    annotateSource?.docType === "pdf" ? annotateSource.hash : null;
+  const pdfSpread = annotatePdfHash
+    ? (pdfSpreadByHash[annotatePdfHash] ?? loadPdfSpreadPref(annotatePdfHash))
+    : false;
+  const togglePdfSpread = useCallback(() => {
+    const hash = annotateSourceRef.current?.hash;
+    if (!hash) return;
+    setPdfSpreadByHash((prev) => {
+      const on = prev[hash] ?? loadPdfSpreadPref(hash);
+      const next = !on;
+      savePdfSpreadPref(hash, next);
+      return { ...prev, [hash]: next };
     });
   }, []);
   /** Scene width of the open markdown page — viewport-sized on fresh opens. */
@@ -8568,6 +8586,7 @@ export function Workspace({
                       onMeasure={onMdInkMeasure}
                       onNav={setPdfNav}
                       onThumbRenderer={onPdfThumbRenderer}
+                      spread={pdfSpread}
                       selectable={!annotateCode || Boolean(openFootnote) || highlighting}
                       onError={(message) => {
                         if (/cancel|abort|worker.*(destroy|terminat|not running)/i.test(message)) {
@@ -8649,6 +8668,11 @@ export function Workspace({
             pageFilm={
               pdfNav && pdfNav.count >= 2
                 ? { open: pdfFilmOpen, onToggle: togglePdfFilm }
+                : null
+            }
+            pageSpread={
+              annotateSource?.docType === "pdf"
+                ? { on: pdfSpread, onToggle: togglePdfSpread }
                 : null
             }
           />

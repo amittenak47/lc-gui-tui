@@ -31,8 +31,16 @@ let publishedFrozen = false;
 const cameraLiveListeners = new Set<(live: boolean) => void>();
 let legacyCameraLiveUnsub: (() => void) | null = null;
 
+/** `document.documentElement` while the reading camera is mid-gesture. */
+export const DOC_CAMERA_LIVE_CLASS = "lc-doc-camera-live";
+
 function paintFrozen(): boolean {
   return cameraLive || pointerHeld;
+}
+
+function syncCameraLiveClass(): void {
+  if (typeof document === "undefined") return;
+  document.documentElement.classList.toggle(DOC_CAMERA_LIVE_CLASS, cameraLive);
 }
 
 function publishPaintFrozen(): void {
@@ -70,6 +78,7 @@ export function selectionOwnsGesture(): boolean {
 export function setDocCameraLive(live: boolean): void {
   if (cameraLive === live) return;
   cameraLive = live;
+  syncCameraLiveClass();
   publishPaintFrozen();
 }
 

@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  loadPdfSpreadPref,
+  savePdfSpreadPref,
   thumbWindow,
   trimThumbCache,
 } from "./pdfFilm";
@@ -48,5 +50,27 @@ describe("trimThumbCache", () => {
     expect(next.has(1)).toBe(true);
     expect(next.has(50)).toBe(true);
     expect(next.has(51)).toBe(false);
+  });
+});
+
+describe("pdf spread pref", () => {
+  it("is off by default and persists per document hash", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+    });
+    expect(loadPdfSpreadPref("hash-a")).toBe(false);
+    savePdfSpreadPref("hash-a", true);
+    expect(loadPdfSpreadPref("hash-a")).toBe(true);
+    expect(loadPdfSpreadPref("hash-b")).toBe(false);
+    savePdfSpreadPref("hash-a", false);
+    expect(loadPdfSpreadPref("hash-a")).toBe(false);
+    vi.unstubAllGlobals();
   });
 });
