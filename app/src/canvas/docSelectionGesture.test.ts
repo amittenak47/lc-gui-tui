@@ -1,15 +1,22 @@
 /** @vitest-environment jsdom */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   isDocChromeTarget,
+  isDocCameraLive,
   isSubMarkDragLive,
   pointerInSubMark,
   setDocCameraLive,
+  setDocPointerHeld,
   setSubMarkDragLive,
   setSubMarkPointerHit,
   subscribeDocCameraLive,
 } from "./docSelectionGesture";
+
+afterEach(() => {
+  setDocPointerHeld(false);
+  setDocCameraLive(false);
+});
 
 describe("isDocChromeTarget", () => {
   it("treats a colour-wheel hub as overlay chrome", () => {
@@ -56,6 +63,32 @@ describe("subscribeDocCameraLive", () => {
     expect(seen[1]).toEqual([true, false]);
     unsubA();
     unsubB();
+  });
+});
+
+describe("pointer held freezes the paint pump", () => {
+  it("counts as camera-live so idle inflate yields before pan arms", () => {
+    setDocPointerHeld(false);
+    setDocCameraLive(false);
+    expect(isDocCameraLive()).toBe(false);
+    setDocPointerHeld(true);
+    expect(isDocCameraLive()).toBe(true);
+    setDocCameraLive(true);
+    setDocPointerHeld(false);
+    expect(isDocCameraLive()).toBe(true);
+    setDocCameraLive(false);
+    expect(isDocCameraLive()).toBe(false);
+  });
+
+  it("notifies subscribers on the held edge even when the pulse is still false", () => {
+    setDocPointerHeld(false);
+    setDocCameraLive(false);
+    const seen: boolean[] = [];
+    const unsub = subscribeDocCameraLive((live) => seen.push(live));
+    setDocPointerHeld(true);
+    setDocPointerHeld(false);
+    expect(seen).toEqual([true, false]);
+    unsub();
   });
 });
 

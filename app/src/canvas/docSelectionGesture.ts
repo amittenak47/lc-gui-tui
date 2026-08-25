@@ -26,8 +26,21 @@ let claimed = false;
 let onClaimed: (() => void) | null = null;
 
 let cameraLive = false;
+let pointerHeld = false;
+let publishedFrozen = false;
 const cameraLiveListeners = new Set<(live: boolean) => void>();
 let legacyCameraLiveUnsub: (() => void) | null = null;
+
+function paintFrozen(): boolean {
+  return cameraLive || pointerHeld;
+}
+
+function publishPaintFrozen(): void {
+  const next = paintFrozen();
+  if (next === publishedFrozen) return;
+  publishedFrozen = next;
+  for (const listener of [...cameraLiveListeners]) listener(next);
+}
 
 /**
  * Board registers here so a mid-gesture claim can drop a deferred pan /
@@ -57,11 +70,25 @@ export function selectionOwnsGesture(): boolean {
 export function setDocCameraLive(live: boolean): void {
   if (cameraLive === live) return;
   cameraLive = live;
-  for (const listener of [...cameraLiveListeners]) listener(live);
+  publishPaintFrozen();
+}
+
+/**
+ * Finger is down on the reading surface, even before pan has armed.
+ *
+ * Selectable docs wait 16px of travel before the first camera sample. Idle
+ * `toBlob` / `page.render` used that gap (and the time until
+ * `pulseCameraMotion`) to keep the main thread busy — the gesture registered,
+ * the page did not move. Freeze the paint pump at pointerdown instead.
+ */
+export function setDocPointerHeld(held: boolean): void {
+  if (pointerHeld === held) return;
+  pointerHeld = held;
+  publishPaintFrozen();
 }
 
 export function isDocCameraLive(): boolean {
-  return cameraLive;
+  return paintFrozen();
 }
 
 /**

@@ -37,6 +37,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 
 import { isDocCameraLive, subscribeDocCameraLive } from "../canvas/docSelectionGesture";
+import { yieldToInput } from "../util/cameraBusy";
 import type { PdfThumbRenderer } from "./pdfFilm";
 import {
   captureCanvasPng,
@@ -592,7 +593,7 @@ export function PdfDocument({
       const slot = host.querySelector<HTMLElement>(`[data-pdf-page="${n}"]`);
       const canvas = slot?.querySelector("canvas");
       if (!canvas) return;
-      const sheet = await captureCanvasPng(canvas);
+      const sheet = await captureCanvasPng(canvas, () => isDocCameraLive());
       if (disposedRef.current) return;
       if (sheet) dropSessionText(sessionRef.current.put(n, sheet));
       // Finger went down during toBlob — keep the GPU canvas. Zeroing it
@@ -651,8 +652,10 @@ export function PdfDocument({
       try {
         const paged = sessionRef.current.get(n);
         if (paged) {
+          if (opts?.yieldToCamera && isDocCameraLive()) return;
           const ok = await restoreCanvasPng(canvas, paged);
           if (disposedRef.current) return;
+          if (opts?.yieldToCamera && isDocCameraLive()) return;
           if (ok && textHost.childNodes.length > 0) {
             slot.setAttribute("data-painted", "");
             done = true;
@@ -728,6 +731,8 @@ export function PdfDocument({
         // so this ends as soon as what is wanted is what is painted.
         for (;;) {
           if (disposedRef.current) return;
+          await yieldToInput();
+          if (disposedRef.current) return;
           await waitWhileDocCameraLive();
           if (disposedRef.current) return;
 
@@ -751,7 +756,11 @@ export function PdfDocument({
             )
             .slice(0, PAINT_INFLIGHT);
           if (batch.length > 0) {
-            await Promise.all(batch.map((n) => paintOne(n)));
+            await Promise.all(
+              batch.map((n) =>
+                paintOne(n, { yieldToCamera: !visible.has(n) }),
+              ),
+            );
             continue;
           }
 

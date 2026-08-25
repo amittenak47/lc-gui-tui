@@ -168,6 +168,7 @@ import {
   selectionOwnsGesture,
   onDocScrollRequest,
   setDocCameraLive,
+  setDocPointerHeld,
   isSubMarkDragLive,
 } from "./docSelectionGesture";
 import {
@@ -3646,6 +3647,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     onSelectionGestureClaimed(dropPanForSelection);
 
+    let heldPointerId: number | null = null;
+    const holdPointer = (pointerId: number) => {
+      heldPointerId = pointerId;
+      setDocPointerHeld(true);
+      refreshPanRideNodes();
+    };
+    const releaseHeldPointer = (pointerId: number) => {
+      if (heldPointerId !== pointerId) return;
+      heldPointerId = null;
+      setDocPointerHeld(false);
+    };
+
     // Published so the edge auto-scroll above can read the same camera the pan
     // does — the live one mid-gesture, Excalidraw's between gestures.
     readScrollRef.current = () => readScroll();
@@ -3803,6 +3816,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         sideScrollStart: sideScroll?.scrollLeft ?? 0,
         zoom: cam.zoom,
       };
+      // Freeze PDF inflate before pan arms (selectable docs wait 16px).
+      holdPointer(event.pointerId);
       if (!deferred) {
         try {
           root.setPointerCapture(event.pointerId);
@@ -3877,6 +3892,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
       }
 
+      let justArmed = false;
       if (!drag.armed) {
         if (Math.hypot(dx, dy) < armThresholdPx(drag)) return;
         if (drag.selectableDoc) {
@@ -3887,13 +3903,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           }
         }
         stopPanInertia();
-        const cam = readScroll();
-        drag.startScrollY = cam.scrollY;
-        drag.startClientY = event.clientY;
+        // Keep pointerdown origin on a selectable page pan so the slop travel
+        // is the first camera sample (1:1 with the finger). Re-anchor only
+        // when a nested scroller / dock would jump by the threshold.
+        if (!drag.selectableDoc || drag.sideScroll) {
+          const cam = readScroll();
+          drag.startScrollY = cam.scrollY;
+          drag.startClientY = event.clientY;
+          drag.zoom = cam.zoom;
+        }
         drag.lastClientY = event.clientY;
         drag.lastT = performance.now();
-        drag.zoom = cam.zoom;
         drag.armed = true;
+        justArmed = true;
         if (drag.deferred) {
           drag.codeDockEl?.classList.add("lc-code-dock-scrolling");
           rasterInkRef.current?.setCameraMoving(true);
@@ -3929,10 +3951,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       drag.lastT = now;
       lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
 
-      scheduleVisualScrollRef.current(scrollX, scrollY);
+      if (justArmed) applyVisualScrollNowRef.current(scrollX, scrollY);
+      else scheduleVisualScrollRef.current(scrollX, scrollY);
     };
 
     const onPointerUp = (event: PointerEvent) => {
+      releaseHeldPointer(event.pointerId);
       const drag = panDragRef.current;
       if (drag?.codeDockEl) {
         drag.codeDockEl.classList.remove("lc-code-dock-scrolling");
@@ -4006,13 +4030,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     root.addEventListener("pointercancel", onPointerUp, true);
     return () => {
       onSelectionGestureClaimed(null);
+      if (heldPointerId != null) {
+        heldPointerId = null;
+        setDocPointerHeld(false);
+      }
       root.removeEventListener("pointerdown", onPointerDown, true);
       root.removeEventListener("pointermove", onPointerMove, true);
       root.removeEventListener("pointerup", onPointerUp, true);
       root.removeEventListener("pointercancel", onPointerUp, true);
       stopPanInertia();
     };
-  }, [clampPanScroll, interactive, stopPanInertia]);
+  }, [clampPanScroll, interactive, refreshPanRideNodes, stopPanInertia]);
 
   /*
    * Two of Excalidraw's own gestures do not belong on a tablet board.
@@ -4310,6 +4338,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     handPanningRef.current = false;
     panDragRef.current = null;
     rasterInkRef.current?.setCameraMoving(false);
+    setDocPointerHeld(false);
     commitVisualScrollRef.current();
   }, [activeTool, stopPanInertia]);
 
