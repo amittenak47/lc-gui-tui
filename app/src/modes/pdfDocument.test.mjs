@@ -20,7 +20,13 @@ import { pathToFileURL } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { paintOrder, pdfJsDataUrls, pdfStackHeight, windowedPages } from "./PdfDocument";
+import {
+  paintOrder,
+  pdfJsDataUrls,
+  pdfNavShouldPublish,
+  pdfStackHeight,
+  windowedPages,
+} from "./PdfDocument";
 
 const FIXTURE = resolve(process.cwd(), "src/modes/fixtures/two-pages.pdf");
 
@@ -141,28 +147,28 @@ describe("the fixture, through pdf.js", () => {
  * The paint window is what decides a textbook's memory cost.
  *
  * A page bitmap at a reading column and 2× supersampling is roughly 12 MB, so
- * this rule is the difference between about 40 MB resident and, for a
+ * this rule is the difference between about 84 MB resident and, for a
  * 1500-page book, something no device has.
  */
 describe("windowedPages", () => {
-  it("keeps the previous, current and next page", () => {
-    expect(windowedPages([26], 60)).toEqual([25, 26, 27]);
+  it("keeps three neighbours either side of the page on screen", () => {
+    expect(windowedPages([26], 60)).toEqual([23, 24, 25, 26, 27, 28, 29]);
   });
 
   it("does not run off the front of the book", () => {
-    expect(windowedPages([1], 60)).toEqual([1, 2]);
+    expect(windowedPages([1], 60)).toEqual([1, 2, 3, 4]);
   });
 
   it("does not run off the back", () => {
-    expect(windowedPages([60], 60)).toEqual([59, 60]);
+    expect(windowedPages([60], 60)).toEqual([57, 58, 59, 60]);
   });
 
   it("merges the neighbours of two pages on screen at once", () => {
-    expect(windowedPages([10, 11], 60)).toEqual([9, 10, 11, 12]);
+    expect(windowedPages([10, 11], 60)).toEqual([7, 8, 9, 10, 11, 12, 13, 14]);
   });
 
   it("opens on the first pages before the observer has reported", () => {
-    expect(windowedPages([], 60)).toEqual([1, 2]);
+    expect(windowedPages([], 60)).toEqual([1, 2, 3, 4]);
   });
 
   it("opens on the only page of a one-page document", () => {
@@ -170,7 +176,25 @@ describe("windowedPages", () => {
   });
 
   it("stays a handful of pages however long the book is", () => {
-    expect(windowedPages([900], 1500)).toHaveLength(3);
+    expect(windowedPages([900], 1500)).toHaveLength(7);
+  });
+});
+
+describe("pdfNavShouldPublish", () => {
+  it("publishes the first reading", () => {
+    expect(pdfNavShouldPublish(null, { count: 60, current: 1 })).toBe(true);
+  });
+
+  it("stays quiet when the page under the camera has not changed", () => {
+    expect(pdfNavShouldPublish({ count: 60, current: 12 }, { count: 60, current: 12 })).toBe(
+      false,
+    );
+  });
+
+  it("publishes when the current page changes", () => {
+    expect(pdfNavShouldPublish({ count: 60, current: 12 }, { count: 60, current: 13 })).toBe(
+      true,
+    );
   });
 });
 

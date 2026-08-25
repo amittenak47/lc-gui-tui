@@ -102,8 +102,8 @@ describe("textbook PDFs from Downloads", () => {
             PAGE_GAP,
           );
           expect(stack).toBeGreaterThan(laid[0].height);
-          expect(windowedPages([50], numPages)).toHaveLength(3);
-          expect(windowedPages([50], numPages)).toEqual([49, 50, 51]);
+          expect(windowedPages([50], numPages)).toHaveLength(7);
+          expect(windowedPages([50], numPages)).toEqual([47, 48, 49, 50, 51, 52, 53]);
 
           const frames = [];
           let y = 0;

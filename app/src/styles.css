@@ -15461,11 +15461,20 @@ button.lc-row-selected:hover:not(:disabled) {
   position: relative;
   flex: 0 0 auto;
   background: #fff;
-  box-shadow: 0 1px 6px rgb(0 0 0 / 22%);
+  /*
+   * Unpainted sheets are layout-only. A blur on every page in a 400-page stack
+   * sits in the display list of each pan frame; keep the drop shadow for the
+   * handful that actually hold a bitmap.
+   */
+  box-shadow: none;
   /* pdf.js TextLayer setLayerDimensions() rounds against these. */
   --scale-round-x: 1px;
   --scale-round-y: 1px;
   --user-unit: 1;
+}
+
+.lc-pdf-page[data-painted] {
+  box-shadow: 0 1px 6px rgb(0 0 0 / 22%);
 }
 
 /* The picture. Never selected out of — the text layer above is for that. */

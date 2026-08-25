@@ -55,7 +55,7 @@ import {
   isDocCameraLive,
   isDocChromeTarget,
   requestDocScroll,
-  onDocCameraLiveChange,
+  subscribeDocCameraLive,
   releaseSelectionGesture,
   setSubMarkPointerHit,
   setSubMarkDragLive,
@@ -1810,7 +1810,7 @@ export function DocSelectionLayer({
     if (!isDocCameraLive()) startObserver();
     else placementDeferred = true;
 
-    onDocCameraLiveChange((live) => {
+    const unsubCamera = subscribeDocCameraLive((live) => {
       if (live) {
         placementDeferred = true;
         stopObserver();
@@ -1823,7 +1823,7 @@ export function DocSelectionLayer({
     });
     return () => {
       stopObserver();
-      onDocCameraLiveChange(null);
+      unsubCamera();
       unbindView();
       body.removeEventListener("scroll", onHostScroll, true);
       placeRef.current = null;

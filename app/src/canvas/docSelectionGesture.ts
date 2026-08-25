@@ -26,7 +26,8 @@ let claimed = false;
 let onClaimed: (() => void) | null = null;
 
 let cameraLive = false;
-let onCameraLiveChange: ((live: boolean) => void) | null = null;
+const cameraLiveListeners = new Set<(live: boolean) => void>();
+let legacyCameraLiveUnsub: (() => void) | null = null;
 
 /**
  * Board registers here so a mid-gesture claim can drop a deferred pan /
@@ -56,16 +57,31 @@ export function selectionOwnsGesture(): boolean {
 export function setDocCameraLive(live: boolean): void {
   if (cameraLive === live) return;
   cameraLive = live;
-  onCameraLiveChange?.(live);
+  for (const listener of [...cameraLiveListeners]) listener(live);
 }
 
 export function isDocCameraLive(): boolean {
   return cameraLive;
 }
 
+/**
+ * Subscribe to camera live edges.
+ *
+ * More than one listener: footnote ribbons *and* the PDF paint pump both have
+ * to freeze for the same flick, and a single-slot setter would drop the other.
+ */
+export function subscribeDocCameraLive(handler: (live: boolean) => void): () => void {
+  cameraLiveListeners.add(handler);
+  return () => {
+    cameraLiveListeners.delete(handler);
+  };
+}
+
 /** DocSelectionLayer flushes deferred ribbon placement when live goes false. */
 export function onDocCameraLiveChange(handler: ((live: boolean) => void) | null): void {
-  onCameraLiveChange = handler;
+  legacyCameraLiveUnsub?.();
+  legacyCameraLiveUnsub = null;
+  if (handler) legacyCameraLiveUnsub = subscribeDocCameraLive(handler);
 }
 
 /* ----------------------------------------------------- edge auto-scroll --- */
