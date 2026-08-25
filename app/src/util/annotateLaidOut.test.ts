@@ -44,6 +44,19 @@ describe("waitForAnnotateLaidOut", () => {
     expect(await waitForAnnotateLaidOut(() => 9000, 2000, false)).toBe(true);
   });
 
+  it("stops waiting when the reader reports a hard failure", async () => {
+    const t0 = Date.now();
+    expect(
+      await waitForAnnotateLaidOut(
+        () => null,
+        4000,
+        false,
+        () => "this PDF could not be opened",
+      ),
+    ).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+
   it("resets the deadline while height is still growing", async () => {
     let height = 1000;
     const pending = waitForAnnotateLaidOut(() => height, 300, false);

@@ -24,30 +24,40 @@
  * before the book does — but a laid-out page is a div with a size, while a
  * painted one is a bitmap: at a 760px column and 2× supersampling that is
  * roughly 12 MB of canvas each, so a 1500-page textbook painted eagerly is
- * about 18 GB. Time is not the problem here; memory is. So a window of pages
- * around the viewport holds bitmaps and text layers, and everything else is
- * released back to a blank div of the right size.
+ * about 18 GB. Time is not the problem here; memory is. A small live window
+ * holds GPU canvases; pages that leave it compress into a session pagefile
+ * (lossless PNG of the *already decoded* pixels). Scroll back inflates that
+ * PNG. It does not run JBIG2 / JPX / path raster again.
  *
- * The text layer goes with the bitmap, which means a mark on a page that is
- * not in the window cannot resolve — and that is fine, because the marker
- * layer keeps a window of its own on the same pages and re-places whatever
- * arrives (see `DocSelectionLayer`).
+ * The text layer stays in the DOM while the bitmap pages out — footnotes and
+ * quotes measure those spans, not the picture. Only an LRU drop from the
+ * pagefile clears the spans (the bitmap is gone, so they would be a lie).
  */
 
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 
 import { isDocCameraLive, subscribeDocCameraLive } from "../canvas/docSelectionGesture";
 import type { PdfThumbRenderer } from "./pdfFilm";
+import {
+  captureCanvasPng,
+  PDF_HOT_RADIUS,
+  PDF_SESSION_CAP,
+  PdfPageSession,
+  restoreCanvasPng,
+  sessionPathPages,
+} from "./pdfPageSession";
 import { dropPdfDocument, lendPdfDocument } from "./pdfOpenDocs";
 import { alignTextLayerToGlyphs } from "../util/pdfTextFit";
 
 /**
  * Supersampling of the page bitmap relative to its scene size.
  *
- * The board commonly shows a document page near zoom 1 and lets the reader zoom
- * in on a figure; at 1× the text would go soft exactly when they do that. Two is
- * the usual device-pixel-ratio ceiling on the tablets this runs on, so it is
- * the point past which more pixels stop being visible.
+ * Two matches the usual device-pixel-ratio ceiling on these tablets — it is
+ * screen pixels, not a pinch-zoom mipmap. The board can pinch (cap 1.75) but
+ * reading is width-fit; we do not bake a thumb / 1× / 2× ladder, and we do
+ * not re-render a page at 2× after it has already decoded at 1×. Neighbours
+ * use the same scale as the focus page so scrolling onto them is not a second
+ * trip through JBIG2.
  */
 const PDF_RENDER_SCALE = 2;
 
@@ -65,14 +75,14 @@ const PAGE_GAP = 18;
 const PAGE_VISIBLE_MARGIN = "20% 0px";
 
 /**
- * Pages kept painted either side of the one being read.
- *
- * Radius 3 is current ± three neighbours: enough that a fast page-turn still
- * lands on a bitmap, bounded so the resident set stays a handful of canvases
- * whatever the book's length. At ~12 MB a page that is about 84 MB versus, for
- * a 1500-page textbook, 18 GB.
+ * Live GPU canvases: current page ± {@link PDF_HOT_RADIUS}. Scroll one sheet
+ * down: +1 into the window, −1 compressed into the session pagefile. Scroll
+ * back: restore the PNG. Path-fill covers TOC → chapter jumps the live ring
+ * cannot keep.
  */
-const PAGE_WINDOW_RADIUS = 3;
+export { PDF_HOT_RADIUS, PDF_SESSION_CAP } from "./pdfPageSession";
+
+const PAGE_WINDOW_RADIUS = PDF_HOT_RADIUS;
 
 /**
  * How many page bitmaps the pump may decode at once.
@@ -80,7 +90,7 @@ const PAGE_WINDOW_RADIUS = 3;
  * The window is filled in paint-order (on-screen first), but a scanned page's
  * JBIG2 decode can outlast a flick to the next sheet. Two in flight lets a
  * neighbour start while the focus page is still rendering, without stacking
- * seven 12 MB canvases at the same moment.
+ * a full ring of 12 MB canvases at the same moment.
  */
 const PAINT_INFLIGHT = 2;
 
@@ -239,11 +249,18 @@ export function PdfDocument({
   const taskRef = useRef<ReturnType<typeof import("pdfjs-dist").getDocument> | null>(null);
   const textLayerRef = useRef<typeof import("pdfjs-dist").TextLayer | null>(null);
   /** Pages holding a bitmap right now, and how to give it back. */
-  const paintedRef = useRef<Map<number, { release: () => void }>>(new Map());
+  const paintedRef = useRef<Map<number, { release: () => void; scale: number }>>(
+    new Map(),
+  );
+  const sessionRef = useRef(new PdfPageSession());
+  const lastSettledPageRef = useRef(1);
+  const pathFillRef = useRef<number[]>([]);
   /** Pages the viewport can currently see. */
   const visibleRef = useRef<Set<number>>(new Set());
   /** Pages the window wants painted — the visible ones, plus their neighbours. */
   const wantedRef = useRef<Set<number>>(new Set());
+  const pagesRef = useRef(pages);
+  pagesRef.current = pages;
   const [windowTick, setWindowTick] = useState(0);
   /** One paint pump at a time — see the effect that drives it. */
   const pumpRef = useRef(false);
@@ -279,6 +296,9 @@ export function PdfDocument({
     }
     setPages([]);
     paintedRef.current.clear();
+    sessionRef.current.clear();
+    pathFillRef.current = [];
+    lastSettledPageRef.current = 1;
     wantedRef.current = new Set();
     visibleRef.current = new Set();
     visibleRatioRef.current = new Map();
@@ -339,9 +359,19 @@ export function PdfDocument({
               height: Math.round(viewport.height),
             });
           }
+          // First batch is enough for the open gate to see a real stack height.
+          // Waiting for every getPage used to throw "did not finish opening"
+          // while PdfDocument still said Opening… — Kleinberg is 432 dictionary
+          // round-trips. Pause so the 250 ms settle can fire before the next
+          // batch grows the stack and resets the deadline.
+          setPages(laid.slice());
+          if (from === 1 && doc.numPages > LAYOUT_BATCH) {
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 300);
+            });
+            if (cancelled) return;
+          }
         }
-        if (cancelled) return;
-        setPages(laid);
       } catch (cause: unknown) {
         if (cancelled) return;
         onErrorRef.current?.(
@@ -383,9 +413,9 @@ export function PdfDocument({
     if (slots.length === 0) return;
     const last = pages[pages.length - 1].pageNumber;
 
-    /** Visible pages, grown by a page either side. */
+    /** Sliding live window — session pagefile holds the rest of this visit. */
     const rebuild = () => {
-      const wanted = new Set(windowedPages(visibleRef.current, last));
+      const wanted = new Set(windowedPages(visibleRef.current, last, PDF_HOT_RADIUS));
       const before = wantedRef.current;
       const same =
         before.size === wanted.size && [...wanted].every((n) => before.has(n));
@@ -428,9 +458,21 @@ export function PdfDocument({
       return () => onNavRef.current?.(null);
     }
 
+    const notePath = () => {
+      const current = lastPublished.current > 0 ? lastPublished.current : 1;
+      const from = lastSettledPageRef.current;
+      if (current === from) return;
+      pathFillRef.current = sessionPathPages(from, current, last, PDF_SESSION_CAP).filter(
+        (n) => !wantedRef.current.has(n) && !sessionRef.current.has(n),
+      );
+      lastSettledPageRef.current = current;
+      if (pathFillRef.current.length > 0) setWindowTick((tick) => tick + 1);
+    };
+
     const flushAfterCoast = () => {
       rebuild();
       publishNav();
+      notePath();
     };
 
     const observer = new IntersectionObserver(
@@ -456,6 +498,7 @@ export function PdfDocument({
         if (isDocCameraLive()) return;
         rebuild();
         publishNav();
+        notePath();
       },
       { rootMargin: PAGE_VISIBLE_MARGIN },
     );
@@ -470,6 +513,21 @@ export function PdfDocument({
       onNavRef.current?.(null);
     };
   }, [pages]);
+
+  /**
+   * Spans stay in the tree (footnotes need them after settle) but they are not
+   * painted while the camera is moving. Sliding images is cheap; sliding a
+   * dense absolute text tree with the stack is layout work on every pan sample.
+   */
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || pages.length === 0) return;
+    const apply = (live: boolean) => {
+      host.classList.toggle("lc-pdf-doc-camera-live", live);
+    };
+    apply(isDocCameraLive());
+    return subscribeDocCameraLive(apply);
+  }, [pages.length]);
 
   /**
    * Hand the filmstrip a renderer that uses this document, not a second load.
@@ -535,44 +593,90 @@ export function PdfDocument({
     if (!host || !doc || !TextLayer || pages.length === 0) return;
     if (pumpRef.current) return;
 
-    const byNumber = new Map(pages.map((page) => [page.pageNumber, page]));
+    const dropSessionText = (pagesToDrop: number[]) => {
+      for (const gone of pagesToDrop) {
+        const node = host.querySelector<HTMLElement>(`[data-pdf-page="${gone}"]`);
+        const text = node?.querySelector<HTMLElement>(".lc-pdf-text");
+        if (text) text.textContent = "";
+        node?.removeAttribute("data-painted");
+      }
+    };
+
+    const pageOut = async (n: number, keepText = true): Promise<void> => {
+      const slot = host.querySelector<HTMLElement>(`[data-pdf-page="${n}"]`);
+      const canvas = slot?.querySelector("canvas");
+      if (!canvas) return;
+      const sheet = await captureCanvasPng(canvas);
+      if (disposedRef.current) return;
+      if (sheet) dropSessionText(sessionRef.current.put(n, sheet));
+      canvas.width = 0;
+      canvas.height = 0;
+      slot?.removeAttribute("data-painted");
+      if (!keepText) {
+        const text = slot?.querySelector<HTMLElement>(".lc-pdf-text");
+        if (text) text.textContent = "";
+      }
+    };
 
     const paintOne = async (n: number): Promise<void> => {
-      const entry = byNumber.get(n);
+      const entry = pagesRef.current.find((page) => page.pageNumber === n);
       const slot = host.querySelector<HTMLElement>(`[data-pdf-page="${n}"]`);
       const canvas = slot?.querySelector("canvas");
       const textHost = slot?.querySelector<HTMLElement>(".lc-pdf-text");
       const ctx = canvas?.getContext("2d");
       if (!entry || !slot || !canvas || !ctx || !textHost) return;
 
-      /*
-       * Claimed before the first await, so a later pump turn does not start
-       * this page again underneath the one already working on it — and given
-       * up again in `finally` unless it finished, because a claim left behind
-       * by an abandoned paint is a page that stays blank for ever.
-       */
+      // Same scale for focus and neighbours — a 1× prefetch upgraded on
+      // intersect would re-enter the JBIG2 decoder. 2× is DPR, not a mipmap.
+      const scale = PDF_RENDER_SCALE;
       let paint: { cancel: () => void; promise: Promise<void> } | null = null;
       let done = false;
       paintedRef.current.set(n, {
+        scale,
         release: () => {
           try {
             paint?.cancel();
           } catch {
             /* a render that already finished is nothing to cancel */
           }
-          // Zero the backing store: clearing pixels leaves the allocation, and
-          // the allocation is the whole reason for the window.
           canvas.width = 0;
           canvas.height = 0;
-          textHost.textContent = "";
-          slot.removeAttribute("data-painted");
         },
       });
 
       try {
+        const paged = sessionRef.current.get(n);
+        if (paged) {
+          const ok = await restoreCanvasPng(canvas, paged);
+          if (disposedRef.current) return;
+          if (ok && textHost.childNodes.length > 0) {
+            slot.setAttribute("data-painted", "");
+            done = true;
+            return;
+          }
+          if (ok) {
+            const page = await doc.getPage(n);
+            if (disposedRef.current) return;
+            const content = await page.getTextContent();
+            if (disposedRef.current) return;
+            textHost.textContent = "";
+            const layer = new TextLayer({
+              textContentSource: content,
+              container: textHost,
+              viewport: page.getViewport({ scale: entry.fit }),
+            });
+            await layer.render();
+            if (disposedRef.current) return;
+            alignTextLayerToGlyphs(slot, layer.textDivs, content.items, entry.fit);
+            slot.setAttribute("data-painted", "");
+            done = true;
+            return;
+          }
+        }
+
         const page = await doc.getPage(n);
         if (disposedRef.current) return;
-        const viewport = page.getViewport({ scale: entry.fit * PDF_RENDER_SCALE });
+        const viewport = page.getViewport({ scale: entry.fit * scale });
         canvas.width = Math.round(viewport.width);
         canvas.height = Math.round(viewport.height);
         paint = page.render({ canvas, canvasContext: ctx, viewport });
@@ -580,35 +684,26 @@ export function PdfDocument({
         if (disposedRef.current) return;
 
         textHost.textContent = "";
+        if (scale < PDF_RENDER_SCALE) {
+          slot.setAttribute("data-painted", "");
+          done = true;
+          return;
+        }
         const content = await page.getTextContent();
         if (disposedRef.current) return;
         const layer = new TextLayer({
           textContentSource: content,
           container: textHost,
-          // The laid-out scale, not the supersampled one: these spans sit over
-          // the picture in scene units, not in bitmap pixels.
           viewport: page.getViewport({ scale: entry.fit }),
         });
         await layer.render();
         if (disposedRef.current) return;
-        /*
-         * Second pass over the spans, in the DOM.
-         *
-         * pdf.js fits each span to its glyphs by measuring the string on a
-         * canvas, and a WebView that scales text — Android applies the system
-         * font size to the whole view — lays the same string out at a different
-         * width than the canvas reports. The spans keep their left edge and
-         * lose the difference off the right, and since every quote is measured
-         * from them, a swept selection comes back ending short of the words it
-         * covers. Re-fit from what the DOM actually laid out.
-         */
         alignTextLayerToGlyphs(slot, layer.textDivs, content.items, entry.fit);
         slot.setAttribute("data-painted", "");
         done = true;
       } catch (cause: unknown) {
         if (disposedRef.current) return;
         const message = cause instanceof Error ? cause.message : String(cause);
-        // A cancelled render is the window moving on, not a failure.
         if (!/cancel|abort|worker.*(destroy|terminat|not running)/i.test(message)) {
           onErrorRef.current?.(message);
         }
@@ -627,19 +722,52 @@ export function PdfDocument({
         // so this ends as soon as what is wanted is what is painted.
         for (;;) {
           if (disposedRef.current) return;
+          await waitWhileDocCameraLive();
+          if (disposedRef.current) return;
 
-          // Release first, so the memory is back before the next bitmap asks.
-          for (const [n, entry] of [...paintedRef.current]) {
+          // Compress extras into the pagefile. Do not zero a live canvas
+          // mid-flick — toBlob during coast is the hitch. Camera-live wait
+          // above is what holds this until settle.
+          for (const [n] of [...paintedRef.current]) {
             if (wantedRef.current.has(n)) continue;
-            entry.release();
+            await pageOut(n, true);
             paintedRef.current.delete(n);
+            if (disposedRef.current) return;
           }
 
-          const batch = paintOrder(wantedRef.current, visibleRef.current)
-            .filter((n) => !paintedRef.current.has(n))
+          const visible = visibleRef.current;
+          const batch = paintOrder(wantedRef.current, visible)
+            .filter((n) =>
+              pageNeedsPaint(n, paintedRef.current, visible, sessionRef.current),
+            )
             .slice(0, PAINT_INFLIGHT);
-          if (batch.length === 0) return;
-          await Promise.all(batch.map((n) => paintOne(n)));
+          if (batch.length > 0) {
+            await Promise.all(batch.map((n) => paintOne(n)));
+            continue;
+          }
+
+          // Path fill: pages between this settle and the last one, so
+          // TOC → chapter → back does not re-decode JBIG2. Paint then
+          // immediately page out — they must not sit as extra GPU canvases.
+          while (
+            pathFillRef.current.length > 0 &&
+            (wantedRef.current.has(pathFillRef.current[0]!) ||
+              sessionRef.current.has(pathFillRef.current[0]!))
+          ) {
+            pathFillRef.current.shift();
+          }
+          const next = pathFillRef.current.shift();
+          if (next == null) return;
+          if (sessionRef.current.size() >= PDF_SESSION_CAP) {
+            pathFillRef.current = [];
+            return;
+          }
+          await paintOne(next);
+          if (disposedRef.current) return;
+          if (!wantedRef.current.has(next)) {
+            await pageOut(next, false);
+            paintedRef.current.delete(next);
+          }
         }
       } finally {
         pumpRef.current = false;
@@ -649,8 +777,18 @@ export function PdfDocument({
          * down, so that page is not left blank until the reader scrolls again.
          */
         if (!disposedRef.current) {
-          const pending = [...wantedRef.current].some((n) => !paintedRef.current.has(n));
-          if (pending) setWindowTick((tick) => tick + 1);
+          const pendingHot = [...wantedRef.current].some((n) =>
+            pageNeedsPaint(
+              n,
+              paintedRef.current,
+              visibleRef.current,
+              sessionRef.current,
+            ),
+          );
+          const pendingPath = pathFillRef.current.some(
+            (n) => !wantedRef.current.has(n) && !sessionRef.current.has(n),
+          );
+          if (pendingHot || pendingPath) setWindowTick((tick) => tick + 1);
         }
       }
     })();
@@ -672,6 +810,21 @@ export function PdfDocument({
     observer.observe(node);
     return () => observer.disconnect();
   }, [pages]);
+
+  /**
+   * Spans stay in the tree (footnotes need them after settle) but they are not
+   * painted while the camera is moving. Sliding images is cheap; sliding a
+   * dense absolute text tree with the stack is layout work on every pan sample.
+   */
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || pages.length === 0) return;
+    const apply = (live: boolean) => {
+      host.classList.toggle("lc-pdf-doc-camera-live", live);
+    };
+    apply(isDocCameraLive());
+    return subscribeDocCameraLive(apply);
+  }, [pages.length]);
 
   return (
     <div
@@ -715,6 +868,47 @@ export function PdfDocument({
       {pages.length === 0 && <p className="lc-pdf-loading">Opening…</p>}
     </div>
   );
+}
+
+function waitWhileDocCameraLive(): Promise<void> {
+  if (!isDocCameraLive()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const unsub = subscribeDocCameraLive((live) => {
+      if (live) return;
+      unsub();
+      resolve();
+    });
+    if (!isDocCameraLive()) {
+      unsub();
+      resolve();
+    }
+  });
+}
+
+/**
+ * Every live canvas uses the same scale. 2× is the panel's typical DPR, not
+ * a pinch-zoom mipmap. A 1× neighbour upgraded on intersect re-enters JBIG2.
+ */
+export function pdfPagePaintScale(
+  _page?: number,
+  _visible?: Iterable<number>,
+  hires = PDF_RENDER_SCALE,
+): number {
+  return hires;
+}
+
+function pageNeedsPaint(
+  n: number,
+  painted: Map<number, { scale: number }>,
+  visible: Iterable<number>,
+  session?: { has(page: number): boolean },
+): boolean {
+  const have = painted.get(n);
+  if (!have) return true;
+  // Session already holds decoded pixels. Inflating that PNG again is a
+  // blit; `page.render` at a higher scale is the bitstream walk we skip.
+  if (session?.has(n)) return false;
+  return pdfPagePaintScale(n, visible) > have.scale;
 }
 
 /**

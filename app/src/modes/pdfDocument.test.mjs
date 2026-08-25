@@ -22,8 +22,10 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   paintOrder,
+  PDF_HOT_RADIUS,
   pdfJsDataUrls,
   pdfNavShouldPublish,
+  pdfPagePaintScale,
   pdfStackHeight,
   windowedPages,
 } from "./PdfDocument";
@@ -144,39 +146,53 @@ describe("the fixture, through pdf.js", () => {
 
 
 /**
- * The paint window is what decides a textbook's memory cost.
+ * The paint window is what decides a textbook's GPU cost.
  *
- * A page bitmap at a reading column and 2× supersampling is roughly 12 MB, so
- * this rule is the difference between about 84 MB resident and, for a
- * 1500-page book, something no device has.
+ * Live canvases: current page ± {@link PDF_HOT_RADIUS}. The rest of this visit
+ * is the session pagefile, not more GPU textures.
  */
 describe("windowedPages", () => {
-  it("keeps three neighbours either side of the page on screen", () => {
-    expect(windowedPages([26], 60)).toEqual([23, 24, 25, 26, 27, 28, 29]);
+  it("keeps eight neighbours either side of the page on screen", () => {
+    expect(windowedPages([50], 200, PDF_HOT_RADIUS)).toHaveLength(17);
+    expect(windowedPages([50], 200, PDF_HOT_RADIUS)[0]).toBe(42);
+    expect(windowedPages([50], 200, PDF_HOT_RADIUS).at(-1)).toBe(58);
   });
 
   it("does not run off the front of the book", () => {
-    expect(windowedPages([1], 60)).toEqual([1, 2, 3, 4]);
+    expect(windowedPages([1], 60, PDF_HOT_RADIUS)).toEqual(
+      Array.from({ length: 1 + PDF_HOT_RADIUS }, (_, i) => i + 1),
+    );
   });
 
   it("does not run off the back", () => {
-    expect(windowedPages([60], 60)).toEqual([57, 58, 59, 60]);
+    expect(windowedPages([60], 60, PDF_HOT_RADIUS)).toEqual(
+      Array.from({ length: 1 + PDF_HOT_RADIUS }, (_, i) => i + (60 - PDF_HOT_RADIUS)),
+    );
   });
 
   it("merges the neighbours of two pages on screen at once", () => {
-    expect(windowedPages([10, 11], 60)).toEqual([7, 8, 9, 10, 11, 12, 13, 14]);
+    expect(windowedPages([10, 11], 60, 3)).toEqual([7, 8, 9, 10, 11, 12, 13, 14]);
   });
 
   it("opens on the first pages before the observer has reported", () => {
-    expect(windowedPages([], 60)).toEqual([1, 2, 3, 4]);
+    expect(windowedPages([], 200)).toEqual(
+      Array.from({ length: 1 + PDF_HOT_RADIUS }, (_, i) => i + 1),
+    );
   });
 
   it("opens on the only page of a one-page document", () => {
     expect(windowedPages([], 1)).toEqual([1]);
   });
 
-  it("stays a handful of pages however long the book is", () => {
-    expect(windowedPages([900], 1500)).toHaveLength(7);
+  it("stays a bounded ring however long the book is", () => {
+    expect(windowedPages([900], 1500)).toHaveLength(1 + 2 * PDF_HOT_RADIUS);
+  });
+});
+
+describe("pdfPagePaintScale", () => {
+  it("uses the same 2× for the page on screen and its neighbours", () => {
+    expect(pdfPagePaintScale(12, [12])).toBe(2);
+    expect(pdfPagePaintScale(40, [12])).toBe(2);
   });
 });
 

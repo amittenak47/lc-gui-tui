@@ -1012,6 +1012,8 @@ export function Workspace({
    * reveal at the 1100 floor with the pan clamp pinned.
    */
   const annotateHeightRef = useRef<number | null>(null);
+  /** pdf.js failure during open — abort the layout gate instead of "smaller file". */
+  const annotatePdfErrorRef = useRef<string | null>(null);
   const [pdfNav, setPdfNav] = useState<PdfNav | null>(null);
   const pdfNavRef = useRef<PdfNav | null>(null);
   pdfNavRef.current = pdfNav;
@@ -2700,6 +2702,7 @@ export function Workspace({
       }
       beginPadOpen();
       const loadGen = ++workspaceLoadGenRef.current;
+      annotatePdfErrorRef.current = null;
       traceOpen("start", { name: input.name, docType: input.docType, loadGen, tabId: input.tabId });
       /*
        * Same loading transition as pickProblem — do not invent a parallel path.
@@ -3101,18 +3104,27 @@ export function Workspace({
          */
         const allowZero = !bytes && !text.trim();
         const needsHeight = Boolean(bytes) || Boolean(text.trim());
+        const pdfFailed = () => annotatePdfErrorRef.current;
         let laidOut = await waitForAnnotateLaidOut(
           () => annotateHeightRef.current,
           8000,
           allowZero,
+          pdfFailed,
         );
+        if (!laidOut && pdfFailed()) {
+          throw new Error(pdfFailed()!);
+        }
         if (!laidOut && needsHeight) {
           boardRef.current?.syncDocumentScrollBounds();
           laidOut = await waitForAnnotateLaidOut(
             () => annotateHeightRef.current,
             25000,
             allowZero,
+            pdfFailed,
           );
+        }
+        if (!laidOut && pdfFailed() && !(typeof annotateHeightRef.current === "number" && annotateHeightRef.current > 0)) {
+          throw new Error(pdfFailed()!);
         }
         if (!laidOut && needsHeight) {
           const seen = annotateHeightRef.current;
@@ -8561,6 +8573,7 @@ export function Workspace({
                         if (/cancel|abort|worker.*(destroy|terminat|not running)/i.test(message)) {
                           return;
                         }
+                        annotatePdfErrorRef.current = message;
                         setError(message);
                       }}
                     />

@@ -24,7 +24,7 @@ import {
 } from "../canvas/inkCodec";
 import { INK_LRU_RADIUS, lruWindow, pageIdForOp } from "../canvas/inkPageIndex";
 import { NO_PRESSURE } from "../canvas/rasterInk";
-import { pdfStackHeight, windowedPages } from "./PdfDocument";
+import { pdfStackHeight, windowedPages, PDF_HOT_RADIUS } from "./PdfDocument";
 
 const DOWNLOADS = join(homedir(), "Downloads");
 const PAGE_GAP = 18;
@@ -102,8 +102,14 @@ describe("textbook PDFs from Downloads", () => {
             PAGE_GAP,
           );
           expect(stack).toBeGreaterThan(laid[0].height);
-          expect(windowedPages([50], numPages)).toHaveLength(7);
-          expect(windowedPages([50], numPages)).toEqual([47, 48, 49, 50, 51, 52, 53]);
+          const paintWindow = windowedPages([50], numPages);
+          expect(paintWindow[0]).toBe(Math.max(1, 50 - PDF_HOT_RADIUS));
+          expect(paintWindow.at(-1)).toBe(Math.min(numPages, 50 + PDF_HOT_RADIUS));
+          expect(paintWindow).toHaveLength(
+            Math.min(numPages, 50 + PDF_HOT_RADIUS) -
+              Math.max(1, 50 - PDF_HOT_RADIUS) +
+              1,
+          );
 
           const frames = [];
           let y = 0;
