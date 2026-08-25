@@ -32,7 +32,7 @@ export function sessionPathPages(
 }
 
 /** Live GPU canvases: current ± this. Session pagefile holds the rest. */
-export const PDF_HOT_RADIUS = 8;
+export const PDF_HOT_RADIUS = 3;
 export const PDF_SESSION_CAP = 80;
 
 export type PdfSessionSheet = {

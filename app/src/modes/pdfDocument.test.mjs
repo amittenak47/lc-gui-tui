@@ -152,10 +152,10 @@ describe("the fixture, through pdf.js", () => {
  * is the session pagefile, not more GPU textures.
  */
 describe("windowedPages", () => {
-  it("keeps eight neighbours either side of the page on screen", () => {
-    expect(windowedPages([50], 200, PDF_HOT_RADIUS)).toHaveLength(17);
-    expect(windowedPages([50], 200, PDF_HOT_RADIUS)[0]).toBe(42);
-    expect(windowedPages([50], 200, PDF_HOT_RADIUS).at(-1)).toBe(58);
+  it("keeps three neighbours either side of the page on screen", () => {
+    expect(windowedPages([50], 200, PDF_HOT_RADIUS)).toHaveLength(7);
+    expect(windowedPages([50], 200, PDF_HOT_RADIUS)[0]).toBe(47);
+    expect(windowedPages([50], 200, PDF_HOT_RADIUS).at(-1)).toBe(53);
   });
 
   it("does not run off the front of the book", () => {

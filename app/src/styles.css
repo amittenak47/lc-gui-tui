@@ -15457,14 +15457,6 @@ button.lc-row-selected:hover:not(:disabled) {
   box-sizing: border-box;
 }
 
-/*
- * Keep the spans in the tree — footnotes re-place from them after settle —
- * but do not paint a dense text layer while the stack is sliding.
- */
-.lc-pdf-doc-camera-live .lc-pdf-text {
-  visibility: hidden;
-}
-
 .lc-pdf-page {
   position: relative;
   flex: 0 0 auto;

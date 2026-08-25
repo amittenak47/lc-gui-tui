@@ -515,21 +515,6 @@ export function PdfDocument({
   }, [pages]);
 
   /**
-   * Spans stay in the tree (footnotes need them after settle) but they are not
-   * painted while the camera is moving. Sliding images is cheap; sliding a
-   * dense absolute text tree with the stack is layout work on every pan sample.
-   */
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host || pages.length === 0) return;
-    const apply = (live: boolean) => {
-      host.classList.toggle("lc-pdf-doc-camera-live", live);
-    };
-    apply(isDocCameraLive());
-    return subscribeDocCameraLive(apply);
-  }, [pages.length]);
-
-  /**
    * Hand the filmstrip a renderer that uses this document, not a second load.
    *
    * Low scale, JPEG, throwaway canvas — the scene paint still owns the page
@@ -603,12 +588,16 @@ export function PdfDocument({
     };
 
     const pageOut = async (n: number, keepText = true): Promise<void> => {
+      if (isDocCameraLive()) return;
       const slot = host.querySelector<HTMLElement>(`[data-pdf-page="${n}"]`);
       const canvas = slot?.querySelector("canvas");
       if (!canvas) return;
       const sheet = await captureCanvasPng(canvas);
       if (disposedRef.current) return;
       if (sheet) dropSessionText(sessionRef.current.put(n, sheet));
+      // Finger went down during toBlob — keep the GPU canvas. Zeroing it
+      // here is the white flash + the hitch they feel starting from rest.
+      if (isDocCameraLive()) return;
       canvas.width = 0;
       canvas.height = 0;
       slot?.removeAttribute("data-painted");
@@ -618,19 +607,34 @@ export function PdfDocument({
       }
     };
 
-    const paintOne = async (n: number): Promise<void> => {
+    const paintOne = async (
+      n: number,
+      opts?: { yieldToCamera?: boolean },
+    ): Promise<void> => {
       const entry = pagesRef.current.find((page) => page.pageNumber === n);
       const slot = host.querySelector<HTMLElement>(`[data-pdf-page="${n}"]`);
       const canvas = slot?.querySelector("canvas");
       const textHost = slot?.querySelector<HTMLElement>(".lc-pdf-text");
       const ctx = canvas?.getContext("2d");
       if (!entry || !slot || !canvas || !ctx || !textHost) return;
+      if (opts?.yieldToCamera && isDocCameraLive()) return;
 
       // Same scale for focus and neighbours — a 1× prefetch upgraded on
       // intersect would re-enter the JBIG2 decoder. 2× is DPR, not a mipmap.
       const scale = PDF_RENDER_SCALE;
       let paint: { cancel: () => void; promise: Promise<void> } | null = null;
       let done = false;
+      const stopLive =
+        opts?.yieldToCamera === true
+          ? subscribeDocCameraLive((live) => {
+              if (!live) return;
+              try {
+                paint?.cancel();
+              } catch {
+                /* already finished */
+              }
+            })
+          : null;
       paintedRef.current.set(n, {
         scale,
         release: () => {
@@ -682,6 +686,7 @@ export function PdfDocument({
         paint = page.render({ canvas, canvasContext: ctx, viewport });
         await paint.promise;
         if (disposedRef.current) return;
+        if (opts?.yieldToCamera && isDocCameraLive()) return;
 
         textHost.textContent = "";
         if (scale < PDF_RENDER_SCALE) {
@@ -708,6 +713,7 @@ export function PdfDocument({
           onErrorRef.current?.(message);
         }
       } finally {
+        stopLive?.();
         if (!done) {
           paintedRef.current.get(n)?.release();
           paintedRef.current.delete(n);
@@ -729,6 +735,9 @@ export function PdfDocument({
           // mid-flick — toBlob during coast is the hitch. Camera-live wait
           // above is what holds this until settle.
           for (const [n] of [...paintedRef.current]) {
+            if (wantedRef.current.has(n)) continue;
+            await waitWhileDocCameraLive();
+            if (disposedRef.current) return;
             if (wantedRef.current.has(n)) continue;
             await pageOut(n, true);
             paintedRef.current.delete(n);
@@ -762,7 +771,11 @@ export function PdfDocument({
             pathFillRef.current = [];
             return;
           }
-          await paintOne(next);
+          await waitWhileDocCameraLive();
+          if (disposedRef.current) return;
+          await paintOne(next, { yieldToCamera: true });
+          if (disposedRef.current) return;
+          await waitWhileDocCameraLive();
           if (disposedRef.current) return;
           if (!wantedRef.current.has(next)) {
             await pageOut(next, false);
@@ -810,21 +823,6 @@ export function PdfDocument({
     observer.observe(node);
     return () => observer.disconnect();
   }, [pages]);
-
-  /**
-   * Spans stay in the tree (footnotes need them after settle) but they are not
-   * painted while the camera is moving. Sliding images is cheap; sliding a
-   * dense absolute text tree with the stack is layout work on every pan sample.
-   */
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host || pages.length === 0) return;
-    const apply = (live: boolean) => {
-      host.classList.toggle("lc-pdf-doc-camera-live", live);
-    };
-    apply(isDocCameraLive());
-    return subscribeDocCameraLive(apply);
-  }, [pages.length]);
 
   return (
     <div
