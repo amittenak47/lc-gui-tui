@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { InkPageBook } from "./inkPageCache";
-import { SPANNING_PAGE_ID, type PageFrame } from "./inkPageIndex";
+import { INK_LRU_RADIUS, SPANNING_PAGE_ID, type PageFrame } from "./inkPageIndex";
 import { decodeInkOps } from "./inkCodec";
 import { NO_PRESSURE, type InkDrawOp, type InkEraseOp } from "./rasterInk";
 
@@ -42,7 +42,9 @@ describe("InkPageBook", () => {
     }
     book.setVisiblePage(10);
     const hotPages = [...book.hot.keys()].filter((id) => id !== SPANNING_PAGE_ID).sort((a, b) => a - b);
-    expect(hotPages).toEqual([7, 8, 9, 10, 11, 12, 13]);
+    expect(hotPages).toEqual(
+      Array.from({ length: 1 + 2 * INK_LRU_RADIUS }, (_, i) => 10 - INK_LRU_RADIUS + i),
+    );
     expect(book.opCount()).toBe(20);
     expect(book.paintOps().length).toBeLessThan(book.opCount());
     expect(book.assembleOps()).toHaveLength(20);

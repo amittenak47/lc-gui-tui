@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DOC_CAMERA_LIVE_CLASS,
   isDocChromeTarget,
   isDocCameraLive,
   isSubMarkDragLive,
@@ -89,6 +90,24 @@ describe("pointer held freezes the paint pump", () => {
     setDocPointerHeld(false);
     expect(seen).toEqual([true, false]);
     unsub();
+  });
+
+  it("hides overlay text on the real camera pulse, not on pointer-down", () => {
+    setDocPointerHeld(false);
+    setDocCameraLive(false);
+    setDocPointerHeld(true);
+    expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
+      false,
+    );
+    setDocCameraLive(true);
+    expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
+      true,
+    );
+    setDocCameraLive(false);
+    expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
+      false,
+    );
+    setDocPointerHeld(false);
   });
 });
 

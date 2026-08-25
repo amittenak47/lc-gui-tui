@@ -70,6 +70,16 @@ describe("pageIdForOp", () => {
     expect(pageIdForOp(stroke(90, 130), frames())).toBe(SPANNING_PAGE_ID);
   });
 
+  it("keeps a stroke that spans two-up halves of the same PDF page", () => {
+    const spread: PageFrame[] = [
+      { pageId: 1, minY: 0, maxY: 100 },
+      { pageId: 1, minY: 118, maxY: 218 },
+      { pageId: 2, minY: 236, maxY: 336 },
+    ];
+    expect(pageIdForOp(stroke(90, 130), spread)).toBe(1);
+    expect(pageIdForOp(stroke(200, 250), spread)).toBe(SPANNING_PAGE_ID);
+  });
+
   it("bins everything to page 1 on a single-frame document", () => {
     const one = fallbackPageFrames({ minX: 0, minY: 0, maxX: 100, maxY: 800 });
     expect(pageIdForOp(stroke(400), one)).toBe(1);
@@ -125,5 +135,13 @@ describe("scrollYForPage", () => {
     expect(scrollYForPage(frames(), 2, 1, 0)).toBe(-118);
     expect(scrollYForPage(frames(), 2, 1, 10)).toBe(-108);
     expect(scrollYForPage(frames(), 9, 1)).toBeNull();
+  });
+
+  it("jumps to the left half when a PDF page has two stacked slots", () => {
+    const spread: PageFrame[] = [
+      { pageId: 1, minY: 0, maxY: 100 },
+      { pageId: 1, minY: 118, maxY: 218 },
+    ];
+    expect(scrollYForPage(spread, 1, 1, 0)).toBe(0);
   });
 });

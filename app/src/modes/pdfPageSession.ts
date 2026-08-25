@@ -14,6 +14,10 @@
  * out.
  */
 
+import { PDF_SESSION_CAP as SESSION_CAP_DEFAULT } from "../perfPreset";
+
+export { PDF_HOT_RADIUS, PDF_SESSION_CAP } from "../perfPreset";
+
 export function sessionPathPages(
   from: number,
   to: number,
@@ -31,10 +35,6 @@ export function sessionPathPages(
   return out;
 }
 
-/** Live GPU canvases: current ± this. Session pagefile holds the rest. */
-export const PDF_HOT_RADIUS = 3;
-export const PDF_SESSION_CAP = 80;
-
 export type PdfSessionSheet = {
   blob: Blob;
   width: number;
@@ -45,7 +45,7 @@ export class PdfPageSession {
   private readonly order: number[] = [];
   private readonly sheets = new Map<number, PdfSessionSheet>();
 
-  constructor(readonly cap = PDF_SESSION_CAP) {}
+  constructor(readonly cap = SESSION_CAP_DEFAULT) {}
 
   has(page: number): boolean {
     return this.sheets.has(page);
