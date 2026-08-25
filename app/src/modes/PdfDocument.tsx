@@ -36,6 +36,7 @@
 
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 
+import { isDocCameraLive, subscribeDocCameraLive } from "../canvas/docSelectionGesture";
 import type { PdfThumbRenderer } from "./pdfFilm";
 import { dropPdfDocument, lendPdfDocument } from "./pdfOpenDocs";
 import { alignTextLayerToGlyphs } from "../util/pdfTextFit";
@@ -66,12 +67,22 @@ const PAGE_VISIBLE_MARGIN = "20% 0px";
 /**
  * Pages kept painted either side of the one being read.
  *
- * The previous page, the current one, the next: enough that a page turn in
- * either direction is already drawn, and bounded so the resident set is a
- * handful of bitmaps whatever the book's length. At ~12 MB a page that is the
- * difference between 60 MB and, for a 1500-page textbook, 18 GB.
+ * Radius 3 is current ± three neighbours: enough that a fast page-turn still
+ * lands on a bitmap, bounded so the resident set stays a handful of canvases
+ * whatever the book's length. At ~12 MB a page that is about 84 MB versus, for
+ * a 1500-page textbook, 18 GB.
  */
-const PAGE_WINDOW_RADIUS = 1;
+const PAGE_WINDOW_RADIUS = 3;
+
+/**
+ * How many page bitmaps the pump may decode at once.
+ *
+ * The window is filled in paint-order (on-screen first), but a scanned page's
+ * JBIG2 decode can outlast a flick to the next sheet. Two in flight lets a
+ * neighbour start while the focus page is still rendering, without stacking
+ * seven 12 MB canvases at the same moment.
+ */
+const PAINT_INFLIGHT = 2;
 
 /**
  * Page dimensions are fetched in batches rather than one at a time.
@@ -383,6 +394,7 @@ export function PdfDocument({
       setWindowTick((tick) => tick + 1);
     };
 
+    const lastPublished = { count: -1, current: -1 };
     const publishNav = () => {
       const ratios = visibleRatioRef.current;
       let current = 1;
@@ -396,6 +408,9 @@ export function PdfDocument({
       if (best < 0 && visibleRef.current.size > 0) {
         current = Math.min(...visibleRef.current);
       }
+      if (!pdfNavShouldPublish(lastPublished, { count: last, current })) return;
+      lastPublished.count = last;
+      lastPublished.current = current;
       const aspects = pages.map((page) =>
         page.height > 0 ? page.width / page.height : 612 / 792,
       );
@@ -413,6 +428,11 @@ export function PdfDocument({
       return () => onNavRef.current?.(null);
     }
 
+    const flushAfterCoast = () => {
+      rebuild();
+      publishNav();
+    };
+
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -426,13 +446,26 @@ export function PdfDocument({
             visibleRatioRef.current.delete(n);
           }
         }
+        /*
+         * A live flick already has the compositor moving the whole stack.
+         * Rebuilding the paint window or publishing nav (Workspace setState +
+         * filmstrip scrollIntoView) invalidates that layer mid-coast — the same
+         * ~30fps chop footnote placement used to cause. Keep the sets current;
+         * apply them when the camera settles.
+         */
+        if (isDocCameraLive()) return;
         rebuild();
         publishNav();
       },
       { rootMargin: PAGE_VISIBLE_MARGIN },
     );
     for (const slot of slots) observer.observe(slot);
+    const unsubLive = subscribeDocCameraLive((live) => {
+      if (live) return;
+      flushAfterCoast();
+    });
     return () => {
+      unsubLive();
       observer.disconnect();
       onNavRef.current?.(null);
     };
@@ -602,11 +635,11 @@ export function PdfDocument({
             paintedRef.current.delete(n);
           }
 
-          const next = paintOrder(wantedRef.current, visibleRef.current).find(
-            (n) => !paintedRef.current.has(n),
-          );
-          if (next == null) return;
-          await paintOne(next);
+          const batch = paintOrder(wantedRef.current, visibleRef.current)
+            .filter((n) => !paintedRef.current.has(n))
+            .slice(0, PAINT_INFLIGHT);
+          if (batch.length === 0) return;
+          await Promise.all(batch.map((n) => paintOne(n)));
         }
       } finally {
         pumpRef.current = false;
@@ -706,10 +739,22 @@ export function windowedPages(
   // Nothing visible yet — the observer's first callback has not run, and a book
   // must not open on a blank rectangle while it is scheduled.
   if (wanted.size === 0) {
-    wanted.add(1);
-    if (lastPage >= 2) wanted.add(2);
+    for (let n = 1; n <= Math.min(lastPage, 1 + radius); n += 1) wanted.add(n);
   }
   return [...wanted].sort((a, b) => a - b);
+}
+
+/**
+ * Skip filmstrip / Workspace updates when the page under the camera has not
+ * changed. IntersectionObserver fires on every ratio tweak during a pan; a new
+ * `aspects` array each time was a full Workspace render per sample.
+ */
+export function pdfNavShouldPublish(
+  prev: { count: number; current: number } | null,
+  next: { count: number; current: number },
+): boolean {
+  if (prev == null) return true;
+  return prev.count !== next.count || prev.current !== next.current;
 }
 
 /**

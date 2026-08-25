@@ -5,8 +5,10 @@ import {
   isDocChromeTarget,
   isSubMarkDragLive,
   pointerInSubMark,
+  setDocCameraLive,
   setSubMarkDragLive,
   setSubMarkPointerHit,
+  subscribeDocCameraLive,
 } from "./docSelectionGesture";
 
 describe("isDocChromeTarget", () => {
@@ -40,6 +42,20 @@ describe("pointerInSubMark", () => {
     expect(pointerInSubMark(10, 10)).toBe(true);
     expect(pointerInSubMark(80, 10)).toBe(false);
     setSubMarkPointerHit(null);
+  });
+});
+
+describe("subscribeDocCameraLive", () => {
+  it("notifies every subscriber without dropping the other", () => {
+    const seen: boolean[][] = [[], []];
+    const unsubA = subscribeDocCameraLive((live) => seen[0].push(live));
+    const unsubB = subscribeDocCameraLive((live) => seen[1].push(live));
+    setDocCameraLive(true);
+    setDocCameraLive(false);
+    expect(seen[0]).toEqual([true, false]);
+    expect(seen[1]).toEqual([true, false]);
+    unsubA();
+    unsubB();
   });
 });
 
