@@ -8,6 +8,7 @@ import {
   noteCameraBusy,
   resetCameraBusyForTests,
   waitWhileCameraBusy,
+  yieldToInput,
 } from "./cameraBusy";
 
 afterEach(() => {
@@ -60,5 +61,14 @@ describe("cameraBusy", () => {
     await vi.advanceTimersByTimeAsync(cameraBusyHoldMs() + 80);
     await pending;
     expect(isCameraBusy()).toBe(false);
+  });
+
+  it("yieldToInput resolves on the next macrotask", async () => {
+    let turned = false;
+    const pending = yieldToInput().then(() => {
+      expect(turned).toBe(true);
+    });
+    turned = true;
+    await pending;
   });
 });

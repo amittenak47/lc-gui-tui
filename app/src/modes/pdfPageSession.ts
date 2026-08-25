@@ -98,20 +98,37 @@ export class PdfPageSession {
   }
 }
 
+function yieldMacrotask(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 /** Lossless PNG of the canvas, scaled to CSS size so the pagefile is not 2×. */
-export function captureCanvasPng(canvas: HTMLCanvasElement): Promise<PdfSessionSheet | null> {
-  if (canvas.width < 1 || canvas.height < 1) return Promise.resolve(null);
+export async function captureCanvasPng(
+  canvas: HTMLCanvasElement,
+  shouldAbort?: () => boolean,
+): Promise<PdfSessionSheet | null> {
+  if (canvas.width < 1 || canvas.height < 1) return null;
+  if (shouldAbort?.()) return null;
+  // Let pointerdown freeze the pump before we copy / encode. `toBlob` cannot
+  // be cancelled once started; skipping it is the interrupt.
+  await yieldMacrotask();
+  if (shouldAbort?.()) return null;
   const width = Math.max(1, Math.round(canvas.clientWidth || canvas.width));
   const height = Math.max(1, Math.round(canvas.clientHeight || canvas.height));
   const off = document.createElement("canvas");
   off.width = width;
   off.height = height;
   const ctx = off.getContext("2d");
-  if (!ctx) return Promise.resolve(null);
+  if (!ctx) return null;
   ctx.drawImage(canvas, 0, 0, width, height);
+  if (shouldAbort?.()) return null;
+  await yieldMacrotask();
+  if (shouldAbort?.()) return null;
   return new Promise((resolve) => {
     off.toBlob((blob) => {
-      if (!blob) {
+      if (!blob || shouldAbort?.()) {
         resolve(null);
         return;
       }

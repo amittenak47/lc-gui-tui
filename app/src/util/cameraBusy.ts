@@ -61,3 +61,14 @@ export function yieldToIdle(): Promise<void> {
     }
   });
 }
+
+/**
+ * One macrotask so a queued pointerdown can freeze the PDF pump before the
+ * next `toBlob` / `page.render`. Not `requestIdleCallback` — that waits for
+ * quiet, which is the opposite of interrupt.
+ */
+export function yieldToInput(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}

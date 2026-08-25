@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { describe, expect, it } from "vitest";
 
-import { PdfPageSession, sessionPathPages } from "./pdfPageSession";
+import { PdfPageSession, captureCanvasPng, sessionPathPages } from "./pdfPageSession";
 
 function sheet(n: number) {
   return { blob: new Blob([String(n)]), width: 10, height: 12 };
@@ -54,5 +54,24 @@ describe("sessionPathPages", () => {
 
   it("is empty when settle did not move", () => {
     expect(sessionPathPages(12, 12, 200, 80)).toEqual([]);
+  });
+});
+
+describe("captureCanvasPng", () => {
+  it("does not encode when abort is already true", async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 4;
+    canvas.height = 4;
+    expect(await captureCanvasPng(canvas, () => true)).toBeNull();
+  });
+
+  it("drops the sheet if abort flips during the input yield", async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 4;
+    canvas.height = 4;
+    let abort = false;
+    const pending = captureCanvasPng(canvas, () => abort);
+    abort = true;
+    expect(await pending).toBeNull();
   });
 });
