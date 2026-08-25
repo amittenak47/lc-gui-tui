@@ -173,6 +173,25 @@ export function pdfWorker(pdfjs: PdfJs): PdfWorker {
   return sharedWorker;
 }
 
+/**
+ * URLs pdf.js fetches at render time (fonts, cmaps, JBIG2/JPEG2000 decoders).
+ *
+ * Copied into `dist/` by `pdfjsAssets` in vite.config. `wasmUrl` is required
+ * for scanned textbooks: a missing decoder still lays the page boxes out, so
+ * the board shows a stack of white sheets and blank filmstrip thumbs.
+ */
+export function pdfJsDataUrls(base = document.baseURI): {
+  standardFontDataUrl: string;
+  cMapUrl: string;
+  wasmUrl: string;
+} {
+  return {
+    standardFontDataUrl: new URL("standard_fonts/", base).href,
+    cMapUrl: new URL("cmaps/", base).href,
+    wasmUrl: new URL("wasm/", base).href,
+  };
+}
+
 interface RenderedPage {
   pageNumber: number;
   /** Natural-size → frame-width factor for this page. */
@@ -266,17 +285,7 @@ export function PdfDocument({
         const task = pdfjs.getDocument({
           data: new Uint8Array(bytes.slice(0)),
           worker: pdfWorker(pdfjs),
-          /*
-           * Font metrics and character maps, served from the bundle.
-           *
-           * pdf.js fetches these by URL rather than importing them, so they are
-           * copied out of the package at build time (see `pdfjsAssets` in
-           * vite.config). Without the fonts a document that assumes the base-14
-           * set renders with the wrong glyph widths; without the cmaps a CJK or
-           * scanned document renders blank.
-           */
-          standardFontDataUrl: new URL("standard_fonts/", document.baseURI).href,
-          cMapUrl: new URL("cmaps/", document.baseURI).href,
+          ...pdfJsDataUrls(),
           cMapPacked: true,
         });
         const doc = await task.promise;

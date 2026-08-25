@@ -13,7 +13,7 @@ The APK is **self-contained**: it runs the same in-process harness router as des
 | Requirement | Notes |
 | --- | --- |
 | **Android SDK + NDK** | Android Studio → SDK Platform 34 + NDK. Set `ANDROID_HOME` to `%LOCALAPPDATA%\Android\Sdk`. |
-| **JDK 17** | Point `JAVA_HOME` at a JDK 17 install (fewer Gradle warnings). |
+| **JDK 17–23** | Point `JAVA_HOME` at a JDK 17, 21, or 23 install. **Not** Android Studio's bundled JBR if it is 25 — Gradle then fails configuring `:buildSrc` with the error `25.0.2`. The overlay picks `C:\Program Files\Java\jdk-23` (or another 17–24 JDK) and writes `org.gradle.java.home`. |
 | **Rust Android targets** | `rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android` |
 | **Node 20+** | For `npm install` / Tauri build |
 
@@ -166,13 +166,13 @@ adb install -r src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-u
 **No USB cable:** wireless debugging (same Wi-Fi as the PC). Pairing is once; the connect *port* changes after a reboot.
 
 ```cmd
-cd <repo>\app
+cd <repo>
 npm run adb:pair -- 192.168.1.20:37123 123456
 npm run adb:connect -- 192.168.1.20:41259
 npm run android:wireless:practice
 ```
 
-The pairing port is on **Pair device with pairing code**. The connect port is the **IP address & Port** line on the main Wireless debugging screen — they are not the same. After that, `npm run adb:reconnect` then `npm run android:wireless:practice`. Live PDF open log: `npm run logs:open`.
+The pairing port is on **Pair device with pairing code**. The connect port is the **IP address & Port** line on the main Wireless debugging screen — they are not the same. After that, `npm run adb:reconnect` then `npm run android:wireless:practice`. Live PDF open log: `npm run logs:open` (pins the saved wireless serial so `adb logcat` does not fail with "more than one device/emulator").
 
 Or copy `app-universal-debug.apk` to the tablet → open in **Files** → allow "Install unknown apps" when prompted.
 
@@ -266,7 +266,8 @@ If it still feels tight on your device, the constant lives in `app/src/styles.cs
 | `cargo` works, `adb` does not | Stale cmd window. Close every cmd and reopen |
 | Tauri opens Android Studio | No device or emulator seen. Fix `adb` PATH, run `adb devices` |
 | Coach offline, LLM unreachable | Settings → LLM on the tablet. Check the provider, the API key, and that the model URL is reachable from the tablet |
-| `no src-tauri/gen/android` / init failed | Overlay now runs `tauri android init` itself. If that fails: SDK, NDK, JDK 17+, then `cd app && npm run android:init` |
+| `no src-tauri/gen/android` / init failed | Overlay now runs `tauri android init` itself. If that fails: SDK, NDK, JDK 17–23, then `cd app && npm run android:init` |
+| `:buildSrc` fails with `25.0.2` | Android Studio JBR is JDK 25. Overlay pins Gradle to JDK 17–23 (`org.gradle.java.home`). Retry `npm run android:wireless:practice` |
 | Annotate cannot load `http://` pages | Rebuild after overlay (`npm run android:overlay` then `android:apk:practice`) |
 | Palette under system bar | Reinstall APK after safe-area fix (§6) |
 

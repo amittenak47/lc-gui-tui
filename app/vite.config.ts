@@ -13,10 +13,12 @@ const rootDir = dirname(fileURLToPath(import.meta.url));
  * pdf.js's data directories, served in dev and copied into the build.
  *
  * `standard_fonts` holds metrics for the base-14 fonts a PDF is allowed to
- * assume the reader has, and `cmaps` maps the character encodings CJK and many
- * scanned documents use. Neither is code, so neither can be imported — pdf.js
- * fetches them by URL at render time, and without them a real textbook renders
- * with wrong glyph widths or, for CJK, blank pages.
+ * assume the reader has, `cmaps` maps CJK encodings, and `wasm` holds the
+ * JBIG2 / JPEG2000 image decoders (JS fallback in this pdfjs-dist build).
+ * None of these are importable code — pdf.js fetches them by URL at render
+ * time. Missing fonts skew glyph widths; missing cmaps blank CJK text;
+ * missing `wasmUrl` blanks a scanned textbook (JBIG2 per page) while layout
+ * still reports a full stack of white sheets.
  *
  * Copied rather than added to `public/`: they belong to a dependency, and a
  * checked-in copy would drift the moment pdfjs-dist is bumped.
@@ -24,7 +26,7 @@ const rootDir = dirname(fileURLToPath(import.meta.url));
 function pdfjsAssets(): Plugin {
   const require = createRequire(import.meta.url);
   const root = dirname(require.resolve("pdfjs-dist/package.json"));
-  const dirs = ["standard_fonts", "cmaps"] as const;
+  const dirs = ["standard_fonts", "cmaps", "wasm"] as const;
   return {
     name: "lc-pdfjs-assets",
     configureServer(server) {

@@ -48,6 +48,19 @@ export function pickWirelessSerial(devicesText) {
   return wireless[0] ?? usb[0] ?? null;
 }
 
+/** Saved wireless serial if still listed; else pickWirelessSerial. */
+export function resolveSerial(devicesText, savedSerial) {
+  const text = String(devicesText ?? "");
+  const saved = String(savedSerial ?? "").trim();
+  if (saved) {
+    for (const line of text.split(/\r?\n/)) {
+      const [serial, state] = line.trim().split(/\s+/);
+      if (serial === saved && state === "device") return saved;
+    }
+  }
+  return pickWirelessSerial(text);
+}
+
 function adbBin() {
   const home = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
     || join(process.env.LOCALAPPDATA || "", "Android", "Sdk");
@@ -97,6 +110,9 @@ the main "IP address & Port" line.
   node scripts/android-adb-wireless.mjs devices
   node scripts/android-adb-wireless.mjs install practice
   node scripts/android-adb-wireless.mjs install whiteboard
+  node scripts/android-adb-wireless.mjs logcat open
+  node scripts/android-adb-wireless.mjs logcat
+  node scripts/android-adb-wireless.mjs logcat clear
 
 Same Wi-Fi. Guest / AP isolation will fail. After sleep or reboot, connect
 again — the port usually changed.
@@ -146,20 +162,36 @@ function devices() {
   if (result.status !== 0) fail("adb devices failed. Is platform-tools on PATH?");
 }
 
-function install(flavor) {
-  const kind = flavor === "whiteboard" ? "whiteboard" : "practice";
+function attachedSerial() {
   const devicesOut = runAdb(["devices"]);
   if (devicesOut.status !== 0) {
     fail("adb devices failed.");
-    return;
+    return null;
   }
-  const saved = loadState()?.serial ?? null;
-  const listed = pickWirelessSerial(devicesOut.stdout || "");
-  const serial = saved && (devicesOut.stdout || "").includes(saved) ? saved : listed;
+  const serial = resolveSerial(devicesOut.stdout || "", loadState()?.serial ?? null);
   if (!serial) {
     fail("No adb device. Pair + connect first (Wireless debugging, same Wi-Fi).");
-    return;
+    return null;
   }
+  return serial;
+}
+
+function logcat(kind) {
+  const serial = attachedSerial();
+  if (!serial) return;
+  const args = ["-s", serial, "logcat"];
+  if (kind === "clear") args.push("-c");
+  else if (kind === "open") args.push("-s", "Tauri/Console:D", "-e", "lc:open");
+  else args.push("-s", "Tauri/Console:D");
+  console.error(`adb -s ${serial} logcat${kind === "open" ? " (lc:open)" : kind === "clear" ? " -c" : ""}`);
+  const result = runAdb(args, { stdio: "inherit" });
+  process.exitCode = result.status === 0 ? 0 : 1;
+}
+
+function install(flavor) {
+  const kind = flavor === "whiteboard" ? "whiteboard" : "practice";
+  const serial = attachedSerial();
+  if (!serial) return;
   const script = process.platform === "win32"
     ? join(SCRIPT_DIR, `android-install-${kind}.cmd`)
     : join(SCRIPT_DIR, `android-install-${kind}.sh`);
@@ -188,6 +220,7 @@ async function main() {
   if (cmd === "reconnect") return reconnect();
   if (cmd === "devices" || cmd === "status") return devices();
   if (cmd === "install") return install(a);
+  if (cmd === "logcat" || cmd === "logs") return logcat(a);
   fail(`unknown command: ${cmd}`);
   usage();
 }

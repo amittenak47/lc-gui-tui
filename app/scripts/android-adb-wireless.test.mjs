@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseTarget, pickWirelessSerial } from "./android-adb-wireless.mjs";
+import { parseTarget, pickWirelessSerial, resolveSerial } from "./android-adb-wireless.mjs";
 
 describe("parseTarget", () => {
   it("accepts ipv4 and port", () => {
@@ -28,5 +28,21 @@ describe("pickWirelessSerial", () => {
 
   it("falls back to USB when nothing is wireless", () => {
     expect(pickWirelessSerial("R58M123ABCD\tdevice\n")).toBe("R58M123ABCD");
+  });
+});
+
+describe("resolveSerial", () => {
+  const two = [
+    "List of devices attached",
+    "emulator-5554\tdevice",
+    "192.168.132.66:38985\tdevice",
+  ].join("\n");
+
+  it("keeps the saved wireless serial when still listed", () => {
+    expect(resolveSerial(two, "192.168.132.66:38985")).toBe("192.168.132.66:38985");
+  });
+
+  it("ignores a saved serial that is gone", () => {
+    expect(resolveSerial(two, "10.0.0.9:5555")).toBe("192.168.132.66:38985");
   });
 });
