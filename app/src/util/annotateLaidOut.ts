@@ -29,17 +29,25 @@ export const ANNOTATE_LAYOUT_SETTLE_MS = 250;
  *
  * Returns false when the timeout fires without a height — callers must not
  * treat that as "document ready" or the board reveals on a stuck "Opening…".
+ * `failed` aborts the wait when pdf.js (or the reader) has already given up,
+ * so a broken file does not sit through the full timeout and then show
+ * "pick a smaller file".
  */
 export function waitForAnnotateLaidOut(
   readHeight: () => number | null,
   timeoutMs = 8000,
   allowZero = true,
+  failed?: () => string | null,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     let deadline = performance.now() + timeoutMs;
     let last: number | null = null;
     let since = 0;
     const tick = () => {
+      if (failed?.()) {
+        resolve(false);
+        return;
+      }
       const now = performance.now();
       const height = readHeight();
       if (annotateHeightIsSettled(height, allowZero)) {

@@ -15457,6 +15457,14 @@ button.lc-row-selected:hover:not(:disabled) {
   box-sizing: border-box;
 }
 
+/*
+ * Keep the spans in the tree — footnotes re-place from them after settle —
+ * but do not paint a dense text layer while the stack is sliding.
+ */
+.lc-pdf-doc-camera-live .lc-pdf-text {
+  visibility: hidden;
+}
+
 .lc-pdf-page {
   position: relative;
   flex: 0 0 auto;
@@ -15467,6 +15475,12 @@ button.lc-row-selected:hover:not(:disabled) {
    * handful that actually hold a bitmap.
    */
   box-shadow: none;
+  /*
+   * ±60 painted neighbours would otherwise all be in the compositor's display
+   * list on every pan sample. Skip raster for off-screen sheets; the inline
+   * width/height still holds the stack.
+   */
+  content-visibility: auto;
   /* pdf.js TextLayer setLayerDimensions() rounds against these. */
   --scale-round-x: 1px;
   --scale-round-y: 1px;
