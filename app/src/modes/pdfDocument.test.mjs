@@ -20,12 +20,21 @@ import { pathToFileURL } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { paintOrder, pdfStackHeight, windowedPages } from "./PdfDocument";
+import { paintOrder, pdfJsDataUrls, pdfStackHeight, windowedPages } from "./PdfDocument";
 
 const FIXTURE = resolve(process.cwd(), "src/modes/fixtures/two-pages.pdf");
 
 /** US Letter at 72dpi — what the fixture declares in its MediaBox. */
 const LETTER = { width: 612, height: 792 };
+
+describe("pdfJsDataUrls", () => {
+  it("fetches wasm next to cmaps, with a trailing slash pdf.js requires", () => {
+    const urls = pdfJsDataUrls("https://tauri.localhost/");
+    expect(urls.wasmUrl).toBe("https://tauri.localhost/wasm/");
+    expect(urls.cMapUrl).toBe("https://tauri.localhost/cmaps/");
+    expect(urls.standardFontDataUrl).toBe("https://tauri.localhost/standard_fonts/");
+  });
+});
 
 describe("pdfStackHeight", () => {
   it("is zero for a document with no pages", () => {

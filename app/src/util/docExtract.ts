@@ -7,7 +7,7 @@
 import type { DocType } from "./annotateStore";
 import { waitWhileCameraBusy } from "./cameraBusy";
 import { readEpub } from "./epub";
-import { loadPdfJs, pdfWorker } from "../modes/PdfDocument";
+import { loadPdfJs, pdfJsDataUrls, pdfWorker } from "../modes/PdfDocument";
 import { borrowPdfDocument } from "../modes/pdfOpenDocs";
 import { webPagesFromMarks, type MarkLike } from "./webMarkPages";
 
@@ -137,8 +137,7 @@ async function extractPdfPages(
   const task = pdfjs.getDocument({
     data: new Uint8Array(bytes.slice(0)),
     worker: pdfWorker(pdfjs),
-    standardFontDataUrl: new URL("standard_fonts/", document.baseURI).href,
-    cMapUrl: new URL("cmaps/", document.baseURI).href,
+    ...pdfJsDataUrls(),
     cMapPacked: true,
   });
   try {

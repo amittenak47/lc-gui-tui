@@ -13,17 +13,19 @@ import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { gradleJdkEnv, pickGradleJdkHome } from "./android-overlay.mjs";
+
 const APP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const debug = process.argv.includes("--debug");
 
 process.env.VITE_FEATURE_LEETCODE = "0";
 
-function run(cmd, args) {
+function run(cmd, args, env = process.env) {
   const result = spawnSync(cmd, args, {
     cwd: APP_DIR,
     stdio: "inherit",
     shell: true,
-    env: process.env,
+    env,
   });
   if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
 }
@@ -31,7 +33,14 @@ function run(cmd, args) {
 run("node", ["scripts/android-overlay.mjs"]);
 run("npm", ["run", "icons:sync"]);
 
+const jdk = pickGradleJdkHome();
+if (!jdk) {
+  console.error("android-apk-whiteboard: no JDK 17–24. Set JAVA_HOME and retry.");
+  process.exit(1);
+}
+const env = gradleJdkEnv(jdk);
+
 const tauri = ["exec", "--", "tauri", "android", "build", "--apk"];
 if (debug) tauri.push("--debug");
 tauri.push("--", "--no-default-features");
-run("npm", tauri);
+run("npm", tauri, env);

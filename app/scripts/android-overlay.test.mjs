@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { withBuildSrcJvm17, withExecOperations, withNetworkSecurityConfig } from "./android-overlay.mjs";
+import { withBuildSrcJvm17, withExecOperations, withGradleJavaHome, withNetworkSecurityConfig, isUsableGradleJdk, javaMajorFromRelease } from "./android-overlay.mjs";
 
 const MANIFEST = `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -106,5 +106,21 @@ describe("withBuildSrcJvm17", () => {
     const once = withBuildSrcJvm17(BUILD_SRC);
     expect(withBuildSrcJvm17(once)).toBe(once);
     expect(once.match(/JvmTarget\.JVM_17/g)).toHaveLength(1);
+  });
+});
+
+describe("Gradle JDK 25", () => {
+  it("reads 25.0.2 from a JDK release file", () => {
+    expect(javaMajorFromRelease('JAVA_VERSION="25.0.2"\n')).toBe(25);
+    expect(javaMajorFromRelease('JAVA_VERSION="23.0.1"\n')).toBe(23);
+    expect(isUsableGradleJdk(25)).toBe(false);
+    expect(isUsableGradleJdk(23)).toBe(true);
+    expect(isUsableGradleJdk(17)).toBe(true);
+  });
+
+  it("pins org.gradle.java.home with forward slashes", () => {
+    const next = withGradleJavaHome("android.useAndroidX=true\n", "C:\\Program Files\\Java\\jdk-23");
+    expect(next).toContain("org.gradle.java.home=C:/Program Files/Java/jdk-23");
+    expect(withGradleJavaHome(next, "C:\\Program Files\\Java\\jdk-23")).toBe(next);
   });
 });

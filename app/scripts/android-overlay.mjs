@@ -16,6 +16,9 @@
  *      deprecated `Project.exec` (Gradle 8.11+ warning, gone in 9).
  *   4. pin `buildSrc` Kotlin compile to JVM 17 so a JDK 23 Gradle does not
  *      emit "Kotlin does not yet support 23 JDK target".
+ *   5. pin `org.gradle.java.home` to a JDK 17–24. Android Studio's JBR is now
+ *      25.0.2; Gradle 8.14 + Kotlin 1.9 fail configuring `:buildSrc` with
+ *      that version as the entire error message.
  *
  * Without (1)+(2) Android 9+ blocks the WebView's cleartext HTTP fetches to
  * external http:// pages (Annotate mode). The harness router itself is in-process.
@@ -25,7 +28,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -120,6 +123,86 @@ export function withBuildSrcJvm17(source) {
   return `${source.trimEnd()}\n${BUILD_SRC_JVM17}`;
 }
 
+/** Major from a JDK `release` file (`JAVA_VERSION="25.0.2"` → 25). */
+export function javaMajorFromRelease(text) {
+  const match = /JAVA_VERSION="(\d+)/.exec(String(text ?? ""));
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Gradle 8.14 + the Kotlin 1.9 `kotlin-dsl` in `buildSrc` know JVM 17–24.
+ * 25 (current Android Studio JBR) configures with the error `25.0.2`.
+ */
+export function isUsableGradleJdk(major) {
+  return Number.isInteger(major) && major >= 17 && major <= 24;
+}
+
+export function javaMajorFromHome(home) {
+  if (!home) return null;
+  const release = join(home, "release");
+  if (!existsSync(release)) return null;
+  try {
+    return javaMajorFromRelease(readFileSync(release, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function defaultJdkHomes(env = process.env) {
+  const pf = env["ProgramFiles"] || "C:\\Program Files";
+  const homes = [];
+  const javaDir = join(pf, "Java");
+  if (existsSync(javaDir)) {
+    for (const name of readdirSync(javaDir)) homes.push(join(javaDir, name));
+  }
+  homes.push(join(pf, "Android", "Android Studio", "jbr"));
+  homes.push("/usr/lib/jvm/java-17-openjdk-amd64");
+  homes.push("/usr/lib/jvm/java-21-openjdk-amd64");
+  return homes;
+}
+
+/**
+ * JDK Gradle should run on. `JAVA_HOME` wins when it is 17–24; otherwise the
+ * lowest usable install (prefer 17 over 23). Studio JBR 25 is skipped.
+ */
+export function pickGradleJdkHome(env = process.env) {
+  const consider = (home, into) => {
+    if (!home) return;
+    const major = javaMajorFromHome(home);
+    if (!isUsableGradleJdk(major)) return;
+    const javaBin = join(home, "bin", process.platform === "win32" ? "java.exe" : "java");
+    if (!existsSync(javaBin)) return;
+    into.push({ home, major });
+  };
+  const fromEnv = [];
+  consider(env.JAVA_HOME, fromEnv);
+  if (fromEnv.length) return fromEnv[0].home;
+  const found = [];
+  for (const home of defaultJdkHomes(env)) consider(home, found);
+  found.sort((a, b) => a.major - b.major);
+  return found[0]?.home ?? null;
+}
+
+export function withGradleJavaHome(properties, jdkHome) {
+  const slash = String(jdkHome).replaceAll("\\", "/");
+  const line = `org.gradle.java.home=${slash}`;
+  if (/^org\.gradle\.java\.home=/m.test(properties)) {
+    return properties.replace(/^org\.gradle\.java\.home=.*$/m, line);
+  }
+  return `${properties.trimEnd()}\n${line}\n`;
+}
+
+/** Env for `tauri android` so it does not pick Studio's JDK 25 JBR. */
+export function gradleJdkEnv(jdkHome, env = process.env) {
+  const bin = join(jdkHome, "bin");
+  const sep = process.platform === "win32" ? ";" : ":";
+  return {
+    ...env,
+    JAVA_HOME: jdkHome,
+    PATH: `${bin}${sep}${env.PATH || ""}`,
+  };
+}
+
 /**
  * Locate generated BuildTask.kt under buildSrc (package path varies).
  *
@@ -196,6 +279,37 @@ async function main() {
       await writeFile(buildSrcGradle, next);
       console.log("android overlay: buildSrc Kotlin jvmTarget 17");
     }
+  }
+
+  const jdk = pickGradleJdkHome();
+  if (!jdk) {
+    console.error(
+      "android overlay: no JDK 17–24 for Gradle. Android Studio's JBR is 25.0.2;",
+    );
+    console.error(
+      "Kotlin 1.9 then fails configuring :buildSrc with the error `25.0.2`.",
+    );
+    console.error("Install JDK 17, 21, or 23 and set JAVA_HOME, then retry.");
+    process.exitCode = 1;
+    return;
+  }
+  const propsPath = join(PROJECT, "gradle.properties");
+  if (existsSync(propsPath)) {
+    const props = await readFile(propsPath, "utf8");
+    const next = withGradleJavaHome(props, jdk);
+    if (next !== props) {
+      await writeFile(propsPath, next);
+      console.log(`android overlay: Gradle JDK ${javaMajorFromHome(jdk)} (${jdk.replaceAll("\\", "/")})`);
+    }
+  }
+  const gradlew = join(PROJECT, process.platform === "win32" ? "gradlew.bat" : "gradlew");
+  if (existsSync(gradlew)) {
+    spawnSync(gradlew, ["--stop"], {
+      cwd: PROJECT,
+      stdio: "ignore",
+      shell: process.platform === "win32",
+      env: gradleJdkEnv(jdk),
+    });
   }
 }
 

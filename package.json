@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "scripts": {
+    "adb:pair": "node app/scripts/android-adb-wireless.mjs pair",
+    "adb:connect": "node app/scripts/android-adb-wireless.mjs connect",
+    "adb:reconnect": "node app/scripts/android-adb-wireless.mjs reconnect",
+    "adb:devices": "node app/scripts/android-adb-wireless.mjs devices",
+    "android:wireless:practice": "node app/scripts/android-adb-wireless.mjs install practice",
+    "android:wireless:whiteboard": "node app/scripts/android-adb-wireless.mjs install whiteboard",
+    "logs:android": "node app/scripts/android-adb-wireless.mjs logcat",
+    "logs:open": "node app/scripts/android-adb-wireless.mjs logcat open",
+    "logs:clear": "node app/scripts/android-adb-wireless.mjs logcat clear"
+  }
+}
