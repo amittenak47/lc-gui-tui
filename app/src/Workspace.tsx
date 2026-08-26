@@ -191,7 +191,7 @@ import { WorkspaceLinkPicker, groupLabel, type LinkTarget } from "./modes/Worksp
 import { resolveWikiLinks } from "./util/wikiLinks";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
-import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref } from "./modes/pdfFilm";
+import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, publishPdfFilmCurrent } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
@@ -221,7 +221,7 @@ import {
   LEGACY_MD_INK_TASK_ID,
 } from "./templates/annotate";
 import { BROWSE_PICK_QUIET_MS, browsePickBlocked } from "./util/browsePickGuard";
-import { waitForAnnotateLaidOut } from "./util/annotateLaidOut";
+import { waitForAnnotateLaidOut, waitForPdfPageNode } from "./util/annotateLaidOut";
 import {
   buildAnnotateSidecar,
   CODE_SOURCE_MAX_CHARS,
@@ -2869,7 +2869,10 @@ export function Workspace({
         const sessionPage =
           Number.isFinite(savedPdfPage) && savedPdfPage >= 1 ? savedPdfPage : 0;
         setPdfSessionPage(sessionPage);
-        if (sessionPage >= 1) boardRef.current?.aimPdfPage(sessionPage);
+        if (sessionPage >= 1) {
+          publishPdfFilmCurrent(sessionPage);
+          boardRef.current?.aimPdfPage(sessionPage);
+        }
         setAnnotateSource({ name: input.name, text, hash, docType, bytes });
         if (docType === "web") {
           setWebUrl(input.name);
@@ -3094,13 +3097,12 @@ export function Workspace({
         boardRef.current?.stripCoachViz();
         lastIdsRef.current = new Set();
         await boardRef.current?.waitForTemplate();
-        // Ink first — see `openWhiteboard`. The second fit below still runs
-        // once the document itself has finished measuring.
+        // Ink first — see `openWhiteboard`. A saved PDF page restores the
+        // camera after that page exists; do not fit to the stack top first.
         if (existing) {
           const handle = boardRef.current;
           if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board);
         }
-        await boardRef.current?.settleFitView();
 
         // Document must finish laying out (measure stable) before reveal.
         // PDFs can take longer than markdown; a soft timeout used to clear the
@@ -3127,52 +3129,87 @@ export function Workspace({
          * Zero is only settled for a note that can be empty. A file with text
          * or bytes that reports zero has not laid out; treating that as done
          * floors the page and the pan clamp will not travel down it.
+         *
+         * Saved PDF page: do not settleFitView to the stack top. That paints
+         * page 1, then restoreView jumps — two pdf.js rasters for one open.
+         * Wait until the session page's div exists, then restoreView once.
          */
         const allowZero = !bytes && !text.trim();
         const needsHeight = Boolean(bytes) || Boolean(text.trim());
         const pdfFailed = () => annotatePdfErrorRef.current;
-        let laidOut = await waitForAnnotateLaidOut(
-          () => annotateHeightRef.current,
-          8000,
-          allowZero,
-          pdfFailed,
-        );
-        if (!laidOut && pdfFailed()) {
-          throw new Error(pdfFailed()!);
-        }
-        if (!laidOut && needsHeight) {
-          boardRef.current?.syncDocumentScrollBounds();
-          laidOut = await waitForAnnotateLaidOut(
-            () => annotateHeightRef.current,
+        const restorePdfPage =
+          docType === "pdf" && sessionPage >= 1 ? sessionPage : 0;
+
+        if (restorePdfPage >= 1) {
+          const pageReady = await waitForPdfPageNode(
+            restorePdfPage,
             25000,
+            pdfFailed,
+          );
+          if (pdfFailed()) throw new Error(pdfFailed()!);
+          if (!pageReady) {
+            traceOpen("session PDF page node never appeared", {
+              page: restorePdfPage,
+              ms: openMs(),
+            });
+          }
+          publishPdfFilmCurrent(restorePdfPage);
+          boardRef.current?.aimPdfPage(restorePdfPage);
+          if (existing?.board.appState) {
+            boardRef.current?.restoreView(existing.board.appState);
+          }
+          let landed = boardRef.current?.scrollToPdfPage(restorePdfPage) === true;
+          const jumpDeadline = performance.now() + 8000;
+          while (!landed && performance.now() < jumpDeadline) {
+            if (pdfFailed()) throw new Error(pdfFailed()!);
+            await waitMs(50);
+            landed = boardRef.current?.scrollToPdfPage(restorePdfPage) === true;
+          }
+          if (!landed) {
+            traceOpen("session PDF camera never jumped", {
+              page: restorePdfPage,
+              ms: openMs(),
+            });
+          }
+        } else {
+          await boardRef.current?.settleFitView();
+          let laidOut = await waitForAnnotateLaidOut(
+            () => annotateHeightRef.current,
+            8000,
             allowZero,
             pdfFailed,
           );
-        }
-        if (!laidOut && pdfFailed() && !(typeof annotateHeightRef.current === "number" && annotateHeightRef.current > 0)) {
-          throw new Error(pdfFailed()!);
-        }
-        if (!laidOut && needsHeight) {
-          const seen = annotateHeightRef.current;
-          if (!(typeof seen === "number" && seen > 0)) {
-            throw new Error(
-              "This document did not finish opening — try again, or pick a smaller file.",
+          if (!laidOut && pdfFailed()) {
+            throw new Error(pdfFailed()!);
+          }
+          if (!laidOut && needsHeight) {
+            boardRef.current?.syncDocumentScrollBounds();
+            laidOut = await waitForAnnotateLaidOut(
+              () => annotateHeightRef.current,
+              25000,
+              allowZero,
+              pdfFailed,
             );
           }
-          traceOpen("layout gate timed out with paper on screen", {
-            height: seen,
-            ms: openMs(),
-          });
-        }
-        await boardRef.current?.settleFitView();
-        if (existing?.board.appState) {
-          const savedPage = Math.floor(
-            Number((existing.board.appState as { pdfPage?: number }).pdfPage),
-          );
-          if (Number.isFinite(savedPage) && savedPage >= 1) {
-            boardRef.current?.aimPdfPage(savedPage);
+          if (!laidOut && pdfFailed() && !(typeof annotateHeightRef.current === "number" && annotateHeightRef.current > 0)) {
+            throw new Error(pdfFailed()!);
           }
-          boardRef.current?.restoreView(existing.board.appState);
+          if (!laidOut && needsHeight) {
+            const seen = annotateHeightRef.current;
+            if (!(typeof seen === "number" && seen > 0)) {
+              throw new Error(
+                "This document did not finish opening — try again, or pick a smaller file.",
+              );
+            }
+            traceOpen("layout gate timed out with paper on screen", {
+              height: seen,
+              ms: openMs(),
+            });
+          }
+          await boardRef.current?.settleFitView();
+          if (existing?.board.appState) {
+            boardRef.current?.restoreView(existing.board.appState);
+          }
         }
 
         {

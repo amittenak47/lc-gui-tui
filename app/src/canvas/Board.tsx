@@ -147,6 +147,7 @@ import {
   pageFramesFromPdfSlot,
   pageIdFromCamera,
   pageIdsIntersectingView,
+  scrollYForPage,
 } from "./inkPageIndex";
 import {
   peekPdfReadingFrames,
@@ -1660,7 +1661,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const flickSettleErrRef = useRef(0);
   const pdfCoastRef = useRef(false);
   const pendingPdfPageRef = useRef(0);
-  const scrollToPdfPageRef = useRef<(pageId: number) => void>(() => {});
+  const scrollToPdfPageRef = useRef<(pageId: number) => boolean>(() => false);
   /** Last page named to the reader, so the pill fires on arrival only. */
   const lastNamedPageRef = useRef<RegionId | null>(null);
   /** Camera the page was last read from — skips the scene walk when still. */
@@ -2888,11 +2889,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (pending >= 1) {
       const origin = pageBoundsRef.current?.minY ?? 0;
       const frames = offsetPageFrames(local, origin);
+      publishPdfFilmCurrent(pending);
+      publishPdfViewPages(
+        [pending],
+        pdfRestPages(pending, Math.max(pending, lastPageId(frames)), [pending]),
+      );
       if (frames.some((frame) => frame.pageId === pending)) {
-        pendingPdfPageRef.current = 0;
-        scrollToPdfPageRef.current(pending);
-      } else {
-        publishPdfFilmCurrent(pending);
+        if (scrollToPdfPageRef.current(pending)) {
+          pendingPdfPageRef.current = 0;
+        }
       }
       return;
     }
@@ -7478,17 +7483,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const jumpToPdfPage = useCallback((pageId: number) => {
     const api = apiRef.current;
-    const slot = contentSlotNodeRef.current;
-    const bounds = pageBoundsRef.current;
-    if (!api || !slot || !bounds || pageId < 1) return false;
-    const node = slot.querySelector<HTMLElement>(`[data-pdf-page="${pageId}"]`);
-    if (!node) return false;
-    const slotRect = slot.getBoundingClientRect();
-    const box = node.getBoundingClientRect();
-    const pageH = bounds.maxY - bounds.minY;
-    if (slotRect.height < 1 || pageH <= 0) return false;
-    const sy = slotRect.height / pageH;
-    const minY = bounds.minY + (box.top - slotRect.top) / sy;
+    if (!api || pageId < 1) return false;
     const state = api.getAppState() as { zoom?: { value?: number } };
     const zoom = state.zoom?.value ?? 1;
     if (!(zoom > 0)) return false;
@@ -7499,10 +7494,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       mobileRef.current,
     );
     const insetTop = measured.top + (mobileRef.current ? 0 : safeCssPx("--lc-safe-top"));
+    const origin = pageBoundsRef.current?.minY ?? 0;
+    let frames = offsetPageFrames(peekPdfReadingFrames(), origin);
+    if (!frames.some((frame) => frame.pageId === pageId)) {
+      frames = pageFramesFromPdfSlot(
+        contentSlotNodeRef.current,
+        pageBoundsRef.current,
+      );
+    }
+    let nextScrollY = scrollYForPage(frames, pageId, zoom, insetTop);
+    if (nextScrollY == null) {
+      const slot = contentSlotNodeRef.current;
+      const bounds = pageBoundsRef.current;
+      const node = slot?.querySelector<HTMLElement>(`[data-pdf-page="${pageId}"]`);
+      if (!slot || !bounds || !node) return false;
+      const slotRect = slot.getBoundingClientRect();
+      const box = node.getBoundingClientRect();
+      const pageH = bounds.maxY - bounds.minY;
+      if (slotRect.height < 1 || pageH <= 0) return false;
+      const sy = slotRect.height / pageH;
+      const minY = bounds.minY + (box.top - slotRect.top) / sy;
+      nextScrollY = insetTop / zoom - minY;
+    }
     userAdjustedCameraRef.current = true;
     pendingPdfPageRef.current = 0;
     api.updateScene({
-      appState: { scrollY: insetTop / zoom - minY },
+      appState: { scrollY: nextScrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
     publishPdfFilmCurrent(pageId);
@@ -7864,14 +7881,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       fitRegion: (regionId: RegionId | string) => {
         refitToViewport(regionId);
       },
-      scrollToPdfPage: (pageId: number) => {
-        jumpToPdfPage(pageId);
-      },
+      scrollToPdfPage: (pageId: number) => jumpToPdfPage(pageId),
       aimPdfPage: (pageId: number) => {
         if (!(pageId >= 1)) {
           pendingPdfPageRef.current = 0;
           return;
         }
+        userAdjustedCameraRef.current = true;
         pendingPdfPageRef.current = pageId;
         publishPdfFilmCurrent(pageId);
       },
@@ -7880,18 +7896,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (!api || !saved) return;
         userAdjustedCameraRef.current = true;
         const zoom = saved.zoom > 0 ? saved.zoom : 1;
-        const frames = pageFramesFromPdfSlot(
-          contentSlotNodeRef.current,
-          pageBoundsRef.current,
-        );
-        if (frames.length >= 2) {
-          const state = api.getAppState() as { height?: number };
-          const savedPage = Math.floor(Number(saved.pdfPage));
-          const page =
-            savedPage >= 1
-              ? savedPage
-              : pageIdFromCamera(frames, saved.scrollY, zoom, state.height ?? 800);
-          if (jumpToPdfPage(page)) return;
+        api.updateScene({
+          appState: {
+            scrollX: saved.scrollX,
+            zoom: { value: zoom },
+          },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        const savedPage = Math.floor(Number(saved.pdfPage));
+        if (savedPage >= 1) {
+          if (jumpToPdfPage(savedPage)) return;
+          pendingPdfPageRef.current = savedPage;
+          publishPdfFilmCurrent(savedPage);
+          return;
         }
         api.updateScene({
           appState: {

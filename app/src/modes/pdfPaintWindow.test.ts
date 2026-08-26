@@ -5,6 +5,8 @@ import {
   pageNeedsDecode,
   pdfDecodeQueue,
   pdfOuterPages,
+  pdfPaintHole,
+  pdfPaintShouldWaitForLanding,
   pdfRestPages,
   pdfShouldPreempt,
 } from "./pdfPaintWindow";
@@ -79,6 +81,22 @@ describe("pdfDecodeQueue", () => {
         rest,
       ),
     ).toBe(false);
+  });
+});
+
+describe("pdfPaintShouldWaitForLanding", () => {
+  it("skips page 1..32 while C is still in a later layout batch", () => {
+    expect(pdfPaintShouldWaitForLanding(47, 32)).toBe(true);
+    expect(pdfPaintShouldWaitForLanding(47, 47)).toBe(false);
+    expect(pdfPaintShouldWaitForLanding(1, 32)).toBe(false);
+  });
+});
+
+describe("pdfPaintHole", () => {
+  it("does not treat page 1 as the hole while C is the session page", () => {
+    expect(pdfPaintHole(47, [1])).toEqual([47]);
+    expect(pdfPaintHole(47, [])).toEqual([47]);
+    expect(pdfPaintHole(47, [46, 47])).toEqual([46, 47]);
   });
 });
 

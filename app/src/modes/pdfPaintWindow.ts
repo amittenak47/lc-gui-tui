@@ -89,6 +89,30 @@ export function pdfExpandOrder(
 }
 
 /**
+ * Layout has not reached C yet — do not decode page 1..last as a stand-in.
+ */
+export function pdfPaintShouldWaitForLanding(C: number, lastLaidOut: number): boolean {
+  return Number.isFinite(C) && C >= 1 && lastLaidOut >= 1 && C > lastLaidOut;
+}
+
+/**
+ * Camera hole for the pump. If IO / camera Y still reports the top of the
+ * stack while C is the session page, paint C — not page 1.
+ */
+export function pdfPaintHole(
+  C: number,
+  intersecting: Iterable<number>,
+  near = PDF_PREVIEW_RADIUS,
+): number[] {
+  const focus = Number.isFinite(C) ? Math.round(C) : 1;
+  const hole = [...new Set([...intersecting])].filter((n) => n >= 1);
+  if (hole.includes(focus)) return hole;
+  if (hole.length === 0) return [focus];
+  if (hole.some((n) => Math.abs(n - focus) <= near)) return hole;
+  return [focus];
+}
+
+/**
  * True only when pdf.js must run. LRU already at target (or higher) is a blit.
  * Demote 2× → 1× is not a render.
  */
