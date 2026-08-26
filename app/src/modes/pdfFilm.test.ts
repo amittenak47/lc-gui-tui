@@ -25,6 +25,10 @@ import {
   peekPdfThumbs,
   nextMissingPdfThumb,
   pdfThumbViewportScale,
+  hydratePdfThumbs,
+  peekPdfLayoutBusy,
+  publishPdfLayoutBusy,
+  subscribePdfLayoutBusy,
 } from "./pdfFilm";
 
 describe("filmStripWheelDelta", () => {
@@ -103,6 +107,21 @@ describe("session thumbs by document hash", () => {
     expect(peekPdfThumbs("doc-a").size).toBe(0);
     expect(peekPdfThumb("", 1)).toBe(null);
   });
+
+  it("hydrates stored thumbs without replacing ones already in memory", () => {
+    resetPdfThumbs();
+    rememberPdfThumb("doc-a", 1, "live");
+    hydratePdfThumbs(
+      "doc-a",
+      new Map([
+        [1, "disk-old"],
+        [2, "disk-2"],
+      ]),
+    );
+    expect(peekPdfThumb("doc-a", 1)).toBe("live");
+    expect(peekPdfThumb("doc-a", 2)).toBe("disk-2");
+    resetPdfThumbs();
+  });
 });
 
 describe("pdfThumbViewportScale", () => {
@@ -127,6 +146,21 @@ describe("nextMissingPdfThumb", () => {
   it("skips failed pages so a bad sheet cannot spin the idle pass", () => {
     resetPdfThumbs();
     expect(nextMissingPdfThumb("doc-a", 3, [], [1])).toBe(2);
+  });
+});
+
+describe("pdf layout busy", () => {
+  it("notifies subscribers when spread relayout starts and when C is ready", () => {
+    publishPdfLayoutBusy(false);
+    const seen: boolean[] = [];
+    const unsub = subscribePdfLayoutBusy((busy) => seen.push(busy));
+    expect(seen).toEqual([false]);
+    publishPdfLayoutBusy(true);
+    publishPdfLayoutBusy(true);
+    publishPdfLayoutBusy(false);
+    expect(seen).toEqual([false, true, false]);
+    expect(peekPdfLayoutBusy()).toBe(false);
+    unsub();
   });
 });
 

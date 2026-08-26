@@ -60,14 +60,17 @@ import {
   subscribePdfViewPages,
   wakePdfPaintPump,
   capturePdfThumbIfNew,
+  hydratePdfThumbs,
   nextMissingPdfThumb,
   peekPdfFilmThumbWanted,
   peekPdfThumb,
   pdfThumbViewportScale,
+  publishPdfLayoutBusy,
   rememberPdfThumb,
   PDF_FILM_THUMB_CSS,
   type PdfThumbRenderer,
 } from "./pdfFilm";
+import { loadStoredPdfThumbs } from "./pdfThumbStore";
 import {
   captureSheetPng,
   PDF_SESSION_CAP,
@@ -134,6 +137,11 @@ export const PAGE_GAP = 18;
 
 /** `.lc-pdf-doc` padding-top — stack frames start here, not at Y 0. */
 export const PDF_DOC_PAD_TOP = 18;
+
+/** Filmstrip construction: wait this long after pan / paint before decoding. */
+const PDF_IDLE_THUMB_DELAY_MS = 1500;
+/** Gap between idle thumb pages so one JBIG2 cannot starve the next pan. */
+const PDF_IDLE_THUMB_GAP_MS = 80;
 
 /**
  * A little slack around the viewport when deciding which pages are on screen.
@@ -210,8 +218,8 @@ export interface PdfDocumentProps {
    */
   onThumbRenderer?: (render: PdfThumbRenderer | null) => void;
   /**
-   * Filmstrip is open: after rest-2 / 0.25 paint is idle, fill remaining
-   * ~48px JPEGs for the whole file. Off while parked or the strip is closed.
+   * Filmstrip is open. Missing ~48px JPEGs decode only after the camera
+   * has been idle — never from the reading paint pump.
    */
   idleThumbs?: boolean;
   /**
@@ -426,6 +434,7 @@ function blitCachedSheet(
     dest.width,
     dest.height,
   );
+  if (n === peekPdfFilmCurrent()) publishPdfLayoutBusy(false);
 }
 
 function releasePagePixels(
@@ -476,6 +485,8 @@ export function PdfDocument({
   idleThumbsRef.current = idleThumbs;
   const docHashRef = useRef(docHash);
   docHashRef.current = docHash;
+  const thumbCancelRef = useRef<() => void>(() => {});
+  const thumbIdleArmRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (paused || initialPage < 1) return;
     publishPdfFilmCurrent(initialPage);
@@ -504,10 +515,6 @@ export function PdfDocument({
   const pagesRef = useRef(pages);
   pagesRef.current = pages;
   const [windowTick, setWindowTick] = useState(0);
-  useEffect(() => {
-    if (paused || !idleThumbs) return;
-    setWindowTick((tick) => tick + 1);
-  }, [idleThumbs, paused]);
   /** One paint pump at a time — see the effect that drives it. */
   const pumpRef = useRef(false);
   const inFlightPaintRef = useRef<{
@@ -523,6 +530,20 @@ export function PdfDocument({
   const frameWidthRef = useRef(frameWidth);
   spreadRef.current = spread;
   frameWidthRef.current = frameWidth;
+  const lastSpreadForBusyRef = useRef(spread);
+
+  useEffect(() => {
+    if (!docHash) return;
+    let cancelled = false;
+    void loadStoredPdfThumbs(docHash).then((stored) => {
+      if (cancelled || stored.size === 0) return;
+      hydratePdfThumbs(docHash, stored);
+    });
+    return () => {
+      cancelled = true;
+      publishPdfLayoutBusy(false);
+    };
+  }, [docHash]);
 
   useEffect(() => {
     if (paused) return;
@@ -699,6 +720,8 @@ export function PdfDocument({
    */
   useLayoutEffect(() => {
     const nats = naturalsRef.current;
+    const spreadChanged = lastSpreadForBusyRef.current !== spread;
+    lastSpreadForBusyRef.current = spread;
     if (nats.length === 0 || !docRef.current) return;
     try {
       inFlightPaintRef.current?.cancel();
@@ -706,6 +729,7 @@ export function PdfDocument({
       /* already finished */
     }
     inFlightPaintRef.current = null;
+    if (spreadChanged) publishPdfLayoutBusy(true);
     setPages(layoutPdfPages(nats, frameWidth, spread));
     setWindowTick((tick) => tick + 1);
     wakePdfPaintPump();
@@ -1095,9 +1119,6 @@ export function PdfDocument({
           },
         });
         done = true;
-        if (docHash && !isDocCameraLive()) {
-          queueMicrotask(() => capturePdfThumbIfNew(docHash, n));
-        }
       };
       const rememberScratch = async (src: HTMLCanvasElement, pixelScale: number) => {
         const sheet = await snapshotSheet(src, pixelScale);
@@ -1231,50 +1252,6 @@ export function PdfDocument({
       }
     };
 
-    let thumbTask: { cancel: () => void } | null = null;
-    const cancelThumb = () => {
-      try {
-        thumbTask?.cancel();
-      } catch {
-        /* already finished */
-      }
-      thumbTask = null;
-    };
-
-    const renderTinyThumb = async (
-      pageNumber: number,
-      hash: string,
-    ): Promise<"ok" | "busy" | "fail"> => {
-      if (peekPdfThumb(hash, pageNumber)) return "ok";
-      try {
-        const page = await doc.getPage(pageNumber);
-        if (disposedRef.current || pausedRef.current || isDocCameraLive()) return "busy";
-        if (currentQueue().queue.length > 0) return "busy";
-        const natural = page.getViewport({ scale: 1 });
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const scale = pdfThumbViewportScale(natural.width, PDF_FILM_THUMB_CSS, dpr);
-        const viewport = page.getViewport({ scale });
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(viewport.width));
-        canvas.height = Math.max(1, Math.round(viewport.height));
-        const ctx = canvas.getContext("2d", { alpha: false });
-        if (!ctx) return "fail";
-        ctx.fillStyle = "#fff";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        const render = page.render({ canvas, canvasContext: ctx, viewport });
-        thumbTask = render;
-        await render.promise;
-        thumbTask = null;
-        if (disposedRef.current) return "busy";
-        rememberPdfThumb(hash, pageNumber, canvas.toDataURL("image/jpeg", 0.62));
-        return "ok";
-      } catch {
-        thumbTask = null;
-        if (disposedRef.current || isDocCameraLive()) return "busy";
-        return "fail";
-      }
-    };
-
     const currentQueue = () => {
       const last = pagesRef.current.at(-1)?.pageNumber ?? 1;
       const C = peekPdfFilmCurrent();
@@ -1302,7 +1279,7 @@ export function PdfDocument({
     };
 
     preemptPaintIfNeededRef.current = () => {
-      cancelThumb();
+      thumbCancelRef.current();
       const flight = inFlightPaintRef.current;
       if (!flight) return;
       const { queue, rest } = currentQueue();
@@ -1336,7 +1313,7 @@ export function PdfDocument({
     };
 
     pumpRef.current = true;
-    const thumbFailed = new Set<number>();
+    thumbCancelRef.current();
     void (async () => {
       try {
         for (;;) {
@@ -1383,22 +1360,6 @@ export function PdfDocument({
             continue;
           }
 
-          const hash = docHashRef.current;
-          if (idleThumbsRef.current && hash) {
-            const last = pagesRef.current.at(-1)?.pageNumber ?? 0;
-            const prefer = [
-              ...peekPdfFilmThumbWanted(),
-              ...pdfOuterPages(peekPdfFilmCurrent(), last, PDF_PREVIEW_RADIUS),
-            ];
-            const thumbPage = nextMissingPdfThumb(hash, last, prefer, thumbFailed);
-            if (thumbPage != null) {
-              const result = await renderTinyThumb(thumbPage, hash);
-              if (result === "busy") await waitForPaintSignal();
-              else if (result === "fail") thumbFailed.add(thumbPage);
-              continue;
-            }
-          }
-
           while (
             pathFillRef.current.length > 0 &&
             (wantedRef.current.has(pathFillRef.current[0]!) ||
@@ -1420,6 +1381,7 @@ export function PdfDocument({
         }
       } finally {
         pumpRef.current = false;
+        thumbIdleArmRef.current();
         if (!disposedRef.current) {
           const pendingHot = currentQueue().queue.length > 0;
           const pendingPath = pathFillRef.current.some(
@@ -1428,18 +1390,133 @@ export function PdfDocument({
               !sessionRef.current.has(n) &&
               !sheetLruRef.current.has(n),
           );
-          const last = pagesRef.current.at(-1)?.pageNumber ?? 0;
-          const hash = docHashRef.current;
-          const pendingThumbs = Boolean(
-            idleThumbsRef.current &&
-              hash &&
-              nextMissingPdfThumb(hash, last, [], thumbFailed) != null,
-          );
-          if (pendingHot || pendingPath || pendingThumbs) setWindowTick((tick) => tick + 1);
+          if (pendingHot || pendingPath) setWindowTick((tick) => tick + 1);
         }
       }
     })();
   }, [pages, windowTick, paused]);
+
+  /**
+   * Filmstrip JPEGs: copy LRU first, else a ~48px pdf.js render. Only after
+   * the camera and the paint pump have been idle. Pan or a new decode aborts.
+   */
+  useEffect(() => {
+    const hash = docHash;
+    if (paused || !idleThumbs || !hash) return;
+    const doc = docRef.current;
+    if (!doc) return;
+
+    let gen = 0;
+    let timer = 0;
+    let thumbTask: { cancel: () => void } | null = null;
+    const thumbFailed = new Set<number>();
+
+    const cancelThumb = () => {
+      try {
+        thumbTask?.cancel();
+      } catch {
+        /* already finished */
+      }
+      thumbTask = null;
+    };
+
+    const busy = () =>
+      disposedRef.current ||
+      pausedRef.current ||
+      isDocCameraLive() ||
+      pumpRef.current ||
+      Boolean(inFlightPaintRef.current);
+
+    const abortFill = () => {
+      gen += 1;
+      cancelThumb();
+      window.clearTimeout(timer);
+      timer = 0;
+    };
+
+    const armIdleTimer = () => {
+      window.clearTimeout(timer);
+      timer = 0;
+      if (busy() || !idleThumbsRef.current) return;
+      timer = window.setTimeout(() => {
+        timer = 0;
+        void fillOne();
+      }, PDF_IDLE_THUMB_DELAY_MS);
+    };
+
+    const fillOne = async () => {
+      const mine = gen;
+      if (busy() || !idleThumbsRef.current) return;
+      const last = pagesRef.current.at(-1)?.pageNumber ?? 0;
+      const prefer = [
+        ...peekPdfFilmThumbWanted(),
+        ...pdfOuterPages(peekPdfFilmCurrent(), last, PDF_PREVIEW_RADIUS),
+      ];
+      const pageNumber = nextMissingPdfThumb(hash, last, prefer, thumbFailed);
+      if (pageNumber == null) return;
+      capturePdfThumbIfNew(hash, pageNumber);
+      if (peekPdfThumb(hash, pageNumber)) {
+        timer = window.setTimeout(() => {
+          void fillOne();
+        }, PDF_IDLE_THUMB_GAP_MS);
+        return;
+      }
+      try {
+        const page = await doc.getPage(pageNumber);
+        if (mine !== gen || busy()) return;
+        const natural = page.getViewport({ scale: 1 });
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const scale = pdfThumbViewportScale(natural.width, PDF_FILM_THUMB_CSS, dpr);
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(viewport.width));
+        canvas.height = Math.max(1, Math.round(viewport.height));
+        const ctx = canvas.getContext("2d", { alpha: false });
+        if (!ctx) {
+          thumbFailed.add(pageNumber);
+          timer = window.setTimeout(() => {
+            void fillOne();
+          }, PDF_IDLE_THUMB_GAP_MS);
+          return;
+        }
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        const render = page.render({ canvas, canvasContext: ctx, viewport });
+        thumbTask = render;
+        await render.promise;
+        thumbTask = null;
+        if (mine !== gen || disposedRef.current) return;
+        rememberPdfThumb(hash, pageNumber, canvas.toDataURL("image/jpeg", 0.62));
+        if (mine !== gen || busy()) return;
+        timer = window.setTimeout(() => {
+          void fillOne();
+        }, PDF_IDLE_THUMB_GAP_MS);
+      } catch {
+        thumbTask = null;
+        if (mine !== gen) return;
+        if (!disposedRef.current && !isDocCameraLive()) thumbFailed.add(pageNumber);
+        if (!busy()) {
+          timer = window.setTimeout(() => {
+            void fillOne();
+          }, PDF_IDLE_THUMB_GAP_MS);
+        }
+      }
+    };
+
+    thumbCancelRef.current = abortFill;
+    thumbIdleArmRef.current = armIdleTimer;
+    const unsubLive = subscribeDocCameraLive((live) => {
+      if (live) abortFill();
+      else armIdleTimer();
+    });
+    armIdleTimer();
+    return () => {
+      thumbCancelRef.current = () => {};
+      thumbIdleArmRef.current = () => {};
+      unsubLive();
+      abortFill();
+    };
+  }, [idleThumbs, paused, docHash, pages]);
 
   // Height is reported from the laid-out stack rather than summed from the page
   // sizes: the gaps, and any rounding the browser does, belong in the number the

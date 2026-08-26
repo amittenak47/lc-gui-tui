@@ -5,7 +5,8 @@
  * strip in the document would scale and pan with the book. This rail is chrome:
  * an iOS-style filmstrip under the header. Click jumps the camera; only
  * neighbouring thumbs copy a live canvas. Viewed pages keep a JPEG in the
- * session hash map; pages never painted stay blank (no pdf.js of the textbook).
+ * session hash map (and on disk after the first capture). Missing pages fill
+ * only while the camera is idle with the strip open — not from the paint pump.
  */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 

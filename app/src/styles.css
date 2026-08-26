@@ -5783,6 +5783,26 @@ body[data-lc-sash-drag="horizontal"] {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
+.lc-spread-toggle {
+  position: relative;
+}
+
+.lc-spread-toggle.is-busy .lc-spread-busy {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  pointer-events: none;
+}
+
+.lc-spread-toggle.is-busy .lc-spread-busy .lc-spinner {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
 /*
  * Reading / annotating toggle — Markdown Ink.
  *
