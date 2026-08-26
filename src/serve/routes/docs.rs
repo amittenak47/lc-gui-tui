@@ -405,3 +405,19 @@ pub async fn put_chunks(
     .await?;
     Ok(Json(ack).into_response())
 }
+
+/// DELETE /docs/local-index — wipe this device's whole search index.
+///
+/// The tablet's answer to a leftover index: stale vectors from an old model,
+/// text from files long gone. Deliberately total and deliberately local — the
+/// hub's index is a different file, and drawings and document copies live in
+/// other stores. Ask rebuilds by indexing again.
+pub async fn clear_local_index() -> Result<Json<docs_index::ClearReport>, AppError> {
+    let report = blocking(move || {
+        let path = docs_index::db_path()?;
+        let conn = docs_index::open(&path)?;
+        docs_index::clear(&conn)
+    })
+    .await?;
+    Ok(Json(report))
+}

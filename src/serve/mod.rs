@@ -25,7 +25,7 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{header, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use tower::ServiceExt;
 
@@ -145,6 +145,7 @@ pub fn router(state: Shared) -> Router {
         .route("/coach/ask", post(coach::ask))
         .route("/docs/chunk-digests", get(routes::list_doc_chunk_digests))
         .route("/docs/retrieve", post(routes::retrieve_library_docs))
+        .route("/docs/local-index", delete(routes::clear_local_docs))
         .route(
             "/docs/:hash/index",
             get(routes::get_docs_index).put(routes::put_docs_index),

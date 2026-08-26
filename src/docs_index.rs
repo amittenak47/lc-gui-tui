@@ -283,6 +283,28 @@ pub fn embedded_chunk_count(conn: &Connection, hash: &str) -> Result<u32> {
     Ok(count as u32)
 }
 
+/// What a clear of the local search index removed.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClearReport {
+    pub documents: u32,
+    pub chunks: u32,
+}
+
+/// Wipe this device's whole search index: every row of `docs.db`.
+///
+/// The reader's answer to a leftover index — stale vectors from an old model,
+/// text from files that have since moved on. It is deliberately total and
+/// deliberately local: drawings, boards, notes and document copies live in
+/// other stores, the hub's `docs.db` is a different file entirely, and Ask can
+/// always rebuild by indexing again. Chunks first so the cascade never has to
+/// fire; both counts are reported because "what did that just cost?" is the
+/// only question anyone asks after holding a clear button.
+pub fn clear(conn: &Connection) -> Result<ClearReport> {
+    let chunks = conn.execute("DELETE FROM chunks", [])? as u32;
+    let documents = conn.execute("DELETE FROM documents", [])? as u32;
+    Ok(ClearReport { documents, chunks })
+}
+
 /// Cheap sync watermark: counts and model, no vectors.
 ///
 /// A ping asks this of the whole library before it moves any embeddings.
@@ -2431,6 +2453,45 @@ mod tests {
                 heading: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn clear_wipes_every_document_and_chunk_but_leaves_the_file() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        upsert(
+            &mut conn,
+            "h",
+            &IndexBody {
+                name: "n.pdf".into(),
+                doc_type: "pdf".into(),
+                pages: sample_pages(2),
+            },
+            &cfg(),
+            false,
+        )
+        .unwrap();
+        upsert(
+            &mut conn,
+            "h2",
+            &IndexBody {
+                name: "m.md".into(),
+                doc_type: "markdown".into(),
+                pages: sample_pages(1),
+            },
+            &cfg(),
+            false,
+        )
+        .unwrap();
+
+        let report = clear(&conn).unwrap();
+        assert_eq!(report.documents, 2);
+        assert_eq!(report.chunks, 3);
+
+        // A second clear is a no-op, and the db still opens and answers.
+        let again = clear(&conn).unwrap();
+        assert_eq!(again.documents, 0);
+        assert!(status(&conn, "h").unwrap().indexed == false);
     }
 
     #[test]
