@@ -2,6 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, expect, it, beforeAll } from "vitest";
+import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
@@ -65,5 +66,46 @@ describe("MorphBar", () => {
     });
     expect(shell.style.transition).toBe("");
     expect(shell.style.width).toBe("120px");
+  });
+
+  it("keeps its box on the depth axis instead of morphing a size", () => {
+    const { shell } = mount(
+      <MorphBar active="one" axis="depth">
+        <div data-morph-id="one">one</div>
+        <div data-morph-id="two">two</div>
+      </MorphBar>,
+    );
+    expect(shell.dataset.axis).toBe("depth");
+    // Depth swaps labels by rotateY inside a fixed box, so no inline size.
+    expect(shell.style.width).toBe("");
+    expect(shell.style.height).toBe("");
+    const activePanel = shell.querySelector(".lc-morph-panel.is-active");
+    expect(activePanel?.textContent).toBe("one");
+    expect(shell.querySelectorAll('.lc-morph-panel:not(.is-active)')).toHaveLength(1);
+  });
+
+  it("swaps the active panel on the depth axis without touching the box", () => {
+    function Host() {
+      const [active, setActive] = useState("one");
+      return (
+        <button type="button" onClick={() => setActive("two")}>
+          <MorphBar active={active} axis="depth">
+            <div data-morph-id="one">one</div>
+            <div data-morph-id="two">two</div>
+          </MorphBar>
+        </button>
+      );
+    }
+    const { host, root } = mount(<Host />);
+    const before = host.querySelector(".lc-morph-bar") as HTMLElement;
+    expect(before.querySelector(".lc-morph-panel.is-active")?.textContent).toBe("one");
+    act(() => {
+      host.querySelector("button")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const after = host.querySelector(".lc-morph-bar") as HTMLElement;
+    expect(after.querySelector(".lc-morph-panel.is-active")?.textContent).toBe("two");
+    expect(after.style.width).toBe("");
+    expect(after.style.height).toBe("");
+    void root;
   });
 });
