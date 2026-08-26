@@ -1707,6 +1707,45 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   pointer-events: none !important;
 }
 
+/*
+ * Hub Sync pill — a sibling of the map controls in the chrome slot, parked
+ * top-right where nothing else docks. The slot is pointer-transparent; only
+ * the button itself takes taps. The card chrome copies `.lc-map-chrome-stack`
+ * so it reads as part of the same island family, with no new color tokens.
+ */
+.lc-hub-sync-dock {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  right: 10px;
+  z-index: 50;
+  display: flex;
+}
+
+.lc-hub-sync {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.lc-hub-sync[data-stage="synced"] {
+  cursor: default;
+}
+
+.lc-hub-sync-morph .lc-morph-panel.is-active {
+  white-space: nowrap;
+}
+
 .lc-main.is-split-horizontal {
   flex-direction: column;
 }
@@ -4513,6 +4552,27 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-morph-bar[data-axis="width"] .lc-morph-panel.is-active {
   display: inline-flex;
   width: max-content;
+}
+
+/*
+ * Depth: the shell keeps its box; panels swap by rotating through Z.
+ * Only the Sync pill uses this today — height/width call sites above keep
+ * their own morphs. Reduced-motion below already kills the transitions,
+ * which turns this into an instant label swap; that is the intended
+ * fallback rather than a weakened fade.
+ */
+.lc-morph-bar[data-axis="depth"] {
+  perspective: 600px;
+}
+
+.lc-morph-bar[data-axis="depth"] .lc-morph-panel:not(.is-active) {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(90deg);
+}
+
+.lc-morph-bar[data-axis="depth"] .lc-morph-panel.is-active {
+  display: inline-flex;
 }
 
 @media (prefers-reduced-motion: reduce) {

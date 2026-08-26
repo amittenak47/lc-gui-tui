@@ -18,12 +18,15 @@ import {
   type ReactNode,
 } from "react";
 
-export type MorphBarAxis = "height" | "width";
+export type MorphBarAxis = "height" | "width" | "depth";
 
 export interface MorphBarProps extends HTMLAttributes<HTMLDivElement> {
   /** Which panel id is showing. */
   active: string;
-  /** `height` for flyouts that grow upward; `width` for pill toolbars. */
+  /**
+   * `height` for flyouts that grow upward; `width` for pill toolbars; `depth`
+   * keeps its box and swaps labels by rotating them in Z.
+   */
   axis?: MorphBarAxis;
   /**
    * Play the shell's grow-from-nothing on the first commit.
@@ -69,6 +72,17 @@ export function MorphBar({
     const measure = measureRef.current;
     if (!measure) return;
 
+    if (axis === "depth") {
+      // Depth shells never resize — the panels cross-fade through rotateY
+      // inside a fixed box, so there is nothing to measure. The handover
+      // snap still has to be released, or the cross-fade would stay frozen.
+      if (firstReadRef.current) {
+        firstReadRef.current = false;
+        if (!animateOnMount) requestAnimationFrame(() => setSnap(false));
+      }
+      return () => {};
+    }
+
     const read = () => {
       if (axis === "height") {
         setSize(measure.scrollHeight);
@@ -101,7 +115,11 @@ export function MorphBar({
     ...(typeof shellProps.style === "object" && shellProps.style
       ? shellProps.style
       : {}),
-    ...(axis === "height" ? { height: size } : { width: size }),
+    ...(axis === "height"
+      ? { height: size }
+      : axis === "width"
+        ? { width: size }
+        : {}),
     ...(snap ? { transition: "none" } : {}),
   };
 

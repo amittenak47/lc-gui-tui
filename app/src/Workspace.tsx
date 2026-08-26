@@ -46,6 +46,7 @@ import type {
 import { DEFAULT_DATASET } from "./api/types";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { HoldButton } from "./components/HoldButton";
+import { HubSyncControl } from "./components/HubSyncControl";
 import { LoadingDoodle } from "./components/LoadingDoodle";
 import { waitForTopBannersIdle } from "./components/StatusBanner";
 import {
@@ -8458,6 +8459,11 @@ export function Workspace({
         </form>
       )}
       </>, headerSlots.chrome) : null}
+      {/* The one-tap hub Sync pill lives beside the board's map controls in
+          the chrome slot; only the focused workspace mounts its own. */}
+      {active && headerSlots.boardChrome ? (
+        createPortal(<HubSyncControl />, headerSlots.boardChrome)
+      ) : null}
         <div
           className={[
             "lc-canvas-wrap",
